@@ -120,10 +120,18 @@ function installCommands(context: ProjectionContext, usedSkills: Set<string>, re
   );
 }
 
+// A capability entry projects claude/agents/<name>.md unless it names a
+// runtime-specific source, repo-relative (OP-1432: codex-obs has its own text).
+export function agentSourcePath(repoRoot: string, name: string, options: AgentRenderOptions): string {
+  return options.source
+    ? path.join(repoRoot, options.source)
+    : path.join(repoRoot, "claude", "agents", `${name}.md`);
+}
+
 function installKherepAgents(context: ProjectionContext, usedAgents: Set<string>, receipt: ProjectionReceipt): void {
   const { capabilities, codexHome, repoRoot, transaction } = context;
   for (const [name, options] of Object.entries(capabilities.agents)) {
-    const source = fs.readFileSync(path.join(repoRoot, "claude", "agents", `${name}.md`), "utf8");
+    const source = fs.readFileSync(agentSourcePath(repoRoot, name, options), "utf8");
     const projected = options.as || name;
     const target = path.join(codexHome, "agents", `${projected}.toml`);
     const existed = Boolean(fs.statSync(target, { throwIfNoEntry: false }));

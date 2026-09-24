@@ -50,6 +50,10 @@ run never dispatches another observation run. On Claude the dispatch is enforced
 `observation-stop`, and a turn with nothing to file opts out by ending with `[obs: none – <reason>]`.
 
 An empty result is a valid result. A turn that produced nothing new is written as nothing.
+`claude-obs` starts its final message with one status line: `OBS-RESULT: wrote <n> <page ids>`,
+`OBS-RESULT: empty <reason>` or `OBS-RESULT: failed <reason>`. The Maestro treats `OBS-RESULT: failed`,
+and a result without that line, as a failure it reports to the user in the same turn; it is never
+read as a valid empty result.
 
 Observations are stored in the Confluence knowledge space configured for this host, read from
 `<runtime-home>/kherep/confluence.json` and resolved at install time. A host without that file
@@ -60,7 +64,7 @@ stay filterable: `type-observation`, `evidence-<confirmed | assumed | refuted | 
 and `product-<jira | confluence | jsm>` where the finding applies to one product's variant.
 Origin, timestamp and source reference belong in the page body.
 
-Placement follows the content. The hierarchy says what a page is about and is deliberately
+Placement follows the content. The exception is a node named in the brief: it binds every finding of that run, whatever a finding's content suggests. The hierarchy says what a page is about and is deliberately
 shallow: `Development/General`, `Development/Forge Apps/<App>`, `Development/DC Apps/<App>`,
 `Atlassian`, `Operations`, `Kherep`. Everything else is a label. The product an app variant
 belongs to is one of those labels and never a branch: a monorepo's knowledge is mostly shared,

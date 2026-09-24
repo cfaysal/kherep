@@ -40,6 +40,7 @@ interface Match {
   live: string;
   source: string;
   rendered: boolean;
+  block: boolean;
 }
 
 function claudeHome(): string {
@@ -66,15 +67,24 @@ function matchFor(written: unknown, pairs: ManagedPair[]): Match | null {
   if (!best) return null;
   // Keep the sub-path when the entry is a directory: name the actual source file.
   const suffix = target.slice(bestLive.length);
-  return { live: target, source: best.source + suffix, rendered: Boolean(best.rendered) };
+  return { live: target, source: best.source + suffix, rendered: Boolean(best.rendered), block: Boolean(best.block) };
+}
+
+function carryHint(match: Match): string {
+  if (match.block) {
+    return `Only the <!-- kherep-project-rules --> block is managed; text outside it is operator content and never drift. `
+      + `If the edit is inside the block, carry it into the source in the SAME working step.`;
+  }
+  if (match.rendered) {
+    return `The live file is BUILT from that source by install.sh, so the edit belongs in the source - `
+      + `a live-only change is overwritten on the next install.`;
+  }
+  return `Carry this change into the repo source in the SAME working step - a live-only change is lost `
+    + `on the next install and shows up as unreconciled drift.`;
 }
 
 function message(match: Match): string {
-  const carry = match.rendered
-    ? `The live file is BUILT from that source by install.sh, so the edit belongs in the source - `
-      + `a live-only change is overwritten on the next install.`
-    : `Carry this change into the repo source in the SAME working step - a live-only change is lost `
-      + `on the next install and shows up as unreconciled drift.`;
+  const carry = carryHint(match);
   return (
     `[drift-managed-path-watch] ${match.live} is managed by kherep/bootstrap/drift-check.sh.\n`
     + `Versioned source: kherep/${match.source}\n`

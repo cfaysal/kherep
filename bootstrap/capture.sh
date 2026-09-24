@@ -39,7 +39,11 @@ kherep_validate_shell_path KHEREP_WORKSPACE "$WS" || exit $?
 if [ "$SKIP_SETTINGS" != "1" ]; then
   cp -a "$WS/.claude/settings.local.json" "$CLAUDE_SRC/settings.project.json"; portable_paths "$CLAUDE_SRC/settings.project.json"
 fi
-cp -a "$WS/CLAUDE.md" "$CLAUDE_SRC/CLAUDE.project.md"
+# OP-1425. Only the marked Kherep block is captured; the operator text around it
+# never enters the shared template. No block (exit 3) is a hard stop, not a copy.
+node "$REPO_ROOT/bootstrap/project-rules-block.mts" capture "$WS/CLAUDE.md" "$CLAUDE_SRC/CLAUDE.project.md" || {
+  echo "FATAL: $WS/CLAUDE.md has no complete kherep-project-rules block to capture" >&2; exit 1;
+}
 
 # 3. Deprecated -> parked, never installed
 while read -r rel; do

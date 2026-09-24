@@ -88,6 +88,7 @@
     },
     "claude-obs": {
       "as": "codex-obs",
+      "source": "codex/agents/codex-obs.md",
       "model": "gpt-5.6-luna",
       "reasoning": "low",
       "sandbox": "read-only"

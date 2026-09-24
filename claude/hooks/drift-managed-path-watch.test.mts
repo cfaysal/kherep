@@ -112,6 +112,16 @@ test("a managed live path names its versioned source", () => {
   for (const [live, source] of pairs) assert.ok(names(live, source), `${live} does not name ${source}`);
 });
 
+// OP-1425. The workspace rule files belong to the operator; only the block is Kherep's.
+test("a workspace rule file says that only its block is managed", () => {
+  for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+    const context = contextOf(run(path.join(WS, name))) ?? "";
+    assert.match(context, /kherep-project-rules/, `${name} does not name the block`);
+    assert.match(context, /operator content and never drift/);
+  }
+  assert.doesNotMatch(contextOf(run(path.join(HOME, "CLAUDE.md"))) ?? "", /kherep-project-rules/);
+});
+
 test("backslashes, upper case and a . segment still match", () => {
   const shouted = path.join(HOME, "HOOKS", "Commit-Guard.js").replace(/\//g, "\\").toUpperCase();
   assert.ok(names(shouted, "claude/hooks/"), "a shouted Windows path is not recognised");
@@ -157,7 +167,7 @@ function argsOf(line: string): string[] {
 function invocationsOf(script: string): Invocation[] {
   const found: Invocation[] = [];
   for (const line of script.replace(/\\\r?\n\s*/g, " ").split(/\r?\n/)) {
-    const m = /^\s*(cmp_file|cmp_tree)\s+(.+)$/.exec(line);
+    const m = /^\s*(cmp_file|cmp_tree|cmp_block)\s+(.+)$/.exec(line);
     if (!m) continue;
     const args = argsOf(m[2]);
     if (args.length < 3) continue; // function definition / malformed - not a call

@@ -333,6 +333,34 @@ SH
   ! compgen -G "$C/backups/bootstrap/preflight-*" >/dev/null || fail "secret preflight not cleaned"
 }
 
+# OP-1432. The observation agent is installed by default, so the Confluence
+# brokers and exactly the modules they import are too - without the Atlassian
+# switch, which keeps gating only the Jira and MPAC helpers.
+test_default_confluence_brokers() {
+  local rc tool
+  fixture confluence
+  set +e
+  env -u KHEREP_INSTALL_ATLASSIAN_TOOLS HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" \
+    KHEREP_CREDENTIALS_ROOT="$R" KHEREP_INSTALL_SKIP_GITCONFIG=1 KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE=1 \
+    KHEREP_INSTALL_SKIP_ATL_CREDENTIAL=1 SKIP_SECRETS=1 SKIP_DEPS=1 bash "$HERE/install.sh" > "$ROOT/log" 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { cat "$ROOT/log"; fail "default install failed (rc=$rc)"; }
+  for tool in atlassian-credentials.mts confluence-contract.mts confluence-content.mts confluence-session.mts \
+    confluence-related.mts confluence-semantic.mts confluence-neighbours.mts confluence-neighbour-cli.mts \
+    confluence-runtime-label.mts atl-confluence.mts atl-confluence-ccoder.mts; do
+    same "$HERE/../modules/atl-jira-brokers/$tool" "$W/tools/$tool"
+  done
+  for tool in atl-jira.mts atl-jira-ccoder.mts jira-adf.mts jira-config.mts mpac/mpac.ps1; do
+    [ ! -e "$W/tools/$tool" ] || fail "default install projected the optional helper $tool"
+  done
+  grep -qF "node <workspace>/tools/atl-confluence-ccoder.mts" "$C/agents/claude-obs.md" ||
+    fail "installed claude-obs.md lacks the ccoder invocation"
+  HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
+    bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
+    { cat "$ROOT/drift.log"; fail "drift-check failed after a default install"; }
+}
+
 # OP-1085: the deps phase runs AFTER the commit and must not be able to undo an
 # install. The fake npm answers every install with the Mac EEXIST; the plugin
 # step fails too, via an unreachable claude binary. The install is forced through
@@ -404,5 +432,5 @@ JS
 }
 
 test_library; test_retire; test_lock; test_preflights; test_path_guards; test_partial; test_term; test_commit_signal; test_secrets
-test_deps_failure
+test_deps_failure; test_default_confluence_brokers
 echo 'TRANSACTION TEST PASS'

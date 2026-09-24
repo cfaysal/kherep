@@ -177,7 +177,14 @@ check_profile() {
   }
   [ -e "$workspace/.claude/settings.local.json" ] || { note_fail "MISSING [$profile] project settings"; }
   [ -e "$workspace/CLAUDE.md" ] || { note_fail "MISSING [$profile] project CLAUDE.md"; }
-  local atlassian_tools=(atl-jira.mts atl-jira-ccoder.mts atlassian-credentials.mts jira-adf.mts jira-adf-text.mts jira-attach.mts jira-download.mts jira-config.mts jira-transition-guard.mts jira-fields.mts jira-links.mts jira-search.mts jira-discovery.mts atl-confluence.mts atl-confluence-ccoder.mts confluence-contract.mts confluence-content.mts confluence-session.mts confluence-related.mts confluence-semantic.mts confluence-neighbours.mts confluence-neighbour-cli.mts confluence-runtime-label.mts)
+  # OP-1432. The Confluence set ships with the observation agent: present by default.
+  local confluence_tools=(atlassian-credentials.mts atl-confluence.mts atl-confluence-ccoder.mts confluence-contract.mts confluence-content.mts confluence-session.mts confluence-related.mts confluence-semantic.mts confluence-neighbours.mts confluence-neighbour-cli.mts confluence-runtime-label.mts)
+  for tool in "${confluence_tools[@]}"; do
+    cmp -s "$TMP/repo/modules/atl-jira-brokers/$tool" "$workspace/tools/$tool" || {
+      note_fail "CONFLUENCE BROKER [$profile]: default install did not project $tool";
+    }
+  done
+  local atlassian_tools=(atl-jira.mts atl-jira-ccoder.mts jira-adf.mts jira-adf-text.mts jira-attach.mts jira-download.mts jira-config.mts jira-transition-guard.mts jira-fields.mts jira-links.mts jira-search.mts jira-discovery.mts)
   for tool in "${atlassian_tools[@]}"; do
     [ ! -e "$workspace/tools/$tool" ] || {
       note_fail "OPTIONAL TOOL [$profile]: default install projected $tool";
@@ -188,7 +195,7 @@ check_profile() {
     bash "$TMP/repo/bootstrap/install.sh" >/dev/null; then
     note_fail "OPTIONAL TOOL [$profile]: explicit tools install failed"
   else
-    for tool in "${atlassian_tools[@]}"; do
+    for tool in "${atlassian_tools[@]}" "${confluence_tools[@]}"; do
       cmp -s "$TMP/repo/modules/atl-jira-brokers/$tool" "$workspace/tools/$tool" || {
         note_fail "OPTIONAL TOOL [$profile]: $tool is not projected from its canonical source";
       }

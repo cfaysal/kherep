@@ -15,6 +15,9 @@ export interface AgentRenderOptions {
   // Name the projected Codex agent gets. Defaults to the source name; set it where a
   // runtime needs its own name for the same definition.
   as?: string;
+  // Repo-relative Markdown source for a runtime-specific definition; defaults to
+  // claude/agents/<name>.md.
+  source?: string;
   model?: string;
   reasoning?: string;
   sandbox?: string;

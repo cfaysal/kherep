@@ -149,7 +149,7 @@ function handDeclaredSources(): { label: string; source: string }[] {
   const driftCheck = fs.readFileSync(path.join(repo, "bootstrap", "drift-check.sh"), "utf8")
     .replace(/\\\n\s*/g, " "); // Zeilenfortsetzungen zusammenziehen
   const found: { label: string; source: string }[] = [];
-  const pattern = /cmp_(?:file|tree)\s+"([^"$]+)"\s+"([^"]+)"/g;
+  const pattern = /cmp_(?:file|tree|block)\s+"([^"$]+)"\s+"([^"]+)"/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(driftCheck)) !== null) {
     found.push({ label: match[1], source: match[2] });

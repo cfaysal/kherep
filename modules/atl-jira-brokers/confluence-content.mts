@@ -272,6 +272,43 @@ export async function addLabels(session: ConfluenceSession, id: string, names: s
   return resultsOf(json).map((row) => text(row.name)).filter(Boolean);
 }
 
+// Removal is classic v1 as well. The query form takes any name (the path form
+// refuses "/"), answers 204 with no body, and the doc does not say what it
+// answers for a label the page does not carry - so the result is the labels
+// read back afterwards, not the status of the deletes.
+export async function removeLabels(session: ConfluenceSession, id: string, names: string[]): Promise<string[]> {
+  const pageId = contentId(id, "--id");
+  const unwanted = names.map((name) => name.trim()).filter(Boolean);
+  if (unwanted.length === 0) throw new ConfluenceError("--remove is missing a label name.");
+  for (const name of unwanted) {
+    await session.request({
+      method: "DELETE",
+      path: v1(`/content/${pageId}/label?name=${encodeURIComponent(name)}`),
+      scope: SCOPES.labels,
+    });
+  }
+  return listLabels(session, pageId);
+}
+
+// Reading labels is v2 and paginated by a next link, like the child list.
+export async function listLabels(session: ConfluenceSession, id: string): Promise<string[]> {
+  const pageId = contentId(id, "--id");
+  const out = new Set<string>();
+  let path: string | null = v2(`/pages/${pageId}/labels?limit=250`);
+  while (path) {
+    const { json }: { json: unknown } = await session.request({ method: "GET", path, scope: SCOPES.get });
+    const before = out.size;
+    for (const row of resultsOf(json)) {
+      const name = text(row.name);
+      if (name) out.add(name);
+    }
+    const next = (json as { _links?: { next?: unknown } })?._links?.next;
+    const link = typeof next === "string" && next ? next : "";
+    path = link && out.size > before ? (link.startsWith("/wiki") ? link : `/wiki${link}`) : null;
+  }
+  return [...out];
+}
+
 // GET /wiki/api/v2/spaces?keys=<key>. Only an EXACT key is adopted: the filter
 // can answer with neighbours, and a near miss adopted as the target would file
 // content into the wrong space.

@@ -14,6 +14,8 @@ import {
 } from "./confluence-contract.mts";
 import {
   addLabels,
+  listLabels,
+  removeLabels,
   createPage,
   deletePage,
   findSpace,
@@ -245,6 +247,31 @@ test("labels refuse an empty list instead of posting nothing", async () => {
   const { session, specs } = recorder();
   await assert.rejects(() => addLabels(session, "5001", ["", "  "]), ConfluenceError);
   assert.equal(specs.length, 0);
+});
+
+test("label removal deletes each name through the v1 query form, then reads the page's labels back", async () => {
+  const { session, specs } = recorder([null, null, { results: [{ name: "keep" }] }]);
+  const left = await removeLabels(session, "5001", [" evidence-confirmed ", "a/b", " "]);
+  assert.deepEqual(specs.map((spec) => [spec.method, spec.path]), [
+    ["DELETE", "/wiki/rest/api/content/5001/label?name=evidence-confirmed"],
+    ["DELETE", "/wiki/rest/api/content/5001/label?name=a%2Fb"],
+    ["GET", "/wiki/api/v2/pages/5001/labels?limit=250"],
+  ]);
+  assert.equal(specs[0].scope, SCOPES.labels);
+  assert.deepEqual(left, ["keep"]);
+});
+
+test("label removal refuses an empty list instead of sending nothing", async () => {
+  await assert.rejects(() => removeLabels(NEVER, "5001", ["", "  "]), ConfluenceError);
+});
+
+test("the label list follows the next link to exhaustion", async () => {
+  const { session, specs } = recorder([
+    { results: [{ name: "a" }], _links: { next: "/api/v2/pages/5001/labels?cursor=c1" } },
+    { results: [{ name: "b" }] },
+  ]);
+  assert.deepEqual(await listLabels(session, "5001"), ["a", "b"]);
+  assert.equal(specs[1].path, "/wiki/api/v2/pages/5001/labels?cursor=c1");
 });
 
 test("a space is looked up by exact key and a near miss is not adopted", async () => {

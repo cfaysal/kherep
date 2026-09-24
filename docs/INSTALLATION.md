@@ -68,9 +68,11 @@ Connection profiles ship unconfigured. Kherep does not provision a Confluence sp
 | `KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE` | Skip resolving the Confluence knowledge space (throwaway installs such as the smoke test); only `1` skips |
 | `KHEREP_INSTALL_SKIP_ATL_CREDENTIAL` | Skip reading and live-verifying the Atlassian service-account credential (throwaway installs such as the smoke test); only `1` skips |
 | `KHEREP_INSTALL_SKIP_RUNTIME_AGENT` | Leave the memory runtime agent untouched |
-| `KHEREP_INSTALL_ATLASSIAN_TOOLS` | Opt into Jira/MPAC helpers |
+| `KHEREP_INSTALL_ATLASSIAN_TOOLS` | Opt into Jira/MPAC helpers. The two Confluence brokers and the modules they import are installed without it, because the observation agent needs them |
 | `KHEREP_EXISTING_USER_SETTINGS` | Read-only settings fixture for candidate review |
 | `KHEREP_EXISTING_PROJECT_SETTINGS` | Read-only project-settings fixture |
+| `KHEREP_WORK_ITEM_REQUIRED` | `1` enforces work-item keys under `KHEREP_WORKSPACE`, `0` turns it off. Persisted into the commit policy file; without it an upgrade keeps the installed value, a fresh install uses `0` |
+| `KHEREP_WORK_ITEM_PATTERN` | Extended regex for the accepted key. Persisted into the commit policy file; without it an upgrade keeps the installed pattern |
 
 The Central Brain is the knowledge space the installer resolves for this host; the observation agents write to it through the [Atlassian brokers](../modules/atl-jira-brokers/README.md), which also cover Jira operations. Keep private configuration outside Git.
 
@@ -82,7 +84,7 @@ Claude dispatch defaults to the aliases `opus`, `sonnet`, `haiku` and `fable`, w
 
 Every resulting role pin must occur in the allowed-model list. Empty, malformed or inconsistent policy blocks dispatch. A narrower model list therefore needs corresponding role overrides.
 
-Set `KHEREP_WORK_ITEM_REQUIRED=1` to require work-item keys for repositories under `KHEREP_WORKSPACE`. `KHEREP_WORK_ITEM_PATTERN` configures the accepted subject pattern. The Git `commit-msg` hook enforces the configured rule; the product does not require a particular tracker or space key.
+Set `KHEREP_WORK_ITEM_REQUIRED=1` during installation to require work-item keys for repositories under `KHEREP_WORKSPACE`. `KHEREP_WORK_ITEM_PATTERN` configures the accepted subject pattern. The installer writes the workspace and both values to `kherep/githooks/commit-policy` next to the Git `commit-msg` hook, so the rule binds every commit on the host, whether it comes from a terminal, an IDE, Codex or Claude, without the variables being set there. The file is LF-only `key=value` text, backed up like every managed file and checked by `drift-check.sh`. At commit time a non-empty `KHEREP_WORKSPACE`, `KHEREP_WORK_ITEM_REQUIRED` or `KHEREP_WORK_ITEM_PATTERN` still overrides the file, and `KHEREP_WORK_ITEM=none` still skips the key check for one commit. A malformed file is ignored with a warning instead of blocking commits. The product does not require a particular tracker or space key.
 
 ## Verify the installed runtime
 
@@ -101,6 +103,8 @@ Read the installed source receipt and target files when comparing an upgrade. Re
 Compare managed source and installed files in both directions before replacing an existing setup. Preserve operator edits and inspect an isolated candidate with read-only settings fixtures.
 
 The installer records backups through managed transactions. Verify recovery in a disposable candidate and retain the recorded backup. Never recursively remove a configuration home to repair an installation.
+
+The workspace rule files `CLAUDE.md` and `AGENTS.md` keep the operator's content. Kherep manages only the block between `<!-- kherep-project-rules:start -->` and `<!-- kherep-project-rules:end -->`. The block is a short reference: the Kherep rules themselves are installed at user level, in `~/.claude/CLAUDE.md` for Claude and in the Codex home `AGENTS.md` for Codex, and both runtimes load those files in every session. On the first upgrade the block is appended after the existing text, which stays byte for byte as it was. A file that still equals a template from an earlier Kherep version is replaced by the block, and a file with only one of the two markers is refused before anything changes. Drift checking compares only the block.
 
 Existing memory services can have persisted identities and state outside the managed files. Preserve recovery copies and verify the selected backend before retiring an existing integration.
 

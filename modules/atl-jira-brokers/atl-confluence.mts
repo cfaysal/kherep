@@ -16,6 +16,7 @@ import {
   findSpace,
   getPage,
   purgePage,
+  removeLabels,
   representationFor,
   updatePage,
   type Page,
@@ -172,6 +173,17 @@ async function cmdPurge(ctx: CliContext, args: Args): Promise<number> {
 }
 
 async function cmdLabels(ctx: CliContext, args: Args): Promise<number> {
+  if (args.remove !== undefined) {
+    // The runtime label is computed by the broker; removing it by hand would
+    // make the page's author unattributable.
+    const unwanted = args.remove.split(",").map((name) => name.trim()).filter(Boolean);
+    if (unwanted.some((name) => name.startsWith("runtime-"))) fail("--remove cannot take the runtime label.");
+    const left = await removeLabels(createSession(ctx), args.id ?? "", unwanted);
+    ctx.log(`labels: ${left.join(", ")}`);
+    const stuck = unwanted.filter((name) => left.includes(name));
+    if (stuck.length > 0) fail(`still present: ${stuck.join(", ")}`);
+    if (args.labels === undefined) return 0;
+  }
   // The runtime half is never taken from the caller, here either: the correcting
   // verb is exactly where a wrong one would be introduced by hand.
   const wanted = withRuntimeLabel((args.labels ?? "").split(","), CRED_ENV, ctx.env);

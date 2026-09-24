@@ -56,6 +56,10 @@ node "$HERE/render-profile.mts" settings \
 node "$HERE/render-profile.mts" local-inference "$KHEREP_PROFILE" \
   "$HERE/manifest/local-inference.json" "$CLAUDE_HOME/kherep/local-inference/config.json" \
   "$EXPECTED_DIR/local-inference.json"
+# OP-1426. Same renderer and precedence as install.sh, so a live policy that
+# still matches the install-time values is not reported as drift.
+node "$HERE/commit-policy.mts" render "$WS" \
+  "$CLAUDE_HOME/kherep/githooks/commit-policy" "$EXPECTED_DIR/commit-policy"
 
 drift=0
 # Normalize a file for comparison: machine-absolute ~/.claude path -> portable ~ form (matches
@@ -98,6 +102,23 @@ cmp_file() {
     echo "DRIFT         $rel"; drift=1
   fi
   rm -rf "$normalized_dir"
+}
+
+# OP-1425. A workspace rule file belongs to the operator; only the marked Kherep
+# block in it is compared against the source. Text outside the block is never drift.
+cmp_block() {
+  local rel="$1" repo="$2" live="$3" block_dir rc
+  if [ ! -f "$repo" ]; then printf 'MISSING-REPO  %s (%q)\n' "$rel" "$repo"; drift=1; return; fi
+  if [ ! -f "$live" ]; then printf 'MISSING-LIVE  %s (%q)\n' "$rel" "$live"; drift=1; return; fi
+  block_dir="$(mktemp -d "$EXPECTED_DIR/block.XXXXXX")" || { echo "NORMALIZE-FAIL $rel"; drift=1; return; }
+  node "$HERE/project-rules-block.mts" drift "$repo" "$live" "$block_dir/repo" "$block_dir/live"
+  rc=$?
+  case "$rc" in
+    0) cmp_file "$rel" "$block_dir/repo" "$block_dir/live" ;;
+    3) echo "MISSING-BLOCK $rel"; drift=1 ;;
+    *) echo "BLOCK-INVALID $rel"; drift=1 ;;
+  esac
+  rm -rf "$block_dir"
 }
 
 cmp_tree() {
@@ -145,17 +166,43 @@ if [ "$DRIFT_SCOPE" = "all" ]; then
     "$EXPECTED_DIR/local-inference.json" "$CLAUDE_HOME/kherep/local-inference/config.json"
   cmp_tree "runtime/twg" \
     "$HERE/../modules/twg/runtime" "$CLAUDE_HOME/kherep/twg"
+  cmp_file "kherep/githooks/commit-policy" \
+    "$EXPECTED_DIR/commit-policy" "$CLAUDE_HOME/kherep/githooks/commit-policy"
 fi
 
 # Project-scoped rules are installed/captured explicitly and therefore are not
 # entries in the user-home manifest. They are nevertheless load-bearing and
 # must participate in drift detection.
 cmp_file "project/settings.local.json" "$EXPECTED_DIR/settings.local.json" "$WS/.claude/settings.local.json"
-cmp_file "project/CLAUDE.md" "$CLAUDE_SRC/CLAUDE.project.md" "$WS/CLAUDE.md"
-cmp_file "project/AGENTS.md" "$CLAUDE_SRC/AGENTS.project.md" "$WS/AGENTS.md"
-if [ "$INSTALL_ATLASSIAN_TOOLS" = "1" ]; then
+cmp_block "project/CLAUDE.md" "$CLAUDE_SRC/CLAUDE.project.md" "$WS/CLAUDE.md"
+cmp_block "project/AGENTS.md" "$CLAUDE_SRC/AGENTS.project.md" "$WS/AGENTS.md"
+# OP-1432. The Confluence set ships with the observation agent and is installed
+# on every run, so it is compared on every run too.
 cmp_file "project/tools/atlassian-credentials.mts" \
   "$HERE/../modules/atl-jira-brokers/atlassian-credentials.mts" "$WS/tools/atlassian-credentials.mts"
+# OP-1405. The Confluence broker. Its sources live in the Jira broker directory
+# because the installers copy that directory flat into $WS/tools/.
+cmp_file "project/tools/atl-confluence.mts" \
+  "$HERE/../modules/atl-jira-brokers/atl-confluence.mts" "$WS/tools/atl-confluence.mts"
+cmp_file "project/tools/atl-confluence-ccoder.mts" \
+  "$HERE/../modules/atl-jira-brokers/atl-confluence-ccoder.mts" "$WS/tools/atl-confluence-ccoder.mts"
+cmp_file "project/tools/confluence-contract.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-contract.mts" "$WS/tools/confluence-contract.mts"
+cmp_file "project/tools/confluence-content.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-content.mts" "$WS/tools/confluence-content.mts"
+cmp_file "project/tools/confluence-session.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-session.mts" "$WS/tools/confluence-session.mts"
+cmp_file "project/tools/confluence-related.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-related.mts" "$WS/tools/confluence-related.mts"
+cmp_file "project/tools/confluence-semantic.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-semantic.mts" "$WS/tools/confluence-semantic.mts"
+cmp_file "project/tools/confluence-neighbours.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-neighbours.mts" "$WS/tools/confluence-neighbours.mts"
+cmp_file "project/tools/confluence-neighbour-cli.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-neighbour-cli.mts" "$WS/tools/confluence-neighbour-cli.mts"
+cmp_file "project/tools/confluence-runtime-label.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-runtime-label.mts" "$WS/tools/confluence-runtime-label.mts"
+if [ "$INSTALL_ATLASSIAN_TOOLS" = "1" ]; then
 cmp_file "project/tools/atl-jira.mts" \
   "$HERE/../modules/atl-jira-brokers/atl-jira.mts" "$WS/tools/atl-jira.mts"
 cmp_file "project/tools/atl-jira-ccoder.mts" \
@@ -180,28 +227,6 @@ cmp_file "project/tools/jira-download.mts" \
   "$HERE/../modules/atl-jira-brokers/jira-download.mts" "$WS/tools/jira-download.mts"
 cmp_file "project/tools/jira-discovery.mts" \
   "$HERE/../modules/atl-jira-brokers/jira-discovery.mts" "$WS/tools/jira-discovery.mts"
-# OP-1405. The Confluence broker. Its sources live in the Jira broker directory
-# because the installers copy that directory flat into $WS/tools/.
-cmp_file "project/tools/atl-confluence.mts" \
-  "$HERE/../modules/atl-jira-brokers/atl-confluence.mts" "$WS/tools/atl-confluence.mts"
-cmp_file "project/tools/atl-confluence-ccoder.mts" \
-  "$HERE/../modules/atl-jira-brokers/atl-confluence-ccoder.mts" "$WS/tools/atl-confluence-ccoder.mts"
-cmp_file "project/tools/confluence-contract.mts" \
-  "$HERE/../modules/atl-jira-brokers/confluence-contract.mts" "$WS/tools/confluence-contract.mts"
-cmp_file "project/tools/confluence-content.mts" \
-  "$HERE/../modules/atl-jira-brokers/confluence-content.mts" "$WS/tools/confluence-content.mts"
-cmp_file "project/tools/confluence-session.mts" \
-  "$HERE/../modules/atl-jira-brokers/confluence-session.mts" "$WS/tools/confluence-session.mts"
-cmp_file "project/tools/confluence-related.mts" \
-  "$HERE/../modules/atl-jira-brokers/confluence-related.mts" "$WS/tools/confluence-related.mts"
-cmp_file "project/tools/confluence-semantic.mts" \
-  "$HERE/../modules/atl-jira-brokers/confluence-semantic.mts" "$WS/tools/confluence-semantic.mts"
-cmp_file "project/tools/confluence-neighbours.mts" \
-  "$HERE/../modules/atl-jira-brokers/confluence-neighbours.mts" "$WS/tools/confluence-neighbours.mts"
-cmp_file "project/tools/confluence-neighbour-cli.mts" \
-  "$HERE/../modules/atl-jira-brokers/confluence-neighbour-cli.mts" "$WS/tools/confluence-neighbour-cli.mts"
-cmp_file "project/tools/confluence-runtime-label.mts" \
-  "$HERE/../modules/atl-jira-brokers/confluence-runtime-label.mts" "$WS/tools/confluence-runtime-label.mts"
 cmp_file "project/tools/mpac/mpac.ps1" \
   "$HERE/../modules/mpac-tools/mpac.ps1" "$WS/tools/mpac/mpac.ps1"
 cmp_file "project/tools/mpac/README.md" \

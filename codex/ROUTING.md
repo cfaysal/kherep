@@ -37,14 +37,18 @@ Discover capabilities from the active runtime and current installed bindings. A 
 ## Session observations
 
 After a completed turn, the Maestro dispatches the observation agent for its own runtime with an
-explicit pinned model. On this runtime that agent is `codex-obs`, projected from the shared
-definition through `codex/parity/capabilities.json`; on Claude it is `claude-obs`. The pin is
+explicit pinned model. On this runtime that agent is `codex-obs`, projected from its own worker
+definition `codex/agents/codex-obs.md` through `codex/parity/capabilities.json`; on Claude it is `claude-obs`. The pin is
 enforced at dispatch, not merely configured: a dispatch without a model, or with a different one,
 is denied. An observation run never dispatches another observation run.
 
 The Codex worker is read-only and returns only a strict JSON candidate. The Maestro validates it,
 reads the configured authority and publishes a nonempty candidate. An empty result is valid and
-causes zero writes. Claude keeps its direct-publication workflow.
+causes zero writes. Claude keeps its direct-publication workflow: `claude-obs` starts its final
+message with one `OBS-RESULT: wrote | empty | failed` status line, and the Claude Maestro reports
+`OBS-RESULT: failed` to the user in the same turn as a failure, never as a valid empty result. The
+Codex Maestro does the same for its own publish step: a missing broker, missing credential or
+non-zero broker exit is reported as a failure in the same turn, not as an empty result.
 
 Observations are stored in the Confluence knowledge space configured for this host, read from
 `<runtime-home>/kherep/confluence.json`. On Codex that is `kherep/confluence.json` inside the active
@@ -64,7 +68,7 @@ configuration or call a broker. The Maestro requires `observationPublishingAutho
 `true` in the canonical configuration, scoped to the resolved space identity. The Claude broker and
 its direct-publication path remain separate.
 
-Placement follows the content. The hierarchy says what a page is about and is deliberately
+Placement follows the content. The exception is a node named in the brief: it binds every finding of that run, whatever a finding's content suggests. The hierarchy says what a page is about and is deliberately
 shallow: `Development/General`, `Development/Forge Apps/<App>`, `Development/DC Apps/<App>`,
 `Atlassian`, `Operations`, `Kherep`. Everything else is a label. The product an app variant
 belongs to is one of those labels and never a branch: a monorepo's knowledge is mostly shared,

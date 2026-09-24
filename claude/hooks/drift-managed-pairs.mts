@@ -27,11 +27,13 @@ import { joinPathLike } from "./lib/workspace-scope.mts";
 import { checkoutFor } from "./lib/orchestra-checkout.mts";
 
 // `rendered` marks a live file that install.sh BUILDS from the source, so the
-// edit has to be redone in the source rather than copied over.
+// edit has to be redone in the source rather than copied over. `block` marks a
+// live file of which install.sh manages only the marked Kherep block (OP-1425).
 export interface ManagedPair {
   live: string;
   source: string;
   rendered?: boolean;
+  block?: boolean;
 }
 
 // Pairs drift-check.sh compares outside the manifest loop, in its order.
@@ -49,6 +51,12 @@ export function fixedPairs(home: string, workspace: string): ManagedPair[] {
       rendered: true,
     },
     { live: joinPathLike(home, "kherep/twg"), source: "modules/twg/runtime" },
+    // OP-1426. Rendered from the install-time KHEREP_WORK_ITEM_* values.
+    {
+      live: joinPathLike(home, "kherep/githooks/commit-policy"),
+      source: "bootstrap/commit-policy.mts",
+      rendered: true,
+    },
   ];
   if (!workspace) return pairs;
   // drift-check.sh:131-132 - project-scoped, installed explicitly, not in the manifest.
@@ -58,10 +66,10 @@ export function fixedPairs(home: string, workspace: string): ManagedPair[] {
       source: "claude/settings.project.json",
       rendered: true,
     },
-    { live: joinPathLike(workspace, "CLAUDE.md"), source: "claude/CLAUDE.project.md" },
+    { live: joinPathLike(workspace, "CLAUDE.md"), source: "claude/CLAUDE.project.md", block: true },
     // The Codex-side rule file. Unmanaged until OP-686, which is exactly how it
     // drifted seven rules behind CLAUDE.md without anything noticing.
-    { live: joinPathLike(workspace, "AGENTS.md"), source: "claude/AGENTS.project.md" },
+    { live: joinPathLike(workspace, "AGENTS.md"), source: "claude/AGENTS.project.md", block: true },
     { live: joinPathLike(workspace, "tools/atl-jira.mts"), source: "modules/atl-jira-brokers/atl-jira.mts" },
     {
       live: joinPathLike(workspace, "tools/atlassian-credentials.mts"),

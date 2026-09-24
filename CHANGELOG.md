@@ -9,6 +9,35 @@ increments the minor version; every other release increments the patch version.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-24
+
+### Added
+
+- A commit policy file next to the `commit-msg` hook. The work-item rule now
+  applies to every runtime that runs Git, not only to a process that carries
+  the `KHEREP_*` variables. `KHEREP_WORK_ITEM_REQUIRED` and
+  `KHEREP_WORK_ITEM_PATTERN` given at install time are persisted; a variable
+  set at commit time still overrides the file.
+- `labels --remove` for the Confluence brokers, with a read-back of the labels
+  that remain on the page.
+
+### Changed
+
+- The installer manages only a marked reference block in the workspace
+  `CLAUDE.md` and `AGENTS.md`. Text outside the block stays byte-identical;
+  unedited copies of the previous full template are replaced by the block. The
+  block points to the user-level rules instead of repeating them.
+- The Confluence brokers and the modules they import are installed together
+  with the observation agent. `KHEREP_INSTALL_ATLASSIAN_TOOLS` now only adds
+  the Jira and MPAC helpers.
+- The Claude observation agent has its own definition: it files through the
+  Claude broker only, starts every result with an `OBS-RESULT` status line,
+  keeps findings under a hierarchy node named in the brief and takes the
+  session label from the brief. The Codex worker contract moved to
+  `codex/agents/codex-obs.md`.
+- The drift check compares only the managed block of the workspace rule files
+  and includes the commit policy file.
+
 ## [0.1.0] - 2026-09-24
 
 First public release.
@@ -34,5 +63,6 @@ First public release.
 - Turn-completion observations for Claude and Codex through the service-account
   Confluence path.
 
-[Unreleased]: https://github.com/cfaysal/kherep/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/cfaysal/kherep/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/cfaysal/kherep/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/cfaysal/kherep/releases/tag/v0.1.0

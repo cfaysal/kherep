@@ -6,7 +6,8 @@
       "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts related:*)",
       "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts create:*)",
       "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts labels:*)",
-      "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts stitch:*)"
+      "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts stitch:*)",
+      "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts children:*)"
     ]
   },
   "hooks": {

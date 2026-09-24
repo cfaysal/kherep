@@ -91,12 +91,18 @@ while IFS= read -r rel || [ -n "$rel" ]; do
   [ -e "$CLAUDE_SRC/$rel" ] || { echo "FATAL: managed source missing: claude/$rel"; exit 1; }
 done < "$REPO_ROOT/bootstrap/manifest/files.txt"
 for required in \
-  "$CLAUDE_SRC/CLAUDE.user.md" "$CLAUDE_SRC/CLAUDE.project.md" \
+  "$CLAUDE_SRC/CLAUDE.user.md" "$CLAUDE_SRC/CLAUDE.project.md" "$CLAUDE_SRC/AGENTS.project.md" \
   "$CLAUDE_SRC/settings.user.json" "$CLAUDE_SRC/settings.project.json" \
   "$REPO_ROOT/modules/local-inference/runner.mts" \
   "$REPO_ROOT/modules/local-inference/lib" "$REPO_ROOT/bootstrap/manifest/local-inference.json" \
   "$REPO_ROOT/modules/twg/runtime"; do
   [ -e "$required" ] || { echo "FATAL: managed source missing: $required"; exit 1; }
+done
+# OP-1432. The Confluence brokers and exactly the modules they import ship with
+# the observation agent, so they are installed by default, not behind the switch.
+CONFLUENCE_TOOLS="atlassian-credentials.mts confluence-contract.mts confluence-content.mts confluence-session.mts confluence-related.mts confluence-semantic.mts confluence-neighbours.mts confluence-neighbour-cli.mts confluence-runtime-label.mts atl-confluence.mts atl-confluence-ccoder.mts"
+for tool in $CONFLUENCE_TOOLS; do
+  [ -e "$REPO_ROOT/modules/atl-jira-brokers/$tool" ] || { echo "FATAL: managed source missing: modules/atl-jira-brokers/$tool"; exit 1; }
 done
 if [ "$INSTALL_ATLASSIAN_TOOLS" = "1" ]; then
   for required in "$REPO_ROOT/modules/atl-jira-brokers" "$REPO_ROOT/modules/mpac-tools/mpac.ps1" "$REPO_ROOT/modules/mpac-tools/README.md"; do
@@ -119,8 +125,11 @@ while IFS= read -r rel || [ -n "$rel" ]; do
 done < "$REPO_ROOT/bootstrap/manifest/files.txt"
 transaction_validate_path_under_root "project CLAUDE.md" "$WS/CLAUDE.md" "$WS" 0 || exit $?
 transaction_validate_path_under_root "project settings" "$WS/.claude/settings.local.json" "$WS" 0 || exit $?
+for target in $CONFLUENCE_TOOLS; do
+  transaction_validate_path_under_root "Confluence broker" "$WS/tools/$target" "$WS" 0 || exit $?
+done
 if [ "$INSTALL_ATLASSIAN_TOOLS" = "1" ]; then
-  for target in atl-jira.mts atl-jira-ccoder.mts atlassian-credentials.mts jira-adf.mts jira-adf-text.mts jira-attach.mts jira-download.mts jira-config.mts jira-transition-guard.mts jira-fields.mts jira-links.mts jira-search.mts jira-discovery.mts atl-confluence.mts atl-confluence-ccoder.mts confluence-contract.mts confluence-content.mts confluence-session.mts confluence-related.mts confluence-semantic.mts confluence-neighbours.mts confluence-neighbour-cli.mts confluence-runtime-label.mts; do
+  for target in atl-jira.mts atl-jira-ccoder.mts jira-adf.mts jira-adf-text.mts jira-attach.mts jira-download.mts jira-config.mts jira-transition-guard.mts jira-fields.mts jira-links.mts jira-search.mts jira-discovery.mts; do
     transaction_validate_path_under_root "optional Atlassian tool" "$WS/tools/$target" "$WS" 0 || exit $?
   done
 fi
@@ -128,6 +137,7 @@ transaction_validate_path_under_root "local-inference runner" "$CLAUDE_HOME/kher
 transaction_validate_path_under_root "local-inference lib" "$CLAUDE_HOME/kherep/local-inference/lib" "$CLAUDE_HOME" 0 || exit $?
 transaction_validate_path_under_root "local-inference config" "$CLAUDE_HOME/kherep/local-inference/config.json" "$CLAUDE_HOME" 0 || exit $?
 transaction_validate_path_under_root "TWG runtime" "$CLAUDE_HOME/kherep/twg" "$CLAUDE_HOME" 0 || exit $?
+transaction_validate_path_under_root "commit policy" "$CLAUDE_HOME/kherep/githooks/commit-policy" "$CLAUDE_HOME" 0 || exit $?
 if [ "$SKIP_SECRETS" = "0" ]; then
   for target in \
     "$CLAUDE_HOME/.mcp.json"; do
@@ -151,6 +161,18 @@ node "$REPO_ROOT/bootstrap/render-profile.mts" settings \
 node "$REPO_ROOT/bootstrap/render-profile.mts" local-inference "$KHEREP_PROFILE" \
   "$REPO_ROOT/bootstrap/manifest/local-inference.json" \
   "$CLAUDE_HOME/kherep/local-inference/config.json" "$PREFLIGHT_DIR/local-inference.json"
+# OP-1426. The commit-msg hook reads this file when KHEREP_* is absent, so the
+# work-item rule binds every runtime. Rendered here so an invalid value stops
+# the run before the first live mutation; precedence in bootstrap/commit-policy.mts.
+node "$REPO_ROOT/bootstrap/commit-policy.mts" render "$WS" \
+  "$CLAUDE_HOME/kherep/githooks/commit-policy" "$PREFLIGHT_DIR/commit-policy"
+# OP-1425. $WS/CLAUDE.md and $WS/AGENTS.md belong to the operator; Kherep renders
+# only its marked block into them. Rendered here so a refused merge (one marker
+# without the other) stops the run before the first live mutation.
+for rules in CLAUDE AGENTS; do
+  node "$REPO_ROOT/bootstrap/project-rules-block.mts" render \
+    "$CLAUDE_SRC/$rules.project.md" "$WS/$rules.md" "$PREFLIGHT_DIR/project-$rules.md"
+done
 
 # Decrypt and validate the complete bundle before the first live mutation.
 # Decrypted YAML stays in the sops->node pipe; decoded staging files are mode
@@ -170,13 +192,16 @@ while IFS= read -r rel || [ -n "$rel" ]; do
   case "$rel" in settings.json|CLAUDE.md) continue;; esac
   install_entry "$rel" "$CLAUDE_SRC" "$CLAUDE_HOME" "$INSTALL_BACKUP"
 done < "$REPO_ROOT/bootstrap/manifest/files.txt"
+install_path "kherep/githooks/commit-policy" "$PREFLIGHT_DIR/commit-policy" \
+  "$CLAUDE_HOME/kherep/githooks/commit-policy" "$INSTALL_BACKUP/kherep/githooks/commit-policy"
+echo "install: commit policy -> $(grep '^work_item_required=' "$PREFLIGHT_DIR/commit-policy") ($CLAUDE_HOME/kherep/githooks/commit-policy)"
 install_path "CLAUDE.md" "$CLAUDE_SRC/CLAUDE.user.md" "$CLAUDE_HOME/CLAUDE.md" "$INSTALL_BACKUP/CLAUDE.md"
-install_path "project/CLAUDE.md" "$CLAUDE_SRC/CLAUDE.project.md" "$WS/CLAUDE.md" "$INSTALL_BACKUP/project/CLAUDE.md"
+install_path "project/CLAUDE.md" "$PREFLIGHT_DIR/project-CLAUDE.md" "$WS/CLAUDE.md" "$INSTALL_BACKUP/project/CLAUDE.md"
 # AGENTS.md is what binds the Codex runtime. It existed live since months with no
 # versioned source at all (OP-686): not in the manifest, never installed, and
 # therefore invisible to drift-check. It had drifted seven rules behind CLAUDE.md,
 # including the work-item rule itself.
-install_path "project/AGENTS.md" "$CLAUDE_SRC/AGENTS.project.md" "$WS/AGENTS.md" "$INSTALL_BACKUP/project/AGENTS.md"
+install_path "project/AGENTS.md" "$PREFLIGHT_DIR/project-AGENTS.md" "$WS/AGENTS.md" "$INSTALL_BACKUP/project/AGENTS.md"
 # Both brokers import these modules. Install shared dependencies first so a
 # successful transaction never leaves a broker pointing at a missing import.
 #
@@ -186,10 +211,18 @@ install_path "project/AGENTS.md" "$CLAUDE_SRC/AGENTS.project.md" "$WS/AGENTS.md"
 # ran an older install. The Codex installer moves those copies into its backup
 # through RETIRED_WORKSPACE_TARGETS. A Bootstrap-only rollout must also move the
 # six old files into a dated backup; it must never delete them in place.
+# OP-1432. The Confluence set ships with the observation agent and is installed
+# on every run; the Jira brokers below import atlassian-credentials.mts from it.
+# OP-1405. CONFLUENCE_TOOLS lists the shared modules BEFORE the two CLIs, as in
+# the Jira set below, so a partially applied run never leaves a broker whose
+# imports are missing.
+for tool in $CONFLUENCE_TOOLS; do
+  install_path "project/tools/$tool" \
+    "$REPO_ROOT/modules/atl-jira-brokers/$tool" "$WS/tools/$tool" \
+    "$INSTALL_BACKUP/project/tools/$tool"
+done
+
 if [ "$INSTALL_ATLASSIAN_TOOLS" = "1" ]; then
-install_path "project/tools/atlassian-credentials.mts" \
-  "$REPO_ROOT/modules/atl-jira-brokers/atlassian-credentials.mts" "$WS/tools/atlassian-credentials.mts" \
-  "$INSTALL_BACKUP/project/tools/atlassian-credentials.mts"
 install_path "project/tools/jira-adf.mts" \
   "$REPO_ROOT/modules/atl-jira-brokers/jira-adf.mts" "$WS/tools/jira-adf.mts" \
   "$INSTALL_BACKUP/project/tools/jira-adf.mts"
@@ -226,40 +259,6 @@ install_path "project/tools/atl-jira.mts" \
 install_path "project/tools/atl-jira-ccoder.mts" \
   "$REPO_ROOT/modules/atl-jira-brokers/atl-jira-ccoder.mts" "$WS/tools/atl-jira-ccoder.mts" \
   "$INSTALL_BACKUP/project/tools/atl-jira-ccoder.mts"
-# OP-1405. The Confluence broker. The shared modules are installed BEFORE the
-# two CLIs, like the Jira set above, so a partially applied run never leaves a
-# broker whose imports are missing.
-install_path "project/tools/confluence-contract.mts" \
-  "$REPO_ROOT/modules/atl-jira-brokers/confluence-contract.mts" "$WS/tools/confluence-contract.mts" \
-  "$INSTALL_BACKUP/project/tools/confluence-contract.mts"
-install_path "project/tools/confluence-content.mts" \
-  "$REPO_ROOT/modules/atl-jira-brokers/confluence-content.mts" "$WS/tools/confluence-content.mts" \
-  "$INSTALL_BACKUP/project/tools/confluence-content.mts"
-install_path "project/tools/confluence-session.mts" \
-  "$REPO_ROOT/modules/atl-jira-brokers/confluence-session.mts" "$WS/tools/confluence-session.mts" \
-  "$INSTALL_BACKUP/project/tools/confluence-session.mts"
-install_path "project/tools/confluence-related.mts" \
-  "$REPO_ROOT/modules/atl-jira-brokers/confluence-related.mts" "$WS/tools/confluence-related.mts" \
-  "$INSTALL_BACKUP/project/tools/confluence-related.mts"
-install_path "project/tools/confluence-semantic.mts" \
-  "$REPO_ROOT/modules/atl-jira-brokers/confluence-semantic.mts" "$WS/tools/confluence-semantic.mts" \
-  "$INSTALL_BACKUP/project/tools/confluence-semantic.mts"
-install_path "project/tools/confluence-neighbours.mts" \
-  "$REPO_ROOT/modules/atl-jira-brokers/confluence-neighbours.mts" "$WS/tools/confluence-neighbours.mts" \
-  "$INSTALL_BACKUP/project/tools/confluence-neighbours.mts"
-install_path "project/tools/confluence-neighbour-cli.mts" \
-  "$REPO_ROOT/modules/atl-jira-brokers/confluence-neighbour-cli.mts" "$WS/tools/confluence-neighbour-cli.mts" \
-  "$INSTALL_BACKUP/project/tools/confluence-neighbour-cli.mts"
-install_path "project/tools/confluence-runtime-label.mts" \
-  "$REPO_ROOT/modules/atl-jira-brokers/confluence-runtime-label.mts" "$WS/tools/confluence-runtime-label.mts" \
-  "$INSTALL_BACKUP/project/tools/confluence-runtime-label.mts"
-install_path "project/tools/atl-confluence.mts" \
-  "$REPO_ROOT/modules/atl-jira-brokers/atl-confluence.mts" "$WS/tools/atl-confluence.mts" \
-  "$INSTALL_BACKUP/project/tools/atl-confluence.mts"
-install_path "project/tools/atl-confluence-ccoder.mts" \
-  "$REPO_ROOT/modules/atl-jira-brokers/atl-confluence-ccoder.mts" "$WS/tools/atl-confluence-ccoder.mts" \
-  "$INSTALL_BACKUP/project/tools/atl-confluence-ccoder.mts"
-
 # MPAC-Tools (OP-967). Ohne diese Eintraege waere mpac.ps1 zwar versioniert,
 # aber unbeobachtet - genau daraus entsteht der Drift aus Golden Rule #14.
 install_path "project/tools/mpac/mpac.ps1" \
@@ -401,7 +400,9 @@ fi
 # Codex, by the IDE or by hand in a terminal never pass through it, so the
 # binding rule lives in a git hook. One shared core.hooksPath, so there are no
 # per-repo copies to drift apart. The hook itself is scoped to KHEREP_WORKSPACE
-# and stays out of the way everywhere else.
+# and stays out of the way everywhere else. Its policy (workspace, required,
+# pattern) is the commit-policy file placed inside the transaction in section A
+# (OP-1426), so it also binds processes that do not carry KHEREP_*.
 #
 # core.hooksPath is real, machine-wide git state, NOT a managed file under
 # CLAUDE_HOME. The smoke test runs this installer against a throwaway profile

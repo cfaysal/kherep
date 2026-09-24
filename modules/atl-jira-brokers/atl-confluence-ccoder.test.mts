@@ -270,3 +270,45 @@ test(`${BROKER} reports a move it cannot see at the target as UNVERIFIED`, async
   assert.match(err.join("\n"), /UNVERIFIED/);
   assert.doesNotMatch(out.join("\n"), /readback parent/);
 });
+
+// OP-1436. The labels verb could only add, so a wrong evidence or session label
+// could not be corrected without leaving two contradicting labels on the page.
+function labelApi(after: string[]) {
+  return (call: Call): HttpResponse => {
+    if (call.options?.method === "DELETE") return response(204, null);
+    if (call.url.includes("/pages/5001/labels")) return response(200, { results: after.map((name) => ({ name })) });
+    return response(200, { results: [] });
+  };
+}
+
+test(`${BROKER} removes labels and proves it from a separate read of the page's labels`, async () => {
+  const { out, calls, injected } = harness({ api: labelApi(["type-observation", "evidence-assumed"]) });
+  assert.equal(await runCli(["labels", "--id", "5001", "--remove", "evidence-confirmed"], injected), 0);
+  const deletes = calls.filter((call) => call.options?.method === "DELETE");
+  assert.deepEqual(deletes.map((call) => call.url.replace(/^.*\/wiki/, "/wiki")),
+    ["/wiki/rest/api/content/5001/label?name=evidence-confirmed"]);
+  assert.ok(!calls.some((call) => call.options?.method === "POST" && call.url.includes("/label")),
+    "a pure removal must not post the runtime label");
+  assert.match(out.join("\n"), /^labels: type-observation, evidence-assumed$/m);
+});
+
+test(`${BROKER} removes first, then adds, when both are given`, async () => {
+  const { calls, injected } = harness({ api: labelApi(["type-observation"]) });
+  assert.equal(await runCli(["labels", "--id", "5001", "--remove", "evidence-confirmed", "--labels", "evidence-assumed"], injected), 0);
+  const writes = calls.filter((call) => call.options?.method === "DELETE" || call.options?.method === "POST")
+    .filter((call) => call.url.includes("/label"));
+  assert.deepEqual(writes.map((call) => call.options?.method), ["DELETE", "POST"]);
+});
+
+test(`${BROKER} fails when a removed label is still on the page afterwards`, async () => {
+  const { err, injected } = harness({ api: labelApi(["evidence-confirmed"]) });
+  assert.equal(await runCli(["labels", "--id", "5001", "--remove", "evidence-confirmed"], injected), 1);
+  assert.match(err.join("\n"), /still present: evidence-confirmed/);
+});
+
+test(`${BROKER} refuses to remove the runtime label before sending anything`, async () => {
+  const { err, calls, injected } = harness({ api: labelApi([]) });
+  assert.equal(await runCli(["labels", "--id", "5001", "--remove", "runtime-claude-code-win"], injected), 1);
+  assert.ok(!calls.some((call) => call.url.includes("/label")), "no label request may be sent");
+  assert.match(err.join("\n"), /runtime label/);
+});
