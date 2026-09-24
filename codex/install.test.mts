@@ -370,7 +370,8 @@ test("installs the Mac-compatible projection without replacing user state", asyn
   const observationTarget = path.join(result.targets.hookDir, "codex-observation-turn-completion.mts");
   assert.equal(fs.readFileSync(observationTarget, "utf8"), renderedObservationHook(workspace));
   const stop = renderedHookGroup(config, "Stop");
-  assert.equal(occurrences(stop, "codex-observation-stop.mts"), 1);
+  assert.equal(occurrences(stop, "codex-observation-stop.mts"), 0);
+  assert.equal(occurrences(stop, "codex-acceptance-gate.mts"), 1);
   assert.equal(occurrences(stop, "codex-observation-turn-completion.mts"), 0);
   assert.equal(
     fs.readFileSync(result.targets.registryRuntime, "utf8"),
@@ -633,7 +634,8 @@ test("is idempotent and backs up the previously managed projection", (t) => {
     fs.readFileSync(path.join(second.backupRoot, "hooks", "kherep-maestro", "codex-observation-turn-completion.mts")),
     Buffer.from(renderedObservationHook(workspace)),
   );
-  assert.equal(occurrences(renderedHookGroup(config, "Stop"), "codex-observation-turn-completion.mts"), 1);
+  assert.equal(occurrences(renderedHookGroup(config, "Stop"), "codex-observation-turn-completion.mts"), 0);
+  assert.equal(occurrences(renderedHookGroup(config, "Stop"), "codex-acceptance-gate.mts"), 1);
   assert.equal(fs.existsSync(staleSkill), false);
   assert.equal(
     fs.readFileSync(path.join(second.backupRoot, "skills", "stale-plugin-skill", "SKILL.md"), "utf8"),
@@ -1090,7 +1092,7 @@ test("removes projection files that the TypeScript migration renamed", (t) => {
   }
 });
 
-test("Mac install copies and configures the observation Stop hook", (t) => {
+test("Mac install keeps observation hooks unconfigured and acceptance active", (t) => {
   const { root, codexHome, installOptions, workspace } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = install({ ...installOptions, platform: "darwin" });
@@ -1112,7 +1114,7 @@ test("Mac install copies and configures the observation Stop hook", (t) => {
   assert.equal(gate.status, 0, gate.stderr);
   assert.equal(JSON.parse(gate.stdout).continue, false);
   const config = fs.readFileSync(result.targets.config, "utf8");
-  assert.match(config, /codex-observation-stop\.mts/);
-  assert.doesNotMatch(config, /codex-acceptance-gate\.mts/);
+  assert.doesNotMatch(config, /codex-observation-(?:stop|turn-completion)\.mts/);
+  assert.match(config, /codex-acceptance-gate\.mts/);
   assert.equal(fs.readFileSync(install({ ...installOptions, platform: "darwin" }).targets.config, "utf8"), config);
 });

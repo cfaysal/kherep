@@ -276,15 +276,15 @@ test("upgrades the exact pre-observation projection with and without retired nat
   ];
 
   for (const { options, written } of variants) {
-    const previous = omitObservation(render(written));
+    const previous = omitObservation(render({ ...written, observationStopHook: false }));
     assert.match(previous, /codex-confluence-delivery-check\.mts/);
     assert.doesNotMatch(previous, /codex-observation-turn-completion\.mts/);
     const config = [START, previous, END, ""].join("\n");
 
     const result = prepareManagedConfig(config, options);
-    assert.equal(result.managedFragment, "replaced");
+    assert.equal(result.managedFragment, options.retiredCentralBrain ? "replaced" : "current");
     assert.equal((result.config.match(/codex-confluence-delivery-check\.mts/g) || []).length, 1);
-    assert.equal((result.config.match(/codex-observation-turn-completion\.mts/g) || []).length, 1);
+    assert.equal((result.config.match(/codex-observation-turn-completion\.mts/g) || []).length, 0);
     assert.doesNotMatch(result.config, /central-brain|native-context|native-capture/);
     assert.equal(prepareManagedConfig(result.config, options).managedFragment, "current");
     assert.throws(

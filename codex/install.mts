@@ -269,7 +269,6 @@ export function install(options: InstallOptions = {}) {
     // recognised as managed and replaced; the selection file goes to the backup.
     retiredCentralBrain: retiredMemoryProvider?.binding
       ? retiredCentralBrainRender(retiredMemoryProvider.binding, mcp.node) : undefined,
-    observationStopHook: platform === "darwin",
     startMarker: CONFIG_START,
     endMarker: CONFIG_END,
     retiredMcpServerNames,

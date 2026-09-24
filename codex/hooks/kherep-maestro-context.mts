@@ -60,6 +60,8 @@ export function turnContext(): string {
     "5. Before done, inspect the final diff and report C1 correctness, C2 verification, C3 safety, and C4 scope integrity.",
     "6. Do not claim memory of prior sessions unless the active context or current artifacts establish it.",
     "7. Trivial conversation skips orchestration ceremony.",
+    "8. Before final, dispatch codex-obs once with agent_type codex-obs, model gpt-5.6-luna, reasoning_effort low, fork_turns none; pass only a bounded nonprivate summary and require strict JSON.",
+    "9. Validate candidates; publish nonempty observations only from the Maestro through the configured Codex Confluence broker when observationPublishingAuthorized is literal true. Empty means zero writes; keep routine observation status out of the user answer.",
   ].join("\n");
 }
 

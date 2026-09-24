@@ -14,17 +14,15 @@ Existing reminders and acceptance hooks remain configured. Historical renderers 
 
 ## Turn-completion observations
 
-Windows projects separate acceptance and observation Stop commands. macOS projects a combined Stop command that applies acceptance and dispatches the same read-only candidate flow. Both commands receive the selected workspace broker path at installation.
+Both hosts project an acceptance-only `Stop` group. The `UserPromptSubmit` Maestro context hook supplies a quiet per-turn instruction to dispatch `codex-obs` once before final. Previous macOS combined and Windows separate observation Stop blocks are recognized as managed and replaced during reinstall. Their old script files may remain installed but are not configured, so they cannot produce user-visible observation continuation prompts.
 
-The normal Codex projection installs the `codex-obs` role, rendered from its own worker-only source `codex/agents/codex-obs.md` (the `source` field of its entry in `codex/parity/capabilities.json`; the Claude `claude-obs` definition is not projected), one turn-completion Stop hook and the ten-file minimal Codex service-account Confluence graph. That graph consists of `atl-confluence.mts`, the shared `atlassian-credentials.mts` parser and eight Confluence modules: contract, content, session, related, semantic, neighbours, neighbour CLI and runtime label.
-
-The managed Stop group runs the acceptance gate first, requests the observation continuation once and then runs optional native capture. The continued turn stops with `stop_hook_active=true`, which suppresses a second observation dispatch. The observation hook requests exactly one `codex-obs` dispatch with `fork_turns: "none"` and passes only the completed turn, relevant tool evidence and compact task state. In Codex, the worker performs no configuration or broker I/O and returns one strict JSON candidate envelope. Its role is projected with `sandbox_mode = "read-only"`; together with restricted subagent execution, this prevents worker filesystem writes and withholds the Maestro's escalated network execution. The current Codex role projection has no supported finer per-tool deny schema, so no invented configuration field is emitted; the candidate-only instruction additionally forbids configuration and broker calls. Each candidate contains exactly `title`, `bodyStorage`, `evidence`, `labels` and `placement`; placement is exactly `{ project, app }` and the worker supplies only the three base labels. The trusted Maestro main thread validates that envelope and adds session or runtime details during publication. An empty `observations` array performs zero writes; for nonempty candidates, the main thread checks authority and runs related, create/readback and stitch through the Codex service-account broker. At install time, the selected workspace is resolved and its concrete `tools/atl-confluence.mts` path is rendered into the installed hook as a PowerShell single-quoted literal; embedded single quotes are doubled, keeping spaces and `$()` non-interpolating. A missing or ambiguous source sentinel fails installation, and the installed artifact has neither a placeholder nor a checkout/default-workspace fallback.
+The normal projection installs the `codex-obs` role from `codex/agents/codex-obs.md` and the ten-file minimal Codex service-account Confluence graph. That graph consists of `atl-confluence.mts`, the shared `atlassian-credentials.mts` parser and eight Confluence modules: contract, content, session, related, semantic, neighbours, neighbour CLI and runtime label. The Maestro sends only a bounded nonprivate summary to the worker with `fork_turns: "none"`. The worker returns strict JSON candidates and performs no configuration or broker I/O. Its projected `sandbox_mode = "read-only"` prevents worker filesystem writes; restricted subagent execution withholds the Maestro's escalated network authority. The candidate envelope includes `title`, `bodyStorage`, `evidence`, `labels` and `placement`. The Maestro validates it, checks canonical publishing authority, and uses the Codex service-account broker for related search, create/readback and stitch. Empty `observations` means zero writes. The context hook forwards no prompt or transcript content.
 
 The canonical host target is `<CODEX_HOME>/kherep/confluence.json`. On migration, `orchestra/confluence.json` may supply only its `spaceKey`. The setup helper revalidates that key through the Codex `atl-confluence.mts` service-account broker before writing the canonical file, and retains the legacy file. The PowerShell `-AuthorizeObservationPublishing` switch explicitly adds literal `observationPublishingAuthorized: true`. Reinstallation without the switch preserves an existing canonical literal `true` only when the prior canonical `spaceId` equals the newly resolved `spaceId`; a fresh install or changed space identity omits the property, and a legacy file can never supply it. The helper never persists false.
 
 Before a Codex write, the trusted Maestro main thread reads the canonical file and requires the authority property to be literal `true`; absence or any other value produces `publication not authorized` and no write. The value is durable standing authority only for non-secret observation pages in that configured space through the Codex service account. It grants no authority over other spaces, content types, secrets, identities or permissions. The candidate worker cannot publish and does not read configuration. This is a Codex-only split and leaves Claude's direct broker path unchanged. Jira, MPAC, Rovo and the Claude Jira and Confluence brokers remain optional. Codex and Claude service-account credential bindings remain separate.
 
-Installed source and configuration prove only what was projected. They do not prove that the host trusted or ran the hook, that a main-turn continuation occurred, or that Confluence accepted and read back a write. Manual one-observation delivery, a manual `0 observations` result and automatic main-turn dispatch are separate acceptance evidence. Until each is measured at the Windows target, its live status is UNKNOWN.
+Installed source and configuration prove only what was projected. They do not prove that the host trusted or ran the hook, that an automatic observation dispatch occurred, or that Confluence accepted and read back a write. Manual one-observation delivery, a manual `0 observations` result and automatic quiet main-turn dispatch are separate acceptance evidence. Until each is measured at the Windows target, its live status is UNKNOWN.
 
 ## MCP projection
 
@@ -32,13 +30,14 @@ Installed source and configuration prove only what was projected. They do not pr
 flowchart TB
     subgraph T[Turn-completion observation path]
         direction LR
-        I[Managed Codex installation] --> ST[Stop group:<br/>1 acceptance gate<br/>2 observation continuation<br/>3 optional native capture]
+        I[Managed Codex installation] --> ST[Stop group:<br/>acceptance gate<br/>optional native capture]
         I --> MA[Maestro]
         I --> OB[codex-obs]
-        ST --> MA
+        I --> UC[UserPromptSubmit context hook]
+        UC --> MA
         MA --> OB
         OB -->|strict JSON candidates only| MA
-        MA -->|continued Stop:<br/>stop_hook_active=true| NR[No second observation dispatch]
+        MA --> NR[One observation pass per main turn]
         I --> CB[atl-confluence.mts]
         I --> CT[CODEX_HOME/kherep/confluence.json]
         CT --> MA

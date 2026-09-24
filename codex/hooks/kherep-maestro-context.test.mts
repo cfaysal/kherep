@@ -35,6 +35,9 @@ function run(input: unknown, env: NodeJS.ProcessEnv = {}) {
   assert.match(result.stdout, /MAESTRO TURN CHECK/);
   assert.match(result.stdout, /C1 correctness/);
   assert.match(result.stdout, /Never overlap writes/i);
+  assert.match(result.stdout, /dispatch codex-obs once.*gpt-5\.6-luna.*fork_turns none/);
+  assert.match(result.stdout, /observationPublishingAuthorized is literal true/);
+  assert.doesNotMatch(result.stdout, /Before the final response, dispatch the codex-obs agent/);
 }
 
 {

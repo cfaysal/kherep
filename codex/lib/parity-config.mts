@@ -39,6 +39,8 @@ export interface RenderOptions extends McpRenderOptions {
   hookDir: string;
   node: string;
   nativeHooks?: { contextCli: string; captureCli: string; profile: string; extraCaCertificates?: string };
+  // Legacy renders only: true was the combined macOS Stop hook, false was the
+  // separate Windows observation Stop hook. Omitted means quiet observations.
   observationStopHook?: boolean;
 }
 
@@ -120,11 +122,13 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
     ]),
     hookGroup("PreCompact", "manual|auto", [hook("codex-precompact-checkpoint.mts", { timeout: 30 })]),
     hookGroup("Stop", "", [
-      ...(options.observationStopHook
+      ...(options.observationStopHook === true
         ? [hook("codex-observation-stop.mts", { timeout: 30 })]
         : [
           hook("codex-acceptance-gate.mts", { timeout: 30 }),
-          hook("codex-observation-turn-completion.mts", { timeout: 30 }),
+          ...(options.observationStopHook === false
+            ? [hook("codex-observation-turn-completion.mts", { timeout: 30 })]
+            : []),
         ]),
       ...native(options.nativeHooks?.captureCli, 10),
     ]),

@@ -103,12 +103,10 @@ test("native hooks add exactly one command per event and preserve reminders and 
   assert.match(config, /codex-acceptance-gate\.mts/);
   const stop = config.split("[[hooks.Stop]]")[1]!.split(/\n\[\[hooks\.[A-Za-z]+\]\]/)[0]!;
   assert.equal((stop.match(/codex-acceptance-gate\.mts/g) || []).length, 1);
-  assert.equal((stop.match(/codex-observation-turn-completion\.mts/g) || []).length, 1);
+  assert.equal((stop.match(/codex-observation-turn-completion\.mts/g) || []).length, 0);
   assert.equal((stop.match(/native-capture\.mjs/g) || []).length, 1);
-  assert.ok(stop.indexOf("codex-acceptance-gate.mts") < stop.indexOf("codex-observation-turn-completion.mts"));
-  assert.ok(stop.indexOf("codex-observation-turn-completion.mts") < stop.indexOf("native-capture.mjs"));
-  const observation = stop.slice(stop.indexOf("codex-observation-turn-completion.mts"));
-  assert.match(observation, /timeout = 30/);
+  assert.ok(stop.indexOf("codex-acceptance-gate.mts") < stop.indexOf("native-capture.mjs"));
+  assert.match(stop, /timeout = 30/);
   for (const renderer of [renderPreviousNudges, renderPreviousNudgesPrefix,
     renderLegacyJavaScript, renderLegacyJavaScriptPrefix]) {
     assert.equal(renderer(options), renderer({ ...options, nativeHooks: undefined }));
@@ -227,14 +225,13 @@ test("renders the full hook and MCP parity contract without secret values", () =
   assert.match(config, /\[mcp_servers\.atlassian\][\s\S]*?url = "https:\/\/example\.test\/atlassian"/);
   assert.match(config, /\[mcp_servers\.openaiDeveloperDocs\][\s\S]*?url = "https:\/\/example\.test\/docs"/);
   assert.match(config, /codex-acceptance-gate\.mts/);
-  assert.match(config, /codex-observation-turn-completion\.mts/);
+  assert.doesNotMatch(config, /codex-observation-(?:stop|turn-completion)\.mts/);
   assert.match(config, /codex-hook-adapter\.mts/);
   assert.doesNotMatch(config, /codex-memory-(prompt|notify)\.js/,
     "routing hooks must not forward prompt or turn content");
   const stop = config.split("[[hooks.Stop]]")[1]!.split(/\n\[\[hooks\.[A-Za-z]+\]\]/)[0]!;
-  const observation = stop.slice(stop.indexOf("codex-observation-turn-completion.mts"));
-  assert.doesNotMatch(observation, /transcript|Authorization|Bearer|token/i,
-    "the observation hook command must not receive transcripts or secrets");
+  assert.doesNotMatch(stop, /transcript|Authorization|Bearer|token/i,
+    "the Stop hook command must not receive transcripts or secrets");
   assert.match(config, /functions\\\\\.exec/);
   assert.doesNotMatch(config, /clq-accept-gate|ensure-daemon/);
   assert.doesNotMatch(config, /Authorization|Bearer|token/i);
@@ -339,8 +336,26 @@ test('an installation predating every post-legacy hook is still recognised as ma
 
   const old = `${managed.startMarker}\n${previous}\n${managed.endMarker}`;
   const upgraded = prepareManagedConfig(old, managed).config;
-  for (const name of names) assert.ok(upgraded.includes(name), `${name} never reached the upgraded block`);
+  assert.match(upgraded, /codex-confluence-delivery-check\.mts/);
+  assert.doesNotMatch(upgraded, /codex-observation-turn-completion\.mts/);
   assert.equal(prepareManagedConfig(upgraded, managed).config, upgraded, 'the upgrade has to settle');
+});
+
+test("quiet projection upgrades both previous Stop variants and keeps acceptance", () => {
+  const options = { contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks",
+    node: "/synthetic/node", mcpServers: [] };
+  const managed = { ...options, startMarker: "# start synthetic", endMarker: "# end synthetic",
+    retiredMcpServerNames: [], registryProjections: [], pluginMcpServers: {}, registry: "/synthetic/registry.json",
+    registryBridge: "/synthetic/bridge.mts", registryRuntime: "/synthetic/runtime.mts",
+    memoryNotifyHook: "/synthetic/notify.mts" };
+  for (const observationStopHook of [true, false]) {
+    const old = `${managed.startMarker}\n${render({ ...options, observationStopHook })}${managed.endMarker}`;
+    const upgraded = prepareManagedConfig(old, managed).config;
+    const stop = upgraded.split("[[hooks.Stop]]")[1]!.split("[[hooks.SubagentStart]]")[0]!;
+    assert.match(stop, /codex-acceptance-gate\.mts/);
+    assert.doesNotMatch(stop, /codex-observation-(?:stop|turn-completion)\.mts/);
+    assert.equal(prepareManagedConfig(upgraded, managed).config, upgraded);
+  }
 });
 
 test("Mac observation Stop projection replaces only the acceptance command", () => {
