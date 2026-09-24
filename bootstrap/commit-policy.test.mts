@@ -136,3 +136,72 @@ test("a real git commit without KHEREP_* is rejected without a key and accepted 
   assert.equal(accepted.status, 0, accepted.stderr);
   assert.equal(git("log", "--format=%s").stdout.trim(), "ABC-1 fix: with key");
 });
+
+// Per-repository opt-out: `git config --local kherep.workItemRequired false`.
+// Precedence: a non-empty KHEREP_WORK_ITEM_REQUIRED, then the repository-local
+// config, then the policy file. Only a valid Git boolean false opts out.
+function setRepoConfig(f: Fixture, value: string): void {
+  assert.equal(spawnSync("git", ["config", "--local", "kherep.workItemRequired", value], { cwd: f.repo }).status, 0);
+}
+
+test("a repository-local false value opts the repository out of the key rule", (t) => {
+  const f = fixture(t);
+  writePolicy(f, [`workspace=${fwd(f.workspace)}`, "work_item_required=1"]);
+  assert.equal(runHook(f, "fix: no key before opt-out").status, 1);
+  for (const value of ["0", "false", "No", "OFF"]) {
+    setRepoConfig(f, value);
+    const result = runHook(f, "fix: opted out");
+    assert.equal(result.status, 0, `${value}: ${result.stderr}`);
+  }
+});
+
+test("an opted-out repository still rejects an AI attribution trailer", (t) => {
+  const f = fixture(t);
+  writePolicy(f, [`workspace=${fwd(f.workspace)}`, "work_item_required=1"]);
+  setRepoConfig(f, "false");
+  const result = runHook(f, "fix: opted out\n\nCo-authored-by: Example <bot@example.com>");
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /AI attribution trailer/);
+});
+
+test("an invalid or true repository value does not opt out", (t) => {
+  const f = fixture(t);
+  writePolicy(f, [`workspace=${fwd(f.workspace)}`, "work_item_required=1"]);
+  for (const value of ["maybe", "true", "1"]) {
+    setRepoConfig(f, value);
+    const result = runHook(f, "fix: no key");
+    assert.equal(result.status, 1, `${value}: ${result.stderr}`);
+    assert.match(result.stderr, /work-item key/);
+  }
+});
+
+test("a non-empty environment value wins over the repository opt-out", (t) => {
+  const f = fixture(t);
+  writePolicy(f, [`workspace=${fwd(f.workspace)}`, "work_item_required=0"]);
+  setRepoConfig(f, "false");
+  assert.equal(runHook(f, "fix: env on", { KHEREP_WORK_ITEM_REQUIRED: "1" }).status, 1);
+});
+
+test("only the repository-local scope opts out, not a global value", (t) => {
+  const f = fixture(t);
+  writePolicy(f, [`workspace=${fwd(f.workspace)}`, "work_item_required=1"]);
+  const globalConfig = path.join(f.root, "global.gitconfig");
+  fs.writeFileSync(globalConfig, "[kherep]\n\tworkItemRequired = false\n");
+  const result = runHook(f, "fix: global only", { GIT_CONFIG_GLOBAL: fwd(globalConfig) });
+  assert.equal(result.status, 1, result.stderr);
+});
+
+test("a real git commit in an opted-out repository is accepted without a key", (t) => {
+  const f = fixture(t);
+  writePolicy(f, [`workspace=${fwd(f.workspace)}`, "work_item_required=1"]);
+  setRepoConfig(f, "false");
+  const git = (...args: string[]): SpawnSyncReturns<string> => spawnSync("git", [
+    "-c", `core.hooksPath=${fwd(f.hooks)}`, "-c", "user.name=Example", "-c", "user.email=dev@example.com", ...args,
+  ], { cwd: f.repo, encoding: "utf8", env: cleanEnv() });
+  fs.writeFileSync(path.join(f.repo, "a.txt"), "a\n");
+  assert.equal(git("add", "a.txt").status, 0);
+  const accepted = git("commit", "-q", "-m", "fix: no key, opted out");
+  assert.equal(accepted.status, 0, accepted.stderr);
+  const trailer = git("commit", "-q", "--allow-empty", "-m", "fix: trailer\n\nCo-authored-by: Example <bot@example.com>");
+  assert.equal(trailer.status, 1, trailer.stderr);
+});

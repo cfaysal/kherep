@@ -91,3 +91,11 @@ test("commit hook excludes a sibling whose name only shares the workspace prefix
 
   assert.equal(result.status, 0, result.stderr);
 });
+
+test("commit hook keeps an explicit KHEREP_WORK_ITEM_REQUIRED=1 over a repository opt-out", (t) => {
+  const { logicalWorkspace, repo } = fixture(t);
+  assert.equal(spawnSync("git", ["config", "--local", "kherep.workItemRequired", "false"], { cwd: repo }).status, 0);
+  const result = runHook(repo, logicalWorkspace.replace(/\\/g, "/"), "fix: missing work item");
+
+  assert.equal(result.status, 1, result.stderr);
+});
