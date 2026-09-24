@@ -1,6 +1,6 @@
 {
   "name": "kherep-maestro",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Kherep Maestro parity layer for Codex",
   "author": {
     "name": "Kherep contributors"

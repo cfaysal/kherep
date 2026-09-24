@@ -33,8 +33,9 @@ import fs from "node:fs";
 import {
   contentBlocks,
   endingTurn,
+  lastAssistantText,
   readTranscript,
-  textOf,
+  startsTurn,
   turnIsSubstantial,
   type ContentBlock,
   type TranscriptEntry,
@@ -67,18 +68,6 @@ export const OBSERVATION_REASON = [
   "An observation run never dispatches another.",
 ].join(" ");
 
-// A turn starts at a message the user actually sent. Tool results arrive with
-// role "user" as well, sub-agent entries (isSidechain) belong to another
-// conversation, and runtime-injected entries (isMeta, e.g. an expanded skill or
-// command body) were not typed by the user. None of them starts a turn.
-function startsTurn(entry: TranscriptEntry): boolean {
-  if (!entry || entry.isMeta === true) return false;
-  const msg = entry.message;
-  if (!msg || msg.role !== "user") return false;
-  if (typeof msg.content === "string") return true;
-  return contentBlocks(msg).some((block) => Boolean(block) && block.type !== "tool_result");
-}
-
 function isAssistant(entry: TranscriptEntry): boolean {
   return Boolean(entry && entry.message && entry.message.role === "assistant");
 }
@@ -91,15 +80,6 @@ function isObservationDispatch(block: ContentBlock): boolean {
 
 function dispatchedObservation(turn: TranscriptEntry[]): boolean {
   return turn.some((entry) => isAssistant(entry) && contentBlocks(entry.message).some(isObservationDispatch));
-}
-
-function lastAssistantText(turn: TranscriptEntry[]): string {
-  for (let i = turn.length - 1; i >= 0; i--) {
-    if (!isAssistant(turn[i])) continue;
-    const text = textOf(turn[i].message);
-    if (text.trim()) return text;
-  }
-  return "";
 }
 
 // The payload's copy of the final message counts too: the runtime can hand it

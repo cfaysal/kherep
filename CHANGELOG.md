@@ -9,6 +9,30 @@ increments the minor version; every other release increments the patch version.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-24
+
+### Added
+
+- A `search` verb for the Confluence brokers. It runs a read-only semantic
+  search filtered to the configured space and reports a hit, no match or an
+  unavailable search as distinct exit codes (0, 1, 2).
+- An evidence-first gate for Claude. A `UserPromptSubmit` hook asks for
+  research on relevant prompts, naming the knowledge space and, inside a Git
+  repository, the code graph. A `Stop` hook sends a substantial turn back once
+  when it shows neither a lookup nor the visible classification
+  `[research: none - <reason>]`. Trivial turns are not gated, a continuation
+  is never blocked twice, and an unreadable transcript fails open. Skills
+  listed in the optional operator file `<claude-home>/kherep/research-sources.json`
+  count as lookups.
+
+### Changed
+
+- Codex observations no longer surface as a visible Stop continuation after a
+  reinstall. Both hosts project an acceptance-only `Stop` group; the
+  `UserPromptSubmit` Maestro context hook reminds the Maestro quietly to
+  dispatch `codex-obs` once per main turn. Earlier managed Stop groups with an
+  observation step are upgraded in place.
+
 ## [0.1.1] - 2026-09-24
 
 ### Added
@@ -63,6 +87,7 @@ First public release.
 - Turn-completion observations for Claude and Codex through the service-account
   Confluence path.
 
-[Unreleased]: https://github.com/cfaysal/kherep/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/cfaysal/kherep/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/cfaysal/kherep/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/cfaysal/kherep/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/cfaysal/kherep/releases/tag/v0.1.0

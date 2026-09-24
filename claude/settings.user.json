@@ -4,6 +4,7 @@
     "allow": [
       "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts get:*)",
       "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts related:*)",
+      "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts search:*)",
       "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts create:*)",
       "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts labels:*)",
       "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts stitch:*)",
@@ -121,6 +122,10 @@
           {
             "type": "command",
             "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/maestro-discipline.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/research-first.mts\""
           }
         ]
       }
@@ -136,6 +141,10 @@
           {
             "type": "command",
             "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/observation-stop.mts\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/research-stop.mts\""
           }
         ]
       }

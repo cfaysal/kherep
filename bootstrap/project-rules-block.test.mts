@@ -116,17 +116,17 @@ test("the project templates are references to the user-level rules", () => {
 });
 
 // Every template committed before OP-1425 on any ref was installed whole by some
-// installer. main starts at the public reset 627a48d, so the older versions live
-// only on other refs and --all is required. The cut-off keeps the test stable:
-// later template edits are installed inside the markers and need no new hash.
+// installer. The public history starts after the cut-off, so a clone of it holds
+// none of those blobs and the check has nothing to compare; the hash list is then
+// the only record. The cut-off keeps the test stable: later template edits are
+// installed inside the markers and need no new hash.
 test("the known template set covers every whole-file template blob", () => {
   assert.ok(KNOWN_TEMPLATE_SHA256.every((hash) => /^[0-9a-f]{64}$/.test(hash)));
   const listing = git(["rev-list", "--objects", "--all", "--until=2026-09-24T00:00:00Z", "--",
     "claude/CLAUDE.project.md", "claude/AGENTS.project.md"]);
   if (listing === null) return;
   const blobs = listing.split(/\r?\n/).filter((line) => / claude\/(CLAUDE|AGENTS)\.project\.md$/.test(line));
-  // A clone without the pre-public refs sees fewer blobs; the check still holds for those it sees.
-  assert.ok(blobs.length >= 1, "no historical template blob found");
+  // A clone without the pre-public refs sees fewer blobs, or none; the check holds for those it sees.
   for (const line of blobs) {
     const text = git(["cat-file", "blob", line.split(" ")[0]]);
     assert.ok(text !== null && isKnownTemplate(text), `unknown blob ${line}`);

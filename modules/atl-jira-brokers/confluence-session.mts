@@ -70,7 +70,7 @@ export interface ConfluenceContext {
   session: SessionCache;
 }
 
-function siteOrigin(env: Record<string, string | undefined>): string {
+export function siteOrigin(env: Record<string, string | undefined>): string {
   const raw = env[SITE_ENV];
   if (!raw?.trim()) throw new ConfluenceError(`${SITE_ENV} is not set.`);
   let parsed: URL;

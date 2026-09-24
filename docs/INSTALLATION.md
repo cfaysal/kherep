@@ -76,6 +76,8 @@ Connection profiles ship unconfigured. Kherep does not provision a Confluence sp
 
 The Central Brain is the knowledge space the installer resolves for this host; the observation agents write to it through the [Atlassian brokers](../modules/atl-jira-brokers/README.md), which also cover Jira operations. Keep private configuration outside Git.
 
+The `research-stop` hook counts a Skill as a Central Brain lookup when its name is listed in the optional operator file `<claude-home>/kherep/research-sources.json`, shaped `{"brainSkills": ["<skill-name>"]}`; the installer neither creates nor manages this file, and a missing or malformed file leaves only the built-in lookups.
+
 The optional encrypted-secrets phase requires an external bundle and key. Enable `SKIP_SECRETS=0` only after configuring and reviewing the destination.
 
 ## Model and work-item policy

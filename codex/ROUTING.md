@@ -12,6 +12,8 @@ Establish the goal, observable completion condition, scope, constraints and priv
 
 Use current code and configuration, executable behavior, live tool state and official documentation. Treat notes and memory as leads. Verify important facts before acting; carry unresolved facts as UNKNOWN.
 
+Evidence first. The Maestro classifies every directive and researches a relevant one before answering: the Central Brain through `node <workspace>/tools/atl-confluence.mts search --space <key> --query "<terms>"`, and, for code work inside a repository indexed by codebase-memory, the code graph first. A turn for which research is not relevant says so with `[research: none - <reason>]`. On Codex this is NOT yet enforced: there is no prompt hook and no Stop gate for it, unlike Claude's `research-first` and `research-stop`, so the rule currently lives on instruction only.
+
 ## Dispatch
 
 Keep direct, low-risk work in the main agent. Use bounded delegation when independent investigation, expertise, parallelism or review helps. Select available models according to task complexity, configured cost limits and privacy boundaries. Never assume a particular provider, model identifier, host or tool is installed.

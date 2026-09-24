@@ -177,7 +177,7 @@ test(`${BROKER} prints a usage line for an unknown verb`, async () => {
   const { err, calls, injected } = harness();
   assert.equal(await runCli(["publish"], injected), 1);
   assert.match(err.join("\n"),
-    /^Usage: create \| update \| get \| delete \| purge \| labels \| move \| space \| children \| related \| context \| orphans \| stitch \| selftest$/m);
+    /^Usage: create \| update \| get \| delete \| purge \| labels \| move \| space \| children \| related | search | context\| context \| orphans \| stitch \| selftest$/m);
   assert.deepEqual(calls, []);
 });
 

@@ -27,6 +27,7 @@ import {
   cmdMove,
   cmdOrphans,
   cmdRelated,
+  cmdSearch,
   cmdSpace,
   cmdStitch,
   type NeighbourCliContext,
@@ -217,6 +218,7 @@ const COMMANDS: Record<string, (ctx: CliContext, args: Args) => Promise<number>>
   space: cmdSpace,
   children: cmdChildren,
   related: cmdRelated,
+  search: cmdSearch,
   context: cmdContext,
   orphans: cmdOrphans,
   stitch: cmdStitch,
@@ -241,7 +243,7 @@ export async function runCli(argv: string[], injected: Injected = {}): Promise<n
     const run = COMMANDS[command];
     // One line on purpose: the contract test reads this source and requires every
     // verb of the command table to appear in a single usage string.
-    if (!run) fail("Usage: create | update | get | delete | purge | labels | move | space | children | related | context | orphans | stitch | selftest");
+    if (!run) fail("Usage: create | update | get | delete | purge | labels | move | space | children | related | search | context | orphans | stitch | selftest");
     return await run(ctx, parseArgs(rest));
   } catch (error) {
     ctx.logError(error instanceof CliFailure || error instanceof ConfluenceError

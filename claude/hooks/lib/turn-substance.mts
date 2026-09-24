@@ -1,5 +1,5 @@
 // One definition of "substantial", shared by the Stop hooks that judge a turn:
-// maestro-banner-gate.js and observation-stop.mts. Two copies would drift, and
+// maestro-banner-gate.js, observation-stop.mts and research-stop.mts. Two copies would drift, and
 // the banner and the observation dispatch would then start firing on different
 // turns for no reason anyone decided.
 //
@@ -128,4 +128,28 @@ export function turnIsSubstantial(turn: TranscriptEntry[]): boolean {
     }
   }
   return toolCalls >= SUBSTANTIAL_TOOL_CALLS || chars >= SUBSTANTIAL_CHARS;
+}
+
+// The stricter boundary the observation and research Stop hooks share. A turn
+// starts at a message the user actually sent. Tool results arrive with role
+// "user" as well, sub-agent entries (isSidechain) belong to another
+// conversation, and runtime-injected entries (isMeta, e.g. an expanded skill or
+// command body) were not typed by the user. None of them starts a turn.
+export function startsTurn(entry: TranscriptEntry): boolean {
+  if (!entry || entry.isMeta === true) return false;
+  const msg = entry.message;
+  if (!msg || msg.role !== "user") return false;
+  if (typeof msg.content === "string") return true;
+  return contentBlocks(msg).some((block) => Boolean(block) && block.type !== "tool_result");
+}
+
+// The last non-empty assistant prose of a turn: where a visible opt-out lives.
+export function lastAssistantText(turn: TranscriptEntry[]): string {
+  for (let i = turn.length - 1; i >= 0; i--) {
+    const msg = turn[i] && turn[i].message;
+    if (!msg || msg.role !== "assistant") continue;
+    const text = textOf(msg);
+    if (text.trim()) return text;
+  }
+  return "";
 }

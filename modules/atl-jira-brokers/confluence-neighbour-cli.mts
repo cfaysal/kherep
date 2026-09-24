@@ -4,7 +4,7 @@
 // stops reading. Argument checking here, everything after it in
 // confluence-neighbours.mts.
 import { ConfluenceError } from "./confluence-contract.mts";
-import { findSpace, listChildren, movePage, updatePage } from "./confluence-content.mts";
+import { findSpace, listChildren, listLabels, movePage, updatePage } from "./confluence-content.mts";
 import {
   reportContext,
   reportOrphans,
@@ -12,8 +12,9 @@ import {
   reportStitch,
   type NeighbourDeps,
 } from "./confluence-neighbours.mts";
+import { spaceIndex } from "./confluence-related.mts";
 import type { Proposals } from "./confluence-semantic.mts";
-import { createSession, type ConfluenceContext } from "./confluence-session.mts";
+import { createSession, siteOrigin, type ConfluenceContext } from "./confluence-session.mts";
 
 export interface NeighbourCliContext extends ConfluenceContext {
   log: (line: string) => void;
@@ -80,6 +81,50 @@ export async function cmdStitch(ctx: NeighbourCliContext, args: NeighbourArgs): 
     dryRun: "dry-run" in args,
     only: args.id,
   });
+}
+
+// OP-1440. The research lookup a turn makes BEFORE it answers: which pages in
+// the knowledge space already say something about this question? Read-only; the
+// semantic search proposes, the space index disposes exactly as for `related`
+// (same space, leaf pages, proposal order kept), without the shared-word rule,
+// because a question is not a title.
+//
+// Three outcomes, three exit codes, grep's convention: 0 hits, 1 the search ran
+// and nothing in the space matched, 2 the search could not run. A search that
+// never ran is UNKNOWN and must not read like a measured zero (golden rule 12).
+export async function cmdSearch(ctx: NeighbourCliContext, args: NeighbourArgs): Promise<number> {
+  try {
+    const query = (args.query ?? "").trim();
+    if (!query) throw new ConfluenceError("--query is missing.");
+    const limit = positive(args.limit, "--limit") ?? 3;
+    const deps = await neighbourDeps(ctx, args);
+    const index = await spaceIndex(deps.session, deps.spaceId);
+    const proposed = await deps.semantic(query);
+    if (proposed.error) {
+      ctx.logError(proposed.error);
+      throw new ConfluenceError("Nothing was searched, so nothing was found. This result is UNKNOWN, not zero.");
+    }
+    const hits = new Map<string, string>();
+    for (const title of proposed.titles) {
+      if (hits.size >= limit) break;
+      const page = index.byTitle.get(title.trim().toLowerCase());
+      if (page && !index.parents.has(page.id)) hits.set(page.id, page.title);
+    }
+    const base = `${siteOrigin(ctx.env)}/wiki/spaces/${encodeURIComponent(deps.spaceKey)}/pages`;
+    for (const [id, title] of hits) {
+      const evidence = await listLabels(deps.session, id)
+        .then((labels) => labels.filter((label) => label.startsWith("evidence-")).join(",") || "no evidence label")
+        .catch(() => "evidence UNKNOWN - labels not readable");
+      ctx.log(`hit\t${id}\t${title}\t${evidence}\t${base}/${id}`);
+    }
+    ctx.log(`count: ${hits.size}`);
+    ctx.log(`status: ${hits.size ? "hit" : "no match"}`);
+    return hits.size ? 0 : 1;
+  } catch (error) {
+    ctx.logError(error instanceof ConfluenceError ? error.cliMessage : "Internal error.");
+    ctx.log("status: unavailable");
+    return 2;
+  }
 }
 
 // Where a space is and what hangs directly under a page. They sit here rather
