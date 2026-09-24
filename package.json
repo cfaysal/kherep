@@ -1,0 +1,22 @@
+{
+  "name": "kherep",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kherep orchestration stack. TypeScript runs directly on Node (type stripping, no build); tsc is the type check only.",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test:bootstrap": "node --test \"bootstrap/*.test.mts\"",
+    "test:codex": "node --test \"codex/*.test.mts\" \"codex/lib/*.test.mts\" \"codex/hooks/*.test.mts\" \"codex/scripts/*.test.mts\"",
+    "test:brokers": "node --test \"modules/atl-jira-brokers/*.test.mts\"",
+    "test:modules": "node --test \"lib/*.test.mts\" \"modules/local-inference/*.test.mts\" \"modules/mcp-auth-bridge/*.test.mts\" \"modules/mpac-tools/*.test.mts\"",
+    "audit:publication": "node bootstrap/publication-audit.mts"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "6.0.3"
+  },
+  "license": "Apache-2.0"
+}

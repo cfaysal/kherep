@@ -1,0 +1,17 @@
+{
+  "name": "kherep",
+  "owner": {
+    "name": "Kherep contributors"
+  },
+  "plugins": [
+    {
+      "name": "kherep-maestro",
+      "source": {
+        "source": "local",
+        "path": "./plugins/kherep-maestro"
+      },
+      "description": "Kherep Maestro parity contract for Codex.",
+      "version": "0.1.0"
+    }
+  ]
+}

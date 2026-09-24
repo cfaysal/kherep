@@ -1,0 +1,16 @@
+# Managed runtime paths parked with reversible backups during installation. One path per line.
+hooks/drift-managed-path-watch.js
+hooks/drift-managed-path-watch.test.js
+hooks/em-dash-watch.js
+hooks/lib/dispatch-policy.js
+hooks/lib/orchestra-checkout.js
+hooks/lib/private-path-policy.js
+hooks/lib/real-path-policy.js
+hooks/lib/workspace-scope.js
+hooks/lib/workspace-scope.test.js
+hooks/loc-watch.js
+hooks/manifest-watch.js
+hooks/memo-retro-reminder.js
+hooks/simplify-nudge.js
+hooks/umlaut-translit-watch.js
+kherep/central-brain/selection.json

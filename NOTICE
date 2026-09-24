@@ -1,0 +1,14 @@
+Kherep
+Copyright 2026 CFcon
+
+This product includes software developed by CFcon. The CFcon copyright
+covers only material that originates from CFcon. It does not extend to any
+third-party material in this distribution.
+
+This distribution bundles third-party components under
+codex/parity/plugin-sources/ and includes material adapted from other
+upstream projects. That material remains the work of its original authors
+under its original license. Each bundled component retains its own license
+file and copyright notices. See THIRD-PARTY-NOTICES.md for the complete
+inventory, with the original author, a link to the original repository, the
+upstream revision and the license of all third-party material.

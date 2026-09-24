@@ -1,0 +1,26 @@
+{
+  "name": "kherep-maestro",
+  "version": "0.1.0",
+  "description": "Kherep Maestro parity layer for Codex",
+  "author": {
+    "name": "Kherep contributors"
+  },
+  "license": "Apache-2.0",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Kherep Maestro",
+    "shortDescription": "Maestro parity for Codex sessions.",
+    "longDescription": "Installs versioned routing, skills, agents, hooks, MCP registrations, and parity checks for Codex without modifying Claude Code.",
+    "developerName": "Kherep contributors",
+    "category": "Developer",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Verify this Codex host against the Kherep Maestro capability manifest.",
+      "Show any Windows or Mac Maestro parity gaps.",
+      "Apply Kherep evidence-first routing to this task."
+    ]
+  }
+}

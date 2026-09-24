@@ -1,0 +1,12 @@
+{
+  "name": "kherep",
+  "description": "Kherep Maestro routing configuration",
+  "leadAgentId": "team-lead@kherep",
+  "members": [
+    {
+      "agentId": "team-lead@kherep",
+      "name": "team-lead",
+      "agentType": "team-lead"
+    }
+  ]
+}

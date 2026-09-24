@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Capability source contract (mac profile)
+        run: node bootstrap/capability-check.mts --strict --profile mac
+      - name: Capability source contract (win profile)
+        run: node bootstrap/capability-check.mts --strict --profile win
+      - name: Manifest consistency
+        run: node --test bootstrap/manifest-consistency.test.mts
+
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Hook test suites
+        shell: bash
+        run: |
+          status=0
+          for t in claude/hooks/*.test.js claude/hooks/*.test.mts claude/hooks/lib/*.test.js claude/hooks/lib/*.test.mts; do
+            [ -e "$t" ] || continue
+            echo "== $t"
+            node "$t" || status=1
+          done
+          exit $status
+      - name: Shared Teamwork Graph tests
+        shell: bash
+        run: node --test modules/twg/*.test.mts
+      - name: Bootstrap suites (TypeScript on Node, no build)
+        run: npm run test:bootstrap
+
+  smoke:
+    needs: contract
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Bootstrap smoke test
+        env:
+          KHEREP_SMOKE_NO_MANAGED_WORKSPACE: "1"
+        run: bash bootstrap/smoke-test.sh
+
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - name: Type check (tsc --noEmit, strict, erasableSyntaxOnly)
+        run: npm run typecheck
+      - name: Codex projection suites
+        run: npm run test:codex
+      - name: local-inference and mcp-auth-bridge suites
+        run: npm run test:modules
+      - name: atl-jira broker suites
+        run: npm run test:brokers

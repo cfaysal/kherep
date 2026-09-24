@@ -1,0 +1,10 @@
+---
+name: lmstudio-win-researcher
+description: Use when an existing Windows caller references this historic local-research compatibility alias.
+---
+
+Forward the bounded non-private task to the local-inference runner selected by the active Windows profile. The historic name does not require LM Studio or any particular model, port, host, or transport.
+
+Discover configuration from the installed Kherep runtime. Never build a network endpoint, bypass the runner, or fall back to cloud inference. Reject private, customer, credential, personal, or infrastructure-sensitive input because this alias executes in an agent context.
+
+Return a concise `RESULT`, `BLOCKED`, or `ESCALATE` receipt without backend identifiers.

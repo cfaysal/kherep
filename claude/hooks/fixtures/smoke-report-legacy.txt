@@ -1,0 +1,66 @@
+GITHOOK UNRESOLVED /d/Work/.worktrees/confluence-identity-seed-20260730: fatal: detected dubious ownership in repository at 'D:/Work/.worktrees/confluence-identity-seed-20260730'
+GITHOOK UNRESOLVED /d/Work/.worktrees/infra-confluence-identity-seed-20260730: fatal: detected dubious ownership in repository at 'D:/Work/.worktrees/infra-confluence-identity-seed-20260730'
+GITHOOK UNRESOLVED /d/Work/ForgeApps/_worktrees/Aegis-p0-hardening: fatal: detected dubious ownership in repository at 'D:/Work/ForgeApps/_worktrees/Aegis-p0-hardening'
+GITHOOK UNRESOLVED /d/Work/infra/.worktrees/atlassian-dc-two-node: fatal: detected dubious ownership in repository at 'D:/Work/infra/.worktrees/atlassian-dc-two-node'
+✔ credential matcher detects common argv secret transports (0.9922ms)
+✔ credential matcher avoids long-hostname and native-header false positives (0.0933ms)
+✔ credential matcher fails closed for malformed command arguments (0.0638ms)
+✔ active names merge exact registry project and supplemental MCP files (0.5029ms)
+✔ host-wide argv audit retains inactive and shadowed registry definitions (0.5412ms)
+✔ JSON parser errors never reproduce adjacent file content (2.0918ms)
+✔ converts an exact supergateway bearer bridge to native HTTP (0.9271ms)
+✔ rejects an inexact bridge instead of dropping unknown behavior (0.2537ms)
+✔ rejects every environment except absent or an empty plain object (0.2437ms)
+✔ rejects endpoints that can carry credentials outside the header (0.1453ms)
+✔ fresh output is private on POSIX and existing output is never overwritten (7.4588ms)
+✔ CLI output and JSON parse failures never echo the bearer token (324.5805ms)
+﹣ POSIX input and output paths reject symbolic-link traversal (0.0846ms) # SKIP
+✔ moves bearer auth out of command arguments into a private-file wrapper contract (1.2752ms)
+✔ rejects every deviation from the known scoped TLS bridge (0.3742ms)
+✔ uses a shell-free platform-native npm invocation (0.785ms)
+✔ reads only a private regular token file (4.0774ms)
+✔ accepts only credential-free HTTPS endpoints (0.2382ms)
+✔ resolves only the pinned global supergateway package entry (17.8451ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 18
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 545.9328
+PASS materializes exact bytes, names, and POSIX modes
+PASS rejects non-canonical Base64 before output
+PASS rejects invalid UTF-8 in a decoded JSON secret
+PASS rejects invalid UTF-8 in an opaque text secret
+PASS rejects malformed MCP JSON
+PASS rejects non-object MCP JSON
+PASS rejects an implausible Fixture service script
+PASS rejects invalid UTF-8 in host config
+PASS rejects malformed host config JSON
+PASS rejects non-object host config JSON
+PASS rejects host-profile identity mismatch from staged bytes
+PASS requires an explicit supported profile
+PASS refuses an existing output directory and preserves every byte
+prepare-secrets: 13/13 passed
+✔ converged state performs zero mutators and ignores enabled=false (479.3264ms)
+✔ adds a missing marketplace and installs its missing user plugin (2037.5197ms)
+✔ enables an installed but disabled user-scope plugin (1041.0187ms)
+✔ malformed manifest fails before any Claude invocation (58.4013ms)
+✔ malformed list JSON fails without leaking captured content (243.6215ms)
+✔ same marketplace name with another source fails before mutation (288.1784ms)
+✔ real mutator failure remains nonzero and hides child stderr (941.6165ms)
+✔ successful mutator without post-state is rejected (1008.5501ms)
+✔ nonzero race is accepted only when the exact state appeared (6347.6769ms)
+✔ fresh final snapshot rejects a vanished or unusable installPath (1147.0206ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 13597.7337
+BUILD-SECRETS TEST PASS
+TRANSACTION TEST PASS
+SMOKE FAIL

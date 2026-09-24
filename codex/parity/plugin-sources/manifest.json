@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "id": "ai-plugins@claude-plugins-official",
+      "version": "1.0.0",
+      "path": "ai-plugins_claude-plugins-official",
+      "contentSha256": "0a06ca0ed11698e6e13f72ffedfb4371eb7e1155a97697c10674fa16df3fe3c8"
+    },
+    {
+      "id": "andrej-karpathy-skills@karpathy-skills",
+      "version": "1.0.0",
+      "path": "andrej-karpathy-skills_karpathy-skills",
+      "contentSha256": "5b6e6d12a1e5ebdb81eca27f0ccd611adb5a9c6fe0c785989979a0a4971ac19a"
+    },
+    {
+      "id": "atlassian@claude-plugins-official",
+      "version": "9b52fb18e184",
+      "path": "atlassian_claude-plugins-official",
+      "contentSha256": "2c1376c30debba77d85275e6d2a34dedb9f54f53bb973d2f132c572d030cc060"
+    },
+    {
+      "id": "caveman@caveman",
+      "version": "ef6050c5e184",
+      "path": "caveman_caveman",
+      "contentSha256": "0d00692c9f4029dd8ed8fcc6663acdd92e61a51d9803177d08d1e9cdaef01e2a"
+    },
+    {
+      "id": "claude-code-setup@claude-plugins-official",
+      "version": "1.0.0",
+      "path": "claude-code-setup_claude-plugins-official",
+      "contentSha256": "1bd586722215a729b502a5142a798320cad7f9419f3cf57cb014f5df64bee9ea"
+    },
+    {
+      "id": "claude-md-management@claude-plugins-official",
+      "version": "1.0.0",
+      "path": "claude-md-management_claude-plugins-official",
+      "contentSha256": "41f528491dc39dc009b8845e92cd199278a29d207da39d2c89d0edde3428ca1d"
+    },
+    {
+      "id": "cloudflare@claude-plugins-official",
+      "version": "1.0.0",
+      "path": "cloudflare_claude-plugins-official",
+      "contentSha256": "41ede193fbe29835bba0b7c285e32e665e537aa7093dcdffe711ae0a68b93e49"
+    },
+    {
+      "id": "code-simplifier@claude-plugins-official",
+      "version": "1.0.0",
+      "path": "code-simplifier_claude-plugins-official",
+      "contentSha256": "1fbf7b5671857d5cd16abe65b39c3b5708d9d19a399291b1aee84a82ef4dc3e9"
+    },
+    {
+      "id": "feature-dev@claude-plugins-official",
+      "version": "unknown",
+      "path": "feature-dev_claude-plugins-official",
+      "contentSha256": "2896c9c51020b01098ac01704c48e1b1c305e9ee3bca7df78bc735d9e4615ae7"
+    },
+    {
+      "id": "frontend-design@claude-plugins-official",
+      "version": "unknown",
+      "path": "frontend-design_claude-plugins-official",
+      "contentSha256": "70b2784b5b90db1b4de88786968dcd529d7879ea78df5c63fa657daa42eda1c9"
+    },
+    {
+      "id": "mcp-server-dev@claude-plugins-official",
+      "version": "unknown",
+      "path": "mcp-server-dev_claude-plugins-official",
+      "contentSha256": "00a6801676ce3f058347042d69da8ba3778ea797b8690b6dfb109fc438465e66"
+    },
+    {
+      "id": "ralph-loop@claude-plugins-official",
+      "version": "1.0.0",
+      "path": "ralph-loop_claude-plugins-official",
+      "contentSha256": "96d255809d8bb7a99f4feb1b7f9889a1ed0120687186ffaf1a9242deff1585ab"
+    },
+    {
+      "id": "security-guidance@claude-plugins-official",
+      "version": "2.0.3",
+      "path": "security-guidance_claude-plugins-official",
+      "contentSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "superpowers@claude-plugins-official",
+      "version": "5.1.0",
+      "path": "superpowers_claude-plugins-official",
+      "contentSha256": "10b8df0514865cec0e40c5beb95a702a88da1b871fe9dcc58f58567ebff7575a"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+#!/bin/sh
+# Runtime-independent commit policy for repositories under KHEREP_WORKSPACE.
+MSG_FILE="$1"
+[ -f "$MSG_FILE" ] || exit 0
+[ -n "$KHEREP_WORKSPACE" ] || exit 0
+
+TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null) || TOPLEVEL=$(pwd)
+canonical_dir() {
+  KHEREP_PATH=$(printf '%s' "$1" | tr '\\' '/')
+  (CDPATH=; export CDPATH; cd -P "$KHEREP_PATH" && pwd -P) 2>/dev/null
+}
+TOP_REAL=$(canonical_dir "$TOPLEVEL") || {
+  printf '\nKherep commit policy could not resolve the repository directory.\n' >&2
+  exit 1
+}
+WORK_REAL=$(canonical_dir "$KHEREP_WORKSPACE") || {
+  printf '\nKherep commit policy could not resolve KHEREP_WORKSPACE. Check the configured directory.\n' >&2
+  exit 1
+}
+TOP_LC=$(printf '%s' "$TOP_REAL" | tr 'A-Z' 'a-z')
+WORK_LC=$(printf '%s' "$WORK_REAL" | tr 'A-Z' 'a-z' | sed 's|/*$||')
+case "$TOP_LC" in "$WORK_LC"|"$WORK_LC"/*) ;; *) exit 0 ;; esac
+
+if grep -v '^#' "$MSG_FILE" | grep -Eqi '^[[:space:]]*co-authored-by:|generated with \[claude code\]'; then
+  printf '\nKherep commit policy rejected an AI attribution trailer. Remove it and commit again.\n' >&2
+  exit 1
+fi
+
+[ "$KHEREP_WORK_ITEM_REQUIRED" = "1" ] || exit 0
+[ "$KHEREP_WORK_ITEM" = "none" ] && exit 0
+SUBJECT=$(grep -v '^#' "$MSG_FILE" | sed '/^[[:space:]]*$/d' | head -n 1)
+case "$SUBJECT" in "Merge "*|"Revert "*|"fixup!"*|"squash!"*|"amend!"*) exit 0 ;; esac
+
+PATTERN=${KHEREP_WORK_ITEM_PATTERN:-'[A-Z][A-Z0-9]{1,9}-[0-9]+'}
+if printf '%s' "$SUBJECT" | grep -Eq "^(${PATTERN})[[:space:]]+[^[:space:]]"; then
+  exit 0
+fi
+printf '\nKherep commit policy requires the subject to start with the configured work-item key and a space.\n' >&2
+exit 1

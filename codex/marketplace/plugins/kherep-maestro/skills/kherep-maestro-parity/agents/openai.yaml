@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kherep Maestro Parity"
+  short_description: "Verify and repair the Kherep Maestro projection"
+  default_prompt: "Use $kherep-maestro-parity to verify this Codex host against the Kherep Maestro capability manifest."

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "additionalDirectories": [
+      "__KHEREP_WORKSPACE__"
+    ]
+  }
+}

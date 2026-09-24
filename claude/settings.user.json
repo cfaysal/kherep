@@ -1,0 +1,143 @@
+{
+  "env": {},
+  "permissions": {
+    "allow": [
+      "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts get:*)",
+      "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts related:*)",
+      "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts create:*)",
+      "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts labels:*)",
+      "Bash(node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts stitch:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/privacy-boundary-guard.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/secret-output-guard.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/playwright-file-guard.js\""
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/dispatch-contract-guard.js\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/commit-guard.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/deploy-guard.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/clq-accept-gate.js\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/manifest-watch.mts\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/loc-watch.mts\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/simplify-nudge.mts\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/drift-managed-path-watch.mts\""
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/live-hook-integrity.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/orchestra-default.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/runtime-capability-snapshot.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/drift-check-nudge.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/smoke-test-nudge.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/orphan-check-nudge.mts\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/critical-file-integrity.js\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/maestro-discipline.js\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/maestro-banner-gate.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/observation-stop.mts\""
+          }
+        ]
+      }
+    ]
+  }
+}

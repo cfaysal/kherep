@@ -1,0 +1,5 @@
+# Example name resolution for self-hosted MCP backends. Replace the placeholders
+# with your own addresses from your private configuration at install time, then
+# append the lines to /etc/hosts (mac/linux) or C:\Windows\System32\drivers\etc\hosts (win).
+<MCP_BACKEND_A_IP>   mcp-backend-a.example.com
+<MCP_BACKEND_B_IP>   mcp-backend-b.example.com

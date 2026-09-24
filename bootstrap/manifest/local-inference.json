@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 2,
+  "backends": {},
+  "profiles": {
+    "win": {
+      "backends": {}
+    },
+    "mac": {
+      "backends": {}
+    }
+  }
+}

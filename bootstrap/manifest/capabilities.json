@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 2,
+  "plugins": [
+    "ai-plugins@claude-plugins-official",
+    "andrej-karpathy-skills@karpathy-skills",
+    "atlassian@claude-plugins-official",
+    "caveman@caveman",
+    "claude-code-setup@claude-plugins-official",
+    "claude-md-management@claude-plugins-official",
+    "cloudflare@claude-plugins-official",
+    "code-review@claude-plugins-official",
+    "code-simplifier@claude-plugins-official",
+    "codex@openai-codex",
+    "context7@claude-plugins-official",
+    "feature-dev@claude-plugins-official",
+    "frontend-design@claude-plugins-official",
+    "mcp-server-dev@claude-plugins-official",
+    "playwright@claude-plugins-official",
+    "ralph-loop@claude-plugins-official",
+    "security-guidance@claude-plugins-official",
+    "skill-creator@claude-plugins-official",
+    "superpowers@claude-plugins-official"
+  ],
+  "mcpServers": [
+    "kherep-linkedin-cli",
+    "claude-baton",
+    "codebase-memory-mcp",
+    "forge-knowledge",
+    "n8n",
+    "rovo"
+  ],
+  "ownedAgents": {
+    "kherep-builder": "kherep-builder.md",
+    "dc-plugin-build-runner": "dc-plugin-build-runner.md",
+    "forge-deploy-validator": "forge-deploy-validator.md",
+    "lmstudio-mac-researcher": "lmstudio-mac-researcher.md",
+    "lmstudio-win-researcher": "lmstudio-win-researcher.md",
+    "mac-agent": "mac-agent.md",
+    "n8n-workflow-deploy-runner": "n8n-workflow-deploy-runner.md",
+    "win-agent": "win-agent.md",
+    "claude-obs": "claude-obs.md",
+    "atlassian-broker": "atlassian-broker.md"
+  },
+  "skills": [
+    "kherep-content-humanizer",
+    "kherep-deploy-workflow",
+    "kherep-grill",
+    "kherep-linkedin-draft",
+    "kherep",
+    "kherep-twg",
+    "codebase-design",
+    "codebase-memory",
+    "domain-modeling",
+    "forge-bulk-op-pattern",
+    "improve-codebase-architecture",
+    "local-inference",
+    "session-optimizer",
+    "vite-base-forge"
+  ],
+  "commands": [
+    "btw.md",
+    "kickoff.md",
+    "memo-checkpoint.md",
+    "memo-eod.md",
+    "memo-resume.md",
+    "memo-retro.md"
+  ],
+  "requiredHooks": [
+    "commit-guard.js",
+    "deploy-guard.js",
+    "dispatch-contract-guard.js",
+    "privacy-boundary-guard.js",
+    "clq-accept-gate.js",
+    "runtime-capability-snapshot.js",
+    "maestro-discipline.js",
+    "orchestra-default.js",
+    "live-hook-integrity.js",
+    "lib/orchestra-checkout.mts",
+    "lib/private-path-policy.mts",
+    "lib/private-path-rules.mts",
+    "lib/real-path-policy.mts",
+    "lib/workspace-scope.mts"
+  ],
+  "pluginEntrypoints": {
+    "caveman@caveman": [
+      "agents/cavecrew-builder.md",
+      "agents/cavecrew-investigator.md",
+      "agents/cavecrew-reviewer.md"
+    ],
+    "feature-dev@claude-plugins-official": [
+      "agents/code-architect.md",
+      "agents/code-explorer.md",
+      "agents/code-reviewer.md"
+    ],
+    "codex@openai-codex": [
+      "agents/codex-rescue.md",
+      "commands/rescue.md",
+      "commands/adversarial-review.md"
+    ]
+  },
+  "runtimeFiles": [
+    "kherep/local-inference/runner.mts",
+    "kherep/local-inference/lib/profile.mts",
+    "kherep/local-inference/lib/transport.mts",
+    "kherep/local-inference/config.json",
+    "kherep/twg/cli.mts",
+    "kherep/mcp-auth-bridge/supergateway-secret-wrapper.mts"
+  ],
+  "profileBaselines": {
+    "win": {
+      "plugins": [],
+      "mcpServers": [],
+      "agents": [],
+      "skills": [
+        "gepeto",
+        "intake",
+        "jira-cloud-textarea-adf",
+        "pinokio"
+      ],
+      "commands": []
+    },
+    "mac": {
+      "plugins": [],
+      "mcpServers": [],
+      "agents": [],
+      "skills": [
+        "gepeto",
+        "intake",
+        "jira-cloud-textarea-adf",
+        "pinokio"
+      ],
+      "commands": []
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "allowJs": true
+  },
+  "include": [
+    "bootstrap/**/*.mts",
+    "claude/**/*.mts",
+    "codex/**/*.mts",
+    "modules/atl-jira-brokers/**/*.mts",
+    "modules/local-inference/**/*.mts",
+    "modules/mcp-auth-bridge/**/*.mts",
+    "modules/twg/**/*.mts"
+  ]
+}

@@ -1,0 +1,76 @@
+import childProcess from "node:child_process";
+import os from "node:os";
+import path from "node:path";
+
+function quoteWindowsArgument(value: string) {
+  if (/^[A-Za-z0-9_./:@+-]+$/.test(value)) return value;
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+export function normalizeWindowsCodexCommand(command: string) {
+  return /[\\/]WindowsApps[\\/]OpenAI\.Codex_/i.test(command) ? "codex" : command;
+}
+
+export function resolveCodexCommand() {
+  if (process.platform !== "win32") return "codex";
+  const lookup = childProcess.spawnSync("where.exe", ["codex"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    windowsHide: true,
+  });
+  const candidates = lookup.status === 0
+    ? lookup.stdout.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean)
+    : [];
+  const command = candidates.find((entry) => [".exe", ".com"].includes(path.extname(entry).toLowerCase())) ||
+    candidates.find((entry) => [".cmd", ".bat"].includes(path.extname(entry).toLowerCase())) ||
+    "codex.cmd";
+  return normalizeWindowsCodexCommand(command);
+}
+
+export function codexInvocation(command: string, args: string[], platform: string = process.platform, comSpec = process.env.ComSpec || "cmd.exe") {
+  if (platform !== "win32") return { command, args };
+  const extension = path.win32.extname(command).toLowerCase();
+  if ([".exe", ".com"].includes(extension) && !/[\\/]WindowsApps[\\/]/i.test(command)) {
+    return { command, args };
+  }
+  const commandLine = [command, ...args].map(quoteWindowsArgument).join(" ");
+  return {
+    command: comSpec,
+    args: ["/d", "/s", "/c", commandLine],
+  };
+}
+
+export function codexEnvironment(
+  codexHome?: string,
+  platform: string = process.platform,
+  environment = process.env,
+  home = os.homedir(),
+) {
+  const requestedHome = codexHome || environment.CODEX_HOME;
+  const platformPath = platform === "win32" ? path.win32 : path;
+  if (platform === "win32" && requestedHome &&
+      platformPath.resolve(requestedHome) === platformPath.resolve(home, ".codex")) {
+    const cleaned = { ...environment };
+    delete cleaned.CODEX_HOME;
+    return cleaned;
+  }
+  return codexHome ? { ...environment, CODEX_HOME: codexHome } : environment;
+}
+
+export function runCodex(args: string[], options: { cwd?: string; codexHome?: string } = {}) {
+  const command = resolveCodexCommand();
+  const invocation = codexInvocation(command, args);
+  const result = childProcess.spawnSync(invocation.command, invocation.args, {
+    cwd: options.cwd,
+    encoding: "utf8",
+    env: codexEnvironment(options.codexHome),
+    stdio: [process.platform === "win32" ? "inherit" : "ignore", "pipe", "pipe"],
+    windowsHide: process.platform === "win32",
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const detail = result.stderr?.trim();
+    throw new Error(`codex ${args.join(" ")} failed${detail ? `: ${detail}` : ""}`);
+  }
+  return `${result.stdout || ""}\n${result.stderr || ""}`.trim();
+}

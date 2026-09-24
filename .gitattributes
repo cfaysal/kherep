@@ -1,0 +1,10 @@
+# Normalize line endings so a fresh clone gets runnable scripts on every OS.
+# Shell scripts MUST be LF or Git Bash on Windows fails (\r in shebang/commands).
+* text=auto eol=lf
+codex/parity/plugin-sources/** whitespace=-blank-at-eol,-blank-at-eof
+*.sh        text eol=lf
+*.ps1       text eol=lf
+*.png       binary
+*.jpg       binary
+*.gif       binary
+*.key       binary

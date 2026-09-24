@@ -1,0 +1,9 @@
+# Paths that stay in the private repository and never enter a public export.
+# Read by bootstrap/public-export.mts from the exported revision itself.
+# Every entry is a directory and ends with "/". An entry with a slash before
+# the end is anchored to the repository root; a single name such as
+# "_deprecated/" matches a directory of that name at any depth.
+docs/handover/
+analysis/
+docs/superpowers/
+_deprecated/

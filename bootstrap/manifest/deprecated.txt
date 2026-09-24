@@ -1,0 +1,11 @@
+# Paths excluded from source capture. Existing runtime retirement is managed separately.
+hooks/memo-retro-reminder.js
+hooks/em-dash-watch.js
+hooks/_deprecated/em-dash-chat-watch.js
+hooks/_deprecated/em-dash-watch.js
+hooks/_deprecated/no-em-dash.py
+hooks/_deprecated/no-em-dash.sh
+skills/intake
+skills/jira-cloud-textarea-adf
+skills/gepeto
+skills/pinokio
