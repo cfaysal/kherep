@@ -9,6 +9,16 @@ increments the minor version; every other release increments the patch version.
 
 ## [Unreleased]
 
+### Added
+
+- A per-repository opt-out from the work-item key. The `commit-msg` hook skips
+  the key check when the repository-local Git config
+  `kherep.workItemRequired` is a Git boolean false (`false`, `no`, `off`,
+  `0`). A non-empty `KHEREP_WORK_ITEM_REQUIRED` at commit time still wins,
+  then the repository value, then the policy file. Global and system values
+  do not opt out; an absent, unreadable or invalid value keeps the rule. AI
+  attribution trailers are still rejected in an opted-out repository.
+
 ## [0.1.2] - 2026-09-24
 
 ### Added

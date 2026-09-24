@@ -19,4 +19,20 @@ assert.equal(run('git commit -m "TASK_12 valid subject"', { KHEREP_WORK_ITEM_REQ
 assert.equal(run('git commit -m "subject"', { KHEREP_WORK_ITEM_REQUIRED: "1", KHEREP_WORK_ITEM_PATTERN: "[" }), 2);
 assert.equal(run('git commit -m "x Co-Authored-By: bot"'), 2);
 assert.equal(run('git commit -m "em — dash"'), 2);
-console.log("commit-guard: 9 pass");
+// Per-repository opt-out (kherep.workItemRequired=false). The guard's only key
+// source is KHEREP_WORK_ITEM_REQUIRED in its environment, and a non-empty value
+// wins over the repository value in the commit-msg hook too, so the guard's
+// verdict matches the hook in an opted-out repository without reading it.
+const fs = require("node:fs");
+const os = require("node:os");
+const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kherep-guard-optout-")));
+const repo = path.join(root, "repo");
+fs.mkdirSync(repo);
+assert.equal(spawnSync("git", ["init", "-q"], { cwd: repo }).status, 0);
+assert.equal(spawnSync("git", ["config", "--local", "kherep.workItemRequired", "false"], { cwd: repo }).status, 0);
+const ws = { KHEREP_WORKSPACE: root };
+assert.equal(run('git commit -m "plain subject"', { ...ws, KHEREP_WORK_ITEM_REQUIRED: "" }, repo), 0);
+assert.equal(run('git commit -m "plain subject"', { ...ws, KHEREP_WORK_ITEM_REQUIRED: "1" }, repo), 2);
+assert.equal(run('git commit -m "x Co-Authored-By: bot"', { ...ws, KHEREP_WORK_ITEM_REQUIRED: "" }, repo), 2);
+fs.rmSync(root, { recursive: true, force: true });
+console.log("commit-guard: 12 pass");

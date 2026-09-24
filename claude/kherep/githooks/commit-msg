@@ -28,6 +28,7 @@ if [ -f "$POLICY_FILE" ] && ! read_policy "$POLICY_FILE"; then
   printf '\nKherep commit policy ignored a malformed policy file: %s\n' "$POLICY_FILE" >&2
   P_WORKSPACE='' P_REQUIRED='' P_PATTERN=''
 fi
+ENV_REQUIRED=$KHEREP_WORK_ITEM_REQUIRED
 KHEREP_WORKSPACE=${KHEREP_WORKSPACE:-$P_WORKSPACE}
 KHEREP_WORK_ITEM_REQUIRED=${KHEREP_WORK_ITEM_REQUIRED:-$P_REQUIRED}
 KHEREP_WORK_ITEM_PATTERN=${KHEREP_WORK_ITEM_PATTERN:-$P_PATTERN}
@@ -53,6 +54,15 @@ case "$TOP_LC" in "$WORK_LC"|"$WORK_LC"/*) ;; *) exit 0 ;; esac
 if grep -v '^#' "$MSG_FILE" | grep -Eqi '^[[:space:]]*co-authored-by:|generated with \[claude code\]'; then
   printf '\nKherep commit policy rejected an AI attribution trailer. Remove it and commit again.\n' >&2
   exit 1
+fi
+
+# Per-repository opt-out: `git config --local kherep.workItemRequired false`.
+# Precedence: a non-empty KHEREP_WORK_ITEM_REQUIRED, then this repository-local
+# value, then the policy file. Git parses the value as a boolean; an absent,
+# unreadable or invalid value is not an opt-out.
+if [ -z "$ENV_REQUIRED" ] &&
+  [ "$(git config --local --type=bool --get kherep.workItemRequired 2>/dev/null)" = "false" ]; then
+  exit 0
 fi
 
 [ "$KHEREP_WORK_ITEM_REQUIRED" = "1" ] || exit 0
