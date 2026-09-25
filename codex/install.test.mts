@@ -24,6 +24,15 @@ import { renderRegistryMcpServer } from "./lib/parity-config.mts";
 import { retiredCentralBrainRender } from "./lib/retired-central-brain.mts";
 import { withoutRetiredTable, withRetiredCentralBrain } from "./lib/retired-central-brain-fixture.mts";
 
+// Some Node releases the engines range admits, 24.1.0 among them, print this
+// warning when a child loads a .mts file. Only this exact pair of lines is
+// dropped; any other stderr still fails the assertion.
+const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
+  + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
+  + "created\\)\\r?\\n", "gm");
+const withoutTypeStrippingWarning = (stderr: string | Buffer): string =>
+  String(stderr).replace(TYPE_STRIPPING_WARNING, "");
+
 const here = import.meta.dirname;
 const CAPABILITIES = JSON.parse(fs.readFileSync(path.join(here, "parity", "capabilities.json"), "utf8")) as Capabilities;
 const FIXTURE_AUTHORIZATION = `Bearer ${"fixture".repeat(8)}`;
@@ -525,7 +534,7 @@ test("default install projects observation delivery without optional Jira toolin
     input: JSON.stringify({ stop_hook_active: false }),
   });
   assert.equal(hookRun.status, 0, hookRun.stderr);
-  assert.equal(hookRun.stderr, "");
+  assert.equal(withoutTypeStrippingWarning(hookRun.stderr), "");
   const hookDecision = JSON.parse(hookRun.stdout) as { reason: string };
   const broker = path.join(workspace, "tools", "atl-confluence.mts");
   const brokerLiteral = `'${broker.replaceAll("'", "''")}'`;
@@ -537,7 +546,7 @@ test("default install projects observation delivery without optional Jira toolin
       { encoding: "utf8", windowsHide: true },
     );
     assert.equal(parsed.status, 0, parsed.error?.message || parsed.stderr);
-    assert.equal(parsed.stderr, "");
+    assert.equal(withoutTypeStrippingWarning(parsed.stderr), "");
     assert.equal(parsed.stdout, broker);
   }
   assert.doesNotMatch(installedObservationHook, /__KHEREP_SELECTED_WORKSPACE__/);
