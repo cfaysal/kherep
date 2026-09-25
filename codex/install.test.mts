@@ -479,6 +479,20 @@ test("default install projects observation delivery without optional Jira toolin
     "utf8",
   );
   assert.match(observationAgent, /^sandbox_mode = "read-only"$/m);
+  // The installed dispatch guard enforces exactly the pin the projection wrote.
+  const obsModel = observationAgent.match(/^model = "(.*)"$/m)?.[1] ?? "";
+  const installedGuard = path.join(result.targets.hookDir, "codex-dispatch-contract-guard.mts");
+  assert.deepEqual(fs.readFileSync(installedGuard), fs.readFileSync(path.join(here, "hooks", "dispatch-contract-guard.mts")));
+  assert.deepEqual(
+    fs.readFileSync(path.join(result.targets.hookDir, "..", "parity", "capabilities.json")),
+    fs.readFileSync(path.join(here, "parity", "capabilities.json")),
+  );
+  const guard = (extra: Record<string, unknown>): string => spawnSync(process.execPath, [installedGuard], {
+    encoding: "utf8",
+    input: JSON.stringify({ tool_name: "spawn_agent", tool_input: { task_name: "obs", message: "m", agent_type: "codex-obs", ...extra } }),
+  }).stdout;
+  assert.ok(guard({}).includes(`pinned to model ${obsModel};`));
+  assert.equal(guard({ model: obsModel }), "");
 
   assert.deepEqual(fs.readFileSync(jira), jiraBefore);
   assert.equal(fs.readFileSync(retired, "utf8"), "operator-owned-retired\n");

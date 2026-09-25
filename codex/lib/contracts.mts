@@ -19,6 +19,9 @@ export interface AgentRenderOptions {
   // claude/agents/<name>.md.
   source?: string;
   model?: string;
+  // true: the Codex dispatch guard denies a dispatch of this agent whose model is
+  // missing or differs from `model` (codex/hooks/dispatch-contract-guard.mts).
+  enforcePin?: boolean;
   reasoning?: string;
   sandbox?: string;
 }

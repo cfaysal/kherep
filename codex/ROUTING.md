@@ -41,8 +41,12 @@ Discover capabilities from the active runtime and current installed bindings. A 
 After a completed turn, the Maestro dispatches the observation agent for its own runtime with an
 explicit pinned model. On this runtime that agent is `codex-obs`, projected from its own worker
 definition `codex/agents/codex-obs.md` through `codex/parity/capabilities.json`; on Claude it is `claude-obs`. The pin is
-enforced at dispatch, not merely configured: a dispatch without a model, or with a different one,
-is denied. An observation run never dispatches another observation run.
+enforced at dispatch, not merely configured. The Codex dispatch guard reads it from the same
+`capabilities.json` entry that writes `model` into the agent TOML, an entry marked `enforcePin`, and
+denies an `Agent` or `spawn_agent` dispatch whose `agent_type` names that agent when `model` is
+missing or differs; the reason names the pinned model. It also denies hook input it cannot parse or
+attribute to a tool, and every dispatch while its pin source is unreadable. Agents without
+`enforcePin` keep the allowed model the Maestro selects, or inherit one. An observation run never dispatches another observation run.
 
 The Codex worker is read-only and returns only a strict JSON candidate. The Maestro validates it,
 reads the configured authority and publishes a nonempty candidate. An empty result is valid and
