@@ -165,7 +165,7 @@ SH
 # the original path. A rolled-back retirement leaves the parked copy where it is;
 # the dated suffix is what keeps the next run from overwriting it.
 test_retire() {
-  local live="$TMP/retire/live" backup="$TMP/retire/backup" out
+  local live="$TMP/retire/live" backup="$TMP/retire/backup" out rc
   local crowded="$TMP/retire/crowded" stamp=19700101-000000 parked
   mkdir -p "$live/hooks" "$backup"
   printf orphan > "$live/hooks/em-dash-watch.js"
@@ -177,6 +177,8 @@ test_retire() {
   [ "$(cat "$backup/one/retired/hooks/em-dash-watch.js")" = orphan ] || fail "retired file was not backed up"
   transaction_rollback test
   [ "$(cat "$live/hooks/em-dash-watch.js")" = orphan ] || fail "rollback did not restore the retired file"
+  [ -f "$backup/one/ROLLED-BACK" ] && [ "$(cat "$live/hooks/_deprecated/em-dash-watch.js")" = orphan ] ||
+    fail "a created graveyard that holds the parked copy broke the rollback or lost the copy"
 
   transaction_begin "$backup/two" "$live"
   out="$(transaction_retire_path hooks/gone.js "$live/hooks/gone.js" "$backup/two/retired/hooks/gone.js")"
@@ -209,37 +211,81 @@ test_retire() {
   [ -e "$parked.$stamp-1" ] || fail "a same-second collision got no counted sibling"
   same "$parked.$stamp-1" "$TMP/retire/third.before"
   transaction_commit
+
+  # #45. The graveyard a retirement creates is journalled. A retirement that
+  # fails before its file lands there (here: a backup that already exists) is
+  # rolled back through the same EXIT path install.sh uses, and the rollback
+  # removes the now empty _deprecated/ it created. The first case above already
+  # shows that one holding a parked copy stays and still rolls back cleanly.
+  mkdir -p "$TMP/retire/fresh/tools/x" "$backup/five/retired/tools/x"
+  printf fresh > "$TMP/retire/fresh/tools/x/tool.ps1"; printf taken > "$backup/five/retired/tools/x/tool.ps1"
+  set +e
+  (
+    set -e; trap 'transaction_rollback injected > /dev/null 2>&1' EXIT
+    transaction_begin "$backup/five" "$TMP/retire/fresh"
+    transaction_retire_path tools/x/tool.ps1 "$TMP/retire/fresh/tools/x/tool.ps1" "$backup/five/retired/tools/x/tool.ps1"
+  ) > "$TMP/retire/five.log" 2>&1; rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a retirement over an existing backup did not fail"
+  [ "$(cat "$TMP/retire/fresh/tools/x/tool.ps1")" = fresh ] || fail "rollback did not restore the half-retired file"
+  grep -qxF "$TMP/retire/fresh/tools/x/_deprecated" "$backup/five/journal/created-parents" ||
+    fail "the created graveyard was not journalled"
+  [ -f "$backup/five/ROLLED-BACK" ] || fail "the rollback after a failed retirement was not clean"
+  [ ! -e "$TMP/retire/fresh/tools/x/_deprecated" ] || fail "rollback left the empty graveyard it created"
 }
 
-# #33. retired.txt also names workspace files with the project/ prefix. The
+# #33, #45. retired.txt also names workspace files with the project/ prefix. The
 # declared pass maps them to the workspace, parks them like a Claude-home entry
 # with the backup under retired/project/..., skips an entry that is absent and
-# restores the parked file on rollback. A traversing entry is refused before
-# anything moves.
+# restores the parked file on rollback. A project/ entry is parked only while
+# its content, CRLF folded to LF, matches one of its listed hashes; anything
+# else is kept with one KEEP line, without backup or journal entry. A traversing
+# entry, and a project/ entry without hashes, are refused before anything moves.
+sha256_lf() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
 test_retire_declared() {
-  local root="$TMP/retire-declared" home ws backup manifest rc
+  local root="$TMP/retire-declared" home ws backup manifest rc known other keep
   home="$root/home/.claude"; ws="$root/workspace"; backup="$root/backup"; manifest="$root/retired.txt"
-  mkdir -p "$home/hooks" "$ws/tools/mpac" "$backup"
+  mkdir -p "$home/hooks" "$ws/tools/mpac" "$ws/tools/edited" "$backup"
   printf home-orphan > "$home/hooks/em-dash-watch.js"
-  printf ws-orphan > "$ws/tools/mpac/mpac.ps1"
-  printf '%s\n' '# comment' hooks/em-dash-watch.js project/tools/mpac/README.md project/tools/mpac/mpac.ps1 > "$manifest"
+  printf 'ws-known\r\n' > "$ws/tools/mpac/mpac.ps1"; cp "$ws/tools/mpac/mpac.ps1" "$root/known.before"
+  printf 'operator edit\n' > "$ws/tools/edited/tool.ps1"
+  known="$(printf 'ws-known\n' | sha256_lf)"; other="$(printf 'another placed version\n' | sha256_lf)"
+  keep='retire: KEEP project/tools/edited/tool.ps1 (content not placed by the installer)'
+  printf '%s\n' '# comment' hooks/em-dash-watch.js "project/tools/edited/tool.ps1 sha256:$known,$other" \
+    "project/tools/mpac/README.md sha256:$known" "project/tools/mpac/mpac.ps1 sha256:$other,$known" > "$manifest"
   (
     KHEREP_PROFILE=win; source "$HERE/profile.sh"; source "$HERE/install-retired.sh"
     transaction_begin "$backup/one" "$home" "$ws"
     bootstrap_retire_declared "$manifest" "$home" "$ws" "$backup/one" > "$root/out" ||
       fail "the declared retirement pass failed"
     [ ! -e "$ws/tools/mpac/mpac.ps1" ] || fail "a retired workspace file stayed at its live path"
-    [ "$(cat "$ws/tools/mpac/_deprecated/mpac.ps1")" = ws-orphan ] || fail "a retired workspace file was not parked in the workspace"
-    [ "$(cat "$backup/one/retired/project/tools/mpac/mpac.ps1")" = ws-orphan ] || fail "a retired workspace file was not backed up"
+    same "$ws/tools/mpac/_deprecated/mpac.ps1" "$root/known.before"
+    same "$backup/one/retired/project/tools/mpac/mpac.ps1" "$root/known.before"
     [ ! -e "$home/project" ] || fail "a project/ entry was resolved against the Claude home"
     [ "$(cat "$home/hooks/_deprecated/em-dash-watch.js")" = home-orphan ] || fail "the Claude-home entry was not parked"
     grep -qF "retire: SKIP project/tools/mpac/README.md" "$root/out" || fail "an absent workspace entry did not report SKIP"
     [ ! -e "$ws/tools/mpac/_deprecated/README.md" ] && [ ! -e "$backup/one/retired/project/tools/mpac/README.md" ] ||
       fail "an absent workspace entry was parked or backed up"
+    [ "$(grep -c 'retire: KEEP' "$root/out")" -eq 1 ] && grep -qxF "$keep" "$root/out" ||
+      fail "unknown workspace content did not produce exactly one KEEP line: $(cat "$root/out")"
+    [ "$(cat "$ws/tools/edited/tool.ps1")" = 'operator edit' ] && [ ! -e "$ws/tools/edited/_deprecated" ] ||
+      fail "unknown workspace content was moved"
+    [ ! -e "$backup/one/retired/project/tools/edited" ] || fail "unknown workspace content was backed up"
+    ! grep -rqF "tools/edited" "$backup/one/journal" || fail "unknown workspace content was journalled"
     [ "$TX_COUNT" -eq 2 ] || fail "expected two journalled retirements, got $TX_COUNT"
     transaction_rollback test > /dev/null
-    [ "$(cat "$ws/tools/mpac/mpac.ps1")" = ws-orphan ] || fail "rollback did not restore the retired workspace file"
+    same "$ws/tools/mpac/mpac.ps1" "$root/known.before"
     [ "$(cat "$home/hooks/em-dash-watch.js")" = home-orphan ] || fail "rollback did not restore the retired Claude-home file"
+
+    printf '%s\n' hooks/em-dash-watch.js project/tools/mpac/mpac.ps1 > "$manifest"
+    transaction_begin "$backup/unhashed" "$home" "$ws"
+    set +e; bootstrap_retire_declared "$manifest" "$home" "$ws" "$backup/unhashed" > "$root/unhashed.log" 2>&1; rc=$?; set -e
+    [ "$rc" -ne 0 ] || fail "a project/ entry without hashes was accepted"
+    grep -qF "FATAL: retirement manifest entry project/tools/mpac/mpac.ps1 needs 'sha256:" "$root/unhashed.log" ||
+      fail "a project/ entry without hashes was not refused clearly: $(cat "$root/unhashed.log")"
+    [ "$TX_COUNT" -eq 0 ] && [ "$(cat "$home/hooks/em-dash-watch.js")" = home-orphan ] ||
+      fail "a manifest with an unhashed project/ entry moved a file before it was refused"
+    transaction_rollback test > /dev/null
 
     printf '%s\n' 'project/../escape' > "$manifest"
     printf outside > "$root/escape"
@@ -436,17 +482,18 @@ test_default_confluence_brokers() {
 }
 
 # Kherep no longer ships the MPAC tools (#25). Hosts that installed them earlier
-# get <workspace>/tools/mpac/ retired through retired.txt (#33): an upgrade parks
-# both files in a _deprecated/ sibling with their exact bytes in the install
-# backup, and drift-check passes. A file that is back at a retired path, in the
-# workspace or in the Claude home, is RETIRED-LIVE drift instead of a silent pass.
+# get <workspace>/tools/mpac/ retired through retired.txt (#33). The workspace
+# entries are hash-gated (#45): an upgrade over an operator's own mpac.ps1 keeps
+# it with one KEEP line and still succeeds, while the ungated Claude-home entry
+# is parked with its exact bytes in the install backup. A path that is live
+# afterwards is reported as RETIRED-LIVE, which is information: drift-check still
+# passes with exit 0, under the default scope and under DRIFT_SCOPE=project.
 test_upgrade_retires_mpac() {
-  local rc f b
+  local rc b
   fixture mpac
   mkdir -p "$W/tools/mpac" "$ROOT/mpac.before"
-  printf 'operator mpac script\n' > "$W/tools/mpac/mpac.ps1"
-  printf 'operator mpac notes\n' > "$W/tools/mpac/README.md"
-  cp "$W/tools/mpac/mpac.ps1" "$W/tools/mpac/README.md" "$ROOT/mpac.before/"
+  printf 'operator mpac script\n' > "$W/tools/mpac/mpac.ps1"; cp "$W/tools/mpac/mpac.ps1" "$ROOT/mpac.before/"
+  printf leftover > "$C/hooks/em-dash-watch.js"
   set +e
   KHEREP_INSTALL_ATLASSIAN_TOOLS=1 HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" \
     KHEREP_CREDENTIALS_ROOT="$R" KHEREP_INSTALL_SKIP_GITCONFIG=1 KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE=1 \
@@ -455,24 +502,31 @@ test_upgrade_retires_mpac() {
   set -e
   [ "$rc" -eq 0 ] || { cat "$ROOT/log"; fail "upgrade install with the Atlassian switch failed (rc=$rc)"; }
   b="$(latest "$H")"
-  for f in mpac.ps1 README.md; do
-    [ ! -e "$W/tools/mpac/$f" ] || fail "the upgrade left the retired MPAC file $f live"
-    same "$W/tools/mpac/_deprecated/$f" "$ROOT/mpac.before/$f"
-    same "$b/retired/project/tools/mpac/$f" "$ROOT/mpac.before/$f"
-  done
+  [ "$(grep -c 'retire: KEEP' "$ROOT/log")" -eq 1 ] &&
+    grep -qxF 'retire: KEEP project/tools/mpac/mpac.ps1 (content not placed by the installer)' "$ROOT/log" ||
+    { cat "$ROOT/log"; fail "the upgrade did not keep the operator's mpac.ps1 with exactly one KEEP line"; }
+  same "$W/tools/mpac/mpac.ps1" "$ROOT/mpac.before/mpac.ps1"
+  [ ! -e "$W/tools/mpac/_deprecated" ] && [ ! -e "$b/retired/project" ] ||
+    fail "the upgrade parked or backed up workspace content it did not place"
+  [ "$(cat "$C/hooks/_deprecated/em-dash-watch.js")" = leftover ] && [ "$(cat "$b/retired/hooks/em-dash-watch.js")" = leftover ] &&
+    [ ! -e "$C/hooks/em-dash-watch.js" ] || fail "the upgrade did not park the retired Claude-home file"
   same "$HERE/../modules/atl-jira-brokers/atl-jira.mts" "$W/tools/atl-jira.mts"
   KHEREP_INSTALL_ATLASSIAN_TOOLS=1 HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" \
     KHEREP_CREDENTIALS_ROOT="$R" bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
-    { cat "$ROOT/drift.log"; fail "drift-check failed after the upgrade retired the MPAC tools"; }
-  ! grep -q RETIRED-LIVE "$ROOT/drift.log" || { cat "$ROOT/drift.log"; fail "drift-check reports a parked file as live"; }
+    { cat "$ROOT/drift.log"; fail "drift-check failed over a kept retired file"; }
+  grep -qxF 'DRIFT-CHECK PASS (repo == live)' "$ROOT/drift.log" &&
+    grep -q '^RETIRED-LIVE  project/tools/mpac/mpac\.ps1 ' "$ROOT/drift.log" &&
+    ! grep -q 'RETIRED-LIVE  project/tools/mpac/README\.md' "$ROOT/drift.log" &&
+    ! grep -q 'RETIRED-LIVE  hooks/' "$ROOT/drift.log" ||
+    { cat "$ROOT/drift.log"; fail "drift-check did not report exactly the kept retired path and PASS"; }
 
-  cp "$ROOT/mpac.before/mpac.ps1" "$W/tools/mpac/mpac.ps1"
   printf leftover > "$C/hooks/em-dash-watch.js"
   set +e
   KHEREP_INSTALL_ATLASSIAN_TOOLS=1 HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" \
     KHEREP_CREDENTIALS_ROOT="$R" bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1; rc=$?
   set -e
-  [ "$rc" -eq 1 ] || { cat "$ROOT/drift.log"; fail "drift-check passed over live retired paths (rc=$rc)"; }
+  [ "$rc" -eq 0 ] && grep -qxF 'DRIFT-CHECK PASS (repo == live)' "$ROOT/drift.log" ||
+    { cat "$ROOT/drift.log"; fail "drift-check treated live retired paths as drift (rc=$rc)"; }
   grep -q '^RETIRED-LIVE  project/tools/mpac/mpac\.ps1 ' "$ROOT/drift.log" &&
     grep -q '^RETIRED-LIVE  hooks/em-dash-watch\.js ' "$ROOT/drift.log" &&
     ! grep -q 'RETIRED-LIVE  project/tools/mpac/README\.md' "$ROOT/drift.log" ||
@@ -481,7 +535,8 @@ test_upgrade_retires_mpac() {
   DRIFT_SCOPE=project KHEREP_INSTALL_ATLASSIAN_TOOLS=1 HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win \
     KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1; rc=$?
   set -e
-  [ "$rc" -eq 1 ] && grep -q '^RETIRED-LIVE  project/tools/mpac/mpac\.ps1 ' "$ROOT/drift.log" &&
+  [ "$rc" -eq 0 ] && grep -qxF 'DRIFT-CHECK PASS (repo == live)' "$ROOT/drift.log" &&
+    grep -q '^RETIRED-LIVE  project/tools/mpac/mpac\.ps1 ' "$ROOT/drift.log" &&
     ! grep -q 'RETIRED-LIVE  hooks/' "$ROOT/drift.log" ||
     { cat "$ROOT/drift.log"; fail "project-scope drift-check did not limit RETIRED-LIVE to workspace entries"; }
 }

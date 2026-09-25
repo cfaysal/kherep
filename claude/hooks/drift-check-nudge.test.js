@@ -129,7 +129,6 @@ check(
 // original ones: a report whose single problem carries one of these labels ends
 // in FOUND DRIFT and must never read as zero findings (#33).
 for (const line of [
-  "RETIRED-LIVE  project/tools/mpac/mpac.ps1 (/w/tools/mpac/mpac.ps1)",
   "MISSING-BLOCK project/CLAUDE.md",
   "BLOCK-INVALID project/AGENTS.md",
   "NORMALIZE-FAIL hooks/commit-guard.js",
@@ -142,6 +141,16 @@ for (const line of [
     true
   );
 }
+
+// RETIRED-LIVE is information, not drift (#45): drift-check keeps PASS for it,
+// and a fresh PASS report that carries the line must not raise a nudge.
+check(
+  "a PASS report with a RETIRED-LIVE line yields no findings",
+  contextOf(run({ cwd: IN_SCOPE }, claudeHomeWith(
+    "ok            hooks/commit-guard.js\nRETIRED-LIVE  project/tools/mpac/mpac.ps1 (/w/tools/mpac/mpac.ps1)\n\n" +
+      "DRIFT-CHECK PASS (repo == live)\n", 1))),
+  null
+);
 
 check(
   "an all-ok PASS report yields no findings",

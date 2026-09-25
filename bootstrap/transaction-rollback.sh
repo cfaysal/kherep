@@ -67,6 +67,7 @@ transaction_rollback() {
   printf '%s\n' "$reason" > "$TX_BACKUP_ROOT/ROLLBACK-REASON"
   for ((i=TX_COUNT-1; i>=0; i--)); do transaction_restore_entry "$i" || ok=1; done
   transaction_cleanup_pending || ok=1
+  transaction_cleanup_created_graveyards
   transaction_cleanup_created_parents || ok=1
   rm -f "$TX_BACKUP_ROOT/ACTIVE"
   if [ "$ok" = 0 ]; then

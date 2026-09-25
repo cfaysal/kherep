@@ -200,7 +200,9 @@ const retiredEntries = fs
   .readFileSync(path.join(manifestDir, "retired.txt"), "utf8")
   .split("\n")
   .map((line) => line.replace(/\r$/, "").trim())
-  .filter((line) => line && !line.startsWith("#"));
+  .filter((line) => line && !line.startsWith("#"))
+  // A project/ entry carries its content hashes after one space (#45).
+  .map((line) => line.split(" ")[0]);
 
 test("keine Datei ist gleichzeitig verwaltet und zurueckgezogen", () => {
   const managed = new Set(fileEntries);

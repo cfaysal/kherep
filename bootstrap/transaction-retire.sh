@@ -15,6 +15,19 @@
 # suffix counts up (.<stamp>-1, -2, ...) until a free name is found: a collision
 # can no longer abort the install. TX_RETIRE_STAMP overrides the stamp and
 # exists only so tests can force that collision; production never sets it.
+#
+# A _deprecated/ the pass creates is journalled like a created parent (#45).
+# Rollback removes it only while it is empty, i.e. when the retirement failed
+# before its file landed there. One that holds a parked copy stays, by design.
+
+transaction_cleanup_created_graveyards() {
+  local i path
+  for ((i=${#TX_CREATED_GRAVEYARDS[@]}-1; i>=0; i--)); do
+    path="${TX_CREATED_GRAVEYARDS[$i]}"
+    if [ -d "$path" ] && [ ! -L "$path" ]; then rmdir "$path" 2>/dev/null || true; fi
+  done
+  TX_CREATED_GRAVEYARDS=()
+}
 
 transaction_retire_path() {
   local label="$1" live="$2" backup="$3"
@@ -30,7 +43,11 @@ transaction_retire_path() {
   transaction_assert_allowed_path target "$label retire target" "$dest" || return $?
   transaction_assert_allowed_path backup "$label retire backup" "$backup" || return $?
   transaction_claim_target "$live" || return $?
-  mkdir -p "$graveyard"
+  if [ ! -d "$graveyard" ]; then
+    mkdir "$graveyard" || return $?
+    TX_CREATED_GRAVEYARDS[${#TX_CREATED_GRAVEYARDS[@]}]="$graveyard"
+    printf '%s\n' "$graveyard" >> "$TX_BACKUP_ROOT/journal/created-parents"
+  fi
   if transaction_path_exists "$dest"; then
     stamp="${TX_RETIRE_STAMP:-$(date -u +%Y%m%d-%H%M%S)}"
     dest="$graveyard/$base.$stamp"

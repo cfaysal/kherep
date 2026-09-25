@@ -233,18 +233,20 @@ cmp_file "project/tools/jira-discovery.mts" \
 fi
 
 # #33. A path in retired.txt is one the installer parks. If it is still live,
-# the retirement never ran on this host (or the file came back), and without
-# this check an orphan the repo no longer compares would pass silently.
+# the retirement never ran on this host, the file came back, or the installer
+# kept it because its content is not one the installer placed (#45). The line
+# is information, not drift: a kept file would otherwise stay red for good.
 # Claude-home entries follow DRIFT_SCOPE; project/ entries are always checked.
 [ -f "$RETIRED_MANIFEST" ] || { echo "FATAL: retirement manifest missing: $RETIRED_MANIFEST" >&2; exit 2; }
-while IFS= read -r rel || [ -n "$rel" ]; do
-  rel="${rel%$'\r'}"
-  case "$rel" in ''|'#'*) continue ;; esac
-  kherep_validate_manifest_relative_path "retirement manifest entry" "$rel" || exit 2
+while IFS= read -r line || [ -n "$line" ]; do
+  parse_rc=0; bootstrap_retired_parse_line "$line" || parse_rc=$?
+  [ "$parse_rc" -ne 1 ] || continue
+  [ "$parse_rc" -eq 0 ] || exit 2
+  rel="$RETIRED_REL"
   case "$rel" in project/*) ;; *) [ "$DRIFT_SCOPE" = "all" ] || continue ;; esac
   live="$(bootstrap_retired_live_path "$rel" "$CLAUDE_HOME" "$WS")"
   if [ -e "$live" ] || [ -L "$live" ]; then
-    printf 'RETIRED-LIVE  %s (%q)\n' "$rel" "$live"; drift=1
+    printf 'RETIRED-LIVE  %s (%q)\n' "$rel" "$live"
   fi
 done < "$RETIRED_MANIFEST"
 

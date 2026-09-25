@@ -63,13 +63,23 @@ increments the minor version; every other release increments the patch version.
   arrived in Node 23.6.0.
 - The retirement manifest `bootstrap/manifest/retired.txt` can now name
   workspace files with the `project/` prefix that the installer and
-  drift-check already use. The installer parks such a file in a `_deprecated/`
-  sibling inside the workspace, with its previous version in the installation
-  backup under `retired/project/`, and a rollback puts it back. An entry that
-  is absent on the host is skipped. drift-check reports a declared retired
-  path that is still present, in the Claude home or in the workspace, as
-  `RETIRED-LIVE` drift instead of passing, and the session-start drift nudge
-  lists it. With `DRIFT_SCOPE=project` only the workspace entries are checked.
+  drift-check already use. Such an entry lists the SHA-256 of every version
+  the installer placed there, hashed with CRLF folded to LF
+  (`project/<path> sha256:<hex>[,<hex>...]`), and an entry without hashes is
+  rejected when the manifest is read. The installer parks the file in a
+  `_deprecated/` sibling inside the workspace only while its content matches
+  one of those hashes, with its previous version in the installation backup
+  under `retired/project/`, and a rollback puts it back. Other content is
+  kept in place and reported as
+  `retire: KEEP <entry> (content not placed by the installer)`, without a
+  backup or journal entry, and the installation continues (#45). An entry that
+  is absent on the host is skipped. A `_deprecated/` directory the pass
+  creates is journalled, and a rollback removes it again while it is empty.
+  drift-check reports a declared retired path that is still present, in the
+  Claude home or in the workspace, as `RETIRED-LIVE`. The line is information:
+  it does not change a PASS or the exit code, and the session-start drift
+  nudge does not count it (#45). With `DRIFT_SCOPE=project` only the workspace
+  entries are checked.
 - The Claude installer writes the system-wide `core.hooksPath`, which binds
   every account on the host, only with `KHEREP_INSTALL_SYSTEM_HOOKSPATH=1`.
   Without it the installer reads the value and, when it differs from Kherep's
