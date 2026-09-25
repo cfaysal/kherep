@@ -15,6 +15,7 @@ export interface NodePolicy {
   version: 1;
   allowedCommands: Phase1Command[];
   messaging?: { accept: AcceptRule[] };
+  wake?: { sessions: string[] };
 }
 
 export const DEFAULT_POLICY: NodePolicy = { version: 1, allowedCommands: [...PHASE1_COMMANDS] };
@@ -34,10 +35,12 @@ export function loadPolicy(file: string): NodePolicy {
     return denyAll();
   }
   try {
-    const value = JSON.parse(text) as { version?: unknown; allowedCommands?: unknown; messaging?: unknown };
+    const value = JSON.parse(text) as { version?: unknown; allowedCommands?: unknown; messaging?: unknown; wake?: unknown };
     if (value.version !== 1 || !Array.isArray(value.allowedCommands)) return denyAll();
     const accept = parseAcceptRules(value.messaging);
-    return { version: 1, allowedCommands: value.allowedCommands.filter(isPhase1Command), ...(accept ? { messaging: { accept } } : {}) };
+    const wake = parseWake(value.wake);
+    return { version: 1, allowedCommands: value.allowedCommands.filter(isPhase1Command), ...(accept ? { messaging: { accept } } : {}),
+      ...(wake ? { wake } : {}) };
   } catch {
     return denyAll();
   }
@@ -84,4 +87,21 @@ export function acceptsMessage(policy: NodePolicy, toSession: string, fromNodeId
   const refs = local ? [toSession, local.sessionId, ...(local.name ? [local.name] : [])] : [toSession];
   return (policy.messaging?.accept ?? []).some((rule) =>
     (rule.session === "*" || refs.includes(rule.session)) && (rule.from.includes("*") || rule.from.includes(fromNodeId)));
+}
+
+// The optional wake section (issue #31, operator decision 2026-09-25): waking
+// idle sessions is opt-in per node and per session. Anything but enabled true
+// with a non-empty list of session ids or names disables it (fail closed);
+// "*" matches every session, but only where it is written.
+function parseWake(section: unknown): { sessions: string[] } | null {
+  if (typeof section !== "object" || section === null) return null;
+  const { enabled, sessions } = section as { enabled?: unknown; sessions?: unknown };
+  if (enabled !== true || !Array.isArray(sessions) || sessions.length === 0 || !sessions.every(isSessionRef)) return null;
+  return { sessions: [...sessions] as string[] };
+}
+
+// refs: the session id and its current name, if any.
+export function wakeAllowed(policy: NodePolicy, refs: string[]): boolean {
+  const sessions = policy.wake?.sessions ?? [];
+  return sessions.includes("*") || refs.some((ref) => sessions.includes(ref));
 }

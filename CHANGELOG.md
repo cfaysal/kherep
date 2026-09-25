@@ -12,11 +12,18 @@ increments the minor version; every other release increments the patch version.
 ### Added
 
 - Control Plane: an idle Claude Code session wakes when a peer message
-  arrives. A second `Stop` hook (`modules/control-plane/node/wake-hook.mts`)
-  runs with `asyncRewake`, wakes at most 6 times per hour per session, does
-  not wake at reply depth 6 or deeper, re-arms itself before its timeout, and
-  can be switched off with a `wake.disabled` file in the node directory; every
-  decision is logged to `wake.jsonl` without message text. A prompt typed
+  arrives, if the node's `policy.json` opts in with a `wake` section that
+  lists the session (by id or name, or an explicit `"*"`); without it nothing
+  is woken. A listener (`modules/control-plane/node/wake-hook.mts`) runs with
+  `asyncRewake` after the delivery hook on `UserPromptSubmit` and `Stop`, one
+  per session, and takes its re-arm deadline from the `--timeout` its entry
+  carries. Wakes and `Stop` continuations share a budget of 6 per rolling
+  hour, 20 per rolling day and 30 s spacing per session; a session in
+  `bypassPermissions` is neither woken nor continued. It does not wake at reply
+  depth 6 or deeper, wakes once for an offer left by a turn without `Stop`,
+  ends when its Claude Code process is gone, re-arms itself before its timeout,
+  and can be switched off with a `wake.disabled` file in the node directory;
+  every decision is logged to `wake.jsonl` without message text. A prompt typed
   while a turn is still running no longer re-offers that turn's messages; they
   are re-offered after `StopFailure` (now wired) or after 10 minutes. `msg
   send` addresses sessions by id, policy rules match the id or the session's

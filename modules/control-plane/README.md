@@ -111,7 +111,7 @@ Delivery is offer, then confirm. A hook call that injects a message marks it `of
 
 - `UserPromptSubmit` injects records in state `accepted`, and records in state `offered` only on evidence that the turn which offered them ended: `StopFailure` flagged them (`retry`), or the offer is older than 10 minutes (`REOFFER_AFTER_MS`; a user interrupt fires no hook). A prompt the user types while a turn still runs fires `UserPromptSubmit` too, so a younger offer is not repeated; that turn's `Stop` confirms it. A repeated record is marked in its block as offered again. After 3 offers without a confirming `Stop` the record becomes `refused`, reason `not confirmed by the session after 3 turns`, and is not offered again.
 - `StopFailure` (the turn ended on an API error) flags the session's `offered` records `retry` and prints nothing; Claude Code ignores its output.
-- `Stop` first confirms every `offered` record of the session as `delivered`, then injects only records still `accepted`, which arrived during the turn; the next `Stop` confirms those. A message offered in the same turn is never injected again, so a second `Stop` without new messages stays silent. `stop_hook_active` changes nothing: a continued or woken turn confirms and offers the same way.
+- `Stop` first confirms every `offered` record of the session as `delivered`, then injects only records still `accepted`, which arrived during the turn; the next `Stop` confirms those. A message offered in the same turn is never injected again, so a second `Stop` without new messages stays silent. `stop_hook_active` changes nothing: a continued or woken turn confirms and offers the same way. Continuing the turn is an autonomous turn: it draws on the session's budget (see [listening while idle](#listening-while-idle)) and never happens in permission mode `bypassPermissions`. When either stops it, `Stop` still confirms but offers nothing, writes `continue-budget` or `continue-permission-mode` to `wake.jsonl`, and the messages wait for the next user prompt. `UserPromptSubmit`, a prompt of the user, is not gated.
 - Both events also tell the session once about each message it sent (its `sent/` record has this session's id or name as `fromSession`) that ended `refused` or `expired`: `Your message <id> to <node>/<session> was not delivered: "<reason>"`. The record gets `noticedAt`.
 - Nothing for this session: exit 0 without output. The hook reads local files only; it opens no network connection and starts no process.
 - Otherwise it marks the records and then prints `{"hookSpecificOutput": {"hookEventName": "<event>", "additionalContext": "..."}}`. On `UserPromptSubmit` the context is added alongside the prompt; on `Stop` it keeps the conversation going as hook feedback.
@@ -122,17 +122,20 @@ Every injected message is framed as peer content. The context opens once with th
 
 Reply depth, local and without a protocol change: an inbox record gets `depth` 0 for a new message, or the depth of this node's sent message it answers (`inReplyTo`) plus one. `msg send --reply-to` stores the replied record's depth plus one in its `sent/` record. From `MAX_REPLY_DEPTH` (6) on, a record never wakes a session and its block says that the automatic reply limit is reached and the model should not reply unless the user asks.
 
-`bootstrap/install.sh` wires the hook into the user `settings.json` for all three events, and the wake listener below after it on `Stop`, running both from the checkout the installer runs from; see [installation](../../docs/INSTALLATION.md#3-install-the-claude-adapter). Without an enrolled node they find no inbox and exit 0 without output.
+`bootstrap/install.sh` wires the hook into the user `settings.json` for all three events, and the wake listener below after it on `UserPromptSubmit` and `Stop`, running both from the checkout the installer runs from; see [installation](../../docs/INSTALLATION.md#3-install-the-claude-adapter). Without an enrolled node they find no inbox and exit 0 without output.
 
 Without the Kherep installer, add it by hand to a Claude Code `settings.json`. Use the absolute path of your checkout, and give the hook the same `KHEREP_CONFIG_DIR` as the daemon when the daemon uses one:
 
 ```json
 {
   "hooks": {
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node \"<checkout>/modules/control-plane/node/deliver-hook.mts\"", "timeout": 10 }] }],
+    "UserPromptSubmit": [{ "hooks": [
+      { "type": "command", "command": "node \"<checkout>/modules/control-plane/node/deliver-hook.mts\"", "timeout": 10 },
+      { "type": "command", "command": "node \"<checkout>/modules/control-plane/node/wake-hook.mts\" --timeout 86400", "asyncRewake": true, "timeout": 86400 }
+    ] }],
     "Stop": [{ "hooks": [
       { "type": "command", "command": "node \"<checkout>/modules/control-plane/node/deliver-hook.mts\"", "timeout": 10 },
-      { "type": "command", "command": "node \"<checkout>/modules/control-plane/node/wake-hook.mts\"", "asyncRewake": true, "timeout": 86400 }
+      { "type": "command", "command": "node \"<checkout>/modules/control-plane/node/wake-hook.mts\" --timeout 86400", "asyncRewake": true, "timeout": 86400 }
     ] }],
     "StopFailure": [{ "hooks": [{ "type": "command", "command": "node \"<checkout>/modules/control-plane/node/deliver-hook.mts\"", "timeout": 10 }] }]
   }
@@ -141,16 +144,32 @@ Without the Kherep installer, add it by hand to a Claude Code `settings.json`. U
 
 #### Listening while idle
 
-`node/wake-hook.mts` wakes an idle Claude Code session when a peer message arrives. It is a second `Stop` hook with `"asyncRewake": true`, which "runs in the background and wakes Claude on exit code 2", and wakes it "immediately even when the session is idle" ([hooks reference](https://code.claude.com/docs/en/hooks), fetched 2026-09-25). A process the model starts itself is no substitute: a background listener started through the Bash tool was blocked by the auto-mode classifier.
+`node/wake-hook.mts` wakes an idle Claude Code session when a peer message arrives. It runs with `"asyncRewake": true`, which "runs in the background and wakes Claude on exit code 2", and wakes it "immediately even when the session is idle" ([hooks reference](https://code.claude.com/docs/en/hooks), fetched 2026-09-25). A process the model starts itself is no substitute: a background listener started through the Bash tool was blocked by the auto-mode classifier.
 
-- Each `Stop` starts a listener. It takes over `listeners/<session_id>.json` (pid and start time) in the node directory; an older listener of the same session finds itself replaced and exits 0, so repeated turns never pile up processes. `stop_hook_active` does not matter.
-- It polls the inbox every 2 s for `accepted` records addressed to the session id or its current name that were received more than 3 s after it started. Earlier arrivals belong to the `Stop` delivery hook, which runs in parallel. Race: a message that arrives within those 3 s and after that hook read the inbox waits for the next turn. Before waking it waits 250 ms and re-reads the records, so one a delivery hook offered meanwhile wakes nobody. `offered` records never wake a session (for example after an Esc interrupt); they wait for the next prompt or the 10-minute rule.
-- On a hit it exits 2 with `Kherep: N new message(s) from other agent sessions arrived. They are delivered in this turn.` on stderr, which Claude Code shows as a system reminder. The text carries no peer content. Measured on Claude Code 2.1.273: the woken turn fires `UserPromptSubmit` with that text as prompt, so the delivery hook offers the messages at its start; its `Stop` confirms them and starts the next listener.
-- Timeout: Claude Code enforces `timeout` on an `asyncRewake` hook and kills it without waking the session, which would leave the session deaf. The listener therefore exits 2 on its own 60 s before the 86400 s timeout with `Kherep: message listener re-armed.`: one short turn a day, whose `Stop` re-arms.
-- Limits: at most 6 wakes per session per rolling hour (token bucket in `listeners/<session_id>.rate.json`); beyond that the listener exits 0 and the messages wait for the next turn. Records at `MAX_REPLY_DEPTH` or deeper never wake.
-- Kill switch: while `wake.disabled` exists in the node directory, listeners exit at start. Without an enrolled node (`node.json`) they exit 0 and write nothing.
-- Audit: `wake.jsonl` in the node directory gets one line per decision, `{ts, sessionId, messageIds, action}` with action `wake`, `rate-limited`, `depth-limit`, `superseded`, `disabled` or `rearm`. It never contains message text.
-- Codex has no documented way to wake an idle session, so Codex sessions get no listener; their messages arrive with the next prompt.
+Waking is off unless the node's policy file opts in (operator decision of 2026-09-25). The `wake` section names the sessions, by id or current name, that may be woken; `"*"` stands for every session, but only where it is written:
+
+```json
+{
+  "version": 1,
+  "allowedCommands": ["node.status", "runtime.list", "session.list"],
+  "wake": { "enabled": true, "sessions": ["review", "7f9c2d1e-0b4a-4c1e-9a55-3c2f8e6d1a90"] }
+}
+```
+
+A missing section, `enabled` other than `true`, or an empty or malformed `sessions` list turns waking off (fail closed) and leaves the rest of the policy in force; a policy file that does not parse denies everything as before. A session that is not listed gets no listener, and the audit says `not-allowlisted`.
+
+- Armed twice per turn: after the delivery hook on `UserPromptSubmit` and on `Stop`. The `UserPromptSubmit` entry keeps a listener when a turn ends without `Stop` (`StopFailure` or a user interrupt); it states its timeout, because `UserPromptSubmit` hooks otherwise default to 30 s. Each arming takes over `listeners/<session_id>.json` (a random token, pid, start time, event) in the node directory; a listener that finds another token there exits 0, so one session never has two listeners. Identity is the token, never the pid, and no listener terminates another process. `stop_hook_active` does not matter.
+- A listener armed at `UserPromptSubmit` treats the session as busy: it wakes only after `StopFailure` marks it idle (the delivery hook does that) or once the turn cannot still run (10 minutes, as for re-offers). A turn that ends normally fires `Stop`, whose listener replaces it. Caveat: a turn that runs longer than 10 minutes can get a wake that becomes a short extra turn after it.
+- It polls the inbox every 2 s for `accepted` records addressed to the session id or its current name that were received more than 3 s after it started. Earlier arrivals belong to the delivery hook of the same event, which runs in parallel. Race: a message that arrives within those 3 s and after that hook read the inbox waits for the next turn. Before waking it waits 250 ms and re-reads the records, so one a delivery hook offered meanwhile wakes nobody.
+- Stuck offers: an `offered` record of the session that the delivery hook would offer again (`StopFailure` flagged it, or it is older than 10 minutes) wakes the idle session once, with `Kherep: a message offered in an earlier turn may not have been read. It is offered again in this turn.`, so that turn's `UserPromptSubmit` offers it again. Never more than once per record (`listeners/<session_id>.stuck.json`), and not in the first 3 s, while the parallel `Stop` may still confirm it.
+- On a hit it exits 2 with `Kherep: N new message(s) from other agent sessions arrived. They are delivered in this turn.` on stderr, which Claude Code shows as a system reminder. The texts carry no peer content. Measured on Claude Code 2.1.273: the woken turn fires `UserPromptSubmit` with that text as prompt, so the delivery hook offers the messages at its start; its `Stop` confirms them and starts the next listener.
+- Timeout: Claude Code enforces `timeout` on an `asyncRewake` hook and kills it without waking the session, which would leave the session deaf. The installed command passes the same number as `--timeout <seconds>`, and the listener exits 2 on its own 60 s before it with `Kherep: message listener re-armed.`: one short turn a day, which re-arms. A `--timeout` of 120 s or less ends the listener at start; without the argument it assumes 86400.
+- Budget: wakes, re-arms and `Stop` continuations of the delivery hook are all autonomous turns and share one budget per session, `listeners/<session_id>.turns.json`: at most 6 per rolling hour, 20 per rolling day, and 30 s between two. Within the 30 s the listener waits and tries again; with the hour or day used up it exits 0 (audit `budget`) and the messages wait for the next user prompt, whose listener starts again. Records at `MAX_REPLY_DEPTH` (6) or deeper never wake.
+- Permission mode: a session whose hook input says `permission_mode` `bypassPermissions` is never woken (audit `permission-mode`) and its `Stop` does not continue the turn; `default`, `acceptEdits`, `plan`, `auto` and `dontAsk` may be woken. The mode is read when the listener is armed.
+- Parent death: every poll checks that the process that started the listener still runs; if not, the listener exits 0 (audit `parent-gone`). On macOS and Linux an orphan is re-parented, so its parent pid changes; on Windows the parent pid stays and is probed with signal 0. Claude Code may start the hook through a shell; when that shell stays alive as the parent, the listener watches the shell, and after Claude Code exits it ends at the latest at its timeout. A reused pid on Windows can hide a parent's death.
+- Kill switch: while `wake.disabled` exists in the node directory, listeners exit at start. Without an enrolled node (`node.json`) or without the policy opt-in they exit 0 and write nothing.
+- Audit: `wake.jsonl` in the node directory gets one line per decision, `{ts, sessionId, messageIds, action}`. The listener writes `wake`, `stuck-offer`, `budget`, `depth-limit`, `superseded`, `disabled`, `rearm`, `permission-mode`, `not-allowlisted` or `parent-gone`; the delivery hook writes `continue`, `continue-budget` or `continue-permission-mode` for `Stop` continuations. It never contains message text.
+- Codex has no documented way to wake an idle session, so Codex sessions get no listener; their messages arrive with the next prompt. The Codex `Stop` continuation is not budgeted.
 
 #### Codex sessions
 
@@ -279,6 +298,7 @@ Messaging is off unless `policy.json` accepts it. The optional `messaging` secti
 - `session` is the exact session id or name a sender addresses, or `*` for any session on this node. `from` lists sender node ids, `operator` for messages sent through the API, or `*` for any sender.
 - A missing section or an empty `accept` list disables messaging. A malformed section disables it as a whole, fail closed; the command allowlist is unaffected.
 - The daemon reads the policy at start. It advertises `messaging.v1` in `register` only when at least one accept rule exists.
+- The optional `wake` section decides which sessions the wake listener may wake; the listener reads it each time it is armed ([listening while idle](#listening-while-idle)).
 - An accepted message is written to `inbox/<messageId>.json` atomically (a temporary file renamed into place) with `messageId`, `from`, `toSession`, `text`, optional `inReplyTo`, `createdAt`, `receivedAt` and `state` `accepted`. A redelivered message keeps the existing file. When the file cannot be written the node sends no status, so the Worker keeps the message queued and delivers it again after the next authentication.
 - The delivery hook and the daemon move a record on to `offered`, `delivered` or `refused` (see [Delivery hook](#delivery-hook) and [Session messaging](#session-messaging)). `offered` is local only.
 - Records older than 7 days are removed when the daemon starts.

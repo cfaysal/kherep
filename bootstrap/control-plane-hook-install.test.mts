@@ -18,16 +18,25 @@ const HERE = import.meta.dirname;
 const HOOK = "modules/control-plane/node/deliver-hook.mts";
 const WAKE = "modules/control-plane/node/wake-hook.mts";
 const EVENTS = ["UserPromptSubmit", "Stop", "StopFailure"];
+// The events the wake listener is armed at, after the delivery hook.
+const WAKE_EVENTS = ["UserPromptSubmit", "Stop"];
 const forward = (value: string): string => value.replace(/\\/g, "/");
 // Git Bash wants /c/... on Windows; install.sh refuses a drive-letter path.
 const slash = (value: string): string =>
   forward(value).replace(/^([A-Za-z]):\//, (_match, drive: string) => `/${drive.toLowerCase()}/`);
 const hookCommand = (repo: string, hook = HOOK): string => `node "${repo}/${hook}"`;
 type HookGroups = { hooks: Record<string, { hooks: { command: string; [field: string]: unknown }[] }[]> };
-// The delivery hook ends each event's last group, except Stop, where the wake
+// The delivery hook ends each event's last group, except where the wake
 // listener follows it.
-const deliverCommand = (value: HookGroups, event: string) => value.hooks[event].at(-1)?.hooks.at(event === "Stop" ? -2 : -1)?.command;
-const wakeEntry = (value: HookGroups) => value.hooks.Stop.at(-1)?.hooks.at(-1);
+const deliverCommand = (value: HookGroups, event: string) =>
+  value.hooks[event].at(-1)?.hooks.at(WAKE_EVENTS.includes(event) ? -2 : -1)?.command;
+const wakeEntries = (value: HookGroups, event: string) =>
+  value.hooks[event].flatMap((group) => group.hooks).filter((hook) => hook.command.includes("wake-hook"));
+const wakeEntry = (value: HookGroups, event: string) => value.hooks[event].at(-1)?.hooks.at(-1);
+// The installed entry: the timeout Claude Code enforces and the one the
+// listener derives its re-arm deadline from are one number.
+const wakeHook = (repo: string, seconds: number) =>
+  ({ type: "command", command: `${hookCommand(repo, WAKE)} --timeout ${seconds}`, asyncRewake: true, timeout: seconds });
 // Some Node releases the engines range admits, 24.1.0 among them, print this
 // warning when a child loads a .mts file. Only this exact pair of lines is
 // dropped; any other stderr still fails the assertion.
@@ -90,17 +99,19 @@ test("install wires the delivery and wake hooks from the checkout, drift-check i
   for (const event of EVENTS) {
     const commands: string[] = settings.hooks[event].flatMap((group: { hooks: { command: string }[] }) => group.hooks.map((h) => h.command));
     assert.equal(commands.filter((command) => command.includes("deliver-hook")).length, 1, `${event}: ${commands.join(" | ")}`);
-    assert.equal(commands.filter((command) => command.includes("wake-hook")).length, event === "Stop" ? 1 : 0, event);
+    assert.equal(commands.filter((command) => command.includes("wake-hook")).length, WAKE_EVENTS.includes(event) ? 1 : 0, event);
     assert.equal(deliverCommand(settings, event), expected, `${event} does not end with the delivery hook`);
     // Run as stored, through bash like Claude Code: inert without an enrolled node.
     const run = bash(["-c", expected], f, JSON.stringify({ session_id: "s", hook_event_name: event }));
     assert.deepEqual([run.status, run.stdout, withoutTypeStrippingWarning(run.stderr)], [0, "", ""], `${event}: ${run.stderr}`);
   }
   // The wake listener keeps its background fields through the render.
-  const wake = hookCommand(forward(KHEREP_REPO), WAKE);
-  assert.deepEqual(wakeEntry(settings), { type: "command", command: wake, asyncRewake: true, timeout: 86400 });
-  const listened = bash(["-c", wake], f, JSON.stringify({ session_id: "s", hook_event_name: "Stop" }));
-  assert.deepEqual([listened.status, listened.stdout, withoutTypeStrippingWarning(listened.stderr)], [0, "", ""], listened.stderr);
+  for (const event of WAKE_EVENTS) {
+    const wake = wakeHook(forward(KHEREP_REPO), 86400);
+    assert.deepEqual(wakeEntry(settings, event), wake, event);
+    const listened = bash(["-c", wake.command], f, JSON.stringify({ session_id: "s", hook_event_name: event }));
+    assert.deepEqual([listened.status, listened.stdout, withoutTypeStrippingWarning(listened.stderr)], [0, "", ""], listened.stderr);
+  }
 
   const drift = bash([slash(path.join(HERE, "drift-check.sh"))], f);
   assert.equal(drift.status, 0, `${drift.stdout}\n${drift.stderr}`);
@@ -114,7 +125,7 @@ test("install wires the delivery and wake hooks from the checkout, drift-check i
   const captured = JSON.parse(fs.readFileSync(copy, "utf8"));
   const source = JSON.parse(fs.readFileSync(path.join(HERE, "..", "claude", "settings.user.json"), "utf8"));
   for (const event of EVENTS) assert.equal(deliverCommand(captured, event), deliverCommand(source, event));
-  assert.deepEqual(wakeEntry(captured), wakeEntry(source));
+  for (const event of WAKE_EVENTS) assert.deepEqual(wakeEntry(captured, event), wakeEntry(source, event));
   assert.ok(!fs.readFileSync(copy, "utf8").includes(forward(KHEREP_REPO)), "capture left the machine path of the checkout");
 
   // Removing the entries by hand, as docs/INSTALLATION.md describes, is drift.
@@ -122,4 +133,25 @@ test("install wires the delivery and wake hooks from the checkout, drift-check i
   fs.writeFileSync(path.join(f.claude, "settings.json"), `${JSON.stringify(settings, null, 2)}\n`);
   const removed = bash([slash(path.join(HERE, "drift-check.sh"))], f);
   assert.equal(removed.status, 1, `${removed.stdout}\n${removed.stderr}`);
+});
+
+// todo: mergeHooks in bootstrap/render-profile-settings.mts keeps an existing
+// hook whose fields differ from the managed one, so the older entry stays next
+// to the new one. Fixing it lies outside the files this change may touch.
+test("an upgrade replaces the wake entries of an older install with a changed timeout", {
+  todo: "installer merge keeps the older wake entry (bootstrap/render-profile-settings.mts)",
+}, (t) => {
+  const f = fixture(t);
+  const repo = forward(KHEREP_REPO);
+  const settingsFile = path.join(f.claude, "settings.json");
+  // An earlier install: the wake entries carry another timeout, Stop's in the form without the argument.
+  const older = { hooks: {
+    UserPromptSubmit: [{ matcher: "", hooks: [wakeHook(repo, 43200)] }],
+    Stop: [{ matcher: "", hooks: [{ type: "command", command: hookCommand(repo, WAKE), asyncRewake: true, timeout: 43200 }] }],
+  } };
+  fs.writeFileSync(settingsFile, `${JSON.stringify(older, null, 2)}\n`);
+  const install = bash([slash(path.join(HERE, "install.sh"))], f);
+  assert.equal(install.status, 0, `${install.stdout}\n${install.stderr}`);
+  const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+  for (const event of WAKE_EVENTS) assert.deepEqual(wakeEntries(settings, event), [wakeHook(repo, 86400)], event);
 });
