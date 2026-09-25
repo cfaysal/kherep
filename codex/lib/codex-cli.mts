@@ -57,7 +57,14 @@ export function codexEnvironment(
   return codexHome ? { ...environment, CODEX_HOME: codexHome } : environment;
 }
 
-export function runCodex(args: string[], options: { cwd?: string; codexHome?: string } = {}) {
+// A command whose stdout is a document to parse (--json) asks for stdout only:
+// Codex prints warnings to stderr, for example when CODEX_HOME lies under a
+// temporary directory, and appending them breaks JSON.parse (#55).
+export function codexOutput(stdout: string | null | undefined, stderr: string | null | undefined, stdoutOnly = false) {
+  return (stdoutOnly ? stdout || "" : `${stdout || ""}\n${stderr || ""}`).trim();
+}
+
+export function runCodex(args: string[], options: { cwd?: string; codexHome?: string; stdoutOnly?: boolean } = {}) {
   const command = resolveCodexCommand();
   const invocation = codexInvocation(command, args);
   const result = childProcess.spawnSync(invocation.command, invocation.args, {
@@ -72,5 +79,5 @@ export function runCodex(args: string[], options: { cwd?: string; codexHome?: st
     const detail = result.stderr?.trim();
     throw new Error(`codex ${args.join(" ")} failed${detail ? `: ${detail}` : ""}`);
   }
-  return `${result.stdout || ""}\n${result.stderr || ""}`.trim();
+  return codexOutput(result.stdout, result.stderr, options.stdoutOnly);
 }

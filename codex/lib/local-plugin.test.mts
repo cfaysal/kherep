@@ -140,3 +140,12 @@ test("fails closed on unknown marketplace list JSON before mutation", () => {
   } }), /Unexpected Codex marketplace list schema/);
   assert.deepEqual(calls, [["plugin", "marketplace", "list", "--json"]]);
 });
+
+test("asks for stdout only when it lists marketplaces as JSON", () => {
+  const requests: Array<{ args: string[]; stdoutOnly?: boolean }> = [];
+  assert.throws(() => registerLocalPlugin(desired, pluginId, { runCodex(args, options) {
+    requests.push({ args, stdoutOnly: options?.stdoutOnly });
+    return "{}";
+  } }), /Unexpected Codex marketplace list schema/);
+  assert.deepEqual(requests, [{ args: ["plugin", "marketplace", "list", "--json"], stdoutOnly: true }]);
+});

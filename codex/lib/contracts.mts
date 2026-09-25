@@ -124,4 +124,4 @@ export interface CanonicalSource extends CanonicalEntry {
   root: string;
 }
 
-export type RunCodex = (args: string[], options?: { cwd?: string }) => string;
+export type RunCodex = (args: string[], options?: { cwd?: string; stdoutOnly?: boolean }) => string;
