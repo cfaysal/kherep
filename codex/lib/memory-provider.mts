@@ -130,6 +130,13 @@ function sameNotifyPath(actual: string, expected: string): boolean {
   return path.normalize(actual) === path.normalize(expected);
 }
 
+// The Codex Computer Use notify wrapper: codex-computer-use.exe on Windows, the
+// SkyComputerUseClient binary inside its app bundle on macOS (#55).
+function isComputerUseWrapper(command: string): boolean {
+  return path.win32.basename(command).toLowerCase() === "codex-computer-use.exe"
+    || path.posix.basename(command) === "SkyComputerUseClient";
+}
+
 export function configureMemoryNotify(config: string, node: string, hook: string, previousNodes: string[] = []): string {
   const firstTable = config.search(/^\s*\[/m);
   const top = firstTable < 0 ? config : config.slice(0, firstTable);
@@ -139,7 +146,7 @@ export function configureMemoryNotify(config: string, node: string, hook: string
       const { values, secondEnd } = notifyStrings(line[1]);
       const nodes = [node, ...previousNodes];
       if (values.length === 2 && nodes.includes(values[0]) && values[1] === hook) return config.replace(line[0], "");
-      if (values.length === 4 && path.win32.basename(values[0]).toLowerCase() === "codex-computer-use.exe"
+      if (values.length === 4 && isComputerUseWrapper(values[0])
           && values[1] === "turn-ended" && values[2] === "--previous-notify") {
         const previous: unknown = JSON.parse(values[3]);
         if (Array.isArray(previous) && previous.length === 2 && previous.every((value) => typeof value === "string")
