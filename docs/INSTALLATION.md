@@ -91,7 +91,7 @@ The optional encrypted-secrets phase requires an external bundle and key. Enable
 
 ### Control-plane tasks
 
-An enrolled control-plane node can run tasks as Claude Code background sessions (details: [Tasks](../modules/control-plane/README.md#tasks)). The installer changes nothing for this; it stays off until the node's `policy.json` enables it. Prerequisites on the node: the daemon runs (`kherep-node daemon`), and the Claude CLI is installed as a native executable and signed in for the account the daemon runs as. A Windows npm shim (`claude.cmd`) cannot receive the task text safely through `cmd.exe`, so starts through it fail with that reason.
+An enrolled control-plane node can run tasks as Claude Code background sessions (details: [Tasks](../modules/control-plane/README.md#tasks)). The installer changes nothing for this; it stays off until the node's `policy.json` enables it. Prerequisites on the node: the daemon runs (`kherep-node daemon`), and the Claude CLI is installed and signed in for the account the daemon runs as. On Windows the node runs the native `claude.exe` that an npm install ships next to its `claude.cmd` shim; a shim without it cannot receive the task text safely through `cmd.exe`, so starts through it fail with that reason.
 
 Enable sessions in the node's `policy.json`, with the directory the sessions may work in as workspace root:
 

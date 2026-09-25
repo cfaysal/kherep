@@ -5,7 +5,7 @@ import { makeEnvelope, parseEnvelope, type SessionInfo } from "../protocol.mts";
 import { NodeClient } from "./client.mts";
 import { generateIdentity } from "./identity.mts";
 import { DEFAULT_POLICY } from "./policy.mts";
-import { CLAUDE_RUNTIME, claudeInvocation, LIST_TIMEOUT_MS, listSessions, mapClaudeAgents } from "./sessions.mts";
+import { CLAUDE_RUNTIME, claudeInvocation, LIST_TIMEOUT_MS, listSessions, mapClaudeAgents, nativeClaude } from "./sessions.mts";
 
 const STARTED = Date.UTC(2026, 0, 2, 3, 4, 5);
 const ROW = { pid: 4242, cwd: "/work/repo", kind: "interactive", startedAt: STARTED, sessionId: "0f0e0d0c-1111-4222-8333-444455556666",
@@ -113,4 +113,12 @@ test("a failed listing skips the snapshot and fails session.list with the reason
   // Registering while the listing fails sends no snapshot either.
   node.connectionClosed();
   assert.deepEqual(types(await node.onFrame(authOk)), ["register", "directory.get"]);
+});
+
+test("an npm shim resolves to the native executable next to it, so no prompt passes through cmd.exe", () => {
+  const shim = String.raw`C:\Users\u\AppData\Roaming\npm\claude.cmd`;
+  const native = String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`;
+  assert.equal(nativeClaude(shim, (file) => file === native), native);
+  assert.equal(nativeClaude(shim, () => false), shim);
+  assert.equal(nativeClaude("/usr/local/bin/claude", () => true), "/usr/local/bin/claude");
 });
