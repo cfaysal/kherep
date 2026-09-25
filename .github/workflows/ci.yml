@@ -56,15 +56,21 @@ jobs:
         run: npm run test:bootstrap
 
   # The unit suites and the node suites of the typescript job (without the type
-  # check) on the oldest Node release that the engines field in package.json
-  # admits, so a runtime feature newer than the floor fails here.
+  # check) on releases the engines field in package.json admits besides the
+  # current LTS. Support is not monotonic by version: 22.18.0 is the floor and
+  # has import.meta.main, while the later 24.1.0 lacks it and runs the
+  # TypeScript sources through unflagged type stripping.
   unit-engines-floor:
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22.18.0", "24.1.0"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "22.18.0"
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - name: Hook test suites
         shell: bash

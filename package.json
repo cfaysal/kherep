@@ -4,7 +4,7 @@
   "private": true,
   "description": "Kherep orchestration stack. TypeScript runs directly on Node (type stripping, no build); tsc is the type check only.",
   "engines": {
-    "node": ">=22.18.0"
+    "node": "^22.18.0 || >=23.6.0"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
