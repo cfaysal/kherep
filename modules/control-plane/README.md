@@ -127,7 +127,7 @@ Durable Object classes are declared with the `exports` map, which replaces the l
 
 ### Node
 
-Node.js 22.18 or later, no dependencies:
+Node.js 22.18 or later on the 22 line, or 23.6 or later, no dependencies:
 
 ```sh
 # The operator creates a code: POST /api/enrollments (through Access)

@@ -51,6 +51,9 @@ increments the minor version; every other release increments the patch version.
   `attribution: false` needs Claude Code 2.1.281 or later, and older versions
   discard the whole settings file. The existing commit guards are unchanged.
   Reinstall to apply.
+- `engines` in `package.json` is now `^22.18.0 || >=23.6.0`. Node 23.0 to 23.5
+  cannot run the TypeScript sources without a flag; unflagged type stripping
+  arrived in Node 23.6.0.
 
 ### Removed
 
@@ -84,16 +87,20 @@ increments the minor version; every other release increments the patch version.
   real paths, and the runner test still removes its fixture afterwards. The
   local-inference check that rejects a symlinked output root is unchanged.
 - The remaining entry points and hooks no longer rely on `import.meta.main`
-  to detect a direct start. Node 23 and Node 24.0 to 24.1 lack it, although
-  the engines range admits them, so on those releases eight Claude hooks, ten
-  Codex hooks, including the privacy-boundary and dispatch-contract guards,
-  and the bootstrap, Codex installer, plugin-snapshot, broker, local-inference
-  and MCP-wrapper CLIs did nothing and exited 0. Each now compares
-  `import.meta.url` with the real path of its script argument, like the four
-  CLIs above. A test fails when a tracked source file uses `import.meta.main`
-  again or compares against an unresolved script argument, and CI runs the
-  unit, Codex, module, broker and Control Plane node suites on Node 22.18.0,
-  the engines floor.
+  to detect a direct start. Node 23.6 and later 23 releases and Node 24.0 to
+  24.1 run the TypeScript sources but lack it, although the engines range
+  admitted them, so there eight Claude hooks, ten Codex hooks, including the
+  privacy-boundary and dispatch-contract guards, and the bootstrap, Codex
+  installer, plugin-snapshot, broker, local-inference and MCP-wrapper CLIs did
+  nothing and exited 0. Node 23.0 to 23.5 failed loudly instead, because they
+  cannot load the sources without a flag. Every entry point, the four CLIs
+  above included, now compares `import.meta.url` with its script argument both
+  as given and resolved to its real path, so it also runs under
+  `--preserve-symlinks-main`, which keeps the symlinked path. A test fails when
+  a tracked source file reads `import.meta.main` again, compares against the
+  script argument in one form only, or defines the check without both forms,
+  and CI runs the unit, Codex, module, broker and Control Plane node suites on
+  Node 22.18.0 and 24.1.0.
 
 ## [0.1.2] - 2026-09-24
 
