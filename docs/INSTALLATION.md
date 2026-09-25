@@ -14,6 +14,8 @@ npm ci
 
 Use absolute paths. For the Bash installer on Windows, use Git Bash paths such as `/c/Projects`, including for environment-variable overrides. On macOS, use native absolute POSIX paths. The Node-based Codex installer accepts native paths separately.
 
+The workspace path must be a single shell word: no whitespace and none of ``| & ; < > ( ) $ ` \ " ' * ? [ ] { }``. The Claude adapter names the workspace unquoted in the permission rules for its Confluence broker and in the stored `broker` command (see [section 5](#5-configure-integrations)), and a quoted call would not match those rules. `install.sh` and `drift-check.sh` therefore stop before writing anything when the workspace contains one of these characters, and name the path. The default workspace is `$HOME/Kherep`, so if your home path contains a space, set `KHEREP_WORKSPACE` to a path without one. `CLAUDE_HOME` may contain spaces, because every hook command quotes it, and so may `KHEREP_CREDENTIALS_ROOT`, which is rendered only as an environment value. The Codex installer quotes the workspace wherever it names it in a command and does not apply this restriction.
+
 ## 2. Review an isolated installation
 
 This preview writes managed files to a new candidate directory, leaves workspace Git configuration unchanged and does not install dependencies or start a memory agent. It also skips the Atlassian credential and Confluence knowledge-space steps, so it never reads a real credential file named by an inherited `KHEREP_ATL_CRED_FILE_*` variable and makes no live call.
