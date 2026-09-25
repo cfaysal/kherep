@@ -22,14 +22,30 @@ export interface DiscoveryDeps {
   pathEnv?: string;
   pathExt?: string;
   platform?: NodeJS.Platform;
+  home?: string;
+  appData?: string;
+  // Replaces the fallback directories; tests use it to stay hermetic.
+  fallback?: string[];
   fetch?: typeof fetch;
   timeoutMs?: number;
 }
 
-// Finds an executable on PATH without running it.
+// Where per-user and package-manager installs put their executables. A
+// daemon started as a service (a macOS LaunchAgent, for example) gets a
+// minimal PATH that lacks them, so they are searched after PATH.
+export function fallbackDirs(deps: DiscoveryDeps = {}): string[] {
+  const platform = deps.platform ?? process.platform;
+  const home = deps.home ?? os.homedir();
+  const join = platform === "win32" ? path.win32.join : path.posix.join;
+  if (platform === "win32") return [join(deps.appData ?? process.env.APPDATA ?? join(home, "AppData", "Roaming"), "npm")];
+  return [join(home, ".local", "bin"), join(home, ".claude", "local"), join(home, ".npm-global", "bin"), "/opt/homebrew/bin", "/usr/local/bin"];
+}
+
+// Finds an executable on PATH, then in the fallback directories, without
+// running it.
 export function findOnPath(name: string, deps: DiscoveryDeps = {}): string | null {
   const platform = deps.platform ?? process.platform;
-  const dirs = (deps.pathEnv ?? process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const dirs = [...(deps.pathEnv ?? process.env.PATH ?? "").split(path.delimiter).filter(Boolean), ...(deps.fallback ?? fallbackDirs(deps))];
   const exts = platform === "win32" ? (deps.pathExt ?? process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";").concat("") : [""];
   for (const dir of dirs) {
     for (const ext of exts) {
