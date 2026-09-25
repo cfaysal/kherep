@@ -1,6 +1,8 @@
 import { isNodeId, isPhase1Command, PHASE1_COMMANDS } from "../../protocol.mts";
+import { isMessageId, isMessageText, isSessionRef, MAX_SESSION_REF, OPERATOR_NODE_ID } from "../../protocol-messages.mts";
 import { registryStub, sessionStub, type Env } from "./env.mts";
 import { fail, json, readJsonObject } from "./http.mts";
+import { routeEffects } from "./message-routing.mts";
 
 // Operator API, Phase 1 (issue #5, design section 5). The caller has already
 // passed Access JWT validation; `actor` is the verified identity.
@@ -12,6 +14,7 @@ export async function handleApi(request: Request, env: Env, actor: string): Prom
 
   if (parts.length === 2 && parts[1] === "nodes" && method === "GET") return json({ nodes: await registry.listNodes() });
   if (parts.length === 2 && parts[1] === "sessions" && method === "GET") return json({ sessions: await registry.listSessions() });
+  if (parts.length === 2 && parts[1] === "messages" && method === "GET") return listMessages(new URL(request.url).searchParams, env);
   if (parts.length === 2 && parts[1] === "enrollments" && method === "POST") {
     const body = await readJsonObject(request);
     if (!body) return fail(400, "invalid body");
@@ -51,5 +54,30 @@ export async function handleApi(request: Request, env: Env, actor: string): Prom
     return json(result, 202);
   }
 
+  if (parts.length === 4 && parts[3] === "messages" && method === "POST") {
+    const body = await readJsonObject(request);
+    if (!body || !isSessionRef(body.session) || !isMessageText(body.text)) return fail(400, "invalid session or text");
+    if (body.inReplyTo !== undefined && !isMessageId(body.inReplyTo)) return fail(400, "invalid inReplyTo");
+    // Operator-originated: the sender is "operator" with the Access identity
+    // as its session. Unknown or revoked targets are recorded as refused.
+    const result = await registry.sendMessage({
+      messageId: crypto.randomUUID(), from: { nodeId: OPERATOR_NODE_ID, session: actor.slice(0, MAX_SESSION_REF) },
+      to: { nodeId, session: body.session }, text: body.text, inReplyTo: body.inReplyTo,
+    }, actor);
+    if (!result.ok) return fail(409, result.error);
+    await routeEffects(env, result.effects);
+    return json(result.status, 202);
+  }
+
   return fail(404, "not found");
+}
+
+// Message metadata for one node (as sender or target) or for all nodes. The
+// message text is never part of this response.
+async function listMessages(params: URLSearchParams, env: Env): Promise<Response> {
+  const node = params.get("node");
+  if (node !== null && !isNodeId(node) && node !== OPERATOR_NODE_ID) return fail(400, "invalid node");
+  const limit = Number(params.get("limit") ?? "50");
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) return fail(400, "limit must be 1-200");
+  return json({ messages: await registryStub(env).listMessages(node, limit) });
 }

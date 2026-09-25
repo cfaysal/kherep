@@ -2,6 +2,7 @@ import {
   isCommandBody, makeEnvelope, parseEnvelope, PONG_FRAME, type ChallengeBody, type Envelope, type MessageType,
   type NodeFacts, type Phase1Command, type RuntimeInfo, type SessionInfo,
 } from "../protocol.mts";
+import { isMessageDeliverBody } from "../protocol-messages.mts";
 import { signChallenge, type NodeIdentity } from "./identity.mts";
 import { isAllowed, type NodePolicy } from "./policy.mts";
 
@@ -58,6 +59,11 @@ export class NodeClient {
         ];
       case "command":
         return this.authenticated ? this.onCommand(envelope) : [];
+      case "message.deliver":
+        // This node does not advertise messaging.v1 yet (issue #31, step 1), so
+        // a message that arrives anyway is refused instead of silently dropped.
+        if (!this.authenticated || !isMessageDeliverBody(envelope.body)) return [];
+        return [this.frame("message.status", { messageId: envelope.body.messageId, state: "refused", reason: "messaging not enabled on this node" })];
       default:
         return [];
     }

@@ -87,6 +87,19 @@ test("executes a resent command once and acknowledges the duplicate", async () =
   assert.deepEqual(calls, ["node.status"]);
 });
 
+test("refuses a delivered message because this node does not enable messaging yet", async () => {
+  const { client } = await authed();
+  const messageId = "00000000-0000-4000-8000-00000000000b";
+  const deliver = JSON.stringify(makeEnvelope("message.deliver", {
+    messageId, from: { nodeId: "operator", session: "operator@example.com" }, toSession: "s1", text: "hi", createdAt: new Date(0).toISOString(),
+  }, 0, 0));
+  const out = decode(await client.onFrame(deliver));
+  assert.deepEqual(out.map((e) => [e.type, e.body]),
+    [["message.status", { messageId, state: "refused", reason: "messaging not enabled on this node" }]]);
+  // An invalid body is dropped without an answer.
+  assert.deepEqual(await client.onFrame(JSON.stringify(makeEnvelope("message.deliver", { messageId }, 0, 0))), []);
+});
+
 test("a policy file can narrow but never widen the allowlist; a broken file allows nothing", (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-node-policy-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
