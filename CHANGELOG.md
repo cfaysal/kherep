@@ -89,6 +89,22 @@ increments the minor version; every other release increments the patch version.
   it does not change a PASS or the exit code, and the session-start drift
   nudge does not count it (#45). With `DRIFT_SCOPE=project` only the workspace
   entries are checked.
+- The Codex installer retires workspace files through the same
+  `bootstrap/manifest/retired.txt` and the same rules as the Claude installer
+  (#44). It reads the `project/` entries, ignores the Claude-home entries,
+  refuses the whole manifest before anything moves when an entry is invalid,
+  and parks a file in a `_deprecated/` sibling only while its content matches
+  one of the listed hashes; other content is kept and reported as
+  `retire: KEEP <entry> (content not placed by the installer)`. A parked file
+  has its previous version in the installation backup under `workspace/`, an
+  occupied destination gets a dated suffix, and a rollback puts the file back
+  and removes a `_deprecated/` it created while that is empty. Retirement now
+  runs on every Codex install, also without `KHEREP_INSTALL_ATLASSIAN_TOOLS=1`.
+  The installer no longer deletes the old `tools/*.mjs` Jira brokers from its
+  own hardcoded list: six of them are now declared in `retired.txt` with the
+  hashes of the versions the installer placed, so both installers park them.
+  `tools/jira-config.mjs` has no known placed version and is no longer
+  retired automatically.
 - The Claude installer writes the system-wide `core.hooksPath`, which binds
   every account on the host, only with `KHEREP_INSTALL_SYSTEM_HOOKSPATH=1`.
   Without it the installer reads the value and, when it differs from Kherep's
