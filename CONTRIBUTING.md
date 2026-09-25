@@ -30,6 +30,10 @@ Keep production configuration out of tests. Tests that need an unavailable platf
 
 Keep changes focused and preserve unrelated work. Include the problem, resulting behavior and relevant verification. Update architecture and installation reference alongside changes to interfaces, authentication or wiring.
 
-Use the work tracking and commit conventions configured for your workspace. Keep organization-specific policy, personal configuration and credentials outside the reusable product.
+Track changes to Kherep in the repository's GitHub Issues. Open or reference an issue before a non-trivial change and close it from the pull request with `Closes #<number>`. Typo and documentation fixes can go straight to a pull request. Commits and branch names in this repository carry no external tracker keys.
+
+Changes reach `main` only through a pull request, which is merged by rebase.
+
+Keep organization-specific policy, personal configuration and credentials outside the reusable product. The work-item and commit conventions of a workspace where Kherep is installed apply to that workspace's repositories, not to contributions to Kherep.
 
 Preserve upstream license notices and attribution when changing bundled third-party material.
