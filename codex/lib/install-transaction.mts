@@ -7,16 +7,26 @@ interface Entry {
   target: string;
 }
 
+function exists(target: string): boolean {
+  return Boolean(fs.lstatSync(target, { throwIfNoEntry: false }));
+}
+
+function retireStamp(): string {
+  return new Date().toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
+}
+
 export class InstallTransaction {
   root: string;
   backupRoot: string;
   entries: Map<string, Entry>;
+  createdGraveyards: string[];
   onWrite: ((target: string) => void) | null;
 
   constructor(root: string, backupRoot: string, onWrite: ((target: string) => void) | null = null) {
     this.root = path.resolve(root);
     this.backupRoot = path.resolve(backupRoot);
     this.entries = new Map();
+    this.createdGraveyards = [];
     this.onWrite = onWrite;
     fs.mkdirSync(this.backupRoot, { recursive: true });
   }
@@ -48,6 +58,29 @@ export class InstallTransaction {
     const resolved = this.stage(target);
     if (fs.existsSync(resolved)) fs.rmSync(resolved, { force: true, recursive: true });
     return resolved;
+  }
+
+  // #44. Retirement parks instead of deleting, as bootstrap/transaction-retire.sh
+  // does: the file moves into a _deprecated/ sibling after its backup is staged,
+  // so rollback puts it back at the original path. An occupied destination gets
+  // the dated suffix .<YYYYmmdd-HHMMSS>, counted up -1, -2, ... until free; a
+  // parked file is never overwritten. The stamp parameter exists for tests only.
+  park(target: string, stamp: string = retireStamp()): string {
+    const resolved = this.stage(target);
+    const graveyard = path.join(path.dirname(resolved), "_deprecated");
+    if (!exists(graveyard)) {
+      fs.mkdirSync(graveyard);
+      this.createdGraveyards.push(graveyard);
+    }
+    let dest = path.join(graveyard, path.basename(resolved));
+    if (exists(dest)) {
+      const dated = `${dest}.${stamp}`;
+      dest = dated;
+      for (let attempt = 1; exists(dest); attempt += 1) dest = `${dated}-${attempt}`;
+    }
+    fs.renameSync(resolved, dest);
+    this.onWrite?.(dest);
+    return dest;
   }
 
   installDir(source: string, target: string): string {
@@ -88,6 +121,12 @@ export class InstallTransaction {
         fs.cpSync(backup, entry.target, { recursive: stat.isDirectory() });
       }
     }
+    // A parked copy stays where it is: removing it would be the delete park()
+    // avoids. A _deprecated/ this run created goes only while it is empty.
+    for (const graveyard of this.createdGraveyards.reverse()) {
+      try { fs.rmdirSync(graveyard); } catch { /* holds a parked copy */ }
+    }
+    this.createdGraveyards = [];
   }
 
   targets(): string[] {

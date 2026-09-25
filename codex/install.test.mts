@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -136,7 +137,7 @@ function fixture() {
   const installOptions = {
     claudeConfigDir, claudeRegistryFile, codexHome,
     workspace, installAtlassianTools: true,
-    nodePath: process.execPath,
+    nodePath: process.execPath, log: (): void => {},
     resolveRegistryRuntime: () => "fixture", runCodex,
     mcpCompatibility: {
       operatorBindings: {
@@ -1082,12 +1083,12 @@ test("rejects incomplete managed blocks", () => {
   );
 });
 
-// OP-1122, OP-1123 and OP-1124 renamed projection files from .js/.mjs to .mts.
-// A stale copy under the old name must not survive an install; the backup keeps
-// it. The workspace brokers are checked in the same test because they are the
-// same defect one root further out: the projection copies by name.
+// OP-1122 and OP-1123 renamed projection files from .js to .mts. A stale copy
+// under the old name must not survive an install; the backup keeps it. The
+// workspace brokers OP-1124 renamed from .mjs are retired through retired.txt
+// instead, see the #44 tests below.
 test("removes projection files that the TypeScript migration renamed", (t) => {
-  const { root, codexHome, workspace, installOptions } = fixture();
+  const { root, codexHome, installOptions } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const stale = [
     path.join(codexHome, "hooks", "kherep-maestro", "codex-cbm-reminder.js"),
@@ -1095,9 +1096,7 @@ test("removes projection files that the TypeScript migration renamed", (t) => {
     path.join(codexHome, "orchestra", "registry-http-bridge.js"),
     path.join(codexHome, "kherep", "local-inference", "runner.js"),
   ];
-  const staleBrokers = ["atl-jira", "atl-jira-ccoder", "jira-adf", "jira-config", "jira-fields", "jira-links", "jira-transition-guard"]
-    .map((name) => path.join(workspace, "tools", `${name}.mjs`));
-  for (const file of [...stale, ...staleBrokers]) {
+  for (const file of stale) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, "stale\n", "utf8");
   }
@@ -1106,13 +1105,91 @@ test("removes projection files that the TypeScript migration renamed", (t) => {
     assert.equal(fs.existsSync(file), false, file);
     assert.ok(fs.existsSync(path.join(result.backupRoot, path.relative(codexHome, file))), file);
   }
-  for (const file of staleBrokers) {
-    assert.equal(fs.existsSync(file), false, file);
-    assert.ok(
-      fs.existsSync(path.join(result.backupRoot, "workspace", path.relative(workspace, file))),
-      file,
-    );
+});
+
+// #44. The Codex installer retires workspace files through the same declaration
+// and the same gate as install.sh: bootstrap/manifest/retired.txt, project/
+// entries only, parked into a _deprecated/ sibling with a backup, never deleted.
+// No version the installer placed is available to a test, so the real manifest
+// is copied with one fixture digest appended to the real atl-jira.mjs entry; all
+// other entries and hashes stay as shipped.
+const RETIRED_MANIFEST = path.join(here, "..", "bootstrap", "manifest", "retired.txt");
+const lfSha256 = (text: string): string => crypto.createHash("sha256").update(text).digest("hex");
+
+function retiredManifestWith(root: string, entry: string, digest: string): string {
+  const real = fs.readFileSync(RETIRED_MANIFEST, "utf8");
+  const line = real.split(/\r?\n/).find((candidate) => candidate.startsWith(`${entry} sha256:`));
+  assert.ok(line, `${entry} is declared with hashes in retired.txt`);
+  const manifest = path.join(root, "retired.txt");
+  fs.writeFileSync(manifest, real.replace(line, `${line},${digest}`));
+  return manifest;
+}
+
+test("retires a declared workspace file into _deprecated without the Jira tooling", (t) => {
+  const { root, codexHome, installOptions, workspace } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const tools = path.join(workspace, "tools");
+  fs.mkdirSync(tools, { recursive: true });
+  fs.writeFileSync(path.join(tools, "atl-jira.mjs"), "placed broker\r\n");
+  fs.writeFileSync(path.join(tools, "jira-adf.mjs"), "operator edit\n");
+  fs.writeFileSync(path.join(tools, "jira-config.mjs"), "no longer declared\n");
+  const claudeHook = path.join(installOptions.claudeConfigDir, "hooks", "em-dash-watch.js");
+  const codexHook = path.join(codexHome, "hooks", "em-dash-watch.js");
+  for (const file of [claudeHook, codexHook]) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "claude-home entry\n");
   }
+  const lines: string[] = [];
+  const result = install({
+    ...installOptions, installAtlassianTools: false, log: (line) => lines.push(line),
+    retiredManifest: retiredManifestWith(root, "project/tools/atl-jira.mjs", lfSha256("placed broker\n")),
+  });
+
+  const parked = path.join(tools, "_deprecated", "atl-jira.mjs");
+  assert.equal(fs.existsSync(path.join(tools, "atl-jira.mjs")), false);
+  assert.equal(fs.readFileSync(parked, "utf8"), "placed broker\r\n");
+  assert.equal(fs.readFileSync(path.join(result.backupRoot, "workspace", "tools", "atl-jira.mjs"), "utf8"), "placed broker\r\n");
+  assert.ok(lines.includes(`retire: project/tools/atl-jira.mjs -> ${parked}`));
+  assert.deepEqual(lines.filter((line) => line.startsWith("retire: KEEP")),
+    ["retire: KEEP project/tools/jira-adf.mjs (content not placed by the installer)"]);
+  assert.equal(fs.readFileSync(path.join(tools, "jira-adf.mjs"), "utf8"), "operator edit\n");
+  assert.equal(fs.existsSync(path.join(result.backupRoot, "workspace", "tools", "jira-adf.mjs")), false);
+  assert.equal(fs.readFileSync(path.join(tools, "jira-config.mjs"), "utf8"), "no longer declared\n");
+  assert.ok(lines.includes(`retire: SKIP project/tools/jira-links.mjs (nothing at ${path.join(tools, "jira-links.mjs")})`));
+  for (const file of [claudeHook, codexHook]) assert.equal(fs.readFileSync(file, "utf8"), "claude-home entry\n");
+  assert.equal(lines.some((line) => line.includes("hooks/em-dash-watch.js")), false);
+});
+
+test("refuses a workspace entry without hashes before anything moves", (t) => {
+  const { root, codexHome, installOptions, workspace } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const known = path.join(workspace, "tools", "atl-jira.mjs");
+  fs.mkdirSync(path.dirname(known), { recursive: true });
+  fs.writeFileSync(known, "placed broker\n");
+  const manifest = path.join(root, "retired.txt");
+  fs.writeFileSync(manifest, `project/tools/atl-jira.mjs sha256:${lfSha256("placed broker\n")}\nproject/tools/unhashed.mjs\n`);
+  assert.throws(() => install({ ...installOptions, retiredManifest: manifest }),
+    /retirement manifest entry project\/tools\/unhashed\.mjs needs 'sha256:/);
+  assert.equal(fs.readFileSync(known, "utf8"), "placed broker\n");
+  assert.equal(fs.existsSync(path.join(workspace, "tools", "_deprecated")), false);
+  assert.deepEqual(fs.readdirSync(codexHome), []);
+});
+
+test("rollback puts a parked workspace file back at its path", (t) => {
+  const { root, installOptions, workspace } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const live = path.join(workspace, "tools", "atl-jira.mjs");
+  const parked = path.join(workspace, "tools", "_deprecated", "atl-jira.mjs");
+  fs.mkdirSync(path.dirname(live), { recursive: true });
+  fs.writeFileSync(live, "placed broker\n");
+  assert.throws(() => install({
+    ...installOptions,
+    retiredManifest: retiredManifestWith(root, "project/tools/atl-jira.mjs", lfSha256("placed broker\n")),
+    afterWrite: () => { if (fs.existsSync(parked)) throw new Error("fixture failure after park"); },
+  }), /fixture failure after park/);
+  assert.equal(fs.readFileSync(live, "utf8"), "placed broker\n");
+  // As in install.sh, the parked copy stays: removing it would be a delete.
+  assert.equal(fs.readFileSync(parked, "utf8"), "placed broker\n");
 });
 
 test("Mac install keeps observation hooks unconfigured and acceptance active", (t) => {

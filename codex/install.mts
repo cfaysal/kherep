@@ -22,6 +22,7 @@ import { memoryProviderFile, resolveMemoryProvider } from "./lib/memory-provider
 import { projectOperatorBinding } from "./lib/mcp-operator-binding.mts";
 import { projectRegistry } from "./lib/mcp-registry-projection.mts";
 import { retiredCentralBrainRender } from "./lib/retired-central-brain.mts";
+import { readRetiredWorkspaceEntries, retireWorkspaceEntries } from "./lib/retired-workspace.mts";
 import * as parityProjection from "./lib/parity-projection.mts";
 import { resolveRegistryFile } from "./lib/registry-file.mts";
 import { setMarkedBlock } from "./lib/text-merge.mts";
@@ -60,13 +61,6 @@ const RETIRED_TARGETS = [
   path.join("kherep", "local-inference", "runner.js"),
 ];
 
-// The same problem one root further out: OP-1124 renamed the Jira brokers under
-// $WS/tools from .mjs to .mts. The workspace projection also copies by name, so
-// the retired files are removed through the workspace transaction and come back
-// on a rollback with everything else.
-const RETIRED_WORKSPACE_TARGETS = ["atl-jira", "atl-jira-ccoder", "jira-adf", "jira-config", "jira-fields", "jira-links", "jira-transition-guard"]
-  .map((name) => path.join("tools", `${name}.mjs`));
-
 export function renderObservationHook(source: string, workspace: string): string {
   const occurrences = source.split(OBSERVATION_WORKSPACE_SENTINEL).length - 1;
   if (occurrences !== 1) {
@@ -98,6 +92,8 @@ export interface InstallOptions {
   runCodex?: RunCodex;
   resolveRegistryRuntime?: () => unknown;
   afterWrite?: (writes: number) => void;
+  retiredManifest?: string;
+  log?: (line: string) => void;
   mcpCompatibility?: McpCompatibilityOptions;
 }
 
@@ -145,6 +141,11 @@ export function install(options: InstallOptions = {}) {
   const claudeHome = path.resolve(options.claudeConfigDir || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"));
   const capabilitiesFile = path.join(sourceRoot, "parity", "capabilities.json");
   const capabilities = JSON.parse(fs.readFileSync(capabilitiesFile, "utf8")) as Capabilities;
+  // #44. Workspace files retired through the one declaration both installers
+  // read. Parsed before anything is written, so an invalid manifest moves nothing.
+  const retiredWorkspace = readRetiredWorkspaceEntries(
+    options.retiredManifest || path.join(repoRoot, "bootstrap", "manifest", "retired.txt"),
+  );
   const registryFile = resolveRegistryFile({
     ...options,
     requiredMcpServers: capabilities.mcpServers,
@@ -337,8 +338,11 @@ export function install(options: InstallOptions = {}) {
       workspaceTransaction.copyFile(sources.codexJiraBroker, targets.codexJiraBroker);
       workspaceTransaction.copyFile(sources.claudeJiraBroker, targets.claudeJiraBroker);
       workspaceTransaction.copyFile(sources.claudeConfluenceBroker, targets.claudeConfluenceBroker);
-      for (const relative of RETIRED_WORKSPACE_TARGETS) workspaceTransaction.remove(path.join(workspace, relative));
     }
+    // Parked with a backup, never deleted, and independent of the optional Jira
+    // tooling: a file retired by the manifest is retired on every install.
+    retireWorkspaceEntries(retiredWorkspace, workspace, workspaceTransaction,
+      options.log || ((line) => process.stdout.write(`${line}\n`)));
 
     transaction.copyFile(sources.contextHook, targets.contextHook);
     transaction.copyFile(path.join(sourceRoot, "lib", "memory-provider.mts"), path.join(codexHome, "lib", "memory-provider.mts"));
