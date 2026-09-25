@@ -18,7 +18,7 @@ test("Phase 1 commands take no arguments", () => {
 test("session.start args are validated field by field and nothing else is accepted", () => {
   assert.equal(isCommandArgs("session.start", START), true);
   assert.equal(isCommandArgs("session.start", { ...START, cwd: "/work/repo" }), true);
-  assert.equal(isCommandArgs("session.start", { ...START, runtime: "codex" }), true, "codex reaches the node, which refuses it with a reason");
+  assert.equal(isCommandArgs("session.start", { ...START, runtime: "codex" }), true, "codex reaches the node, whose policy decides");
   for (const bad of [
     { ...START, permissionMode: "bypassPermissions" }, { ...START, permissionMode: "plan" }, { ...START, runtime: "gemini" },
     { ...START, name: "task-other" }, { ...START, prompt: "" }, { ...START, prompt: "x".repeat(16_385) }, { ...START, taskId: "t1" },

@@ -11,6 +11,18 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Control Plane Codex tasks: `POST /api/tasks` with `requirements.runtime`
+  `codex` goes to a node that lists `codex` as a CLI runtime, and that node
+  runs `codex exec --json` detached, with stdin from the null device, only
+  when its `sessions.runtimes` lists `codex` (the default stays `claude`).
+  Permission modes map to Codex sandboxes (`auto` and `acceptEdits` to
+  `workspace-write`, `default` to `read-only`); the bypass flags are never
+  passed. The task's session id is the `thread_id`; the node reports
+  `started`, then `done` with the last message as summary or `failed`,
+  continues with `codex exec resume`, and stops the process group by pid
+  after checking its start time. Claude and Codex tasks share the limits.
+  The Worker accepts runtime `codex` once redeployed.
+
 - Control Plane tasks: the operator creates a task with `POST /api/tasks`
   (behind Access), and the Worker dispatches `session.start` to an online node
   that advertises `sessions.v1` and matches the runtime, os and capabilities,
@@ -22,7 +34,7 @@ increments the minor version; every other release increments the patch version.
   `/continue` stop or resume it. Off unless the node's `policy.json` enables a
   `sessions` section; per node at most 3 running task sessions, 10 starts per
   rolling day and 120 minutes per run, permission mode `auto` by default,
-  never `bypassPermissions`, Claude only (Codex is refused). Sessions report
+  never `bypassPermissions`, Claude first (Codex: see the entry above). Sessions report
   with `kherep-node task done`, `msg send` tags messages with the task, and the
   wake listener wakes a task's session for messages of its task beyond the
   allowlist, within the budget. A session may request a task with `task new`

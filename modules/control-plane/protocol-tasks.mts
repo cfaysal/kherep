@@ -11,12 +11,12 @@ export const SESSIONS_CAPABILITY = "sessions.v1";
 export const DELEGATE_ACCEPT_CAPABILITY = "sessions.delegate.accept.v1";
 export const DELEGATE_REQUEST_CAPABILITY = "sessions.delegate.request.v1";
 
-// Operator decisions of 2026-09-25: Claude only in this step (codex is named so
-// it can be refused with a reason), permission mode auto by default, never
-// bypassPermissions.
+// Operator decisions of 2026-09-25: Claude first, Codex since issue #63 (a
+// node still runs Codex only when its own policy lists it), permission mode
+// auto by default, never bypassPermissions.
 export const TASK_RUNTIMES = ["claude", "codex"] as const;
 export type TaskRuntime = (typeof TASK_RUNTIMES)[number];
-export const SUPPORTED_RUNTIMES: readonly TaskRuntime[] = ["claude"];
+export const SUPPORTED_RUNTIMES: readonly TaskRuntime[] = ["claude", "codex"];
 export const PERMISSION_MODES = ["auto", "default", "acceptEdits"] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 export const DEFAULT_PERMISSION_MODE: PermissionMode = "auto";

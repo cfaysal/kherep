@@ -26,14 +26,30 @@ const create = (requirements: Record<string, unknown>, extra: Record<string, unk
   api("/api/tasks", { title: "Fix the build", text: SECRET, requirements, ...extra });
 
 describe("POST /api/tasks", () => {
-  it("validates the body and refuses codex and bypassPermissions", async () => {
+  it("validates the body and refuses unknown runtimes and bypassPermissions", async () => {
     expect((await api("/api/tasks", { title: "t" })).status).toBe(400);
     expect((await api("/api/tasks", { title: "a\nb", text: "x" })).status).toBe(400);
     expect((await create({ shell: "bash" })).status).toBe(400);
-    const codex = await create({ runtime: "codex" });
-    expect([codex.status, await codex.json()]).toEqual([400, { error: "runtime codex is not supported yet; this step starts Claude sessions only" }]);
+    expect((await create({ runtime: "gemini" })).status).toBe(400);
     expect((await create({}, { permissionMode: "bypassPermissions" })).status).toBe(400);
+    expect((await create({ runtime: "codex" }, { permissionMode: "bypassPermissions" })).status).toBe(400);
     expect((await create({}, { permissionMode: "plan" })).status).toBe(400);
+  });
+
+  it("dispatches a codex task only to a node that lists codex as a CLI runtime (issue #63)", async () => {
+    const os = uniqueOs();
+    await onlineNode("codex-claude-only", os, ["sessions.v1"]);
+    const none = await create({ runtime: "codex", os });
+    expect(none.status).toBe(409);
+    expect(((await none.json()) as { error: string }).error).toMatch(/ and runtime codex on os-/);
+    const codexNode = await onlineNode("codex-node", os, ["sessions.v1"], ["claude", "codex"]);
+    const created = await create({ runtime: "codex", os }, { permissionMode: "default" });
+    expect(created.status).toBe(201);
+    expect(((await created.json()) as { nodeId: string }).nodeId).toBe(codexNode);
+    const pending = await runInDurableObject(session(codexNode), (_i, state) =>
+      state.storage.sql.exec("SELECT command, args FROM outbox ORDER BY seq").toArray());
+    expect(pending.map((p) => p.command)).toEqual(["session.start"]);
+    expect(JSON.parse(String(pending[0].args))).toMatchObject({ runtime: "codex", permissionMode: "default", prompt: SECRET });
   });
 
   it("picks an online node by runtime, os and capabilities, then by load; 409 when none fits", async () => {

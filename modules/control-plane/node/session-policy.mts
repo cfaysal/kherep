@@ -6,9 +6,10 @@ import {
 
 // The optional sessions section of policy.json (issue #31, item 5; operator
 // decisions of 2026-09-25). Started sessions are off unless enabled is true.
-// The limits are caps: a policy may narrow them, never widen them. Codex and
-// bypassPermissions are never allowed, even when listed. A malformed section
-// turns everything off, delegation included (fail closed).
+// The limits are caps: a policy may narrow them, never widen them. runtimes
+// defaults to claude only; codex runs only when the policy lists it (issue
+// #63). bypassPermissions is never allowed, even when listed. A malformed
+// section turns everything off, delegation included (fail closed).
 export const MAX_CONCURRENT = 3;
 export const MAX_STARTS_PER_DAY = 10;
 export const MAX_RUNTIME_MINUTES = 120;

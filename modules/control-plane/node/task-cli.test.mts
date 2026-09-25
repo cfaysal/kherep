@@ -79,7 +79,7 @@ test("task new is refused unless the node allows requests, and never from a task
   const env = { CLAUDE_CODE_SESSION_ID: "maestro" };
   assert.match(task(node, ["new", "--title", "t", "--", "x"], env).err[0], /--directive is required/);
   assert.match(task(node, ["new", "--title", "t", "--directive", "  ", "--", "x"], env).err[0], /--directive is required/);
-  assert.match(task(node, ["new", "--title", "t", "--directive", "d", "--runtime", "codex", "--", "x"], env).err[0], /codex is not supported/);
+  assert.match(task(node, ["new", "--title", "t", "--directive", "d", "--runtime", "gemini", "--", "x"], env).err[0], /gemini is not supported/);
   const ok = task(node, ["new", "--title", "Run tests", "--directive", "Ask a worker to run the suite", "--os", "linux", "--", "run", "npm", "test"], env);
   assert.equal(ok.code, 0);
   const requestId = ok.out[0];

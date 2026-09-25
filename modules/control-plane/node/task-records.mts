@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
-  isTaskId, type PermissionMode, type TaskReportBody, type TaskRequestBody, type TaskState,
+  isTaskId, type PermissionMode, type TaskReportBody, type TaskRequestBody, type TaskRuntime, type TaskState,
 } from "../protocol-tasks.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { localSessionName } from "./exchange.mts";
@@ -16,9 +16,15 @@ import { messageIds, readJson, writeJsonAtomic } from "./inbox.mts";
 export interface TaskRecord {
   taskId: string; name: string; cwd: string; permissionMode: PermissionMode; state: TaskState;
   startedAt: string; deadline: string; updatedAt: string;
-  // shortId: the id `claude --bg` prints, for `claude stop`; sessionId: the
-  // full id from `claude agents --json`, for `claude --resume`.
+  // Absent in records written before issue #63: claude.
+  runtime?: TaskRuntime;
+  // Claude: shortId is the id `claude --bg` prints, for `claude stop`;
+  // sessionId the full id from `claude agents --json`, for `claude --resume`.
+  // Codex: sessionId is the thread_id of `thread.started`, for `codex exec
+  // resume`; pid and pidStart (the process start time) identify the process
+  // to stop, since a pid alone may be reused.
   shortId?: string; sessionId?: string; requestedBy?: string; reason?: string;
+  pid?: number; pidStart?: string;
   // Set by `task done`: the session reported done, but its process may still
   // run, so the record stays counted and watched (limits, deadline) until
   // `claude agents` shows the session ended or the deadline stopped it.
