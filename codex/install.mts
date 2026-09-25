@@ -360,6 +360,9 @@ export function install(options: InstallOptions = {}) {
     }
     transaction.copyFile(sources.cbmHook, path.join(targets.hookDir, "codex-cbm-reminder.mts"));
     transaction.copyFile(sources.dispatchHook, path.join(targets.hookDir, "codex-dispatch-contract-guard.mts"));
+    // The guard reads its agent pins from ../parity/capabilities.json, relative to itself
+    // as in the repository: the same manifest the agent TOML is projected from.
+    transaction.copyFile(capabilitiesFile, path.join(targets.hookDir, "..", "parity", "capabilities.json"));
     transaction.copyFile(sources.precompactHook, path.join(targets.hookDir, "codex-precompact-checkpoint.mts"));
     transaction.copyFile(sources.acceptancePolicy, path.join(targets.hookDir, "acceptance-policy.mts"));
     transaction.copyFile(sources.acceptanceHook, path.join(targets.hookDir, "codex-acceptance-gate.mts"));
