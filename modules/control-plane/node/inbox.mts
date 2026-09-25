@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import type { SessionInfo } from "../protocol.mts";
 import {
   isMessageId, type MessageAddress, type MessageDeliverBody, type MessageStatusBody,
 } from "../protocol-messages.mts";
@@ -10,8 +11,14 @@ import { ensureDir } from "./config.mts";
 // The node inbox (issue #31, step 2): one JSON file per accepted message,
 // <messageId>.json, in a directory only this user can read. Delivery into a
 // session reads it through list/get and reports markDelivered.
+// Local states: accepted (stored), offered (handed to a turn that has not
+// confirmed it yet; never sent to the Worker), delivered and refused (each
+// reported to the Worker once).
 
 export const INBOX_RETENTION_MS = 7 * 24 * 60 * 60_000;
+// A waiting message for a session that a successful listing does not show is
+// refused this long after it arrived.
+export const UNDELIVERABLE_AFTER_MS = 60 * 60_000;
 
 export interface InboxRecord {
   messageId: string;
@@ -21,10 +28,18 @@ export interface InboxRecord {
   inReplyTo?: string;
   createdAt: string;
   receivedAt: string;
-  state: "accepted" | "delivered";
-  // Set by the daemon once it sent message.status delivered to the Worker.
+  state: "accepted" | "offered" | "delivered" | "refused";
+  reason?: string;
+  // Set by the delivery hook each time it hands the message to a turn.
+  offers?: number;
+  offeredAt?: string;
+  // Set by the daemon once it sent message.status for reportedState.
   reportedAt?: string;
+  reportedState?: ReportedState;
 }
+
+// The local states the daemon reports to the Worker.
+export type ReportedState = "delivered" | "refused";
 
 function fileOf(dir: string, messageId: string): string {
   return path.join(dir, `${messageId}.json`);
@@ -98,14 +113,48 @@ export function markDelivered(dir: string, messageId: string): MessageStatusBody
   return { messageId, state: "delivered" };
 }
 
-// Delivered records whose status the daemon has not reported yet.
-export function unreportedDeliveries(dir: string): InboxRecord[] {
-  return listInbox(dir).filter((r) => r.state === "delivered" && r.reportedAt === undefined);
+// Records that the hook handed the message to a turn, which confirms it at
+// its Stop. Returns the updated record, or null when it is not in the inbox.
+export function markOffered(dir: string, messageId: string, now: number = Date.now()): InboxRecord | null {
+  const record = getMessage(dir, messageId);
+  if (!record) return null;
+  const offered: InboxRecord = { ...record, state: "offered", offers: (record.offers ?? 0) + 1, offeredAt: new Date(now).toISOString() };
+  writeJsonAtomic(fileOf(dir, messageId), offered);
+  return offered;
 }
 
-export function markReported(dir: string, messageId: string, now: number = Date.now()): void {
+// Refuses a message that still waits for its session; true when it did.
+export function markRefused(dir: string, messageId: string, reason: string): boolean {
   const record = getMessage(dir, messageId);
-  if (record) writeJsonAtomic(fileOf(dir, messageId), { ...record, reportedAt: new Date(now).toISOString() });
+  if (record?.state !== "accepted" && record?.state !== "offered") return false;
+  writeJsonAtomic(fileOf(dir, messageId), { ...record, state: "refused", reason });
+  return true;
+}
+
+// Delivered and refused records whose state the daemon has not reported yet.
+// A record reported before reportedState existed has only reportedAt, which
+// then stands for delivered.
+export function unreportedStatuses(dir: string): (InboxRecord & { state: ReportedState })[] {
+  return listInbox(dir).filter((r): r is InboxRecord & { state: ReportedState } =>
+    (r.state === "delivered" || r.state === "refused") && (r.reportedState ?? (r.reportedAt ? "delivered" : undefined)) !== r.state);
+}
+
+export function markReported(dir: string, messageId: string, state: ReportedState, now: number = Date.now()): void {
+  const record = getMessage(dir, messageId);
+  if (record) writeJsonAtomic(fileOf(dir, messageId), { ...record, reportedAt: new Date(now).toISOString(), reportedState: state });
+}
+
+// Refuses the waiting messages whose session no listed session matches by id
+// or name and that arrived more than afterMs ago. Call it with a successful
+// listing only: a failed listing is not an empty node. Returns the ids.
+export function refuseUndeliverable(dir: string, sessions: SessionInfo[], now: number = Date.now(),
+  afterMs: number = UNDELIVERABLE_AFTER_MS): string[] {
+  const live = new Set(sessions.flatMap((s) => s.name ? [s.sessionId, s.name] : [s.sessionId]));
+  return listInbox(dir)
+    .filter((r) => (r.state === "accepted" || r.state === "offered") && !live.has(r.toSession)
+      && now - Date.parse(r.receivedAt) > afterMs)
+    .filter((r) => markRefused(dir, r.messageId, "target session not running"))
+    .map((r) => r.messageId);
 }
 
 // Removes records received more than the retention period ago, and leftover

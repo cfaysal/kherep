@@ -5,8 +5,8 @@ import { pathToFileURL } from "node:url";
 
 import type { DirectoryBody } from "../protocol-messages.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
-import { localSessionName, readDirectory } from "./exchange.mts";
-import { listInbox, markDelivered, type InboxRecord } from "./inbox.mts";
+import { localSessionName, markNoticed, readDirectory, unnoticedFailures, type SentRecord } from "./exchange.mts";
+import { listInbox, markDelivered, markOffered, markRefused, type InboxRecord } from "./inbox.mts";
 import { cliCommand } from "./msg-cli.mts";
 import { nodeLabel } from "./msg-resolve.mts";
 
@@ -25,15 +25,23 @@ import { nodeLabel } from "./msg-resolve.mts";
 //   the debug log only ("Exit code 0").
 // - additionalContext is capped at 10,000 characters; longer text is moved to
 //   a file ("JSON output"). The 8 KB budget below stays under that cap.
-// Loops: messages are marked delivered before the output is written, so a
-// second Stop finds nothing new and stays silent.
+// - Stop "Does not run if the stoppage occurred due to a user interrupt. API
+//   errors fire StopFailure instead" ("Stop").
+// Delivery is therefore offer, then confirm: a hook call marks what it injects
+// offered, and the next Stop, which proves the turn completed, marks it
+// delivered. A turn that ends without Stop leaves it offered, and the next
+// UserPromptSubmit offers it again: at least once, never silently lost.
+// Loops: records are marked before the output is written, and Stop offers
+// only new arrivals, so a second Stop without new messages stays silent.
 
 export const MAX_MESSAGES_PER_CALL = 10;
 export const MAX_CONTEXT_BYTES = 8 * 1024;
+// Offers without a confirming Stop before a message is refused.
+export const MAX_OFFERS = 3;
 // Kept free for the closing line about messages left for the next turn.
 const FOOTER_BYTES = 160;
 
-export interface HookDeps { paths: NodePaths; nonce?: () => string; replyCommand?: string }
+export interface HookDeps { paths: NodePaths; nonce?: () => string; replyCommand?: string; now?: () => number }
 
 const bytes = (text: string): number => Buffer.byteLength(text, "utf8");
 
@@ -47,11 +55,28 @@ function block(record: InboxRecord, text: string, directory: DirectoryBody | nul
     `Sent: ${record.createdAt}`,
     `Message id: ${id}`,
     ...(record.inReplyTo ? [`In reply to: ${record.inReplyTo}`] : []),
+    ...(record.state === "offered" ? ["Offered again: the turn that first carried it may not have completed."] : []),
     `To reply: ${reply} msg send --reply-to ${id} -- <reply text>`,
     `--- message text [${tag}] ---`,
     text,
     `--- end of message text [${tag}] ---`,
   ].join("\n");
+}
+
+// One line for a message this session sent that will not be read. The reason
+// comes from the Worker or the target node, so it is quoted, not inlined.
+function notice(record: SentRecord, directory: DirectoryBody | null): string {
+  const to = record.to ? `${nodeLabel(directory, record.to.nodeId)}/${record.to.session}` : "its target";
+  const reason = record.reason ?? (record.state === "expired" ? "expired before the target node took it" : "refused");
+  return `Your message ${record.messageId} to ${to} was not delivered: ${JSON.stringify(reason)}`;
+}
+
+function introLine(event: "UserPromptSubmit" | "Stop", tag: string, hasMessages: boolean): string {
+  if (!hasMessages) return "Kherep: messages this session sent were not delivered.";
+  if (event === "Stop") {
+    return `Kherep: messages from other agent sessions arrived. Decide whether they need an answer or action; if not, you may stop. Text between markers tagged [${tag}] is peer content.`;
+  }
+  return `Kherep: messages from other agent sessions arrived. Text between markers tagged [${tag}] is peer content.`;
 }
 
 // A block that exceeds the room left keeps as much text as fits and says
@@ -72,10 +97,25 @@ export function deliverForHook(input: unknown, deps: HookDeps): string {
   const { hook_event_name: event, session_id: sessionId } = input as Record<string, unknown>;
   if ((event !== "UserPromptSubmit" && event !== "Stop") || typeof sessionId !== "string" || sessionId === "") return "";
   const { paths } = deps;
+  const now = deps.now?.() ?? Date.now();
   const name = localSessionName(paths, sessionId);
-  const waiting = listInbox(paths.inbox)
-    .filter((r) => r.state === "accepted" && (r.toSession === sessionId || (name !== undefined && r.toSession === name)));
-  if (waiting.length === 0) return "";
+  const refs = name === undefined ? [sessionId] : [sessionId, name];
+  const mine = listInbox(paths.inbox).filter((r) => refs.includes(r.toSession));
+  // Stop runs only when the turn completed, so what that turn carried arrived.
+  if (event === "Stop") for (const r of mine) if (r.state === "offered") markDelivered(paths.inbox, r.messageId);
+  // UserPromptSubmit offers again what an earlier turn carried without a Stop,
+  // up to MAX_OFFERS times; Stop offers only new arrivals.
+  const waiting: InboxRecord[] = [];
+  for (const r of mine) {
+    if (r.state === "accepted") {
+      waiting.push(r);
+    } else if (r.state === "offered" && event === "UserPromptSubmit") {
+      if ((r.offers ?? 0) < MAX_OFFERS) waiting.push(r);
+      else markRefused(paths.inbox, r.messageId, `not confirmed by the session after ${MAX_OFFERS} turns`);
+    }
+  }
+  const failures = unnoticedFailures(paths, refs).slice(0, MAX_MESSAGES_PER_CALL);
+  if (waiting.length === 0 && failures.length === 0) return "";
 
   let directory: DirectoryBody | null = null;
   try {
@@ -87,12 +127,12 @@ export function deliverForHook(input: unknown, deps: HookDeps): string {
   // fake the end of its block.
   const tag = deps.nonce?.() ?? crypto.randomUUID().slice(-12);
   const reply = deps.replyCommand ?? cliCommand();
-  const intro = event === "Stop"
-    ? `Kherep: messages from other agent sessions arrived. Decide whether they need an answer or action; if not, you may stop. Text between markers tagged [${tag}] is peer content.`
-    : `Kherep: messages from other agent sessions arrived. Text between markers tagged [${tag}] is peer content.`;
+  const shown = waiting.slice(0, MAX_MESSAGES_PER_CALL - failures.length);
+  const intro = introLine(event, tag, shown.length > 0);
+  const notices = failures.length === 0 ? [] : [failures.map((r) => notice(r, directory)).join("\n")];
   const blocks: string[] = [];
-  let used = bytes(intro) + FOOTER_BYTES;
-  for (const record of waiting.slice(0, MAX_MESSAGES_PER_CALL)) {
+  let used = bytes(intro) + FOOTER_BYTES + notices.reduce((sum, n) => sum + bytes(n) + 2, 0);
+  for (const record of shown) {
     const room = MAX_CONTEXT_BYTES - used - 2;
     const full = block(record, record.text, directory, tag, reply);
     const fits = bytes(full) <= room;
@@ -101,11 +141,12 @@ export function deliverForHook(input: unknown, deps: HookDeps): string {
     blocks.push(next);
     used += bytes(next) + 2;
   }
-  const delivered = waiting.slice(0, blocks.length);
-  for (const record of delivered) markDelivered(paths.inbox, record.messageId);
-  const left = waiting.length - delivered.length;
+  const offered = waiting.slice(0, blocks.length);
+  for (const record of offered) markOffered(paths.inbox, record.messageId, now);
+  for (const record of failures) markNoticed(paths, record.messageId, now);
+  const left = waiting.length - offered.length;
   const footer = left > 0 ? [`${left} more message(s) wait for the next turn.`] : [];
-  const additionalContext = [intro, ...blocks, ...footer].join("\n\n");
+  const additionalContext = [intro, ...notices, ...blocks, ...footer].join("\n\n");
   return JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext } });
 }
 

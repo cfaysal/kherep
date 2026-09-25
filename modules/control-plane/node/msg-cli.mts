@@ -175,13 +175,13 @@ async function waitForAnswer(io: Io, messageId: string, timeoutMs: number): Prom
 }
 
 // Messages addressed to this session by its id or its name. Without --all
-// only those not yet handed to the session by the delivery hook.
+// only those the delivery hook has not confirmed as delivered yet.
 function inbox(io: Io, all: boolean): number {
   const me = currentSession(io.paths, io.env);
   if (!me) return fail(io, `cannot tell which session this is: ${SESSION_ENV} is not set`);
   const records = listInbox(io.paths.inbox)
     .filter((r) => r.toSession === me.id || (me.name !== undefined && r.toSession === me.name))
-    .filter((r) => all || r.state === "accepted");
+    .filter((r) => all || r.state === "accepted" || r.state === "offered");
   if (records.length === 0) {
     io.out(all ? "no messages for this session" : "no undelivered messages for this session (--all includes delivered ones)");
     return 0;

@@ -13,7 +13,7 @@ import {
   type OutboxRecord,
 } from "./exchange.mts";
 import { generateIdentity } from "./identity.mts";
-import { getMessage, markDelivered, storeMessage } from "./inbox.mts";
+import { getMessage, markDelivered, markOffered, markRefused, storeMessage, UNDELIVERABLE_AFTER_MS } from "./inbox.mts";
 import { DEFAULT_POLICY } from "./policy.mts";
 
 const SELF = "00000000-0000-4000-8000-0000000000aa";
@@ -132,6 +132,48 @@ test("reports each delivered inbox record exactly once", async (t) => {
   assert.equal(getMessage(paths.inbox, ID_A)?.reportedAt, undefined);
   assert.deepEqual(poll(client, paths).map((e) => [e.type, e.body]), [["message.status", { messageId: ID_A, state: "delivered" }]]);
   assert.ok(getMessage(paths.inbox, ID_A)?.reportedAt);
+  assert.deepEqual(poll(client, paths), []);
+  // A refusal goes out once with its reason; offered is local only.
+  markOffered(paths.inbox, ID_B);
+  assert.deepEqual(poll(client, paths), []);
+  assert.ok(markRefused(paths.inbox, ID_B, "not confirmed by the session after 3 turns"));
+  assert.deepEqual(poll(client, paths).map((e) => e.body),
+    [{ messageId: ID_B, state: "refused", reason: "not confirmed by the session after 3 turns" }]);
+  assert.equal(getMessage(paths.inbox, ID_B)?.reportedState, "refused");
+  assert.deepEqual(poll(client, paths), []);
+});
+
+test("a successful listing refuses messages for sessions that stopped running; a failed one decides nothing", async (t) => {
+  const paths = tempPaths(t);
+  const { client } = await connected(paths);
+  const received = Date.UTC(2026, 8, 25, 12);
+  const ID_C = "00000000-0000-4000-8000-0000000000c3";
+  const ID_D = "00000000-0000-4000-8000-0000000000d4";
+  for (const [id, toSession] of [[ID_A, "gone"], [ID_B, "review"], [ID_C, "s-2"], [ID_D, "gone-too"]]) {
+    storeMessage(paths.inbox, { messageId: id, from: { nodeId: PEER, session: "s-a" }, toSession, text: "hi", createdAt: new Date(0).toISOString() },
+      received);
+  }
+  markOffered(paths.inbox, ID_D);
+  let now = received + UNDELIVERABLE_AFTER_MS;
+  let fail = false;
+  const logs: string[] = [];
+  const list = recordingSessions(paths, async () => {
+    if (fail) throw new Error("claude agents failed");
+    return [{ sessionId: "s-1", runtime: "claude-code", state: "idle", name: "review" }, { sessionId: "s-2", runtime: "claude-code", state: "idle" }];
+  }, (line) => logs.push(line), () => now);
+  await list();
+  assert.equal(getMessage(paths.inbox, ID_A)?.state, "accepted", "not yet past the window");
+  fail = true;
+  now += 1;
+  await assert.rejects(list());
+  assert.equal(getMessage(paths.inbox, ID_A)?.state, "accepted", "a failed listing is not an empty node");
+  fail = false;
+  await list();
+  assert.deepEqual([ID_A, ID_B, ID_C, ID_D].map((id) => [getMessage(paths.inbox, id)?.state, getMessage(paths.inbox, id)?.reason]), [
+    ["refused", "target session not running"], ["accepted", undefined], ["accepted", undefined], ["refused", "target session not running"]]);
+  assert.deepEqual(logs, ["kherep-node: refused 2 message(s) for sessions that are not running"]);
+  assert.deepEqual(poll(client, paths).map((e) => e.body), [ID_A, ID_D].map((messageId) =>
+    ({ messageId, state: "refused", reason: "target session not running" })));
   assert.deepEqual(poll(client, paths), []);
 });
 
