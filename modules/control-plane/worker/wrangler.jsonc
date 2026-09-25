@@ -1,0 +1,39 @@
+// Kherep Control Plane Worker, Phase 1 (GitHub issue #5).
+//
+// This committed file holds PLACEHOLDERS ONLY. It carries no account id, no
+// zone, no route and no real hostname. An operator deploys with a local
+// override config kept outside the repository, for example:
+//
+//   npx wrangler deploy --config /path/outside/repo/kherep-control.jsonc
+//
+// The override copies this file and adds account_id, the custom domain route
+// and the real ACCESS_TEAM_DOMAIN / ACCESS_AUD values. See ../README.md.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "kherep-control",
+  "main": "src/index.mts",
+  "compatibility_date": "2026-09-23",
+  "workers_dev": false,
+  // No Wrangler usage telemetry from this project, including test and dry runs.
+  "send_metrics": false,
+  "durable_objects": {
+    "bindings": [
+      { "name": "NODE_SESSION", "class_name": "NodeSession" },
+      { "name": "REGISTRY", "class_name": "Registry" }
+    ]
+  },
+  // SQLite-backed Durable Object classes. The design (issue #5) names the
+  // migrations array with new_sqlite_classes; Cloudflare now also documents a
+  // declarative "exports" map. Both are supported, but only one per Worker.
+  // https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["NodeSession", "Registry"] }
+  ],
+  "vars": {
+    // Placeholders. Empty values keep /api/* closed (HTTP 503) until the
+    // operator's override supplies https://<team-name>.cloudflareaccess.com
+    // and the Access application AUD tag.
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": ""
+  }
+}

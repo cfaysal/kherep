@@ -1,0 +1,9 @@
+{
+  "_comment": "Ed25519 test key from RFC 8032 section 7.1 TEST 1 (public test vector, not a secret). Shared by the node tests and the Worker tests so both sides agree on the signed challenge bytes.",
+  "seedHex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+  "publicKey": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+  "nodeId": "00000000-0000-4000-8000-000000000001",
+  "nonce": "AAECAwQFBgcICQoLDA0ODw",
+  "timestamp": 1790000000000,
+  "signature": "Z2sF-A2Ndw9R2zRhVhP-jNteUTd5pgmr5rENKnAFOryLYLlzJCUthswtFsufn2yQBJqCjqZADQIBWva0bWGpDw"
+}
