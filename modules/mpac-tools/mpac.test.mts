@@ -5,6 +5,13 @@ import test from "node:test";
 
 const script = path.join(import.meta.dirname, "mpac.ps1");
 
+// mpac.ps1 needs PowerShell 7. Without pwsh on PATH, spawnSync fails with
+// ENOENT and status null; skip with the reason instead of failing unclearly.
+const probe = spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"]);
+const needsPwsh = {
+  skip: (probe.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT" ? "pwsh not found on PATH" : false,
+};
+
 function resolve(env: NodeJS.ProcessEnv) {
   return spawnSync("pwsh", ["-NoProfile", "-Command", `. '${script}'; Resolve-MpacCredPath`], {
     encoding: "utf8",
@@ -12,7 +19,7 @@ function resolve(env: NodeJS.ProcessEnv) {
   });
 }
 
-test("MPAC path uses only the canonical product variable", () => {
+test("MPAC path uses only the canonical product variable", needsPwsh, () => {
   const canonical = resolve({ KHEREP_MPAC_CRED_FILE: "canonical.txt", OTHER_VENDOR_MPAC_CRED_FILE: "other.txt" });
   assert.equal(canonical.status, 0);
   assert.match(canonical.stdout, /canonical\.txt/);
@@ -22,7 +29,7 @@ test("MPAC path uses only the canonical product variable", () => {
   assert.doesNotMatch(unrelated.stdout, /other\.txt/);
 });
 
-test("empty canonical MPAC path fails closed", () => {
+test("empty canonical MPAC path fails closed", needsPwsh, () => {
   const result = resolve({ KHEREP_MPAC_CRED_FILE: "", OTHER_VENDOR_MPAC_CRED_FILE: "other.txt" });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /KHEREP_MPAC_CRED_FILE must not be empty/);
