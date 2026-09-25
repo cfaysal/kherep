@@ -182,3 +182,18 @@ test("unreadable selection shape fails safely instead of appearing absent", (t) 
   fs.writeFileSync(file, "{invalid selection}");
   assert.throws(() => resolveMemoryProvider(file), /^Error: Memory provider selection is invalid$/);
 });
+test('macOS Computer Use wrapper detaches an owned predecessor that names a Node path an upgrade removed', () => {
+ // The notify line as the macOS Computer Use client writes it, slashes escaped (#55).
+ const wrapper = '/Users/example/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient';
+ const oldNode = '/opt/homebrew/Cellar/node/25.8.1_1/bin/node';
+ const hook = '/Users/example/.codex/hooks/kherep-maestro/codex-memory-notify.js';
+ const previous = JSON.stringify([oldNode, hook]).replace(/\//g, '\/');
+ const source = `notify = ${JSON.stringify([wrapper, 'turn-ended', '--previous-notify', previous])}\nmodel = "keep"\n`;
+ const expected = `notify = ${JSON.stringify([wrapper, 'turn-ended'])}\nmodel = "keep"\n`;
+ assert.equal(configureMemoryNotify(source, '/opt/homebrew/bin/node', hook, [oldNode]), expected);
+ // Without the old path in the list, nothing matches and the line stays byte-exact.
+ assert.equal(configureMemoryNotify(source, '/opt/homebrew/bin/node', hook), source);
+ // A different binary with the same arguments is not the wrapper.
+ const other = source.replace('SkyComputerUseClient\"', 'OtherClient\"');
+ assert.equal(configureMemoryNotify(other, '/opt/homebrew/bin/node', hook, [oldNode]), other);
+});
