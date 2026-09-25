@@ -23,7 +23,7 @@ function fixture(t: { after: (fn: () => void) => void }): Fixture {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kherep-op1426-")));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const claude = path.join(root, "home", ".claude");
-  const f = { root, home: path.join(root, "home"), claude, ws: path.join(root, "work space"),
+  const f = { root, home: path.join(root, "home"), claude, ws: path.join(root, "workspace"),
     creds: path.join(root, "credentials"), policy: path.join(claude, "kherep", "githooks", "commit-policy") };
   for (const dir of [f.claude, path.join(f.ws, ".claude"), f.creds]) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(f.claude, "settings.json"), "{}\n");

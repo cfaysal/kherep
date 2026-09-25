@@ -15,6 +15,7 @@ INSTALL_ATLASSIAN_TOOLS="${KHEREP_INSTALL_ATLASSIAN_TOOLS:-0}"
 kherep_validate_shell_path CLAUDE_HOME "$CLAUDE_HOME" || exit $?
 kherep_validate_shell_path KHEREP_WORKSPACE "$WS" || exit $?
 kherep_validate_shell_path KHEREP_CREDENTIALS_ROOT "$CREDENTIALS_ROOT" || exit $?
+kherep_validate_workspace_command_path "$WS" || exit $?
 CLAUDE_SRC="$(cd "$HERE/.." && pwd)/claude"
 MANIFEST="$HERE/manifest/files.txt"
 DRIFT_SCOPE="${DRIFT_SCOPE:-all}"

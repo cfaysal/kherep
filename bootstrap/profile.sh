@@ -74,6 +74,30 @@ kherep_validate_shell_path() {
   fi
 }
 
+# Issue #30. The workspace is the one path rendered UNQUOTED into commands: the
+# `Bash(node <workspace>/tools/...)` allow rules and the claude-obs `broker`
+# (render-profile-paths.mts, workspaceCommandPath). Agents run that string as
+# stored, and a quoted call would not match the rules, so the path must stay one
+# shell word. Refused: whitespace, the characters POSIX always requires quoting,
+# and the glob and brace characters, which expand inside a word. The other
+# sometimes-special characters (# ~ = % ! ^ ,) act only at the start of a word,
+# in an interactive shell or inside the refused brackets and braces, and this
+# word starts with / (or a drive letter once rendered); ~ also appears in 8.3
+# names such as RUNNER~1. CLAUDE_HOME and the credentials root are rendered
+# quoted and are not restricted.
+kherep_validate_workspace_command_path() {
+  local value="$1" unsafe=$'| & ; < > ( ) $ ` \\ " \' * ? [ ] { }' refused=0 i
+  case "$value" in *[[:space:]]*) refused=1 ;; esac
+  for (( i = 0; i < ${#unsafe}; i++ )); do
+    case "$value" in *"${unsafe:i:1}"*) refused=1 ;; esac
+  done
+  [ "$refused" = 0 ] && return 0
+  echo "FATAL: KHEREP_WORKSPACE contains whitespace or a shell metacharacter: $value" >&2
+  echo "Kherep names the workspace unquoted in its tool commands (permission rules, claude-obs broker), so no quoting can make this path work." >&2
+  echo "Choose a workspace path without whitespace and without any of $unsafe and set it with KHEREP_WORKSPACE." >&2
+  return 2
+}
+
 # Repo manifests are trusted input only after this lexical gate. Keeping the
 # path relative and traversal-free makes the configured install roots the sole
 # authority over where a manifest entry can land.

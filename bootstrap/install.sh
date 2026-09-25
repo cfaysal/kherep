@@ -20,6 +20,7 @@ INSTALL_BACKUP=""
 kherep_validate_shell_path CLAUDE_HOME "$CLAUDE_HOME" || exit $?
 kherep_validate_shell_path KHEREP_WORKSPACE "$WS" || exit $?
 kherep_validate_shell_path KHEREP_CREDENTIALS_ROOT "$CREDENTIALS_ROOT" || exit $?
+kherep_validate_workspace_command_path "$WS" || exit $?
 
 bootstrap_cleanup_preflight() {
   [ -n "$PREFLIGHT_DIR" ] || return 0
