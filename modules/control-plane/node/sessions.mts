@@ -3,13 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isSessionInfo, type SessionInfo } from "../protocol.mts";
-import { listCodexSessions } from "./codex-sessions.mts";
+import { listCodexSessions, listCodexTaskSessions } from "./codex-sessions.mts";
 import type { NodePaths } from "./config.mts";
 import { findOnPath } from "./discovery.mts";
 
 // Agent session discovery (issue #31, step 2). Claude Code lists its running
 // sessions with `claude agents --json` (https://code.claude.com/docs/en/sessions).
-// Codex sessions come from the records the delivery hook writes (codex-sessions.mts).
+// Codex sessions come from the records the delivery hook writes and from the
+// Codex tasks this node started (codex-sessions.mts).
 
 export const CLAUDE_RUNTIME = "claude-code";
 export const LIST_TIMEOUT_MS = 10_000;
@@ -109,9 +110,12 @@ export function mapClaudeAgents(value: unknown): SessionInfo[] | null {
 // Codex sessions, and rejects when a listing fails: a failed read must not
 // look like an empty node. Without claude on PATH it contributes nothing.
 export async function listSessions(deps: SessionDeps = {}): Promise<SessionInfo[]> {
-  const codex = deps.paths ? listCodexSessions(deps.paths, deps.now?.() ?? Date.now()) : [];
+  const now = deps.now?.() ?? Date.now();
+  const tasks = deps.paths ? listCodexTaskSessions(deps.paths, now) : [];
+  // A task's thread the delivery hook recorded too is listed once, as the task.
+  const codex = deps.paths ? listCodexSessions(deps.paths, now).filter((s) => !tasks.some((t) => t.sessionId === s.sessionId)) : [];
   const claude = await listClaudeSessions(deps);
-  return [...claude, ...codex].slice(0, MAX_SESSIONS);
+  return [...claude, ...tasks, ...codex].slice(0, MAX_SESSIONS);
 }
 
 async function listClaudeSessions(deps: SessionDeps): Promise<SessionInfo[]> {

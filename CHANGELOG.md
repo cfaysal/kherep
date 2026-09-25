@@ -21,7 +21,16 @@ increments the minor version; every other release increments the patch version.
   `started`, then `done` with the last message as summary or `failed`,
   continues with `codex exec resume`, and stops the process group by pid
   after checking its start time. Claude and Codex tasks share the limits.
-  The Worker accepts runtime `codex` once redeployed.
+  The Worker accepts runtime `codex` once redeployed. Codex task sessions are
+  listed in the node's session snapshot from the task records (thread id,
+  task name, runtime `codex`). A peer message for an ended Codex task resumes
+  it with the message framed as the delivery hook frames it, under the Claude
+  wake's guards (kill switch, allowlist or task grant, reply depth, budget),
+  one run per task, and is confirmed when that run completes. The process can
+  write the node's outbox (its only extra writable root) and gets
+  `KHEREP_CONFIG_DIR` and `KHEREP_SESSION_ID`, so `msg send` works from the
+  sandbox; the msg CLI honours `KHEREP_SESSION_ID` when
+  `CLAUDE_CODE_SESSION_ID` is not set.
 
 - Control Plane tasks: the operator creates a task with `POST /api/tasks`
   (behind Access), and the Worker dispatches `session.start` to an online node

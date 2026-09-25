@@ -25,6 +25,9 @@ export interface TaskRecord {
   // to stop, since a pid alone may be reused.
   shortId?: string; sessionId?: string; requestedBy?: string; reason?: string;
   pid?: number; pidStart?: string;
+  // Codex: the inbox messages a run started for peer messages carries
+  // (codex-wake.mts); settled as delivered or retry when that run ends.
+  offered?: string[];
   // Set by `task done`: the session reported done, but its process may still
   // run, so the record stays counted and watched (limits, deadline) until
   // `claude agents` shows the session ended or the deadline stopped it.
@@ -66,8 +69,9 @@ export function listTasks(paths: NodePaths): TaskRecord[] {
 }
 
 // The task a local session was started for: by the session id `claude agents
-// --json` reported, or by the task's session name that sessions.json records
-// for the id before the mapping is known.
+// --json` reported (for Codex the thread id), by the task's session name that
+// sessions.json records for the id before the mapping is known, or by the task
+// name itself, which a Codex task session carries before its thread id is known.
 export function taskForSession(paths: NodePaths, sessionId: string | undefined): TaskRecord | null {
   if (!sessionId) return null;
   let name: string | undefined;
@@ -76,7 +80,7 @@ export function taskForSession(paths: NodePaths, sessionId: string | undefined):
   } catch {
     name = undefined;
   }
-  return listTasks(paths).find((t) => t.sessionId === sessionId || (name !== undefined && t.name === name)) ?? null;
+  return listTasks(paths).find((t) => t.sessionId === sessionId || t.name === sessionId || (name !== undefined && t.name === name)) ?? null;
 }
 
 export function queueReport(paths: NodePaths, body: TaskReportBody): void {

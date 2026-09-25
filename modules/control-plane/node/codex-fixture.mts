@@ -13,21 +13,30 @@ import { taskNode } from "./task-fixture.mts";
 // picks the behavior: [sleep] runs until stopped, [ignore-term] also ignores
 // SIGTERM, [fail] ends with turn.failed and exit 1, [silent] exits 2 without
 // events; otherwise the turn completes, -o gets the last message, exit 0.
-// A resume keeps the thread id it was given.
+// A resume keeps the thread id it was given. A prompt that carries a peer
+// message ("Message id: <id>") is answered first with the real
+// `kherep-node msg send --reply-to <id>`, run with the environment the node gave.
 
 export const THREAD = "0199a000-0000-7000-8000-000000000001";
 export const LAST_MESSAGE = "  All tests pass.\n\n";
+
+const CLI = path.join(import.meta.dirname, "cli.mts");
 
 const SCRIPT = (log: string): string => `#!${process.execPath}
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
 const stdinNull = fs.fstatSync(0).rdev === fs.statSync("/dev/null").rdev;
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, cwd: process.cwd(), stdinNull, pid: process.pid }) + "\\n");
+const env = { KHEREP_CONFIG_DIR: process.env.KHEREP_CONFIG_DIR, KHEREP_SESSION_ID: process.env.KHEREP_SESSION_ID,
+  CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID };
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, cwd: process.cwd(), stdinNull, pid: process.pid, env }) + "\\n");
 const prompt = argv[argv.length - 1];
 const out = argv[argv.indexOf("-o") + 1];
 const thread = argv[1] === "resume" ? argv[argv.length - 2] : ${JSON.stringify(THREAD)};
 const emit = (event) => process.stdout.write(JSON.stringify(event) + "\\n");
 if (prompt.includes("[silent]")) process.exit(2);
+const peer = /^Message id: (\\S+)$/m.exec(prompt);
+if (peer) require("node:child_process").spawnSync(process.execPath, [${JSON.stringify(CLI)}, "msg", "send", "--reply-to", peer[1], "--", "ack"],
+  { stdio: "ignore" });
 emit({ type: "thread.started", thread_id: thread });
 emit({ type: "turn.started" });
 if (prompt.includes("[ignore-term]")) process.on("SIGTERM", () => {});
@@ -36,7 +45,7 @@ else if (prompt.includes("[fail]")) { emit({ type: "turn.failed", error: { messa
 else { fs.writeFileSync(out, ${JSON.stringify(LAST_MESSAGE)}); emit({ type: "turn.completed", usage: {} }); process.exit(0); }
 `;
 
-export interface FakeRun { argv: string[]; cwd: string; stdinNull: boolean; pid: number }
+export interface FakeRun { argv: string[]; cwd: string; stdinNull: boolean; pid: number; env: { KHEREP_CONFIG_DIR?: string; KHEREP_SESSION_ID?: string } }
 
 export function codexNode(t: test.TestContext, sessions: Record<string, unknown> = {}, codex: CodexDeps = {}) {
   const node = taskNode(t, { runtimes: ["claude", "codex"], ...sessions });
