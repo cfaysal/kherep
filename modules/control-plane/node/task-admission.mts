@@ -55,5 +55,5 @@ export function admitStart(args: SessionStartArgs, deps: RunnerDeps): Admitted {
     startedAt: new Date(now).toISOString(), deadline: new Date(now + policy.maxRuntimeMinutes * 60_000).toISOString(),
     updatedAt: new Date(now).toISOString(), ...(args.requestedBy !== undefined ? { requestedBy: args.requestedBy } : {}),
   };
-  return { record, prompt: framePrompt(args.taskId, args.prompt, deps.cli ?? cliCommand(), delegation) };
+  return { record, prompt: framePrompt(args.taskId, args.prompt, deps.cli ?? cliCommand(), delegation, args.runtime) };
 }

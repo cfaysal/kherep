@@ -1,11 +1,11 @@
 import fs from "node:fs";
 
 import { audit, bypassesPermissions, isPlainSessionId, takeTurn, type AutonomyAction } from "./autonomy.mts";
-import { resumeArgs, sameProcess } from "./codex-process.mts";
+import { resumeArgs, stillRuns } from "./codex-process.mts";
 import { spawnRun } from "./codex-runner.mts";
 import type { NodePaths } from "./config.mts";
 import { deliveryContext, MAX_OFFERS, offerEnded, sessionInbox } from "./deliver-core.mts";
-import { markRefused, markRetry, MAX_REPLY_DEPTH, type InboxRecord } from "./inbox.mts";
+import { markRefused, markRetry, MAX_REPLY_DEPTH, messageIds, type InboxRecord } from "./inbox.mts";
 import { wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit } from "./task-admission.mts";
@@ -31,7 +31,13 @@ const atReplyLimit = (record: InboxRecord): boolean => (record.depth ?? 0) >= MA
 const ids = (records: InboxRecord[]): string[] => records.map((r) => r.messageId);
 
 // Each message is audited once per action, not at every 2-second round.
+// Entries of messages that left the inbox are pruned.
 const noted = new Map<string, AutonomyAction>();
+function pruneNoted(paths: NodePaths): void {
+  if (noted.size === 0) return;
+  const present = new Set(messageIds(paths.inbox));
+  for (const id of noted.keys()) if (!present.has(id)) noted.delete(id);
+}
 function note(paths: NodePaths, now: number, sessionId: string, messageIds: string[], action: AutonomyAction): void {
   const fresh = messageIds.filter((id) => noted.get(id) !== action);
   if (fresh.length === 0) return;
@@ -42,6 +48,7 @@ function note(paths: NodePaths, now: number, sessionId: string, messageIds: stri
 export async function pollCodexInbound(deps: RunnerDeps, log: (line: string) => void = () => {}): Promise<void> {
   const sessions = deps.policy.sessions;
   if (!sessions?.enabled || !sessions.runtimes.includes("codex")) return;
+  pruneNoted(deps.paths);
   for (const record of listTasks(deps.paths)) {
     if (record.runtime !== "codex" || !isPlainSessionId(record.sessionId) || isActive(record)) continue;
     try {
@@ -76,8 +83,12 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   if (fs.existsSync(killSwitch(paths))) return note(paths, now, sessionId, due, "disabled");
   if (bypassesPermissions(record.permissionMode)) return note(paths, now, sessionId, due, "permission-mode");
   // The previous run may still be ending (a stop's grace period); a failed read throws.
-  if (sameProcess(deps.codex ?? {}, record.pid, record.pidStart)) return;
+  if (stillRuns(deps.codex ?? {}, record.pid, record.pidStart)) return;
   if (overLimit(deps, now, record.taskId)) return;
+  // The turn is taken before deliveryContext because that marks the messages
+  // offered: a turn denied afterwards (spacing) would count an offer for
+  // nothing and refuse the message after MAX_OFFERS rounds. With due messages
+  // the context is not empty, unless a delivery hook offered them meanwhile.
   const budget = takeTurn(paths, sessionId, now);
   if (budget === "spacing" || budget === "locked") return;
   if (budget === "exhausted") return note(paths, now, sessionId, due, "budget");
@@ -92,7 +103,7 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   const run: TaskRecord = { ...record, running: true, offered,
     deadline: new Date(now + deps.policy.sessions!.maxRuntimeMinutes * 60_000).toISOString() };
   try {
-    await spawnRun(deps, run, (files, outbox) => resumeArgs(sessionId, record.permissionMode, files, outbox, prompt));
+    await spawnRun(deps, run, (files, outbox) => resumeArgs(sessionId, record.permissionMode, files, outbox), prompt);
   } catch (error) {
     for (const id of offered) markRetry(paths.inbox, id);
     log(`kherep-node: could not resume task ${record.taskId} for messages: ${String((error as Error).message ?? error)}`);

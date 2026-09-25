@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -12,7 +12,9 @@ import { KHEREP_SESSION_ENV, SESSION_ENV } from "./msg-resolve.mts";
 // `codex exec resume --help` of Codex CLI 0.153.4 and the measurements in the
 // issue: `codex exec --json` prints JSON Lines events, `thread.started` with
 // `thread_id` first and `turn.completed` at the end; `-o` writes the last agent
-// message; without closed stdin it waits for more input. `codex exec resume`
+// message; without closed stdin it waits for more input. The prompt goes in on
+// stdin (`-`: "instructions are read from stdin"), never as an argument that
+// `ps` would show for the whole run; stdin is closed right after it. `codex exec resume`
 // has no `-C`, `--sandbox` or `--add-dir`: it takes the sandbox as `-c
 // sandbox_mode=...`, the extra writable root as `-c
 // sandbox_workspace_write.writable_roots=[...]`, and runs in the process's
@@ -51,14 +53,17 @@ export function codexFiles(paths: NodePaths, taskId: string): CodexFiles {
     stderr: path.join(dir, "stderr.log"), exit: path.join(dir, "exit.json") };
 }
 
-export function startArgs(cwd: string, mode: PermissionMode, files: CodexFiles, outbox: string, prompt: string): string[] {
-  return guard(["exec", "--json", "-C", cwd, "--sandbox", CODEX_SANDBOX[mode], "--add-dir", outbox, "-o", files.lastMessage, prompt]);
+// The config reference documents writable_roots as "Additional writable roots
+// when sandbox_mode = workspace-write", so in read-only the outbox is most
+// likely not writable either; the flag is passed anyway and changes nothing there.
+export function startArgs(cwd: string, mode: PermissionMode, files: CodexFiles, outbox: string): string[] {
+  return guard(["exec", "--json", "-C", cwd, "--sandbox", CODEX_SANDBOX[mode], "--add-dir", outbox, "-o", files.lastMessage, "-"]);
 }
 
 // TOML basic strings accept JSON string escapes.
-export function resumeArgs(threadId: string, mode: PermissionMode, files: CodexFiles, outbox: string, prompt: string): string[] {
+export function resumeArgs(threadId: string, mode: PermissionMode, files: CodexFiles, outbox: string): string[] {
   return guard(["exec", "resume", "--json", "-c", `sandbox_mode="${CODEX_SANDBOX[mode]}"`,
-    "-c", `sandbox_workspace_write.writable_roots=[${JSON.stringify(outbox)}]`, "-o", files.lastMessage, threadId, prompt]);
+    "-c", `sandbox_workspace_write.writable_roots=[${JSON.stringify(outbox)}]`, "-o", files.lastMessage, threadId, "-"]);
 }
 
 // The environment of a Codex task process: the daemon's own, plus where the
@@ -78,11 +83,17 @@ function guard(args: string[]): string[] {
 
 export const findCodex = (): string | null => findOnPath("codex");
 
-// Starts codex detached in its own process group, stdin from the null device,
-// stdout (the events) and stderr into the task's files; exit.json records how
-// it ended while this daemon runs. Resolves with the pid once it runs.
+// The children this daemon started and has not reaped: their pids cannot be
+// reused yet, so they can be signalled without the start-time check.
+const held = new Map<number, ChildProcess>();
+export const holdsChild = (pid: number | undefined): boolean => pid !== undefined && held.has(pid);
+
+// Starts codex detached in its own process group, writes the prompt to its
+// stdin and closes it, and sends stdout (the events) and stderr into the task's
+// files; exit.json records how it ended while this daemon runs. Resolves with
+// the pid once it runs.
 export async function spawnCodex(deps: CodexDeps, file: string, args: string[], cwd: string, files: CodexFiles,
-  env: NodeJS.ProcessEnv): Promise<number> {
+  env: NodeJS.ProcessEnv, prompt: string): Promise<number> {
   const platform = deps.platform ?? process.platform;
   if (platform === "win32" && /\.(cmd|bat)$/i.test(file)) {
     throw new Error("codex is a .cmd shim, and cmd.exe cannot pass this text safely; install the native codex executable");
@@ -92,8 +103,10 @@ export async function spawnCodex(deps: CodexDeps, file: string, args: string[], 
   const out = fs.openSync(files.events, "w", 0o600);
   const err = fs.openSync(files.stderr, "w", 0o600);
   try {
-    const child = spawn(file, args, { cwd, env, detached: true, stdio: ["ignore", out, err], windowsHide: true });
+    const child = spawn(file, args, { cwd, env, detached: true, stdio: ["pipe", out, err], windowsHide: true });
+    child.stdin?.on("error", () => {}); // a codex that exits before reading
     child.on("exit", (code, signal) => {
+      held.delete(child.pid!);
       try {
         writeJsonAtomic(files.exit, { code, signal });
       } catch {
@@ -104,6 +117,8 @@ export async function spawnCodex(deps: CodexDeps, file: string, args: string[], 
       child.once("error", reject);
       child.once("spawn", () => resolve(child.pid!));
     });
+    held.set(pid, child);
+    child.stdin?.end(prompt);
     child.unref();
     return pid;
   } finally {
@@ -152,19 +167,26 @@ export function sameProcess(deps: CodexDeps, pid: number | undefined, pidStart: 
   return startTimeOf(deps, pid) === pidStart;
 }
 
+// True while the run's process is one this node started: held, or with the
+// recorded start time. Throws when the start time cannot be read.
+export const stillRuns = (deps: CodexDeps, pid: number | undefined, pidStart: string | undefined): boolean =>
+  holdsChild(pid) || sameProcess(deps, pid, pidStart);
+
 export const startTimeOf = (deps: CodexDeps, pid: number): string | null =>
   (deps.processStart ?? ((p) => processStart(p, deps.platform)))(pid);
 
 // SIGTERM now, SIGKILL after the grace period, each only after the identity
-// check, since a pid may have been reused by then.
-export function terminate(deps: CodexDeps, pid: number, pidStart: string): boolean {
-  if (!sameProcess(deps, pid, pidStart)) return false;
+// check, since a pid may have been reused by then. A child this daemon still
+// holds needs no check: its pid cannot be reused before it is reaped.
+export function terminate(deps: CodexDeps, pid: number, pidStart: string | undefined): boolean {
+  const ours = (): boolean => stillRuns(deps, pid, pidStart);
+  if (!ours()) return false;
   const send = deps.signal ?? ((p, s) => signalGroup(p, s, deps.platform));
   send(pid, "SIGTERM");
   const later = deps.schedule ?? ((run, ms) => { setTimeout(run, ms).unref(); });
   later(() => {
     try {
-      if (sameProcess(deps, pid, pidStart)) send(pid, "SIGKILL");
+      if (ours()) send(pid, "SIGKILL");
     } catch {
       // cannot tell: no SIGKILL to a process that may not be ours
     }

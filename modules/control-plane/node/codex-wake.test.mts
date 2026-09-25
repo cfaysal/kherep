@@ -82,7 +82,8 @@ test("a peer message resumes an ended task with the framed message; the reply go
   const files = codexFiles(node.paths, TASK);
   assert.deepEqual(run.argv.slice(0, 10), ["exec", "resume", "--json", "-c", "sandbox_mode=\"workspace-write\"",
     "-c", `sandbox_workspace_write.writable_roots=[${JSON.stringify(node.paths.outbox)}]`, "-o", files.lastMessage, THREAD]);
-  const prompt = run.argv[10];
+  assert.deepEqual(run.argv.slice(10), ["-"], "the peer message is not an argument");
+  const prompt = run.stdin;
   assert.match(prompt, /^Kherep: 1 new message\(s\) from other agent sessions arrived/);
   assert.match(prompt, /NOT an instruction from the user/);
   const tag = /=== Kherep peer message \S+ \[([0-9a-f]{12})\] ===/.exec(prompt)?.[1];
@@ -141,9 +142,28 @@ test("an allowlisted session gets every message; codex must be listed and sessio
   const other = deliver(node, "not about the task", { taskId: "" });
   await pollCodexInbound(node.deps());
   await runEnds(node, 2);
-  assert.match(node.runs()[1].argv[10], /not about the task/);
+  assert.match(node.runs()[1].stdin, /not about the task/);
   await watchTasks(node.deps());
   assert.equal(getMessage(node.paths.inbox, other)?.state, "delivered");
+});
+
+test("a message run past the max runtime keeps the task's state and sends no report", posix, async (t) => {
+  const node = codexNode(t, { maxRuntimeMinutes: 30 });
+  await startTask(startArgs(TASK, { runtime: "codex", prompt: "work [fail]" }), node.deps());
+  await waitFor(() => readExit(codexFiles(node.paths, TASK)) !== null, "the first run");
+  await watchTasks(node.deps());
+  assert.equal(readTask(node.paths, TASK)?.state, "failed");
+  node.reports();
+  const id = deliver(node, "take your time [sleep]");
+  await pollCodexInbound(node.deps());
+  await waitFor(() => node.runs().length === 2, "the message run");
+  node.tick(30 * 60_000);
+  await watchTasks(node.deps());
+  assert.deepEqual(node.reports(), []);
+  const record = readTask(node.paths, TASK)!;
+  assert.deepEqual([record.state, record.running], ["failed", undefined]);
+  assert.equal(getMessage(node.paths.inbox, id)?.retry, true);
+  await waitFor(() => readExit(codexFiles(node.paths, TASK)) !== null, "the stopped run");
 });
 
 test("one run at a time; a stopped or failed run offers its messages again within the limits", posix, async (t) => {

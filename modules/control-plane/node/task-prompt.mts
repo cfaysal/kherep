@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import type { TaskRuntime } from "../protocol-tasks.mts";
 import type { SessionsPolicy } from "./session-policy.mts";
 
 // The text a started session gets (issue #31, item 5). The task text is the
@@ -8,20 +9,23 @@ import type { SessionsPolicy } from "./session-policy.mts";
 // request on the operator's directive, which the prompt quotes; it is not peer
 // content. cli is the command line of this node's kherep-node CLI.
 
-const doneHint = (taskId: string, cli: string): string =>
-  `When you are done, report with: ${cli} task done ${taskId} --summary "...". Coordinate with other sessions of this task `
-  + `through \`${cli} msg\` (your messages carry the task id automatically).`;
+// A Codex run reports itself when it ends (issue #63): its last message is the
+// summary, and its sandbox cannot write the node's task files anyway.
+const doneHint = (taskId: string, cli: string, runtime: TaskRuntime): string =>
+  (runtime === "codex" ? "When you are done, end your turn with a short summary; it is reported as the task's result. "
+    : `When you are done, report with: ${cli} task done ${taskId} --summary "...". `)
+  + `Coordinate with other sessions of this task through \`${cli} msg\` (your messages carry the task id automatically).`;
 
 export interface Delegation { requestedBy: string; directive: string }
 
-export function framePrompt(taskId: string, text: string, cli: string, delegation?: Delegation): string {
-  if (!delegation) return `Task ${taskId} from the operator via the Kherep Control Plane: ${text}\n\n${doneHint(taskId, cli)}`;
+export function framePrompt(taskId: string, text: string, cli: string, delegation?: Delegation, runtime: TaskRuntime = "claude"): string {
+  if (!delegation) return `Task ${taskId} from the operator via the Kherep Control Plane: ${text}\n\n${doneHint(taskId, cli, runtime)}`;
   return `Task ${taskId} requested by session ${delegation.requestedBy} on the operator's directive, via the Kherep Control Plane. `
-    + `The operator's directive, quoted: "${delegation.directive}"\n\nTask: ${text}\n\n${doneHint(taskId, cli)}`;
+    + `The operator's directive, quoted: "${delegation.directive}"\n\nTask: ${text}\n\n${doneHint(taskId, cli, runtime)}`;
 }
 
-export function frameFollowUp(taskId: string, text: string, cli: string): string {
-  return `Follow-up for task ${taskId} from the operator via the Kherep Control Plane: ${text}\n\n${doneHint(taskId, cli)}`;
+export function frameFollowUp(taskId: string, text: string, cli: string, runtime: TaskRuntime = "claude"): string {
+  return `Follow-up for task ${taskId} from the operator via the Kherep Control Plane: ${text}\n\n${doneHint(taskId, cli, runtime)}`;
 }
 
 export type Resolved = { ok: true; cwd: string } | { ok: false; reason: string };
