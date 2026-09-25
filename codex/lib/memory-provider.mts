@@ -130,19 +130,20 @@ function sameNotifyPath(actual: string, expected: string): boolean {
   return path.normalize(actual) === path.normalize(expected);
 }
 
-export function configureMemoryNotify(config: string, node: string, hook: string): string {
+export function configureMemoryNotify(config: string, node: string, hook: string, previousNodes: string[] = []): string {
   const firstTable = config.search(/^\s*\[/m);
   const top = firstTable < 0 ? config : config.slice(0, firstTable);
   const line = top.match(/^\s*notify\s*=\s*(\[[^\r\n]*\])\s*(?:#.*)?$/m);
   if (line) {
     try {
       const { values, secondEnd } = notifyStrings(line[1]);
-      if (JSON.stringify(values) === JSON.stringify([node, hook])) return config.replace(line[0], "");
+      const nodes = [node, ...previousNodes];
+      if (values.length === 2 && nodes.includes(values[0]) && values[1] === hook) return config.replace(line[0], "");
       if (values.length === 4 && path.win32.basename(values[0]).toLowerCase() === "codex-computer-use.exe"
           && values[1] === "turn-ended" && values[2] === "--previous-notify") {
         const previous: unknown = JSON.parse(values[3]);
         if (Array.isArray(previous) && previous.length === 2 && previous.every((value) => typeof value === "string")
-            && sameNotifyPath(previous[0], node) && sameNotifyPath(previous[1], hook)) {
+            && nodes.some((entry) => sameNotifyPath(previous[0], entry)) && sameNotifyPath(previous[1], hook)) {
           const wrapper = line[1].slice(0, secondEnd) + line[1].match(/[\t ]*\]$/)![0];
           return config.replace(line[0], line[0].replace(line[1], wrapper));
         }
