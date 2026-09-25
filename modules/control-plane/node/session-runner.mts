@@ -4,10 +4,9 @@ import {
   DELEGATED_PERMISSION_MODES, type SessionContinueArgs, type SessionStartArgs, type SessionStopArgs,
 } from "../protocol-tasks.mts";
 import type { NodePaths } from "./config.mts";
-import { findOnPath } from "./discovery.mts";
 import { cliCommand } from "./msg-cli.mts";
 import type { NodePolicy } from "./policy.mts";
-import { claudeCall, LIST_TIMEOUT_MS, type Exec } from "./sessions.mts";
+import { claudeCall, findClaude, LIST_TIMEOUT_MS, type Exec } from "./sessions.mts";
 import { isActive, listTasks, queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
 import { frameFollowUp, framePrompt, resolveCwd } from "./task-prompt.mts";
 
@@ -49,7 +48,7 @@ const execClaude: Exec = (file, args, options) => new Promise((resolve, reject) 
 const trim = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 256) || "no reason given";
 
 export async function runClaude(deps: RunnerDeps, args: string[], cwd?: string): Promise<string> {
-  const claude = (deps.findClaude ?? (() => findOnPath("claude")))();
+  const claude = (deps.findClaude ?? findClaude)();
   if (!claude) throw new Error("claude is not installed on this node");
   const run = claudeCall(claude, args, args[0] === "agents" ? LIST_TIMEOUT_MS : RUN_TIMEOUT_MS, deps.platform, deps.comSpec);
   return (deps.exec ?? execClaude)(run.file, run.args, { ...run.options, ...(cwd ? { cwd } : {}) });

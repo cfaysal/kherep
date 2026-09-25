@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 import { isSessionInfo, type SessionInfo } from "../protocol.mts";
 import { listCodexSessions } from "./codex-sessions.mts";
@@ -64,6 +66,21 @@ export function claudeCall(resolved: string, args: string[], timeout: number, pl
   return { file: resolved, args, options: { timeout } };
 }
 
+// An npm install on Windows puts a claude.cmd shim on PATH that only starts the
+// native executable shipped in the package. When that executable sits next to
+// the shim it runs directly, so a task prompt never passes through cmd.exe.
+const NPM_NATIVE = ["node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"];
+export function nativeClaude(resolved: string, exists: (file: string) => boolean = (file) => fs.existsSync(file)): string {
+  if (!/[\\/]claude\.cmd$/i.test(resolved)) return resolved;
+  const native = path.win32.join(path.win32.dirname(resolved), ...NPM_NATIVE);
+  return exists(native) ? native : resolved;
+}
+
+export function findClaude(): string | null {
+  const found = findOnPath("claude");
+  return found && nativeClaude(found);
+}
+
 function optional(value: unknown, max: number): string | undefined {
   return typeof value === "string" && value.length > 0 && value.length <= max ? value : undefined;
 }
@@ -98,7 +115,7 @@ export async function listSessions(deps: SessionDeps = {}): Promise<SessionInfo[
 }
 
 async function listClaudeSessions(deps: SessionDeps): Promise<SessionInfo[]> {
-  const claude = (deps.findClaude ?? (() => findOnPath("claude")))();
+  const claude = (deps.findClaude ?? findClaude)();
   if (!claude) return [];
   const run = claudeInvocation(claude, deps.platform, deps.comSpec);
   const output = await (deps.exec ?? execFileText)(run.file, run.args, run.options)
