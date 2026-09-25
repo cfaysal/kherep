@@ -269,6 +269,7 @@ test("preserves existing literal observation publication authority without the f
     spaceKey: privateSpace.key,
     spaceId: privateSpace.id,
     observationPublishingAuthorized: true,
+    operatorNote: "a key this script does not know",
   }));
 
   const result = runCli(fixture);
@@ -276,6 +277,7 @@ test("preserves existing literal observation publication authority without the f
   assert.equal(result.status, 0, String(result.stderr));
   const config = JSON.parse(fs.readFileSync(fixture.target, "utf8"));
   assert.equal(config.observationPublishingAuthorized, true);
+  assert.equal(config.operatorNote, "a key this script does not know", "the merge keeps unknown keys");
 });
 
 test("keeps prior placement nodes only when the same space cannot be read", (t) => {

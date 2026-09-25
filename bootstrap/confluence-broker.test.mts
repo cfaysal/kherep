@@ -58,9 +58,17 @@ function renderedBrokerRules(root: string, profile: string, workspace: string): 
   return allow.filter((rule) => rule.includes("atl-confluence-ccoder.mts"));
 }
 
+interface SpaceFixture {
+  target: string;
+  broker: string;
+  run: (profile: string, workspace: string) => void;
+  brokerOnly: (profile: string, workspace: string) => ReturnType<typeof spawnSync>;
+}
+
 // confluence-space.mts with the arguments install.sh passes, against a stub
-// broker and a stub placement resolver: nothing leaves the host.
-function spaceFixture(root: string): { run: (profile: string, workspace: string) => void; target: string } {
+// broker and a stub placement read that always fails, so a run keeps the
+// stored nodes: nothing leaves the host.
+function spaceFixture(root: string): SpaceFixture {
   const bootstrap = path.join(root, "repo", "bootstrap");
   const brokers = path.join(root, "repo", "modules", "atl-jira-brokers");
   fs.mkdirSync(bootstrap, { recursive: true });
@@ -70,21 +78,28 @@ function spaceFixture(root: string): { run: (profile: string, workspace: string)
   }
   fs.writeFileSync(path.join(bootstrap, "confluence-nodes.mts"), [
     'export const PLACEMENT_NODES = ["Kherep"];',
-    "export async function readSpacePages() { return []; }",
-    'export function resolvePlacement() { return { nodes: { Kherep: "parent-1" }, missing: [] }; }',
+    'export async function readSpacePages() { throw new Error("space pages unreadable in this test"); }',
+    'export function resolvePlacement() { return { nodes: { Kherep: "stub-parent" }, missing: [] }; }',
   ].join("\n"));
-  fs.writeFileSync(path.join(brokers, "atl-confluence-ccoder.mts"),
-    'process.stdout.write("id: space-1\\nkey: KB\\nname: Knowledge\\n");\n');
+  const broker = path.join(brokers, "atl-confluence-ccoder.mts");
+  fs.writeFileSync(broker, 'process.stdout.write("id: space-1\\nkey: KB\\nname: Resolved Name\\n");\n');
   const target = path.join(root, "claude-home", "kherep", "confluence.json");
+  const cli = (extra: string[], spaceKey?: string) => {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.KHEREP_CONFLUENCE_SPACE_KEY;
+    if (spaceKey) env.KHEREP_CONFLUENCE_SPACE_KEY = spaceKey;
+    return spawnSync(process.execPath, [path.join(bootstrap, "confluence-space.mts"),
+      "--out", target, "--runtime", "claude", ...extra], { encoding: "utf8", env });
+  };
   const run = (profile: string, workspace: string): void => {
-    const result = spawnSync(process.execPath, [path.join(bootstrap, "confluence-space.mts"),
-      "--out", target, "--runtime", "claude", "--profile", profile, "--workspace", workspace], {
-      encoding: "utf8",
-      env: { ...process.env, KHEREP_CONFLUENCE_SPACE_KEY: "KB" },
-    });
+    const result = cli(["--profile", profile, "--workspace", workspace], "KB");
     assert.equal(result.status, 0, result.stderr);
   };
-  return { run, target };
+  // No space key and no terminal: a broker-only run that reached for the
+  // space would fail on the prompt.
+  const brokerOnly = (profile: string, workspace: string) =>
+    cli(["--broker-only", "--profile", profile, "--workspace", workspace]);
+  return { target, broker, run, brokerOnly };
 }
 
 const stored = (file: string): Record<string, unknown> => JSON.parse(fs.readFileSync(file, "utf8"));
@@ -141,27 +156,49 @@ test("a re-render replaces the old backslash broker rules and keeps every unrela
   assert.equal(allow.length, obsolete.length + unrelated.length, "the allowlist does not grow");
 });
 
-test("a re-install keeps the space and its nodes, refreshes the broker, and is idempotent", (t) => {
-  const root = tempRoot(t);
-  const space = spaceFixture(root);
+// The seeded values differ from everything the stubs return: the nodes survive
+// only through the stored-nodes path (the placement read always fails here),
+// and the unknown key only if the space step merges instead of rebuilding.
+test("a re-install keeps stored nodes and unknown keys, and a broker-only run changes only broker", (t) => {
+  const space = spaceFixture(tempRoot(t));
   fs.mkdirSync(path.dirname(space.target), { recursive: true });
-  // A host configured before the broker field existed.
-  fs.writeFileSync(space.target, JSON.stringify({
-    spaceKey: "KB", spaceId: "space-1", spaceName: "Knowledge", nodes: { Kherep: "parent-1" },
-  }));
+  const seeded = {
+    spaceKey: "KB", spaceId: "space-1", spaceName: "Seeded Name",
+    nodes: { Kherep: "seeded-parent", Operations: "seeded-operations" }, operatorNote: "kept by every writer",
+  };
+  fs.writeFileSync(space.target, JSON.stringify(seeded));
 
   space.run("mac", "/Users/example/Kherep");
   const first = fs.readFileSync(space.target, "utf8");
   assert.deepEqual(stored(space.target), {
-    spaceKey: "KB", spaceId: "space-1", spaceName: "Knowledge",
-    broker: "node /Users/example/Kherep/tools/atl-confluence-ccoder.mts", nodes: { Kherep: "parent-1" },
+    ...seeded, spaceName: "Resolved Name", broker: "node /Users/example/Kherep/tools/atl-confluence-ccoder.mts",
   });
-
   space.run("mac", "/Users/example/Kherep");
   assert.equal(fs.readFileSync(space.target, "utf8"), first, "a second run changes nothing");
 
-  space.run("mac", "/Users/example/Moved");
-  assert.equal(stored(space.target).broker, "node /Users/example/Moved/tools/atl-confluence-ccoder.mts");
+  // A broker call now fails the run, so broker-only must not make one.
+  fs.writeFileSync(space.broker, "process.exit(9);\n");
+  const result = space.brokerOnly("mac", "/Users/example/Moved");
+  assert.equal(result.status, 0, String(result.stderr));
+  const moved = stored(space.target);
+  assert.equal(moved.broker, "node /Users/example/Moved/tools/atl-confluence-ccoder.mts");
+  const unchanged = `${JSON.stringify({ ...moved, broker: JSON.parse(first).broker }, null, 2)}\n`;
+  assert.equal(unchanged, first, "every key but broker is kept byte for byte, in place");
+});
+
+test("broker-only creates a missing file with broker alone and never overwrites an unreadable one", (t) => {
+  const space = spaceFixture(tempRoot(t));
+  const created = space.brokerOnly("win", WIN_WORKSPACE);
+  assert.equal(created.status, 0, String(created.stderr));
+  assert.deepEqual(stored(space.target), {
+    broker: `node ${commandForm("win", WIN_WORKSPACE)}/tools/atl-confluence-ccoder.mts`,
+  });
+
+  fs.writeFileSync(space.target, "not json");
+  const refused = space.brokerOnly("win", WIN_WORKSPACE);
+  assert.notEqual(refused.status, 0);
+  assert.equal(String(refused.stderr), "FATAL: Existing Confluence space configuration could not be read.\n");
+  assert.equal(fs.readFileSync(space.target, "utf8"), "not json");
 });
 
 test("the Claude runtime cannot be configured without the broker inputs", () => {
@@ -170,4 +207,5 @@ test("the Claude runtime cannot be configured without the broker inputs", () => 
   assert.throws(() => parseArgs([...base, "--profile", "mac"]), /--workspace/);
   assert.throws(() => parseArgs([...base, "--profile", "linux", "--workspace", "/w"]), /--profile <win\|mac>/);
   assert.equal(parseArgs(["--out", "target.json", "--runtime", "codex"]).broker, undefined);
+  assert.throws(() => parseArgs(["--out", "target.json", "--runtime", "codex", "--broker-only"]), /Claude-only/);
 });

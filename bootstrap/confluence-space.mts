@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { PLACEMENT_NODES, readSpacePages, resolvePlacement } from "./confluence-nodes.mts";
 import { renderClaudeBroker } from "./render-profile-paths.mts";
+import { isRecord, type JsonRecord } from "./shape.mts";
 
 const ENV_KEY = "KHEREP_CONFLUENCE_SPACE_KEY";
 
@@ -18,6 +19,8 @@ export interface SetupArgs {
   authorizeObservationPublishing: boolean;
   /** Claude only: the absolute broker command claude-obs runs, stored as `broker`. */
   broker?: string;
+  /** Claude only: merge `broker` into the file and touch nothing else. */
+  brokerOnly?: boolean;
 }
 
 export interface BrokerIO {
@@ -44,6 +47,10 @@ export function parseArgs(argv: string[]): SetupArgs {
     authorizeObservationPublishing: argv.includes("--authorize-observation-publishing"),
   };
   if (runtime === "claude") args.broker = claudeBroker(argValue(argv, "--profile"), argValue(argv, "--workspace"));
+  if (argv.includes("--broker-only")) {
+    if (runtime !== "claude") throw new Error("--broker-only is Claude-only: only claude-obs reads a broker command.");
+    args.brokerOnly = true;
+  }
   return args;
 }
 
@@ -86,17 +93,27 @@ function storedSpaceKey(file: string | undefined): string | undefined {
   }
 }
 
-function storedObservationPublishingAuthority(file: string, resolvedSpaceId: string): boolean {
-  if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) return false;
+// The existing file as an object, or {} when there is none. Every write merges
+// into it instead of rebuilding it, so keys another writer added survive
+// (issue #13). A file that exists but is no readable JSON object stops the
+// step: a merge over it would silently drop what it holds.
+function storedConfig(file: string): JsonRecord {
+  if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) return {};
   try {
-    const stored = JSON.parse(fs.readFileSync(file, "utf8")) as {
-      observationPublishingAuthorized?: unknown;
-      spaceId?: unknown;
-    };
-    return stored.observationPublishingAuthorized === true
-      && stored.spaceId === resolvedSpaceId;
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (isRecord(parsed)) return parsed;
   } catch {
-    throw new Error("Existing Confluence space configuration could not be read.");
+    // Unreadable or not JSON: refused below.
+  }
+  throw new Error("Existing Confluence space configuration could not be read.");
+}
+
+function writeConfig(file: string, config: JsonRecord): void {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  } catch {
+    throw new Error("Confluence space configuration could not be written.");
   }
 }
 
@@ -147,20 +164,10 @@ export function resolveSpace(
   return { id, key: field("key") || key, name: field("name") };
 }
 
-function storedNodes(file: string, resolvedSpaceId: string): Record<string, string> {
-  if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) return {};
-  try {
-    const stored = JSON.parse(fs.readFileSync(file, "utf8")) as {
-      spaceId?: unknown;
-      nodes?: unknown;
-    };
-    if (stored.spaceId !== resolvedSpaceId || !stored.nodes || typeof stored.nodes !== "object"
-      || Array.isArray(stored.nodes)) return {};
-    return Object.fromEntries(Object.entries(stored.nodes).filter((entry): entry is [string, string] =>
-      typeof entry[1] === "string"));
-  } catch {
-    throw new Error("Existing Confluence space configuration could not be read.");
-  }
+function storedNodes(stored: JsonRecord, resolvedSpaceId: string): Record<string, string> {
+  if (stored.spaceId !== resolvedSpaceId || !isRecord(stored.nodes)) return {};
+  return Object.fromEntries(Object.entries(stored.nodes).filter((entry): entry is [string, string] =>
+    typeof entry[1] === "string"));
 }
 
 async function resolveNodes(
@@ -184,24 +191,29 @@ async function main(argv: string[]): Promise<void> {
   if (args.authorizeObservationPublishing && args.runtime !== "codex") {
     throw new Error("Observation publishing authority is Codex-only.");
   }
+  if (args.brokerOnly && args.broker) {
+    // Issue #13. install.sh runs this on every Claude install, apart from the
+    // credential and space steps: no broker call, no prompt, only `broker` changes.
+    writeConfig(args.out, { ...storedConfig(args.out), broker: args.broker });
+    process.stdout.write("confluence broker: configured\n");
+    return;
+  }
   const requested = selectSpaceKey({ target: args.out, existing: args.existing });
   const space = resolveSpace(requested, args.runtime);
+  // Publishing authority is re-derived for the resolved space, never carried by the merge.
+  const { observationPublishingAuthorized: storedAuthority, ...kept } = storedConfig(args.out);
   const observationPublishingAuthorized = args.authorizeObservationPublishing
-    || storedObservationPublishingAuthority(args.out, space.id);
-  const nodes = await resolveNodes(space.id, args.runtime, storedNodes(args.out, space.id));
-  try {
-    fs.mkdirSync(path.dirname(args.out), { recursive: true });
-    fs.writeFileSync(args.out, `${JSON.stringify({
-      spaceKey: space.key,
-      spaceId: space.id,
-      spaceName: space.name,
-      ...(args.broker ? { broker: args.broker } : {}),
-      nodes,
-      ...(observationPublishingAuthorized ? { observationPublishingAuthorized: true } : {}),
-    }, null, 2)}\n`, "utf8");
-  } catch {
-    throw new Error("Confluence space configuration could not be written.");
-  }
+    || (storedAuthority === true && kept.spaceId === space.id);
+  const nodes = await resolveNodes(space.id, args.runtime, storedNodes(kept, space.id));
+  writeConfig(args.out, {
+    ...kept,
+    spaceKey: space.key,
+    spaceId: space.id,
+    spaceName: space.name,
+    ...(args.broker ? { broker: args.broker } : {}),
+    nodes,
+    ...(observationPublishingAuthorized ? { observationPublishingAuthorized: true } : {}),
+  });
   process.stdout.write("confluence space: configured\n");
   process.stdout.write(`placement nodes: ${Object.keys(nodes).length} of ${PLACEMENT_NODES.length} resolved\n`);
 }

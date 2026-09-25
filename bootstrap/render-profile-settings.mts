@@ -71,8 +71,9 @@ export function isManagedDisallowedPermission(value: unknown): boolean {
 // slashes. A rule whose forward-slash twin is in the same list is that obsolete
 // form and is dropped, so an upgrade does not grow the allowlist.
 function isObsoleteBackslashToolRule(value: string, allow: ReadonlySet<string>): boolean {
+  if (!value.startsWith("Bash(node ") || !value.includes("\\")) return false;
   const slashed = value.replace(/\\/g, "/");
-  return slashed !== value && value.startsWith("Bash(node ") && slashed.includes("/tools/") && allow.has(slashed);
+  return slashed.includes("/tools/") && allow.has(slashed);
 }
 
 export function filterManagedDisallowedPermissions(settings: Settings): void {

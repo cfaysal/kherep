@@ -58,10 +58,11 @@ and a result without that line, as a failure it reports to the user in the same 
 read as a valid empty result.
 
 Observations are stored in the Confluence knowledge space configured for this host, read from
-`<runtime-home>/kherep/confluence.json` and resolved at install time. A host without that file
-writes nothing. On Claude the same file stores `broker`, the absolute broker command rendered from
-the values the permission rules are rendered from; `claude-obs` runs it exactly as stored and never
-derives a broker path from its working directory or repository. One page per observation.
+`<runtime-home>/kherep/confluence.json` and resolved at install time. A host without that file, or
+whose file names no space, writes nothing. On Claude the same file stores `broker`, the absolute
+broker command rendered on every install from the values the permission rules are rendered from;
+`claude-obs` runs it exactly as stored and never derives a broker path from its working directory or
+repository. One page per observation.
 Everything written is in English: titles, bodies and labels. Labels carry the axes, because a
 label belongs to a page and the evidence status has to stay filterable: `type-observation`, `evidence-<confirmed | assumed | refuted | superseded>`,
 `status-author-<model | verified | operator>`, `session-<id>`, `runtime-<claude-code | codex>-<win | mac>`,

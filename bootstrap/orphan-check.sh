@@ -21,8 +21,12 @@ BROKER="$HERE/../modules/atl-jira-brokers/atl-confluence-ccoder.mts"
 # writes no observations, so it has no orphans to report either.
 SPACE_FILE="$CLAUDE_HOME/kherep/confluence.json"
 [ -f "$SPACE_FILE" ] || { echo "SKIP: no knowledge space configured on this host"; exit 0; }
-SPACE_KEY="$(node -e 'const f=process.argv[1];try{process.stdout.write(String(JSON.parse(require("fs").readFileSync(f,"utf8")).spaceKey||""))}catch{}' "$SPACE_FILE")"
-[ -n "$SPACE_KEY" ] || { echo "FATAL: $SPACE_FILE names no spaceKey"; exit 2; }
+# Every install writes `broker` into this file, the space keys only once the
+# space step resolved (issue #13): a file without spaceKey is a host without a
+# space. A file that cannot be read is a check that could not run.
+SPACE_KEY="$(node -e 'const f=process.argv[1];let c;try{c=JSON.parse(require("fs").readFileSync(f,"utf8"))}catch{process.exit(3)}process.stdout.write(String((c&&c.spaceKey)||""))' "$SPACE_FILE")" ||
+  { echo "FATAL: $SPACE_FILE could not be read"; exit 2; }
+[ -n "$SPACE_KEY" ] || { echo "SKIP: no knowledge space configured on this host"; exit 0; }
 
 REPORT_DIR="$CLAUDE_HOME/.cache/orphan-check"
 REPORT="$REPORT_DIR/last-report.txt"
