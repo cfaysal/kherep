@@ -34,7 +34,7 @@ export async function main(argv: string[]): Promise<number> {
   if (group === "daemon") {
     const config = readConfig(paths.config);
     if (!config) throw new Error(`not enrolled (${paths.config}); run "kherep-node node onboard" first`);
-    const daemon = startDaemon(config);
+    const daemon = startDaemon(config, paths.inbox);
     const stop = () => daemon.stop();
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);

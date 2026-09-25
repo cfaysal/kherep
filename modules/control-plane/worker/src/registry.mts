@@ -7,7 +7,7 @@ import type { Env } from "./env.mts";
 import { routeEffects } from "./message-routing.mts";
 import { MessageStore, type MessageEffects, type MessageRecord, type NewMessage, type SendResult } from "./message-store.mts";
 import {
-  ENROLLMENT_TTL_DEFAULT_S, ENROLLMENT_TTL_MAX_S, ENROLLMENT_TTL_MIN_S, NODE_COLUMNS, REGISTRY_SCHEMA, toNodeRow,
+  ENROLLMENT_TTL_DEFAULT_S, ENROLLMENT_TTL_MAX_S, ENROLLMENT_TTL_MIN_S, migrateRegistry, NODE_COLUMNS, REGISTRY_SCHEMA, toNodeRow,
   type NodeRow, type NodeStatus,
 } from "./registry-schema.mts";
 
@@ -25,6 +25,7 @@ export class Registry extends DurableObject<Env> {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.sql.exec(REGISTRY_SCHEMA);
+    migrateRegistry(this.sql);
     this.messages = new MessageStore(this.sql, (...args) => this.audit(...args), (nodeId) => this.capabilitiesOf(nodeId));
   }
 
@@ -90,10 +91,14 @@ export class Registry extends DurableObject<Env> {
   }
 
   listSessions(): (SessionInfo & { nodeId: string; updatedAt: number })[] {
-    return this.sql.exec("SELECT node_id, session_id, runtime, state, started_at, updated_at FROM sessions ORDER BY node_id, session_id")
-      .toArray().map((r) => ({
+    return this.sql.exec(`SELECT node_id, session_id, runtime, state, started_at, name, cwd, kind, updated_at FROM sessions
+      ORDER BY node_id, session_id`).toArray().map((r) => ({
         nodeId: String(r.node_id), sessionId: String(r.session_id), runtime: String(r.runtime), state: String(r.state),
-        ...(r.started_at === null ? {} : { startedAt: String(r.started_at) }), updatedAt: Number(r.updated_at),
+        ...(r.started_at === null ? {} : { startedAt: String(r.started_at) }),
+        ...(r.name === null ? {} : { name: String(r.name) }),
+        ...(r.cwd === null ? {} : { cwd: String(r.cwd) }),
+        ...(r.kind === null ? {} : { kind: String(r.kind) }),
+        updatedAt: Number(r.updated_at),
       }));
   }
 
@@ -120,8 +125,9 @@ export class Registry extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       this.sql.exec("DELETE FROM sessions WHERE node_id = ?", nodeId);
       for (const s of sessions) {
-        this.sql.exec("INSERT OR REPLACE INTO sessions (node_id, session_id, runtime, state, started_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-          nodeId, s.sessionId, s.runtime, s.state, s.startedAt ?? null, now);
+        this.sql.exec(`INSERT OR REPLACE INTO sessions (node_id, session_id, runtime, state, started_at, name, cwd, kind, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          nodeId, s.sessionId, s.runtime, s.state, s.startedAt ?? null, s.name ?? null, s.cwd ?? null, s.kind ?? null, now);
       }
     });
   }
