@@ -72,9 +72,13 @@ function message(error: unknown): string { return error instanceof Error ? error
     HOME: "/Users/tester", KHEREP_WORKSPACE: "/Volumes/new", OTHER_VENDOR_WORKSPACE: "/Volumes/old",
   });
   check("canonical workspace ignores another vendor variable", preferredPaths.workspace === "/Volumes/new");
-  const defaultWinPaths = portablePaths("win", { HOME: "C:\\Users\\tester" });
-  check("Windows defaults derive only from HOME", defaultWinPaths.workspace === "C:\\Users\\tester\\Kherep"
-    && defaultWinPaths.credentials === "C:\\Users\\tester\\.kherep\\credentials");
+  // The win profile resolves real files with the host's path API (it is also the
+  // profile of every non-Darwin host), so a drive-letter HOME is only a path on a
+  // Windows host. Elsewhere the same contract is checked with a host-form HOME.
+  const winHome = process.platform === "win32" ? "C:\\Users\\tester" : "/home/tester";
+  const defaultWinPaths = portablePaths("win", { HOME: winHome });
+  check("Windows defaults derive only from HOME", defaultWinPaths.workspace === path.join(winHome, "Kherep")
+    && defaultWinPaths.credentials === path.join(winHome, ".kherep", "credentials"));
   for (const suffix of ["WORKSPACE", "CREDENTIALS_ROOT", "LOCAL_OUTPUT_ROOT"] as const) {
     let rejected = false;
     try { portablePaths("mac", { HOME: "/Users/tester", [`KHEREP_${suffix}`]: "", [`OTHER_VENDOR_${suffix}`]: "/legacy" }); }
