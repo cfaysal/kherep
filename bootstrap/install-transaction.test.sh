@@ -6,6 +6,29 @@ TMP="$(mktemp -d)"; ORIGINAL_PATH="$PATH"
 trap 'rm -rf "$TMP"' EXIT
 fail() { echo "TRANSACTION TEST FAIL: $*" >&2; exit 1; }
 same() { cmp "$1" "$2" >/dev/null || fail "bytes differ: $1"; }
+
+# Issue #23. install.sh writes core.hooksPath at the global scope, and at the
+# system scope on an opt-in. Whatever the caller's environment, every run here
+# writes both scopes to throwaway files and sees no inherited KHEREP_* (host
+# workspace, credential files, install switches). The host's real values, read
+# through the caller's own environment, must be byte-identical afterwards.
+HOST_GIT_ENV=(HOME="$HOME")
+[ -z "${GIT_CONFIG_SYSTEM+x}" ] || HOST_GIT_ENV+=("GIT_CONFIG_SYSTEM=$GIT_CONFIG_SYSTEM")
+[ -z "${GIT_CONFIG_GLOBAL+x}" ] || HOST_GIT_ENV+=("GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL")
+host_hooks_paths() {
+  local scope
+  for scope in system global; do
+    printf '%s=' "$scope"
+    env -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_GLOBAL "${HOST_GIT_ENV[@]}" \
+      git config "--$scope" --get core.hooksPath || echo "<exit $?>"
+  done
+}
+host_hooks_paths > "$TMP/host-hooks-path.before"
+# Native git on Windows needs the drive form of the throwaway path.
+git_config_dir="$TMP"; ! command -v cygpath >/dev/null 2>&1 || git_config_dir="$(cygpath -m "$TMP")"
+export GIT_CONFIG_SYSTEM="$git_config_dir/gitconfig-system" GIT_CONFIG_GLOBAL="$git_config_dir/gitconfig-global"
+unset $(compgen -e | grep '^KHEREP_' || true)
+
 latest() {
   local dirs=("$1"/.claude/backups/bootstrap/install-*) last
   last="${dirs[${#dirs[@]}-1]}"
@@ -521,6 +544,7 @@ JS
   grep -q 'install: DONE WITH ERRORS' "$ROOT/log" || fail "failing deps phase lacks the DONE WITH ERRORS verdict"
   grep -q "install: git core.hooksPath -> $C/kherep/githooks" "$ROOT/log" ||
     fail "gitconfig phase was skipped after the deps failure"
+  [ ! -e "$GIT_CONFIG_SYSTEM" ] || fail "an install without KHEREP_INSTALL_SYSTEM_HOOKSPATH=1 wrote the system scope"
   b="$(latest "$H")"
   [ -f "$b/COMMITTED" ] || fail "deps failure left the transaction uncommitted"
   [ ! -e "$b/ROLLED-BACK" ] && [ ! -e "$b/ACTIVE" ] || fail "deps failure rolled the managed files back"
@@ -535,4 +559,7 @@ JS
 
 test_library; test_retire; test_retire_declared; test_lock; test_preflights; test_path_guards; test_partial; test_term; test_commit_signal; test_secrets
 test_deps_failure; test_default_confluence_brokers; test_upgrade_retires_mpac
+host_hooks_paths > "$TMP/host-hooks-path.after"
+cmp -s "$TMP/host-hooks-path.before" "$TMP/host-hooks-path.after" ||
+  fail "the host's system or global core.hooksPath changed during the run"
 echo 'TRANSACTION TEST PASS'

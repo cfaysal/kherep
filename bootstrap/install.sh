@@ -437,13 +437,26 @@ elif [ -f "$GITHOOKS_DIR/commit-msg" ]; then
     echo "install: WARNING global core.hooksPath could not be set - the work-item rule is NOT enforced for this account"
     post_rc=1
   fi
-  # System level binds EVERY account on the host from one place and needs
-  # elevation. Attempted and allowed to fail: on an elevated run it restores the
-  # binding after a machine rebuild, on a normal run it is a no-op. Set by hand
-  # when available; anchored here so it is reproducible.
-  git config --system core.hooksPath "$GITHOOKS_DIR" 2>/dev/null &&
-    echo "install: git core.hooksPath -> $GITHOOKS_DIR (system, binds EVERY account)" ||
-    echo "install: system-level core.hooksPath not writable (no elevation) - the repo-local binding below is what covers other accounts"
+  # System level binds EVERY account on the host from one place. A writable
+  # system file is no consent: Git for Windows can ship one that a non-elevated
+  # shell may write, and a normal install then silently re-pointed the hook for
+  # every account (issue #23). The value is only read, and a difference reported,
+  # unless KHEREP_INSTALL_SYSTEM_HOOKSPATH is exactly 1. Git for Windows stores
+  # the drive form of a /c/... path, so compare like the repo-local binding does.
+  source "$REPO_ROOT/bootstrap/bind-repo-hookspath.sh"
+  SYSTEM_HOOKS_PATH="$(git config --system --get core.hooksPath 2>/dev/null || true)"
+  if [ "$(norm_hookspath "$SYSTEM_HOOKS_PATH")" != "$(norm_hookspath "$GITHOOKS_DIR")" ]; then
+    SYSTEM_HOOKS_SHOWN="'$SYSTEM_HOOKS_PATH'"
+    [ -n "$SYSTEM_HOOKS_PATH" ] || SYSTEM_HOOKS_SHOWN="unset"
+    if [ "$(kherep_env INSTALL_SYSTEM_HOOKSPATH 0)" != "1" ]; then
+      echo "install: system core.hooksPath is $SYSTEM_HOOKS_SHOWN, not '$GITHOOKS_DIR' - left unchanged; KHEREP_INSTALL_SYSTEM_HOOKSPATH=1 replaces it for EVERY account on this host"
+    elif git config --system core.hooksPath "$GITHOOKS_DIR"; then
+      echo "install: git core.hooksPath -> $GITHOOKS_DIR (system, binds EVERY account; replaced $SYSTEM_HOOKS_SHOWN)"
+    else
+      echo "install: WARNING system core.hooksPath could not be set despite KHEREP_INSTALL_SYSTEM_HOOKSPATH=1 (still $SYSTEM_HOOKS_SHOWN; writing it usually needs elevation)"
+      post_rc=1
+    fi
+  fi
   # A global setting lives in one account's home and binds only that account.
   # A repository-local pointer is read by whichever account runs git in that
   # repository. Advisory like record-install-source: guarded
