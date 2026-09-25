@@ -1,10 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 
 import {
-  isCommandResultBody, isNodeId, isPhase1Command, isRegisterBody, isRuntimeList, isSessionList,
-  makeEnvelope, NONCE_TTL_MS, parseEnvelope, PING_FRAME, PONG_FRAME, type Envelope, type MessageType, type Phase1Command,
+  isCommandResultBody, isNodeId, isPhase1Command, isRegisterBody, isRuntimeList, isSessionCommand, isSessionList,
+  makeEnvelope, NONCE_TTL_MS, parseEnvelope, PING_FRAME, PONG_FRAME, type Envelope, type MessageType, type NodeCommand,
 } from "../../protocol.mts";
 import { isDirectoryGetBody, isMessageSendBody, isNodeMessageStatusBody } from "../../protocol-messages.mts";
+import { isCommandArgs } from "../../protocol-tasks.mts";
+import { handleTaskFrame } from "./task-frames.mts";
 import { randomToken } from "./crypto.mts";
 import { registryStub, type Env } from "./env.mts";
 import { checkAuth, CLOSE, type Attachment } from "./handshake.mts";
@@ -104,15 +106,18 @@ export class NodeSession extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(now + ALARM_INTERVAL_MS);
   }
 
-  // Operator API: queue one Phase 1 command. Refuses anything outside the
-  // allowlist even though the Worker already checked it.
-  async enqueue(command: Phase1Command): Promise<EnqueueResult> {
-    if (!isPhase1Command(command)) return { ok: false, error: "command not allowed" };
+  // Operator API: queue one Phase 1 command, or (task dispatch, item 5) one
+  // session command with its args. Refuses anything else, and args that do
+  // not validate for the command, even though the Worker already checked them.
+  async enqueue(command: NodeCommand, args?: Record<string, unknown>): Promise<EnqueueResult> {
+    if (!isPhase1Command(command) && !isSessionCommand(command)) return { ok: false, error: "command not allowed" };
+    if (!isCommandArgs(command, args)) return { ok: false, error: "invalid command arguments" };
     if (this.store.get("status") === "revoked") return { ok: false, error: "node revoked" };
     const commandId = crypto.randomUUID();
-    const seq = this.store.appendCommand(commandId, command);
+    const seq = this.store.appendCommand(commandId, command, args);
     const ws = this.authedSocket();
-    if (ws) ws.send(JSON.stringify(makeEnvelope("command", { commandId, command }, seq, this.lastNodeSeq(ws), commandId)));
+    const body = { commandId, command, ...(args === undefined ? {} : { args }) };
+    if (ws) ws.send(JSON.stringify(makeEnvelope("command", body, seq, this.lastNodeSeq(ws), commandId)));
     return { ok: true, commandId, seq, delivered: ws !== null };
   }
 
@@ -187,7 +192,8 @@ export class NodeSession extends DurableObject<Env> {
         if (!isMessageSendBody(body)) return this.sendControl(ws, "error", { error: "invalid message.send body" });
         // The sender is the authenticated connection, never a field of the body.
         const result = await registry.sendMessage({ messageId: body.messageId, from: { nodeId, session: body.fromSession },
-          to: { nodeId: body.to.nodeId, session: body.to.session }, text: body.text, inReplyTo: body.inReplyTo }, `node:${nodeId}`);
+          to: { nodeId: body.to.nodeId, session: body.to.session }, text: body.text, inReplyTo: body.inReplyTo, taskId: body.taskId },
+        `node:${nodeId}`);
         if (!result.ok) return this.sendControl(ws, "error", { error: result.error, messageId: body.messageId });
         this.sendControl(ws, "message.status", { ...result.status });
         return routeEffects(this.env, result.effects, this.local(ws, nodeId));
@@ -198,6 +204,9 @@ export class NodeSession extends DurableObject<Env> {
       case "directory.get":
         if (!isDirectoryGetBody(body)) return this.sendControl(ws, "error", { error: "invalid directory.get body" });
         return this.sendControl(ws, "directory", { ...await registry.directory() });
+      case "task.report":
+      case "task.request":
+        return handleTaskFrame(this.env, nodeId, envelope.type, body, (type, reply) => this.sendControl(ws, type, reply));
       case "event":
       case "error":
         return; // activity already recorded

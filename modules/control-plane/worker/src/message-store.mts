@@ -36,7 +36,7 @@ export interface MessageRecord {
   state: MessageState; reason: string | null; createdAt: number; updatedAt: number; expiresAt: number;
 }
 
-export interface NewMessage { messageId: string; from: MessageAddress; to: MessageAddress; text: string; inReplyTo?: string }
+export interface NewMessage { messageId: string; from: MessageAddress; to: MessageAddress; text: string; inReplyTo?: string; taskId?: string }
 
 // Frames the caller must push to nodes after the SQL work is done.
 export interface MessageEffects {
@@ -75,6 +75,7 @@ function deliverBodyOf(row: Record<string, SqlStorageValue>): MessageDeliverBody
     messageId: String(row.id), from: { nodeId: String(row.from_node), session: String(row.from_session) },
     toSession: String(row.to_session), text: String(row.text),
     ...(row.in_reply_to === null ? {} : { inReplyTo: String(row.in_reply_to) }),
+    ...(row.task_id === null || row.task_id === undefined ? {} : { taskId: String(row.task_id) }),
     createdAt: new Date(Number(row.created_at)).toISOString(),
   };
 }
@@ -92,6 +93,9 @@ export class MessageStore {
     this.audit = audit;
     this.capabilities = capabilities;
     this.sql.exec(SCHEMA);
+    // Item 5: the task a message belongs to, added to an existing table.
+    const columns = this.sql.exec("PRAGMA table_info(messages)").toArray().map((c) => String(c.name));
+    if (!columns.includes("task_id")) this.sql.exec("ALTER TABLE messages ADD COLUMN task_id TEXT");
   }
 
   // Records one message as queued, or as refused when the target cannot take
@@ -112,14 +116,15 @@ export class MessageStore {
     const state: MessageState = reason === null ? "queued" : "refused";
 
     this.sql.exec(`INSERT INTO messages (id, from_node, from_session, to_node, to_session, in_reply_to, text, state, reason,
-      created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      created_at, updated_at, expires_at, task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       message.messageId, message.from.nodeId, message.from.session, target, message.to.session, message.inReplyTo ?? null,
-      state === "queued" ? message.text : null, state, reason, now, now, now + MESSAGE_TTL_MS);
+      state === "queued" ? message.text : null, state, reason, now, now, now + MESSAGE_TTL_MS, message.taskId ?? null);
     this.audit(actor, "message.send", target, { messageId: message.messageId, toSession: message.to.session, state, reason });
     if (state === "queued") {
       effects.deliveries.push({ nodeId: target, body: {
         messageId: message.messageId, from: { nodeId: message.from.nodeId, session: message.from.session }, toSession: message.to.session, text: message.text,
-        ...(message.inReplyTo === undefined ? {} : { inReplyTo: message.inReplyTo }), createdAt: new Date(now).toISOString(),
+        ...(message.inReplyTo === undefined ? {} : { inReplyTo: message.inReplyTo }),
+        ...(message.taskId === undefined ? {} : { taskId: message.taskId }), createdAt: new Date(now).toISOString(),
       } });
     }
     return { ok: true, status: statusBody(message.messageId, state, reason), effects };
@@ -141,7 +146,7 @@ export class MessageStore {
   // Queued messages for a node that just authenticated, oldest first.
   pendingFor(nodeId: string, now: number): MessageEffects {
     const effects = this.expireDue(now);
-    const rows = this.sql.exec(`SELECT id, from_node, from_session, to_session, in_reply_to, text, created_at FROM messages
+    const rows = this.sql.exec(`SELECT id, from_node, from_session, to_session, in_reply_to, text, created_at, task_id FROM messages
       WHERE to_node = ? AND state = 'queued' ORDER BY created_at, rowid`, nodeId).toArray();
     for (const row of rows) effects.deliveries.push({ nodeId, body: deliverBodyOf(row) });
     return effects;

@@ -30,6 +30,8 @@ export function configRoot(env: NodeJS.ProcessEnv = process.env, platform: NodeJ
 export interface NodePaths {
   dir: string; config: string; privateKey: string; policy: string; inbox: string;
   outbox: string; sent: string; directory: string; sessions: string; directoryRequest: string; codexSessions: string;
+  // Item 5: the tasks this node started, the task reports and task requests the daemon sends.
+  tasks: string; taskReports: string; taskRequests: string;
 }
 
 export function nodePaths(root: string = configRoot()): NodePaths {
@@ -46,6 +48,9 @@ export function nodePaths(root: string = configRoot()): NodePaths {
     sessions: path.join(dir, "sessions.json"),
     directoryRequest: path.join(dir, "directory.request"),
     codexSessions: path.join(dir, "codex-sessions"),
+    tasks: path.join(dir, "tasks"),
+    taskReports: path.join(dir, "task-reports"),
+    taskRequests: path.join(dir, "task-requests"),
   };
 }
 

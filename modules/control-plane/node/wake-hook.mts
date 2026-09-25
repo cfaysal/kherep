@@ -11,6 +11,7 @@ import { isMainModule } from "./deliver-hook.mts";
 import { localSessionName } from "./exchange.mts";
 import { getMessage, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
 import { loadPolicy, wakeAllowed } from "./policy.mts";
+import { taskForSession } from "./task-records.mts";
 
 // Wakes an idle Claude Code session when a peer message arrives (issue #31).
 // Installed with "asyncRewake": true on Stop and on UserPromptSubmit, with the
@@ -85,8 +86,9 @@ function rememberStuck(paths: NodePaths, sessionId: string, ids: string[]): void
 
 // fresh: accepted records received after the grace period. stuck: records left
 // offered by a turn that ended without Stop, each woken for once at most.
-function pending(paths: NodePaths, refs: string[], sessionId: string, startedAt: number, now: number) {
-  const mine = sessionInbox(paths, refs);
+// With taskId (a task grant) only the records of that task count.
+function pending(paths: NodePaths, refs: string[], sessionId: string, startedAt: number, now: number, taskId?: string) {
+  const mine = sessionInbox(paths, refs).filter((r) => taskId === undefined || r.taskId === taskId);
   const fresh = mine.filter((r) => r.state === "accepted" && Date.parse(r.receivedAt) > startedAt + WAKE_GRACE_MS);
   const woken = stuckWoken(paths, sessionId);
   const stuck = now < startedAt + WAKE_GRACE_MS ? [] : mine.filter((r) => r.state === "offered" && offerEnded(r, now)
@@ -109,12 +111,17 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     audit(paths, now(), sessionId, [], "disabled");
     return quiet;
   }
-  // No wake section, or a malformed one: this node does not wake sessions.
+  // No wake section, or a malformed one, and no task grant: this node does not
+  // wake the session. Task grant (item 5): a session this node started for a
+  // task may be woken by messages of that task, listed or not; the budget and
+  // the permission mode below still apply.
   const policy = loadPolicy(readConfig(paths.config)?.policyFile ?? paths.policy);
-  if (!policy.wake) return quiet;
+  const grant = policy.sessions?.enabled ? taskForSession(paths, sessionId)?.taskId : undefined;
+  if (!policy.wake && !grant) return quiet;
   const name = localSessionName(paths, sessionId);
   const refs = name === undefined ? [sessionId] : [sessionId, name];
-  if (!wakeAllowed(policy, refs)) {
+  const listed = wakeAllowed(policy, refs);
+  if (!listed && !grant) {
     audit(paths, now(), sessionId, [], "not-allowlisted");
     return quiet;
   }
@@ -148,7 +155,7 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     // listener idle or the turn cannot still run; a turn that ends with Stop
     // replaces this listener.
     const idle = held.event === "Stop" || held.idleAt !== undefined || now() >= mine.startedAt + REOFFER_AFTER_MS;
-    const found = idle ? pending(paths, refs, sessionId, mine.startedAt, now()) : { fresh: [], stuck: [] };
+    const found = idle ? pending(paths, refs, sessionId, mine.startedAt, now(), listed ? undefined : grant) : { fresh: [], stuck: [] };
     const deep = found.fresh.filter((r) => atReplyLimit(r) && !limited.has(r.messageId));
     if (deep.length > 0) {
       audit(paths, now(), sessionId, deep.map((r) => r.messageId), "depth-limit");

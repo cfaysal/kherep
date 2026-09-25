@@ -1,7 +1,9 @@
 import fs from "node:fs";
 
-import { isNodeId, isPhase1Command, PHASE1_COMMANDS, type Phase1Command } from "../protocol.mts";
+import { isNodeId, isPhase1Command, isSessionCommand, PHASE1_COMMANDS, type NodeCommand, type Phase1Command } from "../protocol.mts";
 import { isSessionRef, MESSAGING_CAPABILITY, OPERATOR_NODE_ID } from "../protocol-messages.mts";
+import { DELEGATE_ACCEPT_CAPABILITY, DELEGATE_REQUEST_CAPABILITY, SESSIONS_CAPABILITY } from "../protocol-tasks.mts";
+import { parseSessionsPolicy, type SessionsPolicy } from "./session-policy.mts";
 
 // Local allowlist (issue #5, design section 4). The node refuses any command
 // outside this list even when it arrives authenticated from the control plane.
@@ -16,6 +18,7 @@ export interface NodePolicy {
   allowedCommands: Phase1Command[];
   messaging?: { accept: AcceptRule[] };
   wake?: { sessions: string[] };
+  sessions?: SessionsPolicy;
 }
 
 export const DEFAULT_POLICY: NodePolicy = { version: 1, allowedCommands: [...PHASE1_COMMANDS] };
@@ -35,18 +38,22 @@ export function loadPolicy(file: string): NodePolicy {
     return denyAll();
   }
   try {
-    const value = JSON.parse(text) as { version?: unknown; allowedCommands?: unknown; messaging?: unknown; wake?: unknown };
+    const value = JSON.parse(text) as { version?: unknown; allowedCommands?: unknown; messaging?: unknown; wake?: unknown;
+      sessions?: unknown };
     if (value.version !== 1 || !Array.isArray(value.allowedCommands)) return denyAll();
     const accept = parseAcceptRules(value.messaging);
     const wake = parseWake(value.wake);
+    const sessions = parseSessionsPolicy(value.sessions);
     return { version: 1, allowedCommands: value.allowedCommands.filter(isPhase1Command), ...(accept ? { messaging: { accept } } : {}),
-      ...(wake ? { wake } : {}) };
+      ...(wake ? { wake } : {}), ...(sessions ? { sessions } : {}) };
   } catch {
     return denyAll();
   }
 }
 
-export function isAllowed(policy: NodePolicy, command: unknown): command is Phase1Command {
+// Session commands run only when the sessions section enables them.
+export function isAllowed(policy: NodePolicy, command: unknown): command is NodeCommand {
+  if (isSessionCommand(command)) return policy.sessions?.enabled === true;
   return isPhase1Command(command) && policy.allowedCommands.includes(command);
 }
 
@@ -72,9 +79,13 @@ export function messagingEnabled(policy: NodePolicy): boolean {
 }
 
 // What this node advertises in register: its allowed commands, plus
-// messaging.v1 only when at least one accept rule exists.
+// messaging.v1 only when at least one accept rule exists, and the session
+// capabilities its sessions section enables.
 export function advertisedCapabilities(policy: NodePolicy): string[] {
-  return messagingEnabled(policy) ? [...policy.allowedCommands, MESSAGING_CAPABILITY] : [...policy.allowedCommands];
+  const s = policy.sessions;
+  return [...policy.allowedCommands, ...(messagingEnabled(policy) ? [MESSAGING_CAPABILITY] : []),
+    ...(s?.enabled ? [SESSIONS_CAPABILITY] : []), ...(s?.delegate.accept ? [DELEGATE_ACCEPT_CAPABILITY] : []),
+    ...(s?.delegate.request ? [DELEGATE_REQUEST_CAPABILITY] : [])];
 }
 
 // session "*" matches any local session, from "*" any sender. Otherwise both

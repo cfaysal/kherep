@@ -13,7 +13,7 @@ export const CLAUDE_RUNTIME = "claude-code";
 export const LIST_TIMEOUT_MS = 10_000;
 const MAX_SESSIONS = 512;
 
-export interface ExecOptions { timeout: number; windowsVerbatimArguments?: boolean }
+export interface ExecOptions { timeout: number; windowsVerbatimArguments?: boolean; cwd?: string }
 // Runs an executable and resolves with its stdout.
 export type Exec = (file: string, args: string[], options: ExecOptions) => Promise<string>;
 
@@ -43,12 +43,25 @@ const execFileText: Exec = (file, args, options) => new Promise((resolve, reject
 // never from a message, and one that cmd.exe would expand is refused.
 export function claudeInvocation(resolved: string, platform: NodeJS.Platform = process.platform,
   comSpec: string = process.env.ComSpec || "cmd.exe"): Invocation {
+  return claudeCall(resolved, ["agents", "--json"], LIST_TIMEOUT_MS, platform, comSpec);
+}
+
+// Arguments cmd.exe passes through unchanged: no spaces, quotes, % or
+// metacharacters. cmd.exe cannot carry arbitrary text safely, so a prompt
+// never qualifies and a session start through a .cmd shim is refused.
+const CMD_SAFE_ARG = /^[A-Za-z0-9._:\\/=-]+$/;
+
+// The same rule for any claude command line (session control, item 5).
+export function claudeCall(resolved: string, args: string[], timeout: number, platform: NodeJS.Platform = process.platform,
+  comSpec: string = process.env.ComSpec || "cmd.exe"): Invocation {
   if (platform === "win32" && /\.(cmd|bat)$/i.test(resolved)) {
     if (/["%]/.test(resolved)) throw new Error("claude path is not safe for cmd.exe");
-    return { file: comSpec, args: ["/d", "/s", "/c", `"${resolved}" agents --json`],
-      options: { timeout: LIST_TIMEOUT_MS, windowsVerbatimArguments: true } };
+    if (!args.every((arg) => CMD_SAFE_ARG.test(arg))) {
+      throw new Error("claude is a .cmd shim, and cmd.exe cannot pass this text safely; install the native claude executable");
+    }
+    return { file: comSpec, args: ["/d", "/s", "/c", `"${resolved}" ${args.join(" ")}`], options: { timeout, windowsVerbatimArguments: true } };
   }
-  return { file: resolved, args: ["agents", "--json"], options: { timeout: LIST_TIMEOUT_MS } };
+  return { file: resolved, args, options: { timeout } };
 }
 
 function optional(value: unknown, max: number): string | undefined {

@@ -3,6 +3,7 @@ import { isMessageId, isMessageText, isSessionRef, MAX_SESSION_REF, OPERATOR_NOD
 import { registryStub, sessionStub, type Env } from "./env.mts";
 import { fail, json, readJsonObject } from "./http.mts";
 import { routeEffects } from "./message-routing.mts";
+import { handleTasksApi } from "./tasks-api.mts";
 
 // Operator API, Phase 1 (issue #5, design section 5). The caller has already
 // passed Access JWT validation; `actor` is the verified identity.
@@ -24,6 +25,7 @@ export async function handleApi(request: Request, env: Env, actor: string): Prom
     return json(await registry.createEnrollment(actor, body.ttlSeconds as number | undefined), 201);
   }
 
+  if (parts[1] === "tasks") return handleTasksApi(parts, request, env, actor);
   if (parts[1] !== "nodes" || parts.length < 3) return fail(404, "not found");
   const nodeId = parts[2];
   if (!isNodeId(nodeId)) return fail(400, "invalid node id");

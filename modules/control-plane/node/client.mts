@@ -1,7 +1,10 @@
 import {
   isCommandBody, makeEnvelope, parseEnvelope, PONG_FRAME, type ChallengeBody, type Envelope, type MessageType,
-  type NodeFacts, type Phase1Command, type RuntimeInfo, type SessionInfo,
+  type NodeFacts, type Phase1Command, type RuntimeInfo, type SessionCommand, type SessionInfo,
 } from "../protocol.mts";
+import {
+  isCommandArgs, isTaskRequestResult, TASK_REQUEST_RESULT, type TaskReportBody, type TaskRequestBody, type TaskRequestResult,
+} from "../protocol-tasks.mts";
 import {
   isDirectoryBody, isMessageDeliverBody, isMessageId, isMessageStatusBody, type DirectoryBody, type MessageDeliverBody,
   type MessageSendBody, type MessageState,
@@ -9,7 +12,10 @@ import {
 import { signChallenge, type NodeIdentity } from "./identity.mts";
 import { acceptsMessage, advertisedCapabilities, isAllowed, type NodePolicy } from "./policy.mts";
 
-export type CommandHandlers = Record<Phase1Command, () => Promise<unknown>>;
+// Session commands (item 5) take their validated args; a node without them
+// answers ok:false.
+export type CommandHandlers = Record<Phase1Command, () => Promise<unknown>>
+  & Partial<Record<SessionCommand, (args: never) => Promise<unknown>>>;
 // The state of a message this node sent: a Worker state, or error when the
 // Worker rejected the message.send frame itself.
 export type SentState = MessageState | "error";
@@ -31,6 +37,8 @@ export interface ClientOptions {
   // Step 3a: the directory frame, and the state of a message this node sent.
   storeDirectory?: (body: DirectoryBody) => void;
   sentUpdate?: (messageId: string, state: SentState, reason?: string) => void;
+  // Item 5: the Worker's answer to a task.request this node sent.
+  taskRequestResult?: (result: TaskRequestResult) => void;
   log?: (line: string) => void;
   now?: () => number;
 }
@@ -69,6 +77,11 @@ export class NodeClient {
       case "challenge":
         return [this.frame("auth", this.authBody(envelope.body as unknown as ChallengeBody), false)];
       case "event":
+        if ((envelope.body as { name?: unknown }).name === TASK_REQUEST_RESULT && this.authenticated) {
+          const body = envelope.body;
+          if (isTaskRequestResult(body)) this.callback(body.requestId, () => this.options.taskRequestResult?.(body));
+          return [];
+        }
         if ((envelope.body as { name?: unknown }).name !== "auth.ok") return [];
         this.authenticated = true;
         this.lastSnapshot = null;
@@ -133,6 +146,16 @@ export class NodeClient {
     return this.authenticated ? [this.frame("message.status", { messageId, state, ...(reason ? { reason } : {}) })] : [];
   }
 
+  reportTask(body: TaskReportBody): string[] {
+    return this.authenticated ? [this.frame("task.report", { ...body })] : [];
+  }
+
+  requestTask(body: TaskRequestBody): string[] {
+    const { requestId, title, text, requirements, directive, requestedBy } = body;
+    return this.authenticated
+      ? [this.frame("task.request", { requestId, title, text, requirements: { ...requirements }, directive, requestedBy })] : [];
+  }
+
   // A failing local write is logged; the frame loop goes on.
   private callback(what: string, run: () => void): void {
     try {
@@ -172,7 +195,7 @@ export class NodeClient {
 
   private async onCommand(envelope: Envelope): Promise<string[]> {
     if (!isCommandBody(envelope.body)) return [];
-    const { commandId, command } = envelope.body;
+    const { commandId, command, args } = envelope.body;
     // At-least-once delivery: a resent command that was already processed is
     // only acknowledged again, never executed twice.
     if (envelope.seq <= this.processedSeq) return [this.frame("command.ack", { commandId })];
@@ -182,8 +205,13 @@ export class NodeClient {
       out.push(this.frame("command.result", { commandId, ok: false, error: "rejected by local policy" }));
       return out;
     }
+    const handler = this.options.handlers[command] as ((args?: unknown) => Promise<unknown>) | undefined;
+    if (!isCommandArgs(command, args) || !handler) {
+      out.push(this.frame("command.result", { commandId, ok: false, error: handler ? "invalid command arguments" : "command not supported" }));
+      return out;
+    }
     try {
-      const result = await this.options.handlers[command]();
+      const result = await handler(args);
       out.push(this.frame("command.result", { commandId, ok: true, result }));
     } catch (error) {
       out.push(this.frame("command.result", { commandId, ok: false, error: String((error as Error).message ?? error).slice(0, 1024) }));

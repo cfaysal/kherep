@@ -29,6 +29,8 @@ export interface InboxRecord {
   toSession: string;
   text: string;
   inReplyTo?: string;
+  // Item 5: the task the message belongs to (task grant of the wake listener).
+  taskId?: string;
   createdAt: string;
   receivedAt: string;
   state: "accepted" | "offered" | "delivered" | "refused";
@@ -75,7 +77,8 @@ export function storeMessage(dir: string, body: MessageDeliverBody, now: number 
   ensureDir(dir);
   const record: InboxRecord = {
     messageId: body.messageId, from: { nodeId: body.from.nodeId, session: body.from.session }, toSession: body.toSession,
-    text: body.text, ...(body.inReplyTo ? { inReplyTo: body.inReplyTo } : {}), createdAt: body.createdAt,
+    text: body.text, ...(body.inReplyTo ? { inReplyTo: body.inReplyTo } : {}), ...(body.taskId ? { taskId: body.taskId } : {}),
+    createdAt: body.createdAt,
     receivedAt: new Date(now).toISOString(), state: "accepted", depth,
   };
   writeJsonAtomic(fileOf(dir, body.messageId), record);

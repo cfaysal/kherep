@@ -7,6 +7,8 @@ import type { Env } from "./env.mts";
 import { directoryBody } from "./directory.mts";
 import { routeEffects } from "./message-routing.mts";
 import { MessageStore, type MessageEffects, type MessageRecord, type NewMessage, type SendResult } from "./message-store.mts";
+import { TaskStore, type CreateResult, type NewTask, type TaskRow } from "./task-store.mts";
+import type { TaskReportBody } from "../../protocol-tasks.mts";
 import {
   ENROLLMENT_TTL_DEFAULT_S, ENROLLMENT_TTL_MAX_S, ENROLLMENT_TTL_MIN_S, migrateRegistry, NODE_COLUMNS, REGISTRY_SCHEMA, toNodeRow,
   type NodeRow, type NodeStatus,
@@ -21,6 +23,7 @@ export type EnrollResult = { ok: true; nodeId: string } | { ok: false; reason: "
 export class Registry extends DurableObject<Env> {
   private readonly sql: SqlStorage;
   private readonly messages: MessageStore;
+  private readonly tasks: TaskStore;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -28,6 +31,7 @@ export class Registry extends DurableObject<Env> {
     this.sql.exec(REGISTRY_SCHEMA);
     migrateRegistry(this.sql);
     this.messages = new MessageStore(this.sql, (...args) => this.audit(...args), (nodeId) => this.capabilitiesOf(nodeId));
+    this.tasks = new TaskStore(this.sql, (...args) => this.audit(...args));
   }
 
   audit(actor: string, action: string, target: string | null, detail: unknown = null): void {
@@ -161,6 +165,9 @@ export class Registry extends DurableObject<Env> {
   // ---- Messages (issue #31). The caller pushes the returned effects. -------
 
   async sendMessage(message: NewMessage, actor: string): Promise<SendResult> {
+    if (message.taskId !== undefined && !this.tasks.taskOnEitherNode(message.taskId, message.from.nodeId, message.to.nodeId)) {
+      return { ok: false, error: "unknown task for this message" };
+    }
     const result = this.ctx.storage.transactionSync(() => this.messages.send(message, actor, Date.now()));
     await this.armExpiry();
     return result;
@@ -176,6 +183,32 @@ export class Registry extends DurableObject<Env> {
 
   listMessages(nodeId: string | null, limit: number): MessageRecord[] {
     return this.messages.list(nodeId, limit);
+  }
+
+  // ---- Tasks (issue #31, item 5). The caller dispatches session.start. ----
+
+  createTask(input: NewTask): CreateResult {
+    return this.ctx.storage.transactionSync(() => this.tasks.create(input, Date.now()));
+  }
+
+  getTask(taskId: string): TaskRow | null {
+    return this.tasks.get(taskId);
+  }
+
+  listTasks(limit: number): TaskRow[] {
+    return this.tasks.list(limit);
+  }
+
+  reportTask(nodeId: string, body: TaskReportBody): boolean {
+    return this.ctx.storage.transactionSync(() => this.tasks.report(nodeId, body, Date.now()));
+  }
+
+  setTaskState(taskId: string, state: string, reason: string, actor: string): void {
+    this.tasks.setState(taskId, state, reason, actor, Date.now());
+  }
+
+  isTaskSession(nodeId: string, session: string): boolean {
+    return this.tasks.isTaskSession(nodeId, session);
   }
 
   // Expiry is checked on every message access and, so that the text of an
