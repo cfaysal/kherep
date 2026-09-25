@@ -26,6 +26,16 @@ increments the minor version; every other release increments the patch version.
   do not opt out; an absent, unreadable or invalid value keeps the rule. AI
   attribution trailers are still rejected in an opted-out repository.
 
+### Changed
+
+- The Claude user settings now set `attribution` with an empty `commit`, an
+  empty `pr` and `sessionUrl: false`, so Claude Code no longer instructs a
+  `Co-Authored-By` trailer in commit messages or an attribution line in pull
+  request descriptions. The object form is used because the shorthand
+  `attribution: false` needs Claude Code 2.1.281 or later, and older versions
+  discard the whole settings file. The existing commit guards are unchanged.
+  Reinstall to apply.
+
 ### Fixed
 
 - The Claude hooks `cbm-code-discovery-gate`, `cbm-session-reminder` and
