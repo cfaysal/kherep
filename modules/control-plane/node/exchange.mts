@@ -176,7 +176,7 @@ export function exchangeOptions(paths: NodePaths): Pick<ClientOptions, "storeDir
 
 function toSendBody(record: OutboxRecord): MessageSendBody | null {
   const body: MessageSendBody = { messageId: record.messageId, fromSession: record.fromSession, to: record.to, text: record.text,
-    ...(record.inReplyTo ? { inReplyTo: record.inReplyTo } : {}) };
+    ...(record.inReplyTo ? { inReplyTo: record.inReplyTo } : {}), ...(record.taskId ? { taskId: record.taskId } : {}) };
   return isMessageSendBody(body) ? body : null;
 }
 

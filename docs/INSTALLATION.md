@@ -89,6 +89,34 @@ The `research-stop` hook counts a Skill as a Central Brain lookup when its name 
 
 The optional encrypted-secrets phase requires an external bundle and key. Enable `SKIP_SECRETS=0` only after configuring and reviewing the destination.
 
+### Control-plane tasks
+
+An enrolled control-plane node can run tasks as Claude Code background sessions (details: [Tasks](../modules/control-plane/README.md#tasks)). The installer changes nothing for this; it stays off until the node's `policy.json` enables it. Prerequisites on the node: the daemon runs (`kherep-node daemon`), and the Claude CLI is installed as a native executable and signed in for the account the daemon runs as. A Windows npm shim (`claude.cmd`) cannot receive the task text safely through `cmd.exe`, so starts through it fail with that reason.
+
+Enable sessions in the node's `policy.json`, with the directory the sessions may work in as workspace root:
+
+```json
+{
+  "version": 1,
+  "allowedCommands": ["node.status", "runtime.list", "session.list"],
+  "sessions": { "enabled": true, "workspaceRoots": ["D:/work"] }
+}
+```
+
+Restart the daemon so it reads the policy and advertises `sessions.v1`. The limits default to the operator caps: at most 3 running task sessions, 10 starts per rolling day and 120 minutes per run, permission mode `auto` (also allowed: `default`, `acceptEdits`; `bypassPermissions` never). Codex is not supported yet. A session may request tasks only when its node sets `"delegate": { "request": true }` and the target node `"delegate": { "accept": true }`, and only on the operator's explicit directive in that session.
+
+Create and manage tasks through the Access-protected API, for example with `cloudflared access curl`:
+
+```sh
+cloudflared access curl https://control.example.com/api/tasks -X POST -H "content-type: application/json" \
+  --data '{"title": "Fix the flaky test", "text": "Fix the flaky SettingsChangeDetector test", "requirements": {"os": "win32", "cwd": "D:/work/repo"}}'
+cloudflared access curl https://control.example.com/api/tasks/<taskId>
+cloudflared access curl https://control.example.com/api/tasks/<taskId>/continue -X POST -H "content-type: application/json" --data '{"prompt": "Also add a regression test"}'
+cloudflared access curl https://control.example.com/api/tasks/<taskId>/stop -X POST
+```
+
+A 409 answer names why no node could take the task.
+
 ## Model and work-item policy
 
 Claude dispatch defaults to the aliases `opus`, `sonnet`, `haiku` and `fable`, with role-specific pins. Set `KHEREP_ALLOWED_MODELS` to a non-empty comma-separated replacement list. Set `KHEREP_AGENT_MODEL_POLICY` to a non-empty JSON object to override individual role pins.

@@ -1,4 +1,4 @@
-import { makeEnvelope, type CommandBody, type Envelope, type Phase1Command } from "../../protocol.mts";
+import { makeEnvelope, type CommandBody, type Envelope, type NodeCommand } from "../../protocol.mts";
 
 // Per-node SQLite state of a NodeSession: small key/value metadata, the
 // pending-command log (outbox) and the command history with results.
@@ -41,6 +41,10 @@ export class SessionStore {
   constructor(sql: SqlStorage) {
     this.sql = sql;
     this.sql.exec(SCHEMA);
+    // Item 5: session commands carry args. Kept only in the outbox, until the
+    // node acknowledges them, never in the command history.
+    const columns = this.sql.exec("PRAGMA table_info(outbox)").toArray().map((c) => String(c.name));
+    if (!columns.includes("args")) this.sql.exec("ALTER TABLE outbox ADD COLUMN args TEXT");
   }
 
   get(key: string): string | null {
@@ -54,11 +58,12 @@ export class SessionStore {
 
   // Server-to-node sequence numbers are only assigned to commands, the
   // messages that need at-least-once delivery. Control frames use seq 0.
-  appendCommand(commandId: string, command: Phase1Command): number {
+  appendCommand(commandId: string, command: NodeCommand, args?: Record<string, unknown>): number {
     const seq = Number(this.get("serverSeq") ?? "0") + 1;
     const now = Date.now();
     this.set("serverSeq", seq);
-    this.sql.exec("INSERT INTO outbox (seq, command_id, command, created_at) VALUES (?, ?, ?, ?)", seq, commandId, command, now);
+    this.sql.exec("INSERT INTO outbox (seq, command_id, command, created_at, args) VALUES (?, ?, ?, ?, ?)", seq, commandId, command, now,
+      args === undefined ? null : JSON.stringify(args));
     this.sql.exec("INSERT INTO commands (command_id, seq, command, state, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?)",
       commandId, seq, command, now, now);
     return seq;
@@ -68,8 +73,9 @@ export class SessionStore {
   // envelopes to (re)send. The envelope id is the command id, so a resend is
   // recognisable as the same command on the node.
   pendingEnvelopes(nodeAck: number): Envelope<CommandBody>[] {
-    return this.sql.exec("SELECT seq, command_id, command FROM outbox ORDER BY seq").toArray().map((row) =>
-      makeEnvelope<CommandBody>("command", { commandId: String(row.command_id), command: row.command as Phase1Command },
+    return this.sql.exec("SELECT seq, command_id, command, args FROM outbox ORDER BY seq").toArray().map((row) =>
+      makeEnvelope<CommandBody>("command", { commandId: String(row.command_id), command: row.command as NodeCommand,
+        ...(row.args === null ? {} : { args: JSON.parse(String(row.args)) as Record<string, unknown> }) },
         Number(row.seq), nodeAck, String(row.command_id)));
   }
 

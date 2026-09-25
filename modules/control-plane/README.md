@@ -1,6 +1,6 @@
 # Kherep Control Plane (Phase 1)
 
-A Cloudflare Worker that Kherep nodes connect to over an outbound WebSocket, plus the `kherep-node` daemon and CLI that runs on each node. Phase 1 covers enrollment, node identity, registration, liveness, a node/runtime/session registry and a fixed set of three read-only commands. Nothing in Phase 1 runs arbitrary commands on a node. The design and its decisions are recorded in GitHub issue #5. Phase 2 step 1 (GitHub issue #31) adds the messaging wire protocol and its routing and queue in the Worker. Step 2 adds Claude Code session discovery, the node's messaging policy and its inbox. Step 3a adds the session side: a directory of addressable sessions, the `msg` CLI a session uses to list, send, read and reply, and a Claude Code hook that hands inbox messages to their session. Step 3b has the Kherep installer wire the hook into Claude Code (see [Delivery hook](#delivery-hook)). Step 4 adds Codex sessions: the same hook, started with `--runtime codex`, records and serves Codex sessions, and the Codex installer wires it (see [Codex sessions](#codex-sessions)).
+A Cloudflare Worker that Kherep nodes connect to over an outbound WebSocket, plus the `kherep-node` daemon and CLI that runs on each node. Phase 1 covers enrollment, node identity, registration, liveness, a node/runtime/session registry and a fixed set of three read-only commands. Nothing in Phase 1 runs arbitrary commands on a node. The design and its decisions are recorded in GitHub issue #5. Phase 2 step 1 (GitHub issue #31) adds the messaging wire protocol and its routing and queue in the Worker. Step 2 adds Claude Code session discovery, the node's messaging policy and its inbox. Step 3a adds the session side: a directory of addressable sessions, the `msg` CLI a session uses to list, send, read and reply, and a Claude Code hook that hands inbox messages to their session. Step 3b has the Kherep installer wire the hook into Claude Code (see [Delivery hook](#delivery-hook)). Step 4 adds Codex sessions: the same hook, started with `--runtime codex`, records and serves Codex sessions, and the Codex installer wires it (see [Codex sessions](#codex-sessions)). Item 5 adds tasks: the operator, or a session acting on the operator's explicit directive, has a node start, stop or continue a Claude Code background session for a task (see [Tasks](#tasks)).
 
 ## Architecture
 
@@ -24,6 +24,9 @@ operator ----HTTPS behind Cloudflare Access--> Worker --> Registry / NodeSession
 | Directory | `worker/src/directory.mts` | The `directory` frame: non-revoked nodes and their sessions |
 | Session exchange | `node/exchange.mts` | The files the daemon shares with the session tools, and the daemon's 2 second exchange round |
 | Session tools | `node/msg-cli.mts`, `node/msg-resolve.mts`, `node/deliver-hook.mts`, `node/wake-hook.mts` | `kherep-node msg ...`, the Claude Code delivery hook and the idle wake listener |
+| Task protocol | `protocol-tasks.mts` | Session command args, `task.report` and `task.request` bodies, the `sessions.v1` capabilities and their validators |
+| Tasks (Worker) | `worker/src/tasks-api.mts`, `worker/src/task-store.mts`, `worker/src/task-dispatch.mts`, `worker/src/task-frames.mts` | `/api/tasks`, the Registry's `tasks` table, node selection, `session.start` dispatch, task reports and requests |
+| Tasks (node) | `node/session-policy.mts`, `node/session-runner.mts`, `node/task-watch.mts`, `node/task-exchange.mts`, `node/task-cli.mts` | The `sessions` policy section, `claude --bg` start, stop and resume, the watch round, and `kherep-node task ...` |
 
 Both Durable Object classes use SQLite storage (declared in the `exports` map with `"storage": "sqlite"`). `NodeSession` accepts the socket with the WebSocket Hibernation API, so an idle node does not keep the object in memory.
 
@@ -35,7 +38,7 @@ Every frame is JSON text with one envelope:
 { "v": 1, "type": "command", "id": "<uuid>", "seq": 3, "ack": 2, "ts": "<iso8601>", "body": {} }
 ```
 
-- Types: `challenge`, `auth`, `register`, `capabilities.update`, `sessions.snapshot`, `command`, `command.ack`, `command.result`, `event`, `error`, `message.send`, `message.deliver`, `message.status`, `directory.get`, `directory`.
+- Types: `challenge`, `auth`, `register`, `capabilities.update`, `sessions.snapshot`, `command`, `command.ack`, `command.result`, `event`, `error`, `message.send`, `message.deliver`, `message.status`, `directory.get`, `directory`, `task.report`, `task.request`.
 - Server-to-node `seq` numbers are assigned to commands only; control frames carry `seq` 0. The node's `ack` is the highest command `seq` it has processed. Commands stay in the `NodeSession` log until acknowledged or answered, and a reconnect resends everything after the node's `ack` (at-least-once). The command `id` lets the node drop a duplicate without running it again.
 - Liveness: the node sends the fixed frame `{"type":"ping"}` every 30 seconds. The Durable Object answers `{"type":"pong"}` through `setWebSocketAutoResponse`, which does not wake it.
 - Offline detection: while a node is online, a `NodeSession` alarm runs every 5 minutes. It takes the later of the last message and the last auto-response; after 3 intervals without either, the node is marked `offline` in the registry and the alarm stops. A closed socket alone does not mark a node offline, so a reconnect within the backoff window does not flap its status.
@@ -44,6 +47,8 @@ Every frame is JSON text with one envelope:
 ### Commands
 
 Phase 1 dispatches exactly `node.status`, `runtime.list` and `session.list`. The API refuses anything else, `NodeSession` refuses it again, and the node refuses it a third time against its local policy file, even when the command arrives authenticated. The local policy can narrow the set but never widen it; a malformed policy file allows nothing.
+
+Item 5 adds the session commands `session.start`, `session.stop` and `session.continue`. A command body may carry `args`, validated strictly per command (`protocol-tasks.mts` `isCommandArgs`): the Phase 1 commands take none, each session command exactly its own fields. The `commands` API never sends them; only the task dispatch does (see [Tasks](#tasks)). `NodeSession` refuses a session command whose args do not validate, and the node runs one only when its policy enables sessions. The args wait in the `NodeSession` outbox until the node acknowledges them and are not kept in the command history. A node that sends a `command` frame gets an `error`.
 
 ### Sessions
 
@@ -60,8 +65,8 @@ A message goes from a session on one node to a session on another node. A sessio
 
 | Type | Direction | Body |
 | --- | --- | --- |
-| `message.send` | node to Worker | `messageId` (uuid), `fromSession`, `to` (address), `text` (1-16384 chars), optional `inReplyTo` (uuid) |
-| `message.deliver` | Worker to target node | `messageId`, `from` (address), `toSession`, `text`, optional `inReplyTo`, `createdAt` (ISO 8601) |
+| `message.send` | node to Worker | `messageId` (uuid), `fromSession`, `to` (address), `text` (1-16384 chars), optional `inReplyTo` (uuid), optional `taskId` (uuid) |
+| `message.deliver` | Worker to target node | `messageId`, `from` (address), `toSession`, `text`, optional `inReplyTo`, `createdAt` (ISO 8601), optional `taskId` |
 | `message.status` | target node to Worker, Worker to sending node | `messageId`, `state`, optional `reason` (at most 256 chars) |
 | `directory.get` | node to Worker | empty |
 | `directory` | Worker to node | `nodes` (`nodeId`, `name`, `status`), `sessions` (`nodeId`, `sessionId`, `state`, `runtime`, optional `name`, `cwd`, `kind`), `fetchedAt` (ISO 8601), optional `truncated` |
@@ -185,6 +190,69 @@ With `--runtime codex` the delivery hook serves Codex for `SessionStart`, `UserP
 
 The Codex installer (`codex/install.mts`) adds the three hooks to the managed block of `config.toml`, running `deliver-hook.mts --runtime codex` from the checkout it installs from. Codex runs non-managed hooks only after they are reviewed and trusted, and records trust against the hook's hash; review and trust them in Codex before they run.
 
+## Tasks
+
+A task is an instruction that a node runs as a Claude Code background session (item 5, operator decisions of 2026-09-25). Claude only in this step: runtime `codex` is refused with the reason `runtime codex is not supported yet`.
+
+- **Who creates tasks.** The operator, through `POST /api/tasks` behind Access. A session may request one with `task new` only on the operator's explicit directive (see [Delegated tasks](#delegated-tasks)). Nothing else starts, stops or continues a session: nodes cannot send commands, the `commands` API refuses session commands, and a peer message starts nothing.
+- **Node selection.** The Worker takes online, non-revoked nodes that advertise `sessions.v1`, list the runtime (`claude`) as a CLI runtime and match `requirements.os` (the node's `os` fact, for example `win32`, `darwin`, `linux`) and every `requirements.capabilities` entry; among them the node with the fewest active tasks, by name on a tie. Without one it answers 409 with the reason and audits `task.refuse`. It stores the task as `dispatched` and queues `session.start` with `taskId`, `runtime`, `name` (`task-<first 8 of taskId>`), `prompt` (the task text), `permissionMode` (default `auto`; `auto`, `default` or `acceptEdits`, never `bypassPermissions`) and `requirements.cwd` as `cwd`.
+- **Start.** The node checks its `sessions` policy, the runtime, the permission mode, its limits and the working directory, then runs `claude --bg --name task-<8> --permission-mode <mode> "<framed prompt>"` in that directory, with the same executable lookup as the session listing. The prompt is one argument of a process started without a shell. A Windows npm shim (`claude.cmd`) needs `cmd.exe`, which cannot carry arbitrary text safely, so a start or continue through a shim fails with that reason; install the native `claude` executable on such a node. `--bg` prints `backgrounded · <short id> · <name>` (the [agent view documentation](https://code.claude.com/docs/en/agent-view), fetched 2026-09-25); the node records the short id and maps the full session id from `claude agents --json --all` (by that short id, else by name) into `tasks/<taskId>.json` with `name`, `cwd`, `permissionMode`, `startedAt`, `deadline` and `state`, and reports `started`. A refusal or a CLI error, for example a CLI that is not signed in, reports `failed` with the CLI's own message (at most 256 characters), never the command line.
+- **Framed prompt.** `Task <taskId> from the operator via the Kherep Control Plane: <text>`, then how to report (`kherep-node task done <taskId> --summary "..."`) and that `kherep-node msg` carries the task id automatically. The text is operator content given through Access, not peer content.
+- **Watch.** With every 60-second session check the daemon runs `claude agents --json --all` while a task is active and maps its documented `state`: `working` to `running`, `blocked` to `needs-input`, `done`, `failed` and `stopped` as they are. Each change is reported once with `task.report`. A failed listing decides nothing. After `maxRuntimeMinutes` the node runs `claude stop <short id>` and reports `stopped`, reason `max runtime reached`.
+- **Stop and continue.** `POST /api/tasks/{id}/stop` runs `claude stop <short id>` (reason `stopped by the operator`); `POST /api/tasks/{id}/continue` runs `claude --resume <sessionId> --bg --permission-mode <mode> "<follow-up>"` for a task in state `needs-input`, `done`, `failed` or `stopped`, with a new runtime deadline. A node acts only on tasks it started itself. Claude Code may continue a session under a new id; the next watch round maps it.
+- **Reports.** `task.report` (node to Worker) carries `taskId`, `state` (`started`, `running`, `needs-input`, `done`, `failed`, `stopped`), optional `sessionId`, `reason` (at most 256 characters) and `summary` (at most 2048). The Worker accepts it only from the node the task was dispatched to.
+- **Retention and audit.** The Registry keeps the task text for `GET /api/tasks/{id}`; the task list and the audit table never contain it, nor a continue prompt. Every create, refusal, report, state change, stop and continue is audited with the task id.
+
+### Session policy
+
+Sessions are off unless `policy.json` has a `sessions` section with `enabled` `true` and at least one workspace root:
+
+```json
+{
+  "version": 1,
+  "allowedCommands": ["node.status", "runtime.list", "session.list"],
+  "sessions": {
+    "enabled": true,
+    "workspaceRoots": ["D:/work"],
+    "runtimes": ["claude"],
+    "permissionModes": ["auto", "default", "acceptEdits"],
+    "defaultPermissionMode": "auto",
+    "maxConcurrent": 3,
+    "maxStartsPerDay": 10,
+    "maxRuntimeMinutes": 120,
+    "delegate": { "request": false, "accept": false }
+  }
+}
+```
+
+- Every field but `enabled` and `workspaceRoots` is optional with the values shown. The limits are the operator's caps: a smaller positive integer narrows them, a larger one counts as the cap. `codex` in `runtimes` and `bypassPermissions` in `permissionModes` are dropped. A malformed section (wrong types, a relative workspace root, a limit that is not a positive integer, a default mode that is not allowed) turns sessions and delegation off; the rest of the policy stays in force.
+- The working directory is `requirements.cwd` or the first workspace root. It must exist and lie inside a workspace root after resolving symbolic links and junctions on both.
+- Limits per node: at most `maxConcurrent` task sessions in `started`, `running` or `needs-input`, at most `maxStartsPerDay` starts per rolling 24 hours (every start that reached the CLI counts), and `maxRuntimeMinutes` per run.
+- The node advertises `sessions.v1` only when sessions are enabled, `sessions.delegate.accept.v1` when `delegate.accept` is also true, and `sessions.delegate.request.v1` when `delegate.request` is true.
+- Prerequisite: the Claude CLI must be installed and signed in for the account the daemon runs as; background sessions use that account's stored credentials.
+
+### Session tools for tasks
+
+```sh
+node modules/control-plane/node/cli.mts task done <taskId> [--summary <text>]
+node modules/control-plane/node/cli.mts task show [<taskId or requestId>]
+node modules/control-plane/node/cli.mts task new --title <title> --directive "<the operator's instruction, verbatim>" [--runtime claude] [--os <os>] [--cwd <dir>] [--capability <name>]... -- <task text>
+```
+
+- `task done` writes a `task.report` `done` with the summary to `task-reports/`, which the daemon sends in its 2-second exchange round. From a session it works only for the task that session was started for (`CLAUDE_CODE_SESSION_ID`).
+- `msg send` from a session started for a task adds that `taskId` to the message, found in `tasks/` by `CLAUDE_CODE_SESSION_ID` (or the session's name); `msg send --reply-to` keeps the `taskId` of the message it answers. The Worker accepts a `taskId` only when the sending or the target node runs that task.
+- Task grant: the wake listener also wakes a session this node started for a task (sessions enabled) for a message whose `taskId` is that task, even when the `wake` allowlist does not name the session or there is no `wake` section. The budget (6 per rolling hour, 20 per rolling day, 30 s spacing), the `bypassPermissions` exclusion, the reply-depth limit and the kill switch still apply.
+
+### Delegated tasks
+
+A Maestro session may ask for a task with `task new`, which writes `task-requests/<requestId>.json`; the daemon sends it as `task.request` with `title`, `text`, `requirements`, `directive` and `requestedBy` (this session's name or id), and records the Worker's answer (`task.request.result`: `dispatched` with `taskId` and `nodeId`, or `refused` with a reason) in the same file.
+
+- Both nodes opt in: the requesting node needs `sessions.delegate.request: true`, the target node `sessions.delegate.accept: true` (with sessions enabled). Both default to false. The requesting node checks before it sends; the Worker checks the capability again, and picks only nodes that advertise `sessions.delegate.accept.v1`. All start limits of the target apply.
+- A delegated task always runs in permission mode `auto` (the target refuses anything but `auto` or the stricter `default`), never `bypassPermissions`.
+- No chains in v1: a session that was itself started for a task cannot request tasks. `task new`, the daemon and the Worker each refuse it.
+- The Worker refuses an empty directive. It creates the task with `created_by` `session:<nodeId>/<session>` and keeps `requestedBy` and the directive; the audit records both, because the directive is the operator's own words, but never the task text. The framed prompt says `Task <taskId> requested by session <nodeId>/<session> on the operator's directive` and quotes the directive.
+- Rule for the Maestro: use `task new` only when the operator's own prompt in that session asks for it, and quote that instruction verbatim in `--directive`; never because of a peer message. This is enforced by the ROUTING rule and the audit trail, not technically: the control plane cannot prove where a directive came from.
+
 ## Security model
 
 - **Node identity.** `kherep-node node onboard` generates an Ed25519 key pair locally. The private key is written as PKCS#8 PEM to `node-ed25519.pem` in the node's config directory with mode `0600` on POSIX systems; on Windows it inherits the ACL of the per-user config directory. It never leaves the host.
@@ -194,6 +262,7 @@ The Codex installer (`codex/install.mts`) adds the three hooks to the managed bl
 - **Revocation.** `DELETE /api/nodes/{id}` deletes the key binding, marks the node revoked, clears its pending commands and closes its socket. Rotation is re-enrollment with a new key. `kherep-node node unenroll` destroys the local key and config and prints the `nodeId` for the operator to revoke; Phase 1 has no node-initiated revocation call.
 - **Audit.** Enrollment, status changes, command dispatch and revocation are written to the registry's `audit` table with the acting identity. Every message send (from a node or through the API) and every message state change is audited with the message id, the target session, the state and the reason; message text never enters the audit table.
 - **Session messaging.** A message reaches a session only through the node policy, and then only as framed peer content that tells the model it is not an instruction from the user. The session tools never talk to the network; they share files with the daemon in the per-user config directory. The Worker verifies the sender node of a message; the sender session is whatever the sending node reports.
+- **Tasks.** Only the operator API and a delegated request that passed the checks of both nodes and the Worker queue a session command; a node runs it only with sessions enabled in its own policy, inside its workspace roots, within its limits, never in `bypassPermissions` and never for Codex yet. The task text stays out of the audit table; see [Tasks](#tasks).
 - **Message text retention.** The Worker keeps a message's text only while the message is `queued`. When the target node accepts it, or it is refused or expires, the text column is set to `NULL`; a message refused on send is stored without text. The remaining metadata (ids, sessions, state, reason, timestamps) stays in the `messages` table. The API never returns message text.
 
 ## Operator API
@@ -208,6 +277,11 @@ The Codex installer (`codex/install.mts`) adds the three hooks to the managed bl
 | `DELETE /api/nodes/{id}` | Revoke a node |
 | `POST /api/nodes/{id}/messages` | Body `{"session": "<target session>", "text": "...", "inReplyTo": "<uuid>"}` (`inReplyTo` optional); sends as `operator` and answers 202 with `messageId` and `state` (`queued`, or `refused` with a `reason`); 404 for an unknown node, 409 for a revoked one |
 | `GET /api/messages?node={id}&limit={n}` | Message metadata, newest first, where the node is sender or target (`node` optional, `limit` 1-200, default 50); never the text |
+| `POST /api/tasks` | Body `{"title": "...", "text": "...", "requirements": {"runtime": "claude", "os": "win32", "capabilities": [], "cwd": "D:/work/repo"}, "permissionMode": "auto"}` (`requirements` and its fields and `permissionMode` optional); 201 with `taskId`, `nodeId`, `state`; 400 for `codex` or a disallowed mode; 409 with the reason when no node fits |
+| `GET /api/tasks?limit={n}` | Tasks, newest first, without the text |
+| `GET /api/tasks/{id}` | One task with its text, state, session id, summary and reason |
+| `POST /api/tasks/{id}/stop` | Stops an active task's session; 409 when it is not active |
+| `POST /api/tasks/{id}/continue` | Body `{"prompt": "..."}`; resumes the session of a task that waits for input or ended; 409 while it runs |
 
 ## Setup
 
@@ -278,6 +352,9 @@ The config directory is `KHEREP_CONFIG_DIR` when set, otherwise `%APPDATA%\khere
 | `sessions.json` | This node's sessions (`sessionId`, `name`) from the last successful listing |
 | `directory.request` | Touched by the `msg` CLI to ask the daemon for a fresh directory |
 | `codex-sessions/` | One `<session_id>.json` per Codex session the delivery hook saw, see [Codex sessions](#codex-sessions) |
+| `tasks/` | One `<taskId>.json` per task session this node started, see [Tasks](#tasks) |
+| `task-reports/` | `task.report` bodies waiting for the daemon (from the runner, the watch round and `task done`) |
+| `task-requests/` | `task new` requests with the Worker's answer |
 
 ### Node messaging
 
@@ -319,4 +396,4 @@ npm test                            # Workers Vitest integration, runs locally i
 npm run check:bundle                # wrangler deploy --dry-run: bundles and validates, deploys nothing
 ```
 
-The Worker tests run inside the local `workerd` runtime. They cover the handshake (valid signature, wrong key, unknown node, revoked key, replayed and expired nonce), enrollment single use and expiry, seq/ack resend after reconnect, offline marking by the alarm, Access JWT rejection and the command allowlist, message routing (sender taken from the connection, duplicate ids, offline queue and flush, refusals, text removal, expiry, status forwarding including a node-reported `refused` after `accepted`, audit without text, both message endpoints), the Registry column migration, the directory frame (revoked nodes left out, truncation), and drive the real node client over a WebSocket against the real `NodeSession`, including a failed session listing that leaves the Registry unchanged and an operator message that the node's policy accepts. An end-to-end test carries a message from one node's `msg send` through the Worker into the other node's inbox and delivery hook, which offers it on `UserPromptSubmit` and confirms it on `Stop`, and only then the `delivered` status back into the first node's `sent/` file. The node tests inject the command runner and never start the real `claude` executable. [`test-vectors.json`](test-vectors.json) holds the RFC 8032 section 7.1 test key and a challenge signature that both sides must reproduce. The Worker has its own `package.json` so the root install stays free of Cloudflare tooling.
+The Worker tests run inside the local `workerd` runtime. They cover the handshake (valid signature, wrong key, unknown node, revoked key, replayed and expired nonce), enrollment single use and expiry, seq/ack resend after reconnect, offline marking by the alarm, Access JWT rejection and the command allowlist, message routing (sender taken from the connection, duplicate ids, offline queue and flush, refusals, text removal, expiry, status forwarding including a node-reported `refused` after `accepted`, audit without text, both message endpoints), the Registry column migration, the directory frame (revoked nodes left out, truncation), and drive the real node client over a WebSocket against the real `NodeSession`, including a failed session listing that leaves the Registry unchanged and an operator message that the node's policy accepts. An end-to-end test carries a message from one node's `msg send` through the Worker into the other node's inbox and delivery hook, which offers it on `UserPromptSubmit` and confirms it on `Stop`, and only then the `delivered` status back into the first node's `sent/` file. Two task tests carry an operator task from `POST /api/tasks` through the real `NodeSession` to the real node client and session runner (with an injected `claude`), `task.report` `started`, `task done` and a continue back, and a delegated `task new` request through both nodes' opt-ins, the empty-directive and no-chain refusals and the audit. The node tests inject the command runner and never start the real `claude` executable. [`test-vectors.json`](test-vectors.json) holds the RFC 8032 section 7.1 test key and a challenge signature that both sides must reproduce. The Worker has its own `package.json` so the root install stays free of Cloudflare tooling.

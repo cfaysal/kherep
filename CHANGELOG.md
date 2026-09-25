@@ -11,6 +11,26 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Control Plane tasks: the operator creates a task with `POST /api/tasks`
+  (behind Access), and the Worker dispatches `session.start` to an online node
+  that advertises `sessions.v1` and matches the runtime, os and capabilities,
+  the one with the fewest active tasks (409 with the reason when none fits).
+  The node runs `claude --bg --name task-<id> --permission-mode <mode>` in a
+  working directory inside its workspace roots, maps the session id from
+  `claude agents --json --all`, reports state changes with `task.report`, and
+  stops a session after its max runtime. `POST /api/tasks/{id}/stop` and
+  `/continue` stop or resume it. Off unless the node's `policy.json` enables a
+  `sessions` section; per node at most 3 running task sessions, 10 starts per
+  rolling day and 120 minutes per run, permission mode `auto` by default,
+  never `bypassPermissions`, Claude only (Codex is refused). Sessions report
+  with `kherep-node task done`, `msg send` tags messages with the task, and the
+  wake listener wakes a task's session for messages of its task beyond the
+  allowlist, within the budget. A session may request a task with `task new`
+  only on the operator's directive and only when both nodes opt in
+  (`sessions.delegate.request` and `.accept`); a session started for a task
+  cannot request one. The audit records task actions, the requesting session
+  and the directive, never the task text.
+
 - Control Plane: an idle Claude Code session wakes when a peer message
   arrives, if the node's `policy.json` opts in with a `wake` section that
   lists the session (by id or name, or an explicit `"*"`); without it nothing

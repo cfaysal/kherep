@@ -25,11 +25,14 @@ export type NodeReportedState = (typeof NODE_REPORTED_STATES)[number];
 // session is a session id or a session name on that node.
 export interface MessageAddress { nodeId: string; session: string }
 // node -> Worker. The sender node is always the authenticated connection;
-// the body has no field for it.
-export interface MessageSendBody { messageId: string; fromSession: string; to: MessageAddress; text: string; inReplyTo?: string }
+// the body has no field for it. taskId (item 5): the task the message belongs
+// to; the session started for that task may be woken by it (task grant).
+export interface MessageSendBody {
+  messageId: string; fromSession: string; to: MessageAddress; text: string; inReplyTo?: string; taskId?: string;
+}
 // Worker -> target node.
 export interface MessageDeliverBody {
-  messageId: string; from: MessageAddress; toSession: string; text: string; inReplyTo?: string; createdAt: string;
+  messageId: string; from: MessageAddress; toSession: string; text: string; inReplyTo?: string; createdAt: string; taskId?: string;
 }
 // node -> Worker (target reports progress) and Worker -> sending node.
 export interface MessageStatusBody { messageId: string; state: MessageState; reason?: string }
@@ -74,18 +77,19 @@ export function isMessageAddress(value: unknown, allowOperator = false): value i
     && isSessionRef(value.session);
 }
 
+// An optional message or task id (both uuids).
 function isOptionalReplyTo(value: unknown): boolean {
   return value === undefined || isMessageId(value);
 }
 
 export function isMessageSendBody(body: unknown): body is MessageSendBody {
   return isObject(body) && isMessageId(body.messageId) && isSessionRef(body.fromSession) && isMessageAddress(body.to)
-    && isMessageText(body.text) && isOptionalReplyTo(body.inReplyTo);
+    && isMessageText(body.text) && isOptionalReplyTo(body.inReplyTo) && isOptionalReplyTo(body.taskId);
 }
 
 export function isMessageDeliverBody(body: unknown): body is MessageDeliverBody {
   return isObject(body) && isMessageId(body.messageId) && isMessageAddress(body.from, true) && isSessionRef(body.toSession)
-    && isMessageText(body.text) && isOptionalReplyTo(body.inReplyTo)
+    && isMessageText(body.text) && isOptionalReplyTo(body.inReplyTo) && isOptionalReplyTo(body.taskId)
     && typeof body.createdAt === "string" && !Number.isNaN(Date.parse(body.createdAt));
 }
 

@@ -9,7 +9,10 @@ import {
 import { readPrivateKey } from "./identity.mts";
 import { purgeInbox, storeMessage } from "./inbox.mts";
 import { loadPolicy } from "./policy.mts";
+import { continueTask, startTask, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { listSessions } from "./sessions.mts";
+import { pollTasks, recordRequestResult } from "./task-exchange.mts";
+import { watchTasks } from "./task-watch.mts";
 
 // Application ping interval. The Worker answers PING_FRAME through
 // setWebSocketAutoResponse without waking the Durable Object; Node's built-in
@@ -20,8 +23,10 @@ export const SESSIONS_INTERVAL_MS = 60_000;
 
 export interface DaemonHandle { stop(): void; done: Promise<void> }
 
+// runner: with it, the session commands of item 5 (the client runs them only
+// when the policy enables sessions).
 export function commandHandlers(config: NodeConfig, startedAt: number,
-  sessions: () => Promise<SessionInfo[]> = () => listSessions()): CommandHandlers {
+  sessions: () => Promise<SessionInfo[]> = () => listSessions(), runner?: RunnerDeps): CommandHandlers {
   return {
     "node.status": async () => ({
       nodeId: config.nodeId, name: config.name, facts: detectFacts(), uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
@@ -29,6 +34,11 @@ export function commandHandlers(config: NodeConfig, startedAt: number,
     "runtime.list": () => discoverRuntimes(),
     // A failed listing rejects, and the command result reports ok:false.
     "session.list": sessions,
+    ...(runner ? {
+      "session.start": (args) => startTask(args, runner),
+      "session.stop": (args) => stopTask(args, runner),
+      "session.continue": (args) => continueTask(args, runner),
+    } satisfies Partial<CommandHandlers> : {}),
   };
 }
 
@@ -45,10 +55,12 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // Every successful listing also updates sessions.json for the session tools
   // and includes the Codex sessions the delivery hook recorded.
   const sessions = recordingSessions(paths, () => listSessions({ paths }), log);
+  const runner: RunnerDeps = { paths, policy };
   const client = new NodeClient({
-    nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions),
+    nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions, runner),
     facts: detectFacts, runtimes: () => discoverRuntimes(), sessions,
     storeMessage: (body) => { storeMessage(paths.inbox, body, Date.now(), replyDepth(paths, body.inReplyTo)); },
+    taskRequestResult: (result) => recordRequestResult(paths, result),
     ...exchangeOptions(paths), log,
   });
 
@@ -69,6 +81,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     let directory: NodeJS.Timeout | null = null;
     // Outbox records sent on this connection; a reconnect sends them again.
     const inflight = new Set<string>();
+    const requestsInflight = new Set<string>();
     const send = (frame: string): boolean => {
       if (ws.readyState !== WebSocket.OPEN) return false;
       ws.send(frame);
@@ -84,10 +97,14 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
       snapshots = setInterval(() => {
         chain = chain.then(async () => {
           for (const frame of await client.sessionsSnapshot()) if (ws.readyState === WebSocket.OPEN) ws.send(frame);
+          await watchTasks(runner, log);
         }).catch((error: unknown) => log(`kherep-node: session snapshot failed: ${String(error)}`));
       }, SESSIONS_INTERVAL_MS);
       exchange = setInterval(() => {
-        chain = chain.then(() => pollExchange(client, paths, inflight, send))
+        chain = chain.then(() => {
+          pollExchange(client, paths, inflight, send);
+          pollTasks(client, paths, policy, requestsInflight, send);
+        })
           .catch((error: unknown) => log(`kherep-node: message exchange failed: ${String(error)}`));
       }, EXCHANGE_INTERVAL_MS);
       directory = setInterval(() => {

@@ -8,6 +8,7 @@ import { readConfig, type NodePaths } from "./config.mts";
 import { getOutbox, getSent, readDirectory, requestDirectory, writeOutbox, type OutboxRecord } from "./exchange.mts";
 import { getMessage, listInbox } from "./inbox.mts";
 import { currentSession, DIRECTORY_STALE_MS, nodeLabel, resolveTarget, senderSession, SESSION_ENV } from "./msg-resolve.mts";
+import { taskForSession } from "./task-records.mts";
 
 // kherep-node msg: the session side of messaging (issue #31, step 3a). It only
 // reads and writes files in the node's config directory; the daemon does the
@@ -123,13 +124,15 @@ async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<
   let to: MessageAddress | null = null;
   let target = values.to;
   let words = rest;
-  // A reply is one hop deeper than the message it answers.
+  // A reply is one hop deeper than the message it answers, and belongs to its task.
   let depth = 0;
+  let taskId: string | undefined;
   if (replyTo !== undefined) {
     if (!isMessageId(replyTo)) return fail(io, `--reply-to needs a message id, got "${replyTo}"`);
     const original = getMessage(io.paths.inbox, replyTo);
     if (!original) return fail(io, `message ${replyTo} is not in this node's inbox`);
     depth = (original.depth ?? 0) + 1;
+    taskId = original.taskId;
     if (!target) {
       if (original.from.nodeId === OPERATOR_NODE_ID) return fail(io, "the message came from the operator API and cannot be answered with msg send");
       to = { nodeId: original.from.nodeId, session: original.from.session };
@@ -152,8 +155,10 @@ async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<
   const wait = values.wait === undefined ? 0 : Number(values.wait);
   if (!Number.isFinite(wait) || wait < 0) return fail(io, `--wait needs a number of seconds, got "${values.wait}"`);
 
+  // A session started for a task tags its messages with that task (item 5).
+  taskId = taskForSession(io.paths, io.env[SESSION_ENV])?.taskId ?? taskId;
   const record: OutboxRecord = { messageId: crypto.randomUUID(), fromSession: from.value, to, text,
-    ...(replyTo ? { inReplyTo: replyTo } : {}), createdAt: new Date(io.now()).toISOString(), depth };
+    ...(replyTo ? { inReplyTo: replyTo } : {}), ...(taskId ? { taskId } : {}), createdAt: new Date(io.now()).toISOString(), depth };
   writeOutbox(io.paths, record);
   io.out(record.messageId);
   return wait > 0 ? waitForAnswer(io, record.messageId, wait * 1000) : 0;

@@ -12,6 +12,7 @@ export const MESSAGE_TYPES = [
   "challenge", "auth", "register", "capabilities.update", "sessions.snapshot",
   "command", "command.ack", "command.result", "event", "error",
   "message.send", "message.deliver", "message.status", "directory.get", "directory",
+  "task.report", "task.request",
 ] as const;
 export type MessageType = (typeof MESSAGE_TYPES)[number];
 
@@ -19,6 +20,12 @@ export type MessageType = (typeof MESSAGE_TYPES)[number];
 // API, and the node refuses anything else even when it arrives authenticated.
 export const PHASE1_COMMANDS = ["node.status", "runtime.list", "session.list"] as const;
 export type Phase1Command = (typeof PHASE1_COMMANDS)[number];
+// Session control (issue #31, item 5). Only the Worker's task dispatch sends
+// them, never the command API; their args are validated per command in
+// protocol-tasks.mts, and a node runs them only when its policy enables sessions.
+export const SESSION_COMMANDS = ["session.start", "session.stop", "session.continue"] as const;
+export type SessionCommand = (typeof SESSION_COMMANDS)[number];
+export type NodeCommand = Phase1Command | SessionCommand;
 
 export interface Envelope<B = unknown> {
   v: number;
@@ -52,6 +59,10 @@ export function isNodeId(value: unknown): value is string {
 
 export function isPhase1Command(value: unknown): value is Phase1Command {
   return typeof value === "string" && (PHASE1_COMMANDS as readonly string[]).includes(value);
+}
+
+export function isSessionCommand(value: unknown): value is SessionCommand {
+  return typeof value === "string" && (SESSION_COMMANDS as readonly string[]).includes(value);
 }
 
 export function makeEnvelope<B>(type: MessageType, body: B, seq: number, ack: number, id: string = crypto.randomUUID()): Envelope<B> {
@@ -98,7 +109,8 @@ export interface SessionInfo {
 }
 export interface NodeFacts { hostname: string; os: string; arch: string; cpus: number; memoryBytes: number }
 export interface RegisterBody { facts: NodeFacts; runtimes: RuntimeInfo[]; capabilities: string[] }
-export interface CommandBody { commandId: string; command: Phase1Command }
+// args: only session commands carry them (protocol-tasks.mts isCommandArgs).
+export interface CommandBody { commandId: string; command: NodeCommand; args?: Record<string, unknown> }
 export interface CommandAckBody { commandId: string }
 export interface CommandResultBody { commandId: string; ok: boolean; result?: unknown; error?: string }
 
@@ -143,7 +155,8 @@ export function isRegisterBody(body: unknown): body is RegisterBody {
 }
 
 export function isCommandBody(body: unknown): body is CommandBody {
-  return isObject(body) && isShortString(body.commandId, 128) && typeof body.command === "string";
+  return isObject(body) && isShortString(body.commandId, 128) && typeof body.command === "string"
+    && (body.args === undefined || isObject(body.args));
 }
 
 export function isCommandResultBody(body: unknown): body is CommandResultBody {
