@@ -65,9 +65,21 @@ export function isManagedDisallowedPermission(value: unknown): boolean {
     && /(?:^|[^0-9])(?:8000|1234)(?=$|[^0-9])/.test(value);
 }
 
+// Issue #13. Workspace-tool rules used to render with a native Windows path,
+// Bash(node D:\ws/tools/x.mts verb:*). Git Bash consumes those backslashes, so
+// the command they allowed never ran; the managed rule now uses forward
+// slashes. A rule whose forward-slash twin is in the same list is that obsolete
+// form and is dropped, so an upgrade does not grow the allowlist.
+function isObsoleteBackslashToolRule(value: string, allow: ReadonlySet<string>): boolean {
+  const slashed = value.replace(/\\/g, "/");
+  return slashed !== value && value.startsWith("Bash(node ") && slashed.includes("/tools/") && allow.has(slashed);
+}
+
 export function filterManagedDisallowedPermissions(settings: Settings): void {
   if (!settings.permissions || !Array.isArray(settings.permissions.allow)) return;
-  settings.permissions.allow = settings.permissions.allow.filter((item) => !isManagedDisallowedPermission(item));
+  const allow = new Set(settings.permissions.allow);
+  settings.permissions.allow = settings.permissions.allow.filter((item) =>
+    !isManagedDisallowedPermission(item) && !isObsoleteBackslashToolRule(item, allow));
 }
 
 
