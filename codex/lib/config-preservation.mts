@@ -45,6 +45,7 @@ export interface ManagedConfigOptions {
   registryRuntime: string;
   memoryNotifyHook: string;
   mcpCompatibility?: McpCompatibilityOptions;
+  controlPlaneHook?: string;
 }
 
 export function replaceExactManagedFragment(
@@ -207,8 +208,9 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
   const retiredTable = retireUnmanagedCentralBrainTable(next, options.retiredCentralBrain, options.startMarker, options.endMarker);
   next = retiredTable.config;
   const currentRenderOptions = { ...effectiveOptions, mcpServers, pluginMcpServers };
-  const previousStopOptions = { ...currentRenderOptions, observationStopHook: false };
-  const currentLegacyOptions = { ...currentRenderOptions, memoryProvider: "unconfigured" as const };
+  // Every block written before the control-plane hook existed lacks it.
+  const beforeControlPlane = { ...currentRenderOptions, controlPlaneHook: undefined };
+  const currentLegacyOptions = { ...beforeControlPlane, memoryProvider: "unconfigured" as const };
   const legacyRenderOptions = { ...currentLegacyOptions, observationStopHook: false };
   const predecessorRenderOptions = {
     ...legacyRenderOptions,
@@ -234,8 +236,11 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
     startMarker: options.startMarker,
     endMarker: options.endMarker,
     knownManagedFragments: [
-      ...managedFragmentFamily(currentRenderOptions, previousStopOptions),
-      ...retiredCentralBrainFragments(currentRenderOptions, previousStopOptions, options.retiredCentralBrain),
+      ...[currentRenderOptions, beforeControlPlane].flatMap((current) => {
+        const previousStop = { ...current, observationStopHook: false };
+        return [...managedFragmentFamily(current, previousStop),
+          ...retiredCentralBrainFragments(current, previousStop, options.retiredCentralBrain)];
+      }),
       parityConfig.render(currentLegacyOptions),
       parityConfig.render(legacyRenderOptions),
       parityConfig.renderPreviousNudges({ ...predecessorRenderOptions, registryBridge: options.registryBridge }),

@@ -1,6 +1,6 @@
 # Kherep Control Plane (Phase 1)
 
-A Cloudflare Worker that Kherep nodes connect to over an outbound WebSocket, plus the `kherep-node` daemon and CLI that runs on each node. Phase 1 covers enrollment, node identity, registration, liveness, a node/runtime/session registry and a fixed set of three read-only commands. Nothing in Phase 1 runs arbitrary commands on a node. The design and its decisions are recorded in GitHub issue #5. Phase 2 step 1 (GitHub issue #31) adds the messaging wire protocol and its routing and queue in the Worker. Step 2 adds Claude Code session discovery, the node's messaging policy and its inbox. Step 3a adds the session side: a directory of addressable sessions, the `msg` CLI a session uses to list, send, read and reply, and a Claude Code hook that hands inbox messages to their session. Step 3b has the Kherep installer wire the hook into Claude Code (see [Delivery hook](#delivery-hook)).
+A Cloudflare Worker that Kherep nodes connect to over an outbound WebSocket, plus the `kherep-node` daemon and CLI that runs on each node. Phase 1 covers enrollment, node identity, registration, liveness, a node/runtime/session registry and a fixed set of three read-only commands. Nothing in Phase 1 runs arbitrary commands on a node. The design and its decisions are recorded in GitHub issue #5. Phase 2 step 1 (GitHub issue #31) adds the messaging wire protocol and its routing and queue in the Worker. Step 2 adds Claude Code session discovery, the node's messaging policy and its inbox. Step 3a adds the session side: a directory of addressable sessions, the `msg` CLI a session uses to list, send, read and reply, and a Claude Code hook that hands inbox messages to their session. Step 3b has the Kherep installer wire the hook into Claude Code (see [Delivery hook](#delivery-hook)). Step 4 adds Codex sessions: the same hook, started with `--runtime codex`, records and serves Codex sessions, and the Codex installer wires it (see [Codex sessions](#codex-sessions)).
 
 ## Architecture
 
@@ -49,7 +49,8 @@ Phase 1 dispatches exactly `node.status`, `runtime.list` and `session.list`. The
 
 `session.list` and the `sessions.snapshot` frame report the agent sessions running on the node. A session carries `sessionId`, `runtime`, `state` and optional `startedAt` (ISO 8601), `name` (at most 128 chars), `cwd` (at most 512) and `kind` (at most 32). The last three were added in Phase 2; a node that omits them stays valid, and the Registry stores them as nullable columns that it adds to an existing `sessions` table on start.
 
-- Claude Code: the node runs `claude agents --json` (see the [Claude Code sessions documentation](https://code.claude.com/docs/en/sessions)) with the `claude` executable found on `PATH`, without a shell and with a 10 second timeout. `status` becomes `state`, the epoch-millisecond `startedAt` becomes ISO 8601, `runtime` is `claude-code`. Unknown fields are ignored and malformed rows are skipped. Codex sessions are not reported yet.
+- Claude Code: the node runs `claude agents --json` (see the [Claude Code sessions documentation](https://code.claude.com/docs/en/sessions)) with the `claude` executable found on `PATH`, without a shell and with a 10 second timeout. `status` becomes `state`, the epoch-millisecond `startedAt` becomes ISO 8601, `runtime` is `claude-code`. Unknown fields are ignored and malformed rows are skipped.
+- Codex: Codex documents no session listing, so the node lists the sessions its delivery hook recorded in `codex-sessions/` and saw within the last 12 hours (`CODEX_ACTIVE_MS`), with `runtime` and `kind` `codex`, `state` `active` and the name `codex-<first 8 characters of the id>` (see [Codex sessions](#codex-sessions)).
 - A failed listing is not an empty one. Without `claude` on `PATH` the node reports no Claude sessions. When the command fails, times out or prints something other than a JSON list, `session.list` answers `ok: false` with the reason, and no snapshot is sent, so the Registry keeps its last known list instead of being cleared.
 - The node sends a snapshot after every registration and then checks every 60 seconds, sending a new snapshot only when the list changed.
 
@@ -99,7 +100,7 @@ node modules/control-plane/node/cli.mts msg status <messageId>
 
 - `msg sessions` prints every node of the directory with its sessions (name, id, state, runtime, cwd) and marks this session with `*`. A missing `directory.json` is an error that says the daemon may not be running, never an empty list; a directory older than 3 minutes is printed with a warning.
 - `msg send` resolves the node by id or name, then the session on that node by id or name. An unknown or ambiguous reference fails and lists the candidates. The address keeps the session reference as typed, because the target node's policy matches that exact text. `--reply-to` sets `inReplyTo` and sends to the sender of that inbox message unless `--to` is given. The message is written to the outbox and its id printed; `--wait` waits for `accepted` or a refusal and exits non-zero unless the message was accepted. Put `--` before text that starts with `--`.
-- The sender session is `--from`, otherwise the name `sessions.json` records for `CLAUDE_CODE_SESSION_ID`, otherwise that id. Claude Code sets the variable in Bash and PowerShell tool, hook and stdio MCP subprocesses ([environment variables](https://code.claude.com/docs/en/env-vars)). Without either, `msg send` fails.
+- The sender session is `--from` (a Codex session id recorded in `codex-sessions/` becomes that session's `codex-...` name), otherwise the name `sessions.json` records for `CLAUDE_CODE_SESSION_ID`, otherwise that id. Claude Code sets the variable in Bash and PowerShell tool, hook and stdio MCP subprocesses ([environment variables](https://code.claude.com/docs/en/env-vars)). Without either, `msg send` fails.
 - `msg inbox` lists the messages addressed to this session's id or name that are not confirmed delivered yet (`accepted` or `offered`); `--all` includes delivered and refused ones. It marks nothing delivered. `msg status` prints the state of a sent message, or `pending` while it is still in the outbox.
 
 #### Delivery hook
@@ -130,6 +131,19 @@ Without the Kherep installer, add it by hand to a Claude Code `settings.json`. U
   }
 }
 ```
+
+#### Codex sessions
+
+With `--runtime codex` the delivery hook serves Codex for `SessionStart`, `UserPromptSubmit` and `Stop` ([Codex hooks](https://learn.chatgpt.com/docs/hooks.md), fetched 2026-09-25). Without the flag it behaves as the Claude Code hook above; there is no auto-detection. On a machine without `node.json` it writes no file and prints nothing.
+
+- Every call writes `codex-sessions/<session_id>.json` (`sessionId`, `cwd`, `lastSeen`, `runtime` `codex`) atomically with mode `0600`. Codex documents no environment variable with the session id, but every hook input carries `session_id` and `cwd`. An id with characters other than letters, digits, `.`, `_` and `-` is ignored. The daemon lists sessions seen within 12 hours and removes files not seen for 7 days; a listed Codex session counts as running for the 60-minute undeliverable check.
+- `SessionStart` tells the session its id and the `msg send --from <session_id>` command line as developer context.
+- `UserPromptSubmit` offers messages addressed to the session id or its `codex-...` name with the same semantics as for Claude Code (offer, repeat marking, refusal after 3 offers, sender notices), as `hookSpecificOutput.additionalContext`, which Codex adds as developer context. The reply command carries `--from <session_id>`, because the CLI cannot read the id from the environment. The budget is 6 KiB: Codex spills model-visible hook output above roughly 2,500 tokens to a file, and message ids and paths tokenize densely enough that 8 KiB could cross that.
+- `Stop` first confirms `offered` records as `delivered`. If records that arrived during the turn are still `accepted` and `stop_hook_active` is not true, it prints `{"decision": "block", "reason": "..."}` with a fixed text that contains no peer content: Codex turns `reason` into a new continuation prompt that acts as a user prompt. Otherwise it prints nothing, since plain text is invalid for `Stop`.
+- UNVERIFIED: whether that continuation prompt fires `UserPromptSubmit` is not documented. If it does, the messages arrive in the continued turn; if not, they arrive with the next real prompt.
+- `msg inbox` still needs `CLAUDE_CODE_SESSION_ID` and does not work from a Codex session yet.
+
+The Codex installer (`codex/install.mts`) adds the three hooks to the managed block of `config.toml`, running `deliver-hook.mts --runtime codex` from the checkout it installs from. Codex runs non-managed hooks only after they are reviewed and trusted, and records trust against the hook's hash; review and trust them in Codex before they run.
 
 ## Security model
 
@@ -223,6 +237,7 @@ The config directory is `KHEREP_CONFIG_DIR` when set, otherwise `%APPDATA%\khere
 | `directory.json` | The last `directory` frame |
 | `sessions.json` | This node's sessions (`sessionId`, `name`) from the last successful listing |
 | `directory.request` | Touched by the `msg` CLI to ask the daemon for a fresh directory |
+| `codex-sessions/` | One `<session_id>.json` per Codex session the delivery hook saw, see [Codex sessions](#codex-sessions) |
 
 ### Node messaging
 

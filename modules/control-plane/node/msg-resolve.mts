@@ -1,4 +1,5 @@
 import { OPERATOR_NODE_ID, type DirectoryBody, type MessageAddress } from "../protocol-messages.mts";
+import { codexSessionName, isCodexSession } from "./codex-sessions.mts";
 import type { NodePaths } from "./config.mts";
 import { localSessionName } from "./exchange.mts";
 
@@ -21,9 +22,11 @@ export function currentSession(paths: NodePaths, env: NodeJS.ProcessEnv): { id: 
   return name ? { id, name } : { id };
 }
 
-// The fromSession of a message: --from wins, then this session's name, then its id.
+// The fromSession of a message: --from wins, then this session's name, then its
+// id. A --from that is a recorded Codex session id resolves to that session's
+// name, as an id from CLAUDE_CODE_SESSION_ID resolves through sessions.json.
 export function senderSession(paths: NodePaths, env: NodeJS.ProcessEnv, from?: string): Resolved<string> {
-  if (from) return { ok: true, value: from };
+  if (from) return { ok: true, value: isCodexSession(paths, from) ? codexSessionName(from) : from };
   const session = currentSession(paths, env);
   if (!session) return { ok: false, error: `cannot tell which session this is: ${SESSION_ENV} is not set; pass --from <session>` };
   return { ok: true, value: session.name ?? session.id };

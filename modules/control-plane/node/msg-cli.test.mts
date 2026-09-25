@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import type { DirectoryBody } from "../protocol-messages.mts";
+import { recordCodexSession } from "./codex-sessions.mts";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { getOutbox, recordSent, writeDirectory, writeLocalSessions } from "./exchange.mts";
 import { markDelivered, storeMessage } from "./inbox.mts";
@@ -158,4 +159,16 @@ test("msg inbox shows this session's messages, msg status the state of a sent on
   assert.match((await run(paths, ["status", sent])).out, new RegExp(`${sent} refused: not accepted by node policy`));
   assert.equal((await run(paths, ["status", INCOMING])).code, 1);
   assert.equal((await run(paths, ["frobnicate"])).code, 2);
+});
+
+test("msg send --from a recorded Codex session id sends as that session's name", async (t) => {
+  const paths = setup(t);
+  const codex = "019a2b3c-4d5e-7f60-8123-456789abcdef";
+  recordCodexSession(paths, codex, "/work/b", NOW);
+  const sent = await run(paths, ["send", "--from", codex, "node-b/docs", "--", "hello"], {});
+  assert.equal(sent.code, 0, sent.err);
+  assert.equal(getOutbox(paths, sent.out)?.fromSession, "codex-019a2b3c");
+  // An id that no Codex hook recorded is sent as typed.
+  assert.equal(getOutbox(paths, (await run(paths, ["send", "--from", "019a2b3c-other", "node-b/docs", "x"], {})).out)?.fromSession,
+    "019a2b3c-other");
 });
