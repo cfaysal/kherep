@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  fromBase64Url, isPhase1Command, makeEnvelope, MAX_FRAME_BYTES, parseEnvelope, PHASE1_COMMANDS, toBase64Url,
+  fromBase64Url, isPhase1Command, isSessionInfo, makeEnvelope, MAX_FRAME_BYTES, parseEnvelope, PHASE1_COMMANDS, toBase64Url,
 } from "./protocol.mts";
 
 test("round-trips an envelope and rejects malformed ones", () => {
@@ -32,4 +32,14 @@ test("base64url encoding round-trips all byte values", () => {
   assert.match(text, /^[A-Za-z0-9_-]+$/);
   assert.deepEqual(fromBase64Url(text), bytes);
   assert.throws(() => fromBase64Url("a+b/"));
+});
+
+test("session info validates with and without the optional name, cwd and kind", () => {
+  const base = { sessionId: "s1", runtime: "claude-code", state: "running" };
+  assert.equal(isSessionInfo(base), true);
+  assert.equal(isSessionInfo({ ...base, startedAt: "2026-01-01T00:00:00.000Z", name: "review", cwd: "/work/repo", kind: "interactive" }), true);
+  assert.equal(isSessionInfo({ ...base, name: "n".repeat(129) }), false);
+  assert.equal(isSessionInfo({ ...base, cwd: "c".repeat(513) }), false);
+  assert.equal(isSessionInfo({ ...base, kind: "" }), false);
+  assert.equal(isSessionInfo({ ...base, name: 7 }), false);
 });

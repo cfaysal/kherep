@@ -125,6 +125,30 @@ check(
   true
 );
 
+// Every per-file label drift-check.sh prints is a finding, not only the four
+// original ones: a report whose single problem carries one of these labels ends
+// in FOUND DRIFT and must never read as zero findings (#33).
+for (const line of [
+  "RETIRED-LIVE  project/tools/mpac/mpac.ps1 (/w/tools/mpac/mpac.ps1)",
+  "MISSING-BLOCK project/CLAUDE.md",
+  "BLOCK-INVALID project/AGENTS.md",
+  "NORMALIZE-FAIL hooks/commit-guard.js",
+]) {
+  const report = `ok            hooks/commit-guard.js\n${line}\n\nDRIFT-CHECK FOUND DRIFT (see above)\n`;
+  const context = contextOf(run({ cwd: IN_SCOPE }, claudeHomeWith(report, 1)));
+  check(
+    `a report whose only problem is ${line.split(" ")[0]} lists it as a finding`,
+    Boolean(context && context.includes("1 unreconciled file(s)") && context.includes(line)),
+    true
+  );
+}
+
+check(
+  "an all-ok PASS report yields no findings",
+  contextOf(run({ cwd: IN_SCOPE }, claudeHomeWith(CLEAN, 1))),
+  null
+);
+
 const incomplete = contextOf(
   run({ cwd: IN_SCOPE }, claudeHomeWith("ok            hooks/commit-guard.js\n", 1))
 );
