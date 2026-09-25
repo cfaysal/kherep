@@ -184,7 +184,7 @@ export function registerLocalPlugin(marketplaceRoot: string, pluginId: string, o
   const invoke: RunCodex = options.runCodex || ((args, commandOptions = {}) => (
     runCodex(args, { ...options, ...commandOptions })
   ));
-  const entries = marketplaceEntries(invoke(["plugin", "marketplace", "list", "--json"]));
+  const entries = marketplaceEntries(invoke(["plugin", "marketplace", "list", "--json"], { stdoutOnly: true }));
   const owned = entries.filter((entry) => entry.name === OWNED_MARKETPLACE);
   if (owned.length > 1) throw new Error("Codex returned conflicting owned marketplace bindings");
   const previousName = owned[0]?.name;

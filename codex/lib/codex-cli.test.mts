@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { codexEnvironment, codexInvocation, normalizeWindowsCodexCommand } from "./codex-cli.mts";
+import { codexEnvironment, codexInvocation, codexOutput, normalizeWindowsCodexCommand } from "./codex-cli.mts";
 
 test("uses the app execution alias for packaged Codex", () => {
   assert.equal(
@@ -65,4 +65,14 @@ test("preserves an explicit non-default CODEX_HOME", () => {
     codexEnvironment("D:\\Codex", "win32", { KEEP: "yes" }, "C:\\Users\\fixture"),
     { KEEP: "yes", CODEX_HOME: "D:\\Codex" },
   );
+});
+
+test("keeps stderr out of output that is parsed as a document", () => {
+  // The warning Codex prints when CODEX_HOME lies under a temporary directory (#55).
+  const stdout = '{\n  "marketplaces": []\n}\n';
+  const stderr = "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir\n";
+  assert.deepEqual(JSON.parse(codexOutput(stdout, stderr, true)), { marketplaces: [] });
+  assert.throws(() => JSON.parse(codexOutput(stdout, stderr)));
+  assert.equal(codexOutput("out\n", "err\n"), "out\n\nerr");
+  assert.equal(codexOutput(null, "err", true), "");
 });
