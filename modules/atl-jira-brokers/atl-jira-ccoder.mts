@@ -3,6 +3,7 @@
 // Paths, credentials, and access tokens must never be printed.
 import { realpathSync } from "node:fs";
 import { readFile as nodeReadFile } from "node:fs/promises";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   AtlassianCredentialError,
@@ -946,11 +947,14 @@ export async function runCli(argv: string[], injected: Partial<BrokerContext> = 
 }
 
 // Node loads the main module from its real path, so a script started through a
-// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+// symlinked directory (macOS /var -> /private/var) matches only after realpath;
+// under --preserve-symlinks-main it keeps the path as given, so both count.
 // It needs no main flag on import.meta, which Node 23 and 24.0-24.1 lack.
 function isMainModule(): boolean {
+  const entry = process.argv[1] || "";
   try {
-    return import.meta.url === pathToFileURL(realpathSync(process.argv[1] || "")).href;
+    return import.meta.url === pathToFileURL(path.resolve(entry)).href
+      || import.meta.url === pathToFileURL(realpathSync(entry)).href;
   } catch {
     return false;
   }
