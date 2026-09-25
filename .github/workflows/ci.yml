@@ -67,10 +67,24 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*
+      # install-transaction.test.sh (run by the smoke test) drives install.sh,
+      # which writes core.hooksPath with `git config --system` and `--global`.
+      # Both are redirected to throwaway files so the runner's git config stays
+      # untouched; the last step shows what landed there.
       - name: Bootstrap smoke test
         env:
           KHEREP_SMOKE_NO_MANAGED_WORKSPACE: "1"
+          GIT_CONFIG_SYSTEM: ${{ runner.temp }}/gitconfig-system
+          GIT_CONFIG_GLOBAL: ${{ runner.temp }}/gitconfig-global
         run: bash bootstrap/smoke-test.sh
+      - name: Isolated git config written by the smoke test
+        if: always()
+        shell: bash
+        run: |
+          for f in "$RUNNER_TEMP/gitconfig-system" "$RUNNER_TEMP/gitconfig-global"; do
+            echo "== $f"; cat "$f" 2>/dev/null || echo "(not written)"
+          done
+          echo "== runner system core.hooksPath: $(git config --system --get core.hooksPath || echo unset)"
 
   typescript:
     runs-on: ubuntu-latest
