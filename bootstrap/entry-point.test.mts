@@ -24,20 +24,19 @@ test("CLI entry detection survives a linked script directory", (t) => {
   assert.match(result.stderr, /FATAL: --out <file> is required\./);
 });
 
-test("no entry point compares import.meta.url with process.argv", () => {
+// Only tracked files: untracked worktrees or copies of older commits in a
+// developer checkout must not fail this test.
+test("no entry point compares import.meta.url with process.argv", (t) => {
+  const listed = spawnSync("git", ["ls-files", "-z", "*.mts", "*.ts", "*.mjs", "*.js"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  if (listed.error || listed.status !== 0) {
+    t.skip(`git ls-files unavailable: ${listed.error?.message ?? listed.stderr.trim()}`);
+    return;
+  }
   const fragile = /import\.meta\.url\s*===\s*pathToFileURL\(\s*process\.argv\[1\]/;
-  const offenders: string[] = [];
-  const skip = new Set(["node_modules", ".git", ".worktrees"]);
-  const walk = (dir: string): void => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (skip.has(entry.name)) continue;
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (/\.(mts|ts|mjs|js)$/.test(entry.name) && fragile.test(fs.readFileSync(full, "utf8"))) {
-        offenders.push(path.relative(repoRoot, full));
-      }
-    }
-  };
-  walk(repoRoot);
+  const offenders = listed.stdout.split("\0").filter((file) =>
+    file !== "" && fs.existsSync(path.join(repoRoot, file)) && fragile.test(fs.readFileSync(path.join(repoRoot, file), "utf8")));
   assert.deepEqual(offenders, [], "use import.meta.main instead");
 });
