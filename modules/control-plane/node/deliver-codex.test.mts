@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { CODEX_CONTEXT_BYTES, CODEX_STOP_REASON, deliverForCodex } from "./deliver-codex.mts";
-import { MAX_OFFERS } from "./deliver-core.mts";
+import { MAX_OFFERS, REOFFER_AFTER_MS } from "./deliver-core.mts";
 import { hookRuntime } from "./deliver-hook.mts";
 import { getSent, recordSent, writeDirectory, writeOutbox } from "./exchange.mts";
 import { getMessage, readJson, storeMessage } from "./inbox.mts";
@@ -45,8 +45,11 @@ function inbox(paths: NodePaths, n: number, toSession = NAME, text = `${SECRET} 
   return id(n);
 }
 
+// The hook clock; a test moves it past REOFFER_AFTER_MS to end an offering turn.
+let clock = Date.UTC(2026, 5, 1, 1);
 const hook = (paths: NodePaths, event: string, extra: Record<string, unknown> = {}) =>
-  deliverForCodex({ session_id: SELF, cwd: "/work/repo", hook_event_name: event, ...extra }, { paths, nonce: () => "t0k3n", replyCommand: CLI });
+  deliverForCodex({ session_id: SELF, cwd: "/work/repo", hook_event_name: event, ...extra },
+    { paths, nonce: () => "t0k3n", replyCommand: CLI, now: () => clock });
 const stop = (paths: NodePaths, active = false) => hook(paths, "Stop", { stop_hook_active: active });
 
 test("SessionStart records the session and tells it its id and how to send; silent without a node config", (t) => {
@@ -81,8 +84,13 @@ test("UserPromptSubmit offers by id and name as developer context, with --from i
   assert.match(context, new RegExp(`Your message ${id(9)} to node-b \\(${PEER}\\)/build was not delivered: "policy"`));
   assert.ok(getSent(paths, id(9))?.noticedAt);
   assert.equal(getMessage(paths.inbox, id(3))?.state, "accepted");
-  // Offered again at each prompt without a Stop, refused after MAX_OFFERS.
-  for (let offer = 2; offer <= MAX_OFFERS; offer++) assert.match(hook(paths, "UserPromptSubmit"), /Offered again/);
+  // Offered again at each prompt after an offering turn ended without a Stop,
+  // refused after MAX_OFFERS.
+  for (let offer = 2; offer <= MAX_OFFERS; offer++) {
+    clock += REOFFER_AFTER_MS;
+    assert.match(hook(paths, "UserPromptSubmit"), /Offered again/);
+  }
+  clock += REOFFER_AFTER_MS;
   assert.equal(hook(paths, "UserPromptSubmit"), "");
   assert.equal(getMessage(paths.inbox, byName)?.state, "refused");
 });

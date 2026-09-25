@@ -16,14 +16,18 @@ import { KHEREP_REPO, substituteTemplatePaths } from "./render-profile-paths.mts
 
 const HERE = import.meta.dirname;
 const HOOK = "modules/control-plane/node/deliver-hook.mts";
-const EVENTS = ["UserPromptSubmit", "Stop"];
+const WAKE = "modules/control-plane/node/wake-hook.mts";
+const EVENTS = ["UserPromptSubmit", "Stop", "StopFailure"];
 const forward = (value: string): string => value.replace(/\\/g, "/");
 // Git Bash wants /c/... on Windows; install.sh refuses a drive-letter path.
 const slash = (value: string): string =>
   forward(value).replace(/^([A-Za-z]):\//, (_match, drive: string) => `/${drive.toLowerCase()}/`);
-const hookCommand = (repo: string): string => `node "${repo}/${HOOK}"`;
-type HookGroups = { hooks: Record<string, { hooks: { command: string }[] }[]> };
-const lastCommand = (value: HookGroups, event: string) => value.hooks[event].at(-1)?.hooks.at(-1)?.command;
+const hookCommand = (repo: string, hook = HOOK): string => `node "${repo}/${hook}"`;
+type HookGroups = { hooks: Record<string, { hooks: { command: string; [field: string]: unknown }[] }[]> };
+// The delivery hook ends each event's last group, except Stop, where the wake
+// listener follows it.
+const deliverCommand = (value: HookGroups, event: string) => value.hooks[event].at(-1)?.hooks.at(event === "Stop" ? -2 : -1)?.command;
+const wakeEntry = (value: HookGroups) => value.hooks.Stop.at(-1)?.hooks.at(-1);
 // Some Node releases the engines range admits, 24.1.0 among them, print this
 // warning when a child loads a .mts file. Only this exact pair of lines is
 // dropped; any other stderr still fails the assertion.
@@ -74,7 +78,7 @@ function bash(args: string[], f: Fixture, input?: string) {
   return spawnSync("bash", args, { encoding: "utf8", env, input, timeout: 240_000 });
 }
 
-test("install wires the delivery hook from the checkout, drift-check is clean and capture restores the placeholder", (t) => {
+test("install wires the delivery and wake hooks from the checkout, drift-check is clean and capture restores the placeholder", (t) => {
   const f = fixture(t);
   const install = bash([slash(path.join(HERE, "install.sh"))], f);
   assert.equal(install.status, 0, `${install.stdout}\n${install.stderr}`);
@@ -86,11 +90,17 @@ test("install wires the delivery hook from the checkout, drift-check is clean an
   for (const event of EVENTS) {
     const commands: string[] = settings.hooks[event].flatMap((group: { hooks: { command: string }[] }) => group.hooks.map((h) => h.command));
     assert.equal(commands.filter((command) => command.includes("deliver-hook")).length, 1, `${event}: ${commands.join(" | ")}`);
-    assert.equal(lastCommand(settings, event), expected, `${event} does not end with the delivery hook`);
+    assert.equal(commands.filter((command) => command.includes("wake-hook")).length, event === "Stop" ? 1 : 0, event);
+    assert.equal(deliverCommand(settings, event), expected, `${event} does not end with the delivery hook`);
     // Run as stored, through bash like Claude Code: inert without an enrolled node.
     const run = bash(["-c", expected], f, JSON.stringify({ session_id: "s", hook_event_name: event }));
     assert.deepEqual([run.status, run.stdout, withoutTypeStrippingWarning(run.stderr)], [0, "", ""], `${event}: ${run.stderr}`);
   }
+  // The wake listener keeps its background fields through the render.
+  const wake = hookCommand(forward(KHEREP_REPO), WAKE);
+  assert.deepEqual(wakeEntry(settings), { type: "command", command: wake, asyncRewake: true, timeout: 86400 });
+  const listened = bash(["-c", wake], f, JSON.stringify({ session_id: "s", hook_event_name: "Stop" }));
+  assert.deepEqual([listened.status, listened.stdout, withoutTypeStrippingWarning(listened.stderr)], [0, "", ""], listened.stderr);
 
   const drift = bash([slash(path.join(HERE, "drift-check.sh"))], f);
   assert.equal(drift.status, 0, `${drift.stdout}\n${drift.stderr}`);
@@ -103,7 +113,8 @@ test("install wires the delivery hook from the checkout, drift-check is clean an
   assert.equal(capture.status, 0, capture.stderr);
   const captured = JSON.parse(fs.readFileSync(copy, "utf8"));
   const source = JSON.parse(fs.readFileSync(path.join(HERE, "..", "claude", "settings.user.json"), "utf8"));
-  for (const event of EVENTS) assert.equal(lastCommand(captured, event), lastCommand(source, event));
+  for (const event of EVENTS) assert.equal(deliverCommand(captured, event), deliverCommand(source, event));
+  assert.deepEqual(wakeEntry(captured), wakeEntry(source));
   assert.ok(!fs.readFileSync(copy, "utf8").includes(forward(KHEREP_REPO)), "capture left the machine path of the checkout");
 
   // Removing the entries by hand, as docs/INSTALLATION.md describes, is drift.

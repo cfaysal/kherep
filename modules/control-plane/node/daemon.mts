@@ -3,7 +3,9 @@ import { reconnectDelay } from "./backoff.mts";
 import { NodeClient, type CommandHandlers } from "./client.mts";
 import { connectUrl, type NodeConfig, type NodePaths } from "./config.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
-import { DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions } from "./exchange.mts";
+import {
+  DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions, replyDepth,
+} from "./exchange.mts";
 import { readPrivateKey } from "./identity.mts";
 import { purgeInbox, storeMessage } from "./inbox.mts";
 import { loadPolicy } from "./policy.mts";
@@ -46,7 +48,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   const client = new NodeClient({
     nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions),
     facts: detectFacts, runtimes: () => discoverRuntimes(), sessions,
-    storeMessage: (body) => { storeMessage(paths.inbox, body); }, ...exchangeOptions(paths), log,
+    storeMessage: (body) => { storeMessage(paths.inbox, body, Date.now(), replyDepth(paths, body.inReplyTo)); },
+    ...exchangeOptions(paths), log,
   });
 
   let stopped = false;

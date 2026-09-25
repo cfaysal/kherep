@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 
 import { nodePaths } from "./config.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
-import { contextOutput, deliveryContext, type HookDeps } from "./deliver-core.mts";
+import { contextOutput, deliveryContext, retryOffered, sessionInbox, type HookDeps } from "./deliver-core.mts";
 import { localSessionName } from "./exchange.mts";
 
 // Claude Code hook that hands inbox messages to their session (issue #31,
@@ -25,21 +25,29 @@ import { localSessionName } from "./exchange.mts";
 //   a file ("JSON output"). The 8 KB budget below stays under that cap.
 // - Stop "Does not run if the stoppage occurred due to a user interrupt. API
 //   errors fire StopFailure instead" ("Stop").
+// - StopFailure "Runs instead of Stop when the turn ends due to an API error";
+//   Claude Code ignores its output and exit code ("StopFailure").
 // The offer-and-confirm delivery itself lives in deliver-core.mts; with
 // --runtime codex the same entry point serves Codex (deliver-codex.mts).
 
-export { MAX_CONTEXT_BYTES, MAX_MESSAGES_PER_CALL, MAX_OFFERS, type HookDeps } from "./deliver-core.mts";
+export { MAX_CONTEXT_BYTES, MAX_MESSAGES_PER_CALL, MAX_OFFERS, REOFFER_AFTER_MS, type HookDeps } from "./deliver-core.mts";
 
 export type HookRuntime = "claude" | "codex";
 
 // The hook's stdout for one input: empty when there is nothing to deliver.
+// StopFailure only flags this session's offered records for a new offer.
 export function deliverForHook(input: unknown, deps: HookDeps): string {
   if (typeof input !== "object" || input === null) return "";
   const { hook_event_name: event, session_id: sessionId } = input as Record<string, unknown>;
-  if ((event !== "UserPromptSubmit" && event !== "Stop") || typeof sessionId !== "string" || sessionId === "") return "";
+  if ((event !== "UserPromptSubmit" && event !== "Stop" && event !== "StopFailure") || typeof sessionId !== "string"
+    || sessionId === "") return "";
   const name = localSessionName(deps.paths, sessionId);
-  const additionalContext = deliveryContext(event, name === undefined ? [sessionId] : [sessionId, name], deps);
-  return contextOutput(event, additionalContext);
+  const refs = name === undefined ? [sessionId] : [sessionId, name];
+  if (event === "StopFailure") {
+    retryOffered(deps.paths, sessionInbox(deps.paths, refs));
+    return "";
+  }
+  return contextOutput(event, deliveryContext(event, refs, deps));
 }
 
 // The runtime a command line names: --runtime codex, otherwise Claude Code.
@@ -67,17 +75,17 @@ export function runHook(stdin: string, deps: HookDeps, write: (text: string) => 
 // symlinked directory (macOS /var -> /private/var) matches only after realpath;
 // under --preserve-symlinks-main it keeps the path as given, so both count.
 // It needs no main flag on import.meta, which Node 23 and 24.0-24.1 lack.
-function isMainModule(): boolean {
+// url: the import.meta.url of the module asking.
+export function isMainModule(url: string): boolean {
   const entry = process.argv[1] || "";
   try {
-    return import.meta.url === pathToFileURL(path.resolve(entry)).href
-      || import.meta.url === pathToFileURL(fs.realpathSync(entry)).href;
+    return url === pathToFileURL(path.resolve(entry)).href || url === pathToFileURL(fs.realpathSync(entry)).href;
   } catch {
     return false;
   }
 }
 
-if (isMainModule()) {
+if (isMainModule(import.meta.url)) {
   let stdin = "";
   try {
     stdin = fs.readFileSync(0, "utf8");

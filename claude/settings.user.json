@@ -153,6 +153,23 @@
           {
             "type": "command",
             "command": "node \"__KHEREP_REPO__/modules/control-plane/node/deliver-hook.mts\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/wake-hook.mts\"",
+            "asyncRewake": true,
+            "timeout": 86400
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/deliver-hook.mts\""
           }
         ]
       }

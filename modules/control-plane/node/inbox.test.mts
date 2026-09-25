@@ -28,7 +28,7 @@ test("stores one private file per message, atomically, with the documented recor
   assert.deepEqual(fs.readdirSync(dir), [`${ID_A}.json`]); // no temp file left behind
   assert.deepEqual(getMessage(dir, ID_A), {
     messageId: ID_A, from: { nodeId: SENDER, session: "s-a" }, toSession: "s1", text: "hello", inReplyTo: ID_B,
-    createdAt: new Date(NOW - 1000).toISOString(), receivedAt: new Date(NOW).toISOString(), state: "accepted",
+    createdAt: new Date(NOW - 1000).toISOString(), receivedAt: new Date(NOW).toISOString(), state: "accepted", depth: 0,
   });
   if (process.platform !== "win32") {
     assert.equal(fs.statSync(dir).mode & 0o777, 0o700);

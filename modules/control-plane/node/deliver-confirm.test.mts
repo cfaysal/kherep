@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { nodePaths, type NodePaths } from "./config.mts";
-import { deliverForHook, MAX_OFFERS } from "./deliver-hook.mts";
+import { deliverForHook, MAX_OFFERS, REOFFER_AFTER_MS } from "./deliver-hook.mts";
 import { getSent, recordSent, writeDirectory, writeLocalSessions, writeOutbox } from "./exchange.mts";
 import { getMessage, storeMessage } from "./inbox.mts";
 
@@ -33,9 +33,11 @@ function inbox(paths: NodePaths, n: number): string {
   return id(n);
 }
 
-// The additionalContext of one hook call, or "" when it printed nothing.
-function hook(paths: NodePaths, event: "UserPromptSubmit" | "Stop"): string {
-  const output = deliverForHook({ session_id: "s-self", hook_event_name: event }, { paths, nonce: () => "t0k3n", replyCommand: REPLY, now: () => NOW });
+// The additionalContext of one hook call, or "" when it printed nothing; at
+// NOW plus `later` milliseconds.
+function hook(paths: NodePaths, event: "UserPromptSubmit" | "Stop" | "StopFailure", later = 0): string {
+  const output = deliverForHook({ session_id: "s-self", hook_event_name: event },
+    { paths, nonce: () => "t0k3n", replyCommand: REPLY, now: () => NOW + later });
   return output ? (JSON.parse(output).hookSpecificOutput.additionalContext as string) : "";
 }
 
@@ -55,23 +57,68 @@ test("Stop confirms what the turn carried, then offers only messages that arrive
   assert.equal(state(paths, second), "delivered");
 });
 
-test("a turn that ends without Stop offers the message again, marked as a repeat", (t) => {
+test("a message the Stop hook offered is confirmed by the Stop of the continued turn", (t) => {
+  const paths = setup(t);
+  const messageId = inbox(paths, 1);
+  assert.match(hook(paths, "Stop"), /message 1/);
+  assert.equal(state(paths, messageId), "offered");
+  assert.equal(hook(paths, "Stop", 5_000), "");
+  assert.equal(state(paths, messageId), "delivered");
+  assert.equal(hook(paths, "UserPromptSubmit", 60_000), "", "a confirmed message is not offered again");
+});
+
+test("stop_hook_active true changes nothing: the Stop of a woken or continued turn confirms and offers", (t) => {
+  const paths = setup(t);
+  const first = inbox(paths, 1);
+  hook(paths, "UserPromptSubmit");
+  const second = inbox(paths, 2);
+  const deps = { paths, nonce: () => "t0k3n", replyCommand: REPLY, now: () => NOW };
+  const output = deliverForHook({ session_id: "s-self", hook_event_name: "Stop", stop_hook_active: true }, deps);
+  assert.match(JSON.parse(output).hookSpecificOutput.additionalContext, /message 2/);
+  assert.deepEqual([state(paths, first), state(paths, second)], ["delivered", "offered"]);
+  assert.equal(deliverForHook({ session_id: "s-self", hook_event_name: "Stop", stop_hook_active: true }, deps), "");
+  assert.equal(state(paths, second), "delivered");
+});
+
+test("a prompt queued while the offering turn still runs does not offer the message again", (t) => {
+  const paths = setup(t);
+  const messageId = inbox(paths, 1);
+  assert.match(hook(paths, "UserPromptSubmit"), /message 1/);
+  // The user types while the turn runs tools; Claude Code fires UserPromptSubmit for it.
+  assert.equal(hook(paths, "UserPromptSubmit", REOFFER_AFTER_MS - 1), "");
+  assert.deepEqual([state(paths, messageId), getMessage(paths.inbox, messageId)?.offers], ["offered", 1]);
+  assert.equal(hook(paths, "Stop", REOFFER_AFTER_MS), "");
+  assert.equal(state(paths, messageId), "delivered");
+});
+
+test("after StopFailure the next prompt offers the message again at once, marked as a repeat", (t) => {
   const paths = setup(t);
   const messageId = inbox(paths, 1);
   assert.doesNotMatch(hook(paths, "UserPromptSubmit"), /Offered again/);
-  // No Stop: the turn was interrupted or failed.
-  const again = hook(paths, "UserPromptSubmit");
+  assert.equal(hook(paths, "StopFailure", 1_000), "");
+  assert.equal(getMessage(paths.inbox, messageId)?.retry, true);
+  const again = hook(paths, "UserPromptSubmit", 2_000);
   assert.match(again, new RegExp(`Message id: ${messageId}\nOffered again: the turn that first carried it may not have completed\\.`));
-  assert.deepEqual([state(paths, messageId), getMessage(paths.inbox, messageId)?.offers], ["offered", 2]);
-  assert.equal(hook(paths, "Stop"), "");
+  assert.deepEqual([state(paths, messageId), getMessage(paths.inbox, messageId)?.offers, getMessage(paths.inbox, messageId)?.retry],
+    ["offered", 2, undefined]);
+  assert.equal(hook(paths, "Stop", 3_000), "");
   assert.equal(state(paths, messageId), "delivered");
+});
+
+test("an offer older than the re-offer window is offered again, marked as a repeat", (t) => {
+  const paths = setup(t);
+  const messageId = inbox(paths, 1);
+  hook(paths, "UserPromptSubmit");
+  // No Stop and no StopFailure: the user interrupted the turn, which fires no hook.
+  assert.match(hook(paths, "UserPromptSubmit", REOFFER_AFTER_MS), /Offered again: the turn that first carried it/);
+  assert.deepEqual([state(paths, messageId), getMessage(paths.inbox, messageId)?.offers], ["offered", 2]);
 });
 
 test(`after ${MAX_OFFERS} unconfirmed offers the message is refused and not offered again`, (t) => {
   const paths = setup(t);
   const messageId = inbox(paths, 1);
-  for (let n = 1; n <= MAX_OFFERS; n++) assert.match(hook(paths, "UserPromptSubmit"), /message 1/);
-  assert.equal(hook(paths, "UserPromptSubmit"), "");
+  for (let n = 1; n <= MAX_OFFERS; n++) assert.match(hook(paths, "UserPromptSubmit", (n - 1) * REOFFER_AFTER_MS), /message 1/);
+  assert.equal(hook(paths, "UserPromptSubmit", MAX_OFFERS * REOFFER_AFTER_MS), "");
   assert.deepEqual([state(paths, messageId), getMessage(paths.inbox, messageId)?.reason],
     ["refused", `not confirmed by the session after ${MAX_OFFERS} turns`]);
   assert.equal(hook(paths, "Stop"), "");

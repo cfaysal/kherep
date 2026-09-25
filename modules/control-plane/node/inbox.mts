@@ -19,6 +19,9 @@ export const INBOX_RETENTION_MS = 7 * 24 * 60 * 60_000;
 // A waiting message for a session that a successful listing does not show is
 // refused this long after it arrived.
 export const UNDELIVERABLE_AFTER_MS = 60 * 60_000;
+// A message at this reply depth or deeper wakes no session and asks for no
+// automatic answer (see InboxRecord.depth).
+export const MAX_REPLY_DEPTH = 6;
 
 export interface InboxRecord {
   messageId: string;
@@ -33,6 +36,12 @@ export interface InboxRecord {
   // Set by the delivery hook each time it hands the message to a turn.
   offers?: number;
   offeredAt?: string;
+  // Set by StopFailure: the turn that carried the offer ended on an API error,
+  // so the next UserPromptSubmit offers it again at once.
+  retry?: boolean;
+  // Reply hops: 0 for a new message, one more than the depth of this node's
+  // sent message it answers (exchange.mts replyDepth). Missing means 0.
+  depth?: number;
   // Set by the daemon once it sent message.status for reportedState.
   reportedAt?: string;
   reportedState?: ReportedState;
@@ -60,14 +69,14 @@ export function writeJsonAtomic(file: string, value: unknown): void {
 
 // Stores a delivered message. Idempotent: a redelivery of a stored id keeps
 // the existing file. Throws when the record cannot be written.
-export function storeMessage(dir: string, body: MessageDeliverBody, now: number = Date.now()): InboxRecord {
+export function storeMessage(dir: string, body: MessageDeliverBody, now: number = Date.now(), depth = 0): InboxRecord {
   const existing = getMessage(dir, body.messageId);
   if (existing) return existing;
   ensureDir(dir);
   const record: InboxRecord = {
     messageId: body.messageId, from: { nodeId: body.from.nodeId, session: body.from.session }, toSession: body.toSession,
     text: body.text, ...(body.inReplyTo ? { inReplyTo: body.inReplyTo } : {}), createdAt: body.createdAt,
-    receivedAt: new Date(now).toISOString(), state: "accepted",
+    receivedAt: new Date(now).toISOString(), state: "accepted", depth,
   };
   writeJsonAtomic(fileOf(dir, body.messageId), record);
   return record;
@@ -118,9 +127,18 @@ export function markDelivered(dir: string, messageId: string): MessageStatusBody
 export function markOffered(dir: string, messageId: string, now: number = Date.now()): InboxRecord | null {
   const record = getMessage(dir, messageId);
   if (!record) return null;
-  const offered: InboxRecord = { ...record, state: "offered", offers: (record.offers ?? 0) + 1, offeredAt: new Date(now).toISOString() };
+  const { retry: _retry, ...rest } = record;
+  const offered: InboxRecord = { ...rest, state: "offered", offers: (record.offers ?? 0) + 1, offeredAt: new Date(now).toISOString() };
   writeJsonAtomic(fileOf(dir, messageId), offered);
   return offered;
+}
+
+// Flags an offered message for an immediate new offer; false when it is not offered.
+export function markRetry(dir: string, messageId: string): boolean {
+  const record = getMessage(dir, messageId);
+  if (record?.state !== "offered") return false;
+  writeJsonAtomic(fileOf(dir, messageId), { ...record, retry: true });
+  return true;
 }
 
 // Refuses a message that still waits for its session; true when it did.

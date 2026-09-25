@@ -52,8 +52,8 @@ async function run(paths: NodePaths, argv: string[], env: NodeJS.ProcessEnv = EN
   return { code, out: out.join("\n"), err: err.join("\n") };
 }
 
-test("resolves the node and the session by name or id and keeps the reference as typed", () => {
-  assert.deepEqual(resolveTarget(DIRECTORY, "node-b/docs"), { ok: true, value: { nodeId: PEER, session: "docs" } });
+test("resolves the node and the session by name or id and addresses the session by its id", () => {
+  assert.deepEqual(resolveTarget(DIRECTORY, "node-b/docs"), { ok: true, value: { nodeId: PEER, session: "s-b3" } });
   assert.deepEqual(resolveTarget(DIRECTORY, `${PEER}/s-b1`), { ok: true, value: { nodeId: PEER, session: "s-b1" } });
   const ambiguous = resolveTarget(DIRECTORY, "node-b/build");
   assert.equal(ambiguous.ok, false);
@@ -90,8 +90,8 @@ test("msg send writes an outbox record from this session's name and prints the m
   const sent = await run(paths, ["send", "node-b/docs", "please", "review"]);
   assert.equal(sent.code, 0, sent.err);
   const record = getOutbox(paths, sent.out);
-  assert.deepEqual(record, { messageId: sent.out, fromSession: "review", to: { nodeId: PEER, session: "docs" }, text: "please review",
-    createdAt: new Date(NOW).toISOString() });
+  assert.deepEqual(record, { messageId: sent.out, fromSession: "review", to: { nodeId: PEER, session: "s-b3" }, text: "please review",
+    createdAt: new Date(NOW).toISOString(), depth: 0 });
 
   // Without a name in sessions.json the id is the sender; --from overrides both.
   assert.equal(getOutbox(paths, (await run(paths, ["send", "node-b/docs", "x"], { CLAUDE_CODE_SESSION_ID: "s-other" })).out)?.fromSession, "s-other");
@@ -112,16 +112,17 @@ test("msg send writes an outbox record from this session's name and prints the m
 
 test("msg send --reply-to answers the sender of an inbox message and --wait reports the answer", async (t) => {
   const paths = setup(t);
+  // The incoming message is itself a reply at depth 2, so the answer is at depth 3.
   storeMessage(paths.inbox, { messageId: INCOMING, from: { nodeId: PEER, session: "build" }, toSession: "review", text: "done?",
-    createdAt: new Date(0).toISOString() });
+    createdAt: new Date(0).toISOString() }, NOW, 2);
   fs.rmSync(paths.directory); // a reply to the sender needs no directory
   const reply = await run(paths, ["send", "--reply-to", INCOMING, "yes"]);
   assert.equal(reply.code, 0, reply.err);
   assert.deepEqual(getOutbox(paths, reply.out), { messageId: reply.out, fromSession: "review", to: { nodeId: PEER, session: "build" },
-    text: "yes", inReplyTo: INCOMING, createdAt: new Date(NOW).toISOString() });
+    text: "yes", inReplyTo: INCOMING, createdAt: new Date(NOW).toISOString(), depth: 3 });
   writeDirectory(paths, DIRECTORY);
   const redirected = await run(paths, ["send", "--reply-to", INCOMING, "--to", "node-b/docs", "cc"]);
-  assert.deepEqual(getOutbox(paths, redirected.out)?.to, { nodeId: PEER, session: "docs" });
+  assert.deepEqual(getOutbox(paths, redirected.out)?.to, { nodeId: PEER, session: "s-b3" });
   assert.match((await run(paths, ["send", "--reply-to", "00000000-0000-4000-8000-0000000000ff", "x"])).err, /not in this node's inbox/);
 
   // --wait: the sleep hook plays the daemon and moves the record to sent/.

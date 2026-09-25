@@ -25,6 +25,9 @@ export interface ClientOptions {
   sessions: () => Promise<SessionInfo[]>;
   // Stores an accepted message in the node inbox; throws when it cannot.
   storeMessage: (body: MessageDeliverBody) => void;
+  // The last local session listing (sessions.json), so a policy rule for a
+  // session name also accepts a message addressed by that session's id.
+  localSessions?: () => { sessionId: string; name?: string }[];
   // Step 3a: the directory frame, and the state of a message this node sent.
   storeDirectory?: (body: DirectoryBody) => void;
   sentUpdate?: (messageId: string, state: SentState, reason?: string) => void;
@@ -144,7 +147,13 @@ export class NodeClient {
   // queued and delivers it again after the next authentication.
   private onDeliver(body: MessageDeliverBody): string[] {
     const { messageId } = body;
-    if (!acceptsMessage(this.options.policy, body.toSession, body.from.nodeId)) {
+    let local: { sessionId: string; name?: string }[] = [];
+    try {
+      local = this.options.localSessions?.() ?? [];
+    } catch {
+      // unreadable listing: only the addressed reference itself matches
+    }
+    if (!acceptsMessage(this.options.policy, body.toSession, body.from.nodeId, local)) {
       return [this.frame("message.status", { messageId, state: "refused", reason: "not accepted by node policy" })];
     }
     try {

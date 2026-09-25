@@ -123,10 +123,13 @@ async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<
   let to: MessageAddress | null = null;
   let target = values.to;
   let words = rest;
+  // A reply is one hop deeper than the message it answers.
+  let depth = 0;
   if (replyTo !== undefined) {
     if (!isMessageId(replyTo)) return fail(io, `--reply-to needs a message id, got "${replyTo}"`);
     const original = getMessage(io.paths.inbox, replyTo);
     if (!original) return fail(io, `message ${replyTo} is not in this node's inbox`);
+    depth = (original.depth ?? 0) + 1;
     if (!target) {
       if (original.from.nodeId === OPERATOR_NODE_ID) return fail(io, "the message came from the operator API and cannot be answered with msg send");
       to = { nodeId: original.from.nodeId, session: original.from.session };
@@ -150,7 +153,7 @@ async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<
   if (!Number.isFinite(wait) || wait < 0) return fail(io, `--wait needs a number of seconds, got "${values.wait}"`);
 
   const record: OutboxRecord = { messageId: crypto.randomUUID(), fromSession: from.value, to, text,
-    ...(replyTo ? { inReplyTo: replyTo } : {}), createdAt: new Date(io.now()).toISOString() };
+    ...(replyTo ? { inReplyTo: replyTo } : {}), createdAt: new Date(io.now()).toISOString(), depth };
   writeOutbox(io.paths, record);
   io.out(record.messageId);
   return wait > 0 ? waitForAnswer(io, record.messageId, wait * 1000) : 0;
