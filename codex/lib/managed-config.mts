@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { stableNodePath } from "./node-path.mts";
+
 export interface RegistryOptions {
   claudeRegistryFile?: string;
   registryBridge: string;
@@ -22,7 +24,7 @@ function tomlString(value: unknown): string {
 export function resolveRegistry(options: RegistryOptions): RegistryResolution {
   const registry = path.resolve(options.claudeRegistryFile || path.join(os.homedir(), ".claude.json"));
   const bridge = path.resolve(options.registryBridge);
-  const node = path.resolve(options.nodePath || process.execPath);
+  const node = options.nodePath ? path.resolve(options.nodePath) : stableNodePath(process.execPath);
   for (const [label, target] of [["Claude MCP registry", registry], ["Node runtime", node]]) {
     if (!fs.statSync(target, { throwIfNoEntry: false })?.isFile()) {
       throw new Error(`${label} not found: ${target}`);

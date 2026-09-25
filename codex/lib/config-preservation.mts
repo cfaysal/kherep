@@ -7,6 +7,7 @@ import { recoverManagedMcpProjection } from "./mcp-operator-binding.mts";
 import * as parityConfig from "./parity-config.mts";
 import { recognizeHistoricalManagedConfig } from "./historical-managed-artifacts.mts";
 import { configureMemoryNotify } from "./memory-provider.mts";
+import { managedNodePaths, withManagedNodePaths } from "./node-path.mts";
 import { managedFragmentFamily, retiredCentralBrainFragments, retireUnmanagedCentralBrainTable } from "./retired-central-brain.mts";
 import type { RetiredCentralBrainRender } from "./retired-central-brain.mts";
 import { enableHooks, setMarkedBlock, setTopLevelSetting } from "./text-merge.mts";
@@ -203,7 +204,8 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
       config, name, options.startMarker, options.endMarker,
     )));
   let next = setTopLevelSetting(migrated, "model_reasoning_effort", '"xhigh"');
-  next = configureMemoryNotify(next, options.node, options.memoryNotifyHook);
+  const previousNodes = managedNodePaths(config, options.startMarker, options.endMarker, options.node);
+  next = configureMemoryNotify(next, options.node, options.memoryNotifyHook, previousNodes);
   next = enableHooks(next);
   const retiredTable = retireUnmanagedCentralBrainTable(next, options.retiredCentralBrain, options.startMarker, options.endMarker);
   next = retiredTable.config;
@@ -235,7 +237,7 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
   const upgrade = preserveConfigUpgrade(next, {
     startMarker: options.startMarker,
     endMarker: options.endMarker,
-    knownManagedFragments: [
+    knownManagedFragments: withManagedNodePaths([
       ...[currentRenderOptions, beforeControlPlane].flatMap((current) => {
         const previousStop = { ...current, observationStopHook: false };
         return [...managedFragmentFamily(current, previousStop),
@@ -247,7 +249,7 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
       parityConfig.renderPreviousNudgesPrefix({ ...predecessorRenderOptions, registryBridge: options.registryBridge }),
       parityConfig.renderLegacyJavaScript(predecessorRenderOptions),
       parityConfig.renderLegacyJavaScriptPrefix(predecessorRenderOptions),
-    ].concat(historical),
+    ].concat(historical), options.node, previousNodes),
     managedReplacement: parityConfig.render(currentRenderOptions),
     mcpServerNames: registryProjections.map(({ name }) => name),
     retiredBridge,

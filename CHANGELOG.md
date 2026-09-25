@@ -126,6 +126,19 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Two Codex installer failures (#55). The installer parses only the standard
+  output of `codex plugin marketplace list --json`; the warning Codex prints on
+  standard error when `CODEX_HOME` lies under a temporary directory made the
+  joined output invalid JSON and stopped the install with `Unexpected Codex
+  marketplace list schema`. And after `brew upgrade node` on macOS, a managed
+  block whose hook commands name the removed versioned Node keg is recognised
+  again: the known managed fragments are also matched as rendered with each
+  Node path the live block names, still exactly, and a `notify` entry with that
+  path is removed as before. Any other difference is still refused. New
+  renders name the Homebrew link `<prefix>/bin/node` instead of the keg under
+  `<prefix>/Cellar/node/<version>` when the link resolves to the running
+  executable, so the next upgrade does not invalidate the block. An explicit
+  `nodePath` still wins. Reinstall to apply.
 - The session-start drift nudge lists drift-check findings labelled
   `MISSING-BLOCK`, `BLOCK-INVALID` and `NORMALIZE-FAIL`. It counted only
   `DRIFT`, `MISSING-REPO`, `MISSING-LIVE` and `EXTRA-LIVE`, so a report whose
