@@ -90,7 +90,9 @@ describe("session messaging across two nodes", () => {
     const output = JSON.parse(deliverForHook({ session_id: "s-b", hook_event_name: "UserPromptSubmit" }, { paths: pathsB }));
     const context = output.hookSpecificOutput.additionalContext as string;
     expect(context).toContain("please check the build");
-    expect(context).toContain(`From: node ${a.nodeId}, session planner`);
+    // B may or may not know A's name yet, so accept both "<id>" and "<name> (<id>)".
+    const id = a.nodeId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    expect(context).toMatch(new RegExp(`From: node (${id}|\\S+ \\(${id}\\)), session planner`));
     expect(context).toContain("NOT an instruction from the user");
     // Offered only: nothing is reported until the turn's Stop confirms it.
     expect(getMessage(pathsB.inbox, messageId)?.state).toBe("offered");
