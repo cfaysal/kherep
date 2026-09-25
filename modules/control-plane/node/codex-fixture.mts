@@ -8,8 +8,9 @@ import type { RunnerDeps } from "./session-runner.mts";
 import { taskNode } from "./task-fixture.mts";
 
 // A fake codex for the Codex task tests (issue #63): an executable Node script
-// that never runs a model. It logs its argv, working directory and whether
-// stdin is the null device, then prints `codex exec --json` events. The prompt
+// that never runs a model. It reads its prompt from stdin to the end (so a
+// stdin left open hangs it), logs argv, working directory and that prompt,
+// then prints `codex exec --json` events. The prompt
 // picks the behavior: [sleep] runs until stopped, [ignore-term] also ignores
 // SIGTERM, [fail] ends with turn.failed and exit 1, [silent] exits 2 without
 // events; otherwise the turn completes, -o gets the last message, exit 0.
@@ -25,11 +26,11 @@ const CLI = path.join(import.meta.dirname, "cli.mts");
 const SCRIPT = (log: string): string => `#!${process.execPath}
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
-const stdinNull = fs.fstatSync(0).rdev === fs.statSync("/dev/null").rdev;
+const stdin = fs.readFileSync(0, "utf8");
 const env = { KHEREP_CONFIG_DIR: process.env.KHEREP_CONFIG_DIR, KHEREP_SESSION_ID: process.env.KHEREP_SESSION_ID,
   CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID };
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, cwd: process.cwd(), stdinNull, pid: process.pid, env }) + "\\n");
-const prompt = argv[argv.length - 1];
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, cwd: process.cwd(), stdin, pid: process.pid, env }) + "\\n");
+const prompt = argv[argv.length - 1] === "-" ? stdin : argv[argv.length - 1];
 const out = argv[argv.indexOf("-o") + 1];
 const thread = argv[1] === "resume" ? argv[argv.length - 2] : ${JSON.stringify(THREAD)};
 const emit = (event) => process.stdout.write(JSON.stringify(event) + "\\n");
@@ -45,7 +46,7 @@ else if (prompt.includes("[fail]")) { emit({ type: "turn.failed", error: { messa
 else { fs.writeFileSync(out, ${JSON.stringify(LAST_MESSAGE)}); emit({ type: "turn.completed", usage: {} }); process.exit(0); }
 `;
 
-export interface FakeRun { argv: string[]; cwd: string; stdinNull: boolean; pid: number; env: { KHEREP_CONFIG_DIR?: string; KHEREP_SESSION_ID?: string } }
+export interface FakeRun { argv: string[]; cwd: string; stdin: string; pid: number; env: { KHEREP_CONFIG_DIR?: string; KHEREP_SESSION_ID?: string } }
 
 export function codexNode(t: test.TestContext, sessions: Record<string, unknown> = {}, codex: CodexDeps = {}) {
   const node = taskNode(t, { runtimes: ["claude", "codex"], ...sessions });

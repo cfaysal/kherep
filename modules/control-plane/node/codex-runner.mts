@@ -1,7 +1,7 @@
 import { MAX_SUMMARY, type SessionContinueArgs, type SessionStopArgs } from "../protocol-tasks.mts";
 import {
-  codexEnv, codexFiles, findCodex, readEvents, readExit, readLastMessage, resumeArgs, sameProcess, spawnCodex, startArgs, startTimeOf,
-  terminate, type CodexExit, type CodexFiles,
+  codexEnv, codexFiles, findCodex, holdsChild, readEvents, readExit, readLastMessage, resumeArgs, spawnCodex, startArgs, startTimeOf,
+  stillRuns, terminate, type CodexExit, type CodexFiles,
 } from "./codex-process.mts";
 import { ensureDir } from "./config.mts";
 import { getMessage, markDelivered, markRetry } from "./inbox.mts";
@@ -20,6 +20,7 @@ import { frameFollowUp } from "./task-prompt.mts";
 // messages (codex-wake.mts) keeps the task's state and settles its offers.
 
 export const MAX_RUNTIME_REASON = "max runtime reached";
+export const IDENTITY_UNKNOWN = "process identity unknown";
 const POLL_MS = 100;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); });
@@ -27,34 +28,34 @@ const sessionOf = (record: TaskRecord) => (record.sessionId ? { sessionId: recor
 
 export type RunArgs = (files: CodexFiles, outbox: string) => string[];
 
-// Spawns codex for the record, with the outbox as its one extra writable root
-// and the session named in its environment, and records pid and start time.
-// Rejects when it cannot start.
-export async function spawnRun(deps: RunnerDeps, record: TaskRecord, args: RunArgs): Promise<TaskRecord> {
+// Spawns codex for the record, with the outbox as its one extra writable root,
+// the session named in its environment and the prompt on stdin, and records
+// pid and start time. Rejects when it cannot start.
+export async function spawnRun(deps: RunnerDeps, record: TaskRecord, args: RunArgs, prompt: string): Promise<TaskRecord> {
   const codex = deps.codex ?? {};
   const files = codexFiles(deps.paths, record.taskId);
   const file = (codex.findCodex ?? findCodex)();
   if (!file) throw new Error("codex is not installed on this node");
   ensureDir(deps.paths.outbox);
   const pid = await spawnCodex(codex, file, args(files, deps.paths.outbox), record.cwd, files,
-    codexEnv(deps.paths, record.sessionId ?? record.name));
+    codexEnv(deps.paths, record.sessionId ?? record.name), prompt);
   let pidStart: string | undefined;
   try {
     pidStart = startTimeOf(codex, pid) ?? undefined;
   } catch {
-    // without it the process cannot be stopped; the deadline logs that
+    // the watch reads it again while this daemon holds the child
   }
   return writeTask(deps.paths, { ...record, pid, pidStart }, deps.now?.());
 }
 
 // spawnRun, then up to startWaitMs for thread.started (or the process's end)
 // when the thread is not known yet. A start error fails the task.
-async function launch(deps: RunnerDeps, record: TaskRecord, args: RunArgs): Promise<TaskRecord> {
+async function launch(deps: RunnerDeps, record: TaskRecord, args: RunArgs, prompt: string): Promise<TaskRecord> {
   const codex = deps.codex ?? {};
   const files = codexFiles(deps.paths, record.taskId);
   let saved: TaskRecord;
   try {
-    saved = await spawnRun(deps, record, args);
+    saved = await spawnRun(deps, record, args, prompt);
   } catch (error) {
     const message = String((error as Error).message);
     writeTask(deps.paths, { ...record, state: "failed", reason: trim(message) });
@@ -72,7 +73,7 @@ async function launch(deps: RunnerDeps, record: TaskRecord, args: RunArgs): Prom
 }
 
 export async function startCodex(deps: RunnerDeps, record: TaskRecord, prompt: string): Promise<{ taskId: string; state: string; sessionId?: string }> {
-  const saved = await launch(deps, record, (files, outbox) => startArgs(record.cwd, record.permissionMode, files, outbox, prompt));
+  const saved = await launch(deps, record, (files, outbox) => startArgs(record.cwd, record.permissionMode, files, outbox), prompt);
   return { taskId: saved.taskId, state: saved.state, ...sessionOf(saved) };
 }
 
@@ -82,31 +83,32 @@ export async function continueCodex(args: SessionContinueArgs, deps: RunnerDeps)
   if (!deps.policy.sessions?.enabled) throw new Error("sessions are not enabled on this node");
   if (!deps.policy.sessions.runtimes.includes("codex")) throw new Error("runtime codex is not supported on this node yet");
   if (!record.sessionId) throw new Error("the task's session id is not known yet");
-  if (record.state === "started" || record.state === "running" || record.running || sameProcess(deps.codex ?? {}, record.pid, record.pidStart)) {
+  if (record.state === "started" || record.state === "running" || record.running || stillRuns(deps.codex ?? {}, record.pid, record.pidStart)) {
     throw new Error("the task's session is still running");
   }
   const now = deps.now?.() ?? Date.now();
   const limit = overLimit(deps, now, args.taskId);
   if (limit) throw new Error(limit);
   const threadId = record.sessionId;
-  const prompt = frameFollowUp(args.taskId, args.prompt, deps.cli ?? cliCommand());
+  const prompt = frameFollowUp(args.taskId, args.prompt, deps.cli ?? cliCommand(), "codex");
   const restarted: TaskRecord = { ...record, state: "started", reason: undefined, pid: undefined, pidStart: undefined,
     deadline: new Date(now + deps.policy.sessions.maxRuntimeMinutes * 60_000).toISOString() };
-  const saved = await launch(deps, restarted, (files, outbox) => resumeArgs(threadId, record.permissionMode, files, outbox, prompt));
+  const saved = await launch(deps, restarted, (files, outbox) => resumeArgs(threadId, record.permissionMode, files, outbox), prompt);
   return { taskId: saved.taskId, state: saved.state };
 }
 
-// Ends the process after the identity check. A task that already reported done
-// keeps that state; only the process ends.
+// Ends the process after the identity check (terminate). A task that already
+// reported done, or whose run was one for peer messages (running), keeps its
+// reported state and sends no report; only the process ends.
 export async function stopCodex(args: SessionStopArgs, deps: RunnerDeps, reason: string): Promise<{ taskId: string; state: string }> {
   const record = readTask(deps.paths, args.taskId)!;
-  if (record.pid === undefined || record.pidStart === undefined) throw new Error("the task's process is not known");
+  if (record.pid === undefined) throw new Error("the task's process is not known");
   terminate(deps.codex ?? {}, record.pid, record.pidStart);
   settleOffered(deps, record, false);
-  const reportedDone = record.state === "done";
-  const saved = writeTask(deps.paths, { ...record, state: reportedDone ? "done" : "stopped", reason, running: undefined, offered: undefined },
+  const keep = record.state === "done" || record.running === true;
+  const saved = writeTask(deps.paths, { ...record, ...(keep ? {} : { state: "stopped", reason }), running: undefined, offered: undefined },
     deps.now?.());
-  if (!reportedDone) queueReport(deps.paths, { taskId: saved.taskId, state: "stopped", reason, ...sessionOf(saved) });
+  if (!keep) queueReport(deps.paths, { taskId: saved.taskId, state: "stopped", reason, ...sessionOf(saved) });
   return { taskId: saved.taskId, state: saved.state };
 }
 
@@ -142,8 +144,34 @@ function exitReason(exit: CodexExit | null): string {
 // its deadline and reports how an ended process finished, once.
 export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => void = () => {}): Promise<void> {
   const now = deps.now?.() ?? Date.now();
-  for (const record of listTasks(deps.paths).filter((t) => t.runtime === "codex" && isActive(t))) {
+  const codex = deps.codex ?? {};
+  for (let record of listTasks(deps.paths).filter((t) => t.runtime === "codex" && isActive(t))) {
     const files = codexFiles(deps.paths, record.taskId);
+    // A start time the spawn could not read is read again while this daemon
+    // holds the child; its pid cannot be reused before that.
+    if (record.pidStart === undefined && holdsChild(record.pid)) {
+      try {
+        const pidStart = startTimeOf(codex, record.pid!);
+        if (pidStart) record = writeTask(deps.paths, { ...record, pidStart }, now);
+      } catch {
+        // the next round tries again; the held child can be stopped meanwhile
+      }
+    }
+    // Without start time, held child or seen exit (a daemon restart), the
+    // process can be neither identified nor stopped: the run counts as failed
+    // instead of holding a slot for ever. A run for peer messages keeps the
+    // task's reported state.
+    if (record.pidStart === undefined && !holdsChild(record.pid) && readExit(files) === null) {
+      log(`kherep-node: task ${record.taskId}: ${IDENTITY_UNKNOWN}; its process, if any, was not stopped`);
+      settleOffered(deps, record, false);
+      if (record.running) {
+        writeTask(deps.paths, { ...record, running: undefined, offered: undefined }, now);
+        continue;
+      }
+      const saved = writeTask(deps.paths, { ...record, state: "failed", reason: IDENTITY_UNKNOWN, offered: undefined }, now);
+      queueReport(deps.paths, { taskId: saved.taskId, state: "failed", reason: IDENTITY_UNKNOWN, ...sessionOf(saved) });
+      continue;
+    }
     const threadId = record.sessionId ?? readEvents(files).threadId;
     const mapped: TaskRecord = { ...record, ...(threadId ? { sessionId: threadId } : {}) };
     if (now >= Date.parse(record.deadline)) {
@@ -157,9 +185,7 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
     }
     let running: boolean;
     try {
-      // Without a start time only an exit this daemon saw tells the run ended.
-      if (record.pidStart === undefined && readExit(files) === null) throw new Error("its process start time is not known");
-      running = sameProcess(deps.codex ?? {}, record.pid, record.pidStart);
+      running = stillRuns(codex, record.pid, record.pidStart);
     } catch (error) {
       log(`kherep-node: task ${record.taskId}: ${String((error as Error).message ?? error)}`);
       continue; // a failed read decides nothing

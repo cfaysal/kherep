@@ -40,7 +40,7 @@ export async function handleTaskFrame(env: Env, nodeId: string, type: "task.repo
     return refuse("the requesting node runs an active task; a node sends task requests only while it runs none");
   }
   const runtime = body.requirements.runtime ?? "claude";
-  if (!SUPPORTED_RUNTIMES.includes(runtime)) return refuse(`runtime ${runtime} is not supported yet; this step starts Claude sessions only`);
+  if (!SUPPORTED_RUNTIMES.includes(runtime)) return refuse(`runtime ${runtime} is not supported by this control plane`);
   const requestedBy = `${nodeId}/${body.requestedBy}`;
   const result = await dispatchTask(env, {
     title: body.title, text: body.text, requirements: body.requirements, permissionMode: "auto", createdBy: `session:${requestedBy}`,

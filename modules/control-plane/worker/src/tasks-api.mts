@@ -39,7 +39,7 @@ async function createTask(request: Request, env: Env, actor: string): Promise<Re
   const requirements = body.requirements ?? {};
   if (!isTaskRequirements(requirements)) return fail(400, "invalid requirements");
   const runtime = requirements.runtime ?? "claude";
-  if (!SUPPORTED_RUNTIMES.includes(runtime)) return fail(400, `runtime ${runtime} is not supported yet; this step starts Claude sessions only`);
+  if (!SUPPORTED_RUNTIMES.includes(runtime)) return fail(400, `runtime ${runtime} is not supported by this control plane`);
   const mode = body.permissionMode ?? DEFAULT_PERMISSION_MODE;
   if (!isPermissionMode(mode)) return json({ error: "permission mode not allowed", allowed: PERMISSION_MODES }, 400);
   const result = await dispatchTask(env, { title: body.title, text: body.text, requirements, permissionMode: mode, createdBy: actor });

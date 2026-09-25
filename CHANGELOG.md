@@ -30,7 +30,9 @@ increments the minor version; every other release increments the patch version.
   write the node's outbox (its only extra writable root) and gets
   `KHEREP_CONFIG_DIR` and `KHEREP_SESSION_ID`, so `msg send` works from the
   sandbox; the msg CLI honours `KHEREP_SESSION_ID` when
-  `CLAUDE_CODE_SESSION_ID` is not set.
+  `CLAUDE_CODE_SESSION_ID` is not set. The prompt goes to Codex on stdin, never as a
+  process argument. A Codex task whose process cannot be identified after a
+  daemon restart is reported failed (`process identity unknown`).
 
 - Control Plane tasks: the operator creates a task with `POST /api/tasks`
   (behind Access), and the Worker dispatches `session.start` to an online node
