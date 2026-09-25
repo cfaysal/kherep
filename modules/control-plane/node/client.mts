@@ -2,11 +2,17 @@ import {
   isCommandBody, makeEnvelope, parseEnvelope, PONG_FRAME, type ChallengeBody, type Envelope, type MessageType,
   type NodeFacts, type Phase1Command, type RuntimeInfo, type SessionInfo,
 } from "../protocol.mts";
-import { isMessageDeliverBody, type MessageDeliverBody } from "../protocol-messages.mts";
+import {
+  isDirectoryBody, isMessageDeliverBody, isMessageId, isMessageStatusBody, type DirectoryBody, type MessageDeliverBody,
+  type MessageSendBody, type MessageState,
+} from "../protocol-messages.mts";
 import { signChallenge, type NodeIdentity } from "./identity.mts";
 import { acceptsMessage, advertisedCapabilities, isAllowed, type NodePolicy } from "./policy.mts";
 
 export type CommandHandlers = Record<Phase1Command, () => Promise<unknown>>;
+// The state of a message this node sent: a Worker state, or error when the
+// Worker rejected the message.send frame itself.
+export type SentState = MessageState | "error";
 
 export interface ClientOptions {
   nodeId: string;
@@ -19,6 +25,9 @@ export interface ClientOptions {
   sessions: () => Promise<SessionInfo[]>;
   // Stores an accepted message in the node inbox; throws when it cannot.
   storeMessage: (body: MessageDeliverBody) => void;
+  // Step 3a: the directory frame, and the state of a message this node sent.
+  storeDirectory?: (body: DirectoryBody) => void;
+  sentUpdate?: (messageId: string, state: SentState, reason?: string) => void;
   log?: (line: string) => void;
   now?: () => number;
 }
@@ -63,12 +72,28 @@ export class NodeClient {
         return [
           this.frame("register", { facts: this.options.facts(), runtimes: await this.options.runtimes(), capabilities: advertisedCapabilities(this.options.policy) }),
           ...await this.sessionsSnapshot(),
+          ...this.directoryRequest(),
         ];
       case "command":
         return this.authenticated ? this.onCommand(envelope) : [];
       case "message.deliver":
         if (!this.authenticated || !isMessageDeliverBody(envelope.body)) return [];
         return this.onDeliver(envelope.body);
+      case "directory":
+        if (isDirectoryBody(envelope.body)) this.callback("directory", () => this.options.storeDirectory?.(envelope.body as DirectoryBody));
+        return [];
+      case "message.status": {
+        const body = envelope.body;
+        if (isMessageStatusBody(body)) this.callback(body.messageId, () => this.options.sentUpdate?.(body.messageId, body.state, body.reason));
+        return [];
+      }
+      case "error": {
+        // The Worker answers a message.send it cannot take with an error frame
+        // that names the message.
+        const { messageId, error } = envelope.body as { messageId?: unknown; error?: unknown };
+        if (isMessageId(messageId)) this.callback(messageId, () => this.options.sentUpdate?.(messageId, "error", String(error).slice(0, 256)));
+        return [];
+      }
       default:
         return [];
     }
@@ -90,6 +115,27 @@ export class NodeClient {
     if (json === this.lastSnapshot) return [];
     this.lastSnapshot = json;
     return [this.frame("sessions.snapshot", { sessions })];
+  }
+
+  directoryRequest(): string[] {
+    return this.authenticated ? [this.frame("directory.get", {})] : [];
+  }
+
+  sendMessage(body: MessageSendBody): string[] {
+    return this.authenticated ? [this.frame("message.send", { ...body, to: { ...body.to } })] : [];
+  }
+
+  reportDelivered(messageId: string): string[] {
+    return this.authenticated ? [this.frame("message.status", { messageId, state: "delivered" })] : [];
+  }
+
+  // A failing local write is logged; the frame loop goes on.
+  private callback(what: string, run: () => void): void {
+    try {
+      run();
+    } catch (error) {
+      this.options.log?.(`kherep-node: could not record ${what}: ${String((error as Error).message ?? error)}`);
+    }
   }
 
   // Refused unless the local policy accepts this sender for this session.

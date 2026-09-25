@@ -22,16 +22,19 @@ export interface InboxRecord {
   createdAt: string;
   receivedAt: string;
   state: "accepted" | "delivered";
+  // Set by the daemon once it sent message.status delivered to the Worker.
+  reportedAt?: string;
 }
 
 function fileOf(dir: string, messageId: string): string {
   return path.join(dir, `${messageId}.json`);
 }
 
-// Temp file plus rename, so a reader never sees a half-written record.
-function writeAtomic(file: string, record: InboxRecord): void {
+// Temp file plus rename, so a reader never sees a half-written record. Also
+// used for the other files the daemon and the session tools exchange.
+export function writeJsonAtomic(file: string, value: unknown): void {
   const temp = path.join(path.dirname(file), `.${path.basename(file)}.${crypto.randomUUID()}.tmp`);
-  fs.writeFileSync(temp, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+  fs.writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: "wx" });
   try {
     fs.renameSync(temp, file);
   } catch (error) {
@@ -51,21 +54,26 @@ export function storeMessage(dir: string, body: MessageDeliverBody, now: number 
     text: body.text, ...(body.inReplyTo ? { inReplyTo: body.inReplyTo } : {}), createdAt: body.createdAt,
     receivedAt: new Date(now).toISOString(), state: "accepted",
   };
-  writeAtomic(fileOf(dir, body.messageId), record);
+  writeJsonAtomic(fileOf(dir, body.messageId), record);
   return record;
 }
 
-export function getMessage(dir: string, messageId: string): InboxRecord | null {
-  if (!isMessageId(messageId)) return null;
+// The parsed file, or null when it does not exist. Other errors throw.
+export function readJson<T>(file: string): T | null {
   try {
-    return JSON.parse(fs.readFileSync(fileOf(dir, messageId), "utf8")) as InboxRecord;
+    return JSON.parse(fs.readFileSync(file, "utf8")) as T;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
 }
 
-function messageIds(dir: string): string[] {
+export function getMessage(dir: string, messageId: string): InboxRecord | null {
+  return isMessageId(messageId) ? readJson<InboxRecord>(fileOf(dir, messageId)) : null;
+}
+
+// The message ids of the <messageId>.json files in a directory.
+export function messageIds(dir: string): string[] {
   try {
     return fs.readdirSync(dir).filter((name) => name.endsWith(".json")).map((name) => name.slice(0, -5)).filter(isMessageId);
   } catch (error) {
@@ -86,8 +94,18 @@ export function listInbox(dir: string, toSession?: string): InboxRecord[] {
 export function markDelivered(dir: string, messageId: string): MessageStatusBody | null {
   const record = getMessage(dir, messageId);
   if (!record) return null;
-  if (record.state !== "delivered") writeAtomic(fileOf(dir, messageId), { ...record, state: "delivered" });
+  if (record.state !== "delivered") writeJsonAtomic(fileOf(dir, messageId), { ...record, state: "delivered" });
   return { messageId, state: "delivered" };
+}
+
+// Delivered records whose status the daemon has not reported yet.
+export function unreportedDeliveries(dir: string): InboxRecord[] {
+  return listInbox(dir).filter((r) => r.state === "delivered" && r.reportedAt === undefined);
+}
+
+export function markReported(dir: string, messageId: string, now: number = Date.now()): void {
+  const record = getMessage(dir, messageId);
+  if (record) writeJsonAtomic(fileOf(dir, messageId), { ...record, reportedAt: new Date(now).toISOString() });
 }
 
 // Removes records received more than the retention period ago, and leftover

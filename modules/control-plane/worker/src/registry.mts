@@ -1,9 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 
 import type { NodeFacts, RuntimeInfo, SessionInfo } from "../../protocol.mts";
-import type { MessageStatusBody } from "../../protocol-messages.mts";
+import type { DirectoryBody, MessageStatusBody } from "../../protocol-messages.mts";
 import { randomToken, sha256 } from "./crypto.mts";
 import type { Env } from "./env.mts";
+import { directoryBody } from "./directory.mts";
 import { routeEffects } from "./message-routing.mts";
 import { MessageStore, type MessageEffects, type MessageRecord, type NewMessage, type SendResult } from "./message-store.mts";
 import {
@@ -100,6 +101,14 @@ export class Registry extends DurableObject<Env> {
         ...(r.kind === null ? {} : { kind: String(r.kind) }),
         updatedAt: Number(r.updated_at),
       }));
+  }
+
+  // The directory frame (issue #31, step 3a): non-revoked nodes and their
+  // sessions. Not audited: nodes ask for it every minute, and it carries no
+  // message content.
+  directory(): DirectoryBody {
+    const nodes = this.sql.exec("SELECT id, name, status FROM nodes WHERE revoked_at IS NULL ORDER BY name").toArray();
+    return directoryBody(nodes, this.listSessions(), Date.now());
   }
 
   setStatus(nodeId: string, status: Exclude<NodeStatus, "revoked">, lastSeen: number): void {
