@@ -153,6 +153,12 @@ export class TaskStore {
       match ? match[1] : "--------").toArray().length > 0;
   }
 
+  // True while any task of the node is active. A session names itself, so the
+  // Worker takes no task request from a node that runs task sessions.
+  hasActiveTasks(nodeId: string): boolean {
+    return this.sql.exec(`SELECT 1 FROM tasks WHERE node_id = ? AND state IN (${ACTIVE}) LIMIT 1`, nodeId).toArray().length > 0;
+  }
+
   // A message may carry a task id only when the sender or the target node runs the task.
   taskOnEitherNode(taskId: string, from: string, to: string): boolean {
     const task = this.get(taskId, false);

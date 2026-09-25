@@ -6,9 +6,9 @@ import {
 import { readConfig, type NodePaths } from "./config.mts";
 import { senderSession, SESSION_ENV } from "./msg-resolve.mts";
 import { loadPolicy } from "./policy.mts";
-import { NO_CHAINS, NOT_DELEGATING } from "./task-exchange.mts";
+import { NO_CHAINS, NOT_DELEGATING, TASKS_ACTIVE } from "./task-exchange.mts";
 import {
-  listTasks, queueReport, readRequest, readTask, requestIds, taskForSession, writeRequest, writeTask,
+  hasActiveTask, isActive, listTasks, queueReport, readRequest, readTask, requestIds, taskForSession, writeRequest, writeTask,
 } from "./task-records.mts";
 
 // kherep-node task: the session side of tasks (issue #31, item 5). Like the msg
@@ -58,7 +58,8 @@ export function runTaskArgs({ positionals, values }: TaskArgs, context: TaskCont
     const summary = values.summary;
     if (summary !== undefined && (summary.length === 0 || summary.length > MAX_SUMMARY)) return fail(`--summary must be 1 to ${MAX_SUMMARY} characters`);
     queueReport(paths, { taskId, state: "done", ...(record.sessionId ? { sessionId: record.sessionId } : {}), ...(summary ? { summary } : {}) });
-    writeTask(paths, { ...record, state: "done" }, now());
+    // The process may still run: it stays under the limits until the watch sees it end.
+    writeTask(paths, { ...record, state: "done", ...(isActive(record) ? { running: true } : {}) }, now());
     out(`task ${taskId} reported done`);
     return 0;
   }
@@ -87,6 +88,7 @@ function newTask(context: TaskContext, words: string[], values: TaskArgs["values
   if (taskForSession(paths, env[SESSION_ENV])) return fail(NO_CHAINS);
   const policy = loadPolicy(readConfig(paths.config)?.policyFile ?? paths.policy);
   if (!policy.sessions?.delegate.request) return fail(NOT_DELEGATING);
+  if (hasActiveTask(paths)) return fail(TASKS_ACTIVE);
   const from = senderSession(paths, env);
   if (!from.ok) return fail(from.error);
   const directive = values.directive ?? "";

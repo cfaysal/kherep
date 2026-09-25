@@ -40,7 +40,9 @@ describe("operator task end to end", () => {
     await node.exchange();
     await vi.waitFor(async () => expect(await taskOf(taskId)).toMatchObject({ state: "done", resultSummary: "build is green" }), WAIT);
 
-    // Continue resumes the same session in the background.
+    // Continue resumes the same session in the background, once its process
+    // has ended; until then the node keeps it under its limits.
+    await node.watch("done");
     expect((await api(`/api/tasks/${taskId}/continue`, { prompt: "also update the changelog" })).status).toBe(202);
     await vi.waitFor(() => expect(node.calls.some((args) => args[0] === "--resume" && args[1] === SESSION_ID)).toBe(true), WAIT);
     const audit = await auditFor(taskId);
@@ -103,6 +105,11 @@ describe("delegated task requests", () => {
     writeRequest(accepting.paths, chained);
     accepting.raw(accepting.client.requestTask(chained));
     await vi.waitFor(() => expect(readRequest(accepting.paths, chained.requestId)?.reason).toBe("a session started for a task cannot request tasks"), WAIT);
+    // A spoofed session name does not help: a node with an active task sends no requests.
+    const spoofed = request("random-id");
+    writeRequest(accepting.paths, spoofed);
+    accepting.raw(accepting.client.requestTask(spoofed));
+    await vi.waitFor(() => expect(readRequest(accepting.paths, spoofed.requestId)?.reason).toMatch(/runs an active task/), WAIT);
     const audit = await auditFor(taskId);
     expect(audit).toEqual(expect.arrayContaining([expect.objectContaining({ action: "task.create", actor: `session:${maestro.nodeId}/maestro` })]));
     const created = JSON.parse(String(audit.find((row) => row.action === "task.create")!.detail));

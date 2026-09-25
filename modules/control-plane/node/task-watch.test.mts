@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { startTask } from "./session-runner.mts";
-import { startArgs, TASK, taskNode } from "./task-fixture.mts";
+import { parseTaskArgs, runTaskArgs } from "./task-cli.mts";
+import { startArgs, TASK, taskId, taskNode } from "./task-fixture.mts";
 import { readTask, writeTask } from "./task-records.mts";
 import { watchTasks } from "./task-watch.mts";
 
@@ -41,6 +42,40 @@ test("maps the session id later when it was not listed at start", async (t) => {
   await watchTasks(node.deps());
   assert.deepEqual(node.reports(), [{ taskId: TASK, state: "running", sessionId: SESSION }]);
   assert.equal(readTask(node.paths, TASK)?.shortId, "b0000000");
+});
+
+test("a task its session reported done stays under the limits until its process ends", async (t) => {
+  const node = taskNode(t, { maxRuntimeMinutes: 30, maxConcurrent: 1 });
+  await startTask(startArgs(), node.deps());
+  const done = runTaskArgs(parseTaskArgs(["done", TASK, "--summary", "ok"]),
+    { paths: node.paths, env: { CLAUDE_CODE_SESSION_ID: SESSION }, out: () => {}, err: () => {} });
+  assert.equal(done, 0);
+  node.reports();
+  // Still counted: the claude process keeps running after `task done`.
+  await assert.rejects(startTask(startArgs(taskId(2)), node.deps()), /at most 1 task sessions at a time/);
+  node.reports();
+  await watchTasks(node.deps());
+  assert.deepEqual(node.reports(), [], "done is reported once, by task done");
+  node.tick(30 * 60_000);
+  await watchTasks(node.deps());
+  await watchTasks(node.deps());
+  assert.equal(node.calls.filter((c) => c.args[0] === "stop").length, 1, "the deadline still stops it, once");
+  assert.deepEqual(node.reports(), [], "the Worker keeps done");
+  assert.deepEqual([readTask(node.paths, TASK)?.state, readTask(node.paths, TASK)?.running], ["done", undefined]);
+  await startTask(startArgs(taskId(2)), node.deps());
+});
+
+test("a task reported done is released when claude agents shows its session ended", async (t) => {
+  const node = taskNode(t, { maxConcurrent: 1 });
+  await startTask(startArgs(), node.deps());
+  runTaskArgs(parseTaskArgs(["done", TASK]), { paths: node.paths, env: {}, out: () => {}, err: () => {} });
+  await watchTasks(node.deps());
+  assert.equal(readTask(node.paths, TASK)?.running, true, "still working");
+  node.rows[0].state = "done";
+  await watchTasks(node.deps());
+  assert.equal(readTask(node.paths, TASK)?.running, undefined);
+  await startTask(startArgs(taskId(2)), node.deps());
+  assert.equal(node.calls.filter((c) => c.args[0] === "stop").length, 0);
 });
 
 test("stops a task session after its max runtime and reports it stopped", async (t) => {

@@ -19,6 +19,10 @@ export interface TaskRecord {
   // shortId: the id `claude --bg` prints, for `claude stop`; sessionId: the
   // full id from `claude agents --json`, for `claude --resume`.
   shortId?: string; sessionId?: string; requestedBy?: string; reason?: string;
+  // Set by `task done`: the session reported done, but its process may still
+  // run, so the record stays counted and watched (limits, deadline) until
+  // `claude agents` shows the session ended or the deadline stopped it.
+  running?: boolean;
 }
 
 export type RequestState = "pending" | "dispatched" | "refused";
@@ -27,7 +31,8 @@ export interface TaskRequestRecord extends TaskRequestBody {
 }
 
 export const ACTIVE_STATES: readonly TaskState[] = ["started", "running", "needs-input"];
-export const isActive = (record: TaskRecord): boolean => ACTIVE_STATES.includes(record.state);
+export const isActive = (record: TaskRecord): boolean => ACTIVE_STATES.includes(record.state) || record.running === true;
+export const hasActiveTask = (paths: NodePaths): boolean => listTasks(paths).some(isActive);
 
 const fileOf = (dir: string, id: string): string => path.join(dir, `${id}.json`);
 
