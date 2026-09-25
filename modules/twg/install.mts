@@ -203,7 +203,17 @@ function parseArgs(argv: string[]): { runtime: Runtime; homeDir: string } {
   return { runtime, homeDir: path.resolve(homeDir || envHome || path.join(os.homedir(), `.${runtime}`)) };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+// Node loads the main module from its real path, so a script started through a
+// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+function isMainModule(): boolean {
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1] || "")).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   try {
     const args = parseArgs(process.argv.slice(2));
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));

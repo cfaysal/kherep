@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -70,7 +71,17 @@ export async function main(argv: string[]): Promise<number> {
   return 2;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+// Node loads the main module from its real path, so a script started through a
+// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+function isMainModule(): boolean {
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1] || "")).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (error: unknown) => {
     console.error(`kherep-node: ${(error as Error).message ?? String(error)}`);
     process.exitCode = 1;

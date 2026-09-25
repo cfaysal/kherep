@@ -208,6 +208,37 @@ test("reports successful setup without exposing the Confluence target identity",
   );
 });
 
+// The CLI entry once compared import.meta.url with pathToFileURL(argv[1]).
+// Node resolves the entry module to its real path, argv[1] keeps the symlink,
+// so a script reached through any symlinked component (macOS /var ->
+// /private/var) did nothing and exited 0. The fixture root is resolved first,
+// so the only symlink on the invoked path is the one this test creates.
+test("runs as a CLI when invoked through a symlinked directory", (t) => {
+  const fixture = createCliFixture();
+  t.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
+  fs.writeFileSync(
+    fixture.broker,
+    'process.stdout.write("id: private-space-id\\nkey: PRIVATEKEY\\nname: Private Space Name\\n");\n',
+  );
+  const realRoot = fs.realpathSync(fixture.root);
+  const link = path.join(realRoot, "linked-bootstrap");
+  try {
+    fs.symlinkSync(path.join(realRoot, "bootstrap"), link, "dir");
+  } catch (error) {
+    if ((error as { code?: string }).code === "EPERM") {
+      t.skip("directory symlink creation is not permitted on this host");
+      return;
+    }
+    throw error;
+  }
+
+  const result = runCli({ ...fixture, script: path.join(link, "confluence-space.mts") });
+
+  assert.equal(result.status, 0, String(result.stderr));
+  assert.equal(result.stdout, "confluence space: configured\nplacement nodes: 1 of 1 resolved\n");
+  assert.equal(JSON.parse(fs.readFileSync(fixture.target, "utf8")).spaceId, privateSpace.id);
+});
+
 test("persists explicit observation publication authority", (t) => {
   const fixture = createCliFixture();
   t.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
