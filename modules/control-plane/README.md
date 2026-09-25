@@ -178,7 +178,7 @@ Messaging is off unless `policy.json` accepts it. The optional `messaging` secti
 - An accepted message is written to `inbox/<messageId>.json` atomically (a temporary file renamed into place) with `messageId`, `from`, `toSession`, `text`, optional `inReplyTo`, `createdAt`, `receivedAt` and `state` `accepted`. A redelivered message keeps the existing file. When the file cannot be written the node sends no status, so the Worker keeps the message queued and delivers it again after the next authentication.
 - Records older than 7 days are removed when the daemon starts. Handing a message to a running session and reporting `delivered` come in a later step; `node/inbox.mts` already exports `listInbox`, `getMessage` and `markDelivered` for it.
 
-Runtime discovery checks `PATH` for `claude` and `codex` without running them, and probes LM Studio (`127.0.0.1:1234`) and Ollama (`127.0.0.1:11434`) on loopback only.
+Runtime discovery checks `PATH` for `claude` and `codex` without running them, then the per-user and package-manager directories that a service's minimal `PATH` (a macOS LaunchAgent, for example) lacks: `~/.local/bin`, `~/.claude/local`, `~/.npm-global/bin`, `/opt/homebrew/bin` and `/usr/local/bin`, or `%APPDATA%\npm` on Windows. Session discovery uses the same lookup; a Windows npm shim (`claude.cmd`) runs through `cmd.exe` with a fixed command line, any other executable runs without a shell. Runtime discovery also probes LM Studio (`127.0.0.1:1234`) and Ollama (`127.0.0.1:11434`) on loopback only.
 
 The control URL must be an `https` origin; plain `http` is accepted only for a loopback development Worker.
 

@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { configRoot, connectUrl, nodePaths, normalizeControlUrl } from "./config.mts";
-import { findOnPath } from "./discovery.mts";
+import { fallbackDirs, findOnPath } from "./discovery.mts";
 import { readPrivateKey } from "./identity.mts";
 import { nodeStatus, onboard, unenroll } from "./onboard.mts";
 
@@ -92,6 +92,29 @@ test("runtime discovery finds executables on PATH without running them", (t) => 
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const win = process.platform === "win32";
   fs.writeFileSync(path.join(dir, win ? "claude.cmd" : "claude"), "", { mode: 0o755 });
-  assert.ok(findOnPath("claude", { pathEnv: dir, pathExt: ".CMD" }));
-  assert.equal(findOnPath("codex", { pathEnv: dir, pathExt: ".CMD" }), null);
+  const deps = { pathEnv: dir, pathExt: ".CMD", fallback: [] };
+  assert.ok(findOnPath("claude", deps));
+  assert.equal(findOnPath("codex", deps), null);
+});
+
+test("the fallback directories cover per-user and package-manager installs", () => {
+  assert.deepEqual(fallbackDirs({ platform: "darwin", home: "/Users/u" }),
+    ["/Users/u/.local/bin", "/Users/u/.claude/local", "/Users/u/.npm-global/bin", "/opt/homebrew/bin", "/usr/local/bin"]);
+  assert.deepEqual(fallbackDirs({ platform: "win32", home: "C:\\Users\\u", appData: "D:\\Roaming" }), ["D:\\Roaming\\npm"]);
+});
+
+test("an executable missing from a minimal PATH is found in a fallback directory, PATH first", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-node-fallback-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const win = process.platform === "win32";
+  const onPath = path.join(root, "path");
+  const home = path.join(root, "home");
+  const userBin = win ? path.join(root, "appdata", "npm") : path.join(home, ".local", "bin");
+  for (const dir of [onPath, userBin]) fs.mkdirSync(dir, { recursive: true });
+  const file = (dir: string) => path.join(dir, win ? "claude.cmd" : "claude");
+  fs.writeFileSync(file(userBin), "", { mode: 0o755 });
+  const deps = { pathEnv: onPath, pathExt: ".CMD", home, appData: path.join(root, "appdata") };
+  assert.equal(findOnPath("claude", deps), file(userBin));
+  fs.writeFileSync(file(onPath), "", { mode: 0o755 });
+  assert.equal(findOnPath("claude", deps), file(onPath));
 });

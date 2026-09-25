@@ -5,7 +5,7 @@ import { makeEnvelope, parseEnvelope, type SessionInfo } from "../protocol.mts";
 import { NodeClient } from "./client.mts";
 import { generateIdentity } from "./identity.mts";
 import { DEFAULT_POLICY } from "./policy.mts";
-import { CLAUDE_RUNTIME, LIST_TIMEOUT_MS, listSessions, mapClaudeAgents } from "./sessions.mts";
+import { CLAUDE_RUNTIME, claudeInvocation, LIST_TIMEOUT_MS, listSessions, mapClaudeAgents } from "./sessions.mts";
 
 const STARTED = Date.UTC(2026, 0, 2, 3, 4, 5);
 const ROW = { pid: 4242, cwd: "/work/repo", kind: "interactive", startedAt: STARTED, sessionId: "0f0e0d0c-1111-4222-8333-444455556666",
@@ -27,14 +27,31 @@ test("skips malformed rows and fails only on output that is not a list", () => {
   assert.equal(mapClaudeAgents({ sessions: [] }), null);
 });
 
-test("runs claude agents --json without a shell and with the timeout", async () => {
+async function invoked(resolved: string, platform: NodeJS.Platform): Promise<unknown[]> {
   const calls: unknown[] = [];
   const sessions = await listSessions({
-    findClaude: () => "/opt/bin/claude",
-    exec: async (file, args, timeoutMs) => { calls.push([file, args, timeoutMs]); return JSON.stringify([ROW]); },
+    findClaude: () => resolved, platform, comSpec: "C:\\Windows\\system32\\cmd.exe",
+    exec: async (file, args, options) => { calls.push([file, args, options]); return JSON.stringify([ROW]); },
   });
-  assert.deepEqual(calls, [["/opt/bin/claude", ["agents", "--json"], LIST_TIMEOUT_MS]]);
   assert.equal(sessions.length, 1);
+  return calls;
+}
+
+test("runs claude agents --json directly, without a shell, for an executable", async () => {
+  const direct = (file: string) => [[file, ["agents", "--json"], { timeout: LIST_TIMEOUT_MS }]];
+  assert.deepEqual(await invoked("/opt/bin/claude", "linux"), direct("/opt/bin/claude"));
+  assert.deepEqual(await invoked("C:\\tools\\claude.exe", "win32"), direct("C:\\tools\\claude.exe"));
+  assert.deepEqual(await invoked("C:\\tools\\claude", "win32"), direct("C:\\tools\\claude"));
+  // A .cmd name only means a shim on Windows.
+  assert.deepEqual(await invoked("/opt/bin/claude.cmd", "darwin"), direct("/opt/bin/claude.cmd"));
+});
+
+test("runs a Windows npm shim through cmd.exe with a fixed command line", async () => {
+  const shim = "C:\\Users\\user\\AppData\\Roaming\\npm\\claude.cmd";
+  assert.deepEqual(await invoked(shim, "win32"), [["C:\\Windows\\system32\\cmd.exe",
+    ["/d", "/s", "/c", `"${shim}" agents --json`], { timeout: LIST_TIMEOUT_MS, windowsVerbatimArguments: true }]]);
+  assert.equal(claudeInvocation("C:\\npm\\CLAUDE.BAT", "win32", "cmd.exe").file, "cmd.exe");
+  assert.throws(() => claudeInvocation("C:\\%PATH%\\claude.cmd", "win32"), /not safe/);
 });
 
 test("claude not on PATH contributes no sessions and runs nothing", async () => {
