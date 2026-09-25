@@ -24,6 +24,14 @@ const slash = (value: string): string =>
 const hookCommand = (repo: string): string => `node "${repo}/${HOOK}"`;
 type HookGroups = { hooks: Record<string, { hooks: { command: string }[] }[]> };
 const lastCommand = (value: HookGroups, event: string) => value.hooks[event].at(-1)?.hooks.at(-1)?.command;
+// Some Node releases the engines range admits, 24.1.0 among them, print this
+// warning when a child loads a .mts file. Only this exact pair of lines is
+// dropped; any other stderr still fails the assertion.
+const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
+  + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
+  + "created\\)\\r?\\n", "gm");
+const withoutTypeStrippingWarning = (stderr: string | Buffer): string =>
+  String(stderr).replace(TYPE_STRIPPING_WARNING, "");
 
 function hostEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KHEREP_")));
@@ -77,7 +85,7 @@ test("install wires the delivery hook from the checkout, drift-check is clean an
     assert.equal(lastCommand(settings, event), expected, `${event} does not end with the delivery hook`);
     // Run as stored, through bash like Claude Code: inert without an enrolled node.
     const run = bash(["-c", expected], f, JSON.stringify({ session_id: "s", hook_event_name: event }));
-    assert.deepEqual([run.status, run.stdout, run.stderr], [0, "", ""], `${event}: ${run.stderr}`);
+    assert.deepEqual([run.status, run.stdout, withoutTypeStrippingWarning(run.stderr)], [0, "", ""], `${event}: ${run.stderr}`);
   }
 
   const drift = bash([slash(path.join(HERE, "drift-check.sh"))], f);
