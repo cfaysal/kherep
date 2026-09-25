@@ -38,12 +38,14 @@ test("the Claude text names exactly the ccoder broker invocation", () => {
 // the checkout instead of the workspace root and reported a missing broker.
 test("the Claude text takes the broker only from confluence.json, verbatim", () => {
   assert.doesNotMatch(CLAUDE_OBS, /<workspace>/);
-  for (const line of CLAUDE_OBS.split(/\r?\n/).filter((entry) => /^ {4}\S/.test(entry))) {
-    assert.doesNotMatch(line, /^ +node /, `a command line composes the broker itself: ${line}`);
-  }
+  const composed = CLAUDE_OBS.split(/\r?\n/).filter((line) => /^ {4}node /.test(line));
+  assert.deepEqual(composed, [], "a command line composes the broker itself");
   assert.match(CLAUDE_OBS, /exactly as stored/i);
   assert.match(CLAUDE_OBS, /never derive[\s\S]{0,200}working\s+directory[\s\S]{0,200}repository/i);
   assert.match(CLAUDE_OBS, /`OBS-RESULT: failed missing broker <[^>]*path[^>]*>`/);
+  // The installer writes broker on every install and the space only once it
+  // resolved, so a file with broker alone is a host without a space.
+  assert.match(CLAUDE_OBS, /`broker` but no\s+`spaceKey`[\s\S]{0,120}`OBS-RESULT: failed no space configured`/);
 });
 
 test("the Claude text mentions the Codex broker only to prohibit it", () => {

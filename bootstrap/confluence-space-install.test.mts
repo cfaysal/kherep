@@ -27,7 +27,8 @@ function withoutComments(file: string, source: string): string {
 
 test("install.sh resolves the space into the Claude home", () => {
   const installSh = read("bootstrap", "install.sh");
-  const at = installSh.indexOf('node "$REPO_ROOT/bootstrap/confluence-space.mts"');
+  // The full space step; the broker-only call in the preflight has its own test.
+  const at = installSh.indexOf('node "$REPO_ROOT/bootstrap/confluence-space.mts" --out');
   assert.notEqual(at, -1, "install.sh does not run bootstrap/confluence-space.mts");
   // From the invocation to the end of its failure branch, so a line
   // continuation between the two does not decide the outcome.
@@ -40,6 +41,18 @@ test("install.sh resolves the space into the Claude home", () => {
   // from the very values the permission rules are rendered from.
   assert.match(statement, /--runtime claude --profile "\$KHEREP_PROFILE" --workspace "\$WS"/);
   assert.match(installSh, /render-profile\.mts" settings \\\s*"\$KHEREP_PROFILE" "\$WS" /);
+});
+
+// Issue #13 (review MEDIUM-1). The broker command does not wait for the
+// credential and space steps: it is rendered in the preflight on every install,
+// from the live file, and placed by the transaction like the other rendered files.
+test("install.sh renders and places the broker on every install, apart from the space step", () => {
+  const code = withoutComments("install.sh", read("bootstrap", "install.sh"));
+  const render = code.indexOf("confluence-space.mts\" --broker-only");
+  assert.notEqual(render, -1, "install.sh never runs the broker-only step");
+  assert.match(code.slice(render), /^confluence-space\.mts" --broker-only --runtime claude \\\s*--profile "\$KHEREP_PROFILE" --workspace "\$WS" --out "\$PREFLIGHT_DIR\/confluence\.json"/);
+  assert.ok(render < code.indexOf("transaction_begin"), "rendered before the first live mutation, outside C2/C3");
+  assert.match(code, /install_path "kherep\/confluence\.json" "\$PREFLIGHT_DIR\/confluence\.json" \\\s*"\$CLAUDE_HOME\/kherep\/confluence\.json"/);
 });
 
 // OP-1421. The other runtime. `--runtime` is the difference to the credential

@@ -54,7 +54,7 @@ const WORKSPACE_TOOL = "node __KHEREP_WORKSPACE__/tools/";
 // Git Bash consumes the backslashes of a native Windows path: node D:\ws/tools/x
 // reaches node as D:ws/tools/x, relative to the current directory. Forward
 // slashes work in Git Bash, PowerShell and node alike.
-export function workspaceCommandPath(profile: string, workspace: string): string {
+function workspaceCommandPath(profile: string, workspace: string): string {
   return resolveProfilePath(profile, workspace).replace(/\\/g, "/");
 }
 

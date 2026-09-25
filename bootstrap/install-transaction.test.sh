@@ -358,6 +358,13 @@ test_default_confluence_brokers() {
     fail "installed claude-obs.md lacks the stored-broker invocation"
   ! grep -qF "<workspace>" "$C/agents/claude-obs.md" ||
     fail "installed claude-obs.md leaves the broker path to the model (issue #13)"
+  # The space step is skipped here, yet the broker command is installed and
+  # names the projected broker (issue #13, review MEDIUM-1).
+  node -e '
+    const fs = require("fs"), c = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const m = /^node (\S+\/tools\/atl-confluence-ccoder\.mts)$/.exec(c.broker || "");
+    if (!m || c.broker.includes("\\") || "spaceKey" in c || !fs.existsSync(m[1])) process.exit(1);
+  ' "$C/kherep/confluence.json" || fail "a skipped space step left no usable broker in confluence.json"
   HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
     bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
     { cat "$ROOT/drift.log"; fail "drift-check failed after a default install"; }

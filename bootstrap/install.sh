@@ -136,6 +136,7 @@ transaction_validate_path_under_root "local-inference lib" "$CLAUDE_HOME/kherep/
 transaction_validate_path_under_root "local-inference config" "$CLAUDE_HOME/kherep/local-inference/config.json" "$CLAUDE_HOME" 0 || exit $?
 transaction_validate_path_under_root "TWG runtime" "$CLAUDE_HOME/kherep/twg" "$CLAUDE_HOME" 0 || exit $?
 transaction_validate_path_under_root "commit policy" "$CLAUDE_HOME/kherep/githooks/commit-policy" "$CLAUDE_HOME" 0 || exit $?
+transaction_validate_path_under_root "Confluence configuration" "$CLAUDE_HOME/kherep/confluence.json" "$CLAUDE_HOME" 0 || exit $?
 if [ "$SKIP_SECRETS" = "0" ]; then
   for target in \
     "$CLAUDE_HOME/.mcp.json"; do
@@ -164,6 +165,15 @@ node "$REPO_ROOT/bootstrap/render-profile.mts" local-inference "$KHEREP_PROFILE"
 # the run before the first live mutation; precedence in bootstrap/commit-policy.mts.
 node "$REPO_ROOT/bootstrap/commit-policy.mts" render "$WS" \
   "$CLAUDE_HOME/kherep/githooks/commit-policy" "$PREFLIGHT_DIR/commit-policy"
+# Issue #13. The broker command claude-obs runs, from the values the permission
+# rules above are rendered from. Rendered on EVERY install and apart from the
+# credential and space steps (C2/C3), so an upgrade whose space step is skipped
+# or fails still names this workspace. Merged into a copy of the live file, so
+# only `broker` changes; an unreadable live file stops the run here.
+[ ! -f "$CLAUDE_HOME/kherep/confluence.json" ] ||
+  cp "$CLAUDE_HOME/kherep/confluence.json" "$PREFLIGHT_DIR/confluence.json"
+node "$REPO_ROOT/bootstrap/confluence-space.mts" --broker-only --runtime claude \
+  --profile "$KHEREP_PROFILE" --workspace "$WS" --out "$PREFLIGHT_DIR/confluence.json" >/dev/null
 # OP-1425. $WS/CLAUDE.md and $WS/AGENTS.md belong to the operator; Kherep renders
 # only its marked block into them. Rendered here so a refused merge (one marker
 # without the other) stops the run before the first live mutation.
@@ -193,6 +203,9 @@ done < "$REPO_ROOT/bootstrap/manifest/files.txt"
 install_path "kherep/githooks/commit-policy" "$PREFLIGHT_DIR/commit-policy" \
   "$CLAUDE_HOME/kherep/githooks/commit-policy" "$INSTALL_BACKUP/kherep/githooks/commit-policy"
 echo "install: commit policy -> $(grep '^work_item_required=' "$PREFLIGHT_DIR/commit-policy") ($CLAUDE_HOME/kherep/githooks/commit-policy)"
+install_path "kherep/confluence.json" "$PREFLIGHT_DIR/confluence.json" \
+  "$CLAUDE_HOME/kherep/confluence.json" "$INSTALL_BACKUP/kherep/confluence.json"
+echo "install: Confluence broker command -> $CLAUDE_HOME/kherep/confluence.json"
 install_path "CLAUDE.md" "$CLAUDE_SRC/CLAUDE.user.md" "$CLAUDE_HOME/CLAUDE.md" "$INSTALL_BACKUP/CLAUDE.md"
 install_path "project/CLAUDE.md" "$PREFLIGHT_DIR/project-CLAUDE.md" "$WS/CLAUDE.md" "$INSTALL_BACKUP/project/CLAUDE.md"
 # AGENTS.md is what binds the Codex runtime. It existed live since months with no
@@ -369,12 +382,13 @@ fi
 # Only the exact value 1 skips; a real install without the switch still runs the
 # step and still fails on a missing space. Skipping only C2 does not make the
 # space optional: the install then fails, because the space was never checked.
-# The same file carries `broker`, the absolute command claude-obs runs. It is
-# rendered from the profile and workspace the settings step above renders the
-# permission rules from, so it is their prefix byte for byte (issue #13).
+# The same file carries `broker`, the absolute command claude-obs runs, placed
+# on every install by the preflight broker-only step (issue #13). This step
+# passes the same profile and workspace, so it writes the same value, and it
+# merges: every key it does not own survives.
 SKIP_KNOWLEDGE_SPACE="$(kherep_env INSTALL_SKIP_KNOWLEDGE_SPACE 0)"
 if [ "$SKIP_KNOWLEDGE_SPACE" = "1" ]; then
-  echo "install: SKIP_KNOWLEDGE_SPACE=1 (Confluence knowledge space not resolved; $CLAUDE_HOME/kherep/confluence.json untouched)"
+  echo "install: SKIP_KNOWLEDGE_SPACE=1 (Confluence knowledge space not resolved; the space keys in $CLAUDE_HOME/kherep/confluence.json stay as they were)"
 elif [ "$atl_credential_ok" = "1" ]; then
   KHEREP_ATL_CRED_FILE_CLAUDE="${KHEREP_ATL_CRED_FILE_CLAUDE:-$CLAUDE_HOME/kherep/atl-credential-claude.txt}" \
     node "$REPO_ROOT/bootstrap/confluence-space.mts" --out "$CLAUDE_HOME/kherep/confluence.json" \

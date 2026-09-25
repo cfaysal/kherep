@@ -26,8 +26,11 @@ test("install.sh runs the step for the claude runtime", () => {
   // dependent space read rather than treating an unauthenticated read as empty.
   assert.match(installSh, /if node[^\n]*atl-credential\.mts[^\n]*; then/);
   assert.match(installSh, /else\s+post_rc=1\s+echo "install: WARNING no verified Atlassian/);
+  // The full space step; the preflight broker-only call reads no space (issue #13).
+  const spaceStep = installSh.indexOf('bootstrap/confluence-space.mts" --out');
+  assert.notEqual(spaceStep, -1, "install.sh does not run the space step");
   assert.ok(
-    installSh.indexOf("bootstrap/atl-credential.mts") < installSh.indexOf("bootstrap/confluence-space.mts"),
+    installSh.indexOf("bootstrap/atl-credential.mts") < spaceStep,
     "the credential must be verified before resolving the space",
   );
   assert.match(installSh,

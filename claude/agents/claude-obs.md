@@ -152,8 +152,10 @@ The target space lives in the host's own configuration, not in this file:
 `~/.claude/kherep/confluence.json` (under the directory `CLAUDE_CONFIG_DIR` names, where it is set)
 with `spaceKey`, `spaceId`, `spaceName`, `broker` and `nodes`. It is never
 the bare user home: `~/.kherep/confluence.json` is not a valid location, and a file found there is
-not your configuration. A missing file is `failed missing broker`, see The broker. If the file has
-no `spaceKey`, you do NOT write and report `OBS-RESULT: failed no space configured`.
+not your configuration. A missing file is `failed missing broker`, see The broker. The installer
+writes `broker` on every install and the space only once it resolved, so a file that has `broker` but no
+`spaceKey` is a host without a space: you do NOT write and report
+`OBS-RESULT: failed no space configured`, not `missing broker`.
 
     <confluence.json broker> create --space <spaceKey> --parent <the id the nodes map gives for that node> \
       --title "<short title>" --format storage --body-file <file> \
