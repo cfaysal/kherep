@@ -127,17 +127,20 @@ export class Registry extends DurableObject<Env> {
   }
 
   // Revocation deletes the key binding (design section 2). The row stays, marked
-  // revoked, so the audit trail keeps its target.
-  revoke(nodeId: string, actor: string): boolean {
+  // revoked, so the audit trail keeps its target. Messages still queued for the
+  // node are refused in the same transaction; the caller pushes the returned
+  // statuses to their senders. Returns null when there was nothing to revoke.
+  revoke(nodeId: string, actor: string): MessageEffects | null {
     const found = this.sql.exec("SELECT id FROM nodes WHERE id = ? AND revoked_at IS NULL", nodeId).toArray().length > 0;
-    if (!found) return false;
-    this.ctx.storage.transactionSync(() => {
-      this.sql.exec("UPDATE nodes SET public_key = NULL, status = 'revoked', revoked_at = ? WHERE id = ?", Date.now(), nodeId);
+    if (!found) return null;
+    return this.ctx.storage.transactionSync(() => {
+      const now = Date.now();
+      this.sql.exec("UPDATE nodes SET public_key = NULL, status = 'revoked', revoked_at = ? WHERE id = ?", now, nodeId);
       this.sql.exec("DELETE FROM runtimes WHERE node_id = ?", nodeId);
       this.sql.exec("DELETE FROM sessions WHERE node_id = ?", nodeId);
       this.audit(actor, "node.revoke", nodeId);
+      return this.messages.refuseQueuedFor(nodeId, "target node revoked", actor, now);
     });
-    return true;
   }
 
   // ---- Messages (issue #31). The caller pushes the returned effects. -------

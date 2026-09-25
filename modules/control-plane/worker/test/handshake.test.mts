@@ -40,7 +40,7 @@ describe("challenge handshake", () => {
   it("rejects a revoked key", async () => {
     const key = await newKey();
     const nodeId = await enroll(key);
-    expect(await registry().revoke(nodeId, "test")).toBe(true);
+    expect(await registry().revoke(nodeId, "test")).not.toBeNull();
     await session(nodeId).revoke();
     const { socket, challenge } = await connect(nodeId);
     socket.send(makeEnvelope("auth", await signAuth(key, nodeId, challenge.nonce), 0, 0));

@@ -36,8 +36,10 @@ export async function handleApi(request: Request, env: Env, actor: string): Prom
   }
 
   if (parts.length === 3 && method === "DELETE") {
-    if (!(await registry.revoke(nodeId, actor))) return fail(404, "unknown or already revoked node");
+    const refused = await registry.revoke(nodeId, actor);
+    if (!refused) return fail(404, "unknown or already revoked node");
     await sessionStub(env, nodeId).revoke();
+    await routeEffects(env, refused);
     return json({ nodeId, status: "revoked" });
   }
 
@@ -58,8 +60,11 @@ export async function handleApi(request: Request, env: Env, actor: string): Prom
     const body = await readJsonObject(request);
     if (!body || !isSessionRef(body.session) || !isMessageText(body.text)) return fail(400, "invalid session or text");
     if (body.inReplyTo !== undefined && !isMessageId(body.inReplyTo)) return fail(400, "invalid inReplyTo");
+    const node = await registry.getNode(nodeId);
+    if (!node) return fail(404, "unknown node");
+    if (node.status === "revoked") return fail(409, "node revoked");
     // Operator-originated: the sender is "operator" with the Access identity
-    // as its session. Unknown or revoked targets are recorded as refused.
+    // as its session.
     const result = await registry.sendMessage({
       messageId: crypto.randomUUID(), from: { nodeId: OPERATOR_NODE_ID, session: actor.slice(0, MAX_SESSION_REF) },
       to: { nodeId, session: body.session }, text: body.text, inReplyTo: body.inReplyTo,

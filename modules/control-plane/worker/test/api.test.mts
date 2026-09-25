@@ -4,7 +4,8 @@ import { exportJWK, generateKeyPair, SignJWT, type CryptoKey as JoseKey, type JW
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index.mts";
-import { BASE, enroll, FACTS, newKey, registry, workerFetch } from "./helpers.mts";
+import { makeEnvelope } from "../../protocol.mts";
+import { authenticate, BASE, enroll, FACTS, newKey, registry, workerFetch } from "./helpers.mts";
 
 const TEAM = "https://team.example.com";
 const AUD = "test-audience";
@@ -132,6 +133,43 @@ describe("operator API", () => {
       state.storage.sql.exec("SELECT actor, action, detail FROM audit WHERE detail LIKE ?", `%${messageId}%`).toArray());
     expect(audit).toEqual([expect.objectContaining({ actor: "operator@example.com", action: "message.send" })]);
     expect(String(audit[0].detail)).not.toContain("operator secret");
+  });
+
+  it("refuses operator messages to unknown or revoked nodes like the commands endpoint", async () => {
+    const jwt = await token();
+    const post = (id: string) => api(`/api/nodes/${id}/messages`, { method: "POST", body: JSON.stringify({ session: "s", text: "x" }) }, jwt);
+    const unknown = await post(crypto.randomUUID());
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toEqual({ error: "unknown node" });
+    const nodeId = await enroll(await newKey());
+    expect((await api(`/api/nodes/${nodeId}`, { method: "DELETE" }, jwt)).status).toBe(200);
+    const revoked = await post(nodeId);
+    expect(revoked.status).toBe(409);
+    expect(await revoked.json()).toEqual({ error: "node revoked" });
+  });
+
+  it("refuses the queued messages of a revoked node and tells their senders", async () => {
+    const jwt = await token();
+    const senderKey = await newKey();
+    const senderId = await enroll(senderKey, "sender");
+    const targetId = await enroll(await newKey(), "target");
+    await registry().updateRegistration(targetId, FACTS, [], ["messaging.v1"]);
+    const sender = await authenticate(senderId, senderKey);
+    const messageId = crypto.randomUUID();
+    sender.send(makeEnvelope("message.send", { messageId, fromSession: "s-a", to: { nodeId: targetId, session: "s-b" }, text: "queued secret" }, 0, 0));
+    expect((await sender.next()).body).toEqual({ messageId, state: "queued" });
+
+    expect((await api(`/api/nodes/${targetId}`, { method: "DELETE" }, jwt)).status).toBe(200);
+    const status = await sender.next();
+    expect([status.type, status.body]).toEqual(["message.status", { messageId, state: "refused", reason: "target node revoked" }]);
+    const row = await runInDurableObject(registry(), (_i, state) =>
+      state.storage.sql.exec("SELECT state, text FROM messages WHERE id = ?", messageId).one());
+    expect(row).toEqual({ state: "refused", text: null });
+    const audit = await runInDurableObject(registry(), (_i, state) => state.storage.sql
+      .exec("SELECT actor, detail FROM audit WHERE action = 'message.state' AND detail LIKE ?", `%${messageId}%`).toArray());
+    expect(audit).toEqual([expect.objectContaining({ actor: "operator@example.com" })]);
+    expect(String(audit[0].detail)).not.toContain("queued secret");
+    sender.ws.close(1000, "done");
   });
 
   it("revokes a node and refuses further commands", async () => {

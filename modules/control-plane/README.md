@@ -53,8 +53,8 @@ A message goes from a session on one node to a session on another node. A sessio
 - States: `queued`, `accepted`, `delivered`, `replied`, `expired`, `refused`. A node may report `accepted`, `delivered`, `replied` and `refused`; `queued` and `expired` are set by the Worker only. Progress only moves forward; `refused` and `expired` are final. Only the target node of a message may report its state.
 - Sender: the Worker takes the sending node from the authenticated connection, never from the body. A `from` field in `message.send` is ignored. Messages sent through the API carry the sender node id `operator` and the Access identity as the session.
 - Idempotency: a repeated `message.send` with the same `messageId` from the same node creates no second message and is answered with the current state. The same `messageId` from another node is answered with an `error` frame.
-- Routing: the Worker stores the message as `queued` and answers the sender with `message.status`. It sends `message.deliver` at once when the target node is connected, otherwise after the target's next successful authentication, oldest first. Every state the target reports is forwarded to the sending node when it is connected.
-- Refusals: the Worker records `refused`, with a reason, and reports it to the sender when the target node is unknown or revoked, does not advertise the capability `messaging.v1`, or already has 100 queued messages.
+- Routing: the Worker stores the message as `queued` and answers the sender with `message.status`. It sends `message.deliver` at once when the target node is connected, otherwise after the target's next successful authentication, oldest first. Every state the target reports is forwarded to the sending node when it is connected. Statuses for a sender that is not connected are not stored for later delivery; read them through `GET /api/messages`.
+- Refusals: the Worker records `refused`, with a reason, and reports it to the sender when the target node is unknown or revoked, does not advertise the capability `messaging.v1`, or already has 100 queued messages. Revoking a node refuses every message still queued for it (reason `target node revoked`) and tells the senders.
 - Expiry: a message still queued 24 hours after it was sent becomes `expired`, and the sender is told. Expiry is checked on every message operation and by a `Registry` alarm set to the earliest expiry of a queued message.
 - The node daemon does not advertise `messaging.v1` yet. A `message.deliver` that arrives anyway is answered with `message.status` `refused`, reason `messaging not enabled on this node`.
 
@@ -78,7 +78,7 @@ A message goes from a session on one node to a session on another node. A sessio
 | `POST /api/nodes/{id}/commands` | Body `{"command": "node.status"}`; only the three Phase 1 commands |
 | `POST /api/enrollments` | Body `{"ttlSeconds": 600}` (optional); returns a one-time `code` |
 | `DELETE /api/nodes/{id}` | Revoke a node |
-| `POST /api/nodes/{id}/messages` | Body `{"session": "<target session>", "text": "...", "inReplyTo": "<uuid>"}` (`inReplyTo` optional); sends as `operator` and answers 202 with `messageId` and `state` (`queued`, or `refused` with a `reason`) |
+| `POST /api/nodes/{id}/messages` | Body `{"session": "<target session>", "text": "...", "inReplyTo": "<uuid>"}` (`inReplyTo` optional); sends as `operator` and answers 202 with `messageId` and `state` (`queued`, or `refused` with a `reason`); 404 for an unknown node, 409 for a revoked one |
 | `GET /api/messages?node={id}&limit={n}` | Message metadata, newest first, where the node is sender or target (`node` optional, `limit` 1-200, default 50); never the text |
 
 ## Setup
