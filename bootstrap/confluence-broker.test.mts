@@ -3,6 +3,10 @@
 // renders the permission rules, so the stored command and the allow rules
 // cannot drift apart. These tests render both for the same profile and
 // workspace and compare them byte for byte, then pin the re-install behaviour.
+//
+// On Windows the command names the workspace with forward slashes: Git Bash
+// consumes the backslashes of a native path, so node D:\ws/tools/x.mts reaches
+// node as D:ws/tools/x.mts, relative to the current directory.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -11,16 +15,24 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 
 import { parseArgs } from "./confluence-space.mts";
+import { resolveProfilePath } from "./render-profile-paths.mts";
 import { renderSettings } from "./render-profile.mts";
+import type { Settings } from "./render-profile-settings.mts";
 
 const HERE = import.meta.dirname;
 const REPO = path.join(HERE, "..");
 // The verbs claude/agents/claude-obs.md runs through the stored command.
 const OBS_VERBS = ["related", "create", "stitch", "children"];
+const ALL_VERBS = ["get", "related", "search", "create", "labels", "stitch", "children"];
+const WIN_WORKSPACE = "C:\\Users\\example\\Kherep";
 const HOSTS = [
-  { profile: "win", workspace: "C:\\Users\\example\\Kherep" },
+  { profile: "win", workspace: WIN_WORKSPACE },
   { profile: "mac", workspace: "/Users/example/Kherep" },
 ];
+// The command form: the resolved workspace with forward slashes. On a Windows
+// host that is C:/Users/example/Kherep.
+const commandForm = (profile: string, workspace: string): string =>
+  resolveProfilePath(profile, workspace).replace(/\\/g, "/");
 
 function tempRoot(t: TestContext): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-broker-"));
@@ -28,14 +40,21 @@ function tempRoot(t: TestContext): string {
   return root;
 }
 
-// The Claude allow rules that name the broker, rendered as install.sh renders them.
-function renderedBrokerRules(root: string, profile: string, workspace: string): string[] {
+// The settings pair exactly as install.sh renders it, optionally over an
+// existing user settings file.
+function render(root: string, profile: string, workspace: string, existingUser = "-"): { user: Settings; project: Settings } {
   const user = path.join(root, `settings-${profile}.json`);
+  const project = path.join(root, `settings-${profile}.local.json`);
   renderSettings([profile, workspace, path.join(root, "credentials"), path.join(root, "claude-home"),
     path.join(REPO, "claude", "settings.user.json"), path.join(REPO, "claude", "settings.project.json"),
-    "-", "-", user, path.join(root, `settings-${profile}.local.json`)]);
-  const allow = (JSON.parse(fs.readFileSync(user, "utf8")) as { permissions?: { allow?: string[] } })
-    .permissions?.allow ?? [];
+    existingUser, "-", user, project]);
+  const read = (file: string) => JSON.parse(fs.readFileSync(file, "utf8")) as Settings;
+  return { user: read(user), project: read(project) };
+}
+
+// The Claude allow rules that name the broker.
+function renderedBrokerRules(root: string, profile: string, workspace: string): string[] {
+  const allow = render(root, profile, workspace).user.permissions?.allow ?? [];
   return allow.filter((rule) => rule.includes("atl-confluence-ccoder.mts"));
 }
 
@@ -76,15 +95,50 @@ test("the stored broker command is the prefix of every rendered broker allow rul
     const space = spaceFixture(root);
     space.run(profile, workspace);
     const broker = stored(space.target).broker;
-    assert.equal(typeof broker, "string", profile);
-    assert.match(String(broker), /^node \S.*\/tools\/atl-confluence-ccoder\.mts$/, profile);
-    assert.doesNotMatch(String(broker), /<workspace>|__KHEREP_/, profile);
+    assert.equal(broker, `node ${commandForm(profile, workspace)}/tools/atl-confluence-ccoder.mts`, profile);
+    assert.doesNotMatch(String(broker), /\\|<workspace>|__KHEREP_/, profile);
+    if (profile === "win" && process.platform === "win32") {
+      assert.equal(broker, "node C:/Users/example/Kherep/tools/atl-confluence-ccoder.mts");
+    }
 
     const rules = renderedBrokerRules(root, profile, workspace);
-    assert.ok(rules.length >= OBS_VERBS.length, `${profile}: no rendered broker rules`);
-    for (const rule of rules) assert.ok(rule.startsWith(`Bash(${broker} `), `${profile}: ${rule}`);
+    assert.deepEqual(rules, ALL_VERBS.map((verb) => `Bash(${broker} ${verb}:*)`), `${profile}: same verbs, same file`);
     for (const verb of OBS_VERBS) assert.ok(rules.includes(`Bash(${broker} ${verb}:*)`), `${profile}: ${verb}`);
   }
+});
+
+// Only the Bash command rules take the forward-slash form. The workspace
+// directory grant goes through the same substitution and keeps the native path.
+test("the workspace directory grant keeps its native form", (t) => {
+  for (const { profile, workspace } of HOSTS) {
+    const dirs = render(tempRoot(t), profile, workspace).project.permissions?.additionalDirectories ?? [];
+    assert.ok(dirs.includes(resolveProfilePath(profile, workspace)), `${profile}: ${JSON.stringify(dirs)}`);
+  }
+});
+
+// A host installed before the switch carries the backslash rules. They are
+// dropped in the merge rather than kept beside the new ones; nothing else is.
+test("a re-render replaces the old backslash broker rules and keeps every unrelated rule", (t) => {
+  const root = tempRoot(t);
+  const native = resolveProfilePath("win", WIN_WORKSPACE);
+  const obsolete = ALL_VERBS.map((verb) => `Bash(node ${native}/tools/atl-confluence-ccoder.mts ${verb}:*)`);
+  assert.ok(obsolete.every((rule) => rule.includes("\\")), "the fixture must carry the backslash form");
+  const unrelated = [
+    "Bash(npm run test:*)",
+    `Read(${native}/**)`,
+    `Bash(node ${native}/tools/operator-helper.mts run:*)`,
+    "Bash(node D:\\Elsewhere/tools/atl-confluence-ccoder.mts get:*)",
+  ];
+  const existing = path.join(root, "existing-settings.json");
+  fs.writeFileSync(existing, JSON.stringify({ permissions: { allow: [...obsolete, ...unrelated] } }));
+
+  const allow = render(root, "win", WIN_WORKSPACE, existing).user.permissions?.allow ?? [];
+  const broker = `node ${commandForm("win", WIN_WORKSPACE)}/tools/atl-confluence-ccoder.mts`;
+  assert.deepEqual(allow.filter((rule) => rule.startsWith(`Bash(${broker} `)),
+    ALL_VERBS.map((verb) => `Bash(${broker} ${verb}:*)`));
+  for (const rule of obsolete) assert.ok(!allow.includes(rule), `still allowed: ${rule}`);
+  for (const rule of unrelated) assert.ok(allow.includes(rule), `lost: ${rule}`);
+  assert.equal(allow.length, obsolete.length + unrelated.length, "the allowlist does not grow");
 });
 
 test("a re-install keeps the space and its nodes, refreshes the broker, and is idempotent", (t) => {

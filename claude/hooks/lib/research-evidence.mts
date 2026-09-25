@@ -37,10 +37,13 @@ export function spaceKeyFrom(configPath: string = DEFAULT_CONFIG): string {
 
 // The Brain search both hooks name, resolved so no model composes the broker
 // path (issue #13). The same form bootstrap/render-profile-paths.mts renders
-// into the permission allowlist (path.resolve, then "/tools/..."), so the
-// suggested command matches the allow rule instead of raising a prompt.
+// into the permission allowlist (path.resolve with forward slashes, then
+// "/tools/..."), so the suggested command matches the allow rule instead of
+// raising a prompt. Forward slashes because Git Bash consumes the backslashes
+// of a native Windows path.
 export function brainSearchCommand(workspace: string, configPath?: string): string {
-  return `node ${path.resolve(workspace)}/tools/atl-confluence-ccoder.mts search --space ${spaceKeyFrom(configPath)} --query "<terms>"`;
+  const root = path.resolve(workspace).replace(/\\/g, "/");
+  return `node ${root}/tools/atl-confluence-ccoder.mts search --space ${spaceKeyFrom(configPath)} --query "<terms>"`;
 }
 
 const SHELL_TOOLS = new Set(["Bash", "PowerShell"]);

@@ -42,6 +42,24 @@ interface PortablePaths {
   workspace: string;
   credentialsRoot: string;
   claudeHome: string;
+  /** The workspace as a Bash command names it, see workspaceCommandPath. */
+  workspaceCommand: string;
+}
+
+// Issue #13. A workspace tool run through Bash: `node <workspace>/tools/<tool>`.
+// Only this prefix takes the command form; every other workspace placeholder,
+// such as the additionalDirectories grant, keeps the native path.
+const WORKSPACE_TOOL = "node __KHEREP_WORKSPACE__/tools/";
+
+// Git Bash consumes the backslashes of a native Windows path: node D:\ws/tools/x
+// reaches node as D:ws/tools/x, relative to the current directory. Forward
+// slashes work in Git Bash, PowerShell and node alike.
+export function workspaceCommandPath(profile: string, workspace: string): string {
+  return resolveProfilePath(profile, workspace).replace(/\\/g, "/");
+}
+
+function renderWorkspaceTools(value: string, workspaceCommand: string): string {
+  return value.replaceAll(WORKSPACE_TOOL, `node ${workspaceCommand}/tools/`);
 }
 
 function rewriteValue(value: unknown, replacements: PortablePaths): unknown {
@@ -50,7 +68,7 @@ function rewriteValue(value: unknown, replacements: PortablePaths): unknown {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, rewriteValue(item, replacements)]));
   }
   if (typeof value !== "string") return value;
-  let rendered = value;
+  let rendered = renderWorkspaceTools(value, replacements.workspaceCommand);
   for (const [placeholder, key] of Object.entries(PATH_PLACEHOLDERS)) {
     rendered = rendered.replaceAll(placeholder, replacements[key]);
   }
@@ -66,18 +84,19 @@ export function substituteTemplatePaths<T>(
     workspace: resolveProfilePath(profile, workspace),
     credentialsRoot: resolveProfilePath(profile, credentialsRoot),
     claudeHome: resolveProfilePath(profile, claudeHome),
+    workspaceCommand: workspaceCommandPath(profile, workspace),
   };
   return rewriteValue(value, replacements) as T;
 }
 
-// Issue #13. The Claude Confluence broker as claude/settings.user.json allows
-// it, rendered by the same workspace substitution as those rules. install.sh
-// stores the result in confluence.json, and claude-obs runs it verbatim instead
-// of composing a path, so the command always matches the allow rule.
-const CLAUDE_BROKER_TEMPLATE = "node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts";
+// The Claude Confluence broker as claude/settings.user.json allows it, rendered
+// by the same workspace-tool substitution as those rules. install.sh stores the
+// result in confluence.json, and claude-obs runs it verbatim instead of
+// composing a path, so the command always matches the allow rule.
+const CLAUDE_BROKER_TEMPLATE = `${WORKSPACE_TOOL}atl-confluence-ccoder.mts`;
 
 export function renderClaudeBroker(profile: string, workspace: string): string {
-  return CLAUDE_BROKER_TEMPLATE.replaceAll("__KHEREP_WORKSPACE__", resolveProfilePath(profile, workspace));
+  return renderWorkspaceTools(CLAUDE_BROKER_TEMPLATE, workspaceCommandPath(profile, workspace));
 }
 
 export function isMacIncompatiblePermission(value: unknown): boolean {

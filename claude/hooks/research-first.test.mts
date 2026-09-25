@@ -29,12 +29,22 @@ test("in scope: the instruction names the Brain search with the installed space 
   const text = promptContext({ cwd: `${WORKSPACE}/notes`, prompt: "secret Example Corp" }, ENV, CONFIG, never);
   assert.match(text, /^RESEARCH FIRST/);
   // Rendered like the allowlist entry, so the suggestion matches the allow rule.
-  assert.ok(text.includes(`node ${path.resolve(WORKSPACE)}/tools/atl-confluence-ccoder.mts search --space KB --query "<terms>"`));
+  assert.ok(text.includes(`node ${path.resolve(WORKSPACE).replace(/\\/g, "/")}/tools/atl-confluence-ccoder.mts search --space KB --query "<terms>"`));
   assert.match(text, /\[research: none - <reason>\]/);
   assert.match(text, /privacy classification/);
   assert.doesNotMatch(text, /codebase-memory/, "no repository, no code graph line");
   assert.doesNotMatch(text, /Example Corp/, "the prompt is never echoed");
   assert.ok(text.split("\n").length <= 5, "the text stays short");
+});
+
+// Issue #13. Git Bash consumes the backslashes of a native Windows path, so the
+// command uses forward slashes, the form the allow rule has on Windows.
+test("on a Windows workspace the command uses forward slashes", () => {
+  const text = promptContext({ cwd: "D:\\CFcon-DEV\\kherep" }, { KHEREP_WORKSPACE: "D:\\CFcon-DEV" }, CONFIG, never);
+  const root = path.resolve("D:/CFcon-DEV").replace(/\\/g, "/");
+  assert.ok(text.includes(`node ${root}/tools/atl-confluence-ccoder.mts search --space KB`), text);
+  assert.doesNotMatch(text, /\\/);
+  if (process.platform === "win32") assert.ok(text.includes("node D:/CFcon-DEV/tools/atl-confluence-ccoder.mts search"), text);
 });
 
 test("in a git repository the code graph comes first, worded for an unknown index", () => {
