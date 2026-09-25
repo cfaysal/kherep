@@ -146,6 +146,29 @@ describe("message routing", () => {
     sender.ws.close(1000, "done");
   });
 
+  it("forwards a node-reported refused after accepted, and keeps it final", async () => {
+    const a = await node("sender");
+    const b = await node("target");
+    const sender = await authenticate(a.nodeId, a.key);
+    const target = await authenticate(b.nodeId, b.key);
+    const id = send(sender, b.nodeId);
+    await expectFrame(sender, "message.status");
+    await expectFrame(target, "message.deliver");
+    frame(target, "message.status", { messageId: id, state: "accepted" });
+    await expectFrame(sender, "message.status");
+
+    // What the node reports when the target session ended before reading it.
+    frame(target, "message.status", { messageId: id, state: "refused", reason: "target session not running" });
+    expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body)
+      .toEqual({ messageId: id, state: "refused", reason: "target session not running" });
+    expect(await row(id)).toMatchObject({ state: "refused", reason: "target session not running", text: null });
+    frame(target, "message.status", { messageId: id, state: "delivered" });
+    await expect(sender.next(200)).rejects.toThrow();
+    expect(await row(id)).toMatchObject({ state: "refused" });
+    sender.ws.close(1000, "done");
+    target.ws.close(1000, "done");
+  });
+
   it("rejects invalid message frames and node reports of server-only states", async () => {
     const a = await node("sender");
     const sender = await authenticate(a.nodeId, a.key);

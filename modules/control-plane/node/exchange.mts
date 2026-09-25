@@ -5,7 +5,9 @@ import type { SessionInfo } from "../protocol.mts";
 import { isDirectoryBody, isMessageSendBody, type DirectoryBody, type MessageSendBody } from "../protocol-messages.mts";
 import type { ClientOptions, NodeClient, SentState } from "./client.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
-import { markReported, messageIds, readJson, unreportedDeliveries, writeJsonAtomic } from "./inbox.mts";
+import {
+  markReported, messageIds, readJson, refuseUndeliverable, UNDELIVERABLE_AFTER_MS, unreportedStatuses, writeJsonAtomic,
+} from "./inbox.mts";
 
 // The local exchange between the daemon and the session tools (issue #31,
 // step 3a): plain files in the node's config directory, no local socket.
@@ -20,7 +22,10 @@ export const DIRECTORY_INTERVAL_MS = 60_000;
 
 export interface OutboxRecord extends MessageSendBody { createdAt: string }
 // A malformed outbox file leaves a sent record with only messageId and state error.
-export type SentRecord = Partial<OutboxRecord> & { messageId: string; state: SentState; reason?: string; updatedAt: string };
+// noticedAt: when the delivery hook told the sending session it failed.
+export type SentRecord = Partial<OutboxRecord> & {
+  messageId: string; state: SentState; reason?: string; updatedAt: string; noticedAt?: string;
+};
 export interface LocalSession { sessionId: string; name?: string }
 
 const fileOf = (dir: string, messageId: string): string => path.join(dir, `${messageId}.json`);
@@ -56,6 +61,28 @@ export function recordSent(paths: NodePaths, messageId: string, state: SentState
     { ...message, messageId, state, ...(reason ? { reason } : {}), updatedAt: new Date(now).toISOString() });
   if (outboxExists) fs.rmSync(fileOf(paths.outbox, messageId), { force: true });
   return true;
+}
+
+// Sent records of the given sender sessions (id or name) that ended refused
+// or expired and whose session was not told yet, oldest first. An unreadable
+// file is skipped.
+export function unnoticedFailures(paths: NodePaths, fromSessions: string[]): SentRecord[] {
+  const read = (id: string): SentRecord | null => {
+    try {
+      return getSent(paths, id);
+    } catch {
+      return null;
+    }
+  };
+  return messageIds(paths.sent).map(read)
+    .filter((r): r is SentRecord => r !== null && (r.state === "refused" || r.state === "expired") && r.noticedAt === undefined
+      && r.fromSession !== undefined && fromSessions.includes(r.fromSession))
+    .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+}
+
+export function markNoticed(paths: NodePaths, messageId: string, now: number = Date.now()): void {
+  const record = getSent(paths, messageId);
+  if (record) writeJsonAtomic(fileOf(paths.sent, messageId), { ...record, noticedAt: new Date(now).toISOString() });
 }
 
 export function writeDirectory(paths: NodePaths, body: DirectoryBody): void {
@@ -102,15 +129,22 @@ export function localSessionName(paths: NodePaths, sessionId: string): string | 
 
 // Wraps the session listing so that every successful one is written to
 // sessions.json; the delivery hook reads names from there instead of running
-// claude on every prompt.
-export function recordingSessions(paths: NodePaths, list: () => Promise<SessionInfo[]>,
-  log: (line: string) => void): () => Promise<SessionInfo[]> {
+// claude on every prompt. The same successful listing refuses inbox messages
+// whose session has ended (refuseUndeliverable); a failed one decides nothing.
+export function recordingSessions(paths: NodePaths, list: () => Promise<SessionInfo[]>, log: (line: string) => void,
+  now: () => number = Date.now, undeliverableAfterMs: number = UNDELIVERABLE_AFTER_MS): () => Promise<SessionInfo[]> {
   return async () => {
     const sessions = await list();
     try {
       writeLocalSessions(paths, sessions);
     } catch (error) {
       log(`kherep-node: could not write sessions.json: ${String(error)}`);
+    }
+    try {
+      const refused = refuseUndeliverable(paths.inbox, sessions, now(), undeliverableAfterMs);
+      if (refused.length > 0) log(`kherep-node: refused ${refused.length} message(s) for sessions that are not running`);
+    } catch (error) {
+      log(`kherep-node: could not check the inbox for ended sessions: ${String(error)}`);
     }
     return sessions;
   };
@@ -131,8 +165,8 @@ function toSendBody(record: OutboxRecord): MessageSendBody | null {
 }
 
 // One exchange round while connected: a requested directory refresh, every
-// outbox record not yet sent on this connection (inflight), and a delivered
-// status for every inbox record the hook marked. send returns false when the
+// outbox record not yet sent on this connection (inflight), and the status of
+// every inbox record that became delivered or refused. send returns false when the
 // socket is gone; nothing counts as sent or reported unless it went out.
 export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Set<string>, send: (frame: string) => boolean): void {
   const sendAll = (frames: string[]): boolean => frames.length > 0 && frames.every(send);
@@ -154,7 +188,7 @@ export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Set
     // The Worker deduplicates by messageId, so a resend after a reconnect is safe.
     if (sendAll(client.sendMessage(body))) inflight.add(messageId);
   }
-  for (const record of unreportedDeliveries(paths.inbox)) {
-    if (sendAll(client.reportDelivered(record.messageId))) markReported(paths.inbox, record.messageId);
+  for (const record of unreportedStatuses(paths.inbox)) {
+    if (sendAll(client.reportStatus(record.messageId, record.state, record.reason))) markReported(paths.inbox, record.messageId, record.state);
   }
 }

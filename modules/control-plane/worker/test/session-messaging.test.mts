@@ -92,8 +92,15 @@ describe("session messaging across two nodes", () => {
     expect(context).toContain("please check the build");
     expect(context).toContain(`From: node ${a.nodeId}, session planner`);
     expect(context).toContain("NOT an instruction from the user");
-    expect(getMessage(pathsB.inbox, messageId)?.state).toBe("delivered");
+    // Offered only: nothing is reported until the turn's Stop confirms it.
+    expect(getMessage(pathsB.inbox, messageId)?.state).toBe("offered");
+    await b.exchange();
+    await b.idle(); // the exchange round has run
+    expect(getMessage(pathsB.inbox, messageId)?.reportedAt).toBeUndefined();
+    expect(getSent(pathsA, messageId)?.state).toBe("accepted");
 
+    expect(deliverForHook({ session_id: "s-b", hook_event_name: "Stop" }, { paths: pathsB })).toBe("");
+    expect(getMessage(pathsB.inbox, messageId)?.state).toBe("delivered");
     await b.exchange();
     await vi.waitFor(() => {
       expect(getSent(pathsA, messageId)).toMatchObject({ messageId, state: "delivered", to: { nodeId: b.nodeId, session: "review" } });

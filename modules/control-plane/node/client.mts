@@ -125,8 +125,9 @@ export class NodeClient {
     return this.authenticated ? [this.frame("message.send", { ...body, to: { ...body.to } })] : [];
   }
 
-  reportDelivered(messageId: string): string[] {
-    return this.authenticated ? [this.frame("message.status", { messageId, state: "delivered" })] : [];
+  // The state the target session reached: delivered, or refused with a reason.
+  reportStatus(messageId: string, state: "delivered" | "refused", reason?: string): string[] {
+    return this.authenticated ? [this.frame("message.status", { messageId, state, ...(reason ? { reason } : {}) })] : [];
   }
 
   // A failing local write is logged; the frame loop goes on.
