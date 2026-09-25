@@ -7,7 +7,9 @@ import {
 import { readConfig, type NodePaths } from "./config.mts";
 import { getOutbox, getSent, readDirectory, requestDirectory, writeOutbox, type OutboxRecord } from "./exchange.mts";
 import { getMessage, listInbox } from "./inbox.mts";
-import { currentSession, DIRECTORY_STALE_MS, nodeLabel, resolveTarget, senderSession, SESSION_ENV } from "./msg-resolve.mts";
+import {
+  currentSession, DIRECTORY_STALE_MS, nodeLabel, resolveTarget, senderSession, SESSION_ENV, sessionIdFromEnv,
+} from "./msg-resolve.mts";
 import { taskForSession } from "./task-records.mts";
 
 // kherep-node msg: the session side of messaging (issue #31, step 3a). It only
@@ -156,7 +158,7 @@ async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<
   if (!Number.isFinite(wait) || wait < 0) return fail(io, `--wait needs a number of seconds, got "${values.wait}"`);
 
   // A session started for a task tags its messages with that task (item 5).
-  taskId = taskForSession(io.paths, io.env[SESSION_ENV])?.taskId ?? taskId;
+  taskId = taskForSession(io.paths, sessionIdFromEnv(io.env))?.taskId ?? taskId;
   const record: OutboxRecord = { messageId: crypto.randomUUID(), fromSession: from.value, to, text,
     ...(replyTo ? { inReplyTo: replyTo } : {}), ...(taskId ? { taskId } : {}), createdAt: new Date(io.now()).toISOString(), depth };
   writeOutbox(io.paths, record);

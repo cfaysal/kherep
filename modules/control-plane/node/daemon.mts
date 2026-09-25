@@ -1,6 +1,7 @@
 import { PING_FRAME, type SessionInfo } from "../protocol.mts";
 import { reconnectDelay } from "./backoff.mts";
 import { NodeClient, type CommandHandlers } from "./client.mts";
+import { pollCodexInbound } from "./codex-wake.mts";
 import { connectUrl, type NodeConfig, type NodePaths } from "./config.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
 import {
@@ -101,9 +102,11 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         }).catch((error: unknown) => log(`kherep-node: session snapshot failed: ${String(error)}`));
       }, SESSIONS_INTERVAL_MS);
       exchange = setInterval(() => {
-        chain = chain.then(() => {
+        chain = chain.then(async () => {
           pollExchange(client, paths, inflight, send);
           pollTasks(client, paths, policy, requestsInflight, send);
+          // Peer messages for ended Codex task sessions resume them (issue #63).
+          await pollCodexInbound(runner, log);
         })
           .catch((error: unknown) => log(`kherep-node: message exchange failed: ${String(error)}`));
       }, EXCHANGE_INTERVAL_MS);

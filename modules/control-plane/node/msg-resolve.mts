@@ -8,6 +8,12 @@ import { localSessionName } from "./exchange.mts";
 // Claude Code sets CLAUDE_CODE_SESSION_ID in Bash and PowerShell tool, hook and
 // stdio MCP subprocesses (https://code.claude.com/docs/en/env-vars).
 export const SESSION_ENV = "CLAUDE_CODE_SESSION_ID";
+// Runtime-neutral: the node sets it for the Codex task sessions it starts
+// (issue #63), to the thread id, or to the task's name before that is known.
+export const KHEREP_SESSION_ENV = "KHEREP_SESSION_ID";
+
+// This session's id from the environment: Claude Code's variable, else Kherep's.
+export const sessionIdFromEnv = (env: NodeJS.ProcessEnv): string | undefined => env[SESSION_ENV] || env[KHEREP_SESSION_ENV] || undefined;
 
 // A directory older than this is reported as stale.
 export const DIRECTORY_STALE_MS = 3 * 60_000;
@@ -16,7 +22,7 @@ export type Resolved<T> = { ok: true; value: T } | { ok: false; error: string };
 
 // This session's id and its name from sessions.json, or null without the env.
 export function currentSession(paths: NodePaths, env: NodeJS.ProcessEnv): { id: string; name?: string } | null {
-  const id = env[SESSION_ENV];
+  const id = sessionIdFromEnv(env);
   if (!id) return null;
   const name = localSessionName(paths, id);
   return name ? { id, name } : { id };

@@ -5,6 +5,7 @@ import { isSessionInfo, type SessionInfo } from "../protocol.mts";
 import { isSessionRef } from "../protocol-messages.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { readJson, writeJsonAtomic } from "./inbox.mts";
+import { isActive, listTasks } from "./task-records.mts";
 
 // Codex session discovery (issue #31, step 4). Codex has no documented session
 // listing and no documented environment variable with the session id, but every
@@ -79,4 +80,19 @@ export function listCodexSessions(paths: NodePaths, now: number = Date.now(), ac
     if (isSessionInfo(session) && isSessionRef(session.name)) sessions.push(session);
   }
   return sessions;
+}
+
+// Codex task sessions (issue #63), from the task records themselves: a
+// `codex exec` run may never fire a hook, and an ended run can still be
+// messaged (codex-wake.mts resumes it). Listed once the thread id is known,
+// while active or updated within activeMs, with the task's name.
+export function listCodexTaskSessions(paths: NodePaths, now: number = Date.now(), activeMs: number = CODEX_ACTIVE_MS): SessionInfo[] {
+  return listTasks(paths).flatMap((task) => {
+    if (task.runtime !== CODEX_RUNTIME || !task.sessionId) return [];
+    const active = isActive(task);
+    if (!active && !(now - Date.parse(task.updatedAt) <= activeMs)) return [];
+    const session: SessionInfo = { sessionId: task.sessionId, runtime: CODEX_RUNTIME, state: active ? "running" : "idle",
+      startedAt: task.startedAt, name: task.name, ...(task.cwd.length <= 512 ? { cwd: task.cwd } : {}), kind: "codex-task" };
+    return isSessionInfo(session) ? [session] : [];
+  });
 }

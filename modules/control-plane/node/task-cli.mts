@@ -5,7 +5,7 @@ import {
   type TaskRuntime,
 } from "../protocol-tasks.mts";
 import { readConfig, type NodePaths } from "./config.mts";
-import { senderSession, SESSION_ENV } from "./msg-resolve.mts";
+import { senderSession, sessionIdFromEnv } from "./msg-resolve.mts";
 import { loadPolicy } from "./policy.mts";
 import { NO_CHAINS, NOT_DELEGATING, TASKS_ACTIVE } from "./task-exchange.mts";
 import {
@@ -54,8 +54,9 @@ export function runTaskArgs({ positionals, values }: TaskArgs, context: TaskCont
     const [taskId] = rest;
     const record = isTaskId(taskId) ? readTask(paths, taskId) : null;
     if (!record) return fail(`task ${taskId} was not started on this node`);
-    const own = taskForSession(paths, env[SESSION_ENV]);
-    if (env[SESSION_ENV] && own?.taskId !== taskId) return fail(`this session was not started for task ${taskId}`);
+    const self = sessionIdFromEnv(env);
+    const own = taskForSession(paths, self);
+    if (self && own?.taskId !== taskId) return fail(`this session was not started for task ${taskId}`);
     const summary = values.summary;
     if (summary !== undefined && (summary.length === 0 || summary.length > MAX_SUMMARY)) return fail(`--summary must be 1 to ${MAX_SUMMARY} characters`);
     queueReport(paths, { taskId, state: "done", ...(record.sessionId ? { sessionId: record.sessionId } : {}), ...(summary ? { summary } : {}) });
@@ -86,7 +87,7 @@ export function runTaskArgs({ positionals, values }: TaskArgs, context: TaskCont
 function newTask(context: TaskContext, words: string[], values: TaskArgs["values"], now: () => number, out: (line: string) => void,
   fail: (message: string) => number): number {
   const { paths, env } = context;
-  if (taskForSession(paths, env[SESSION_ENV])) return fail(NO_CHAINS);
+  if (taskForSession(paths, sessionIdFromEnv(env))) return fail(NO_CHAINS);
   const policy = loadPolicy(readConfig(paths.config)?.policyFile ?? paths.policy);
   if (!policy.sessions?.delegate.request) return fail(NOT_DELEGATING);
   if (hasActiveTask(paths)) return fail(TASKS_ACTIVE);

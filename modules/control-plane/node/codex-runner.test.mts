@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { codexNode, LAST_MESSAGE, THREAD, waitFor } from "./codex-fixture.mts";
-import { codexFiles, FORBIDDEN_CODEX_FLAGS, processStart, readExit, resumeArgs } from "./codex-process.mts";
+import { codexEnv, codexFiles, FORBIDDEN_CODEX_FLAGS, processStart, readExit, resumeArgs } from "./codex-process.mts";
 import { continueTask, startTask, stopTask } from "./session-runner.mts";
 import { startArgs, TASK, taskId, taskNode } from "./task-fixture.mts";
 import { readTask } from "./task-records.mts";
@@ -27,9 +27,14 @@ test("starts codex exec with the exact arguments, stdin from the null device, an
   const real = fs.realpathSync.native(node.workspace);
   const files = codexFiles(node.paths, TASK);
   const [run] = node.runs();
-  assert.deepEqual(run.argv, ["exec", "--json", "-C", real, "--sandbox", "workspace-write", "-o", files.lastMessage, FRAMED]);
+  // The outbox is the only writable root besides the working directory.
+  assert.deepEqual(run.argv, ["exec", "--json", "-C", real, "--sandbox", "workspace-write", "--add-dir", node.paths.outbox,
+    "-o", files.lastMessage, FRAMED]);
   assert.equal(run.cwd, real);
   assert.equal(run.stdinNull, true, "stdin is the null device, so codex exec does not wait for input");
+  // Before the thread id is known the session is named by the task's name.
+  // An inherited Claude Code session id is dropped (the fake logs it when set).
+  assert.deepEqual(run.env, { KHEREP_CONFIG_DIR: node.root, KHEREP_SESSION_ID: "task-3f2a1b0c" });
   assert.deepEqual(result, { taskId: TASK, state: "started", sessionId: THREAD });
   assert.deepEqual(node.reports(), [{ taskId: TASK, state: "started", sessionId: THREAD }]);
   const record = readTask(node.paths, TASK)!;
@@ -57,11 +62,16 @@ test("permission modes map to sandboxes; bypass flags are never passed", posix, 
   await waitFor(() => readExit(codexFiles(node.paths, taskId(2))) !== null, "the exit");
   await watchTasks(node.deps());
   await continueTask({ taskId: taskId(2), prompt: "again" }, node.deps());
+  await waitFor(() => node.runs().length === 3, "the resumed run");
   for (const run of node.runs()) {
     for (const flag of [...FORBIDDEN_CODEX_FLAGS, "--full-auto", "danger-full-access"]) assert.ok(!run.argv.some((a) => a.includes(flag)), flag);
   }
   // Even a thread id read from codex's own output cannot smuggle one in.
-  assert.throws(() => resumeArgs("--dangerously-bypass-approvals-and-sandbox", "auto", codexFiles(node.paths, TASK), "x"), /lifts the sandbox/);
+  assert.throws(() => resumeArgs("--dangerously-bypass-approvals-and-sandbox", "auto", codexFiles(node.paths, TASK), node.paths.outbox, "x"),
+    /lifts the sandbox/);
+  // read-only still gets the outbox as its one extra root.
+  assert.deepEqual(readOnly.argv.slice(readOnly.argv.indexOf("--add-dir"), readOnly.argv.indexOf("--add-dir") + 2), ["--add-dir", node.paths.outbox]);
+  for (const run of node.runs()) assert.equal(run.argv.filter((a) => a === "--add-dir" || a.startsWith("sandbox_workspace_write")).length, 1);
 });
 
 test("a failed turn or an exit without events reports failed with a reason, never the prompt", posix, async (t) => {
@@ -86,10 +96,13 @@ test("continue resumes the thread with the task's sandbox in its working directo
   node.reports();
   const result = await continueTask({ taskId: TASK, prompt: "one more thing" }, node.deps());
   assert.deepEqual(result, { taskId: TASK, state: "started" });
+  await waitFor(() => node.runs().length === 2, "the resumed run");
   const resume = node.runs()[1];
   const files = codexFiles(node.paths, TASK);
-  assert.deepEqual(resume.argv.slice(0, 8), ["exec", "resume", "--json", "-c", "sandbox_mode=\"workspace-write\"", "-o", files.lastMessage, THREAD]);
-  assert.match(resume.argv[8], /^Follow-up for task 3f2a1b0c-.* from the operator via the Kherep Control Plane: one more thing/);
+  assert.deepEqual(resume.argv.slice(0, 10), ["exec", "resume", "--json", "-c", "sandbox_mode=\"workspace-write\"",
+    "-c", `sandbox_workspace_write.writable_roots=[${JSON.stringify(node.paths.outbox)}]`, "-o", files.lastMessage, THREAD]);
+  assert.deepEqual(resume.env, { KHEREP_CONFIG_DIR: node.root, KHEREP_SESSION_ID: THREAD });
+  assert.match(resume.argv[10], /^Follow-up for task 3f2a1b0c-.* from the operator via the Kherep Control Plane: one more thing/);
   assert.equal(resume.cwd, fs.realpathSync.native(node.workspace));
   assert.equal(resume.stdinNull, true);
   assert.deepEqual(node.reports(), [{ taskId: TASK, state: "started", sessionId: THREAD }]);
@@ -163,4 +176,11 @@ test("codex needs the policy; the workspace root, the limits and the Windows shi
   await startTask(startArgs(taskId(2)), node.deps());
   await startTask(codexArgs(taskId(3), { prompt: "work [sleep]" }), node.deps());
   await assert.rejects(startTask(codexArgs(taskId(4)), node.deps()), /at most 3 task sessions at a time/);
+});
+
+test("the process environment names this session and the node directory, never an inherited Claude session", (t) => {
+  const node = taskNode(t);
+  const inherited = { PATH: "/usr/bin", HOME: "/home/someone", ["CLAUDE_CODE_" + "SESSION_ID"]: "a-claude-session" };
+  assert.deepEqual(codexEnv(node.paths, "task-3f2a1b0c", inherited),
+    { PATH: "/usr/bin", HOME: "/home/someone", KHEREP_SESSION_ID: "task-3f2a1b0c", KHEREP_CONFIG_DIR: node.root });
 });

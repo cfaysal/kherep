@@ -6,14 +6,20 @@ import type { PermissionMode } from "../protocol-tasks.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { findOnPath } from "./discovery.mts";
 import { readJson, writeJsonAtomic } from "./inbox.mts";
+import { KHEREP_SESSION_ENV, SESSION_ENV } from "./msg-resolve.mts";
 
 // The Codex processes of tasks (issue #63), from `codex exec --help` and
 // `codex exec resume --help` of Codex CLI 0.153.4 and the measurements in the
 // issue: `codex exec --json` prints JSON Lines events, `thread.started` with
 // `thread_id` first and `turn.completed` at the end; `-o` writes the last agent
 // message; without closed stdin it waits for more input. `codex exec resume`
-// has no `-C` and no `--sandbox`: it takes the sandbox as `-c sandbox_mode=...`
-// and runs in the process's working directory.
+// has no `-C`, `--sandbox` or `--add-dir`: it takes the sandbox as `-c
+// sandbox_mode=...`, the extra writable root as `-c
+// sandbox_workspace_write.writable_roots=[...]`, and runs in the process's
+// working directory.
+// Besides the working directory, the only writable root is the node's outbox,
+// so `kherep-node msg send` works from inside the sandbox; the rest of the
+// node directory (its key, policy and task records) stays read-only.
 
 // exec is non-interactive and cannot ask, so the permission mode maps to a
 // sandbox: auto and acceptEdits may edit the workspace, default reads only.
@@ -45,12 +51,24 @@ export function codexFiles(paths: NodePaths, taskId: string): CodexFiles {
     stderr: path.join(dir, "stderr.log"), exit: path.join(dir, "exit.json") };
 }
 
-export function startArgs(cwd: string, mode: PermissionMode, files: CodexFiles, prompt: string): string[] {
-  return guard(["exec", "--json", "-C", cwd, "--sandbox", CODEX_SANDBOX[mode], "-o", files.lastMessage, prompt]);
+export function startArgs(cwd: string, mode: PermissionMode, files: CodexFiles, outbox: string, prompt: string): string[] {
+  return guard(["exec", "--json", "-C", cwd, "--sandbox", CODEX_SANDBOX[mode], "--add-dir", outbox, "-o", files.lastMessage, prompt]);
 }
 
-export function resumeArgs(threadId: string, mode: PermissionMode, files: CodexFiles, prompt: string): string[] {
-  return guard(["exec", "resume", "--json", "-c", `sandbox_mode="${CODEX_SANDBOX[mode]}"`, "-o", files.lastMessage, threadId, prompt]);
+// TOML basic strings accept JSON string escapes.
+export function resumeArgs(threadId: string, mode: PermissionMode, files: CodexFiles, outbox: string, prompt: string): string[] {
+  return guard(["exec", "resume", "--json", "-c", `sandbox_mode="${CODEX_SANDBOX[mode]}"`,
+    "-c", `sandbox_workspace_write.writable_roots=[${JSON.stringify(outbox)}]`, "-o", files.lastMessage, threadId, prompt]);
+}
+
+// The environment of a Codex task process: the daemon's own, plus where the
+// node directory is and which session this is, for the msg CLI (msg-resolve.mts).
+// A Claude Code session id the daemon inherited is dropped: the msg CLI would
+// prefer it and speak for that Claude session.
+export function codexEnv(paths: NodePaths, session: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = { ...base, [KHEREP_SESSION_ENV]: session, KHEREP_CONFIG_DIR: path.dirname(paths.dir) };
+  delete result[SESSION_ENV];
+  return result;
 }
 
 function guard(args: string[]): string[] {
@@ -63,7 +81,8 @@ export const findCodex = (): string | null => findOnPath("codex");
 // Starts codex detached in its own process group, stdin from the null device,
 // stdout (the events) and stderr into the task's files; exit.json records how
 // it ended while this daemon runs. Resolves with the pid once it runs.
-export async function spawnCodex(deps: CodexDeps, file: string, args: string[], cwd: string, files: CodexFiles): Promise<number> {
+export async function spawnCodex(deps: CodexDeps, file: string, args: string[], cwd: string, files: CodexFiles,
+  env: NodeJS.ProcessEnv): Promise<number> {
   const platform = deps.platform ?? process.platform;
   if (platform === "win32" && /\.(cmd|bat)$/i.test(file)) {
     throw new Error("codex is a .cmd shim, and cmd.exe cannot pass this text safely; install the native codex executable");
@@ -73,7 +92,7 @@ export async function spawnCodex(deps: CodexDeps, file: string, args: string[], 
   const out = fs.openSync(files.events, "w", 0o600);
   const err = fs.openSync(files.stderr, "w", 0o600);
   try {
-    const child = spawn(file, args, { cwd, detached: true, stdio: ["ignore", out, err], windowsHide: true });
+    const child = spawn(file, args, { cwd, env, detached: true, stdio: ["ignore", out, err], windowsHide: true });
     child.on("exit", (code, signal) => {
       try {
         writeJsonAtomic(files.exit, { code, signal });
