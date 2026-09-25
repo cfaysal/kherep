@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { PLACEMENT_NODES, readSpacePages, resolvePlacement } from "./confluence-nodes.mts";
+import { renderClaudeBroker } from "./render-profile-paths.mts";
 
 const ENV_KEY = "KHEREP_CONFLUENCE_SPACE_KEY";
 
@@ -15,6 +16,8 @@ export interface SetupArgs {
   runtime: Runtime;
   existing?: string;
   authorizeObservationPublishing: boolean;
+  /** Claude only: the absolute broker command claude-obs runs, stored as `broker`. */
+  broker?: string;
 }
 
 export interface BrokerIO {
@@ -34,12 +37,24 @@ export function parseArgs(argv: string[]): SetupArgs {
   if (runtime !== "claude" && runtime !== "codex") {
     throw new Error("--runtime must be claude or codex.");
   }
-  return {
+  const args: SetupArgs = {
     out,
     runtime,
     existing: argValue(argv, "--existing"),
     authorizeObservationPublishing: argv.includes("--authorize-observation-publishing"),
   };
+  if (runtime === "claude") args.broker = claudeBroker(argValue(argv, "--profile"), argValue(argv, "--workspace"));
+  return args;
+}
+
+// Issue #13. Takes the profile and workspace install.sh renders the permission
+// rules from, so the stored command is the prefix of those rules.
+function claudeBroker(profile: string | undefined, workspace: string | undefined): string {
+  if ((profile !== "win" && profile !== "mac") || !workspace) {
+    throw new Error("--runtime claude needs --profile <win|mac> and --workspace <path>: "
+      + "claude-obs reads its broker command from this file.");
+  }
+  return renderClaudeBroker(profile, workspace);
 }
 
 function promptForKey(): string {
@@ -180,6 +195,7 @@ async function main(argv: string[]): Promise<void> {
       spaceKey: space.key,
       spaceId: space.id,
       spaceName: space.name,
+      ...(args.broker ? { broker: args.broker } : {}),
       nodes,
       ...(observationPublishingAuthorized ? { observationPublishingAuthorized: true } : {}),
     }, null, 2)}\n`, "utf8");

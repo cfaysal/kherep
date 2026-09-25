@@ -26,11 +26,24 @@ function codexProjection(): string {
 }
 
 test("the Claude text names exactly the ccoder broker invocation", () => {
-  assert.match(CLAUDE_OBS, /node <workspace>\/tools\/atl-confluence-ccoder\.mts <verb>/);
-  for (const verb of ["related", "create", "stitch"]) {
-    assert.match(CLAUDE_OBS, new RegExp(`node <workspace>/tools/atl-confluence-ccoder\\.mts ${verb} `), verb);
+  assert.match(CLAUDE_OBS, /<confluence\.json broker> <verb>/);
+  for (const verb of ["related", "create", "stitch", "children"]) {
+    assert.match(CLAUDE_OBS, new RegExp(`^ +<confluence\\.json broker> ${verb} `, "m"), verb);
   }
+  assert.match(CLAUDE_OBS, /`broker`[\s\S]{0,300}atl-confluence-ccoder\.mts/);
   assert.doesNotMatch(CLAUDE_OBS, /<broker>/, "a placeholder broker name lets the model pick one");
+});
+
+// Issue #13. The installed text kept a literal <workspace>, the model guessed
+// the checkout instead of the workspace root and reported a missing broker.
+test("the Claude text takes the broker only from confluence.json, verbatim", () => {
+  assert.doesNotMatch(CLAUDE_OBS, /<workspace>/);
+  for (const line of CLAUDE_OBS.split(/\r?\n/).filter((entry) => /^ {4}\S/.test(entry))) {
+    assert.doesNotMatch(line, /^ +node /, `a command line composes the broker itself: ${line}`);
+  }
+  assert.match(CLAUDE_OBS, /exactly as stored/i);
+  assert.match(CLAUDE_OBS, /never derive[\s\S]{0,200}working\s+directory[\s\S]{0,200}repository/i);
+  assert.match(CLAUDE_OBS, /`OBS-RESULT: failed missing broker <[^>]*path[^>]*>`/);
 });
 
 test("the Claude text mentions the Codex broker only to prohibit it", () => {

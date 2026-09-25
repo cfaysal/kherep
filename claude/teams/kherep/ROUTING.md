@@ -12,7 +12,7 @@ Establish the goal, observable completion condition, scope, constraints and priv
 
 Use current code and configuration, executable behavior, live tool state and official documentation. Treat notes and memory as leads. Verify important facts before acting; carry unresolved facts as UNKNOWN.
 
-Evidence first. The Maestro classifies every directive. A banal one (greeting, acknowledgement, a fact that needs no lookup) is answered directly. A relevant one is researched before it is answered: the Central Brain, the Confluence knowledge space, through `node <workspace>/tools/atl-confluence-ccoder.mts search --space <key> --query "<terms>"`, and, for code work inside a repository indexed by codebase-memory, the code graph first. The answer comes after comparing with the Brain and names the page id of any Brain page it contradicts. Search terms follow the privacy classification; private content never goes to Atlassian. `search` exits 0 on hits, 1 on no match and 2 when it could not run, which is UNKNOWN, not zero. On Claude the UserPromptSubmit hook `research-first` repeats this instruction, and the Stop hook `research-stop` returns a substantial turn once when it shows no Brain lookup, or no code-graph call after changing files in a git repository. An `atlassian-broker` dispatch whose prompt asks to search or read Confluence also counts as a Brain lookup, as does a Skill the operator lists in the optional `<claude-home>/kherep/research-sources.json` (`{"brainSkills": ["<skill>"]}`). A turn for which research is not relevant opts out visibly with `[research: none - <reason>]`.
+Evidence first. The Maestro classifies every directive. A banal one (greeting, acknowledgement, a fact that needs no lookup) is answered directly. A relevant one is researched before it is answered: the Central Brain, the Confluence knowledge space, through the Claude broker's `search --space <key> --query "<terms>"`, and, for code work inside a repository indexed by codebase-memory, the code graph first. The answer comes after comparing with the Brain and names the page id of any Brain page it contradicts. Search terms follow the privacy classification; private content never goes to Atlassian. `search` exits 0 on hits, 1 on no match and 2 when it could not run, which is UNKNOWN, not zero. The broker command is resolved on the host, never composed from a placeholder: `research-first` prints it with the absolute path, and `<claude-home>/kherep/confluence.json` stores it as `broker`. On Claude the UserPromptSubmit hook `research-first` repeats this instruction, and the Stop hook `research-stop` returns a substantial turn once when it shows no Brain lookup, or no code-graph call after changing files in a git repository. An `atlassian-broker` dispatch whose prompt asks to search or read Confluence also counts as a Brain lookup, as does a Skill the operator lists in the optional `<claude-home>/kherep/research-sources.json` (`{"brainSkills": ["<skill>"]}`). A turn for which research is not relevant opts out visibly with `[research: none - <reason>]`.
 
 ## Dispatch
 
@@ -59,9 +59,11 @@ read as a valid empty result.
 
 Observations are stored in the Confluence knowledge space configured for this host, read from
 `<runtime-home>/kherep/confluence.json` and resolved at install time. A host without that file
-writes nothing. One page per observation. Everything written is in English: titles, bodies and
-labels. Labels carry the axes, because a label belongs to a page and the evidence status has to
-stay filterable: `type-observation`, `evidence-<confirmed | assumed | refuted | superseded>`,
+writes nothing. On Claude the same file stores `broker`, the absolute broker command rendered from
+the values the permission rules are rendered from; `claude-obs` runs it exactly as stored and never
+derives a broker path from its working directory or repository. One page per observation.
+Everything written is in English: titles, bodies and labels. Labels carry the axes, because a
+label belongs to a page and the evidence status has to stay filterable: `type-observation`, `evidence-<confirmed | assumed | refuted | superseded>`,
 `status-author-<model | verified | operator>`, `session-<id>`, `runtime-<claude-code | codex>-<win | mac>`,
 and `product-<jira | confluence | jsm>` where the finding applies to one product's variant.
 Origin, timestamp and source reference belong in the page body.

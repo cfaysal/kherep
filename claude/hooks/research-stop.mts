@@ -25,13 +25,14 @@
  * <claude-home>/kherep/research-sources.json, {"brainSkills": ["<skill>", ...]},
  * counts as a Brain lookup. A missing, unreadable or malformed file adds nothing.
  *
- * PRIVACY. The reason is a constant. Nothing from the transcript or the payload
- * reaches stdout. Any error fails open.
+ * PRIVACY. The reason is fixed text plus the configured workspace and the
+ * installed space key, exactly what research-first.mts prints. Nothing from the
+ * transcript or the payload reaches stdout. Any error fails open.
  */
 import fs from "node:fs";
 import path from "node:path";
 
-import { RESEARCH_OPT_OUT, researchFacts, type Exists } from "./lib/research-evidence.mts";
+import { brainSearchCommand, RESEARCH_OPT_OUT, researchFacts, type Exists } from "./lib/research-evidence.mts";
 import {
   endingTurn,
   lastAssistantText,
@@ -40,7 +41,7 @@ import {
   turnIsSubstantial,
   type TranscriptEntry,
 } from "./lib/turn-substance.mts";
-import { isKherepScope, type EnvLike } from "./lib/workspace-scope.mts";
+import { workspaceForPayload, type EnvLike } from "./lib/workspace-scope.mts";
 
 export interface StopPayload {
   cwd?: unknown;
@@ -55,17 +56,20 @@ export interface Continuation {
   reason: string;
 }
 
-export const RESEARCH_REASON = [
-  "Evidence first (ROUTING.md, Evidence first): this turn was substantial and shows no research.",
-  "Before ending, look up the Central Brain with node <workspace>/tools/atl-confluence-ccoder.mts search --space <key> --query \"<terms>\"",
-  "and, when this turn changed code in a repository, query the code graph through the codebase-memory MCP tools (mcp__codebase-memory-mcp__*).",
-  "Search terms follow the privacy classification; private content never goes to Atlassian.",
-  "Compare what you found with your answer and name the page id of any Brain page it contradicts.",
-  "If research is not relevant to this directive, end the turn with [research: none - <reason>] instead.",
-].join(" ");
+// The broker command is resolved exactly as research-first.mts resolves it, so
+// the model never composes a path (issue #13).
+export function researchReason(workspace: string, configPath?: string): string {
+  return [
+    "Evidence first (ROUTING.md, Evidence first): this turn was substantial and shows no research.",
+    `Before ending, look up the Central Brain with ${brainSearchCommand(workspace, configPath)}`,
+    "and, when this turn changed code in a repository, query the code graph through the codebase-memory MCP tools (mcp__codebase-memory-mcp__*).",
+    "Search terms follow the privacy classification; private content never goes to Atlassian.",
+    "Compare what you found with your answer and name the page id of any Brain page it contradicts.",
+    "If research is not relevant to this directive, end the turn with [research: none - <reason>] instead.",
+  ].join(" ");
+}
 
-// Resolved like research-first.mts resolves confluence.json: the hook lives in
-// <claude-home>/hooks, the operator file in <claude-home>/kherep.
+// The hook lives in <claude-home>/hooks, the operator file in <claude-home>/kherep.
 const DEFAULT_SOURCES = path.join(import.meta.dirname, "..", "kherep", "research-sources.json");
 
 // The operator's extra lookup skills. Anything but {"brainSkills": [...]} adds
@@ -93,11 +97,13 @@ export function decision(
   env: EnvLike = process.env,
   exists?: Exists,
   sourcesPath: string = DEFAULT_SOURCES,
+  configPath?: string,
 ): Continuation | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const payload = value as StopPayload;
   if (payload.stop_hook_active !== false) return null;
-  if (!isKherepScope(payload, env)) return null;
+  const workspace = workspaceForPayload(payload, env);
+  if (!workspace) return null;
   if (typeof payload.transcript_path !== "string" || !payload.transcript_path) return null;
 
   const all = readTranscript(payload.transcript_path);
@@ -110,7 +116,7 @@ export function decision(
   if (optedOut(turn, payload)) return null;
   const facts = researchFacts(turn, payload.cwd, exists, brainSkillsFrom(sourcesPath));
   if (facts.brain && (!facts.codeWork || facts.codeGraph)) return null;
-  return { decision: "block", reason: RESEARCH_REASON };
+  return { decision: "block", reason: researchReason(workspace, configPath) };
 }
 
 function main(): void {

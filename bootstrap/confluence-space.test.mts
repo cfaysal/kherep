@@ -35,6 +35,9 @@ function createCliFixture(): {
   fs.mkdirSync(bootstrap, { recursive: true });
   fs.mkdirSync(brokers, { recursive: true });
   fs.copyFileSync(path.join(here, "confluence-space.mts"), script);
+  for (const file of ["render-profile-paths.mts", "shape.mts"]) {
+    fs.copyFileSync(path.join(here, file), path.join(bootstrap, file));
+  }
   fs.writeFileSync(path.join(bootstrap, "confluence-nodes.mts"), [
     'export const PLACEMENT_NODES = ["Kherep"];',
     'export async function readSpacePages(credential) {',
@@ -118,12 +121,13 @@ test("parses the required runtime and optional legacy file", () => {
   });
   assert.deepEqual(parseArgs([
     "--out", "target.json", "--runtime", "claude", "--existing", "legacy.json",
-    "--authorize-observation-publishing",
+    "--authorize-observation-publishing", "--profile", "mac", "--workspace", "/w",
   ]), {
     out: "target.json",
     runtime: "claude",
     existing: "legacy.json",
     authorizeObservationPublishing: true,
+    broker: "node /w/tools/atl-confluence-ccoder.mts",
   });
   assert.throws(() => parseArgs(["--out", "target.json"]), /claude or codex/);
   assert.throws(

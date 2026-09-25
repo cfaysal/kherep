@@ -11,12 +11,37 @@
 //   - the code graph, the codebase-memory MCP server, required only when the
 //     turn changed files inside a git repository
 import fs from "node:fs";
+import path from "node:path";
 
 import { contentBlocks, type ContentBlock, type TranscriptEntry } from "./turn-substance.mts";
 import { joinPathLike, normalizePathLike } from "./workspace-scope.mts";
 
 // The visible classification a turn gives when research is not relevant.
 export const RESEARCH_OPT_OUT = /\[\s*research\s*:\s*none\b/i;
+
+// <claude-home>/kherep/confluence.json, seen from <claude-home>/hooks/lib.
+const DEFAULT_CONFIG = path.join(import.meta.dirname, "..", "..", "kherep", "confluence.json");
+const SPACE_KEY = /^[A-Za-z0-9~_-]{1,64}$/;
+
+// The installed space key, or a pointer to where it lives. A key that does not
+// look like one is not printed: this file is operator configuration.
+export function spaceKeyFrom(configPath: string = DEFAULT_CONFIG): string {
+  try {
+    const key = (JSON.parse(fs.readFileSync(configPath, "utf8")) as { spaceKey?: unknown }).spaceKey;
+    if (typeof key === "string" && SPACE_KEY.test(key)) return key;
+  } catch {
+    // Absent or unreadable: fall through to the pointer.
+  }
+  return "<spaceKey from <claude-home>/kherep/confluence.json>";
+}
+
+// The Brain search both hooks name, resolved so no model composes the broker
+// path (issue #13). The same form bootstrap/render-profile-paths.mts renders
+// into the permission allowlist (path.resolve, then "/tools/..."), so the
+// suggested command matches the allow rule instead of raising a prompt.
+export function brainSearchCommand(workspace: string, configPath?: string): string {
+  return `node ${path.resolve(workspace)}/tools/atl-confluence-ccoder.mts search --space ${spaceKeyFrom(configPath)} --query "<terms>"`;
+}
 
 const SHELL_TOOLS = new Set(["Bash", "PowerShell"]);
 const WRITE_TOOLS = new Set(["Edit", "MultiEdit", "NotebookEdit", "Write"]);

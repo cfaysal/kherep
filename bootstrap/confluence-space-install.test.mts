@@ -36,6 +36,10 @@ test("install.sh resolves the space into the Claude home", () => {
   // Non-fatal, like every other post-commit step in that phase.
   assert.match(statement, /\|\|\s*\{\s*post_rc=1;/);
   assert.match(statement, /WARNING no Confluence knowledge space configured/);
+  // Issue #13. The broker command claude-obs reads from the file is rendered
+  // from the very values the permission rules are rendered from.
+  assert.match(statement, /--runtime claude --profile "\$KHEREP_PROFILE" --workspace "\$WS"/);
+  assert.match(installSh, /render-profile\.mts" settings \\\s*"\$KHEREP_PROFILE" "\$WS" /);
 });
 
 // OP-1421. The other runtime. `--runtime` is the difference to the credential

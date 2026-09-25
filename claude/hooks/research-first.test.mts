@@ -10,7 +10,8 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { promptContext, spaceKeyFrom } from "./research-first.mts";
+import { spaceKeyFrom } from "./lib/research-evidence.mts";
+import { promptContext } from "./research-first.mts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "research-first-test-"));
