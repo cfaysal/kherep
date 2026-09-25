@@ -1,8 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 
 import type { NodeFacts, RuntimeInfo, SessionInfo } from "../../protocol.mts";
+import type { MessageStatusBody } from "../../protocol-messages.mts";
 import { randomToken, sha256 } from "./crypto.mts";
 import type { Env } from "./env.mts";
+import { routeEffects } from "./message-routing.mts";
+import { MessageStore, type MessageEffects, type MessageRecord, type NewMessage, type SendResult } from "./message-store.mts";
 import {
   ENROLLMENT_TTL_DEFAULT_S, ENROLLMENT_TTL_MAX_S, ENROLLMENT_TTL_MIN_S, NODE_COLUMNS, REGISTRY_SCHEMA, toNodeRow,
   type NodeRow, type NodeStatus,
@@ -16,11 +19,13 @@ export type EnrollResult = { ok: true; nodeId: string } | { ok: false; reason: "
 // synchronous SQL, so no request can interleave with it.
 export class Registry extends DurableObject<Env> {
   private readonly sql: SqlStorage;
+  private readonly messages: MessageStore;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.sql.exec(REGISTRY_SCHEMA);
+    this.messages = new MessageStore(this.sql, (...args) => this.audit(...args), (nodeId) => this.capabilitiesOf(nodeId));
   }
 
   audit(actor: string, action: string, target: string | null, detail: unknown = null): void {
@@ -133,6 +138,47 @@ export class Registry extends DurableObject<Env> {
       this.audit(actor, "node.revoke", nodeId);
     });
     return true;
+  }
+
+  // ---- Messages (issue #31). The caller pushes the returned effects. -------
+
+  async sendMessage(message: NewMessage, actor: string): Promise<SendResult> {
+    const result = this.ctx.storage.transactionSync(() => this.messages.send(message, actor, Date.now()));
+    await this.armExpiry();
+    return result;
+  }
+
+  reportMessageStatus(nodeId: string, status: MessageStatusBody): MessageEffects {
+    return this.ctx.storage.transactionSync(() => this.messages.report(nodeId, status, Date.now()));
+  }
+
+  pendingMessagesFor(nodeId: string): MessageEffects {
+    return this.ctx.storage.transactionSync(() => this.messages.pendingFor(nodeId, Date.now()));
+  }
+
+  listMessages(nodeId: string | null, limit: number): MessageRecord[] {
+    return this.messages.list(nodeId, limit);
+  }
+
+  // Expiry is checked on every message access and, so that the text of an
+  // expired message never waits for the next access, by an alarm set to the
+  // earliest expiry of a queued message.
+  async alarm(): Promise<void> {
+    const effects = this.ctx.storage.transactionSync(() => this.messages.expireDue(Date.now()));
+    await this.armExpiry();
+    await routeEffects(this.env, effects);
+  }
+
+  private async armExpiry(): Promise<void> {
+    const next = this.messages.nextExpiry();
+    if (next === null) return;
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || current > next) await this.ctx.storage.setAlarm(next);
+  }
+
+  private capabilitiesOf(nodeId: string): string[] | null {
+    const row = this.sql.exec("SELECT capabilities FROM nodes WHERE id = ? AND revoked_at IS NULL", nodeId).toArray()[0];
+    return row ? JSON.parse(String(row.capabilities)) as string[] : null;
   }
 
   private writeRuntimes(nodeId: string, runtimes: RuntimeInfo[]): void {

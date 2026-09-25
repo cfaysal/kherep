@@ -1,9 +1,10 @@
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { exportJWK, generateKeyPair, SignJWT, type CryptoKey as JoseKey, type JWK } from "jose";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index.mts";
-import { BASE, enroll, newKey, workerFetch } from "./helpers.mts";
+import { BASE, enroll, FACTS, newKey, registry, workerFetch } from "./helpers.mts";
 
 const TEAM = "https://team.example.com";
 const AUD = "test-audience";
@@ -101,6 +102,36 @@ describe("operator API", () => {
       expect(refused.status).toBe(400);
       expect(await refused.json()).toMatchObject({ error: "command not allowed" });
     }
+  });
+
+  it("sends an operator message and lists message metadata without text", async () => {
+    const jwt = await token();
+    const nodeId = await enroll(await newKey(), "inbox-node");
+    await registry().updateRegistration(nodeId, FACTS, [], ["messaging.v1"]);
+    const post = (body: unknown) => api(`/api/nodes/${nodeId}/messages`, { method: "POST", body: JSON.stringify(body) }, jwt);
+    const sent = await post({ session: "build", text: "operator secret" });
+    expect(sent.status).toBe(202);
+    const { messageId, state } = await sent.json() as { messageId: string; state: string };
+    expect(state).toBe("queued");
+    for (const bad of [{ session: "", text: "x" }, { session: "s", text: "" }, { session: "s", text: "x", inReplyTo: "nope" }]) {
+      expect((await post(bad)).status).toBe(400);
+    }
+
+    const listed = await api(`/api/messages?node=${nodeId}&limit=10`, {}, jwt);
+    expect(listed.status).toBe(200);
+    const raw = await listed.text();
+    expect(raw).not.toContain("operator secret");
+    const { messages } = JSON.parse(raw) as { messages: Record<string, unknown>[] };
+    expect(messages).toEqual([expect.objectContaining({
+      messageId, fromNode: "operator", fromSession: "operator@example.com", toNode: nodeId, toSession: "build", state: "queued" })]);
+    expect(messages[0]).not.toHaveProperty("text");
+    expect((await api("/api/messages?limit=0", {}, jwt)).status).toBe(400);
+    expect((await api("/api/messages?node=bad", {}, jwt)).status).toBe(400);
+
+    const audit = await runInDurableObject(registry(), (_i, state) =>
+      state.storage.sql.exec("SELECT actor, action, detail FROM audit WHERE detail LIKE ?", `%${messageId}%`).toArray());
+    expect(audit).toEqual([expect.objectContaining({ actor: "operator@example.com", action: "message.send" })]);
+    expect(String(audit[0].detail)).not.toContain("operator secret");
   });
 
   it("revokes a node and refuses further commands", async () => {

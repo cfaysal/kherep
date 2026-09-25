@@ -4,9 +4,11 @@ import {
   isCommandResultBody, isNodeId, isPhase1Command, isRegisterBody, isRuntimeList, isSessionList,
   makeEnvelope, NONCE_TTL_MS, parseEnvelope, PING_FRAME, PONG_FRAME, type Envelope, type MessageType, type Phase1Command,
 } from "../../protocol.mts";
+import { isMessageSendBody, isNodeMessageStatusBody } from "../../protocol-messages.mts";
 import { randomToken } from "./crypto.mts";
 import { registryStub, type Env } from "./env.mts";
 import { checkAuth, CLOSE, type Attachment } from "./handshake.mts";
+import { routeEffects, type LocalNode } from "./message-routing.mts";
 import { SessionStore, type CommandRecord } from "./session-store.mts";
 
 // Offline detection (issue #5 decision 2): while a node is online an alarm
@@ -147,6 +149,20 @@ export class NodeSession extends DurableObject<Env> {
     if (envelope.ack > 0) this.store.ackThrough(envelope.ack);
     this.sendControl(ws, "event", { name: "auth.ok", nodeId: attachment.nodeId });
     for (const pending of this.store.pendingEnvelopes(0)) ws.send(JSON.stringify(pending));
+    // Messages queued while the node was away, oldest first.
+    await routeEffects(this.env, await registryStub(this.env).pendingMessagesFor(attachment.nodeId), this.local(ws, attachment.nodeId));
+  }
+
+  // Registry-routed message frames for this node. Returns false when the node
+  // is not connected; queued messages then wait for its next authentication.
+  pushFrame(type: "message.deliver" | "message.status", body: Record<string, unknown>): boolean {
+    const ws = this.authedSocket();
+    if (ws) this.sendControl(ws, type, body);
+    return ws !== null;
+  }
+
+  private local(ws: WebSocket, nodeId: string): LocalNode {
+    return { nodeId, send: (type, body) => this.sendControl(ws, type, body) };
   }
 
   private async dispatch(ws: WebSocket, nodeId: string, envelope: Envelope): Promise<void> {
@@ -167,6 +183,18 @@ export class NodeSession extends DurableObject<Env> {
         return;
       case "command.result":
         return this.handleResult(nodeId, body);
+      case "message.send": {
+        if (!isMessageSendBody(body)) return this.sendControl(ws, "error", { error: "invalid message.send body" });
+        // The sender is the authenticated connection, never a field of the body.
+        const result = await registry.sendMessage({ messageId: body.messageId, from: { nodeId, session: body.fromSession },
+          to: { nodeId: body.to.nodeId, session: body.to.session }, text: body.text, inReplyTo: body.inReplyTo }, `node:${nodeId}`);
+        if (!result.ok) return this.sendControl(ws, "error", { error: result.error, messageId: body.messageId });
+        this.sendControl(ws, "message.status", { ...result.status });
+        return routeEffects(this.env, result.effects, this.local(ws, nodeId));
+      }
+      case "message.status":
+        if (!isNodeMessageStatusBody(body)) return this.sendControl(ws, "error", { error: "invalid message.status body" });
+        return routeEffects(this.env, await registry.reportMessageStatus(nodeId, body), this.local(ws, nodeId));
       case "event":
       case "error":
         return; // activity already recorded
