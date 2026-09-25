@@ -4,7 +4,7 @@
 // stops reading. Argument checking here, everything after it in
 // confluence-neighbours.mts.
 import { ConfluenceError } from "./confluence-contract.mts";
-import { findSpace, listChildren, listLabels, movePage, updatePage } from "./confluence-content.mts";
+import { findSpace, getPageBody, listChildren, listLabels, movePage, updatePage } from "./confluence-content.mts";
 import {
   reportContext,
   reportOrphans,
@@ -22,6 +22,8 @@ export interface NeighbourCliContext extends ConfluenceContext {
   // The only dependency that reaches outside the Confluence API. Injected so a
   // test never spawns a process and a host without the tool fails loudly.
   semantic: (query: string, limit?: number) => Promise<Proposals>;
+  // The payload channel: stdout, written as is. Only get --body-only uses it.
+  writeOut: (chunk: string) => void;
 }
 
 export type NeighbourArgs = Record<string, string | undefined>;
@@ -174,5 +176,24 @@ export async function cmdMove(ctx: NeighbourCliContext, args: NeighbourArgs): Pr
     return 1;
   }
   ctx.log(`readback parent: ${result.toParent}`);
+  return 0;
+}
+
+const BODY_FORMATS = { storage: "storage", adf: "atlas_doc_format" } as const;
+
+// get --body-only: stdout carries the body and nothing else, without an added
+// newline, so `get --id <page> --body-only > page.xml` is exactly the body. The
+// broker writes no file; the shell names it. Every other line goes to stderr.
+// --format is checked here, before any request, and is refused without
+// --body-only rather than silently ignored.
+export async function cmdGetBody(ctx: NeighbourCliContext, args: NeighbourArgs): Promise<number> {
+  if (!("body-only" in args)) throw new ConfluenceError("get --format applies only with --body-only.");
+  // Present without a value is an empty format and refused, not the default.
+  const format = "format" in args ? args.format ?? "" : "storage";
+  if (!Object.hasOwn(BODY_FORMATS, format)) {
+    throw new ConfluenceError(`--format "${format}" is not readable by get --body-only. Use storage or adf.`);
+  }
+  const representation = BODY_FORMATS[format as keyof typeof BODY_FORMATS];
+  ctx.writeOut(await getPageBody(createSession(ctx), args.id ?? "", representation));
   return 0;
 }

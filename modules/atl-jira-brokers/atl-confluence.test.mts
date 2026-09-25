@@ -21,6 +21,10 @@ const CRED_PATH = "/nowhere/credentials-for-tests";
 const CRED_TEXT = `Client ID: ${CLIENT_ID}\nSecret: ${CLIENT_SECRET}\n`;
 const SITE = "https://wiki.example.com";
 const AUTHOR = "service-account-for-tests";
+// Compared whole: a regex with an unescaped "|" matched this line on any one of
+// its words and so asserted nothing.
+const USAGE = "Usage: create | update | get [--body-only [--format storage|adf]] | delete | purge"
+  + " | labels | move | space | children | related | search | context | orphans | stitch | selftest";
 
 interface Call {
   url: string;
@@ -51,6 +55,8 @@ function harness(options: { env?: Record<string, string | undefined>; api?: (cal
   const out: string[] = [];
   const err: string[] = [];
   const calls: Call[] = [];
+  // What reached stdout through the payload channel, chunk by chunk.
+  const written: string[] = [];
   const injected: Injected = {
     env: options.env ?? { KHEREP_ATL_SITE: SITE, [OWN_ENV]: CRED_PATH },
     async readFile(path) {
@@ -68,8 +74,9 @@ function harness(options: { env?: Record<string, string | undefined>; api?: (cal
     log: (line) => { out.push(line); },
     logError: (line) => { err.push(line); },
     now: () => 1_000_000,
+    writeOut: (chunk) => { written.push(chunk); },
   };
-  return { out, err, calls, injected, printed: () => [...out, ...err].join("\n") };
+  return { out, err, calls, written, injected, printed: () => [...out, ...err].join("\n") };
 }
 
 function defaultApi(call: Call): HttpResponse {
@@ -176,7 +183,7 @@ test(`${BROKER} refuses to purge a page that is not trashed`, async () => {
 test(`${BROKER} prints a usage line for an unknown verb`, async () => {
   const { err, calls, injected } = harness();
   assert.equal(await runCli(["publish"], injected), 1);
-  assert.match(err.join("\n"), /^Usage: create \| update \| get \| delete \| purge \| labels \| move \| space \| children \| related | search | context\| context \| orphans \| stitch \| selftest$/m);
+  assert.equal(err.join("\n"), USAGE);
   assert.deepEqual(calls, []);
 });
 
@@ -268,4 +275,104 @@ test(`${BROKER} reports a move it cannot see at the target as UNVERIFIED`, async
   assert.equal(await runCli(["move", "--id", "5001", "--parent", "7001"], injected), 1);
   assert.match(err.join("\n"), /UNVERIFIED/);
   assert.doesNotMatch(out.join("\n"), /readback parent/);
+});
+
+// get --body-only prints the page body and nothing else to stdout, so
+// `get --id <page> --body-only > page.xml` is exactly the body. The broker
+// itself writes no file.
+const BODY_TEXT = "<p>body</p>\n<p>second line, no newline after it</p>";
+const ADF_TEXT = JSON.stringify({ type: "doc", version: 1, content: [{ type: "paragraph" }] });
+
+function bodyApi(body: unknown) {
+  return (call: Call): HttpResponse => (call.url.includes("/wiki/api/v2/pages/5001")
+    ? response(200, { ...PAGE, body })
+    : response(200, {}));
+}
+
+function pageReads(calls: Call[]): string[] {
+  return calls.filter((call) => call.url.includes("/wiki/api/v2/pages/"))
+    .map((call) => call.url.replace(/^.*\/wiki/, "/wiki"));
+}
+
+test(`${BROKER} get --body-only prints only the storage body, with one request`, async () => {
+  const { out, err, written, calls, injected } = harness({ api: bodyApi({ storage: { value: BODY_TEXT } }) });
+  assert.equal(await runCli(["get", "--id", "5001", "--body-only"], injected), 0);
+  assert.equal(written.join(""), BODY_TEXT, "stdout is the body, byte for byte, without an added newline");
+  assert.deepEqual(out, [], "no metadata line may reach stdout");
+  assert.deepEqual(err, []);
+  assert.deepEqual(pageReads(calls), ["/wiki/api/v2/pages/5001?body-format=storage"]);
+});
+
+test(`${BROKER} get --body-only takes the flag in any position`, async () => {
+  const { out, written, calls, injected } = harness({ api: bodyApi({ storage: { value: BODY_TEXT } }) });
+  assert.equal(await runCli(["get", "--body-only", "--id", "5001", "--format", "storage"], injected), 0);
+  assert.equal(written.join(""), BODY_TEXT);
+  assert.deepEqual(out, []);
+  assert.deepEqual(pageReads(calls), ["/wiki/api/v2/pages/5001?body-format=storage"]);
+});
+
+test(`${BROKER} get --body-only --format adf asks for atlas_doc_format`, async () => {
+  const { out, written, calls, injected } = harness({ api: bodyApi({ atlas_doc_format: { value: ADF_TEXT } }) });
+  assert.equal(await runCli(["get", "--id", "5001", "--body-only", "--format", "adf"], injected), 0);
+  assert.equal(written.join(""), ADF_TEXT);
+  assert.deepEqual(out, []);
+  assert.deepEqual(pageReads(calls), ["/wiki/api/v2/pages/5001?body-format=atlas_doc_format"]);
+});
+
+test(`${BROKER} get --body-only refuses any --format but storage and adf before sending anything`, async () => {
+  const cases: string[][] = [
+    ["--format", "wiki"], ["--format", "markdown"], ["--format", "atlas_doc_format"], ["--format", ""], ["--format"],
+  ];
+  for (const extra of cases) {
+    const { err, out, written, calls, injected } = harness({ api: bodyApi({ storage: { value: BODY_TEXT } }) });
+    assert.equal(await runCli(["get", "--id", "5001", "--body-only", ...extra], injected), 1);
+    assert.match(err.join("\n"), /--format/);
+    assert.deepEqual(calls, [], `${extra.join(" ")} still sent a request`);
+    assert.deepEqual(written, []);
+    assert.deepEqual(out, []);
+  }
+});
+
+test(`${BROKER} get refuses --format without --body-only before sending anything`, async () => {
+  const { err, out, calls, injected } = harness({ api: bodyApi({ storage: { value: BODY_TEXT } }) });
+  assert.equal(await runCli(["get", "--id", "5001", "--format", "adf"], injected), 1);
+  assert.match(err.join("\n"), /--body-only/, "--format alone must not be silently ignored");
+  assert.deepEqual(calls, []);
+  assert.deepEqual(out, []);
+});
+
+test(`${BROKER} get --body-only fails when the answer lacks the requested representation`, async () => {
+  const { err, out, written, injected } = harness({ api: bodyApi({ atlas_doc_format: { value: ADF_TEXT } }) });
+  assert.equal(await runCli(["get", "--id", "5001", "--body-only"], injected), 1);
+  assert.match(err.join("\n"), /without a storage body/);
+  assert.deepEqual(written, [], "an empty stdout must not stand in for the body");
+  assert.deepEqual(out, []);
+});
+
+test(`${BROKER} get --body-only prints nothing for a page that cannot be read`, async () => {
+  const { err, out, written, injected } = harness({ api: () => response(404, { errors: [{ title: "Not Found" }] }) });
+  assert.equal(await runCli(["get", "--id", "5001", "--body-only"], injected), 1);
+  assert.match(err.join("\n"), /404/);
+  assert.deepEqual(written, []);
+  assert.deepEqual(out, []);
+});
+
+test(`${BROKER} get --body-only checks --id before sending anything`, async () => {
+  const { err, written, calls, injected } = harness({ api: bodyApi({ storage: { value: BODY_TEXT } }) });
+  assert.equal(await runCli(["get", "--body-only"], injected), 1);
+  assert.match(err.join("\n"), /--id/);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(written, []);
+});
+
+test(`${BROKER} plain get still prints the metadata lines and asks for no body`, async () => {
+  const { out, err, written, calls, injected } = harness({ api: bodyApi({ storage: { value: BODY_TEXT } }) });
+  assert.equal(await runCli(["get", "--id", "5001"], injected), 0);
+  assert.deepEqual(out, [
+    "id: 5001", "title: New page", "status: current", "version: 1",
+    `authorId: ${AUTHOR}`, "link: /spaces/KB/pages/5001",
+  ]);
+  assert.deepEqual(err, []);
+  assert.deepEqual(written, []);
+  assert.deepEqual(pageReads(calls), ["/wiki/api/v2/pages/5001"]);
 });

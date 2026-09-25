@@ -11,6 +11,13 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- `get --id <page> --body-only [--format storage|adf]` on both Confluence
+  brokers prints only the page body to stdout, without metadata and without
+  an added newline, so `> file` yields exactly the body. One request with
+  the v2 `body-format` parameter; an unmapped or empty `--format`, `--format`
+  without `--body-only`, and an answer without the requested representation
+  fail on stderr with a non-zero exit. The brokers still write no file. Plain
+  `get` is unchanged.
 - A per-repository opt-out from the work-item key. The `commit-msg` hook skips
   the key check when the repository-local Git config
   `kherep.workItemRequired` is a Git boolean false (`false`, `no`, `off`,
