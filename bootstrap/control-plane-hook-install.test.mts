@@ -1,0 +1,102 @@
+// Issue #31, step 3b. The installer wires the control-plane delivery hook into
+// the user settings. The hook imports sibling modules, so it runs from the
+// Kherep checkout (__KHEREP_REPO__) instead of a copy in CLAUDE_HOME. These
+// tests render, install, drift-check and capture against throwaway homes only.
+//
+// Every run builds its environment without the host's KHEREP_* variables and
+// points GIT_CONFIG_SYSTEM and GIT_CONFIG_GLOBAL at fixture files.
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { test, type TestContext } from "node:test";
+
+import { KHEREP_REPO, substituteTemplatePaths } from "./render-profile-paths.mts";
+
+const HERE = import.meta.dirname;
+const HOOK = "modules/control-plane/node/deliver-hook.mts";
+const EVENTS = ["UserPromptSubmit", "Stop"];
+const forward = (value: string): string => value.replace(/\\/g, "/");
+// Git Bash wants /c/... on Windows; install.sh refuses a drive-letter path.
+const slash = (value: string): string =>
+  forward(value).replace(/^([A-Za-z]):\//, (_match, drive: string) => `/${drive.toLowerCase()}/`);
+const hookCommand = (repo: string): string => `node "${repo}/${HOOK}"`;
+type HookGroups = { hooks: Record<string, { hooks: { command: string }[] }[]> };
+const lastCommand = (value: HookGroups, event: string) => value.hooks[event].at(-1)?.hooks.at(-1)?.command;
+
+function hostEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KHEREP_")));
+}
+
+test("__KHEREP_REPO__ renders the checkout with forward slashes on a Windows drive path", { skip: process.platform !== "win32" }, () => {
+  const rendered = substituteTemplatePaths(`node "__KHEREP_REPO__/${HOOK}"`, "win", "D:\\Work", "D:\\creds", "D:\\home\\.claude", "D:\\Tools\\Kherep");
+  assert.equal(rendered, hookCommand("D:/Tools/Kherep"));
+});
+
+test("__KHEREP_REPO__ defaults to the checkout the renderer runs from", () => {
+  const rendered = substituteTemplatePaths("__KHEREP_REPO__", "mac", "/w", "/c", "/h");
+  assert.equal(rendered, substituteTemplatePaths("__KHEREP_REPO__", "mac", "/w", "/c", "/h", KHEREP_REPO));
+  assert.equal(path.resolve(HERE, ".."), KHEREP_REPO);
+});
+
+interface Fixture { root: string; home: string; claude: string; ws: string; config: string }
+
+function fixture(t: TestContext): Fixture {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-issue31-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const f = { root, home: path.join(root, "home"), claude: path.join(root, "home", ".claude"),
+    ws: path.join(root, "Kherep"), config: path.join(root, "no-node") };
+  for (const dir of [f.claude, f.ws]) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(f.claude, "settings.json"), "{}\n");
+  return f;
+}
+
+function bash(args: string[], f: Fixture, input?: string) {
+  const env = {
+    ...hostEnv(), HOME: slash(f.home), CLAUDE_HOME: slash(f.claude), KHEREP_PROFILE: "win", KHEREP_WORKSPACE: slash(f.ws),
+    GIT_CONFIG_SYSTEM: path.join(f.root, "gitconfig-system"), GIT_CONFIG_GLOBAL: path.join(f.root, "gitconfig-global"),
+    KHEREP_INSTALL_SKIP_GITCONFIG: "1", KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE: "1", KHEREP_INSTALL_SKIP_ATL_CREDENTIAL: "1",
+    SKIP_SECRETS: "1", SKIP_DEPS: "1", KHEREP_CONFIG_DIR: f.config,
+  };
+  return spawnSync("bash", args, { encoding: "utf8", env, input, timeout: 240_000 });
+}
+
+test("install wires the delivery hook from the checkout, drift-check is clean and capture restores the placeholder", (t) => {
+  const f = fixture(t);
+  const install = bash([slash(path.join(HERE, "install.sh"))], f);
+  assert.equal(install.status, 0, `${install.stdout}\n${install.stderr}`);
+
+  const text = fs.readFileSync(path.join(f.claude, "settings.json"), "utf8");
+  assert.ok(!text.includes("__KHEREP_REPO__"), "unresolved __KHEREP_REPO__ in the rendered settings");
+  const settings = JSON.parse(text);
+  const expected = hookCommand(forward(KHEREP_REPO));
+  for (const event of EVENTS) {
+    const commands: string[] = settings.hooks[event].flatMap((group: { hooks: { command: string }[] }) => group.hooks.map((h) => h.command));
+    assert.equal(commands.filter((command) => command.includes("deliver-hook")).length, 1, `${event}: ${commands.join(" | ")}`);
+    assert.equal(lastCommand(settings, event), expected, `${event} does not end with the delivery hook`);
+    // Run as stored, through bash like Claude Code: inert without an enrolled node.
+    const run = bash(["-c", expected], f, JSON.stringify({ session_id: "s", hook_event_name: event }));
+    assert.deepEqual([run.status, run.stdout, run.stderr], [0, "", ""], `${event}: ${run.stderr}`);
+  }
+
+  const drift = bash([slash(path.join(HERE, "drift-check.sh"))], f);
+  assert.equal(drift.status, 0, `${drift.stdout}\n${drift.stderr}`);
+
+  // capture.sh writes into the repository's claude/ directory, so its settings
+  // step, portable_paths from lib.sh, runs here on a copy.
+  const copy = path.join(f.root, "captured.json");
+  fs.copyFileSync(path.join(f.claude, "settings.json"), copy);
+  const capture = bash(["-c", `. "${slash(path.join(HERE, "lib.sh"))}" && portable_paths "${slash(copy)}"`], f);
+  assert.equal(capture.status, 0, capture.stderr);
+  const captured = JSON.parse(fs.readFileSync(copy, "utf8"));
+  const source = JSON.parse(fs.readFileSync(path.join(HERE, "..", "claude", "settings.user.json"), "utf8"));
+  for (const event of EVENTS) assert.equal(lastCommand(captured, event), lastCommand(source, event));
+  assert.ok(!fs.readFileSync(copy, "utf8").includes(forward(KHEREP_REPO)), "capture left the machine path of the checkout");
+
+  // Removing the entries by hand, as docs/INSTALLATION.md describes, is drift.
+  for (const event of EVENTS) settings.hooks[event].at(-1).hooks.pop();
+  fs.writeFileSync(path.join(f.claude, "settings.json"), `${JSON.stringify(settings, null, 2)}\n`);
+  const removed = bash([slash(path.join(HERE, "drift-check.sh"))], f);
+  assert.equal(removed.status, 1, `${removed.stdout}\n${removed.stderr}`);
+});

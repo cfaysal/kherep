@@ -126,6 +126,10 @@
           {
             "type": "command",
             "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/research-first.mts\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/deliver-hook.mts\""
           }
         ]
       }
@@ -145,6 +149,10 @@
           {
             "type": "command",
             "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/research-stop.mts\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/deliver-hook.mts\""
           }
         ]
       }
