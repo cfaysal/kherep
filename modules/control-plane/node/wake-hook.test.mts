@@ -1,66 +1,25 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { ensureDir, nodePaths, type NodePaths } from "./config.mts";
-import { writeLocalSessions } from "./exchange.mts";
-import { getMessage, markOffered, MAX_REPLY_DEPTH, storeMessage, writeJsonAtomic } from "./inbox.mts";
+import { getMessage, markOffered, MAX_REPLY_DEPTH, writeJsonAtomic } from "./inbox.mts";
 import {
   killSwitch, listenerDir, REARM_TEXT, runWake, WAKE_GRACE_MS, WAKE_MAX_WAIT_MS, WAKE_POLL_MS, WAKE_SETTLE_MS, WAKE_TIMEOUT_S,
-  wakeAudit, WAKES_PER_HOUR, wakeText,
+  wakeAudit, wakeText,
 } from "./wake-hook.mts";
+import { arrive, auditLines, listen, lockFile, SECRET, SELF, setup, T0 } from "./wake-fixture.mts";
 
 // The wake listener (issue #31): a fake clock and sleep drive it, so no test
 // waits in real time except the one that runs the script as Claude Code would.
+// wake-guards.test.mts covers the policy, budget and permission guards.
 
-const PEER = "00000000-0000-4000-8000-0000000000cc";
-const SELF = "s-self";
-const SECRET = "peer text that must never reach the audit";
-const T0 = Date.UTC(2026, 8, 25, 12);
 const HOOK = fileURLToPath(new URL("./wake-hook.mts", import.meta.url));
 const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
   + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
   + "created\\)\\r?\\n", "gm");
 const withoutTypeStrippingWarning = (stderr: string | Buffer): string => String(stderr).replace(TYPE_STRIPPING_WARNING, "");
-
-const id = (n: number): string => `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
-
-function setup(t: test.TestContext, enrolled = true): { root: string; paths: NodePaths } {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-wake-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const paths = nodePaths(root);
-  if (enrolled) {
-    ensureDir(paths.dir);
-    fs.writeFileSync(paths.config, "{}\n");
-    writeLocalSessions(paths, [{ sessionId: SELF, runtime: "claude-code", state: "idle", name: "review" }]);
-  }
-  return { root, paths };
-}
-
-function arrive(paths: NodePaths, n: number, at: number, toSession = "review", depth = 0): string {
-  storeMessage(paths.inbox, { messageId: id(n), from: { nodeId: PEER, session: "build" }, toSession, text: `${SECRET} ${n}`,
-    createdAt: new Date(at).toISOString() }, at, depth);
-  return id(n);
-}
-
-// A listener on a fake clock; tick(clock) runs after each sleep, before the poll.
-// The Stop input carries stop_hook_active true in a turn a Stop hook continued,
-// the woken turn included; the listener arms all the same.
-function listen(paths: NodePaths, options: { start?: number; tick?: (clock: number) => void; maxWaitMs?: number; pid?: number } = {}) {
-  let clock = options.start ?? T0;
-  return runWake({ session_id: SELF, hook_event_name: "Stop", stop_hook_active: true }, {
-    paths, pid: options.pid ?? 4242, maxWaitMs: options.maxWaitMs ?? 60_000, now: () => clock,
-    sleep: async (ms) => { clock += ms; options.tick?.(clock); },
-  });
-}
-
-const auditLines = (paths: NodePaths) =>
-  fs.existsSync(wakeAudit(paths)) ? fs.readFileSync(wakeAudit(paths), "utf8").trim().split("\n").map((l) => JSON.parse(l)) : [];
-const lockFile = (paths: NodePaths) => path.join(listenerDir(paths), `${SELF}.json`);
 
 test("wakes with the fixed text for a message that arrives after the grace period, by name or id", async (t) => {
   const { paths } = setup(t);
@@ -77,7 +36,7 @@ test("wakes with the fixed text for a message that arrives after the grace perio
   assert.deepEqual(auditLines(paths),
     [{ ts: new Date(T0 + 2 * WAKE_POLL_MS + WAKE_SETTLE_MS).toISOString(), sessionId: SELF, messageIds: [byName, byId], action: "wake" }]);
   assert.ok(!fs.readFileSync(wakeAudit(paths), "utf8").includes(SECRET), "the audit never carries message text");
-  assert.equal(getMessage(paths.inbox, byName)?.state, "accepted", "the Stop delivery hook of the woken turn offers it");
+  assert.equal(getMessage(paths.inbox, byName)?.state, "accepted", "the delivery hook of the woken turn offers it");
   assert.equal(fs.existsSync(lockFile(paths)), false);
 });
 
@@ -89,7 +48,7 @@ test("ignores what arrived up to the grace period after arming, then re-arms its
     if (clock === T0 + WAKE_POLL_MS) during = arrive(paths, 2, T0 + WAKE_GRACE_MS);
   } });
   // Claude Code kills a listener at its timeout without waking the session, so
-  // the listener wakes it first; that turn's Stop starts the next listener.
+  // the listener wakes it first; that turn starts the next listener.
   assert.deepEqual(result, { code: 2, text: REARM_TEXT });
   assert.equal(REARM_TEXT, "Kherep: message listener re-armed.");
   assert.equal(WAKE_MAX_WAIT_MS, (WAKE_TIMEOUT_S - 60) * 1000);
@@ -110,10 +69,11 @@ test("re-reads the state before waking: a message a delivery hook offered meanwh
   assert.deepEqual(auditLines(paths).map((l) => l.action), ["rearm"]);
 });
 
-test("a listener replaced by a newer Stop's listener exits quietly and leaves the new lock", async (t) => {
+test("a listener replaced by a newer one exits quietly and leaves the new lock; identity is the token", async (t) => {
   const { paths } = setup(t);
-  const newer = { pid: 5151, startedAt: T0 + 1 };
-  const result = await listen(paths, { tick: () => writeJsonAtomic(lockFile(paths), newer) });
+  // Same pid and start time, other token: still another listener.
+  const newer = { token: "newer", pid: 4242, startedAt: T0, event: "Stop" };
+  const result = await listen(paths, { token: "older", tick: () => writeJsonAtomic(lockFile(paths), newer) });
   assert.deepEqual(result, { code: 0 });
   assert.deepEqual(auditLines(paths).map((l) => [l.action, l.messageIds]), [["superseded", []]]);
   assert.deepEqual(JSON.parse(fs.readFileSync(lockFile(paths), "utf8")), newer);
@@ -131,24 +91,15 @@ test("the kill switch and an unenrolled machine keep the listener from starting"
   assert.deepEqual(auditLines(paths).map((l) => l.action), ["disabled"]);
   assert.equal(fs.existsSync(listenerDir(paths)), false);
 
-  const none = setup(t, false).paths;
+  const none = setup(t, { enrolled: false }).paths;
   assert.deepEqual(await listen(none, { tick: () => assert.fail("no poll without a node") }), { code: 0 });
   assert.equal(fs.existsSync(none.dir), false, "an unenrolled machine gets no files");
   for (const bad of [undefined, "", "../x", "a/b"]) {
-    assert.deepEqual(await runWake({ session_id: bad }, { paths, sleep: async () => assert.fail("no poll") }), { code: 0 });
+    assert.deepEqual(await runWake({ session_id: bad, hook_event_name: "Stop" }, { paths, sleep: async () => assert.fail("no poll") }),
+      { code: 0 });
   }
-});
-
-test(`wakes a session at most ${WAKES_PER_HOUR} times per rolling hour`, async (t) => {
-  const { paths } = setup(t);
-  const wakeAt = async (n: number, start: number) =>
-    listen(paths, { start, tick: (clock) => { if (clock === start + 2 * WAKE_POLL_MS) arrive(paths, n, clock); } });
-  for (let n = 1; n <= WAKES_PER_HOUR; n++) assert.equal((await wakeAt(n, T0 + n * 60_000)).code, 2, `wake ${n}`);
-  assert.deepEqual(await wakeAt(20, T0 + 7 * 60_000), { code: 0 });
-  assert.equal(getMessage(paths.inbox, id(20))?.state, "accepted", "a rate-limited message waits for the next turn");
-  assert.deepEqual(auditLines(paths).at(-1)?.action, "rate-limited");
-  // One token comes back every hour / WAKES_PER_HOUR.
-  assert.equal((await wakeAt(21, T0 + 7 * 60_000 + 60 * 60_000 / WAKES_PER_HOUR)).code, 2);
+  assert.deepEqual(await runWake({ session_id: SELF, hook_event_name: "PreToolUse" }, { paths, sleep: async () => assert.fail("no poll") }),
+    { code: 0 });
 });
 
 test("a message at the reply limit does not wake the session; the audit says so once", async (t) => {
@@ -166,17 +117,22 @@ test("a message at the reply limit does not wake the session; the audit says so 
   assert.deepEqual(auditLines(mixed)[1].messageIds, [shallow]);
 });
 
-test("runs as Claude Code starts it: exit 2 with the wake text on stderr, exit 0 without a node", (t) => {
+test("runs as Claude Code starts it: exit 2 with the wake text on stderr, exit 0 without a node or with a bad --timeout", (t) => {
   const { root, paths } = setup(t);
   // Arrived well after the grace period, so the first poll wakes.
   arrive(paths, 1, Date.now() + 60_000, SELF);
-  const input = JSON.stringify({ session_id: SELF, hook_event_name: "Stop", stop_hook_active: false });
-  const woken = spawnSync(process.execPath, [HOOK], { input, env: { ...process.env, KHEREP_CONFIG_DIR: root }, encoding: "utf8", timeout: 30_000 });
+  const input = JSON.stringify({ session_id: SELF, hook_event_name: "Stop", stop_hook_active: false, permission_mode: "default" });
+  const run = (args: string[], dir: string, stdin = input) => spawnSync(process.execPath, [HOOK, ...args],
+    { input: stdin, env: { ...process.env, KHEREP_CONFIG_DIR: dir }, encoding: "utf8", timeout: 30_000 });
+  // A --timeout too short for the re-arm margin ends it before it listens.
+  const short = run(["--timeout", "90"], root);
+  assert.deepEqual([short.status, short.stdout, withoutTypeStrippingWarning(short.stderr)], [0, "", ""]);
+  const woken = run(["--timeout", String(WAKE_TIMEOUT_S)], root);
   assert.deepEqual([woken.status, woken.stdout, withoutTypeStrippingWarning(woken.stderr)], [2, "", `${wakeText(1)}\n`]);
 
-  const empty = setup(t, false).root;
+  const empty = setup(t, { enrolled: false }).root;
   for (const stdin of [input, "{not json", ""]) {
-    const quiet = spawnSync(process.execPath, [HOOK], { input: stdin, env: { ...process.env, KHEREP_CONFIG_DIR: empty }, encoding: "utf8", timeout: 30_000 });
+    const quiet = run([], empty, stdin);
     assert.deepEqual([quiet.status, quiet.stdout, withoutTypeStrippingWarning(quiet.stderr)], [0, "", ""], stdin);
   }
 });

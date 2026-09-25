@@ -32,8 +32,11 @@ const FOOTER_BYTES = 160;
 // replyFrom: the session id the reply command passes as --from, for a runtime
 // whose sessions the msg CLI cannot identify from the environment.
 // maxBytes: the context budget, MAX_CONTEXT_BYTES by default.
+// mayContinue: asked before a Stop keeps the turn going, which is an
+// autonomous turn (autonomy.mts); false leaves everything for the next prompt.
 export interface HookDeps {
   paths: NodePaths; nonce?: () => string; replyCommand?: string; now?: () => number; replyFrom?: string; maxBytes?: number;
+  mayContinue?: (messageIds: string[]) => boolean;
 }
 
 export type DeliveryEvent = "UserPromptSubmit" | "Stop";
@@ -110,7 +113,7 @@ export function retryOffered(paths: NodePaths, records: InboxRecord[]): void {
 
 // An offered record UserPromptSubmit offers again: flagged by StopFailure, or
 // offered so long ago that the offering turn cannot still be running.
-function offerEnded(record: InboxRecord, now: number): boolean {
+export function offerEnded(record: InboxRecord, now: number): boolean {
   return record.retry === true || !(now - Date.parse(record.offeredAt ?? "") < REOFFER_AFTER_MS);
 }
 
@@ -139,6 +142,7 @@ export function deliveryContext(event: DeliveryEvent, refs: string[], deps: Hook
   }
   const failures = unnoticedFailures(paths, refs).slice(0, MAX_MESSAGES_PER_CALL);
   if (waiting.length === 0 && failures.length === 0) return "";
+  if (event === "Stop" && deps.mayContinue && !deps.mayContinue(waiting.map((r) => r.messageId))) return "";
 
   let directory: DirectoryBody | null = null;
   try {

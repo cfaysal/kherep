@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { TURN_SPACING_MS } from "./autonomy.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
 import { deliverForHook, MAX_CONTEXT_BYTES, MAX_MESSAGES_PER_CALL, runHook } from "./deliver-hook.mts";
 import { writeDirectory, writeLocalSessions } from "./exchange.mts";
@@ -93,7 +94,10 @@ test("Stop continues the session only for new messages, so a second Stop stays s
   assert.equal(hook(paths, "Stop"), "");
   assert.equal(getMessage(paths.inbox, id(1))?.state, "delivered");
   inbox(paths, 2);
-  assert.notEqual(hook(paths, "Stop"), "");
+  // A new message continues again once the autonomy spacing has passed.
+  assert.equal(hook(paths, "Stop"), "", "within TURN_SPACING_MS of the last continuation");
+  assert.notEqual(deliverForHook({ session_id: "s-self", hook_event_name: "Stop" },
+    { paths, replyCommand: REPLY, now: () => Date.now() + TURN_SPACING_MS }), "");
 });
 
 test("delivers at most 10 messages and 8 KB per call; the rest waits for the next turn", (t) => {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { markListenerIdle, mayContinue } from "./autonomy.mts";
 import { nodePaths } from "./config.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
 import { contextOutput, deliveryContext, retryOffered, sessionInbox, type HookDeps } from "./deliver-core.mts";
@@ -13,6 +14,8 @@ import { localSessionName } from "./exchange.mts";
 // 2026-09-25):
 // - Input: JSON on stdin with the common fields session_id and hook_event_name
 //   ("Common input fields"); Stop adds stop_hook_active ("Stop input").
+//   permission_mode is the current permission mode, "bypassPermissions" among
+//   them ("Common input fields"); it gates Stop continuations (autonomy.mts).
 // - UserPromptSubmit: exit 0 with {"hookSpecificOutput": {"hookEventName":
 //   "UserPromptSubmit", "additionalContext": "..."}} adds the string to
 //   Claude's context alongside the prompt ("UserPromptSubmit decision control").
@@ -35,19 +38,25 @@ export { MAX_CONTEXT_BYTES, MAX_MESSAGES_PER_CALL, MAX_OFFERS, REOFFER_AFTER_MS,
 export type HookRuntime = "claude" | "codex";
 
 // The hook's stdout for one input: empty when there is nothing to deliver.
-// StopFailure only flags this session's offered records for a new offer.
+// StopFailure only flags this session's offered records for a new offer and
+// tells a listener armed at UserPromptSubmit that the turn has ended.
 export function deliverForHook(input: unknown, deps: HookDeps): string {
   if (typeof input !== "object" || input === null) return "";
-  const { hook_event_name: event, session_id: sessionId } = input as Record<string, unknown>;
+  const { hook_event_name: event, session_id: sessionId, permission_mode: mode } = input as Record<string, unknown>;
   if ((event !== "UserPromptSubmit" && event !== "Stop" && event !== "StopFailure") || typeof sessionId !== "string"
     || sessionId === "") return "";
   const name = localSessionName(deps.paths, sessionId);
   const refs = name === undefined ? [sessionId] : [sessionId, name];
+  const now = deps.now?.() ?? Date.now();
   if (event === "StopFailure") {
     retryOffered(deps.paths, sessionInbox(deps.paths, refs));
+    markListenerIdle(deps.paths, sessionId, now);
     return "";
   }
-  return contextOutput(event, deliveryContext(event, refs, deps));
+  // A Stop continuation is an autonomous turn: budget and permission mode gate it.
+  const gated: HookDeps = event === "Stop"
+    ? { ...deps, mayContinue: (ids) => mayContinue(deps.paths, sessionId, mode, ids, now) } : deps;
+  return contextOutput(event, deliveryContext(event, refs, gated));
 }
 
 // The runtime a command line names: --runtime codex, otherwise Claude Code.
