@@ -71,7 +71,7 @@ test("the Codex installer resolves the space into the Codex home, at its CLI bou
   // Same boundary as the credential step: install() is called directly by the
   // Codex test suite against throwaway homes, and a prompt inside it would hang
   // instead of failing.
-  const main = source.indexOf("if (import.meta.main)");
+  const main = source.indexOf("if (isMainModule())");
   assert.notEqual(main, -1, "codex/install.mts has no CLI block");
   assert.ok(at > main, "the step would run inside install()");
   // Non-fatal in the same sense: a parity installation that already landed

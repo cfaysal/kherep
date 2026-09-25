@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Public Jira broker. Credential values are read only through KHEREP_ATL_CRED_FILE_CODEX.
 // Paths, credentials, and access tokens must never be printed.
+import { realpathSync } from "node:fs";
 import { readFile as nodeReadFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 import {
   AtlassianCredentialError,
   parseCredentialText,
@@ -995,7 +997,18 @@ export async function runCli(argv: string[], injected: Partial<BrokerDeps> = {})
   }
 }
 
-if (import.meta.main) {
+// Node loads the main module from its real path, so a script started through a
+// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+// It needs no main flag on import.meta, which Node 23 and 24.0-24.1 lack.
+function isMainModule(): boolean {
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1] || "")).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   const result = await runCli(process.argv.slice(2));
   // With attachment bytes in hand stdout belongs to them alone, so the envelope
   // moves to stderr. That is not a claim that anything went wrong: it is the

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 export interface AuditIssue { file: string; category: string }
 export interface AuditReport { files: number; scanned: number; indexed: number; issues: AuditIssue[] }
@@ -104,7 +105,18 @@ export function auditRepository(repo: string, terms: string[]): AuditReport {
   return report;
 }
 
-if (import.meta.main) {
+// Node loads the main module from its real path, so a script started through a
+// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+// It needs no main flag on import.meta, which Node 23 and 24.0-24.1 lack.
+function isMainModule(): boolean {
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1] || "")).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   try {
     const args = process.argv.slice(2);
     const repo = args[0] || process.cwd();

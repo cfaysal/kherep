@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { errorMessage, isRecord } from "./shape.mts";
 
@@ -125,7 +126,18 @@ function main(args: string[]): void {
   process.stdout.write(`MCP transport hardened: ${serverName} -> native HTTP\n`);
 }
 
-if (import.meta.main) {
+// Node loads the main module from its real path, so a script started through a
+// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+// It needs no main flag on import.meta, which Node 23 and 24.0-24.1 lack.
+function isMainModule(): boolean {
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1] || "")).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   try { main(process.argv.slice(2)); }
   catch (error) { process.stderr.write(`MCP migration failed: ${errorMessage(error)}\n`); process.exitCode = 1; }
 }
