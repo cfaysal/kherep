@@ -1,6 +1,6 @@
 # Kherep Control Plane (Phase 1)
 
-A Cloudflare Worker that Kherep nodes connect to over an outbound WebSocket, plus the `kherep-node` daemon and CLI that runs on each node. Phase 1 covers enrollment, node identity, registration, liveness, a node/runtime/session registry and a fixed set of three read-only commands. Nothing in Phase 1 runs arbitrary commands on a node. The design and its decisions are recorded in GitHub issue #5. Phase 2 step 1 (GitHub issue #31) adds the messaging wire protocol and its routing and queue in the Worker; the node does not accept messages yet.
+A Cloudflare Worker that Kherep nodes connect to over an outbound WebSocket, plus the `kherep-node` daemon and CLI that runs on each node. Phase 1 covers enrollment, node identity, registration, liveness, a node/runtime/session registry and a fixed set of three read-only commands. Nothing in Phase 1 runs arbitrary commands on a node. The design and its decisions are recorded in GitHub issue #5. Phase 2 step 1 (GitHub issue #31) adds the messaging wire protocol and its routing and queue in the Worker. Step 2 adds Claude Code session discovery, the node's messaging policy and its inbox; handing an inbox message to a running session comes in a later step.
 
 ## Architecture
 
@@ -19,6 +19,8 @@ operator ----HTTPS behind Cloudflare Access--> Worker --> Registry / NodeSession
 | `Registry` | `worker/src/registry.mts` | SQLite tables `nodes`, `runtimes`, `sessions`, `enrollments`, `audit`; one-time codes; key binding; revocation |
 | Message queue | `worker/src/message-store.mts`, `worker/src/message-routing.mts` | The Registry's `messages` table, state changes and expiry; pushing the resulting frames to connected nodes |
 | Node | `node/cli.mts` | `kherep-node node onboard|status|unenroll` and `kherep-node daemon` |
+| Node sessions | `node/sessions.mts` | Claude Code session discovery for `session.list` and `sessions.snapshot` |
+| Node inbox | `node/inbox.mts`, `node/policy.mts` | Messaging policy, the inbox of accepted messages and its retention |
 
 Both Durable Object classes use SQLite storage (declared in the `exports` map with `"storage": "sqlite"`). `NodeSession` accepts the socket with the WebSocket Hibernation API, so an idle node does not keep the object in memory.
 
@@ -38,7 +40,15 @@ Every frame is JSON text with one envelope:
 
 ### Commands
 
-Phase 1 dispatches exactly `node.status`, `runtime.list` and `session.list`. The API refuses anything else, `NodeSession` refuses it again, and the node refuses it a third time against its local policy file, even when the command arrives authenticated. The local policy can narrow the set but never widen it; a malformed policy file allows nothing. `session.list` reports an empty list in Phase 1 because the node does not track agent sessions yet.
+Phase 1 dispatches exactly `node.status`, `runtime.list` and `session.list`. The API refuses anything else, `NodeSession` refuses it again, and the node refuses it a third time against its local policy file, even when the command arrives authenticated. The local policy can narrow the set but never widen it; a malformed policy file allows nothing.
+
+### Sessions
+
+`session.list` and the `sessions.snapshot` frame report the agent sessions running on the node. A session carries `sessionId`, `runtime`, `state` and optional `startedAt` (ISO 8601), `name` (at most 128 chars), `cwd` (at most 512) and `kind` (at most 32). The last three were added in Phase 2; a node that omits them stays valid, and the Registry stores them as nullable columns that it adds to an existing `sessions` table on start.
+
+- Claude Code: the node runs `claude agents --json` (see the [Claude Code sessions documentation](https://code.claude.com/docs/en/sessions)) with the `claude` executable found on `PATH`, without a shell and with a 10 second timeout. `status` becomes `state`, the epoch-millisecond `startedAt` becomes ISO 8601, `runtime` is `claude-code`. Unknown fields are ignored and malformed rows are skipped. Codex sessions are not reported yet.
+- A failed listing is not an empty one. Without `claude` on `PATH` the node reports no Claude sessions. When the command fails, times out or prints something other than a JSON list, `session.list` answers `ok: false` with the reason, and no snapshot is sent, so the Registry keeps its last known list instead of being cleared.
+- The node sends a snapshot after every registration and then checks every 60 seconds, sending a new snapshot only when the list changed.
 
 ### Messages
 
@@ -56,7 +66,7 @@ A message goes from a session on one node to a session on another node. A sessio
 - Routing: the Worker stores the message as `queued` and answers the sender with `message.status`. It sends `message.deliver` at once when the target node is connected, otherwise after the target's next successful authentication, oldest first. Every state the target reports is forwarded to the sending node when it is connected. Statuses for a sender that is not connected are not stored for later delivery; read them through `GET /api/messages`.
 - Refusals: the Worker records `refused`, with a reason, and reports it to the sender when the target node is unknown or revoked, does not advertise the capability `messaging.v1`, or already has 100 queued messages. Revoking a node refuses every message still queued for it (reason `target node revoked`) and tells the senders.
 - Expiry: a message still queued 24 hours after it was sent becomes `expired`, and the sender is told. Expiry is checked on every message operation and by a `Registry` alarm set to the earliest expiry of a queued message.
-- The node daemon does not advertise `messaging.v1` yet. A `message.deliver` that arrives anyway is answered with `message.status` `refused`, reason `messaging not enabled on this node`.
+- The node advertises `messaging.v1` only when its policy has at least one accept rule (see [Node messaging](#node-messaging)). A `message.deliver` that the policy does not accept is answered with `message.status` `refused`, reason `not accepted by node policy`; an accepted one is stored in the node inbox and answered with `accepted`.
 
 ## Security model
 
@@ -142,9 +152,33 @@ The config directory is `KHEREP_CONFIG_DIR` when set, otherwise `%APPDATA%\khere
 | --- | --- |
 | `node.json` | Non-secret config: control URL, `nodeId`, name, public key, key and policy paths |
 | `node-ed25519.pem` | The private key, mode `0600` |
-| `policy.json` | Local command allowlist, `{"version": 1, "allowedCommands": [...]}` |
+| `policy.json` | Local command allowlist and messaging policy, see below |
+| `inbox/` | Accepted messages, one `<messageId>.json` per message; directory mode `0700`, files `0600` |
 
-Runtime discovery checks `PATH` for `claude` and `codex` without running them, and probes LM Studio (`127.0.0.1:1234`) and Ollama (`127.0.0.1:11434`) on loopback only.
+### Node messaging
+
+Messaging is off unless `policy.json` accepts it. The optional `messaging` section lists which senders may leave a message for which local session:
+
+```json
+{
+  "version": 1,
+  "allowedCommands": ["node.status", "runtime.list", "session.list"],
+  "messaging": {
+    "accept": [
+      { "session": "review", "from": ["operator", "00000000-0000-4000-8000-000000000001"] },
+      { "session": "*", "from": ["00000000-0000-4000-8000-000000000002"] }
+    ]
+  }
+}
+```
+
+- `session` is the exact session id or name a sender addresses, or `*` for any session on this node. `from` lists sender node ids, `operator` for messages sent through the API, or `*` for any sender.
+- A missing section or an empty `accept` list disables messaging. A malformed section disables it as a whole, fail closed; the command allowlist is unaffected.
+- The daemon reads the policy at start. It advertises `messaging.v1` in `register` only when at least one accept rule exists.
+- An accepted message is written to `inbox/<messageId>.json` atomically (a temporary file renamed into place) with `messageId`, `from`, `toSession`, `text`, optional `inReplyTo`, `createdAt`, `receivedAt` and `state` `accepted`. A redelivered message keeps the existing file. When the file cannot be written the node sends no status, so the Worker keeps the message queued and delivers it again after the next authentication.
+- Records older than 7 days are removed when the daemon starts. Handing a message to a running session and reporting `delivered` come in a later step; `node/inbox.mts` already exports `listInbox`, `getMessage` and `markDelivered` for it.
+
+Runtime discovery checks `PATH` for `claude` and `codex` without running them, then the per-user and package-manager directories that a service's minimal `PATH` (a macOS LaunchAgent, for example) lacks: `~/.local/bin`, `~/.claude/local`, `~/.npm-global/bin`, `/opt/homebrew/bin` and `/usr/local/bin`, or `%APPDATA%\npm` on Windows. Session discovery uses the same lookup; a Windows npm shim (`claude.cmd`) runs through `cmd.exe` with a fixed command line, any other executable runs without a shell. Runtime discovery also probes LM Studio (`127.0.0.1:1234`) and Ollama (`127.0.0.1:11434`) on loopback only.
 
 The control URL must be an `https` origin; plain `http` is accepted only for a loopback development Worker.
 
@@ -159,4 +193,4 @@ npm test                            # Workers Vitest integration, runs locally i
 npm run check:bundle                # wrangler deploy --dry-run: bundles and validates, deploys nothing
 ```
 
-The Worker tests run inside the local `workerd` runtime. They cover the handshake (valid signature, wrong key, unknown node, revoked key, replayed and expired nonce), enrollment single use and expiry, seq/ack resend after reconnect, offline marking by the alarm, Access JWT rejection and the command allowlist, message routing (sender taken from the connection, duplicate ids, offline queue and flush, refusals, text removal, expiry, status forwarding, audit without text, both message endpoints), and drive the real node client over a WebSocket against the real `NodeSession`. [`test-vectors.json`](test-vectors.json) holds the RFC 8032 section 7.1 test key and a challenge signature that both sides must reproduce. The Worker has its own `package.json` so the root install stays free of Cloudflare tooling.
+The Worker tests run inside the local `workerd` runtime. They cover the handshake (valid signature, wrong key, unknown node, revoked key, replayed and expired nonce), enrollment single use and expiry, seq/ack resend after reconnect, offline marking by the alarm, Access JWT rejection and the command allowlist, message routing (sender taken from the connection, duplicate ids, offline queue and flush, refusals, text removal, expiry, status forwarding, audit without text, both message endpoints), the Registry column migration, and drive the real node client over a WebSocket against the real `NodeSession`, including a failed session listing that leaves the Registry unchanged and an operator message that the node's policy accepts. The node tests inject the command runner and never start the real `claude` executable. [`test-vectors.json`](test-vectors.json) holds the RFC 8032 section 7.1 test key and a challenge signature that both sides must reproduce. The Worker has its own `package.json` so the root install stays free of Cloudflare tooling.

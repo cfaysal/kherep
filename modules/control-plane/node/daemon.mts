@@ -4,12 +4,16 @@ import { NodeClient, type CommandHandlers } from "./client.mts";
 import { connectUrl, type NodeConfig } from "./config.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
 import { readPrivateKey } from "./identity.mts";
+import { purgeInbox, storeMessage } from "./inbox.mts";
 import { loadPolicy } from "./policy.mts";
+import { listSessions } from "./sessions.mts";
 
 // Application ping interval. The Worker answers PING_FRAME through
 // setWebSocketAutoResponse without waking the Durable Object; Node's built-in
 // WebSocket client cannot send protocol-level ping frames.
 export const PING_INTERVAL_MS = 30_000;
+// The session list is checked this often; a snapshot goes out only on change.
+export const SESSIONS_INTERVAL_MS = 60_000;
 
 export interface DaemonHandle { stop(): void; done: Promise<void> }
 
@@ -19,19 +23,25 @@ export function commandHandlers(config: NodeConfig, startedAt: number): CommandH
       nodeId: config.nodeId, name: config.name, facts: detectFacts(), uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
     }),
     "runtime.list": () => discoverRuntimes(),
-    // Phase 1 does not track agent sessions yet; the list is reported empty
-    // rather than guessed.
-    "session.list": async () => [],
+    // A failed listing rejects, and the command result reports ok:false.
+    "session.list": () => listSessions(),
   };
 }
 
-export function startDaemon(config: NodeConfig, log: (line: string) => void = (line) => console.error(line)): DaemonHandle {
+export function startDaemon(config: NodeConfig, inboxDir: string, log: (line: string) => void = (line) => console.error(line)): DaemonHandle {
   const identity = readPrivateKey(config.privateKeyFile);
   if (identity.publicKey !== config.publicKey) throw new Error("private key does not match the enrolled public key");
   const policy = loadPolicy(config.policyFile);
+  try {
+    const purged = purgeInbox(inboxDir);
+    if (purged > 0) log(`kherep-node: removed ${purged} inbox message(s) older than 7 days`);
+  } catch (error) {
+    log(`kherep-node: inbox purge failed: ${String(error)}`);
+  }
   const client = new NodeClient({
     nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now()),
-    facts: detectFacts, runtimes: () => discoverRuntimes(), sessions: async () => [],
+    facts: detectFacts, runtimes: () => discoverRuntimes(), sessions: () => listSessions(),
+    storeMessage: (body) => { storeMessage(inboxDir, body); }, log,
   });
 
   let stopped = false;
@@ -46,11 +56,19 @@ export function startDaemon(config: NodeConfig, log: (line: string) => void = (l
     const ws = new WebSocket(connectUrl(config.controlUrl, config.nodeId));
     socket = ws;
     let ping: NodeJS.Timeout | null = null;
-    // Frames are handled strictly in order: command seq/ack depends on it.
+    let snapshots: NodeJS.Timeout | null = null;
+    // Frames are handled strictly in order: command seq/ack depends on it. The
+    // periodic snapshot joins the same chain, since the Worker drops a node
+    // frame whose seq is not above the last one it saw.
     let chain = Promise.resolve();
 
     ws.addEventListener("open", () => {
       ping = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send(PING_FRAME); }, PING_INTERVAL_MS);
+      snapshots = setInterval(() => {
+        chain = chain.then(async () => {
+          for (const frame of await client.sessionsSnapshot()) if (ws.readyState === WebSocket.OPEN) ws.send(frame);
+        }).catch((error: unknown) => log(`kherep-node: session snapshot failed: ${String(error)}`));
+      }, SESSIONS_INTERVAL_MS);
     });
     ws.addEventListener("message", (event) => {
       if (typeof event.data !== "string") return;
@@ -66,6 +84,7 @@ export function startDaemon(config: NodeConfig, log: (line: string) => void = (l
     });
     ws.addEventListener("close", (event) => {
       if (ping) clearInterval(ping);
+      if (snapshots) clearInterval(snapshots);
       client.connectionClosed();
       if (stopped) return finish();
       // Revoked or unknown keys will not succeed on retry; stop instead of hammering.

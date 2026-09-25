@@ -25,7 +25,7 @@ export function configRoot(env: NodeJS.ProcessEnv = process.env, platform: NodeJ
   return path.join(env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"), "kherep");
 }
 
-export interface NodePaths { dir: string; config: string; privateKey: string; policy: string }
+export interface NodePaths { dir: string; config: string; privateKey: string; policy: string; inbox: string }
 
 export function nodePaths(root: string = configRoot()): NodePaths {
   const dir = path.join(root, "control-plane");
@@ -34,6 +34,7 @@ export function nodePaths(root: string = configRoot()): NodePaths {
     config: path.join(dir, "node.json"),
     privateKey: path.join(dir, "node-ed25519.pem"),
     policy: path.join(dir, "policy.json"),
+    inbox: path.join(dir, "inbox"),
   };
 }
 
