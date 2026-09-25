@@ -322,10 +322,23 @@ check_profile() {
     fi
     rm -f "$CLAUDE_HOME/skills/codebase-memory/unexpected-live.md"
   fi
-  printf '\n# intentional smoke-test drift\n' >> "$workspace/CLAUDE.md"
+  # OP-1425: only the marked Kherep block counts; operator text outside it is never drift.
+  cp "$workspace/CLAUDE.md" "$host_home/CLAUDE.md.before"
+  printf '\n# intentional smoke-test operator text\n' >> "$workspace/CLAUDE.md"
+  if ! drift_output="$(DRIFT_SCOPE=project bash "$TMP/repo/bootstrap/drift-check.sh" 2>&1)"; then
+    echo "$drift_output"
+    note_fail "DRIFT-CHECK reported operator text outside the managed block as project drift [$profile]"
+  fi
+  cp "$host_home/CLAUDE.md.before" "$workspace/CLAUDE.md"
+  node -e '
+  const fs=require("fs"),p=process.argv[1],m="<!-- kherep-project-rules:start -->",t=fs.readFileSync(p,"utf8");
+  if(!t.includes(m))process.exit(1);
+  fs.writeFileSync(p,t.replace(m,m+"\n# intentional smoke-test drift"));
+  ' "$workspace/CLAUDE.md" || { note_fail "DRIFT fixture: managed block start marker missing in project CLAUDE.md [$profile]"; }
   if DRIFT_SCOPE=project bash "$TMP/repo/bootstrap/drift-check.sh" >/dev/null; then
     note_fail "DRIFT-CHECK missed project drift [$profile]"
   fi
+  cp "$host_home/CLAUDE.md.before" "$workspace/CLAUDE.md"
 }
 
 # The machine-wide core.hooksPath carries the work-item rule for every runtime,
