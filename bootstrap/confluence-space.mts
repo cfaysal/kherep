@@ -190,7 +190,17 @@ async function main(argv: string[]): Promise<void> {
   process.stdout.write(`placement nodes: ${Object.keys(nodes).length} of ${PLACEMENT_NODES.length} resolved\n`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+// Node loads the main module from its real path, so a script started through a
+// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+function isMainModule(): boolean {
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1] || "")).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   main(process.argv.slice(2)).catch((error: unknown) => {
     process.stderr.write(`FATAL: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

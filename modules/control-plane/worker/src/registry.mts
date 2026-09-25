@@ -12,7 +12,7 @@ export interface EnrollRequest { code: string; publicKey: string; name: string; 
 export type EnrollResult = { ok: true; nodeId: string } | { ok: false; reason: "invalid-code" | "expired-code" | "used-code" };
 
 // Single-instance registry of nodes, runtimes, sessions, enrollments and the
-// audit trail. SQLite-backed (new_sqlite_classes); every mutation below is
+// audit trail. SQLite-backed (exports storage "sqlite"); every mutation below is
 // synchronous SQL, so no request can interleave with it.
 export class Registry extends DurableObject<Env> {
   private readonly sql: SqlStorage;

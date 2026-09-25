@@ -32,16 +32,28 @@ function withHome(report: string | null, mtimeHoursAgo?: number): string {
   return home;
 }
 
-function run(home: string, payload: Record<string, unknown> = { cwd: process.cwd() }): string {
+// A workspace of the test's own, so scope never depends on the operator's real
+// KHEREP_WORKSPACE or on where the checkout happens to live. Every inherited
+// KHEREP_* variable is dropped for the same reason (for example a personal
+// KHEREP_ORPHAN_MAX_AGE_HOURS would change what counts as stale).
+const WORKSPACE = fs.mkdtempSync(path.join(os.tmpdir(), "orphan-nudge-ws-"));
+
+function hookEnv(home: string): NodeJS.ProcessEnv {
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("KHEREP_")));
+  return {
+    ...inherited,
+    CLAUDE_HOME: home,
+    KHEREP_WORKSPACE: WORKSPACE,
+    // No refresh in a test: the real one reads an entire live space.
+    KHEREP_ORPHAN_AUTOREFRESH: "0",
+  };
+}
+
+function run(home: string, payload: Record<string, unknown> = { cwd: WORKSPACE }): string {
   return execFileSync(process.execPath, [HOOK], {
     input: JSON.stringify(payload),
     encoding: "utf8",
-    env: {
-      ...process.env,
-      CLAUDE_HOME: home,
-      // No refresh in a test: the real one reads an entire live space.
-      KHEREP_ORPHAN_AUTOREFRESH: "0",
-    },
+    env: hookEnv(home),
   });
 }
 
@@ -90,7 +102,7 @@ test("exits 0 and prints nothing on malformed input", () => {
   const out = execFileSync(process.execPath, [HOOK], {
     input: "not json",
     encoding: "utf8",
-    env: { ...process.env, CLAUDE_HOME: withHome(DIRTY, 1), KHEREP_ORPHAN_AUTOREFRESH: "0" },
+    env: hookEnv(withHome(DIRTY, 1)),
   });
   assert.equal(out.trim(), "");
 });
