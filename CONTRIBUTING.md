@@ -21,6 +21,8 @@ Read [AGENTS.md](AGENTS.md) and the instructions in the component you change. Ne
 | Shared modules | `npm run test:modules` |
 | Jira and Confluence brokers | `npm run test:brokers` |
 | Teamwork Graph | `node --test modules/twg/*.test.mts` |
+| Control Plane node and protocol | `npm run test:control-plane` |
+| Control Plane Worker | In `modules/control-plane/worker`: `npm ci`, `npm run typecheck`, `npm test`, `npm run check:bundle` |
 
 On Windows, select Git for Windows Bash in the test process's `PATH` before WSL Bash. Do not change global shell configuration for a test run.
 
