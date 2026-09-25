@@ -20,6 +20,8 @@ import { runMsgArgs } from "../../node/msg-cli.mts";
 import { DEFAULT_POLICY, type NodePolicy } from "../../node/policy.mts";
 import { enroll, FACTS, workerFetch } from "./helpers.mts";
 
+const WAIT = { timeout: 5_000, interval: 50 };
+
 function settle(ms = 150): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -43,14 +45,16 @@ async function startNode(name: string, paths: NodePaths, sessions: SessionInfo[]
     chain = chain.then(async () => { for (const frame of await client.onFrame(event.data as string)) send(frame); });
   });
   ws.accept();
-  await settle();
-  expect(client.authenticated).toBe(true);
+  // Wait for the handshake instead of a fixed time; a slow runner needs longer.
+  await vi.waitFor(() => expect(client.authenticated).toBe(true), WAIT);
   const inflight = new Set<string>();
   const exchange = async () => { chain = chain.then(() => pollExchange(client, paths, inflight, send)); await settle(); };
-  return { nodeId, ws, exchange };
+  // Resolves once every frame received so far has been handled, so the test can
+  // close the socket without an RPC still pending at teardown.
+  const idle = () => chain;
+  return { nodeId, ws, exchange, idle };
 }
 
-const WAIT = { timeout: 5_000, interval: 50 };
 
 describe("session messaging across two nodes", () => {
   it("carries a CLI message to the other node's session hook and the delivered status back", async () => {
@@ -63,7 +67,8 @@ describe("session messaging across two nodes", () => {
     const b = await startNode(bName, pathsB, [{ sessionId: "s-b", runtime: "claude-code", state: "idle", name: "review" }],
       { ...DEFAULT_POLICY, messaging: { accept: [{ session: "review", from: ["*"] }] } });
     const a = await startNode(aName, pathsA, [{ sessionId: "s-a", runtime: "claude-code", state: "busy", name: "planner" }]);
-    expect(readDirectory(pathsA)?.sessions).toEqual(expect.arrayContaining([expect.objectContaining({ nodeId: b.nodeId, name: "review" })]));
+    await vi.waitFor(() => expect(readDirectory(pathsA)?.sessions)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ nodeId: b.nodeId, name: "review" })])), WAIT);
 
     const out: string[] = [];
     const err: string[] = [];
@@ -94,6 +99,7 @@ describe("session messaging across two nodes", () => {
       expect(getSent(pathsA, messageId)).toMatchObject({ messageId, state: "delivered", to: { nodeId: b.nodeId, session: "review" } });
       expect(getMessage(pathsB.inbox, messageId)?.reportedAt).toBeTruthy();
     }, WAIT);
+    await Promise.all([a.idle(), b.idle()]);
     a.ws.close(1000, "done");
     b.ws.close(1000, "done");
     fs.rmSync(root, { recursive: true, force: true });
