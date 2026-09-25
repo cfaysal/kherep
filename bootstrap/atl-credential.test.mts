@@ -28,6 +28,15 @@ import { writeSecure } from "./atl-credential.mts";
 import { parseCredentialText as parseForClaude } from "../modules/atl-jira-brokers/atl-jira-ccoder.mts";
 import { parseCredentialText as parseForCodex } from "../modules/atl-jira-brokers/atl-jira.mts";
 
+// Some Node releases the engines range admits, 24.1.0 among them, print this
+// warning when a child loads a .mts file. Only this exact pair of lines is
+// dropped; any other stderr still fails the assertion.
+const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
+  + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
+  + "created\\)\\r?\\n", "gm");
+const withoutTypeStrippingWarning = (stderr: string | Buffer): string =>
+  String(stderr).replace(TYPE_STRIPPING_WARNING, "");
+
 const REPO = path.join(import.meta.dirname, "..");
 const STEP = path.join(import.meta.dirname, "atl-credential.mts");
 const FORMAT = path.join(import.meta.dirname, "atl-credential-format.mts");
@@ -224,7 +233,7 @@ test("a scripted run without a terminal fails fast, naming the variable", () => 
   assert.equal(fs.existsSync(absent), false, "the fixture path must not exist");
   const run = runStep(["--runtime", "claude", "--out", absent]);
   assert.equal(run.status, 1);
-  assert.match(run.stderr, /^FATAL: KHEREP_ATL_CRED_FILE_CLAUDE names no verified credential file/);
+  assert.match(withoutTypeStrippingWarning(run.stderr), /^FATAL: KHEREP_ATL_CRED_FILE_CLAUDE names no verified credential file/);
   assert.match(run.stderr, /attached to a terminal/);
   assert.equal(fs.existsSync(absent), false, "a refused run writes nothing");
 });

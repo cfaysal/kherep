@@ -13,6 +13,15 @@ import {
   type BrokerIO,
 } from "./confluence-space.mts";
 
+// Some Node releases the engines range admits, 24.1.0 among them, print this
+// warning when a child loads a .mts file. Only this exact pair of lines is
+// dropped; any other stderr still fails the assertion.
+const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
+  + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
+  + "created\\)\\r?\\n", "gm");
+const withoutTypeStrippingWarning = (stderr: string | Buffer): string =>
+  String(stderr).replace(TYPE_STRIPPING_WARNING, "");
+
 const here = import.meta.dirname;
 const repoRoot = path.join(here, "..");
 const privateSpace = {
@@ -389,8 +398,8 @@ test("reports a missing broker without exposing setup identifiers", (t) => {
 
   assert.notEqual(result.status, 0);
   assert.equal(result.stdout, "");
-  assert.equal(result.stderr, "FATAL: Confluence broker is unavailable.\n");
-  assertNoPrivateFailureDetail(result.stderr, fixture);
+  assert.equal(withoutTypeStrippingWarning(result.stderr), "FATAL: Confluence broker is unavailable.\n");
+  assertNoPrivateFailureDetail(String(result.stderr), fixture);
 });
 
 test("reports broker execution failure without exposing setup identifiers", (t) => {
@@ -405,8 +414,8 @@ test("reports broker execution failure without exposing setup identifiers", (t) 
 
   assert.notEqual(result.status, 0);
   assert.equal(result.stdout, "");
-  assert.equal(result.stderr, "FATAL: Confluence space is unreadable by the service account.\n");
-  assertNoPrivateFailureDetail(result.stderr, fixture);
+  assert.equal(withoutTypeStrippingWarning(result.stderr), "FATAL: Confluence space is unreadable by the service account.\n");
+  assertNoPrivateFailureDetail(String(result.stderr), fixture);
 });
 
 test("reports an invalid broker response without exposing setup identifiers", (t) => {
@@ -423,8 +432,8 @@ test("reports an invalid broker response without exposing setup identifiers", (t
 
   assert.notEqual(result.status, 0);
   assert.equal(result.stdout, "");
-  assert.equal(result.stderr, "FATAL: Confluence broker returned an invalid space response.\n");
-  assertNoPrivateFailureDetail(result.stderr, fixture);
+  assert.equal(withoutTypeStrippingWarning(result.stderr), "FATAL: Confluence broker returned an invalid space response.\n");
+  assertNoPrivateFailureDetail(String(result.stderr), fixture);
 });
 
 test("reports persistence failure without exposing setup identifiers", (t) => {
@@ -442,8 +451,8 @@ test("reports persistence failure without exposing setup identifiers", (t) => {
 
   assert.notEqual(result.status, 0);
   assert.equal(result.stdout, "");
-  assert.equal(result.stderr, "FATAL: Confluence space configuration could not be written.\n");
-  assertNoPrivateFailureDetail(result.stderr, fixture);
+  assert.equal(withoutTypeStrippingWarning(result.stderr), "FATAL: Confluence space configuration could not be written.\n");
+  assertNoPrivateFailureDetail(String(result.stderr), fixture);
 });
 
 for (const source of ["canonical", "legacy"] as const) {
@@ -471,10 +480,10 @@ for (const source of ["canonical", "legacy"] as const) {
       assert.notEqual(result.status, 0);
       assert.equal(result.stdout, "");
       assert.equal(
-        result.stderr,
+        withoutTypeStrippingWarning(result.stderr),
         "FATAL: Existing Confluence space configuration could not be read.\n",
       );
-      assertNoPrivateFailureDetail(result.stderr, fixture, [configuration]);
+      assertNoPrivateFailureDetail(String(result.stderr), fixture, [configuration]);
     });
   }
 }

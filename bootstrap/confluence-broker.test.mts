@@ -19,6 +19,15 @@ import { resolveProfilePath } from "./render-profile-paths.mts";
 import { renderSettings } from "./render-profile.mts";
 import type { Settings } from "./render-profile-settings.mts";
 
+// Some Node releases the engines range admits, 24.1.0 among them, print this
+// warning when a child loads a .mts file. Only this exact pair of lines is
+// dropped; any other stderr still fails the assertion.
+const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
+  + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
+  + "created\\)\\r?\\n", "gm");
+const withoutTypeStrippingWarning = (stderr: string | Buffer): string =>
+  String(stderr).replace(TYPE_STRIPPING_WARNING, "");
+
 const HERE = import.meta.dirname;
 const REPO = path.join(HERE, "..");
 // The verbs claude/agents/claude-obs.md runs through the stored command.
@@ -197,7 +206,7 @@ test("broker-only creates a missing file with broker alone and never overwrites 
   fs.writeFileSync(space.target, "not json");
   const refused = space.brokerOnly("win", WIN_WORKSPACE);
   assert.notEqual(refused.status, 0);
-  assert.equal(String(refused.stderr), "FATAL: Existing Confluence space configuration could not be read.\n");
+  assert.equal(withoutTypeStrippingWarning(refused.stderr), "FATAL: Existing Confluence space configuration could not be read.\n");
   assert.equal(fs.readFileSync(space.target, "utf8"), "not json");
 });
 

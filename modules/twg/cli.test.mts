@@ -9,6 +9,15 @@ import { parseCli } from "./runtime/cli-contract.mts";
 import { createTwgClient, TwgError } from "./runtime/client.mts";
 import type { TwgExecCallback } from "./runtime/client.mts";
 
+// Some Node releases the engines range admits, 24.1.0 among them, print this
+// warning when a child loads a .mts file. Only this exact pair of lines is
+// dropped; any other stderr still fails the assertion.
+const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
+  + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
+  + "created\\)\\r?\\n", "gm");
+const withoutTypeStrippingWarning = (stderr: string | Buffer): string =>
+  String(stderr).replace(TYPE_STRIPPING_WARNING, "");
+
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 function completeToFile(args: string[], callback: TwgExecCallback, body: unknown): void {
@@ -76,5 +85,5 @@ test("public CLI help lists only read operations and usage errors are structured
   assert.deepEqual(JSON.parse(rejected.stdout), {
     ok: false, error: { code: "TWG_USAGE", message: "Use one documented TWG read operation." },
   });
-  assert.equal(rejected.stderr, "");
+  assert.equal(withoutTypeStrippingWarning(rejected.stderr), "");
 });

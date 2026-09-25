@@ -10,6 +10,15 @@ import {
   type StopInput,
 } from "./observation-turn-completion.mts";
 
+// Some Node releases the engines range admits, 24.1.0 among them, print this
+// warning when a child loads a .mts file. Only this exact pair of lines is
+// dropped; any other stderr still fails the assertion.
+const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
+  + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
+  + "created\\)\\r?\\n", "gm");
+const withoutTypeStrippingWarning = (stderr: string | Buffer): string =>
+  String(stderr).replace(TYPE_STRIPPING_WARNING, "");
+
 const hookPath = fileURLToPath(new URL("./observation-turn-completion.mts", import.meta.url));
 
 function runCli(input: string): ReturnType<typeof spawnSync> {
@@ -70,7 +79,7 @@ test("PowerShell parses the rendered broker path without interpolation", {
     { encoding: "utf8", windowsHide: true },
   );
   assert.equal(parsed.status, 0, parsed.error?.message || parsed.stderr);
-  assert.equal(parsed.stderr, "");
+  assert.equal(withoutTypeStrippingWarning(parsed.stderr), "");
   assert.equal(parsed.stdout, broker);
   assert.doesNotMatch(result.reason, /__KHEREP_SELECTED_WORKSPACE__|D:\/CFcon-DEV/i);
 });
@@ -90,7 +99,7 @@ test("CLI emits only the decision JSON for an exact false lifecycle state", () =
   const expected = decision({ stop_hook_active: false });
 
   assert.equal(result.status, 0);
-  assert.equal(result.stderr, "");
+  assert.equal(withoutTypeStrippingWarning(result.stderr), "");
   assert.equal(result.stdout, JSON.stringify(expected));
   assert.deepEqual(JSON.parse(result.stdout), expected);
 });
@@ -107,7 +116,7 @@ test("CLI emits nothing for true, missing, malformed, and invalid JSON inputs", 
   for (const input of inputs) {
     const result = runCli(input);
     assert.equal(result.status, 0);
-    assert.equal(result.stderr, "");
+    assert.equal(withoutTypeStrippingWarning(result.stderr), "");
     assert.equal(result.stdout, "");
   }
 });

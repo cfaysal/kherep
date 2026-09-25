@@ -9,6 +9,15 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 
+// Some Node releases the engines range admits, 24.1.0 among them, print this
+// warning when a child loads a .mts file. Only this exact pair of lines is
+// dropped; any other stderr still fails the assertion.
+const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
+  + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
+  + "created\\)\\r?\\n", "gm");
+const withoutTypeStrippingWarning = (stderr: string | Buffer): string =>
+  String(stderr).replace(TYPE_STRIPPING_WARNING, "");
+
 const hookSource = path.resolve(import.meta.dirname, "..", "claude", "kherep", "githooks", "commit-msg");
 const fwd = (value: string): string => value.replace(/\\/g, "/");
 
@@ -99,7 +108,7 @@ test("missing policy file keeps the environment-only behaviour", (t) => {
   const f = fixture(t);
   const result = runHook(f, "fix: nothing configured");
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stderr, "");
+  assert.equal(withoutTypeStrippingWarning(result.stderr), "");
   const withEnv = runHook(f, "fix: env only", { KHEREP_WORKSPACE: fwd(f.workspace), KHEREP_WORK_ITEM_REQUIRED: "1" });
   assert.equal(withEnv.status, 1);
 });
