@@ -36,15 +36,20 @@ test("a malformed section turns sessions and delegation off, the rest of the pol
   assert.equal(parseSessionsPolicy({ enabled: true })?.enabled, false);
 });
 
-test("an enabled section applies the operator caps, Claude only and never bypassPermissions", (t) => {
-  const policy = policyWith(t, { enabled: true, workspaceRoots: [ROOT], runtimes: ["claude", "codex"],
+test("an enabled section applies the operator caps, the listed runtimes and never bypassPermissions", (t) => {
+  const policy = policyWith(t, { enabled: true, workspaceRoots: [ROOT], runtimes: ["claude", "codex", "gemini"],
     permissionModes: ["auto", "bypassPermissions", "acceptEdits"], maxConcurrent: 7, maxStartsPerDay: 50, maxRuntimeMinutes: 30 });
   assert.deepEqual(policy.sessions, {
-    enabled: true, runtimes: ["claude"], workspaceRoots: [ROOT], permissionModes: ["auto", "acceptEdits"], defaultPermissionMode: "auto",
+    enabled: true, runtimes: ["claude", "codex"], workspaceRoots: [ROOT], permissionModes: ["auto", "acceptEdits"], defaultPermissionMode: "auto",
     maxConcurrent: 3, maxStartsPerDay: 10, maxRuntimeMinutes: 30, delegate: { request: false, accept: false },
   });
   assert.equal(isAllowed(policy, "session.start"), true);
   assert.deepEqual(advertisedCapabilities(policy), ["session.list", "sessions.v1"]);
+});
+
+test("runtimes default to claude only; codex runs only where the policy lists it", (t) => {
+  assert.deepEqual(policyWith(t, { enabled: true, workspaceRoots: [ROOT] }).sessions?.runtimes, ["claude"]);
+  assert.deepEqual(policyWith(t, { enabled: true, workspaceRoots: [ROOT], runtimes: ["codex"] }).sessions?.runtimes, ["codex"]);
 });
 
 test("delegation is off by default and each side opts in separately", (t) => {

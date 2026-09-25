@@ -2,6 +2,7 @@ import { parseArgs } from "node:util";
 
 import {
   isTaskId, isTaskRequirements, isTaskText, isTaskTitle, MAX_DIRECTIVE, MAX_SUMMARY, SUPPORTED_RUNTIMES, type TaskRequirements,
+  type TaskRuntime,
 } from "../protocol-tasks.mts";
 import { readConfig, type NodePaths } from "./config.mts";
 import { senderSession, SESSION_ENV } from "./msg-resolve.mts";
@@ -22,7 +23,7 @@ import {
 export const TASK_USAGE = `usage:
   kherep-node task done <taskId> [--summary <text>]
   kherep-node task show [<taskId or requestId>]
-  kherep-node task new --title <title> --directive <the operator's instruction, verbatim> [--runtime claude] [--os <os>]
+  kherep-node task new --title <title> --directive <the operator's instruction, verbatim> [--runtime claude|codex] [--os <os>]
     [--cwd <dir>] [--capability <name>]... [--] <task text...>`;
 
 export interface TaskArgs {
@@ -96,8 +97,8 @@ function newTask(context: TaskContext, words: string[], values: TaskArgs["values
     return fail(`--directive is required: quote the operator's own instruction in this session verbatim (at most ${MAX_DIRECTIVE} characters)`);
   }
   const runtime = values.runtime ?? "claude";
-  if (!SUPPORTED_RUNTIMES.includes(runtime as never)) return fail(`runtime ${runtime} is not supported yet; this step starts Claude sessions only`);
-  const requirements: TaskRequirements = { runtime: "claude", ...(values.os ? { os: values.os } : {}), ...(values.cwd ? { cwd: values.cwd } : {}),
+  if (!SUPPORTED_RUNTIMES.includes(runtime as never)) return fail(`runtime ${runtime} is not supported; use claude or codex`);
+  const requirements: TaskRequirements = { runtime: runtime as TaskRuntime, ...(values.os ? { os: values.os } : {}), ...(values.cwd ? { cwd: values.cwd } : {}),
     ...(values.capability?.length ? { capabilities: values.capability } : {}) };
   const text = words.join(" ");
   if (!isTaskTitle(values.title)) return fail("--title is required (one line, at most 200 characters)");

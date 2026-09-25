@@ -103,7 +103,7 @@ Enable sessions in the node's `policy.json`, with the directory the sessions may
 }
 ```
 
-Restart the daemon so it reads the policy and advertises `sessions.v1`. The limits default to the operator caps: at most 3 running task sessions, 10 starts per rolling day and 120 minutes per run, permission mode `auto` (also allowed: `default`, `acceptEdits`; `bypassPermissions` never). Codex is not supported yet. A session may request tasks only when its node sets `"delegate": { "request": true }` and the target node `"delegate": { "accept": true }`, and only on the operator's explicit directive in that session.
+Restart the daemon so it reads the policy and advertises `sessions.v1`. The limits default to the operator caps: at most 3 running task sessions, 10 starts per rolling day and 120 minutes per run, permission mode `auto` (also allowed: `default`, `acceptEdits`; `bypassPermissions` never). Runtime `codex` runs only where the policy lists it in `"runtimes": ["claude", "codex"]` (the default is `["claude"]`); see the Codex tasks section of `modules/control-plane/README.md`. A session may request tasks only when its node sets `"delegate": { "request": true }` and the target node `"delegate": { "accept": true }`, and only on the operator's explicit directive in that session.
 
 Create and manage tasks through the Access-protected API, for example with `cloudflared access curl`:
 

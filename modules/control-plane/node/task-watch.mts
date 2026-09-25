@@ -1,4 +1,5 @@
 import type { TaskState } from "../protocol-tasks.mts";
+import { MAX_RUNTIME_REASON, watchCodexTasks } from "./codex-runner.mts";
 import { agentRows, findRow, mapIds, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { isActive, listTasks, queueReport, writeTask } from "./task-records.mts";
 
@@ -7,13 +8,14 @@ import { isActive, listTasks, queueReport, writeTask } from "./task-records.mts"
 // ("Read session state from a script", https://code.claude.com/docs/en/agent-view,
 // fetched 2026-09-25) map to task states; each change is reported once. A
 // task its session reported done stays under the deadline until it ends.
+// Codex tasks have their own round (codex-runner.mts, issue #63).
 export const AGENT_STATES: Readonly<Record<string, TaskState>> = {
   working: "running", blocked: "needs-input", done: "done", failed: "failed", stopped: "stopped",
 };
-export const MAX_RUNTIME_REASON = "max runtime reached";
 
 export async function watchTasks(deps: RunnerDeps, log: (line: string) => void = () => {}): Promise<void> {
-  const active = listTasks(deps.paths).filter(isActive);
+  await watchCodexTasks(deps, log);
+  const active = listTasks(deps.paths).filter((t) => isActive(t) && t.runtime !== "codex");
   if (active.length === 0) return;
   const now = deps.now?.() ?? Date.now();
   let rows: Record<string, unknown>[] | null = null;
