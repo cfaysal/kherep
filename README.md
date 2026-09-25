@@ -40,6 +40,7 @@ Runtime adapters target Windows and macOS. See each component's documentation fo
 | [Installation](docs/INSTALLATION.md) | Claude setup, isolated preview, upgrades and rollback |
 | [Codex integration](docs/CODEX.md) | Codex installer options and runtime verification |
 | [Atlassian brokers](modules/atl-jira-brokers/README.md) | Jira and Confluence service-account operations, including the Central Brain space |
+| [Control Plane](modules/control-plane/README.md) | Cloudflare Worker and node daemon for node enrollment, liveness and read-only commands (Phase 1) |
 | [Contributing](CONTRIBUTING.md) | Source setup and test commands |
 | [Agent instructions](AGENTS.md) | Reading order and repository working rules |
 
@@ -54,6 +55,7 @@ Runtime adapters target Windows and macOS. See each component's documentation fo
 | `modules/mcp-auth-bridge/` | Authenticated MCP transport adapters |
 | `modules/atl-jira-brokers/` | Operator-configured Jira and Confluence service-account operations |
 | `modules/twg/` | Bounded Teamwork Graph reads |
+| `modules/control-plane/` | Control Plane Worker, node daemon and their shared protocol |
 
 Keep personal configuration and credentials outside the checkout. See the component guides for configuration, permissions and supported integrations.
 

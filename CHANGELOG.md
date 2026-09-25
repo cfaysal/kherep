@@ -11,6 +11,22 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Control Plane, Phase 1 (`modules/control-plane/`). A Cloudflare Worker
+  `kherep-control` with two SQLite-backed Durable Objects: `NodeSession`
+  holds each node's hibernatable WebSocket, the Ed25519 challenge handshake,
+  a seq/ack pending-command log resent after reconnect and alarm-based
+  offline detection (5-minute interval, offline after 3 missed intervals);
+  `Registry` keeps nodes, runtimes, sessions, one-time enrollment codes and
+  an audit trail. `/node/*` is gated only by the signed challenge; `/api/*`
+  requires a Cloudflare Access JWT and fails closed without the team domain
+  and AUD. Only `node.status`, `runtime.list` and `session.list` can be
+  dispatched. The `kherep-node` CLI and daemon (`node onboard|status|unenroll`,
+  `daemon`) generate and keep the node key locally, discover `claude`,
+  `codex` and loopback LM Studio/Ollama, reconnect with jittered backoff up to
+  60 s and enforce a local allowlist. The committed `wrangler.jsonc` holds
+  placeholders only; deployment uses an operator-local override config.
+  `npm run test:control-plane` runs the node tests; the Worker has its own
+  package and test suite.
 - `get --id <page> --body-only [--format storage|adf]` on both Confluence
   brokers prints only the page body to stdout, without metadata and without
   an added newline, so `> file` yields exactly the body. One request with
