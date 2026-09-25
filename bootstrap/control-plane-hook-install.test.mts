@@ -60,9 +60,13 @@ function fixture(t: TestContext): Fixture {
   return f;
 }
 
+// The profile bootstrap/profile.sh resolves on this host: mac on Darwin, win
+// everywhere else. The macOS CI job therefore installs with the mac profile (#51).
+const PROFILE = process.platform === "darwin" ? "mac" : "win";
+
 function bash(args: string[], f: Fixture, input?: string) {
   const env = {
-    ...hostEnv(), HOME: slash(f.home), CLAUDE_HOME: slash(f.claude), KHEREP_PROFILE: "win", KHEREP_WORKSPACE: slash(f.ws),
+    ...hostEnv(), HOME: slash(f.home), CLAUDE_HOME: slash(f.claude), KHEREP_PROFILE: PROFILE, KHEREP_WORKSPACE: slash(f.ws),
     GIT_CONFIG_SYSTEM: path.join(f.root, "gitconfig-system"), GIT_CONFIG_GLOBAL: path.join(f.root, "gitconfig-global"),
     KHEREP_INSTALL_SKIP_GITCONFIG: "1", KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE: "1", KHEREP_INSTALL_SKIP_ATL_CREDENTIAL: "1",
     SKIP_SECRETS: "1", SKIP_DEPS: "1", KHEREP_CONFIG_DIR: f.config,
