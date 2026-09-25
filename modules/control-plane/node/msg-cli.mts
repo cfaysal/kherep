@@ -39,8 +39,7 @@ export interface MsgContext {
   sleep?: (ms: number) => Promise<void>;
 }
 
-interface Io { paths: NodePaths; env: NodeJS.ProcessEnv; now: () => number; out: (line: string) => void; err: (line: string) => void;
-  sleep: (ms: number) => Promise<void> }
+type Io = Required<MsgContext>;
 
 function fail(io: Io, message: string): number {
   io.err(`kherep-node msg: ${message}`);
@@ -119,7 +118,7 @@ function sessions(io: Io): number {
   return 0;
 }
 
-async function send(io: Io, rest: string[], values: { from?: string; to?: string; "reply-to"?: string; wait?: string }): Promise<number> {
+async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<number> {
   const replyTo = values["reply-to"];
   let to: MessageAddress | null = null;
   let target = values.to;
