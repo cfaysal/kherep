@@ -9,7 +9,7 @@ import { runMsg } from "./msg-cli.mts";
 import { loadPolicy } from "./policy.mts";
 import { startTask } from "./session-runner.mts";
 import { parseTaskArgs, runTaskArgs } from "./task-cli.mts";
-import { pollTasks, recordRequestResult } from "./task-exchange.mts";
+import { pollTasks, recordRequestResult, TASKS_ACTIVE } from "./task-exchange.mts";
 import { startArgs, T0, TASK, taskNode } from "./task-fixture.mts";
 import { readRequest, readTask, writeRequest } from "./task-records.mts";
 
@@ -102,4 +102,14 @@ test("task new is refused unless the node allows requests, and never from a task
   pollTasks(client, node.paths, loadPolicy(node.paths.policy), new Set(), send);
   assert.deepEqual(frames.filter((f) => f.type === "task.request"), []);
   assert.equal(readRequest(node.paths, forged)?.reason, "a session started for a task cannot request tasks");
+
+  // A session can name itself anything: while this node runs a task it sends no request at all.
+  const spoofed = task(node, ["new", "--title", "t", "--directive", "d", "--", "x"], { CLAUDE_CODE_SESSION_ID: "random-id" });
+  assert.equal(spoofed.err[0], `kherep-node task: ${TASKS_ACTIVE}`);
+  const handWritten = crypto.randomUUID();
+  writeRequest(node.paths, { requestId: handWritten, title: "t", text: "x", requirements: {}, directive: "d", requestedBy: "random-id",
+    createdAt: new Date(T0).toISOString(), state: "pending" });
+  pollTasks(client, node.paths, loadPolicy(node.paths.policy), new Set(), send);
+  assert.deepEqual(frames.filter((f) => f.type === "task.request"), []);
+  assert.equal(readRequest(node.paths, handWritten)?.reason, TASKS_ACTIVE);
 });

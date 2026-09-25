@@ -5,7 +5,8 @@ import { isActive, listTasks, queueReport, writeTask } from "./task-records.mts"
 // The watch round for started task sessions (issue #31, item 5), run with the
 // daemon's session snapshot. The `state` values of `claude agents --json`
 // ("Read session state from a script", https://code.claude.com/docs/en/agent-view,
-// fetched 2026-09-25) map to task states; each change is reported once.
+// fetched 2026-09-25) map to task states; each change is reported once. A
+// task its session reported done stays under the deadline until it ends.
 export const AGENT_STATES: Readonly<Record<string, TaskState>> = {
   working: "running", blocked: "needs-input", done: "done", failed: "failed", stopped: "stopped",
 };
@@ -38,7 +39,15 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
       }
       continue;
     }
-    const next = (row ? AGENT_STATES[String(row.state)] : undefined) ?? record.state;
+    const agentState = row ? AGENT_STATES[String(row.state)] : undefined;
+    if (record.running) {
+      // Reported done by the session: released once its process has ended.
+      if (rows && (!row || agentState === "done" || agentState === "stopped" || agentState === "failed")) {
+        writeTask(deps.paths, { ...mapped, running: undefined }, now);
+      }
+      continue;
+    }
+    const next = agentState ?? record.state;
     const reported = next !== record.state || mapped.sessionId !== record.sessionId;
     if (!reported && mapped.shortId === record.shortId) continue;
     const saved = writeTask(deps.paths, { ...mapped, state: next }, now);

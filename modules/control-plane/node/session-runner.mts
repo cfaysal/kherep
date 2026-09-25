@@ -151,7 +151,7 @@ export async function continueTask(args: SessionContinueArgs, deps: RunnerDeps):
   if (!record) throw new Error("this node did not start that task");
   if (!deps.policy.sessions?.enabled) throw new Error("sessions are not enabled on this node");
   if (!record.sessionId) throw new Error("the task's session id is not known yet");
-  if (record.state === "started" || record.state === "running") throw new Error("the task's session is still running");
+  if (record.state === "started" || record.state === "running" || record.running) throw new Error("the task's session is still running");
   const now = deps.now?.() ?? Date.now();
   const limit = overLimit(deps, now, args.taskId);
   if (limit) throw new Error(limit);
@@ -162,13 +162,17 @@ export async function continueTask(args: SessionContinueArgs, deps: RunnerDeps):
   return { taskId: saved.taskId, state: saved.state };
 }
 
-// `claude stop <short id>` for a task this node started.
+// `claude stop <short id>` for a task this node started. A task whose session
+// already reported done keeps that state for the Worker; only the process ends.
 export async function stopTask(args: SessionStopArgs, deps: RunnerDeps, reason = "stopped by the operator"): Promise<{ taskId: string; state: string }> {
   const record = readTask(deps.paths, args.taskId);
   if (!record) throw new Error("this node did not start that task");
   if (!record.shortId) throw new Error("the task's session id is not known yet");
   await runClaude(deps, ["stop", record.shortId]);
-  const saved = writeTask(deps.paths, { ...record, state: "stopped", reason }, deps.now?.());
-  queueReport(deps.paths, { taskId: saved.taskId, state: "stopped", reason, ...(saved.sessionId ? { sessionId: saved.sessionId } : {}) });
+  const reportedDone = record.state === "done";
+  const saved = writeTask(deps.paths, { ...record, state: reportedDone ? "done" : "stopped", reason, running: undefined }, deps.now?.());
+  if (!reportedDone) {
+    queueReport(deps.paths, { taskId: saved.taskId, state: "stopped", reason, ...(saved.sessionId ? { sessionId: saved.sessionId } : {}) });
+  }
   return { taskId: saved.taskId, state: saved.state };
 }

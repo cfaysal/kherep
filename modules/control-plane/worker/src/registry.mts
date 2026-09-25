@@ -211,6 +211,10 @@ export class Registry extends DurableObject<Env> {
     return this.tasks.isTaskSession(nodeId, session);
   }
 
+  hasActiveTasks(nodeId: string): boolean {
+    return this.tasks.hasActiveTasks(nodeId);
+  }
+
   // Expiry is checked on every message access and, so that the text of an
   // expired message never waits for the next access, by an alarm set to the
   // earliest expiry of a queued message.

@@ -15,6 +15,7 @@ import { DEFAULT_POLICY, type NodePolicy } from "../../node/policy.mts";
 import { continueTask, startTask, stopTask, type RunnerDeps } from "../../node/session-runner.mts";
 import { parseSessionsPolicy } from "../../node/session-policy.mts";
 import { pollTasks, recordRequestResult } from "../../node/task-exchange.mts";
+import { watchTasks } from "../../node/task-watch.mts";
 import { enroll, FACTS, registry, workerFetch } from "./helpers.mts";
 
 export const WAIT = { timeout: 5_000, interval: 50 };
@@ -50,9 +51,10 @@ export async function startTaskNode(name: string, options: TaskNodeOptions = {})
   const sessions = options.sessions === undefined ? undefined : parseSessionsPolicy({ workspaceRoots: [workspace], ...options.sessions as object });
   const policy: NodePolicy = { ...DEFAULT_POLICY, ...(sessions ? { sessions } : {}) };
   const calls: string[][] = [];
+  let agentState = "working";
   const exec = async (_file: string, args: string[]): Promise<string> => {
     calls.push(args);
-    if (args[0] === "agents") return JSON.stringify([{ id: "b0000001", sessionId: SESSION_ID, state: "working" }]);
+    if (args[0] === "agents") return JSON.stringify([{ id: "b0000001", sessionId: SESSION_ID, state: agentState }]);
     if (args[0] === "stop") return "";
     return `backgrounded · b0000001 · ${args[args.indexOf("--name") + 1] ?? ""}\n`;
   };
@@ -91,5 +93,7 @@ export async function startTaskNode(name: string, options: TaskNodeOptions = {})
   };
   // Sends frames past the node's own checks, as a modified node could.
   const raw = (frames: string[]): void => { frames.forEach(send); };
-  return { nodeId, client, paths, workspace, calls, exchange, raw, close, idle: () => chain };
+  // The daemon's watch round, with the state the fake `claude agents` shows.
+  const watch = async (state: string): Promise<void> => { agentState = state; await watchTasks(runner); };
+  return { nodeId, client, paths, workspace, calls, exchange, raw, watch, close, idle: () => chain };
 }

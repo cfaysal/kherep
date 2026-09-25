@@ -34,6 +34,11 @@ export async function handleTaskFrame(env: Env, nodeId: string, type: "task.repo
   }
   if (body.directive.trim() === "") return refuse("the directive is empty: a session requests a task only on the operator's directive");
   if (await registry.isTaskSession(nodeId, body.requestedBy)) return refuse("a session started for a task cannot request tasks");
+  // requestedBy is the session's own claim, so no chains also means: a node
+  // with an active task sends no requests at all.
+  if (await registry.hasActiveTasks(nodeId)) {
+    return refuse("the requesting node runs an active task; a node sends task requests only while it runs none");
+  }
   const runtime = body.requirements.runtime ?? "claude";
   if (!SUPPORTED_RUNTIMES.includes(runtime)) return refuse(`runtime ${runtime} is not supported yet; this step starts Claude sessions only`);
   const requestedBy = `${nodeId}/${body.requestedBy}`;
