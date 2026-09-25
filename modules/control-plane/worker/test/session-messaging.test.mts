@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 // End to end through the real node modules (issue #31, step 3a): the msg CLI
 // of node A writes its outbox, A's exchange sends it through the real
@@ -50,6 +50,8 @@ async function startNode(name: string, paths: NodePaths, sessions: SessionInfo[]
   return { nodeId, ws, exchange };
 }
 
+const WAIT = { timeout: 5_000, interval: 50 };
+
 describe("session messaging across two nodes", () => {
   it("carries a CLI message to the other node's session hook and the delivered status back", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-e2e-"));
@@ -72,9 +74,13 @@ describe("session messaging across two nodes", () => {
     const messageId = out[0];
 
     await a.exchange();
-    expect(getMessage(pathsB.inbox, messageId)).toMatchObject({ from: { nodeId: a.nodeId, session: "planner" }, toSession: "review",
-      text: "please check the build", state: "accepted" });
-    expect(getSent(pathsA, messageId)?.state).toBe("accepted");
+    // Each hop crosses the Worker and the other node socket asynchronously, so
+    // wait for its effect instead of reading right after the exchange call.
+    await vi.waitFor(() => {
+      expect(getMessage(pathsB.inbox, messageId)).toMatchObject({ from: { nodeId: a.nodeId, session: "planner" }, toSession: "review",
+        text: "please check the build", state: "accepted" });
+      expect(getSent(pathsA, messageId)?.state).toBe("accepted");
+    }, WAIT);
 
     const output = JSON.parse(deliverForHook({ session_id: "s-b", hook_event_name: "UserPromptSubmit" }, { paths: pathsB }));
     const context = output.hookSpecificOutput.additionalContext as string;
@@ -84,8 +90,10 @@ describe("session messaging across two nodes", () => {
     expect(getMessage(pathsB.inbox, messageId)?.state).toBe("delivered");
 
     await b.exchange();
-    expect(getSent(pathsA, messageId)).toMatchObject({ messageId, state: "delivered", to: { nodeId: b.nodeId, session: "review" } });
-    expect(getMessage(pathsB.inbox, messageId)?.reportedAt).toBeTruthy();
+    await vi.waitFor(() => {
+      expect(getSent(pathsA, messageId)).toMatchObject({ messageId, state: "delivered", to: { nodeId: b.nodeId, session: "review" } });
+      expect(getMessage(pathsB.inbox, messageId)?.reportedAt).toBeTruthy();
+    }, WAIT);
     a.ws.close(1000, "done");
     b.ws.close(1000, "done");
     fs.rmSync(root, { recursive: true, force: true });

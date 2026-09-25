@@ -147,7 +147,7 @@ test("without an enrolled node the hook exits 0 with no output at all", (t) => {
     for (const event of ["UserPromptSubmit", "Stop"]) {
       const run = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ session_id: "s-self", hook_event_name: event }),
         env: { ...process.env, KHEREP_CONFIG_DIR: configDir }, encoding: "utf8" });
-      assert.deepEqual([run.status, run.stdout, run.stderr], [0, "", ""], `${configDir} ${event}`);
+      assert.deepEqual([run.status, run.stdout, withoutTypeStrippingWarning(run.stderr)], [0, "", ""], `${configDir} ${event}`);
     }
   }
   assert.equal(fs.existsSync(path.join(root, "missing")), false);
