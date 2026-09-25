@@ -27,6 +27,15 @@ import {
   declinedMessage, pauseBriefly, readSecretBytes, readsAsYes,
 } from "./atl-credential-format.mts";
 
+// Some Node releases the engines range admits, 24.1.0 among them, print this
+// warning when a child loads a .mts file. Only this exact pair of lines is
+// dropped; any other stderr still fails the assertion.
+const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
+  + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
+  + "created\\)\\r?\\n", "gm");
+const withoutTypeStrippingWarning = (stderr: string | Buffer): string =>
+  String(stderr).replace(TYPE_STRIPPING_WARNING, "");
+
 const STEP = path.join(import.meta.dirname, "atl-credential.mts");
 const TARGET = "/var/kherep/atl-credential-claude.txt";
 
@@ -164,7 +173,7 @@ test("a backup already parked is never overwritten, and the target stays as it w
   fs.writeFileSync(backup, "SENTINEL-PARKED\n");
   const refused = park(target, backup);
   assert.equal(refused.status, 1);
-  assert.match(refused.stderr, /^FATAL: Refusing to run: a backup is already parked at /);
+  assert.match(withoutTypeStrippingWarning(refused.stderr), /^FATAL: Refusing to run: a backup is already parked at /);
   assert.ok(refused.stderr.includes(backup), "the refusal names the parked file");
   assert.match(refused.stderr, /Nothing was changed/);
   assert.doesNotMatch(refused.stderr + refused.stdout, /SENTINEL/, "a path, never the contents");
