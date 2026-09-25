@@ -39,7 +39,7 @@ async function authed(policy?: NodePolicy) {
   assert.equal(auth.type, "auth");
   assert.equal(verifyChallenge(ctx.identity.publicKey, auth.body as never), true);
   const afterOk = decode(await ctx.client.onFrame(JSON.stringify(makeEnvelope("event", { name: "auth.ok" }, 0, 0))));
-  assert.deepEqual(afterOk.map((e) => e.type), ["register", "sessions.snapshot"]);
+  assert.deepEqual(afterOk.map((e) => e.type), ["register", "sessions.snapshot", "directory.get"]);
   return ctx;
 }
 

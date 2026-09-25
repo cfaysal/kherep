@@ -25,7 +25,12 @@ export function configRoot(env: NodeJS.ProcessEnv = process.env, platform: NodeJ
   return path.join(env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"), "kherep");
 }
 
-export interface NodePaths { dir: string; config: string; privateKey: string; policy: string; inbox: string }
+// outbox, sent, directory, sessions and directoryRequest are the files the
+// daemon exchanges with the session tools (msg CLI, delivery hook).
+export interface NodePaths {
+  dir: string; config: string; privateKey: string; policy: string; inbox: string;
+  outbox: string; sent: string; directory: string; sessions: string; directoryRequest: string;
+}
 
 export function nodePaths(root: string = configRoot()): NodePaths {
   const dir = path.join(root, "control-plane");
@@ -35,6 +40,11 @@ export function nodePaths(root: string = configRoot()): NodePaths {
     privateKey: path.join(dir, "node-ed25519.pem"),
     policy: path.join(dir, "policy.json"),
     inbox: path.join(dir, "inbox"),
+    outbox: path.join(dir, "outbox"),
+    sent: path.join(dir, "sent"),
+    directory: path.join(dir, "directory.json"),
+    sessions: path.join(dir, "sessions.json"),
+    directoryRequest: path.join(dir, "directory.request"),
   };
 }
 

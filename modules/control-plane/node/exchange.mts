@@ -1,0 +1,160 @@
+import fs from "node:fs";
+import path from "node:path";
+
+import type { SessionInfo } from "../protocol.mts";
+import { isDirectoryBody, isMessageSendBody, type DirectoryBody, type MessageSendBody } from "../protocol-messages.mts";
+import type { ClientOptions, NodeClient, SentState } from "./client.mts";
+import { ensureDir, type NodePaths } from "./config.mts";
+import { markReported, messageIds, readJson, unreportedDeliveries, writeJsonAtomic } from "./inbox.mts";
+
+// The local exchange between the daemon and the session tools (issue #31,
+// step 3a): plain files in the node's config directory, no local socket.
+//   outbox/<id>.json    written by the msg CLI, sent by the daemon
+//   sent/<id>.json      moved there by the daemon, updated with every status
+//   directory.json      the last directory frame
+//   sessions.json       this node's sessions from the last successful listing
+//   directory.request   touched by the msg CLI to ask for a fresh directory
+
+export const EXCHANGE_INTERVAL_MS = 2_000;
+export const DIRECTORY_INTERVAL_MS = 60_000;
+
+export interface OutboxRecord extends MessageSendBody { createdAt: string }
+// A malformed outbox file leaves a sent record with only messageId and state error.
+export type SentRecord = Partial<OutboxRecord> & { messageId: string; state: SentState; reason?: string; updatedAt: string };
+export interface LocalSession { sessionId: string; name?: string }
+
+const fileOf = (dir: string, messageId: string): string => path.join(dir, `${messageId}.json`);
+
+export function writeOutbox(paths: NodePaths, record: OutboxRecord): void {
+  ensureDir(paths.outbox);
+  writeJsonAtomic(fileOf(paths.outbox, record.messageId), record);
+}
+
+export function getOutbox(paths: NodePaths, messageId: string): OutboxRecord | null {
+  return readJson<OutboxRecord>(fileOf(paths.outbox, messageId));
+}
+
+export function getSent(paths: NodePaths, messageId: string): SentRecord | null {
+  return readJson<SentRecord>(fileOf(paths.sent, messageId));
+}
+
+// Moves an outbox record to sent/ with the given state, or updates the state
+// of one already there. Returns false for a message this node does not know.
+export function recordSent(paths: NodePaths, messageId: string, state: SentState, reason?: string, now: number = Date.now()): boolean {
+  let pending: OutboxRecord | null = null;
+  try {
+    pending = getOutbox(paths, messageId);
+  } catch {
+    // unparseable outbox file: replaced by a bare record below
+  }
+  const outboxExists = fs.existsSync(fileOf(paths.outbox, messageId));
+  const base: Partial<SentRecord> | null = pending ?? getSent(paths, messageId) ?? (outboxExists ? { messageId } : null);
+  if (!base) return false;
+  const { state: _state, reason: _reason, updatedAt: _updated, ...message } = base;
+  ensureDir(paths.sent);
+  writeJsonAtomic(fileOf(paths.sent, messageId),
+    { ...message, messageId, state, ...(reason ? { reason } : {}), updatedAt: new Date(now).toISOString() });
+  if (outboxExists) fs.rmSync(fileOf(paths.outbox, messageId), { force: true });
+  return true;
+}
+
+export function writeDirectory(paths: NodePaths, body: DirectoryBody): void {
+  ensureDir(paths.dir);
+  writeJsonAtomic(paths.directory, body);
+}
+
+// null when the file is missing or not a valid directory.
+export function readDirectory(paths: NodePaths): DirectoryBody | null {
+  const value = readJson<unknown>(paths.directory);
+  return isDirectoryBody(value) ? value : null;
+}
+
+export function requestDirectory(paths: NodePaths): void {
+  ensureDir(paths.dir);
+  fs.writeFileSync(paths.directoryRequest, "", { mode: 0o600 });
+}
+
+function takeDirectoryRequest(paths: NodePaths): boolean {
+  try {
+    fs.rmSync(paths.directoryRequest);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+export function writeLocalSessions(paths: NodePaths, sessions: SessionInfo[], now: number = Date.now()): void {
+  ensureDir(paths.dir);
+  const local: LocalSession[] = sessions.map((s) => ({ sessionId: s.sessionId, ...(s.name ? { name: s.name } : {}) }));
+  writeJsonAtomic(paths.sessions, { sessions: local, updatedAt: new Date(now).toISOString() });
+}
+
+export function readLocalSessions(paths: NodePaths): LocalSession[] {
+  const value = readJson<{ sessions?: unknown }>(paths.sessions);
+  return Array.isArray(value?.sessions) ? value.sessions as LocalSession[] : [];
+}
+
+// The name sessions.json records for a local session id, if any.
+export function localSessionName(paths: NodePaths, sessionId: string): string | undefined {
+  return readLocalSessions(paths).find((s) => s.sessionId === sessionId)?.name;
+}
+
+// Wraps the session listing so that every successful one is written to
+// sessions.json; the delivery hook reads names from there instead of running
+// claude on every prompt.
+export function recordingSessions(paths: NodePaths, list: () => Promise<SessionInfo[]>,
+  log: (line: string) => void): () => Promise<SessionInfo[]> {
+  return async () => {
+    const sessions = await list();
+    try {
+      writeLocalSessions(paths, sessions);
+    } catch (error) {
+      log(`kherep-node: could not write sessions.json: ${String(error)}`);
+    }
+    return sessions;
+  };
+}
+
+// The client callbacks that record directory frames and sent states.
+export function exchangeOptions(paths: NodePaths): Pick<ClientOptions, "storeDirectory" | "sentUpdate"> {
+  return {
+    storeDirectory: (body) => writeDirectory(paths, body),
+    sentUpdate: (messageId, state, reason) => { recordSent(paths, messageId, state, reason); },
+  };
+}
+
+function toSendBody(record: OutboxRecord): MessageSendBody | null {
+  const body: MessageSendBody = { messageId: record.messageId, fromSession: record.fromSession, to: record.to, text: record.text,
+    ...(record.inReplyTo ? { inReplyTo: record.inReplyTo } : {}) };
+  return isMessageSendBody(body) ? body : null;
+}
+
+// One exchange round while connected: a requested directory refresh, every
+// outbox record not yet sent on this connection (inflight), and a delivered
+// status for every inbox record the hook marked. send returns false when the
+// socket is gone; nothing counts as sent or reported unless it went out.
+export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Set<string>, send: (frame: string) => boolean): void {
+  const sendAll = (frames: string[]): boolean => frames.length > 0 && frames.every(send);
+  if (takeDirectoryRequest(paths)) sendAll(client.directoryRequest());
+  for (const messageId of messageIds(paths.outbox)) {
+    if (inflight.has(messageId)) continue;
+    let record: OutboxRecord | null | undefined;
+    try {
+      record = getOutbox(paths, messageId);
+    } catch {
+      record = undefined; // not JSON
+    }
+    if (record === null) continue; // gone since the listing
+    const body = typeof record === "object" ? toSendBody(record) : null;
+    if (!body || body.messageId !== messageId) {
+      recordSent(paths, messageId, "error", "invalid outbox record");
+      continue;
+    }
+    // The Worker deduplicates by messageId, so a resend after a reconnect is safe.
+    if (sendAll(client.sendMessage(body))) inflight.add(messageId);
+  }
+  for (const record of unreportedDeliveries(paths.inbox)) {
+    if (sendAll(client.reportDelivered(record.messageId))) markReported(paths.inbox, record.messageId);
+  }
+}

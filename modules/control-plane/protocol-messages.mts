@@ -2,7 +2,7 @@
 // Session-to-session messages between nodes, routed and queued by the Worker.
 // Plain ECMAScript like protocol.mts, so the Worker and the node load it alike.
 
-import { isNodeId } from "./protocol.mts";
+import { isNodeId, isSessionInfo, type SessionInfo } from "./protocol.mts";
 
 // A node advertises this capability when it can take message.deliver. The
 // Worker routes only to nodes that registered it.
@@ -94,4 +94,35 @@ export function isMessageStatusBody(body: unknown): body is MessageStatusBody {
 // A status as a node may send it: only the node-reportable states.
 export function isNodeMessageStatusBody(body: unknown): body is MessageStatusBody & { state: NodeReportedState } {
   return isMessageStatusBody(body) && isNodeReportedState(body.state);
+}
+
+// ---- Directory (step 3a) ---------------------------------------------------
+// directory.get (node -> Worker) has an empty body; the Worker answers with
+// directory: every non-revoked node and the sessions it last reported.
+
+export const MAX_DIRECTORY_NODES = 256;
+export const MAX_DIRECTORY_SESSIONS = 1024;
+
+export interface DirectoryNode { nodeId: string; name: string; status: string }
+export type DirectorySession = Omit<SessionInfo, "startedAt"> & { nodeId: string };
+// truncated is set when the Worker left sessions out to stay within one frame.
+export interface DirectoryBody { nodes: DirectoryNode[]; sessions: DirectorySession[]; fetchedAt: string; truncated?: boolean }
+
+export function isDirectoryGetBody(body: unknown): body is Record<string, never> {
+  return isObject(body) && Object.keys(body).length === 0;
+}
+
+function isDirectoryNode(value: unknown): value is DirectoryNode {
+  return isObject(value) && isNodeId(value.nodeId) && isText(value.name, 128) && isText(value.status, 32);
+}
+
+function isDirectorySession(value: unknown): value is DirectorySession {
+  return isObject(value) && isNodeId(value.nodeId) && isSessionInfo(value) && value.startedAt === undefined;
+}
+
+export function isDirectoryBody(body: unknown): body is DirectoryBody {
+  return isObject(body) && Array.isArray(body.nodes) && body.nodes.length <= MAX_DIRECTORY_NODES && body.nodes.every(isDirectoryNode)
+    && Array.isArray(body.sessions) && body.sessions.length <= MAX_DIRECTORY_SESSIONS && body.sessions.every(isDirectorySession)
+    && typeof body.fetchedAt === "string" && !Number.isNaN(Date.parse(body.fetchedAt))
+    && (body.truncated === undefined || typeof body.truncated === "boolean");
 }

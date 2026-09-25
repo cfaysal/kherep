@@ -1,8 +1,9 @@
-import { PING_FRAME } from "../protocol.mts";
+import { PING_FRAME, type SessionInfo } from "../protocol.mts";
 import { reconnectDelay } from "./backoff.mts";
 import { NodeClient, type CommandHandlers } from "./client.mts";
-import { connectUrl, type NodeConfig } from "./config.mts";
+import { connectUrl, type NodeConfig, type NodePaths } from "./config.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
+import { DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions } from "./exchange.mts";
 import { readPrivateKey } from "./identity.mts";
 import { purgeInbox, storeMessage } from "./inbox.mts";
 import { loadPolicy } from "./policy.mts";
@@ -17,31 +18,34 @@ export const SESSIONS_INTERVAL_MS = 60_000;
 
 export interface DaemonHandle { stop(): void; done: Promise<void> }
 
-export function commandHandlers(config: NodeConfig, startedAt: number): CommandHandlers {
+export function commandHandlers(config: NodeConfig, startedAt: number,
+  sessions: () => Promise<SessionInfo[]> = () => listSessions()): CommandHandlers {
   return {
     "node.status": async () => ({
       nodeId: config.nodeId, name: config.name, facts: detectFacts(), uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
     }),
     "runtime.list": () => discoverRuntimes(),
     // A failed listing rejects, and the command result reports ok:false.
-    "session.list": () => listSessions(),
+    "session.list": sessions,
   };
 }
 
-export function startDaemon(config: NodeConfig, inboxDir: string, log: (line: string) => void = (line) => console.error(line)): DaemonHandle {
+export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: string) => void = (line) => console.error(line)): DaemonHandle {
   const identity = readPrivateKey(config.privateKeyFile);
   if (identity.publicKey !== config.publicKey) throw new Error("private key does not match the enrolled public key");
   const policy = loadPolicy(config.policyFile);
   try {
-    const purged = purgeInbox(inboxDir);
+    const purged = purgeInbox(paths.inbox);
     if (purged > 0) log(`kherep-node: removed ${purged} inbox message(s) older than 7 days`);
   } catch (error) {
     log(`kherep-node: inbox purge failed: ${String(error)}`);
   }
+  // Every successful listing also updates sessions.json for the session tools.
+  const sessions = recordingSessions(paths, () => listSessions(), log);
   const client = new NodeClient({
-    nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now()),
-    facts: detectFacts, runtimes: () => discoverRuntimes(), sessions: () => listSessions(),
-    storeMessage: (body) => { storeMessage(inboxDir, body); }, log,
+    nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions),
+    facts: detectFacts, runtimes: () => discoverRuntimes(), sessions,
+    storeMessage: (body) => { storeMessage(paths.inbox, body); }, ...exchangeOptions(paths), log,
   });
 
   let stopped = false;
@@ -57,6 +61,15 @@ export function startDaemon(config: NodeConfig, inboxDir: string, log: (line: st
     socket = ws;
     let ping: NodeJS.Timeout | null = null;
     let snapshots: NodeJS.Timeout | null = null;
+    let exchange: NodeJS.Timeout | null = null;
+    let directory: NodeJS.Timeout | null = null;
+    // Outbox records sent on this connection; a reconnect sends them again.
+    const inflight = new Set<string>();
+    const send = (frame: string): boolean => {
+      if (ws.readyState !== WebSocket.OPEN) return false;
+      ws.send(frame);
+      return true;
+    };
     // Frames are handled strictly in order: command seq/ack depends on it. The
     // periodic snapshot joins the same chain, since the Worker drops a node
     // frame whose seq is not above the last one it saw.
@@ -69,6 +82,13 @@ export function startDaemon(config: NodeConfig, inboxDir: string, log: (line: st
           for (const frame of await client.sessionsSnapshot()) if (ws.readyState === WebSocket.OPEN) ws.send(frame);
         }).catch((error: unknown) => log(`kherep-node: session snapshot failed: ${String(error)}`));
       }, SESSIONS_INTERVAL_MS);
+      exchange = setInterval(() => {
+        chain = chain.then(() => pollExchange(client, paths, inflight, send))
+          .catch((error: unknown) => log(`kherep-node: message exchange failed: ${String(error)}`));
+      }, EXCHANGE_INTERVAL_MS);
+      directory = setInterval(() => {
+        chain = chain.then(() => { client.directoryRequest().forEach(send); });
+      }, DIRECTORY_INTERVAL_MS);
     });
     ws.addEventListener("message", (event) => {
       if (typeof event.data !== "string") return;
@@ -83,8 +103,7 @@ export function startDaemon(config: NodeConfig, inboxDir: string, log: (line: st
       }).catch((error: unknown) => log(`kherep-node: frame handling failed: ${String(error)}`));
     });
     ws.addEventListener("close", (event) => {
-      if (ping) clearInterval(ping);
-      if (snapshots) clearInterval(snapshots);
+      for (const timer of [ping, snapshots, exchange, directory]) if (timer) clearInterval(timer);
       client.connectionClosed();
       if (stopped) return finish();
       // Revoked or unknown keys will not succeed on retry; stop instead of hammering.

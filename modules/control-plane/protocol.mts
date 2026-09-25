@@ -5,12 +5,13 @@
 
 export const PROTOCOL_VERSION = 1;
 
-// The message.* types carry session-to-session messages (Phase 2, issue #31);
-// their bodies and validators live in protocol-messages.mts.
+// The message.* and directory types carry session-to-session messages and the
+// directory of addressable sessions (Phase 2, issue #31); their bodies and
+// validators live in protocol-messages.mts.
 export const MESSAGE_TYPES = [
   "challenge", "auth", "register", "capabilities.update", "sessions.snapshot",
   "command", "command.ack", "command.result", "event", "error",
-  "message.send", "message.deliver", "message.status",
+  "message.send", "message.deliver", "message.status", "directory.get", "directory",
 ] as const;
 export type MessageType = (typeof MESSAGE_TYPES)[number];
 
