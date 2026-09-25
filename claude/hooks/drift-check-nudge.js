@@ -130,7 +130,8 @@ function spawnRefresh(payload) {
   }
 }
 
-// Per-file status lines from drift-check.sh: every label it prints except "ok".
+// Per-file status lines from drift-check.sh: every label it prints except "ok"
+// and RETIRED-LIVE, which is information and never changes the verdict (#45).
 // The trailing \s is load-bearing: it keeps the closing "DRIFT-CHECK FOUND
 // DRIFT" summary out of the count.
 function findingsOf(report) {
@@ -138,7 +139,7 @@ function findingsOf(report) {
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) =>
-      /^(DRIFT|MISSING-REPO|MISSING-LIVE|EXTRA-LIVE|RETIRED-LIVE|MISSING-BLOCK|BLOCK-INVALID|NORMALIZE-FAIL)\s/.test(l)
+      /^(DRIFT|MISSING-REPO|MISSING-LIVE|EXTRA-LIVE|MISSING-BLOCK|BLOCK-INVALID|NORMALIZE-FAIL)\s/.test(l)
     );
 }
 
