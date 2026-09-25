@@ -39,6 +39,9 @@ export interface RenderOptions extends McpRenderOptions {
   hookDir: string;
   node: string;
   nativeHooks?: { contextCli: string; captureCli: string; profile: string; extraCaCertificates?: string };
+  // The control-plane delivery hook in the checkout (issue #31, step 4). Blocks
+  // written before it existed are rendered without it.
+  controlPlaneHook?: string;
   // Legacy renders only: true was the combined macOS Stop hook, false was the
   // separate Windows observation Stop hook. Omitted means quiet observations.
   observationStopHook?: boolean;
@@ -134,6 +137,15 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
     ]),
     hookGroup("SubagentStart", ".*", [hook("codex-cbm-reminder.mts")]),
   ];
+  if (options.controlPlaneHook) {
+    // Runs from the checkout, because it imports the modules next to it.
+    const deliver: HookSpec = { command: command(node, options.controlPlaneHook, "--runtime", "codex") };
+    groups.push(
+      hookGroup("SessionStart", "startup|resume|clear|compact", [deliver]),
+      hookGroup("UserPromptSubmit", "", [deliver]),
+      hookGroup("Stop", "", [deliver]),
+    );
+  }
   if (native(options.nativeHooks?.captureCli).length)
     groups.push(hookGroup("SessionEnd", "other", native(options.nativeHooks?.captureCli, 3)));
   return groups.join("\n\n");

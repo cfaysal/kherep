@@ -48,6 +48,15 @@ increments the minor version; every other release increments the patch version.
   forward slashes and quoted like the other hook paths; `drift-check.sh`
   renders the same path and `capture.sh` maps it back. Without an enrolled
   node the hook finds no inbox and exits 0 without output.
+- Control Plane Codex sessions (issue #31, step 4). The delivery hook takes
+  `--runtime codex` and then serves Codex `SessionStart`, `UserPromptSubmit`
+  and `Stop`: it records each session in `codex-sessions/`, tells the session
+  its id at start, offers messages as developer context with a `--from` reply
+  command, and at `Stop` continues the turn with a fixed text, never peer
+  content, when new messages wait. The daemon lists Codex sessions seen within
+  12 hours, `msg send --from <codex id>` sends as the session's name, and the
+  Codex installer adds the three hooks to its managed block. The hooks must be
+  trusted in Codex before they run.
 
 ### Changed
 

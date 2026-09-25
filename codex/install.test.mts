@@ -20,7 +20,7 @@ import {
 import { adaptSkillText } from "./lib/component-render.mts";
 import { componentHash } from "./lib/component-hash.mts";
 import type { Capabilities } from "./lib/contracts.mts";
-import { renderRegistryMcpServer } from "./lib/parity-config.mts";
+import { command, hookGroup, renderRegistryMcpServer } from "./lib/parity-config.mts";
 import { retiredCentralBrainRender } from "./lib/retired-central-brain.mts";
 import { withoutRetiredTable, withRetiredCentralBrain } from "./lib/retired-central-brain-fixture.mts";
 
@@ -1140,4 +1140,29 @@ test("Mac install keeps observation hooks unconfigured and acceptance active", (
   assert.doesNotMatch(config, /codex-observation-(?:stop|turn-completion)\.mts/);
   assert.match(config, /codex-acceptance-gate\.mts/);
   assert.equal(fs.readFileSync(install({ ...installOptions, platform: "darwin" }).targets.config, "utf8"), config);
+});
+
+// Issue #31, step 4: the control-plane delivery hook runs from this checkout
+// with --runtime codex for SessionStart, UserPromptSubmit and Stop.
+test("wires the control-plane delivery hook from the checkout and upgrades a block without it", (t) => {
+  const { root, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const hookPath = path.resolve(here, "..", "modules", "control-plane", "node", "deliver-hook.mts");
+  assert.ok(fs.existsSync(hookPath));
+  const deliver = { command: command(process.execPath, hookPath, "--runtime", "codex") };
+  const groups = [
+    hookGroup("SessionStart", "startup|resume|clear|compact", [deliver]),
+    hookGroup("UserPromptSubmit", "", [deliver]),
+    hookGroup("Stop", "", [deliver]),
+  ].join("\n\n");
+  const result = install(installOptions);
+  const config = fs.readFileSync(result.targets.config, "utf8");
+  assert.equal(occurrences(config, groups), 1);
+  assert.equal(occurrences(config, "deliver-hook.mts"), 3);
+  // The existing hooks are untouched: without the three groups the block is the
+  // one the previous installer wrote, and a reinstall recognises and upgrades it.
+  const previous = config.replace(`\n\n${groups}`, "");
+  assert.notEqual(previous, config);
+  fs.writeFileSync(result.targets.config, previous);
+  assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), config);
 });

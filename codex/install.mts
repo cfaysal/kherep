@@ -283,6 +283,7 @@ export function install(options: InstallOptions = {}) {
     registryRuntime: targets.registryRuntime,
     memoryNotifyHook: targets.memoryNotifyHook,
     mcpCompatibility: options.mcpCompatibility,
+    controlPlaneHook: path.join(repoRoot, "modules", "control-plane", "node", "deliver-hook.mts"),
   };
   prepareManagedConfig(existingPlugin.config, managedConfigOptions);
 

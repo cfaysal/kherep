@@ -1,11 +1,13 @@
 import { execFile } from "node:child_process";
 
 import { isSessionInfo, type SessionInfo } from "../protocol.mts";
+import { listCodexSessions } from "./codex-sessions.mts";
+import type { NodePaths } from "./config.mts";
 import { findOnPath } from "./discovery.mts";
 
 // Agent session discovery (issue #31, step 2). Claude Code lists its running
 // sessions with `claude agents --json` (https://code.claude.com/docs/en/sessions).
-// Codex sessions are not reported yet.
+// Codex sessions come from the records the delivery hook writes (codex-sessions.mts).
 
 export const CLAUDE_RUNTIME = "claude-code";
 export const LIST_TIMEOUT_MS = 10_000;
@@ -20,6 +22,9 @@ export interface SessionDeps {
   exec?: Exec;
   platform?: NodeJS.Platform;
   comSpec?: string;
+  // With paths, the Codex sessions recorded in this node's config directory are listed too.
+  paths?: NodePaths;
+  now?: () => number;
 }
 
 export interface Invocation { file: string; args: string[]; options: ExecOptions }
@@ -70,10 +75,16 @@ export function mapClaudeAgents(value: unknown): SessionInfo[] | null {
   return sessions;
 }
 
-// Resolves with the sessions of every runtime found on PATH, and rejects when
-// a runtime is present but its listing fails: a failed read must not look
-// like an empty node. Without claude on PATH it contributes nothing.
+// Resolves with the sessions of every runtime found on PATH plus the recorded
+// Codex sessions, and rejects when a listing fails: a failed read must not
+// look like an empty node. Without claude on PATH it contributes nothing.
 export async function listSessions(deps: SessionDeps = {}): Promise<SessionInfo[]> {
+  const codex = deps.paths ? listCodexSessions(deps.paths, deps.now?.() ?? Date.now()) : [];
+  const claude = await listClaudeSessions(deps);
+  return [...claude, ...codex].slice(0, MAX_SESSIONS);
+}
+
+async function listClaudeSessions(deps: SessionDeps): Promise<SessionInfo[]> {
   const claude = (deps.findClaude ?? (() => findOnPath("claude")))();
   if (!claude) return [];
   const run = claudeInvocation(claude, deps.platform, deps.comSpec);

@@ -40,8 +40,9 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   } catch (error) {
     log(`kherep-node: inbox purge failed: ${String(error)}`);
   }
-  // Every successful listing also updates sessions.json for the session tools.
-  const sessions = recordingSessions(paths, () => listSessions(), log);
+  // Every successful listing also updates sessions.json for the session tools
+  // and includes the Codex sessions the delivery hook recorded.
+  const sessions = recordingSessions(paths, () => listSessions({ paths }), log);
   const client = new NodeClient({
     nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions),
     facts: detectFacts, runtimes: () => discoverRuntimes(), sessions,
