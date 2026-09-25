@@ -91,7 +91,10 @@ export function parseEnvelope(raw: string | ArrayBuffer): ParseResult {
 export interface ChallengeBody { nonce: string; serverTime: number }
 export interface AuthBody { nodeId: string; nonce: string; timestamp: number; signature: string }
 export interface RuntimeInfo { name: string; kind: "cli" | "local-endpoint"; version?: string; endpoint?: string }
-export interface SessionInfo { sessionId: string; runtime: string; state: string; startedAt?: string }
+// name, cwd and kind were added in Phase 2 (issue #31); older nodes omit them.
+export interface SessionInfo {
+  sessionId: string; runtime: string; state: string; startedAt?: string; name?: string; cwd?: string; kind?: string;
+}
 export interface NodeFacts { hostname: string; os: string; arch: string; cpus: number; memoryBytes: number }
 export interface RegisterBody { facts: NodeFacts; runtimes: RuntimeInfo[]; capabilities: string[] }
 export interface CommandBody { commandId: string; command: Phase1Command }
@@ -115,7 +118,9 @@ export function isRuntimeInfo(value: unknown): value is RuntimeInfo {
 
 export function isSessionInfo(value: unknown): value is SessionInfo {
   return isObject(value) && isShortString(value.sessionId, 128) && isShortString(value.runtime, 64)
-    && isShortString(value.state, 32) && (value.startedAt === undefined || isShortString(value.startedAt, 64));
+    && isShortString(value.state, 32) && (value.startedAt === undefined || isShortString(value.startedAt, 64))
+    && (value.name === undefined || isShortString(value.name, 128)) && (value.cwd === undefined || isShortString(value.cwd, 512))
+    && (value.kind === undefined || isShortString(value.kind, 32));
 }
 
 export function isNodeFacts(value: unknown): value is NodeFacts {
