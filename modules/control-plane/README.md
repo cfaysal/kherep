@@ -18,7 +18,7 @@ operator ----HTTPS behind Cloudflare Access--> Worker --> Registry / NodeSession
 | `Registry` | `worker/src/registry.mts` | SQLite tables `nodes`, `runtimes`, `sessions`, `enrollments`, `audit`; one-time codes; key binding; revocation |
 | Node | `node/cli.mts` | `kherep-node node onboard|status|unenroll` and `kherep-node daemon` |
 
-Both Durable Object classes use SQLite storage (`new_sqlite_classes`). `NodeSession` accepts the socket with the WebSocket Hibernation API, so an idle node does not keep the object in memory.
+Both Durable Object classes use SQLite storage (declared in the `exports` map with `"storage": "sqlite"`). `NodeSession` accepts the socket with the WebSocket Hibernation API, so an idle node does not keep the object in memory.
 
 ### Protocol
 
@@ -81,7 +81,10 @@ The committed [`worker/wrangler.jsonc`](worker/wrangler.jsonc) contains placehol
       { "name": "REGISTRY", "class_name": "Registry" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["NodeSession", "Registry"] }],
+  "exports": {
+    "NodeSession": { "type": "durable-object", "storage": "sqlite" },
+    "Registry": { "type": "durable-object", "storage": "sqlite" }
+  },
   "vars": {
     "ACCESS_TEAM_DOMAIN": "https://<team-name>.cloudflareaccess.com",
     "ACCESS_AUD": "<Access application AUD tag>"
@@ -97,7 +100,7 @@ npx wrangler deploy --config /path/outside/the/repository/kherep-control.jsonc
 
 Then put a Cloudflare Access application with an allow policy for the operators in front of `control.example.com/api/*`. Leave `/node/*` outside Access. Deploying and creating these resources is an operator action; the repository never does it.
 
-Cloudflare now also documents a declarative `exports` map for Durable Object classes. The design specifies the `migrations` array; a Worker can use only one of the two.
+Durable Object classes are declared with the `exports` map, which replaces the legacy `migrations` array. A Worker deployed earlier with `migrations` (tag `v1`, `new_sqlite_classes`) moves to `exports` without data migration; the move is one-way, so do not return to `migrations` afterwards.
 
 ### Node
 

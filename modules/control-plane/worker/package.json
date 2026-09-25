@@ -20,5 +20,9 @@
     "vitest": "4.1.11",
     "wrangler": "4.140.0"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260923.1": true
+  }
 }
