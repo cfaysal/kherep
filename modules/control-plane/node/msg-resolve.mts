@@ -39,8 +39,9 @@ function pick<T>(what: string, ref: string, matches: T[], all: T[], label: (item
 }
 
 // Resolves "<node>/<session>" against the directory: the node by id or name,
-// then the session on that node by id or name. The address keeps the session
-// reference as typed, because the target node's policy matches that exact text.
+// then the session on that node by id or name. The address carries the session
+// id, which stays valid when the session is renamed; the target node's policy
+// matches a rule by that id or by the session's current name.
 export function resolveTarget(directory: DirectoryBody, target: string): Resolved<MessageAddress> {
   const slash = target.indexOf("/");
   if (slash <= 0 || slash === target.length - 1) return { ok: false, error: `target must be <node>/<session>, got "${target}"` };
@@ -54,7 +55,7 @@ export function resolveTarget(directory: DirectoryBody, target: string): Resolve
     sessions.filter((s) => s.sessionId === sessionRef || s.name === sessionRef), sessions,
     (s) => (s.name ? `${s.name} (${s.sessionId})` : s.sessionId));
   if (!session.ok) return session;
-  return { ok: true, value: { nodeId: node.value.nodeId, session: sessionRef } };
+  return { ok: true, value: { nodeId: node.value.nodeId, session: session.value.sessionId } };
 }
 
 // A readable sender node: its directory name, operator, or the bare id.

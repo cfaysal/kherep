@@ -72,7 +72,8 @@ describe("session messaging across two nodes", () => {
 
     const out: string[] = [];
     const err: string[] = [];
-    // What `msg send <node-b>/review please check the build` parses to.
+    // What `msg send <node-b>/review please check the build` parses to. The
+    // address carries the session id; B's name rule still accepts it.
     const code = await runMsgArgs({ positionals: ["send", `${bName}/review`, "please", "check", "the", "build"], values: {} },
       { paths: pathsA, env: { CLAUDE_CODE_SESSION_ID: "s-a" }, out: (l) => out.push(l), err: (l) => err.push(l) });
     expect([code, err]).toEqual([0, []]);
@@ -82,7 +83,7 @@ describe("session messaging across two nodes", () => {
     // Each hop crosses the Worker and the other node socket asynchronously, so
     // wait for its effect instead of reading right after the exchange call.
     await vi.waitFor(() => {
-      expect(getMessage(pathsB.inbox, messageId)).toMatchObject({ from: { nodeId: a.nodeId, session: "planner" }, toSession: "review",
+      expect(getMessage(pathsB.inbox, messageId)).toMatchObject({ from: { nodeId: a.nodeId, session: "planner" }, toSession: "s-b",
         text: "please check the build", state: "accepted" });
       expect(getSent(pathsA, messageId)?.state).toBe("accepted");
     }, WAIT);
@@ -105,7 +106,7 @@ describe("session messaging across two nodes", () => {
     expect(getMessage(pathsB.inbox, messageId)?.state).toBe("delivered");
     await b.exchange();
     await vi.waitFor(() => {
-      expect(getSent(pathsA, messageId)).toMatchObject({ messageId, state: "delivered", to: { nodeId: b.nodeId, session: "review" } });
+      expect(getSent(pathsA, messageId)).toMatchObject({ messageId, state: "delivered", to: { nodeId: b.nodeId, session: "s-b" } });
       expect(getMessage(pathsB.inbox, messageId)?.reportedAt).toBeTruthy();
     }, WAIT);
     await Promise.all([a.idle(), b.idle()]);

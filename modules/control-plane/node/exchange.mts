@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { SessionInfo } from "../protocol.mts";
-import { isDirectoryBody, isMessageSendBody, type DirectoryBody, type MessageSendBody } from "../protocol-messages.mts";
+import { isDirectoryBody, isMessageId, isMessageSendBody, type DirectoryBody, type MessageSendBody } from "../protocol-messages.mts";
 import type { ClientOptions, NodeClient, SentState } from "./client.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import {
@@ -20,7 +20,9 @@ import {
 export const EXCHANGE_INTERVAL_MS = 2_000;
 export const DIRECTORY_INTERVAL_MS = 60_000;
 
-export interface OutboxRecord extends MessageSendBody { createdAt: string }
+// depth: the reply depth (inbox.mts InboxRecord.depth); stays local, the
+// Worker never sees it.
+export interface OutboxRecord extends MessageSendBody { createdAt: string; depth?: number }
 // A malformed outbox file leaves a sent record with only messageId and state error.
 // noticedAt: when the delivery hook told the sending session it failed.
 export type SentRecord = Partial<OutboxRecord> & {
@@ -78,6 +80,18 @@ export function unnoticedFailures(paths: NodePaths, fromSessions: string[]): Sen
     .filter((r): r is SentRecord => r !== null && (r.state === "refused" || r.state === "expired") && r.noticedAt === undefined
       && r.fromSession !== undefined && fromSessions.includes(r.fromSession))
     .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+}
+
+// The depth of an arriving message: one more than this node's sent message it
+// answers, 0 for a new message or an answer to something this node did not send.
+export function replyDepth(paths: NodePaths, inReplyTo: string | undefined): number {
+  if (!inReplyTo || !isMessageId(inReplyTo)) return 0;
+  try {
+    const sent = getSent(paths, inReplyTo);
+    return sent ? (sent.depth ?? 0) + 1 : 0;
+  } catch {
+    return 0;
+  }
 }
 
 export function markNoticed(paths: NodePaths, messageId: string, now: number = Date.now()): void {
@@ -150,11 +164,13 @@ export function recordingSessions(paths: NodePaths, list: () => Promise<SessionI
   };
 }
 
-// The client callbacks that record directory frames and sent states.
-export function exchangeOptions(paths: NodePaths): Pick<ClientOptions, "storeDirectory" | "sentUpdate"> {
+// The client callbacks that record directory frames and sent states, and read
+// the local session listing for the messaging policy.
+export function exchangeOptions(paths: NodePaths): Pick<ClientOptions, "storeDirectory" | "sentUpdate" | "localSessions"> {
   return {
     storeDirectory: (body) => writeDirectory(paths, body),
     sentUpdate: (messageId, state, reason) => { recordSent(paths, messageId, state, reason); },
+    localSessions: () => readLocalSessions(paths),
   };
 }
 

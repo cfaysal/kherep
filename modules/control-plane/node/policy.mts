@@ -75,9 +75,13 @@ export function advertisedCapabilities(policy: NodePolicy): string[] {
 }
 
 // session "*" matches any local session, from "*" any sender. Otherwise both
-// match exactly: the session id or name the sender addressed, and the sender
-// node id or "operator".
-export function acceptsMessage(policy: NodePolicy, toSession: string, fromNodeId: string): boolean {
+// match exactly: the session reference the sender addressed, or the id or
+// current name of the local session it names (sessions: the last local
+// listing), and the sender node id or "operator".
+export function acceptsMessage(policy: NodePolicy, toSession: string, fromNodeId: string,
+  sessions: { sessionId: string; name?: string }[] = []): boolean {
+  const local = sessions.find((s) => s.sessionId === toSession || s.name === toSession);
+  const refs = local ? [toSession, local.sessionId, ...(local.name ? [local.name] : [])] : [toSession];
   return (policy.messaging?.accept ?? []).some((rule) =>
-    (rule.session === "*" || rule.session === toSession) && (rule.from.includes("*") || rule.from.includes(fromNodeId)));
+    (rule.session === "*" || refs.includes(rule.session)) && (rule.from.includes("*") || rule.from.includes(fromNodeId)));
 }
