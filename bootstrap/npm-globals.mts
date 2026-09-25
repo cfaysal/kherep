@@ -10,6 +10,7 @@
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { productEnv } from "../lib/product-env.mts";
 import { GlobalsError, fail, mergeManifests, safeString, type MergedEntry } from "./npm-globals-manifest.mts";
@@ -187,7 +188,18 @@ function cli(argv: string[], env: NodeJS.ProcessEnv): number {
   return run(args, planOnly, env);
 }
 
-if (import.meta.main) {
+// Node loads the main module from its real path, so a script started through a
+// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+// It needs no main flag on import.meta, which Node 23 and 24.0-24.1 lack.
+function isMainModule(): boolean {
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1] || "")).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   try {
     process.exitCode = cli(process.argv.slice(2), process.env);
   } catch (error) {

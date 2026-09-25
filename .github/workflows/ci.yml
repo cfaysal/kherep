@@ -55,6 +55,42 @@ jobs:
       - name: Bootstrap suites (TypeScript on Node, no build)
         run: npm run test:bootstrap
 
+  # The unit suites and the node suites of the typescript job (without the type
+  # check) on the oldest Node release that the engines field in package.json
+  # admits, so a runtime feature newer than the floor fails here.
+  unit-engines-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.18.0"
+          cache: npm
+      - name: Hook test suites
+        shell: bash
+        run: |
+          status=0
+          for t in claude/hooks/*.test.js claude/hooks/*.test.mts claude/hooks/lib/*.test.js claude/hooks/lib/*.test.mts; do
+            [ -e "$t" ] || continue
+            echo "== $t"
+            node "$t" || status=1
+          done
+          exit $status
+      - name: Shared Teamwork Graph tests
+        shell: bash
+        run: node --test modules/twg/*.test.mts
+      - name: Bootstrap suites (TypeScript on Node, no build)
+        run: npm run test:bootstrap
+      - run: npm ci
+      - name: Codex projection suites
+        run: npm run test:codex
+      - name: local-inference and mcp-auth-bridge suites
+        run: npm run test:modules
+      - name: atl-jira broker suites
+        run: npm run test:brokers
+      - name: Control Plane protocol and node suites
+        run: npm run test:control-plane
+
   smoke:
     needs: contract
     strategy:

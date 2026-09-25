@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 export interface PreCompactInput {
   transcript_path?: unknown;
@@ -35,4 +36,15 @@ function main(): void {
   if (target) process.stdout.write(JSON.stringify({ systemMessage: "Local Codex pre-compact metadata recorded; the task transcript remains the continuity source." }));
 }
 
-if (import.meta.main) main();
+// Node loads the main module from its real path, so a script started through a
+// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+// It needs no main flag on import.meta, which Node 23 and 24.0-24.1 lack.
+function isMainModule(): boolean {
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1] || "")).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) main();

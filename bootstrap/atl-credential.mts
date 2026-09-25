@@ -26,12 +26,13 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   CAPTURE_QUESTION, RUNTIMES, backupPathFor, bindingHint, childEnv, classifyVerdict, collides,
-  confirmationLines, credentialSource, declinedMessage, fieldLengths, readsAsYes, rejectedMessage,
-  renderCredentialFile, requireSingleLine, resolveTarget, unchangedMessage, verdictOf,
-  writtenMessage,
+  confirmationLines, credentialSource, declinedMessage, fieldLengths, readSecretBytes, readsAsYes,
+  rejectedMessage, renderCredentialFile, requireSingleLine, resolveTarget, unchangedMessage,
+  verdictOf, writtenMessage,
 } from "./atl-credential-format.mts";
 import type { CredentialValues, VerificationOutcome } from "./atl-credential-format.mts";
 
@@ -74,39 +75,6 @@ function promptLine(prompt: string, label: string): string {
     fail(`Could not read the ${label} from the terminal.`);
   }
   return accept(label, buffer.subarray(0, read).toString("utf8"));
-}
-
-const IDLE = new Int32Array(new SharedArrayBuffer(4)); // never notified: a plain sleep
-/** EAGAIN means a non-blocking stdin with nothing typed yet: wait, then ask again. */
-export function pauseBriefly(): void {
-  Atomics.wait(IDLE, 0, 0, 20);
-}
-
-/**
- * promptSecret's byte loop, handed its read so a test can drive it without a
- * terminal. It throws, never exits: promptSecret's finally has to run. An idle
- * terminal is waited out, uncapped - a cap would pass on part of a secret.
- */
-export function readSecretBytes(
-  label: string, readByte: (chunk: Buffer) => number, pause: () => void = pauseBriefly,
-): number[] {
-  const bytes: number[] = [];
-  const chunk = Buffer.alloc(1);
-  for (;;) {
-    let read = 0;
-    try {
-      read = readByte(chunk);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EAGAIN") { pause(); continue; }
-      throw new Error(`Could not read the ${label} from the terminal.`);
-    }
-    if (read === 0) return bytes;
-    const byte = chunk[0];
-    if (byte === 0x0d || byte === 0x0a) return bytes;
-    if (byte === 0x03) throw new Error(`Reading the ${label} was interrupted.`);
-    if (byte === 0x7f || byte === 0x08) { bytes.pop(); continue; }
-    bytes.push(byte);
-  }
 }
 
 /** Raw mode, one byte at a time, echo restored in `finally` on every exit. */
@@ -243,4 +211,15 @@ function main(): void {
   hint();
 }
 
-if (import.meta.main) main();
+// Node loads the main module from its real path, so a script started through a
+// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+// It needs no main flag on import.meta, which Node 23 and 24.0-24.1 lack.
+function isMainModule(): boolean {
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1] || "")).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) main();

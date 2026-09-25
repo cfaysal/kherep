@@ -6,7 +6,9 @@
 //
 // The placement of these files in a directory named after Jira is deliberate
 // and explained at the top of confluence-session.mts.
+import { realpathSync } from "node:fs";
 import { readFile as nodeReadFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
 import { ConfluenceError } from "./confluence-contract.mts";
 import {
@@ -264,8 +266,19 @@ export async function runCli(argv: string[], injected: Injected = {}): Promise<n
   }
 }
 
+// Node loads the main module from its real path, so a script started through a
+// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+// It needs no main flag on import.meta, which Node 23 and 24.0-24.1 lack.
+function isMainModule(): boolean {
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1] || "")).href;
+  } catch {
+    return false;
+  }
+}
+
 // Only on a direct call. Without this guard every import - and therefore every
 // test - would execute the command.
-if (import.meta.main) {
+if (isMainModule()) {
   process.exitCode = await runCli(process.argv.slice(2));
 }

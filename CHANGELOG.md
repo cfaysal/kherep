@@ -83,6 +83,17 @@ increments the minor version; every other release increments the patch version.
   keepalive and runner tests now resolve their fixture directories to their
   real paths, and the runner test still removes its fixture afterwards. The
   local-inference check that rejects a symlinked output root is unchanged.
+- The remaining entry points and hooks no longer rely on `import.meta.main`
+  to detect a direct start. Node 23 and Node 24.0 to 24.1 lack it, although
+  the engines range admits them, so on those releases eight Claude hooks, ten
+  Codex hooks, including the privacy-boundary and dispatch-contract guards,
+  and the bootstrap, Codex installer, plugin-snapshot, broker, local-inference
+  and MCP-wrapper CLIs did nothing and exited 0. Each now compares
+  `import.meta.url` with the real path of its script argument, like the four
+  CLIs above. A test fails when a tracked source file uses `import.meta.main`
+  again or compares against an unresolved script argument, and CI runs the
+  unit, Codex, module, broker and Control Plane node suites on Node 22.18.0,
+  the engines floor.
 
 ## [0.1.2] - 2026-09-24
 
