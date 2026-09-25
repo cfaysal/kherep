@@ -131,9 +131,8 @@ test("jeder kopierte files.txt-Eintrag existiert auf Platte", () => {
 //
 // Ein Teil der geprüften Dateien steht in KEINEM der beiden Manifeste, sondern
 // von Hand in drift-check.sh: der project-Scope und die runtime-Einträge.
-// mpac.ps1 lebt ausschliesslich dort - und genau an dieser Datei hatte die
-// WIN-Box echte, unversionierte Drift. Ein Test, der nur files.txt und
-// capabilities.json abgleicht, hätte sie nie gesehen.
+// Ein Test, der nur files.txt und capabilities.json abgleicht, sieht diese
+// Eintraege nie.
 //
 // Geprüft wird bewusst NUR, dass jede referenzierte Repo-Quelle existiert.
 // Eine Gleichheitsforderung gegen die Manifeste wäre falsch: der project-Scope

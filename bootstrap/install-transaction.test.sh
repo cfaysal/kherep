@@ -335,7 +335,7 @@ SH
 
 # OP-1432. The observation agent is installed by default, so the Confluence
 # brokers and exactly the modules they import are too - without the Atlassian
-# switch, which keeps gating only the Jira and MPAC helpers.
+# switch, which keeps gating only the Jira helpers.
 test_default_confluence_brokers() {
   local rc tool
   fixture confluence
@@ -351,7 +351,7 @@ test_default_confluence_brokers() {
     confluence-runtime-label.mts atl-confluence.mts atl-confluence-ccoder.mts; do
     same "$HERE/../modules/atl-jira-brokers/$tool" "$W/tools/$tool"
   done
-  for tool in atl-jira.mts atl-jira-ccoder.mts jira-adf.mts jira-config.mts mpac/mpac.ps1; do
+  for tool in atl-jira.mts atl-jira-ccoder.mts jira-adf.mts jira-config.mts; do
     [ ! -e "$W/tools/$tool" ] || fail "default install projected the optional helper $tool"
   done
   grep -qF "node <workspace>/tools/atl-confluence-ccoder.mts" "$C/agents/claude-obs.md" ||
@@ -359,6 +359,32 @@ test_default_confluence_brokers() {
   HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
     bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
     { cat "$ROOT/drift.log"; fail "drift-check failed after a default install"; }
+}
+
+# Kherep no longer ships the MPAC tools (#25). Hosts that installed them earlier
+# keep <workspace>/tools/mpac/ as unmanaged operator content: an upgrade with the
+# Atlassian switch on must leave both files byte-identical, and drift-check must
+# no longer compare them.
+test_upgrade_keeps_mpac() {
+  local rc f
+  fixture mpac
+  mkdir -p "$W/tools/mpac" "$ROOT/mpac.before"
+  printf 'operator mpac script\n' > "$W/tools/mpac/mpac.ps1"
+  printf 'operator mpac notes\n' > "$W/tools/mpac/README.md"
+  cp "$W/tools/mpac/mpac.ps1" "$W/tools/mpac/README.md" "$ROOT/mpac.before/"
+  set +e
+  KHEREP_INSTALL_ATLASSIAN_TOOLS=1 HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" \
+    KHEREP_CREDENTIALS_ROOT="$R" KHEREP_INSTALL_SKIP_GITCONFIG=1 KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE=1 \
+    KHEREP_INSTALL_SKIP_ATL_CREDENTIAL=1 SKIP_SECRETS=1 SKIP_DEPS=1 bash "$HERE/install.sh" > "$ROOT/log" 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { cat "$ROOT/log"; fail "upgrade install with the Atlassian switch failed (rc=$rc)"; }
+  for f in mpac.ps1 README.md; do same "$W/tools/mpac/$f" "$ROOT/mpac.before/$f"; done
+  same "$HERE/../modules/atl-jira-brokers/atl-jira.mts" "$W/tools/atl-jira.mts"
+  KHEREP_INSTALL_ATLASSIAN_TOOLS=1 HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" \
+    KHEREP_CREDENTIALS_ROOT="$R" bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
+    { cat "$ROOT/drift.log"; fail "drift-check failed after an upgrade over existing MPAC tools"; }
+  ! grep -qi mpac "$ROOT/drift.log" || { cat "$ROOT/drift.log"; fail "drift-check still reports the MPAC tools"; }
 }
 
 # OP-1085: the deps phase runs AFTER the commit and must not be able to undo an
@@ -432,5 +458,5 @@ JS
 }
 
 test_library; test_retire; test_lock; test_preflights; test_path_guards; test_partial; test_term; test_commit_signal; test_secrets
-test_deps_failure; test_default_confluence_brokers
+test_deps_failure; test_default_confluence_brokers; test_upgrade_keeps_mpac
 echo 'TRANSACTION TEST PASS'

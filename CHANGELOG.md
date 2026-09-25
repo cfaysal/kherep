@@ -52,6 +52,15 @@ increments the minor version; every other release increments the patch version.
   discard the whole settings file. The existing commit guards are unchanged.
   Reinstall to apply.
 
+### Removed
+
+- The MPAC tools (`modules/mpac-tools/`, Atlassian Marketplace vendor
+  reporting). They are not part of Kherep's purpose. The installer no longer
+  places `<workspace>/tools/mpac/` and drift-check no longer compares it;
+  `KHEREP_INSTALL_ATLASSIAN_TOOLS` now gates only the Jira helpers. On hosts
+  that installed them earlier, an upgrade leaves both files untouched as
+  unmanaged operator content.
+
 ### Fixed
 
 - The Claude hooks `cbm-code-discovery-gate`, `cbm-session-reminder` and

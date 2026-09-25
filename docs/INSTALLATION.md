@@ -68,7 +68,7 @@ Connection profiles ship unconfigured. Kherep does not provision a Confluence sp
 | `KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE` | Skip resolving the Confluence knowledge space (throwaway installs such as the smoke test); only `1` skips |
 | `KHEREP_INSTALL_SKIP_ATL_CREDENTIAL` | Skip reading and live-verifying the Atlassian service-account credential (throwaway installs such as the smoke test); only `1` skips |
 | `KHEREP_INSTALL_SKIP_RUNTIME_AGENT` | Leave the memory runtime agent untouched |
-| `KHEREP_INSTALL_ATLASSIAN_TOOLS` | Opt into Jira/MPAC helpers. The two Confluence brokers and the modules they import are installed without it, because the observation agent needs them |
+| `KHEREP_INSTALL_ATLASSIAN_TOOLS` | Opt into the Jira helpers. The two Confluence brokers and the modules they import are installed without it, because the observation agent needs them |
 | `KHEREP_EXISTING_USER_SETTINGS` | Read-only settings fixture for candidate review |
 | `KHEREP_EXISTING_PROJECT_SETTINGS` | Read-only project-settings fixture |
 | `KHEREP_WORK_ITEM_REQUIRED` | `1` enforces work-item keys under `KHEREP_WORKSPACE`, `0` turns it off. Persisted into the commit policy file; without it an upgrade keeps the installed value, a fresh install uses `0` |

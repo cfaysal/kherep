@@ -143,8 +143,6 @@ export function fixedPairs(home: string, workspace: string): ManagedPair[] {
       live: joinPathLike(workspace, "tools/confluence-runtime-label.mts"),
       source: "modules/atl-jira-brokers/confluence-runtime-label.mts",
     },
-    { live: joinPathLike(workspace, "tools/mpac/mpac.ps1"), source: "modules/mpac-tools/mpac.ps1" },
-    { live: joinPathLike(workspace, "tools/mpac/README.md"), source: "modules/mpac-tools/README.md" },
   ]);
 }
 
