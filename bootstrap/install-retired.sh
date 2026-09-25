@@ -30,12 +30,12 @@ bootstrap_retired_live_path() {
 # empty for a Claude-home entry). Returns 1 for a blank or comment line and 2 for
 # an invalid one, so the whole manifest is refused before anything moves.
 bootstrap_retired_parse_line() {
-  local line="${1%$'\r'}" hashes
+  local line="${1%$'\r'}" hashes=""
   RETIRED_REL=""; RETIRED_HASHES=""
   case "$line" in ''|'#'*) return 1 ;; esac
   RETIRED_REL="${line%% *}"
   kherep_validate_manifest_relative_path "retirement manifest entry" "$RETIRED_REL" || return 2
-  hashes=""; [ "$RETIRED_REL" = "$line" ] || hashes="${line#* }"
+  [ "$RETIRED_REL" = "$line" ] || hashes="${line#* }"
   case "$RETIRED_REL" in
     project/*)
       if ! [[ "$hashes" =~ ^sha256:[0-9a-f]{64}(,[0-9a-f]{64})*$ ]]; then

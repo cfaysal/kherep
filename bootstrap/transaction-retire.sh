@@ -20,6 +20,8 @@
 # Rollback removes it only while it is empty, i.e. when the retirement failed
 # before its file landed there. One that holds a parked copy stays, by design.
 
+TX_CREATED_GRAVEYARDS=()
+
 transaction_cleanup_created_graveyards() {
   local i path
   for ((i=${#TX_CREATED_GRAVEYARDS[@]}-1; i>=0; i--)); do
