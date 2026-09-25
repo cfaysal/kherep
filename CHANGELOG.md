@@ -26,6 +26,17 @@ increments the minor version; every other release increments the patch version.
   do not opt out; an absent, unreadable or invalid value keeps the rule. AI
   attribution trailers are still rejected in an opted-out repository.
 
+### Fixed
+
+- The Claude hooks `cbm-code-discovery-gate`, `cbm-session-reminder` and
+  `cbm-subagent-reminder` are executable again. They were tracked without the
+  executable bit since 0.1.0, and because the settings invoke them directly,
+  every installed host failed them with `permission denied` and the
+  code-discovery gate and both reminders never ran. Reinstall to apply.
+- The smoke test's project-drift assertion follows the managed-block rule from
+  0.1.1: operator text outside the Kherep block in the workspace `CLAUDE.md`
+  must not be reported as drift, and a change inside the block must be.
+
 ## [0.1.2] - 2026-09-24
 
 ### Added
