@@ -167,8 +167,8 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     else if (now() >= deadline) due = "rearm";
     else continue;
     const budget = takeTurn(paths, sessionId, now());
-    // Too soon after the last autonomous turn: try again at the next poll.
-    if (budget === "spacing") continue;
+    // Too soon after the last autonomous turn, or the budget was locked: try again at the next poll.
+    if (budget === "spacing" || budget === "locked") continue;
     release();
     if (budget === "exhausted") {
       audit(paths, now(), sessionId, [...fresh, ...stuck], "budget");
