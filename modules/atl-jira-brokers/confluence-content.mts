@@ -137,6 +137,25 @@ export async function getPage(
   return asPage(json);
 }
 
+// GET /wiki/api/v2/pages/{id}?body-format=<representation> ("Get page by id",
+// raw spec dac-static.atlassian.com/cloud/confluence/openapi-v2.v3.json, read
+// 2026-09-25): the enum PrimaryBodyRepresentationSingle includes storage and
+// atlas_doc_format, and "if available" the body is under body.<representation>
+// .value as a string. An answer without it is an error, never an empty body.
+export async function getPageBody(
+  session: ConfluenceSession,
+  id: string,
+  representation: "storage" | "atlas_doc_format",
+): Promise<string> {
+  const pageId = contentId(id, "--id");
+  const { json } = await session.request({
+    method: "GET", path: v2(`/pages/${pageId}?body-format=${representation}`), scope: SCOPES.get,
+  });
+  const value = (json as { body?: Record<string, { value?: unknown } | undefined> } | null)?.body?.[representation]?.value;
+  if (typeof value !== "string") throw new ConfluenceError(`Page ${pageId} answered without a ${representation} body.`);
+  return value;
+}
+
 export interface UpdateInput {
   id: string;
   representation: Representation;

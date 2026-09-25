@@ -24,6 +24,7 @@ import {
 import {
   cmdChildren,
   cmdContext,
+  cmdGetBody,
   cmdMove,
   cmdOrphans,
   cmdRelated,
@@ -72,11 +73,19 @@ function fail(message: string): never {
   throw new CliFailure(message);
 }
 
+// Flags without a value. Otherwise "--body-only --id 5001" reads "--id" as one.
+const VALUELESS = new Set(["body-only"]);
+
 export function parseArgs(argv: string[]): Args {
   const args: Args = {};
   for (let index = 0; index < argv.length; index += 1) {
     if (!argv[index].startsWith("--")) continue;
-    args[argv[index].slice(2)] = argv[index + 1];
+    const name = argv[index].slice(2);
+    if (VALUELESS.has(name)) {
+      args[name] = "";
+      continue;
+    }
+    args[name] = argv[index + 1];
     index += 1;
   }
   return args;
@@ -151,6 +160,7 @@ async function cmdUpdate(ctx: CliContext, args: Args): Promise<number> {
 }
 
 async function cmdGet(ctx: CliContext, args: Args): Promise<number> {
+  if ("body-only" in args || "format" in args) return cmdGetBody(ctx, args);
   printPage(ctx, await getPage(createSession(ctx), args.id ?? ""));
   return 0;
 }
@@ -235,6 +245,7 @@ export async function runCli(argv: string[], injected: Injected = {}): Promise<n
     logError: injected.logError ?? ((line) => console.error(line)),
     now: injected.now ?? (() => Date.now()),
     semantic: injected.semantic ?? semanticProposals,
+    writeOut: injected.writeOut ?? ((chunk) => { process.stdout.write(chunk); }),
     // Fresh per run. That binding is what makes the token cache safe.
     session: {},
   };
@@ -243,7 +254,7 @@ export async function runCli(argv: string[], injected: Injected = {}): Promise<n
     const run = COMMANDS[command];
     // One line on purpose: the contract test reads this source and requires every
     // verb of the command table to appear in a single usage string.
-    if (!run) fail("Usage: create | update | get | delete | purge | labels | move | space | children | related | search | context | orphans | stitch | selftest");
+    if (!run) fail("Usage: create | update | get [--body-only [--format storage|adf]] | delete | purge | labels | move | space | children | related | search | context | orphans | stitch | selftest");
     return await run(ctx, parseArgs(rest));
   } catch (error) {
     ctx.logError(error instanceof CliFailure || error instanceof ConfluenceError
