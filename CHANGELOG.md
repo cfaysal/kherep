@@ -11,6 +11,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Control Plane: an idle Claude Code session wakes when a peer message
+  arrives. A second `Stop` hook (`modules/control-plane/node/wake-hook.mts`)
+  runs with `asyncRewake`, wakes at most 6 times per hour per session, does
+  not wake at reply depth 6 or deeper, re-arms itself before its timeout, and
+  can be switched off with a `wake.disabled` file in the node directory; every
+  decision is logged to `wake.jsonl` without message text. A prompt typed
+  while a turn is still running no longer re-offers that turn's messages; they
+  are re-offered after `StopFailure` (now wired) or after 10 minutes. `msg
+  send` addresses sessions by id, policy rules match the id or the session's
+  current name, and the peer framing follows the new peer-coordination rule.
 - Control Plane, Phase 1 (`modules/control-plane/`). A Cloudflare Worker
   `kherep-control` with two SQLite-backed Durable Objects: `NodeSession`
   holds each node's hibernatable WebSocket, the Ed25519 challenge handshake,
