@@ -94,8 +94,9 @@ export function deliverForHook(input: unknown, deps: HookDeps): string {
   for (const record of waiting.slice(0, MAX_MESSAGES_PER_CALL)) {
     const room = MAX_CONTEXT_BYTES - used - 2;
     const full = block(record, record.text, directory, tag, reply);
-    if (bytes(full) > room && blocks.length > 0) break;
-    const next = bytes(full) > room ? fitted(record, directory, tag, reply, room) : full;
+    const fits = bytes(full) <= room;
+    if (!fits && blocks.length > 0) break;
+    const next = fits ? full : fitted(record, directory, tag, reply, room);
     blocks.push(next);
     used += bytes(next) + 2;
   }

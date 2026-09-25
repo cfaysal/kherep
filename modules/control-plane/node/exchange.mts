@@ -146,7 +146,7 @@ export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Set
       record = undefined; // not JSON
     }
     if (record === null) continue; // gone since the listing
-    const body = typeof record === "object" ? toSendBody(record) : null;
+    const body = record ? toSendBody(record) : null;
     if (!body || body.messageId !== messageId) {
       recordSent(paths, messageId, "error", "invalid outbox record");
       continue;
