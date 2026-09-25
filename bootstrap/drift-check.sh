@@ -227,10 +227,6 @@ cmp_file "project/tools/jira-download.mts" \
   "$HERE/../modules/atl-jira-brokers/jira-download.mts" "$WS/tools/jira-download.mts"
 cmp_file "project/tools/jira-discovery.mts" \
   "$HERE/../modules/atl-jira-brokers/jira-discovery.mts" "$WS/tools/jira-discovery.mts"
-cmp_file "project/tools/mpac/mpac.ps1" \
-  "$HERE/../modules/mpac-tools/mpac.ps1" "$WS/tools/mpac/mpac.ps1"
-cmp_file "project/tools/mpac/README.md" \
-  "$HERE/../modules/mpac-tools/README.md" "$WS/tools/mpac/README.md"
 fi
 
 echo ""

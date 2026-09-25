@@ -105,9 +105,7 @@ for tool in $CONFLUENCE_TOOLS; do
   [ -e "$REPO_ROOT/modules/atl-jira-brokers/$tool" ] || { echo "FATAL: managed source missing: modules/atl-jira-brokers/$tool"; exit 1; }
 done
 if [ "$INSTALL_ATLASSIAN_TOOLS" = "1" ]; then
-  for required in "$REPO_ROOT/modules/atl-jira-brokers" "$REPO_ROOT/modules/mpac-tools/mpac.ps1" "$REPO_ROOT/modules/mpac-tools/README.md"; do
-    [ -e "$required" ] || { echo "FATAL: optional Atlassian source missing"; exit 1; }
-  done
+  [ -e "$REPO_ROOT/modules/atl-jira-brokers" ] || { echo "FATAL: optional Atlassian source missing"; exit 1; }
 fi
 
 # Validate every managed destination before creating bootstrap state. Target
@@ -259,14 +257,6 @@ install_path "project/tools/atl-jira.mts" \
 install_path "project/tools/atl-jira-ccoder.mts" \
   "$REPO_ROOT/modules/atl-jira-brokers/atl-jira-ccoder.mts" "$WS/tools/atl-jira-ccoder.mts" \
   "$INSTALL_BACKUP/project/tools/atl-jira-ccoder.mts"
-# MPAC-Tools (OP-967). Ohne diese Eintraege waere mpac.ps1 zwar versioniert,
-# aber unbeobachtet - genau daraus entsteht der Drift aus Golden Rule #14.
-install_path "project/tools/mpac/mpac.ps1" \
-  "$REPO_ROOT/modules/mpac-tools/mpac.ps1" "$WS/tools/mpac/mpac.ps1" \
-  "$INSTALL_BACKUP/project/tools/mpac/mpac.ps1"
-install_path "project/tools/mpac/README.md" \
-  "$REPO_ROOT/modules/mpac-tools/README.md" "$WS/tools/mpac/README.md" \
-  "$INSTALL_BACKUP/project/tools/mpac/README.md"
 fi
 
 # Managed settings come from the repo while unknown existing preferences,
