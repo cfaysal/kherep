@@ -6,6 +6,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { retireCentralBrainHooks } from "./central-brain-retirement.mts";
 import { substituteTemplatePaths, toBashPath } from "./render-profile-paths.mts";
@@ -111,7 +112,18 @@ function main(argv: string[]): void {
   else throw new Error("mode must be settings or local-inference");
 }
 
-if (import.meta.main) {
+// Node loads the main module from its real path, so a script started through a
+// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+// It needs no main flag on import.meta, which Node 23 and 24.0-24.1 lack.
+function isMainModule(): boolean {
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1] || "")).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   try { main(process.argv.slice(2)); }
   catch (error) { console.error(`FATAL: profile render failed: ${errorMessage(error)}`); process.exit(1); }
 }

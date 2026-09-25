@@ -83,7 +83,9 @@ test("propagates read failures instead of treating them as differences", (t) => 
 // jedes mktemp-Staging wie im Smoke-Test) stimmten beide nie überein, das
 // Skript tat nichts und exitCode 0 galt als "gleich". install_path übersprang
 // damit jede Änderung: keine Backups, kein Settings-Merge, veraltete Dateien
-// überlebten. import.meta.main ist symlink-unabhängig.
+// überlebten. Heute vergleicht isMainModule() import.meta.url mit dem realen
+// Pfad von argv[1]; das ist symlink-unabhängig und braucht kein main-Flag an
+// import.meta, das Node 23 und 24.0-24.1 fehlt.
 test("CLI entry detection survives a symlinked script path", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-entry-equal-cli-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

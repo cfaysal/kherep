@@ -48,7 +48,7 @@ test("the Codex installer runs the step for the codex runtime, at its CLI bounda
   assert.match(source, /result\.codexHome, "kherep", "atl-credential-codex\.txt"/);
   // It has to sit in the CLI block. install() is called directly by the Codex
   // test suite against throwaway homes, and a prompt inside it would hang.
-  assert.ok(at > source.indexOf("if (import.meta.main)"), "the step would run inside install()");
+  assert.ok(at > source.indexOf("if (isMainModule())"), "the step would run inside install()");
   // Non-fatal in the same sense as C3 beside it: a parity installation that
   // already landed stays landed, and the gap is named.
   assert.match(source, /WARNING no verified Atlassian service-account credential/);

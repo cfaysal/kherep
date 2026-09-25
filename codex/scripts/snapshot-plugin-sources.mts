@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 
 import { componentHash } from "../lib/component-hash.mts";
@@ -103,7 +104,18 @@ export function snapshot(registry: Record<string, unknown>, destination: string 
   }
 }
 
-if (import.meta.main) {
+// Node loads the main module from its real path, so a script started through a
+// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+// It needs no main flag on import.meta, which Node 23 and 24.0-24.1 lack.
+function isMainModule(): boolean {
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1] || "")).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   const claudeHome = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"));
   const registryFile = path.join(claudeHome, "plugins", "installed_plugins.json");
   const registry = (JSON.parse(fs.readFileSync(registryFile, "utf8")) as { plugins?: Record<string, unknown> }).plugins || {};

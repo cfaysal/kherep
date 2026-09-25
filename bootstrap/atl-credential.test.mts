@@ -176,7 +176,7 @@ test("no string outside the file renderer interpolates a credential value", () =
 
 test("importing the step runs nothing, and both files stay under the size cap", () => {
   const step = fs.readFileSync(STEP, "utf8");
-  assert.match(step, /^if \(import\.meta\.main\) main\(\);$/m);
+  assert.match(step, /^if \(isMainModule\(\)\) main\(\);$/m);
   for (const file of [STEP, FORMAT, import.meta.filename]) {
     const lines = fs.readFileSync(file, "utf8").replace(/\n$/, "").split(/\r?\n/).length;
     assert.equal(lines <= 250, true, `${path.basename(file)} is ${lines} lines`);

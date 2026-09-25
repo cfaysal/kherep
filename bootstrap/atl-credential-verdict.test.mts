@@ -24,9 +24,8 @@ import { pathToFileURL } from "node:url";
 
 import {
   CAPTURE_QUESTION, backupPathFor, classifyVerdict, confirmationLines, credentialSource,
-  declinedMessage, readsAsYes,
+  declinedMessage, pauseBriefly, readSecretBytes, readsAsYes,
 } from "./atl-credential-format.mts";
-import { pauseBriefly, readSecretBytes } from "./atl-credential.mts";
 
 const STEP = path.join(import.meta.dirname, "atl-credential.mts");
 const TARGET = "/var/kherep/atl-credential-claude.txt";

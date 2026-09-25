@@ -9,7 +9,9 @@
  *
  * Nothing here takes a credential value except renderCredentialFile, which is
  * the one function whose output is the file itself. Every message is built from
- * a path, a byte size, a field length or a verdict.
+ * a path, a byte size, a field length or a verdict. The secret prompt's byte
+ * loop, readSecretBytes, is here too: it reads through the function it is
+ * handed and returns the bytes to the step without printing them.
  */
 import path from "node:path";
 
@@ -27,6 +29,39 @@ export function requireSingleLine(label: string, raw: string): string {
   if (!value) throw new Error(`No ${label} given.`);
   if (/[\r\n]/.test(value)) throw new Error(`The ${label} must be a single line.`);
   return value;
+}
+
+const IDLE = new Int32Array(new SharedArrayBuffer(4)); // never notified: a plain sleep
+/** EAGAIN means a non-blocking stdin with nothing typed yet: wait, then ask again. */
+export function pauseBriefly(): void {
+  Atomics.wait(IDLE, 0, 0, 20);
+}
+
+/**
+ * promptSecret's byte loop, handed its read so a test can drive it without a
+ * terminal. It throws, never exits: promptSecret's finally has to run. An idle
+ * terminal is waited out, uncapped - a cap would pass on part of a secret.
+ */
+export function readSecretBytes(
+  label: string, readByte: (chunk: Buffer) => number, pause: () => void = pauseBriefly,
+): number[] {
+  const bytes: number[] = [];
+  const chunk = Buffer.alloc(1);
+  for (;;) {
+    let read = 0;
+    try {
+      read = readByte(chunk);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EAGAIN") { pause(); continue; }
+      throw new Error(`Could not read the ${label} from the terminal.`);
+    }
+    if (read === 0) return bytes;
+    const byte = chunk[0];
+    if (byte === 0x0d || byte === 0x0a) return bytes;
+    if (byte === 0x03) throw new Error(`Reading the ${label} was interrupted.`);
+    if (byte === 0x7f || byte === 0x08) { bytes.pop(); continue; }
+    bytes.push(byte);
+  }
 }
 
 /**
