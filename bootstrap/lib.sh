@@ -8,19 +8,21 @@ CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLAUDE_SRC="$REPO_ROOT/claude"
 
-# Rewrite machine-absolute paths -> portable ~ form. Idempotent.
+# Rewrite machine-absolute paths -> portable ~ form, and the Kherep checkout
+# back to its __KHEREP_REPO__ placeholder (render-profile-paths.mts). Idempotent.
 # Uses a temp file (NOT sed -i) so it works on both GNU sed (Git Bash) and BSD sed (macOS).
 portable_paths() {
   local f="$1" tmp
   tmp="$(mktemp)"
   node -e '
     const fs=require("fs");
-    const [source,target,home]=process.argv.slice(1);
+    const [source,target,home,repo]=process.argv.slice(1);
     let text=fs.readFileSync(source,"utf8");
-    const variants=new Set([home,home.replace(/\\/g,"/"),JSON.stringify(home).slice(1,-1)]);
-    for(const value of variants)if(value)text=text.split(value).join("~/.claude");
+    const variants=(value)=>new Set([value,value.replace(/\\/g,"/"),JSON.stringify(value).slice(1,-1)]);
+    for(const value of variants(repo))if(value)text=text.split(value).join("__KHEREP_REPO__");
+    for(const value of variants(home))if(value)text=text.split(value).join("~/.claude");
     fs.writeFileSync(target,text);
-  ' "$f" "$tmp" "$CLAUDE_HOME" && mv "$tmp" "$f"
+  ' "$f" "$tmp" "$CLAUDE_HOME" "$REPO_ROOT" && mv "$tmp" "$f"
 }
 
 # Copy a manifest entry (file or dir) from $2 root to $3 root, preserving rel path $1.

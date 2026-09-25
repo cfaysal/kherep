@@ -36,6 +36,7 @@ const PATH_PLACEHOLDERS: Record<string, keyof PortablePaths> = {
   __KHEREP_WORKSPACE__: "workspace",
   __KHEREP_CREDENTIALS_ROOT__: "credentialsRoot",
   __KHEREP_CLAUDE_HOME__: "claudeHome",
+  __KHEREP_REPO__: "repo",
 };
 
 interface PortablePaths {
@@ -44,7 +45,15 @@ interface PortablePaths {
   claudeHome: string;
   /** The workspace as a Bash command names it, see workspaceCommandPath. */
   workspaceCommand: string;
+  /** The Kherep checkout with the same forward slashes; templates quote it. */
+  repo: string;
 }
+
+// Issue #31. The Kherep checkout the renderer runs from: install.sh and
+// drift-check.sh both call the renderer of the repository being installed, so
+// install and drift check render the same path. Hooks that import sibling
+// modules, such as the control-plane delivery hook, run from here.
+export const KHEREP_REPO = path.resolve(import.meta.dirname, "..");
 
 // Issue #13. A workspace tool run through Bash: `node <workspace>/tools/<tool>`.
 // Only this prefix takes the command form; every other workspace placeholder,
@@ -53,7 +62,8 @@ const WORKSPACE_TOOL = "node __KHEREP_WORKSPACE__/tools/";
 
 // Git Bash consumes the backslashes of a native Windows path: node D:\ws/tools/x
 // reaches node as D:ws/tools/x, relative to the current directory. Forward
-// slashes work in Git Bash, PowerShell and node alike.
+// slashes work in Git Bash, PowerShell and node alike. The Kherep checkout in
+// hook commands takes the same form.
 function workspaceCommandPath(profile: string, workspace: string): string {
   return resolveProfilePath(profile, workspace).replace(/\\/g, "/");
 }
@@ -78,13 +88,14 @@ function rewriteValue(value: unknown, replacements: PortablePaths): unknown {
 // Walks any JSON value and rewrites every string in place of its shape: the
 // result has the structure of the input, only the string leaves change.
 export function substituteTemplatePaths<T>(
-  value: T, profile: string, workspace: string, credentialsRoot: string, claudeHome: string,
+  value: T, profile: string, workspace: string, credentialsRoot: string, claudeHome: string, repo: string = KHEREP_REPO,
 ): T {
   const replacements = {
     workspace: resolveProfilePath(profile, workspace),
     credentialsRoot: resolveProfilePath(profile, credentialsRoot),
     claudeHome: resolveProfilePath(profile, claudeHome),
     workspaceCommand: workspaceCommandPath(profile, workspace),
+    repo: workspaceCommandPath(profile, repo),
   };
   return rewriteValue(value, replacements) as T;
 }

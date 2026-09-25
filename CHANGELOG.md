@@ -41,6 +41,13 @@ increments the minor version; every other release increments the patch version.
   then the repository value, then the policy file. Global and system values
   do not opt out; an absent, unreadable or invalid value keeps the rule. AI
   attribution trailers are still rejected in an opted-out repository.
+- The Claude installer wires the control-plane delivery hook
+  (`modules/control-plane/node/deliver-hook.mts`) into the `UserPromptSubmit`
+  and `Stop` hooks of the user `settings.json`. It runs from the Kherep
+  checkout through the new `__KHEREP_REPO__` placeholder, rendered with
+  forward slashes and quoted like the other hook paths; `drift-check.sh`
+  renders the same path and `capture.sh` maps it back. Without an enrolled
+  node the hook finds no inbox and exits 0 without output.
 
 ### Changed
 

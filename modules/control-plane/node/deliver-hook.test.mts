@@ -135,3 +135,20 @@ test("errors never fail the hook: no output, one stderr line, exit code 0", (t) 
   const quiet = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ session_id: "s-self", hook_event_name: "UserPromptSubmit" }), env, encoding: "utf8" });
   assert.deepEqual([quiet.status, quiet.stdout, withoutTypeStrippingWarning(quiet.stderr)], [0, "", ""]);
 });
+
+// The installer wires the hook on every machine (issue #31, step 3b), so it
+// must stay inert where no node was ever enrolled: no config directory, or a
+// config directory without an inbox.
+test("without an enrolled node the hook exits 0 with no output at all", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-hook-none-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "empty", "control-plane"), { recursive: true });
+  for (const configDir of [path.join(root, "missing"), path.join(root, "empty")]) {
+    for (const event of ["UserPromptSubmit", "Stop"]) {
+      const run = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ session_id: "s-self", hook_event_name: event }),
+        env: { ...process.env, KHEREP_CONFIG_DIR: configDir }, encoding: "utf8" });
+      assert.deepEqual([run.status, run.stdout, run.stderr], [0, "", ""], `${configDir} ${event}`);
+    }
+  }
+  assert.equal(fs.existsSync(path.join(root, "missing")), false);
+});

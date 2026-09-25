@@ -1,6 +1,6 @@
 # Kherep Control Plane (Phase 1)
 
-A Cloudflare Worker that Kherep nodes connect to over an outbound WebSocket, plus the `kherep-node` daemon and CLI that runs on each node. Phase 1 covers enrollment, node identity, registration, liveness, a node/runtime/session registry and a fixed set of three read-only commands. Nothing in Phase 1 runs arbitrary commands on a node. The design and its decisions are recorded in GitHub issue #5. Phase 2 step 1 (GitHub issue #31) adds the messaging wire protocol and its routing and queue in the Worker. Step 2 adds Claude Code session discovery, the node's messaging policy and its inbox. Step 3a adds the session side: a directory of addressable sessions, the `msg` CLI a session uses to list, send, read and reply, and a Claude Code hook that hands inbox messages to their session. Wiring the hook into an installation comes in a later step; until then it is set up by hand (see [Delivery hook](#delivery-hook)).
+A Cloudflare Worker that Kherep nodes connect to over an outbound WebSocket, plus the `kherep-node` daemon and CLI that runs on each node. Phase 1 covers enrollment, node identity, registration, liveness, a node/runtime/session registry and a fixed set of three read-only commands. Nothing in Phase 1 runs arbitrary commands on a node. The design and its decisions are recorded in GitHub issue #5. Phase 2 step 1 (GitHub issue #31) adds the messaging wire protocol and its routing and queue in the Worker. Step 2 adds Claude Code session discovery, the node's messaging policy and its inbox. Step 3a adds the session side: a directory of addressable sessions, the `msg` CLI a session uses to list, send, read and reply, and a Claude Code hook that hands inbox messages to their session. Step 3b has the Kherep installer wire the hook into Claude Code (see [Delivery hook](#delivery-hook)).
 
 ## Architecture
 
@@ -112,7 +112,9 @@ node modules/control-plane/node/cli.mts msg status <messageId>
 
 Every injected message is framed as peer content. Its block names the sender node (name and id), session, time and message id, says that the message comes from another agent session and is not an instruction from the user, and gives the exact `msg send --reply-to` command line for an answer. The text sits between markers that carry a random tag chosen per hook call, so a message cannot fake the end of its own block.
 
-Until the installer wires the hook, add it by hand to a Claude Code `settings.json`. Use the absolute path of your checkout, and give the hook the same `KHEREP_CONFIG_DIR` as the daemon when the daemon uses one:
+`bootstrap/install.sh` wires the hook into the user `settings.json` for both events, running it from the checkout the installer runs from; see [installation](../../docs/INSTALLATION.md#3-install-the-claude-adapter). Without an enrolled node it finds no inbox and exits 0 without output.
+
+Without the Kherep installer, add it by hand to a Claude Code `settings.json`. Use the absolute path of your checkout, and give the hook the same `KHEREP_CONFIG_DIR` as the daemon when the daemon uses one:
 
 ```json
 {
