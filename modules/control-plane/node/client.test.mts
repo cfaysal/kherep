@@ -22,6 +22,7 @@ function setup(policy: NodePolicy = DEFAULT_POLICY) {
   };
   const client = new NodeClient({
     nodeId: NODE_ID, identity, policy, handlers, facts: () => FACTS, runtimes: async () => [], sessions: async () => [],
+    storeMessage: () => { throw new Error("messaging is not enabled in these tests"); },
   });
   return { client, identity, calls };
 }
@@ -85,19 +86,6 @@ test("executes a resent command once and acknowledges the duplicate", async () =
   const dup = decode(await client.onFrame(command(1, "node.status")));
   assert.deepEqual(dup.map((e) => e.type), ["command.ack"]);
   assert.deepEqual(calls, ["node.status"]);
-});
-
-test("refuses a delivered message because this node does not enable messaging yet", async () => {
-  const { client } = await authed();
-  const messageId = "00000000-0000-4000-8000-00000000000b";
-  const deliver = JSON.stringify(makeEnvelope("message.deliver", {
-    messageId, from: { nodeId: "operator", session: "operator@example.com" }, toSession: "s1", text: "hi", createdAt: new Date(0).toISOString(),
-  }, 0, 0));
-  const out = decode(await client.onFrame(deliver));
-  assert.deepEqual(out.map((e) => [e.type, e.body]),
-    [["message.status", { messageId, state: "refused", reason: "messaging not enabled on this node" }]]);
-  // An invalid body is dropped without an answer.
-  assert.deepEqual(await client.onFrame(JSON.stringify(makeEnvelope("message.deliver", { messageId }, 0, 0))), []);
 });
 
 test("a policy file can narrow but never widen the allowlist; a broken file allows nothing", (t) => {

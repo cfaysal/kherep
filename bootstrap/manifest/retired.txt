@@ -1,4 +1,6 @@
 # Managed runtime paths parked with reversible backups during installation. One path per line.
+# Paths are relative to the Claude home; a project/ prefix names a workspace file instead.
+# An entry that is absent on the host is skipped. drift-check.sh reports one that is still live.
 hooks/drift-managed-path-watch.js
 hooks/drift-managed-path-watch.test.js
 hooks/em-dash-watch.js
@@ -14,3 +16,5 @@ hooks/memo-retro-reminder.js
 hooks/simplify-nudge.js
 hooks/umlaut-translit-watch.js
 kherep/central-brain/selection.json
+project/tools/mpac/README.md
+project/tools/mpac/mpac.ps1
