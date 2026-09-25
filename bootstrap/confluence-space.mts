@@ -3,7 +3,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { PLACEMENT_NODES, readSpacePages, resolvePlacement } from "./confluence-nodes.mts";
 
 const ENV_KEY = "KHEREP_CONFLUENCE_SPACE_KEY";
@@ -190,7 +189,7 @@ async function main(argv: string[]): Promise<void> {
   process.stdout.write(`placement nodes: ${Object.keys(nodes).length} of ${PLACEMENT_NODES.length} resolved\n`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+if (import.meta.main) {
   main(process.argv.slice(2)).catch((error: unknown) => {
     process.stderr.write(`FATAL: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

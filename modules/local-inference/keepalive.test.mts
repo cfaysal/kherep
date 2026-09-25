@@ -75,7 +75,9 @@ function fakeKeepAlive(events: string[]): KeepAliveProcess {
   check("readiness failure is still reported", readinessFailed);
   check("readiness failure stops the keepalive", failureChild.killed === true);
 
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "local-inference-keepalive-"));
+  // outputPath() rejects an output root reached through a symlink; the macOS
+  // default TMPDIR (/var -> /private/var) is one, so resolve it first (#16).
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "local-inference-keepalive-")));
   const config: LocalInferenceConfig = {
     schemaVersion: 2,
     backends: { win: { ...spec, keepAlive: spec.keepAlive } },

@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 import { nodePaths, readConfig } from "./config.mts";
@@ -70,7 +69,7 @@ export async function main(argv: string[]): Promise<number> {
   return 2;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+if (import.meta.main) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (error: unknown) => {
     console.error(`kherep-node: ${(error as Error).message ?? String(error)}`);
     process.exitCode = 1;

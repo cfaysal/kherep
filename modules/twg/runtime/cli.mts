@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { pathToFileURL } from "node:url";
 
 import { createTwgClient, TwgError } from "./client.mts";
 import type { TwgClient, TwgClientOptions } from "./client.mts";
@@ -43,7 +42,7 @@ export async function main(argv: string[] = process.argv.slice(2), options: Main
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+if (import.meta.main) {
   const result = await main();
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if ("ok" in result && result.ok === false) process.exitCode = result.error.code === "TWG_USAGE" ? 2 : 1;

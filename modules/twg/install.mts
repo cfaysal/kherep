@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { adaptSkillText } from "./component-render-bridge.mts";
 
@@ -203,7 +203,7 @@ function parseArgs(argv: string[]): { runtime: Runtime; homeDir: string } {
   return { runtime, homeDir: path.resolve(homeDir || envHome || path.join(os.homedir(), `.${runtime}`)) };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+if (import.meta.main) {
   try {
     const args = parseArgs(process.argv.slice(2));
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
