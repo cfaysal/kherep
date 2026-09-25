@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   contract:
     strategy:
@@ -14,8 +17,8 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
       - name: Capability source contract (mac profile)
@@ -32,8 +35,8 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
       - name: Hook test suites
@@ -60,8 +63,8 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
       - name: Bootstrap smoke test
@@ -72,8 +75,8 @@ jobs:
   typescript:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: npm
@@ -86,3 +89,23 @@ jobs:
         run: npm run test:modules
       - name: atl-jira broker suites
         run: npm run test:brokers
+      - name: Control Plane protocol and node suites
+        run: npm run test:control-plane
+
+  control-plane-worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: modules/control-plane/worker
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+      - run: npm ci
+      - name: Type check
+        run: npm run typecheck
+      - name: Worker tests (vitest, workerd)
+        run: npm test
+      - name: Bundle check (wrangler deploy --dry-run, no credentials)
+        run: npm run check:bundle
