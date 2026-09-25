@@ -87,14 +87,14 @@ test("sends a sessions snapshot on register and afterwards only when the list ch
   let list: SessionInfo[] = [{ sessionId: "s1", runtime: CLAUDE_RUNTIME, state: "running" }];
   const { node } = client(async () => list);
   assert.deepEqual(await node.sessionsSnapshot(), []); // not authenticated
-  assert.deepEqual(types(await node.onFrame(authOk)), ["register", "sessions.snapshot"]);
+  assert.deepEqual(types(await node.onFrame(authOk)), ["register", "sessions.snapshot", "directory.get"]);
   assert.deepEqual(await node.sessionsSnapshot(), []);
   list = [...list, { sessionId: "s2", runtime: CLAUDE_RUNTIME, state: "idle" }];
   assert.deepEqual(types(await node.sessionsSnapshot()), ["sessions.snapshot"]);
   assert.deepEqual(await node.sessionsSnapshot(), []);
   // A new connection registers again with a fresh snapshot.
   node.connectionClosed();
-  assert.deepEqual(types(await node.onFrame(authOk)), ["register", "sessions.snapshot"]);
+  assert.deepEqual(types(await node.onFrame(authOk)), ["register", "sessions.snapshot", "directory.get"]);
 });
 
 test("a failed listing skips the snapshot and fails session.list with the reason", async () => {
@@ -112,5 +112,5 @@ test("a failed listing skips the snapshot and fails session.list with the reason
   assert.deepEqual(out[1].body, { commandId: "c1", ok: false, error: "claude agents failed: timed out" });
   // Registering while the listing fails sends no snapshot either.
   node.connectionClosed();
-  assert.deepEqual(types(await node.onFrame(authOk)), ["register"]);
+  assert.deepEqual(types(await node.onFrame(authOk)), ["register", "directory.get"]);
 });

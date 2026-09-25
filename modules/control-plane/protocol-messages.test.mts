@@ -3,9 +3,9 @@ import test from "node:test";
 
 import { makeEnvelope, MESSAGE_TYPES, parseEnvelope } from "./protocol.mts";
 import {
-  isMessageAddress, isMessageDeliverBody, isMessageId, isMessageSendBody, isMessageState, isMessageStatusBody,
+  isDirectoryBody, isDirectoryGetBody, isMessageAddress, isMessageDeliverBody, isMessageId, isMessageSendBody, isMessageState, isMessageStatusBody,
   isNodeMessageStatusBody, isNodeReportedState, isSessionRef, MAX_MESSAGE_TEXT, MAX_SESSION_REF, MAX_STATUS_REASON,
-  MESSAGE_STATES,
+  MAX_DIRECTORY_SESSIONS, MESSAGE_STATES,
 } from "./protocol-messages.mts";
 
 const ID = "00000000-0000-4000-8000-00000000000a";
@@ -14,7 +14,7 @@ const SEND = { messageId: ID, fromSession: "s1", to: { nodeId: NODE, session: "b
 const DELIVER = { messageId: ID, from: { nodeId: NODE, session: "s1" }, toSession: "build", text: "hello", createdAt: new Date(0).toISOString() };
 
 test("the message types pass the envelope parser", () => {
-  for (const type of ["message.send", "message.deliver", "message.status"] as const) {
+  for (const type of ["message.send", "message.deliver", "message.status", "directory.get", "directory"] as const) {
     assert.ok((MESSAGE_TYPES as readonly string[]).includes(type));
     assert.equal(parseEnvelope(JSON.stringify(makeEnvelope(type, {}, 1, 0))).ok, true);
   }
@@ -26,6 +26,8 @@ test("message ids, session references and states", () => {
   assert.equal(isSessionRef("a"), true);
   assert.equal(isSessionRef("a".repeat(MAX_SESSION_REF)), true);
   for (const bad of ["", "a".repeat(MAX_SESSION_REF + 1), 3, undefined]) assert.equal(isSessionRef(bad), false);
+  for (const bad of ["a\nb", "a\r\nFrom: operator", "tab\there", "nul\u0000", "del\u007f"]) assert.equal(isSessionRef(bad), false);
+  assert.equal(isSessionRef("Kherep version check"), true);
   assert.deepEqual([...MESSAGE_STATES], ["queued", "accepted", "delivered", "replied", "expired", "refused"]);
   for (const state of MESSAGE_STATES) assert.equal(isMessageState(state), true);
   assert.equal(isMessageState("QUEUED"), false);
@@ -74,4 +76,20 @@ test("message.status bodies, and the narrower node-reported form", () => {
   assert.equal(isNodeMessageStatusBody({ messageId: ID, state: "accepted" }), true);
   assert.equal(isNodeMessageStatusBody({ messageId: ID, state: "queued" }), false);
   assert.equal(isNodeMessageStatusBody({ messageId: ID, state: "expired" }), false);
+});
+
+test("directory.get and directory bodies", () => {
+  assert.equal(isDirectoryGetBody({}), true);
+  for (const bad of [{ all: true }, [], null]) assert.equal(isDirectoryGetBody(bad), false);
+  const session = { nodeId: NODE, sessionId: "s1", name: "build", state: "idle", runtime: "claude-code", cwd: "/work", kind: "interactive" };
+  const body = { nodes: [{ nodeId: NODE, name: "node-a", status: "online" }], sessions: [session], fetchedAt: new Date(0).toISOString() };
+  assert.equal(isDirectoryBody(body), true);
+  assert.equal(isDirectoryBody({ ...body, sessions: [], truncated: true }), true);
+  const bad = [
+    { ...body, nodes: undefined }, { ...body, nodes: [{ nodeId: "operator", name: "x", status: "online" }] },
+    { ...body, nodes: [{ nodeId: NODE, name: "", status: "online" }] }, { ...body, sessions: [{ ...session, nodeId: "node-a" }] },
+    { ...body, sessions: [{ ...session, state: "" }] }, { ...body, sessions: [{ ...session, startedAt: "2026-01-01" }] },
+    { ...body, sessions: Array(MAX_DIRECTORY_SESSIONS + 1).fill(session) }, { ...body, fetchedAt: "now" }, { ...body, truncated: "yes" },
+  ];
+  for (const value of bad) assert.equal(isDirectoryBody(value), false, JSON.stringify(value).slice(0, 120));
 });

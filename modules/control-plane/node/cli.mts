@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 
 import { nodePaths, readConfig } from "./config.mts";
 import { startDaemon } from "./daemon.mts";
+import { MSG_USAGE, runMsg } from "./msg-cli.mts";
 import { nodeStatus, onboard, unenroll } from "./onboard.mts";
 
 // kherep-node: node side of the Kherep Control Plane, Phase 1.
@@ -13,6 +14,7 @@ import { nodeStatus, onboard, unenroll } from "./onboard.mts";
 //   node cli.mts node status
 //   node cli.mts node unenroll
 //   node cli.mts daemon
+//   node cli.mts msg sessions|send|inbox|status ...   (see msg-cli.mts)
 //
 // The enrollment code can also come from KHEREP_ENROLL_CODE so it stays out of
 // shell history. KHEREP_CONFIG_DIR overrides the config location.
@@ -20,9 +22,12 @@ const USAGE = `usage:
   kherep-node node onboard --url <https origin> --code <enrollment code> [--name <name>]
   kherep-node node status
   kherep-node node unenroll
-  kherep-node daemon`;
+  kherep-node daemon
+${MSG_USAGE.replace("usage:\n", "")}`;
 
 export async function main(argv: string[]): Promise<number> {
+  // msg has its own options, and message text may look like anything else.
+  if (argv[0] === "msg") return runMsg(argv.slice(1), { paths: nodePaths(), env: process.env });
   const { positionals, values } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -34,7 +39,7 @@ export async function main(argv: string[]): Promise<number> {
   if (group === "daemon") {
     const config = readConfig(paths.config);
     if (!config) throw new Error(`not enrolled (${paths.config}); run "kherep-node node onboard" first`);
-    const daemon = startDaemon(config, paths.inbox);
+    const daemon = startDaemon(config, paths);
     const stop = () => daemon.stop();
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);

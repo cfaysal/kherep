@@ -4,7 +4,7 @@ import {
   isCommandResultBody, isNodeId, isPhase1Command, isRegisterBody, isRuntimeList, isSessionList,
   makeEnvelope, NONCE_TTL_MS, parseEnvelope, PING_FRAME, PONG_FRAME, type Envelope, type MessageType, type Phase1Command,
 } from "../../protocol.mts";
-import { isMessageSendBody, isNodeMessageStatusBody } from "../../protocol-messages.mts";
+import { isDirectoryGetBody, isMessageSendBody, isNodeMessageStatusBody } from "../../protocol-messages.mts";
 import { randomToken } from "./crypto.mts";
 import { registryStub, type Env } from "./env.mts";
 import { checkAuth, CLOSE, type Attachment } from "./handshake.mts";
@@ -195,6 +195,9 @@ export class NodeSession extends DurableObject<Env> {
       case "message.status":
         if (!isNodeMessageStatusBody(body)) return this.sendControl(ws, "error", { error: "invalid message.status body" });
         return routeEffects(this.env, await registry.reportMessageStatus(nodeId, body), this.local(ws, nodeId));
+      case "directory.get":
+        if (!isDirectoryGetBody(body)) return this.sendControl(ws, "error", { error: "invalid directory.get body" });
+        return this.sendControl(ws, "directory", { ...await registry.directory() });
       case "event":
       case "error":
         return; // activity already recorded
