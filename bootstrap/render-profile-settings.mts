@@ -134,15 +134,40 @@ export function hookKey(item: HookEntry | undefined): string {
   return String((item && item.matcher) || "");
 }
 
+// The script a control-plane hook runs, without its arguments; undefined for
+// any other hook. Issue #31: the managed wake entry carries its timeout both as
+// field and as --timeout argument, so an upgrade that changes the number
+// yields another identity. A managed control-plane script therefore replaces
+// every existing entry of the same event that runs that script; other hooks
+// keep the identity comparison above.
+function controlPlaneScript(hook: HookCommand): string | undefined {
+  if (typeof hook.command !== "string") return undefined;
+  const match = /^node\s+(?:"([^"]+)"|(\S+))/.exec(normalizeHookCommand(hook.command));
+  const script = match?.[1] ?? match?.[2];
+  return script?.includes("/modules/control-plane/node/") ? script : undefined;
+}
+
+function withoutReplacedScripts(entry: HookEntry, scripts: ReadonlySet<string>): HookEntry {
+  const hooks = entry.hooks;
+  if (!Array.isArray(hooks) || scripts.size === 0) return entry;
+  return { ...entry, hooks: hooks.filter((hook) => !scripts.has(controlPlaneScript(hook) ?? "")) };
+}
+
 export function mergeHooks(source: Record<string, HookEntry[]> = {}, existing: Record<string, HookEntry[]> = {}): Record<string, HookEntry[]> {
   const result: Record<string, HookEntry[]> = {};
   for (const event of new Set([...Object.keys(existing), ...Object.keys(source)])) {
     const managed: HookEntry[] = (Array.isArray(source[event]) ? source[event] : [])
       .map((entry) => ({ ...entry, hooks: uniqueHooks([...(entry.hooks || [])]) }));
-    for (const oldEntry of (Array.isArray(existing[event]) ? existing[event] : [])) {
+    const replaced = new Set(managed.flatMap((entry) => (entry.hooks || []).map(controlPlaneScript))
+      .filter((script): script is string => script !== undefined));
+    for (const existingEntry of (Array.isArray(existing[event]) ? existing[event] : [])) {
+      const oldEntry = withoutReplacedScripts(existingEntry, replaced);
+      // A group that held nothing but replaced entries goes with them.
+      const emptied = oldEntry.hooks?.length === 0 && (existingEntry.hooks?.length ?? 0) > 0;
       const index = managed.findIndex((entry) => hookKey(entry) === hookKey(oldEntry));
-      if (index < 0) managed.push(oldEntry);
-      else managed[index] = {
+      if (index < 0) {
+        if (!emptied) managed.push(oldEntry);
+      } else managed[index] = {
         ...oldEntry,
         ...managed[index],
         hooks: uniqueHooks([...(managed[index].hooks || []), ...(oldEntry.hooks || [])]),

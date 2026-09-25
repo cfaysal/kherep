@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 
-import { parentWatch, takeTurn, TURN_SPACING_MS, TURNS_PER_DAY, TURNS_PER_HOUR, wakeAudit } from "./autonomy.mts";
+import { BUDGET_LOCK_STALE_MS, listenerDir, parentWatch, takeTurn, TURN_SPACING_MS, TURNS_PER_DAY, TURNS_PER_HOUR, wakeAudit } from "./autonomy.mts";
 import { deliverForHook } from "./deliver-hook.mts";
 import { getMessage } from "./inbox.mts";
 import { arrive, auditLines, id, listen, SECRET, SELF, setup, T0 } from "./wake-fixture.mts";
@@ -85,4 +86,40 @@ test("parentWatch: the starting process alive, a finished one gone", () => {
   assert.equal(parentWatch(1)(), true, "pid 1 cannot be watched");
   const child = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" });
   assert.equal(parentWatch(Number(child.stdout))(), false);
+});
+
+test("the budget lock: a held lock denies the turn, a stale one is taken over", (t) => {
+  const { paths } = setup(t);
+  const turns = path.join(listenerDir(paths), `${SELF}.turns.json`);
+  const lock = `${turns}.lock`;
+  fs.mkdirSync(listenerDir(paths), { recursive: true });
+  fs.writeFileSync(lock, "4242");
+  assert.equal(takeTurn(paths, SELF, T0), "locked", "denied, not counted blind");
+  assert.equal(fs.existsSync(turns), false);
+  const old = (Date.now() - BUDGET_LOCK_STALE_MS - 1_000) / 1000;
+  fs.utimesSync(lock, old, old);
+  assert.equal(takeTurn(paths, SELF, T0), "ok");
+  assert.equal(fs.existsSync(lock), false, "released after the spend");
+});
+
+test("concurrent spends from separate processes never both take the last slot", async (t) => {
+  const { paths } = setup(t);
+  for (let n = 0; n < TURNS_PER_HOUR - 1; n++) assert.equal(takeTurn(paths, SELF, T0 + n * TURN_SPACING_MS), "ok");
+  const module = new URL("./autonomy.mts", import.meta.url).href;
+  const at = T0 + HOUR / 2;
+  const startAt = Date.now() + 1_500;
+  // Each child waits for the common start, then spends once at the same instant.
+  const script = `import { takeTurn } from ${JSON.stringify(module)};
+    while (Date.now() < ${startAt});
+    process.stdout.write(takeTurn(${JSON.stringify(paths)}, ${JSON.stringify(SELF)}, ${at}));`;
+  const results = await Promise.all(Array.from({ length: 8 }, () => new Promise<string>((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    child.stdout.on("data", (chunk) => { out += chunk; });
+    child.on("error", reject);
+    child.on("close", () => resolve(out));
+  })));
+  assert.equal(results.filter((r) => r === "ok").length, 1, results.join(","));
+  assert.ok(results.every((r) => ["ok", "exhausted", "locked"].includes(r)), results.join(","));
+  assert.equal(takeTurn(paths, SELF, at + TURN_SPACING_MS), "exhausted", "six turns recorded, not more");
 });

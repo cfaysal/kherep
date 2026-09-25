@@ -135,23 +135,23 @@ test("install wires the delivery and wake hooks from the checkout, drift-check i
   assert.equal(removed.status, 1, `${removed.stdout}\n${removed.stderr}`);
 });
 
-// todo: mergeHooks in bootstrap/render-profile-settings.mts keeps an existing
-// hook whose fields differ from the managed one, so the older entry stays next
-// to the new one. Fixing it lies outside the files this change may touch.
-test("an upgrade replaces the wake entries of an older install with a changed timeout", {
-  todo: "installer merge keeps the older wake entry (bootstrap/render-profile-settings.mts)",
-}, (t) => {
+test("an upgrade replaces the wake entries of an older install with a changed timeout", (t) => {
   const f = fixture(t);
   const repo = forward(KHEREP_REPO);
   const settingsFile = path.join(f.claude, "settings.json");
   // An earlier install: the wake entries carry another timeout, Stop's in the form without the argument.
+  // Next to them, hooks of the operator that the upgrade must keep as they are.
+  const own = { type: "command", command: 'node "/opt/own/stop-note.mts" --timeout 43200', timeout: 43200 };
+  const ownGroup = { matcher: "Bash", hooks: [{ type: "command", command: "node /opt/own/bash-note.mts" }] };
   const older = { hooks: {
-    UserPromptSubmit: [{ matcher: "", hooks: [wakeHook(repo, 43200)] }],
-    Stop: [{ matcher: "", hooks: [{ type: "command", command: hookCommand(repo, WAKE), asyncRewake: true, timeout: 43200 }] }],
+    UserPromptSubmit: [{ matcher: "", hooks: [wakeHook(repo, 43200)] }, ownGroup],
+    Stop: [{ matcher: "", hooks: [{ type: "command", command: hookCommand(repo, WAKE), asyncRewake: true, timeout: 43200 }, own] }],
   } };
   fs.writeFileSync(settingsFile, `${JSON.stringify(older, null, 2)}\n`);
   const install = bash([slash(path.join(HERE, "install.sh"))], f);
   assert.equal(install.status, 0, `${install.stdout}\n${install.stderr}`);
   const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
   for (const event of WAKE_EVENTS) assert.deepEqual(wakeEntries(settings, event), [wakeHook(repo, 86400)], event);
+  assert.deepEqual(settings.hooks.UserPromptSubmit.filter((group: { matcher?: string }) => group.matcher === "Bash"), [ownGroup]);
+  assert.deepEqual(settings.hooks.Stop.at(-1).hooks.filter((hook: { command: string }) => hook.command.includes("/opt/own/")), [own]);
 });
