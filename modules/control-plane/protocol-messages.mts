@@ -48,8 +48,11 @@ export function isMessageId(value: unknown): value is string {
   return typeof value === "string" && UUID.test(value);
 }
 
+// Session references end up in single header lines of the text a delivery
+// hook hands to a session, so control characters (line breaks included) are
+// refused: a sender must not be able to forge lines outside its message body.
 export function isSessionRef(value: unknown): value is string {
-  return isText(value, MAX_SESSION_REF);
+  return isText(value, MAX_SESSION_REF) && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 export function isMessageText(value: unknown): value is string {

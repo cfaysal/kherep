@@ -26,6 +26,8 @@ test("message ids, session references and states", () => {
   assert.equal(isSessionRef("a"), true);
   assert.equal(isSessionRef("a".repeat(MAX_SESSION_REF)), true);
   for (const bad of ["", "a".repeat(MAX_SESSION_REF + 1), 3, undefined]) assert.equal(isSessionRef(bad), false);
+  for (const bad of ["a\nb", "a\r\nFrom: operator", "tab\there", "nul\u0000", "del\u007f"]) assert.equal(isSessionRef(bad), false);
+  assert.equal(isSessionRef("Kherep version check"), true);
   assert.deepEqual([...MESSAGE_STATES], ["queued", "accepted", "delivered", "replied", "expired", "refused"]);
   for (const state of MESSAGE_STATES) assert.equal(isMessageState(state), true);
   assert.equal(isMessageState("QUEUED"), false);
