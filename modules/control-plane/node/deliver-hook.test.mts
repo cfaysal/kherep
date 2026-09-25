@@ -11,6 +11,15 @@ import { deliverForHook, MAX_CONTEXT_BYTES, MAX_MESSAGES_PER_CALL, runHook } fro
 import { writeDirectory, writeLocalSessions } from "./exchange.mts";
 import { getMessage, listInbox, storeMessage } from "./inbox.mts";
 
+// Some Node releases the engines range admits, 24.1.0 among them, print this
+// warning when a child loads a .mts file. Only this exact pair of lines is
+// dropped; any other stderr still fails the assertion.
+const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
+  + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
+  + "created\\)\\r?\\n", "gm");
+const withoutTypeStrippingWarning = (stderr: string | Buffer): string =>
+  String(stderr).replace(TYPE_STRIPPING_WARNING, "");
+
 const PEER = "00000000-0000-4000-8000-0000000000cc";
 const HOOK = fileURLToPath(new URL("./deliver-hook.mts", import.meta.url));
 const REPLY = 'node "/opt/kherep/modules/control-plane/node/cli.mts"';
@@ -124,5 +133,5 @@ test("errors never fail the hook: no output, one stderr line, exit code 0", (t) 
   assert.equal(ok.status, 0);
   assert.equal(JSON.parse(ok.stdout).hookSpecificOutput.hookEventName, "UserPromptSubmit");
   const quiet = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ session_id: "s-self", hook_event_name: "UserPromptSubmit" }), env, encoding: "utf8" });
-  assert.deepEqual([quiet.status, quiet.stdout, quiet.stderr], [0, "", ""]);
+  assert.deepEqual([quiet.status, quiet.stdout, withoutTypeStrippingWarning(quiet.stderr)], [0, "", ""]);
 });
