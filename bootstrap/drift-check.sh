@@ -8,6 +8,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/profile.sh"
+source "$HERE/install-retired.sh"
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 WS="$(kherep_env WORKSPACE "$(kherep_default_workspace)")"
 CREDENTIALS_ROOT="$(kherep_env CREDENTIALS_ROOT "$(kherep_default_credentials_root)")"
@@ -17,6 +18,7 @@ kherep_validate_shell_path KHEREP_WORKSPACE "$WS" || exit $?
 kherep_validate_shell_path KHEREP_CREDENTIALS_ROOT "$CREDENTIALS_ROOT" || exit $?
 CLAUDE_SRC="$(cd "$HERE/.." && pwd)/claude"
 MANIFEST="$HERE/manifest/files.txt"
+RETIRED_MANIFEST="$HERE/manifest/retired.txt"
 DRIFT_SCOPE="${DRIFT_SCOPE:-all}"
 [ "$DRIFT_SCOPE" = "all" ] || [ "$DRIFT_SCOPE" = "project" ] || {
   echo "FATAL: DRIFT_SCOPE must be all or project"; exit 2
@@ -228,6 +230,22 @@ cmp_file "project/tools/jira-download.mts" \
 cmp_file "project/tools/jira-discovery.mts" \
   "$HERE/../modules/atl-jira-brokers/jira-discovery.mts" "$WS/tools/jira-discovery.mts"
 fi
+
+# #33. A path in retired.txt is one the installer parks. If it is still live,
+# the retirement never ran on this host (or the file came back), and without
+# this check an orphan the repo no longer compares would pass silently.
+# Claude-home entries follow DRIFT_SCOPE; project/ entries are always checked.
+[ -f "$RETIRED_MANIFEST" ] || { echo "FATAL: retirement manifest missing: $RETIRED_MANIFEST" >&2; exit 2; }
+while IFS= read -r rel || [ -n "$rel" ]; do
+  rel="${rel%$'\r'}"
+  case "$rel" in ''|'#'*) continue ;; esac
+  kherep_validate_manifest_relative_path "retirement manifest entry" "$rel" || exit 2
+  case "$rel" in project/*) ;; *) [ "$DRIFT_SCOPE" = "all" ] || continue ;; esac
+  live="$(bootstrap_retired_live_path "$rel" "$CLAUDE_HOME" "$WS")"
+  if [ -e "$live" ] || [ -L "$live" ]; then
+    printf 'RETIRED-LIVE  %s (%q)\n' "$rel" "$live"; drift=1
+  fi
+done < "$RETIRED_MANIFEST"
 
 echo ""
 if [ "$drift" -eq 0 ]; then echo "DRIFT-CHECK PASS (repo == live)"; else echo "DRIFT-CHECK FOUND DRIFT (see above)"; fi

@@ -130,13 +130,16 @@ function spawnRefresh(payload) {
   }
 }
 
-// Per-file status lines from drift-check.sh. The trailing \s is load-bearing:
-// it keeps the closing "DRIFT-CHECK FOUND DRIFT" summary out of the count.
+// Per-file status lines from drift-check.sh: every label it prints except "ok".
+// The trailing \s is load-bearing: it keeps the closing "DRIFT-CHECK FOUND
+// DRIFT" summary out of the count.
 function findingsOf(report) {
   return report
     .split(/\r?\n/)
     .map((l) => l.trim())
-    .filter((l) => /^(DRIFT|MISSING-REPO|MISSING-LIVE|EXTRA-LIVE)\s/.test(l));
+    .filter((l) =>
+      /^(DRIFT|MISSING-REPO|MISSING-LIVE|EXTRA-LIVE|RETIRED-LIVE|MISSING-BLOCK|BLOCK-INVALID|NORMALIZE-FAIL)\s/.test(l)
+    );
 }
 
 function hasTerminalMarker(report) {

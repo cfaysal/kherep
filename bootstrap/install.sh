@@ -295,7 +295,8 @@ install_entry "mcp-auth-bridge" "$REPO_ROOT/modules" "$CLAUDE_HOME/kherep" "$INS
 # installs by name and owns no remove primitive. Declared retirements are
 # parked in a _deprecated/ sibling, never deleted (Golden Rule 1), inside this
 # same transaction, so a rollback puts them back where they were (OP-1136).
-bootstrap_retire_declared "$REPO_ROOT/bootstrap/manifest/retired.txt" "$CLAUDE_HOME" "$INSTALL_BACKUP"
+# project/ entries are workspace files the installer used to place (#33).
+bootstrap_retire_declared "$REPO_ROOT/bootstrap/manifest/retired.txt" "$CLAUDE_HOME" "$WS" "$INSTALL_BACKUP"
 echo "install: files placed -> $CLAUDE_HOME"
 echo "install: previous managed state parked -> $INSTALL_BACKUP"
 # Where this install came from, so claude/hooks/live-hook-integrity.js can reach

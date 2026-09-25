@@ -51,6 +51,15 @@ increments the minor version; every other release increments the patch version.
   `attribution: false` needs Claude Code 2.1.281 or later, and older versions
   discard the whole settings file. The existing commit guards are unchanged.
   Reinstall to apply.
+- The retirement manifest `bootstrap/manifest/retired.txt` can now name
+  workspace files with the `project/` prefix that the installer and
+  drift-check already use. The installer parks such a file in a `_deprecated/`
+  sibling inside the workspace, with its previous version in the installation
+  backup under `retired/project/`, and a rollback puts it back. An entry that
+  is absent on the host is skipped. drift-check reports a declared retired
+  path that is still present, in the Claude home or in the workspace, as
+  `RETIRED-LIVE` drift instead of passing, and the session-start drift nudge
+  lists it. With `DRIFT_SCOPE=project` only the workspace entries are checked.
 
 ### Removed
 
@@ -58,11 +67,17 @@ increments the minor version; every other release increments the patch version.
   reporting). They are not part of Kherep's purpose. The installer no longer
   places `<workspace>/tools/mpac/` and drift-check no longer compares it;
   `KHEREP_INSTALL_ATLASSIAN_TOOLS` now gates only the Jira helpers. On hosts
-  that installed them earlier, an upgrade leaves both files untouched as
-  unmanaged operator content.
+  that installed them earlier, an upgrade parks `<workspace>/tools/mpac/mpac.ps1`
+  and `README.md` in `<workspace>/tools/mpac/_deprecated/` through the
+  retirement manifest.
 
 ### Fixed
 
+- The session-start drift nudge lists drift-check findings labelled
+  `MISSING-BLOCK`, `BLOCK-INVALID` and `NORMALIZE-FAIL`. It counted only
+  `DRIFT`, `MISSING-REPO`, `MISSING-LIVE` and `EXTRA-LIVE`, so a report whose
+  only problem carried one of the other labels ended in `FOUND DRIFT` but
+  showed no findings at session start.
 - The Claude hooks `cbm-code-discovery-gate`, `cbm-session-reminder` and
   `cbm-subagent-reminder` are executable again. They were tracked without the
   executable bit since 0.1.0, and because the settings invoke them directly,
