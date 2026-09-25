@@ -1,6 +1,6 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 // The real node-side protocol client (modules/control-plane/node), driven over
 // a real WebSocket against the real NodeSession. Its node:crypto signing runs
@@ -38,8 +38,13 @@ async function connectClient(options: Partial<ClientOptions> = {}) {
   const send = (frames: Promise<string[]>) => { chain = chain.then(async () => { for (const frame of await frames) ws.send(frame); }); };
   ws.addEventListener("message", (event) => send(client.onFrame(event.data as string)));
   ws.accept();
-  await settle();
-  expect(client.authenticated).toBe(true);
+  // Wait for the register frame to reach the Registry rather than for a fixed
+  // time: on a slow runner the test can otherwise read the node after auth
+  // (status online) but before register (capabilities, runtimes).
+  await vi.waitFor(async () => {
+    expect(client.authenticated).toBe(true);
+    expect((await registry().getNode(nodeId))?.capabilities.length).toBeGreaterThan(0);
+  }, { timeout: 5_000, interval: 50 });
   // Mirrors the daemon's periodic snapshot on the same ordered chain.
   return { nodeId, client, ws, snapshot: () => send(client.sessionsSnapshot()) };
 }
