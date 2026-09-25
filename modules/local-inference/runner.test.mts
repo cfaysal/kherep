@@ -173,7 +173,8 @@ function message(error: unknown): string { return error instanceof Error ? error
   check("Windows never executes Mac lms locally", remoteStartCalls.every((item) => item.command === "ssh"));
   check("remote Mac readiness uses SSH-localhost", ready.models.data?.[0]?.id === "mac-model" && remoteStartCalls.filter((item) => String(item.args.at(-1)).includes("curl")).every((item) => String(item.args.at(-1)).includes("127.0.0.1:1234")));
 
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "local-inference-"));
+  // resolveInput and outputPath compare real paths; os.tmpdir() can itself be a symlink (macOS /var -> /private/var).
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "local-inference-")));
   const allowed = path.join(root, "allowed");
   const output = path.join(root, "output");
   const privateDir = path.join(allowed, "host_vars");
@@ -317,7 +318,7 @@ function message(error: unknown): string { return error instanceof Error ? error
     check("a missing config uses the safe built-in defaults", loadConfig({ KHEREP_LOCAL_CONFIG: path.join(root, "missing.json") }).schemaVersion === 2);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    if (path.resolve(root).startsWith(path.resolve(os.tmpdir()))) fs.rmSync(root, { recursive: true, force: true });
+    if (path.resolve(root).startsWith(fs.realpathSync(os.tmpdir()))) fs.rmSync(root, { recursive: true, force: true });
   }
 
   console.log(`\n=== ${pass} pass, ${fail} fail ===`);

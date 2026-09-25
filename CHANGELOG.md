@@ -62,6 +62,18 @@ increments the minor version; every other release increments the patch version.
 - The smoke test's project-drift assertion follows the managed-block rule from
   0.1.1: operator text outside the Kherep block in the workspace `CLAUDE.md`
   must not be reported as drift, and a change inside the block must be.
+- The CLIs `bootstrap/confluence-space.mts`, `modules/twg/install.mts`,
+  `modules/twg/runtime/cli.mts` and `modules/control-plane/node/cli.mts` run
+  again when their path contains a symlink, such as the default macOS temporary
+  directory under `/var`, which links to `/private/var`. They compared
+  `import.meta.url` with the unresolved script argument, while Node loads the
+  main module from its real path, so through a symlink they did nothing and
+  exited 0. They now compare against the real path of the script argument.
+  This does not rely on `import.meta.main`, which the Node 23 and early Node 24
+  releases admitted by the engines range do not provide. The local-inference
+  keepalive and runner tests now resolve their fixture directories to their
+  real paths, and the runner test still removes its fixture afterwards. The
+  local-inference check that rejects a symlinked output root is unchanged.
 
 ## [0.1.2] - 2026-09-24
 

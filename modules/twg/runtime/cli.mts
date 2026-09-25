@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { createTwgClient, TwgError } from "./client.mts";
@@ -43,7 +44,17 @@ export async function main(argv: string[] = process.argv.slice(2), options: Main
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+// Node loads the main module from its real path, so a script started through a
+// symlinked directory (macOS /var -> /private/var) only matches after realpath.
+function isMainModule(): boolean {
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1] || "")).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   const result = await main();
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if ("ok" in result && result.ok === false) process.exitCode = result.error.code === "TWG_USAGE" ? 2 : 1;
