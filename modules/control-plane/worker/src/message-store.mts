@@ -156,6 +156,16 @@ export class MessageStore {
     return effects;
   }
 
+  // Refuses every message still queued for a node, for example on revocation.
+  refuseQueuedFor(nodeId: string, reason: string, actor: string, now: number): MessageEffects {
+    const effects = none();
+    for (const row of this.sql.exec(`SELECT ${COLUMNS} FROM messages WHERE to_node = ? AND state = 'queued' ORDER BY created_at, rowid`,
+      nodeId).toArray()) {
+      this.setState(toRecord(row), "refused", reason, actor, now, effects);
+    }
+    return effects;
+  }
+
   nextExpiry(): number | null {
     const row = this.sql.exec("SELECT MIN(expires_at) AS next FROM messages WHERE state = 'queued'").one();
     return row.next === null ? null : Number(row.next);
