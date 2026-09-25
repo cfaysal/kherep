@@ -354,8 +354,10 @@ test_default_confluence_brokers() {
   for tool in atl-jira.mts atl-jira-ccoder.mts jira-adf.mts jira-config.mts; do
     [ ! -e "$W/tools/$tool" ] || fail "default install projected the optional helper $tool"
   done
-  grep -qF "node <workspace>/tools/atl-confluence-ccoder.mts" "$C/agents/claude-obs.md" ||
-    fail "installed claude-obs.md lacks the ccoder invocation"
+  grep -qF "<confluence.json broker> create" "$C/agents/claude-obs.md" ||
+    fail "installed claude-obs.md lacks the stored-broker invocation"
+  ! grep -qF "<workspace>" "$C/agents/claude-obs.md" ||
+    fail "installed claude-obs.md leaves the broker path to the model (issue #13)"
   HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
     bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
     { cat "$ROOT/drift.log"; fail "drift-check failed after a default install"; }

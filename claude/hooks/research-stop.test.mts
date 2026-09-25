@@ -11,7 +11,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { decision, RESEARCH_REASON } from "./research-stop.mts";
+import { decision, researchReason } from "./research-stop.mts";
 import { OBSERVATION_REASON } from "./observation-stop.mts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -51,8 +51,10 @@ function payload(entries: Entry[] | string, extra: Record<string, unknown> = {})
 }
 
 const NO_SOURCES = path.join(TMP, "absent-research-sources.json");
+const CONFIG = path.join(TMP, "confluence.json");
+fs.writeFileSync(CONFIG, JSON.stringify({ spaceKey: "KB", spaceId: "9001" }), "utf8");
 const decide = (entries: Entry[] | string, extra: Record<string, unknown> = {}, sources: string = NO_SOURCES) =>
-  decision(payload(entries, extra), ENV, inRepo, sources);
+  decision(payload(entries, extra), ENV, inRepo, sources, CONFIG);
 
 function sourcesFile(content: string): string {
   const file = path.join(TMP, `sources-${++seq}.json`);
@@ -60,12 +62,20 @@ function sourcesFile(content: string): string {
   return file;
 }
 
-test("blocks a substantial turn without any lookup, with a constant reason naming both sources", () => {
+test("blocks a substantial turn without any lookup, with a fixed reason naming both sources", () => {
   const result = decide([user(USER_TEXT), WORK, said("done")]);
-  assert.deepEqual(result, { decision: "block", reason: RESEARCH_REASON });
-  assert.match(RESEARCH_REASON, /atl-confluence-ccoder\.mts search/);
-  assert.match(RESEARCH_REASON, /codebase-memory/);
-  assert.doesNotMatch(RESEARCH_REASON, /Example Corp|host\.example\.com/);
+  const reason = researchReason(WORKSPACE, CONFIG);
+  assert.deepEqual(result, { decision: "block", reason });
+  assert.match(reason, /codebase-memory/);
+  assert.doesNotMatch(reason, /Example Corp|host\.example\.com/);
+});
+
+// Issue #13. The reason used to print a literal <workspace>, leaving the path to
+// the model. It names the resolved command exactly as research-first does.
+test("the reason names the resolved broker command, never a placeholder", () => {
+  const reason = decide([user(USER_TEXT), WORK, said("done")])?.reason ?? "";
+  assert.ok(reason.includes(`node ${path.resolve(WORKSPACE)}/tools/atl-confluence-ccoder.mts search --space KB --query "<terms>"`), reason);
+  assert.doesNotMatch(reason, /<workspace>|<key>/);
 });
 
 test("passes a substantial turn that looked up the Brain", () => {
@@ -177,7 +187,7 @@ function spawnHook(file: string, stdin: string): string {
 test("no loop with observation-stop: both block once, both stand down on the continuation", () => {
   const entries = [user(USER_TEXT), WORK, said("done")];
   const first = JSON.stringify(payload(entries));
-  assert.deepEqual(JSON.parse(spawnHook("research-stop.mts", first)), { decision: "block", reason: RESEARCH_REASON });
+  assert.deepEqual(JSON.parse(spawnHook("research-stop.mts", first)), { decision: "block", reason: researchReason(WORKSPACE) });
   assert.deepEqual(JSON.parse(spawnHook("observation-stop.mts", first)), { decision: "block", reason: OBSERVATION_REASON });
 
   const continuation = JSON.stringify(payload(entries, { stop_hook_active: true }));
@@ -190,7 +200,7 @@ test("no loop with observation-stop: both block once, both stand down on the con
   assert.equal(spawnHook("research-stop.mts", done), "");
   assert.equal(spawnHook("observation-stop.mts", done), "");
   assert.doesNotMatch(OBSERVATION_REASON, /\[research: none/);
-  assert.doesNotMatch(RESEARCH_REASON, /\[obs: none/);
+  assert.doesNotMatch(researchReason(WORKSPACE), /\[obs: none/);
 });
 
 test("the hook fails open on malformed stdin", () => {

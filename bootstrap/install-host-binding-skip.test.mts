@@ -50,6 +50,7 @@ function runBindings(extraEnv: Record<string, string>, { credentialOk = false } 
     `node() { printf 'CALL %s\\n' "$*"; case "$*" in *atl-credential.mts*) return ${credentialOk ? 0 : 1};; esac; return 1; }`,
     "REPO_ROOT=/fixture/repo",
     "CLAUDE_HOME=/fixture/home",
+    "WS=/fixture/workspace",
     "post_rc=0",
     postCommitBindings(),
     'printf \'post_rc=%s\\n\' "$post_rc"',
@@ -79,6 +80,8 @@ test("without switches a verified credential leads to the space step, and a miss
   assert.equal(run.status, 0, run.stdout);
   assert.ok(callsStep(run, "atl-credential.mts"), run.stdout);
   assert.ok(callsStep(run, "confluence-space.mts"), run.stdout);
+  // Issue #13: the broker command is rendered from the install's profile and workspace.
+  assert.match(run.stdout, /confluence-space\.mts .*--runtime claude --profile mac --workspace \/fixture\/workspace/);
   assert.match(run.stdout, /WARNING no Confluence knowledge space configured/);
   assert.doesNotMatch(run.stdout, /SKIP_(KNOWLEDGE_SPACE|ATL_CREDENTIAL)=1/);
   assert.equal(run.postRc, "1");

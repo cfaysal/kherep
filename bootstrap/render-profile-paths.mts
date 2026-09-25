@@ -70,6 +70,16 @@ export function substituteTemplatePaths<T>(
   return rewriteValue(value, replacements) as T;
 }
 
+// Issue #13. The Claude Confluence broker as claude/settings.user.json allows
+// it, rendered by the same workspace substitution as those rules. install.sh
+// stores the result in confluence.json, and claude-obs runs it verbatim instead
+// of composing a path, so the command always matches the allow rule.
+const CLAUDE_BROKER_TEMPLATE = "node __KHEREP_WORKSPACE__/tools/atl-confluence-ccoder.mts";
+
+export function renderClaudeBroker(profile: string, workspace: string): string {
+  return CLAUDE_BROKER_TEMPLATE.replaceAll("__KHEREP_WORKSPACE__", resolveProfilePath(profile, workspace));
+}
+
 export function isMacIncompatiblePermission(value: unknown): boolean {
   return typeof value === "string" && (
     /(?:^|[\s(\"'=])[A-Za-z]:[\\/]/.test(value)

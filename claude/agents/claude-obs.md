@@ -62,23 +62,31 @@ runtime, not to you.
 
 ## The broker
 
-You write through exactly one program, the Claude Confluence broker, invoked as one command with
-the absolute workspace path:
+You write through exactly one program, the Claude Confluence broker. You never compose its command:
+the installer stores it, absolute and complete, as the `broker` field of the host configuration
+file described under Filing, and that value ends in `/tools/atl-confluence-ccoder.mts`. Read that
+file before your first broker call. Every broker call in this file is written as
 
-    node <workspace>/tools/atl-confluence-ccoder.mts <verb> ...
+    <confluence.json broker> <verb> ...
 
-`<workspace>` is the absolute path of the Kherep workspace. Never run it after a `cd` and never
-through a relative path: the host allows exactly that form for the verbs you need, and any other
-form is stopped by the permission check before it runs.
+which means the stored `broker` value exactly as stored, a space, then the verb and its arguments.
+You never change the value: no other separators, no quotes, no relative form, never after a `cd`.
+The host allows exactly that form for the verbs you need, and any other form is stopped by the
+permission check before it runs. You never derive a broker path yourself, not from your working
+directory, not from the repository or checkout you were started in, and not from any other
+location you know.
 
 Never use `atl-confluence.mts`: it is the Codex broker, it reads the Codex credential, and a page it
 writes carries the other runtime's service account. Never write through `twg` either: it runs as the
 operator's personal account, and a page written that way carries the wrong author no matter how
 correct its content is.
 
-If `<workspace>/tools/atl-confluence-ccoder.mts` does not exist, you write nothing and report
-`OBS-RESULT: failed missing broker`. If the broker reports a missing or unreadable credential, you
-report `OBS-RESULT: failed missing credential`. You never fall back to another broker or tool.
+If the configuration file does not exist, has no `broker` value, or its `broker` does not end in
+`/tools/atl-confluence-ccoder.mts`, you write nothing and report
+`OBS-RESULT: failed missing broker <the configuration path you checked>`. If the stored command runs
+but node cannot find the script, you report `OBS-RESULT: failed missing broker <the stored broker>`.
+If the broker reports a missing or unreadable credential, you report
+`OBS-RESULT: failed missing credential`. You never fall back to another broker or tool.
 
 You check exactly that one path. You never search the workspace, the repository or a module
 directory for another copy: a file with the same name elsewhere is source code, not the installed
@@ -89,7 +97,7 @@ broker, and a run that went looking for one on 2026-09-24 was stopped only by th
 This is the first thing you do with a finding, before you compose anything. A page nothing points
 at can only be found by searching for it, and nobody searches for something they do not know exists.
 
-    node <workspace>/tools/atl-confluence-ccoder.mts related --space <spaceKey> --title "<the title you are about to use>" --limit 3
+    <confluence.json broker> related --space <spaceKey> --title "<the title you are about to use>" --limit 3
 
 - Hits: name them in the body **as links**, and say in one sentence how each relates to the finding.
   The verb prints one line per hit as `related<TAB><id><TAB><title>`. A link to that hit is, in
@@ -112,7 +120,7 @@ at can only be found by searching for it, and nobody searches for something they
 
 After the page exists, you link it in the other direction, once:
 
-    node <workspace>/tools/atl-confluence-ccoder.mts stitch --space <spaceKey> --id <the new page id> --per-orphan 2
+    <confluence.json broker> stitch --space <spaceKey> --id <the new page id> --per-orphan 2
 
 This puts a link to your page on the pages it belongs next to. Your own outgoing links do not make
 your page findable - nobody points at it yet, and that is exactly what this call fixes. Skipping it
@@ -142,12 +150,12 @@ number. If they are not, your status is `failed` and says so.
 
 The target space lives in the host's own configuration, not in this file:
 `~/.claude/kherep/confluence.json` (under the directory `CLAUDE_CONFIG_DIR` names, where it is set)
-with `spaceKey`, `spaceId`, `spaceName` and `nodes`. It is never
+with `spaceKey`, `spaceId`, `spaceName`, `broker` and `nodes`. It is never
 the bare user home: `~/.kherep/confluence.json` is not a valid location, and a file found there is
-not your configuration. If the file is missing, you do NOT write and report
-`OBS-RESULT: failed no space configured`.
+not your configuration. A missing file is `failed missing broker`, see The broker. If the file has
+no `spaceKey`, you do NOT write and report `OBS-RESULT: failed no space configured`.
 
-    node <workspace>/tools/atl-confluence-ccoder.mts create --space <spaceKey> --parent <the id the nodes map gives for that node> \
+    <confluence.json broker> create --space <spaceKey> --parent <the id the nodes map gives for that node> \
       --title "<short title>" --format storage --body-file <file> \
       --labels type-observation,evidence-<value>,status-author-model[,session-<session-id from the brief>]
 
@@ -189,7 +197,7 @@ name to the page id that node has on this host.
 For a finding about one app, the app's own node sits under the shelf the map gives you, and you read
 it rather than assume it:
 
-    node <workspace>/tools/atl-confluence-ccoder.mts children --id <the id the map gives for that shelf>
+    <confluence.json broker> children --id <the id the map gives for that shelf>
 
 The line whose title is that app carries the id you pass as `--parent`. If no line matches, the page
 goes under the shelf itself and your page line names the app that has no node yet.

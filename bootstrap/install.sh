@@ -369,13 +369,16 @@ fi
 # Only the exact value 1 skips; a real install without the switch still runs the
 # step and still fails on a missing space. Skipping only C2 does not make the
 # space optional: the install then fails, because the space was never checked.
+# The same file carries `broker`, the absolute command claude-obs runs. It is
+# rendered from the profile and workspace the settings step above renders the
+# permission rules from, so it is their prefix byte for byte (issue #13).
 SKIP_KNOWLEDGE_SPACE="$(kherep_env INSTALL_SKIP_KNOWLEDGE_SPACE 0)"
 if [ "$SKIP_KNOWLEDGE_SPACE" = "1" ]; then
   echo "install: SKIP_KNOWLEDGE_SPACE=1 (Confluence knowledge space not resolved; $CLAUDE_HOME/kherep/confluence.json untouched)"
 elif [ "$atl_credential_ok" = "1" ]; then
   KHEREP_ATL_CRED_FILE_CLAUDE="${KHEREP_ATL_CRED_FILE_CLAUDE:-$CLAUDE_HOME/kherep/atl-credential-claude.txt}" \
     node "$REPO_ROOT/bootstrap/confluence-space.mts" --out "$CLAUDE_HOME/kherep/confluence.json" \
-      --runtime claude \
+      --runtime claude --profile "$KHEREP_PROFILE" --workspace "$WS" \
     || { post_rc=1; echo "install: WARNING no Confluence knowledge space configured - observation agents will not write"; }
 elif [ "$SKIP_ATL_CREDENTIAL" = "1" ]; then
   post_rc=1

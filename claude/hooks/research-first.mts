@@ -13,9 +13,8 @@
  * echoed. Any error exits silently and never blocks the prompt.
  */
 import fs from "node:fs";
-import path from "node:path";
 
-import { gitRepositoryOf, type Exists } from "./lib/research-evidence.mts";
+import { brainSearchCommand, gitRepositoryOf, type Exists } from "./lib/research-evidence.mts";
 import { workspaceForPayload, type EnvLike } from "./lib/workspace-scope.mts";
 
 export interface PromptPayload {
@@ -23,32 +22,10 @@ export interface PromptPayload {
   [key: string]: unknown;
 }
 
-const DEFAULT_CONFIG = path.join(import.meta.dirname, "..", "kherep", "confluence.json");
-const SPACE_KEY = /^[A-Za-z0-9~_-]{1,64}$/;
-
-// The installed space key, or a pointer to where it lives. A key that does not
-// look like one is not printed: this file is operator configuration.
-export function spaceKeyFrom(configPath: string = DEFAULT_CONFIG): string {
-  try {
-    const key = (JSON.parse(fs.readFileSync(configPath, "utf8")) as { spaceKey?: unknown }).spaceKey;
-    if (typeof key === "string" && SPACE_KEY.test(key)) return key;
-  } catch {
-    // Absent or unreadable: fall through to the pointer.
-  }
-  return "<spaceKey from <claude-home>/kherep/confluence.json>";
-}
-
-// The same form bootstrap/render-profile-paths.mts renders into the permission
-// allowlist (path.resolve, then "/tools/..."), so the suggested command matches
-// the allow rule instead of raising a permission prompt.
-export function brokerRoot(workspace: string): string {
-  return path.resolve(workspace);
-}
-
 export function promptContext(
   value: unknown,
   env: EnvLike = process.env,
-  configPath: string = DEFAULT_CONFIG,
+  configPath?: string,
   exists?: Exists,
 ): string {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "";
@@ -58,7 +35,7 @@ export function promptContext(
 
   const lines = [
     "RESEARCH FIRST (ROUTING.md, Evidence first): classify this prompt. A banal one (greeting, acknowledgement, a fact that needs no lookup) is answered directly. For a relevant one, research before answering:",
-    `1. Central Brain: node ${brokerRoot(workspace)}/tools/atl-confluence-ccoder.mts search --space ${spaceKeyFrom(configPath)} --query "<terms>". Search terms follow the privacy classification; private content never goes to Atlassian. Exit 2 means unavailable (UNKNOWN), not no match.`,
+    `1. Central Brain: ${brainSearchCommand(workspace, configPath)}. Search terms follow the privacy classification; private content never goes to Atlassian. Exit 2 means unavailable (UNKNOWN), not no match.`,
   ];
   if (gitRepositoryOf(payload.cwd, exists)) {
     lines.push("2. Code graph: the working directory is inside a git repository. If it is indexed by codebase-memory, query the code graph (mcp__codebase-memory-mcp__*) first, before reading files.");
