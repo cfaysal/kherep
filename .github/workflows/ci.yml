@@ -68,9 +68,10 @@ jobs:
         with:
           node-version: lts/*
       # install-transaction.test.sh (run by the smoke test) drives install.sh,
-      # which writes core.hooksPath with `git config --system` and `--global`.
-      # Both are redirected to throwaway files so the runner's git config stays
-      # untouched; the last step shows what landed there.
+      # which writes core.hooksPath with `git config --global`, and with
+      # `--system` only on KHEREP_INSTALL_SYSTEM_HOOKSPATH=1. The test redirects
+      # both scopes to its own throwaway files; this redirect is a second layer,
+      # and the last step shows what, if anything, landed here.
       - name: Bootstrap smoke test
         env:
           KHEREP_SMOKE_NO_MANAGED_WORKSPACE: "1"

@@ -60,6 +60,14 @@ increments the minor version; every other release increments the patch version.
   path that is still present, in the Claude home or in the workspace, as
   `RETIRED-LIVE` drift instead of passing, and the session-start drift nudge
   lists it. With `DRIFT_SCOPE=project` only the workspace entries are checked.
+- The Claude installer writes the system-wide `core.hooksPath`, which binds
+  every account on the host, only with `KHEREP_INSTALL_SYSTEM_HOOKSPATH=1`.
+  Without it the installer reads the value and, when it differs from Kherep's
+  hook directory or is unset, prints both values and changes nothing, even when
+  the system file is writable without elevation, as it can be with Git for
+  Windows. With it the installer reports the value it replaced, and a failed
+  write fails the install. The global and repository-local bindings are
+  unchanged.
 
 ### Removed
 
@@ -78,6 +86,11 @@ increments the minor version; every other release increments the patch version.
   `DRIFT`, `MISSING-REPO`, `MISSING-LIVE` and `EXTRA-LIVE`, so a report whose
   only problem carried one of the other labels ended in `FOUND DRIFT` but
   showed no findings at session start.
+- `bootstrap/install-transaction.test.sh` can no longer change the host's Git
+  configuration. Whatever the caller's environment, it redirects the system
+  and global scopes to throwaway files, drops every inherited `KHEREP_*`
+  variable, and fails when the host's system or global `core.hooksPath`
+  differs after the run.
 - The Claude hooks `cbm-code-discovery-gate`, `cbm-session-reminder` and
   `cbm-subagent-reminder` are executable again. They were tracked without the
   executable bit since 0.1.0, and because the settings invoke them directly,

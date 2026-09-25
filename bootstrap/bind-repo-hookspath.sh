@@ -40,6 +40,10 @@ norm_hookspath() {
   printf '%s' "$v"
 }
 
+# install.sh sources this file for norm_hookspath alone (issue #23); only a
+# direct run goes on to the self-test and the binding.
+[ "${BASH_SOURCE[0]}" = "$0" ] || return 0
+
 # Der Selbsttest steht VOR der Argumentpruefung: sonst faengt ihn die
 # usage-Meldung ab, und ein Test, der nie laeuft, ist kein Test.
 if [ "${1:-}" = "--selftest" ]; then

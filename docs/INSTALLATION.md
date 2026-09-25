@@ -50,6 +50,8 @@ Replace the workspace with your chosen absolute path. The normal dependency phas
 
 The installer places managed rules, hooks, skills, agents and routing. It uses backups and updates its managed configuration. Workspace Git-hook binding is part of normal installation; review the chosen workspace before applying it.
 
+The Git hook is bound through `core.hooksPath`: globally for your account and locally in each repository under the workspace. The system scope binds every account on the host, so the installer only reads it: when the system value differs from Kherep's hook directory or is unset, it prints both values and changes nothing, even when the system file happens to be writable without elevation. Set `KHEREP_INSTALL_SYSTEM_HOOKSPATH=1` to replace the system value; the installer then reports the value it replaced, and a failed write fails the installation.
+
 For a files-only installation, set `SKIP_DEPS=1`. Install and configure the required external tools separately before relying on their integrations.
 
 ## 4. Set up Codex
@@ -67,6 +69,7 @@ Connection profiles ship unconfigured. Kherep does not provision a Confluence sp
 | `KHEREP_CREDENTIALS_ROOT` | External integration-configuration root |
 | `KHEREP_LOCAL_CONFIG` | Local-inference configuration |
 | `KHEREP_INSTALL_SKIP_GITCONFIG` | Skip Git configuration during a preview |
+| `KHEREP_INSTALL_SYSTEM_HOOKSPATH` | Opt into setting the system-wide `core.hooksPath`, which binds every account on the host; only `1` opts in. Without it a differing system value is reported and left unchanged |
 | `KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE` | Skip resolving the Confluence knowledge space (throwaway installs such as the smoke test); only `1` skips |
 | `KHEREP_INSTALL_SKIP_ATL_CREDENTIAL` | Skip reading and live-verifying the Atlassian service-account credential (throwaway installs such as the smoke test); only `1` skips |
 | `KHEREP_INSTALL_SKIP_RUNTIME_AGENT` | Leave the memory runtime agent untouched |
