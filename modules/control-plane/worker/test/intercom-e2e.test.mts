@@ -31,7 +31,7 @@ async function msgNew(node: Awaited<ReturnType<typeof startTaskNode>>, target: s
   writeDirectory(node.paths, await registry().directory());
   const out: string[] = [];
   const err: string[] = [];
-  const code = await runMsgArgs({ positionals: ["send", target, text], values: { new: "claude", wait: "5" } }, {
+  const code = await runMsgArgs({ positionals: ["send", target, text], values: { new: "claude", directive: "Open a new intercom session on that node", wait: "5" } }, {
     paths: node.paths, env: { CLAUDE_CODE_SESSION_ID: "maestro" }, out: (l) => out.push(l), err: (l) => err.push(l),
     // Each wait step is one exchange round of the requesting daemon.
     sleep: async () => { await node.exchange(); await new Promise((resolve) => setTimeout(resolve, 20)); },
@@ -60,6 +60,7 @@ describe("intercom sessions", () => {
     expect(start.slice(0, 3)).toEqual(["--bg", "--name", `task-${taskId.slice(0, 8)}`]);
     expect(start[5]).toContain(`This is an intercom session (${label}) for a conversation with session ${maestro.nodeId}/maestro`);
     expect(start[5]).toContain("Task: please review PR 12");
+    expect(start[5]).toContain('The operator\'s directive, quoted: "Open a new intercom session on that node"');
     expect(other.calls).toEqual([]);
     expect(await registry().getTask(taskId)).toMatchObject({ nodeId: target.nodeId, label, requirements: { node: target.nodeId } });
 

@@ -27,7 +27,7 @@ export function cliCommand(): string {
 export const MSG_USAGE = `usage:
   kherep-node msg sessions
   kherep-node msg send <node>/<session> [--from <session>] [--wait <seconds>] [--] <text...>
-  kherep-node msg send <node> --new claude|codex [--cwd <dir>] [--directive <text>] [--from <session>] [--wait <seconds>] [--] <text...>
+  kherep-node msg send <node> --new claude|codex --directive <the operator's answer, verbatim> [--cwd <dir>] [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg send --reply-to <messageId> [--to <node>/<session>] [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg inbox [--all]
   kherep-node msg status <messageId>`;

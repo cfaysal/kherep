@@ -8,7 +8,7 @@ import { listCodexTaskSessions } from "./codex-sessions.mts";
 import { writeDirectory } from "./exchange.mts";
 import { generateIdentity } from "./identity.mts";
 import { parseMsgArgs, runMsg } from "./msg-cli.mts";
-import { INTERCOM_DIRECTIVE } from "./msg-new.mts";
+import { DIRECTIVE_REQUIRED } from "./msg-new.mts";
 import { loadPolicy } from "./policy.mts";
 import { startTask } from "./session-runner.mts";
 import { listSessions } from "./sessions.mts";
@@ -28,6 +28,8 @@ const DIRECTORY: DirectoryBody = {
   fetchedAt: new Date(T0).toISOString(),
 };
 const ENV = { CLAUDE_CODE_SESSION_ID: "maestro" };
+const ANSWER = "Yes, start a new session on sekhmet";
+const D = ["--directive", ANSWER];
 
 // The daemon's part while the CLI waits: the Worker's answer to the request.
 async function send(node: ReturnType<typeof taskNode>, argv: string[], answer?: { ok: boolean; taskId?: string; reason?: string },
@@ -45,21 +47,21 @@ async function send(node: ReturnType<typeof taskNode>, argv: string[], answer?: 
 }
 
 test("msg send --new parses its options", () => {
-  const parsed = parseMsgArgs(["send", "sekhmet", "--new", "codex", "--cwd", "/w/repo", "--", "--hello", "there"]);
+  const parsed = parseMsgArgs(["send", "sekhmet", "--new", "codex", ...D, "--cwd", "/w/repo", "--", "--hello", "there"]);
   assert.deepEqual(parsed.positionals, ["send", "sekhmet", "--hello", "there"]);
-  assert.deepEqual({ ...parsed.values }, { new: "codex", cwd: "/w/repo" });
+  assert.deepEqual({ ...parsed.values }, { new: "codex", directive: ANSWER, cwd: "/w/repo" });
 });
 
 test("msg send --new writes a labelled task request for exactly that node and prints the task id", async (t) => {
   const node = taskNode(t, { delegate: { request: true } });
   writeDirectory(node.paths, DIRECTORY);
-  const sent = await send(node, ["send", "sekhmet", "--new", "codex", "--cwd", "/w/repo", "--", "please", "review", "PR", "12"],
+  const sent = await send(node, ["send", "sekhmet", "--new", "codex", ...D, "--cwd", "/w/repo", "--", "please", "review", "PR", "12"],
     { ok: true, taskId: TASK });
   assert.deepEqual([sent.code, sent.out, sent.err], [0, [TASK], []]);
   const [requestId] = requestIds(node.paths);
   assert.deepEqual(readRequest(node.paths, requestId), {
     requestId, title: LABEL, text: "please review PR 12", requirements: { runtime: "codex", node: PEER, cwd: "/w/repo" },
-    directive: INTERCOM_DIRECTIVE, requestedBy: "maestro", label: LABEL, createdAt: new Date(T0).toISOString(), state: "dispatched", taskId: TASK,
+    directive: ANSWER, requestedBy: "maestro", label: LABEL, createdAt: new Date(T0).toISOString(), state: "dispatched", taskId: TASK,
   });
 
   // The daemon sends the label and the target node with the request.
@@ -87,22 +89,30 @@ test("msg send --new writes a labelled task request for exactly that node and pr
 test("msg send --new prints refusals with the reason and exits non-zero", async (t) => {
   const off = taskNode(t);
   writeDirectory(off.paths, DIRECTORY);
-  const denied = await send(off, ["send", "sekhmet", "--new", "claude", "--", "hi"]);
+  const denied = await send(off, ["send", "sekhmet", "--new", "claude", ...D, "--", "hi"]);
   assert.deepEqual([denied.code, denied.err], [1, [`kherep-node msg: ${NOT_DELEGATING}`]]);
   assert.deepEqual(requestIds(off.paths), [], "nothing is written");
 
   const node = taskNode(t, { delegate: { request: true } });
   writeDirectory(node.paths, DIRECTORY);
-  const refused = await send(node, ["send", "sekhmet", "--new", "claude", "--", "hi"],
+  const refused = await send(node, ["send", "sekhmet", "--new", "claude", ...D, "--", "hi"],
     { ok: false, reason: "node sekhmet cannot take the task: it does not advertise sessions.delegate.accept.v1" });
   assert.equal(refused.code, 1);
   assert.match(refused.err[0], /^kherep-node msg: refused: node sekhmet cannot take the task: it does not advertise sessions\.delegate\.accept\.v1/);
-  assert.match((await send(node, ["send", "osiris", "--new", "claude", "--", "hi"])).err[0], /unknown node "osiris"; candidates: n \(/);
-  assert.match((await send(node, ["send", "sekhmet", "--new", "gemini", "--", "hi"])).err[0], /--new takes claude or codex/);
-  assert.match((await send(node, ["send", "sekhmet", "--new", "claude"])).err[0], /first message must be 1 to 16384/);
-  assert.match((await send(node, ["send", "--reply-to", TASK, "--new", "claude", "--", "hi"])).err[0], /takes neither --reply-to nor --to/);
+  assert.match((await send(node, ["send", "osiris", "--new", "claude", ...D, "--", "hi"])).err[0], /unknown node "osiris"; candidates: n \(/);
+  assert.match((await send(node, ["send", "sekhmet", "--new", "gemini", ...D, "--", "hi"])).err[0], /--new takes claude or codex/);
+  assert.match((await send(node, ["send", "sekhmet", "--new", "claude", ...D])).err[0], /first message must be 1 to 16384/);
+  assert.match((await send(node, ["send", "--reply-to", TASK, "--new", "claude", ...D, "--", "hi"])).err[0], /takes neither --reply-to nor --to/);
+  // No default directive: without the operator's answer nothing is written.
+  const fresh = taskNode(t, { delegate: { request: true } });
+  writeDirectory(fresh.paths, DIRECTORY);
+  for (const directive of [[], ["--directive", "  "]]) {
+    const missing = await send(fresh, ["send", "sekhmet", "--new", "claude", ...directive, "--", "hi"], { ok: true, taskId: TASK });
+    assert.deepEqual([missing.code, missing.out, missing.err], [1, [], [`kherep-node msg: ${DIRECTIVE_REQUIRED}`]]);
+  }
+  assert.deepEqual(requestIds(fresh.paths), []);
   assert.match((await send(node, ["send", "sekhmet/s-peer", "--cwd", "/w", "--", "hi"])).err[0], /--cwd and --directive go with --new/);
-  assert.match((await send(node, ["send", "sekhmet", "--new", "claude", "--", "hi"], undefined, {})).err[0], /cannot tell this session's runtime/);
+  assert.match((await send(node, ["send", "sekhmet", "--new", "claude", ...D, "--", "hi"], undefined, {})).err[0], /cannot tell this session's runtime/);
 });
 
 test("msg sessions shows the label as the session name, and a label addresses the session", async (t) => {
@@ -116,7 +126,7 @@ test("msg sessions shows the label as the session name, and a label addresses th
 
 test("a labelled task keeps --name task-<8>, records the label, frames the reply path and reports it in the session list", async (t) => {
   const node = taskNode(t, { delegate: { accept: true } });
-  await startTask(startArgs(TASK, { requestedBy: `${SELF}/maestro`, directive: INTERCOM_DIRECTIVE, label: LABEL }), node.deps());
+  await startTask(startArgs(TASK, { requestedBy: `${SELF}/maestro`, directive: ANSWER, label: LABEL }), node.deps());
   const start = node.calls.find((c) => c.args[0] === "--bg")!.args;
   assert.deepEqual(start.slice(0, 3), ["--bg", "--name", "task-3f2a1b0c"]);
   assert.match(start[5], new RegExp(`This is an intercom session \\(${LABEL}\\) for a conversation with session ${SELF}/maestro`));
