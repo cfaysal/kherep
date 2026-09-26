@@ -5,6 +5,7 @@ import path from "node:path";
 import type { PermissionMode } from "../protocol-tasks.mts";
 import { codexCommand } from "./codex-binary.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
+import { isCodexSessionId } from "./codex-sessions.mts";
 import { writeJsonAtomic } from "./inbox.mts";
 import { KHEREP_SESSION_ENV, SESSION_ENV } from "./msg-resolve.mts";
 
@@ -67,7 +68,10 @@ export function startArgs(cwd: string, mode: PermissionMode, files: CodexFiles, 
 }
 
 // TOML basic strings accept JSON string escapes.
+// The thread id comes from codex's own output: only a plain id (never one that
+// starts with "-" and could read as an option) goes on the command line.
 export function resumeArgs(threadId: string, mode: PermissionMode, files: CodexFiles, outbox: string): string[] {
+  if (!isCodexSessionId(threadId)) throw new Error("the task's thread id is not a plain id");
   return guard(["exec", "resume", "--json", "--skip-git-repo-check", "-c", `sandbox_mode="${CODEX_SANDBOX[mode]}"`,
     "-c", `sandbox_workspace_write.writable_roots=[${JSON.stringify(outbox)}]`, "-o", files.lastMessage, threadId, "-"]);
 }

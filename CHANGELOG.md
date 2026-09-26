@@ -192,7 +192,11 @@ increments the minor version; every other release increments the patch version.
   after the exit code, with API keys redacted. On Windows a `codex.cmd` npm
   shim is no longer refused: the node runs the package's launcher
   `bin/codex.js` with its own Node and without a shell, and a stop ends the
-  whole process tree.
+  whole process tree. A continue or message resume checks the task's working
+  directory against the workspace roots again, a thread id must be a plain id,
+  and failure reasons also redact bearer tokens, JWTs, URL user info and query
+  strings. Codex on Windows stays unmeasured: its sandbox must be checked before
+  a Windows node lists `codex`.
 
 - Two Codex installer failures (#55). The installer parses only the standard
   output of `codex plugin marketplace list --json`; the warning Codex prints on

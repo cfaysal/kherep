@@ -30,9 +30,9 @@ const messageId = (): string => `7e57${(++counter).toString(16).padStart(4, "0")
 type Node = ReturnType<typeof codexNode>;
 
 // A finished Codex task, its run ended and reported done.
-async function doneTask(t: test.TestContext, sessions: Record<string, unknown> = {}): Promise<Node> {
+async function doneTask(t: test.TestContext, sessions: Record<string, unknown> = {}, cwd?: string): Promise<Node> {
   const node = codexNode(t, sessions);
-  await startTask(startArgs(TASK, { runtime: "codex" }), node.deps());
+  await startTask(startArgs(TASK, { runtime: "codex", ...(cwd ? { cwd: path.join(node.workspace, cwd) } : {}) }), node.deps());
   await waitFor(() => readExit(codexFiles(node.paths, TASK)) !== null, "the first run");
   await watchTasks(node.deps());
   assert.equal(readTask(node.paths, TASK)?.state, "done");
@@ -194,4 +194,19 @@ test("one run at a time; a stopped or failed run offers its messages again withi
   await pollCodexInbound(node.deps());
   await runEnds(node, 4);
   assert.equal(auditLines(node).at(-1)?.action, "stuck-offer");
+});
+
+test("a message resume checks the working directory again", posix, async (t) => {
+  const node = await doneTask(t, {}, "repo");
+  const outside = path.join(node.root, "outside");
+  fs.mkdirSync(outside);
+  // The task's recorded directory now leads out of the workspace root.
+  const repo = path.join(node.workspace, "repo");
+  fs.renameSync(repo, path.join(node.workspace, "moved"));
+  fs.symlinkSync(outside, repo);
+  deliver(node, "hello");
+  const lines: string[] = [];
+  await pollCodexInbound(node.deps(), (line) => lines.push(line));
+  assert.equal(node.runs().length, 1, "nothing resumed");
+  assert.match(lines[0] ?? "", /not resuming task .*outside the workspace roots/);
 });
