@@ -96,13 +96,14 @@ export class Registry extends DurableObject<Env> {
   }
 
   listSessions(): (SessionInfo & { nodeId: string; updatedAt: number })[] {
-    return this.sql.exec(`SELECT node_id, session_id, runtime, state, started_at, name, cwd, kind, updated_at FROM sessions
+    return this.sql.exec(`SELECT node_id, session_id, runtime, state, started_at, name, cwd, kind, label, updated_at FROM sessions
       ORDER BY node_id, session_id`).toArray().map((r) => ({
         nodeId: String(r.node_id), sessionId: String(r.session_id), runtime: String(r.runtime), state: String(r.state),
         ...(r.started_at === null ? {} : { startedAt: String(r.started_at) }),
         ...(r.name === null ? {} : { name: String(r.name) }),
         ...(r.cwd === null ? {} : { cwd: String(r.cwd) }),
         ...(r.kind === null ? {} : { kind: String(r.kind) }),
+        ...(r.label === null ? {} : { label: String(r.label) }),
         updatedAt: Number(r.updated_at),
       }));
   }
@@ -138,9 +139,9 @@ export class Registry extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       this.sql.exec("DELETE FROM sessions WHERE node_id = ?", nodeId);
       for (const s of sessions) {
-        this.sql.exec(`INSERT OR REPLACE INTO sessions (node_id, session_id, runtime, state, started_at, name, cwd, kind, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          nodeId, s.sessionId, s.runtime, s.state, s.startedAt ?? null, s.name ?? null, s.cwd ?? null, s.kind ?? null, now);
+        this.sql.exec(`INSERT OR REPLACE INTO sessions (node_id, session_id, runtime, state, started_at, name, cwd, kind, label, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          nodeId, s.sessionId, s.runtime, s.state, s.startedAt ?? null, s.name ?? null, s.cwd ?? null, s.kind ?? null, s.label ?? null, now);
       }
     });
   }

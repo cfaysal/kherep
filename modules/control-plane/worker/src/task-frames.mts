@@ -44,7 +44,7 @@ export async function handleTaskFrame(env: Env, nodeId: string, type: "task.repo
   const requestedBy = `${nodeId}/${body.requestedBy}`;
   const result = await dispatchTask(env, {
     title: body.title, text: body.text, requirements: body.requirements, permissionMode: "auto", createdBy: `session:${requestedBy}`,
-    requestedBy, directive: body.directive, requestId: body.requestId, fromNode: nodeId,
+    requestedBy, directive: body.directive, requestId: body.requestId, fromNode: nodeId, ...(body.label ? { label: body.label } : {}),
   });
   answer(result.ok ? { ok: true, taskId: result.task.taskId, ...(result.task.nodeId ? { nodeId: result.task.nodeId } : {}) }
     : { ok: false, reason: result.reason.slice(0, MAX_REASON) });

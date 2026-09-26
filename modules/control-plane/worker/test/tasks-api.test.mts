@@ -79,6 +79,38 @@ describe("POST /api/tasks", () => {
     expect(JSON.parse(String(pending[0].args))).toMatchObject({ runtime: "claude", permissionMode: "auto", prompt: SECRET });
   });
 
+  it("dispatches to exactly the node requirements.node names, with the label, or refuses with the reason (issue #74)", async () => {
+    const os = uniqueOs();
+    // A less loaded node that fits: the explicit target still wins, and no fallback reaches it.
+    const idle = await onlineNode("target-idle", os, ["sessions.v1"]);
+    const target = await onlineNode("target-busy", os, ["sessions.v1"]);
+    await create({ os, node: target });
+    const response = await create({ os, node: target }, { label: "intercom: claude@sekhmet" });
+    expect(response.status).toBe(201);
+    const { taskId, nodeId } = (await response.json()) as { taskId: string; nodeId: string };
+    expect(nodeId).toBe(target);
+    expect((await registry().getTask(taskId))?.label).toBe("intercom: claude@sekhmet");
+    const pending = await runInDurableObject(session(target), (_i, state) =>
+      state.storage.sql.exec("SELECT args FROM outbox ORDER BY seq").toArray());
+    expect(JSON.parse(String(pending[1].args))).toMatchObject({ name: `task-${taskId.slice(0, 8)}`, label: "intercom: claude@sekhmet" });
+
+    const refusal = async (requirements: Record<string, unknown>): Promise<string> => {
+      const refused = await create(requirements);
+      expect(refused.status).toBe(409);
+      return ((await refused.json()) as { error: string }).error;
+    };
+    const unknown = crypto.randomUUID();
+    expect(await refusal({ node: unknown })).toBe(`unknown node ${unknown}`);
+    const plain = await onlineNode("target-plain", os, ["messaging.v1"]);
+    expect(await refusal({ node: plain })).toBe(`node target-plain (${plain}) cannot take the task: it does not advertise sessions.v1`);
+    expect(await refusal({ node: target, runtime: "codex" })).toMatch(/cannot take the task: it has no codex CLI runtime$/);
+    expect(await refusal({ node: target, os: "other-os" })).toMatch(new RegExp(`runs ${os}, not other-os$`));
+    await registry().setStatus(target, "offline", Date.now());
+    expect(await refusal({ node: target })).toBe(`node target-busy (${target}) is not online`);
+    expect(await runInDurableObject(session(idle), (_i, state) => state.storage.sql.exec("SELECT 1 FROM outbox").toArray())).toEqual([]);
+    expect((await create({ node: target }, { label: "bad/label" })).status).toBe(400);
+  });
+
   it("audits every task action without the task text", async () => {
     const os = uniqueOs();
     const nodeId = await onlineNode("audit-node", os, ["sessions.v1"]);

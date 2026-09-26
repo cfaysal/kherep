@@ -10,6 +10,7 @@ import { getMessage, listInbox } from "./inbox.mts";
 import {
   currentSession, DIRECTORY_STALE_MS, nodeLabel, resolveTarget, senderSession, SESSION_ENV, sessionIdFromEnv,
 } from "./msg-resolve.mts";
+import { sendNew } from "./msg-new.mts";
 import { taskForSession } from "./task-records.mts";
 
 // kherep-node msg: the session side of messaging (issue #31, step 3a). It only
@@ -26,6 +27,7 @@ export function cliCommand(): string {
 export const MSG_USAGE = `usage:
   kherep-node msg sessions
   kherep-node msg send <node>/<session> [--from <session>] [--wait <seconds>] [--] <text...>
+  kherep-node msg send <node> --new claude|codex --directive <the operator's answer, verbatim> [--cwd <dir>] [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg send --reply-to <messageId> [--to <node>/<session>] [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg inbox [--all]
   kherep-node msg status <messageId>`;
@@ -51,13 +53,14 @@ function fail(io: Io, message: string): number {
 
 export interface MsgArgs {
   positionals: string[];
-  values: { from?: string; to?: string; "reply-to"?: string; wait?: string; all?: boolean };
+  values: { from?: string; to?: string; "reply-to"?: string; wait?: string; all?: boolean; new?: string; cwd?: string; directive?: string };
 }
 
 export function parseMsgArgs(argv: string[]): MsgArgs {
   return parseArgs({
     args: argv, allowPositionals: true,
-    options: { from: { type: "string" }, to: { type: "string" }, "reply-to": { type: "string" }, wait: { type: "string" }, all: { type: "boolean" } },
+    options: { from: { type: "string" }, to: { type: "string" }, "reply-to": { type: "string" }, wait: { type: "string" }, all: { type: "boolean" },
+      new: { type: "string" }, cwd: { type: "string" }, directive: { type: "string" } },
   });
 }
 
@@ -114,7 +117,7 @@ function sessions(io: Io): number {
     if (list.length === 0) io.out("    no sessions reported");
     for (const s of list) {
       const mine = node.nodeId === nodeId && s.sessionId === me?.id;
-      io.out(`  ${mine ? "*" : " "} ${s.name ?? "-"}  ${s.sessionId}  ${s.state}  ${s.runtime}${s.cwd ? `  ${s.cwd}` : ""}`);
+      io.out(`  ${mine ? "*" : " "} ${s.label ?? s.name ?? "-"}  ${s.sessionId}  ${s.state}  ${s.runtime}${s.cwd ? `  ${s.cwd}` : ""}`);
     }
   }
   io.out(`(* marks this session${me ? "" : `; ${SESSION_ENV} is not set, so none is marked`})`);
@@ -123,6 +126,14 @@ function sessions(io: Io): number {
 
 async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<number> {
   const replyTo = values["reply-to"];
+  if (values.new !== undefined) {
+    if (replyTo !== undefined || values.to !== undefined) return fail(io, "--new starts a conversation and takes neither --reply-to nor --to");
+    const [node, ...words] = rest;
+    if (!node) return fail(io, `no target node\n${MSG_USAGE}`);
+    const directory = directoryFor(io);
+    return directory ? sendNew(io, directory, node, words, values) : 1;
+  }
+  if (values.cwd !== undefined || values.directive !== undefined) return fail(io, "--cwd and --directive go with --new");
   let to: MessageAddress | null = null;
   let target = values.to;
   let words = rest;

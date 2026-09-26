@@ -136,7 +136,8 @@ export function listCodexTaskSessions(paths: NodePaths, now: number = Date.now()
     const active = isActive(task);
     if (!active && !(now - Date.parse(task.updatedAt) <= activeMs)) return [];
     const session: SessionInfo = { sessionId: task.sessionId, runtime: CODEX_RUNTIME, state: active ? "running" : "idle",
-      startedAt: task.startedAt, name: task.name, ...(task.cwd.length <= 512 ? { cwd: task.cwd } : {}), kind: "codex-task" };
+      startedAt: task.startedAt, name: task.name, ...(task.cwd.length <= 512 ? { cwd: task.cwd } : {}), kind: "codex-task",
+      ...(task.label ? { label: task.label } : {}) };
     return isSessionInfo(session) ? [session] : [];
   });
 }
