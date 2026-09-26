@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { pointDeliverHooksAt } from "./control-plane-hook-path.mts";
 import type { McpCompatibilityOptions, McpProjection, McpServerSpec, PluginMcpServer } from "./contracts.mts";
 import * as managedConfig from "./managed-config.mts";
 import { repairManagedMcp } from "./mcp-config-repair.mts";
@@ -209,6 +210,8 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
   next = enableHooks(next);
   const retiredTable = retireUnmanagedCentralBrainTable(next, options.retiredCentralBrain, options.startMarker, options.endMarker);
   next = retiredTable.config;
+  const beforeCheckout = next;
+  next = pointDeliverHooksAt(next, options.controlPlaneHook, options.startMarker, options.endMarker);
   const currentRenderOptions = { ...effectiveOptions, mcpServers, pluginMcpServers };
   // Every block written before issue #68 lacks the commandWindows forms.
   const beforeWindowsCommands = { ...currentRenderOptions, windowsHookCommands: false };
@@ -259,6 +262,8 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
   });
   return {
     ...upgrade,
+    // A block that differed only in the checkout path was still rewritten.
+    managedFragment: upgrade.managedFragment === "current" && next !== beforeCheckout ? "replaced" : upgrade.managedFragment,
     migratedMcpServers: [...new Set([...upgrade.migratedMcpServers, ...repairedMcpServers])],
     repairedMcpServers,
     recoveredMcpServers,
