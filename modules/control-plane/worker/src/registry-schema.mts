@@ -49,10 +49,10 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 `;
 
-// Session columns added in Phase 2 (issue #31). CREATE TABLE IF NOT EXISTS
+// Session columns added in Phase 2 (issue #31), and label with issue #74. CREATE TABLE IF NOT EXISTS
 // leaves a table from an earlier deployment as it was, so each column is added
 // when PRAGMA table_info does not list it yet. Safe to run on every start.
-export const ADDED_SESSION_COLUMNS = ["name", "cwd", "kind"] as const;
+export const ADDED_SESSION_COLUMNS = ["name", "cwd", "kind", "label"] as const;
 
 export function migrateRegistry(sql: SqlStorage): void {
   const present = new Set(sql.exec("PRAGMA table_info(sessions)").toArray().map((column) => String(column.name)));

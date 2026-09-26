@@ -26,6 +26,11 @@ import { frameFollowUp } from "./task-prompt.mts";
 // - `claude agents --json --all` lists sessions with `id` (short), `sessionId`,
 //   `name` and `state` (working, blocked, done, failed, stopped).
 // A task with runtime codex goes to codex-runner.mts instead (issue #63).
+// --name stays task-<8> even for a labelled task (issue #74): findRow falls
+// back to that name to map the session before its short id is known, and the
+// Worker and the node recognise a task session by it (no chains). A label is
+// not unique (every intercom session from one sender shares it), so it is
+// only shown in the directory, never used as the name.
 
 export const RUN_TIMEOUT_MS = 60_000;
 const BACKGROUNDED = /^backgrounded · ([A-Za-z0-9]+)/m;

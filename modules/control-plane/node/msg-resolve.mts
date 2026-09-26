@@ -1,4 +1,4 @@
-import { OPERATOR_NODE_ID, type DirectoryBody, type MessageAddress } from "../protocol-messages.mts";
+import { OPERATOR_NODE_ID, type DirectoryBody, type DirectoryNode, type MessageAddress } from "../protocol-messages.mts";
 import { codexSessionName, isCodexSession } from "./codex-sessions.mts";
 import type { NodePaths } from "./config.mts";
 import { localSessionName } from "./exchange.mts";
@@ -44,8 +44,15 @@ function pick<T>(what: string, ref: string, matches: T[], all: T[], label: (item
   return { ok: false, error: `${matches.length > 1 ? "ambiguous" : "unknown"} ${what} "${ref}"; candidates: ${candidates}` };
 }
 
+// A node of the directory by id or name.
+export function resolveNode(directory: DirectoryBody, nodeRef: string): Resolved<DirectoryNode> {
+  return pick("node", nodeRef, directory.nodes.filter((n) => n.nodeId === nodeRef || n.name === nodeRef), directory.nodes,
+    (n) => `${n.name} (${n.nodeId})`);
+}
+
 // Resolves "<node>/<session>" against the directory: the node by id or name,
-// then the session on that node by id or name. The address carries the session
+// then the session on that node by id, name or label (issue #74; a label that
+// several sessions share is ambiguous). The address carries the session
 // id, which stays valid when the session is renamed; the target node's policy
 // matches a rule by that id or by the session's current name.
 export function resolveTarget(directory: DirectoryBody, target: string): Resolved<MessageAddress> {
@@ -53,13 +60,12 @@ export function resolveTarget(directory: DirectoryBody, target: string): Resolve
   if (slash <= 0 || slash === target.length - 1) return { ok: false, error: `target must be <node>/<session>, got "${target}"` };
   const nodeRef = target.slice(0, slash);
   const sessionRef = target.slice(slash + 1);
-  const node = pick("node", nodeRef, directory.nodes.filter((n) => n.nodeId === nodeRef || n.name === nodeRef), directory.nodes,
-    (n) => `${n.name} (${n.nodeId})`);
+  const node = resolveNode(directory, nodeRef);
   if (!node.ok) return node;
   const sessions = directory.sessions.filter((s) => s.nodeId === node.value.nodeId);
   const session = pick(`session on ${node.value.name}`, sessionRef,
-    sessions.filter((s) => s.sessionId === sessionRef || s.name === sessionRef), sessions,
-    (s) => (s.name ? `${s.name} (${s.sessionId})` : s.sessionId));
+    sessions.filter((s) => s.sessionId === sessionRef || s.name === sessionRef || s.label === sessionRef), sessions,
+    (s) => { const shown = s.label ?? s.name; return shown ? `${shown} (${s.sessionId})` : s.sessionId; });
   if (!session.ok) return session;
   return { ok: true, value: { nodeId: node.value.nodeId, session: session.value.sessionId } };
 }

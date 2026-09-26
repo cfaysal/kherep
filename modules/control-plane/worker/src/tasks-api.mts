@@ -1,5 +1,5 @@
 import {
-  ACTIVE_TASK_STATES, DEFAULT_PERMISSION_MODE, isPermissionMode, isTaskId, isTaskRequirements, isTaskText, isTaskTitle,
+  ACTIVE_TASK_STATES, DEFAULT_PERMISSION_MODE, isPermissionMode, isTaskId, isTaskLabel, isTaskRequirements, isTaskText, isTaskTitle,
   PERMISSION_MODES, SUPPORTED_RUNTIMES,
 } from "../../protocol-tasks.mts";
 import { registryStub, sessionStub, type Env } from "./env.mts";
@@ -7,7 +7,7 @@ import { fail, json, readJsonObject } from "./http.mts";
 import { dispatchTask } from "./task-dispatch.mts";
 
 // Operator task API (issue #31, item 5), behind Access like every /api/* route:
-//   POST /api/tasks                 {title, text, requirements?, permissionMode?}
+//   POST /api/tasks                 {title, text, requirements?, permissionMode?, label?}
 //   GET  /api/tasks, GET /api/tasks/{id}
 //   POST /api/tasks/{id}/stop, POST /api/tasks/{id}/continue {prompt}
 // Only the operator starts, stops and continues sessions here; nodes and
@@ -42,7 +42,9 @@ async function createTask(request: Request, env: Env, actor: string): Promise<Re
   if (!SUPPORTED_RUNTIMES.includes(runtime)) return fail(400, `runtime ${runtime} is not supported by this control plane`);
   const mode = body.permissionMode ?? DEFAULT_PERMISSION_MODE;
   if (!isPermissionMode(mode)) return json({ error: "permission mode not allowed", allowed: PERMISSION_MODES }, 400);
-  const result = await dispatchTask(env, { title: body.title, text: body.text, requirements, permissionMode: mode, createdBy: actor });
+  if (body.label !== undefined && !isTaskLabel(body.label)) return fail(400, "invalid label");
+  const result = await dispatchTask(env, { title: body.title, text: body.text, requirements, permissionMode: mode, createdBy: actor,
+    ...(body.label ? { label: body.label } : {}) });
   if (!result.ok) return fail(409, result.reason);
   return json({ taskId: result.task.taskId, nodeId: result.task.nodeId, state: result.task.state }, 201);
 }
