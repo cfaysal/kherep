@@ -4,7 +4,8 @@ import path from "node:path";
 import test from "node:test";
 
 import { codexNode, LAST_MESSAGE, THREAD, waitFor } from "./codex-fixture.mts";
-import { codexEnv, codexFiles, FORBIDDEN_CODEX_FLAGS, processStart, readExit, resumeArgs } from "./codex-process.mts";
+import { lastStderrLine, readExit } from "./codex-output.mts";
+import { codexEnv, codexFiles, FORBIDDEN_CODEX_FLAGS, processStart, resumeArgs } from "./codex-process.mts";
 import { continueTask, startTask, stopTask } from "./session-runner.mts";
 import { startArgs, T0, TASK, taskId, taskNode } from "./task-fixture.mts";
 import { readTask, writeTask } from "./task-records.mts";
@@ -29,7 +30,7 @@ test("starts codex exec with the exact arguments and the prompt on stdin, and re
   const files = codexFiles(node.paths, TASK);
   const [run] = node.runs();
   // The outbox is the only writable root besides the working directory.
-  assert.deepEqual(run.argv, ["exec", "--json", "-C", real, "--sandbox", "workspace-write", "--add-dir", node.paths.outbox,
+  assert.deepEqual(run.argv, ["exec", "--json", "--skip-git-repo-check", "-C", real, "--sandbox", "workspace-write", "--add-dir", node.paths.outbox,
     "-o", files.lastMessage, "-"]);
   assert.equal(run.cwd, real);
   // The prompt never shows in ps; the fake read stdin to its end, so it was closed.
@@ -77,6 +78,21 @@ test("permission modes map to sandboxes; bypass flags are never passed", posix, 
   for (const run of node.runs()) assert.equal(run.argv.filter((a) => a === "--add-dir" || a.startsWith("sandbox_workspace_write")).length, 1);
 });
 
+test("an exit reports codex's last stderr line, redacted", posix, async (t) => {
+  const node = codexNode(t);
+  await startTask(codexArgs(TASK, { prompt: "secret task [stderr]" }), node.deps());
+  node.reports();
+  await waitFor(() => readExit(codexFiles(node.paths, TASK)) !== null, "the exit");
+  await watchTasks(node.deps());
+  assert.deepEqual(node.reports(), [{ taskId: TASK, state: "failed",
+    reason: "codex exited with 1: Not inside a trusted directory; key sk-<redacted> refused" }]);
+  const files = codexFiles(node.paths, TASK);
+  fs.writeFileSync(files.stderr, "Task 3f2a1b0c from the operator via the Kherep Control Plane: secret task\n");
+  assert.equal(lastStderrLine(files), "", "a line that quotes the framing is dropped");
+  fs.writeFileSync(files.stderr, `${"x".repeat(300)}\n\n`);
+  assert.equal(lastStderrLine(files).length, 200);
+});
+
 test("a failed turn or an exit without events reports failed with a reason, never the prompt", posix, async (t) => {
   const node = codexNode(t);
   await startTask(codexArgs(taskId(1), { prompt: "secret task [fail]" }), node.deps());
@@ -102,10 +118,10 @@ test("continue resumes the thread with the task's sandbox in its working directo
   await waitFor(() => node.runs().length === 2, "the resumed run");
   const resume = node.runs()[1];
   const files = codexFiles(node.paths, TASK);
-  assert.deepEqual(resume.argv.slice(0, 10), ["exec", "resume", "--json", "-c", "sandbox_mode=\"workspace-write\"",
+  assert.deepEqual(resume.argv.slice(0, 11), ["exec", "resume", "--json", "--skip-git-repo-check", "-c", "sandbox_mode=\"workspace-write\"",
     "-c", `sandbox_workspace_write.writable_roots=[${JSON.stringify(node.paths.outbox)}]`, "-o", files.lastMessage, THREAD]);
   assert.deepEqual(resume.env, { KHEREP_CONFIG_DIR: node.root, KHEREP_SESSION_ID: THREAD });
-  assert.deepEqual(resume.argv.slice(10), ["-"]);
+  assert.deepEqual(resume.argv.slice(11), ["-"]);
   assert.match(resume.stdin, /^Follow-up for task 3f2a1b0c-.* from the operator via the Kherep Control Plane: one more thing/);
   assert.match(resume.stdin, /end your turn with a short summary/);
   assert.equal(resume.cwd, fs.realpathSync.native(node.workspace));
@@ -127,6 +143,18 @@ test("stop ends the process group with SIGTERM, then SIGKILL after the grace per
   assert.deepEqual(node.reports().map((r) => [r.state, r.reason]), [["stopped", "stopped by the operator"], ["stopped", "stopped by the operator"]]);
   await watchTasks(node.deps());
   assert.deepEqual(node.reports(), [], "a stopped task is not reported again");
+});
+
+test("a stop ends the whole process tree, codex behind a launcher included", posix, async (t) => {
+  const node = codexNode(t);
+  await startTask(codexArgs(TASK, { prompt: "work [tree] [sleep]" }), node.deps());
+  const marker = path.join(path.dirname(node.fake), "runs.jsonl.child");
+  await waitFor(() => fs.existsSync(marker), "the child");
+  const child = Number(fs.readFileSync(marker, "utf8"));
+  t.after(() => { try { process.kill(child, "SIGKILL"); } catch { /* ended */ } });
+  assert.equal(gone(child), false);
+  await stopTask({ taskId: TASK }, node.deps());
+  await waitFor(() => gone(child) && gone(node.runs()[0].pid), "the whole tree");
 });
 
 test("a pid this daemon no longer holds is signalled only with its recorded start time", posix, async (t) => {

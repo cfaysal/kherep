@@ -186,6 +186,14 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane Codex tasks run in a workspace root that is not a Git
+  repository: `codex exec` and `codex exec resume` get `--skip-git-repo-check`
+  (the sandbox is unchanged). A failed run reports codex's last stderr line
+  after the exit code, with API keys redacted. On Windows a `codex.cmd` npm
+  shim is no longer refused: the node runs the package's launcher
+  `bin/codex.js` with its own Node and without a shell, and a stop ends the
+  whole process tree.
+
 - Two Codex installer failures (#55). The installer parses only the standard
   output of `codex plugin marketplace list --json`; the warning Codex prints on
   standard error when `CODEX_HOME` lies under a temporary directory made the

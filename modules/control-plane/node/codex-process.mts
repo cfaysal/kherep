@@ -3,9 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { PermissionMode } from "../protocol-tasks.mts";
+import { codexCommand } from "./codex-binary.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
-import { findOnPath } from "./discovery.mts";
-import { readJson, writeJsonAtomic } from "./inbox.mts";
+import { writeJsonAtomic } from "./inbox.mts";
 import { KHEREP_SESSION_ENV, SESSION_ENV } from "./msg-resolve.mts";
 
 // The Codex processes of tasks (issue #63), from `codex exec --help` and
@@ -56,13 +56,19 @@ export function codexFiles(paths: NodePaths, taskId: string): CodexFiles {
 // The config reference documents writable_roots as "Additional writable roots
 // when sandbox_mode = workspace-write", so in read-only the outbox is most
 // likely not writable either; the flag is passed anyway and changes nothing there.
+// --skip-git-repo-check ("Allow running Codex outside a Git repository", in
+// the help of both commands) skips only Codex's check that the working
+// directory is a trusted Git repository, not the sandbox: the node already
+// confines the working directory to its policy's workspace roots, which need
+// not be repositories. Without it such a task fails at once (measured live:
+// "Not inside a trusted directory and --skip-git-repo-check was not specified.").
 export function startArgs(cwd: string, mode: PermissionMode, files: CodexFiles, outbox: string): string[] {
-  return guard(["exec", "--json", "-C", cwd, "--sandbox", CODEX_SANDBOX[mode], "--add-dir", outbox, "-o", files.lastMessage, "-"]);
+  return guard(["exec", "--json", "--skip-git-repo-check", "-C", cwd, "--sandbox", CODEX_SANDBOX[mode], "--add-dir", outbox, "-o", files.lastMessage, "-"]);
 }
 
 // TOML basic strings accept JSON string escapes.
 export function resumeArgs(threadId: string, mode: PermissionMode, files: CodexFiles, outbox: string): string[] {
-  return guard(["exec", "resume", "--json", "-c", `sandbox_mode="${CODEX_SANDBOX[mode]}"`,
+  return guard(["exec", "resume", "--json", "--skip-git-repo-check", "-c", `sandbox_mode="${CODEX_SANDBOX[mode]}"`,
     "-c", `sandbox_workspace_write.writable_roots=[${JSON.stringify(outbox)}]`, "-o", files.lastMessage, threadId, "-"]);
 }
 
@@ -81,8 +87,6 @@ function guard(args: string[]): string[] {
   return args;
 }
 
-export const findCodex = (): string | null => findOnPath("codex");
-
 // The children this daemon started and has not reaped: their pids cannot be
 // reused yet, so they can be signalled without the start-time check.
 const held = new Map<number, ChildProcess>();
@@ -94,16 +98,13 @@ export const holdsChild = (pid: number | undefined): boolean => pid !== undefine
 // the pid once it runs.
 export async function spawnCodex(deps: CodexDeps, file: string, args: string[], cwd: string, files: CodexFiles,
   env: NodeJS.ProcessEnv, prompt: string): Promise<number> {
-  const platform = deps.platform ?? process.platform;
-  if (platform === "win32" && /\.(cmd|bat)$/i.test(file)) {
-    throw new Error("codex is a .cmd shim, and cmd.exe cannot pass this text safely; install the native codex executable");
-  }
+  const command = codexCommand(file, args, deps.platform ?? process.platform);
   ensureDir(files.dir);
   for (const f of [files.lastMessage, files.exit]) fs.rmSync(f, { force: true });
   const out = fs.openSync(files.events, "w", 0o600);
   const err = fs.openSync(files.stderr, "w", 0o600);
   try {
-    const child = spawn(file, args, { cwd, env, detached: true, stdio: ["pipe", out, err], windowsHide: true });
+    const child = spawn(command.file, command.args, { cwd, env, detached: true, stdio: ["pipe", out, err], windowsHide: true });
     child.stdin?.on("error", () => {}); // a codex that exits before reading
     child.on("exit", (code, signal) => {
       held.delete(child.pid!);
@@ -137,21 +138,32 @@ export function processStart(pid: number, platform: NodeJS.Platform = process.pl
     { encoding: "utf8", windowsHide: true, timeout: 10_000 });
     return text.trim() || null;
   }
+  const gone = (): boolean => {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ESRCH";
+    }
+  };
+  if (gone()) return null;
   try {
-    process.kill(pid, 0);
+    const text = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" }, timeout: 10_000 });
+    return text.trim() || null;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ESRCH") return null;
+    if (gone()) return null; // it ended between the probe and ps
+    throw error;
   }
-  const text = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" }, timeout: 10_000 });
-  return text.trim() || null;
 }
 
 // SIGTERM or SIGKILL to the process group (the negative pid) or, on Windows,
-// taskkill for the process tree. A process that is gone already is no error.
-export function signalGroup(pid: number, signal: NodeJS.Signals, platform: NodeJS.Platform = process.platform): void {
+// taskkill for the process tree (/T; /F for SIGKILL). Either way it reaches
+// codex behind the npm launcher too. A process that is gone is no error.
+export function signalGroup(pid: number, signal: NodeJS.Signals, platform: NodeJS.Platform = process.platform,
+  run: (file: string, args: string[]) => unknown = (file, args) => execFileSync(file, args, { windowsHide: true, timeout: 10_000 })): void {
   try {
     if (platform === "win32") {
-      execFileSync("taskkill", ["/PID", String(pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])], { windowsHide: true, timeout: 10_000 });
+      run("taskkill", ["/PID", String(pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])]);
     } else {
       process.kill(-pid, signal);
     }
@@ -192,54 +204,4 @@ export function terminate(deps: CodexDeps, pid: number, pidStart: string | undef
     }
   }, deps.graceMs ?? 5_000);
   return true;
-}
-
-export interface CodexEvents { threadId?: string; completed: boolean; error?: string }
-
-// Reads the events file; a line that is not JSON (a partial last line) is skipped.
-export function readEvents(files: CodexFiles): CodexEvents {
-  let text: string;
-  try {
-    text = fs.readFileSync(files.events, "utf8");
-  } catch {
-    return { completed: false };
-  }
-  const result: CodexEvents = { completed: false };
-  for (const line of text.split("\n")) {
-    let event: Record<string, unknown>;
-    try {
-      event = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      continue;
-    }
-    if (event.type === "thread.started" && typeof event.thread_id === "string" && !result.threadId) result.threadId = event.thread_id;
-    if (event.type === "turn.completed") result.completed = true;
-    const failure = failureOf(event);
-    if (typeof failure === "string") result.error = failure;
-  }
-  return result;
-}
-
-// The message of a turn.failed or error event.
-function failureOf(event: Record<string, unknown>): unknown {
-  if (event.type === "turn.failed") return (event.error as { message?: unknown } | undefined)?.message;
-  if (event.type === "error") return event.message;
-  return undefined;
-}
-
-export interface CodexExit { code: number | null; signal: string | null }
-export const readExit = (files: CodexFiles): CodexExit | null => {
-  try {
-    return readJson<CodexExit>(files.exit);
-  } catch {
-    return null;
-  }
-};
-
-export function readLastMessage(files: CodexFiles): string {
-  try {
-    return fs.readFileSync(files.lastMessage, "utf8").trim();
-  } catch {
-    return "";
-  }
 }
