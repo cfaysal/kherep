@@ -1,6 +1,7 @@
 import { PING_FRAME, type SessionInfo } from "../protocol.mts";
 import { reconnectDelay } from "./backoff.mts";
 import { NodeClient, type CommandHandlers } from "./client.mts";
+import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { connectUrl, type NodeConfig, type NodePaths } from "./config.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
@@ -107,6 +108,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           pollTasks(client, paths, policy, requestsInflight, send);
           // Peer messages for ended Codex task sessions resume them (issue #63).
           await pollCodexInbound(runner, log);
+          // ... and wake idle interactive Codex sessions with a pointer (issue #66).
+          await pollCodexQueue(runner, log);
         })
           .catch((error: unknown) => log(`kherep-node: message exchange failed: ${String(error)}`));
       }, EXCHANGE_INTERVAL_MS);

@@ -11,6 +11,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Control Plane: the daemon wakes an idle interactive Codex session (TUI or
+  app) for peer messages with `codex queue --thread <id> --message <pointer>`,
+  a fixed text with the message count only; the woken turn's delivery hook
+  offers the messages. The Claude wake's guards apply (kill switch, wake
+  allowlist, no `bypassPermissions`, reply depth, shared budget), one queue per
+  message, no second queue while one is unconfirmed, and never a flag that
+  changes the sandbox or approvals. The Codex delivery hook records the
+  session's permission mode; a session without one is woken only when the
+  allowlist names it.
+
 - Control Plane Codex tasks: `POST /api/tasks` with `requirements.runtime`
   `codex` goes to a node that lists `codex` as a CLI runtime, and that node
   runs `codex exec --json` detached, with stdin from the null device, only

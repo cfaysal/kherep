@@ -20,7 +20,9 @@ export const CODEX_ACTIVE_MS = 12 * 60 * 60_000;
 // Files of sessions not seen for this long are removed.
 export const CODEX_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
-export interface CodexSessionRecord { sessionId: string; cwd?: string; lastSeen: string; runtime: typeof CODEX_RUNTIME }
+// permissionMode: the hook input's permission_mode (documented values default,
+// acceptEdits, plan, dontAsk, bypassPermissions), kept when a later input lacks it.
+export interface CodexSessionRecord { sessionId: string; cwd?: string; lastSeen: string; runtime: typeof CODEX_RUNTIME; permissionMode?: string }
 
 // Session ids name files, so only plain file-name characters are accepted.
 export function isCodexSessionId(value: unknown): value is string {
@@ -35,14 +37,26 @@ const fileOf = (paths: NodePaths, sessionId: string): string => path.join(paths.
 
 // Writes or refreshes the record of one Codex session. Throws for an id that
 // cannot name a file.
-export function recordCodexSession(paths: NodePaths, sessionId: string, cwd: unknown, now: number = Date.now()): void {
+export function recordCodexSession(paths: NodePaths, sessionId: string, cwd: unknown, now: number = Date.now(), permissionMode?: unknown): void {
   if (!isCodexSessionId(sessionId)) throw new Error("codex session id is not a plain name");
   ensureDir(paths.codexSessions);
+  let mode = typeof permissionMode === "string" && /^[A-Za-z-]{1,32}$/.test(permissionMode) ? permissionMode : undefined;
+  if (mode === undefined) {
+    try {
+      mode = readCodexSession(paths, sessionId)?.permissionMode;
+    } catch {
+      // an unreadable record is rewritten without it
+    }
+  }
   const record: CodexSessionRecord = {
     sessionId, ...(typeof cwd === "string" && isSessionRef(cwd) && cwd.length <= 512 ? { cwd } : {}),
-    lastSeen: new Date(now).toISOString(), runtime: CODEX_RUNTIME,
+    lastSeen: new Date(now).toISOString(), runtime: CODEX_RUNTIME, ...(mode ? { permissionMode: mode } : {}),
   };
   writeJsonAtomic(fileOf(paths, sessionId), record);
+}
+
+export function readCodexSession(paths: NodePaths, sessionId: string): CodexSessionRecord | null {
+  return isCodexSessionId(sessionId) ? readJson<CodexSessionRecord>(fileOf(paths, sessionId)) : null;
 }
 
 export function isCodexSession(paths: NodePaths, sessionId: string): boolean {

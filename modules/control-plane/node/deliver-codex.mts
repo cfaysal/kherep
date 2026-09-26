@@ -33,10 +33,10 @@ export const CODEX_STOP_REASON = "Kherep: new messages from other agent sessions
 // On a machine without an enrolled node it writes nothing at all.
 export function deliverForCodex(input: unknown, deps: HookDeps): string {
   if (typeof input !== "object" || input === null) return "";
-  const { hook_event_name: event, session_id: sessionId, cwd, stop_hook_active: continued } = input as Record<string, unknown>;
+  const { hook_event_name: event, session_id: sessionId, cwd, stop_hook_active: continued, permission_mode: mode } = input as Record<string, unknown>;
   if (event !== "SessionStart" && event !== "UserPromptSubmit" && event !== "Stop") return "";
   if (!isCodexSessionId(sessionId) || !fs.existsSync(deps.paths.config)) return "";
-  recordCodexSession(deps.paths, sessionId, cwd, deps.now?.());
+  recordCodexSession(deps.paths, sessionId, cwd, deps.now?.(), mode);
   const refs = [sessionId, codexSessionName(sessionId)];
   if (event === "SessionStart") {
     const cli = deps.replyCommand ?? cliCommand();

@@ -34,12 +34,12 @@ const ids = (records: InboxRecord[]): string[] => records.map((r) => r.messageId
 // Each message is audited once per action, not at every 2-second round.
 // Entries of messages that left the inbox are pruned.
 const noted = new Map<string, AutonomyAction>();
-function pruneNoted(paths: NodePaths): void {
+export function pruneNoted(paths: NodePaths): void {
   if (noted.size === 0) return;
   const present = new Set(messageIds(paths.inbox));
   for (const id of noted.keys()) if (!present.has(id)) noted.delete(id);
 }
-function note(paths: NodePaths, now: number, sessionId: string, messageIds: string[], action: AutonomyAction): void {
+export function note(paths: NodePaths, now: number, sessionId: string, messageIds: string[], action: AutonomyAction): void {
   const fresh = messageIds.filter((id) => noted.get(id) !== action);
   if (fresh.length === 0) return;
   for (const id of fresh) noted.set(id, action);
