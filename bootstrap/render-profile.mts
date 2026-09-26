@@ -9,7 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { retireCentralBrainHooks } from "./central-brain-retirement.mts";
-import { substituteTemplatePaths, toBashPath } from "./render-profile-paths.mts";
+import { substituteTemplatePaths, toBashPath, workspaceEnvPath } from "./render-profile-paths.mts";
 import { filterMacPermissions, filterManagedDisallowedPermissions, mergeSettings, unique, type Settings } from "./render-profile-settings.mts";
 import { errorMessage } from "./shape.mts";
 
@@ -49,7 +49,7 @@ function writeJson(file: string, value: unknown): void {
   fs.renameSync(temp, file);
 }
 
-export function renderSettings(args: string[]): void {
+export function renderSettings(args: string[], platform: string = process.platform): void {
   const [profile, workspace, credentialsRoot, claudeHome, sourceUserFile, sourceProjectFile,
     existingUserFile, existingProjectFile, outputUserFile, outputProjectFile] = args;
   if (!["win", "mac"].includes(profile) || !outputProjectFile) {
@@ -86,9 +86,13 @@ export function renderSettings(args: string[]): void {
   // install.sh uebergibt die Bash-Form, aber MSYS wandelt Argumente an node.exe
   // in die Laufwerksform um (/d/x wird zu D:/x). Der Renderer sieht die
   // Bash-Form also nie und muss zurueckwandeln.
+  //
+  // Issue #75. Ausnahme ist der Workspace auf einem Windows-Host: dort steht
+  // er in nativer Form (D:/x), weil Node-Werkzeuge /d/x zu D:\d\x aufloesen.
+  // Die Bash-Skripte wandeln ihn vor der Pruefung zurueck (kherep_shell_path).
   user.env = {
     ...(user.env || {}),
-    KHEREP_WORKSPACE: toBashPath(workspace),
+    KHEREP_WORKSPACE: workspaceEnvPath(profile, workspace, platform),
     KHEREP_CREDENTIALS_ROOT: toBashPath(credentialsRoot),
   };
   writeJson(outputUserFile, user);

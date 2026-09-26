@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { productEnv } from "../lib/product-env.mts";
+import { nativeWorkspacePath } from "../lib/workspace-path.mts";
 import { resolveTarget as resolveCredentialTarget } from "../bootstrap/atl-credential-format.mts";
 import { mergeLocalInferenceConfig } from "../bootstrap/render-profile.mts";
 import * as registryBridgeModule from "../modules/mcp-auth-bridge/registry-http-wrapper.mts";
@@ -114,7 +115,7 @@ export function resolveWorkspace(options: InstallOptions = {}, platform: string 
   const configured = options.workspace ?? productEnv(process.env, "WORKSPACE");
   if (configured !== undefined) {
     if (configured === "") throw new Error("KHEREP_WORKSPACE must not be empty");
-    return path.resolve(configured);
+    return path.resolve(nativeWorkspacePath(configured, platform));
   }
   const homeDir = options.homeDir || os.homedir();
   return path.resolve(path.join(homeDir, "Kherep"));
