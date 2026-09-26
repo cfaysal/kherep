@@ -13,7 +13,7 @@ import { taskNode } from "./task-fixture.mts";
 // then prints `codex exec --json` events. The prompt
 // picks the behavior: [sleep] runs until stopped, [ignore-term] also ignores
 // SIGTERM, [fail] ends with turn.failed and exit 1, [silent] exits 2 without
-// events, [stderr] exits 1 after two stderr lines, [tree] also starts a
+// events (`codex queue` only logs, or fails for a thread starting with fa11), [stderr] exits 1 after two stderr lines, [tree] also starts a
 // child that runs until killed (as codex does behind the npm launcher); otherwise the turn completes, -o gets the last message, exit 0.
 // A resume keeps the thread id it was given. A prompt that carries a peer
 // message ("Message id: <id>") is answered first with the real
@@ -31,6 +31,12 @@ const stdin = fs.readFileSync(0, "utf8");
 const env = { KHEREP_CONFIG_DIR: process.env.KHEREP_CONFIG_DIR, KHEREP_SESSION_ID: process.env.KHEREP_SESSION_ID,
   CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID };
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, cwd: process.cwd(), stdin, pid: process.pid, env }) + "\\n");
+// codex queue: a thread starting with fa11 has no app server, as when none owns it.
+if (argv[0] === "queue") {
+  if (argv[2].startsWith("fa11")) { process.stderr.write("Error: no app server owns this thread (token sk-live_Secret1)\\n"); process.exit(1); }
+  process.stdout.write("Queued message 01a0db08 for thread " + argv[2] + "\\n");
+  process.exit(0);
+}
 const prompt = argv[argv.length - 1] === "-" ? stdin : argv[argv.length - 1];
 const out = argv[argv.indexOf("-o") + 1];
 const thread = argv[1] === "resume" ? argv[argv.length - 2] : ${JSON.stringify(THREAD)};

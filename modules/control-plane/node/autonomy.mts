@@ -19,7 +19,9 @@ const HOUR_MS = 60 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
 
 export type AutonomyAction = "wake" | "stuck-offer" | "budget" | "depth-limit" | "superseded" | "disabled" | "rearm"
-  | "permission-mode" | "not-allowlisted" | "parent-gone" | "continue" | "continue-budget" | "continue-permission-mode";
+  | "permission-mode" | "not-allowlisted" | "parent-gone" | "continue" | "continue-budget" | "continue-permission-mode"
+  // codex-queue.mts: waking an interactive Codex session with `codex queue`.
+  | "queue-failed" | "permission-mode-unknown";
 
 export const listenerDir = (paths: NodePaths): string => path.join(paths.dir, "listeners");
 export const wakeAudit = (paths: NodePaths): string => path.join(paths.dir, "wake.jsonl");
