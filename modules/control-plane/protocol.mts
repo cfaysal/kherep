@@ -104,8 +104,10 @@ export interface ChallengeBody { nonce: string; serverTime: number }
 export interface AuthBody { nodeId: string; nonce: string; timestamp: number; signature: string }
 export interface RuntimeInfo { name: string; kind: "cli" | "local-endpoint"; version?: string; endpoint?: string }
 // name, cwd and kind were added in Phase 2 (issue #31); older nodes omit them.
+// label (issue #74) is the display name of a task session, for example
+// "intercom: claude@sekhmet"; the session keeps its task-<8> name.
 export interface SessionInfo {
-  sessionId: string; runtime: string; state: string; startedAt?: string; name?: string; cwd?: string; kind?: string;
+  sessionId: string; runtime: string; state: string; startedAt?: string; name?: string; cwd?: string; kind?: string; label?: string;
 }
 export interface NodeFacts { hostname: string; os: string; arch: string; cpus: number; memoryBytes: number }
 export interface RegisterBody { facts: NodeFacts; runtimes: RuntimeInfo[]; capabilities: string[] }
@@ -117,6 +119,12 @@ export interface CommandResultBody { commandId: string; ok: boolean; result?: un
 export function isAuthBody(body: unknown): body is AuthBody {
   return isObject(body) && isNodeId(body.nodeId) && typeof body.nonce === "string" && B64URL.test(body.nonce)
     && isCounter(body.timestamp) && typeof body.signature === "string" && B64URL.test(body.signature);
+}
+
+// A display label (issue #74): letters, digits, space, ":", "@", "-", "_"
+// and ".", at most 64 characters, not starting or ending with a space.
+export function isLabel(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9:@._-]([A-Za-z0-9 :@._-]{0,62}[A-Za-z0-9:@._-])?$/.test(value);
 }
 
 function isShortString(value: unknown, max = 256): value is string {
@@ -133,7 +141,7 @@ export function isSessionInfo(value: unknown): value is SessionInfo {
   return isObject(value) && isShortString(value.sessionId, 128) && isShortString(value.runtime, 64)
     && isShortString(value.state, 32) && (value.startedAt === undefined || isShortString(value.startedAt, 64))
     && (value.name === undefined || isShortString(value.name, 128)) && (value.cwd === undefined || isShortString(value.cwd, 512))
-    && (value.kind === undefined || isShortString(value.kind, 32));
+    && (value.kind === undefined || isShortString(value.kind, 32)) && (value.label === undefined || isLabel(value.label));
 }
 
 export function isNodeFacts(value: unknown): value is NodeFacts {

@@ -84,13 +84,20 @@ export function runTaskArgs({ positionals, values }: TaskArgs, context: TaskCont
   return 2;
 }
 
+// Why this session may not request a task, or null: the checks `task new` and
+// `msg send --new` share (no chains, the node's delegate.request, no active task).
+export function delegationBlocked(paths: NodePaths, env: NodeJS.ProcessEnv): string | null {
+  if (taskForSession(paths, sessionIdFromEnv(env))) return NO_CHAINS;
+  const policy = loadPolicy(readConfig(paths.config)?.policyFile ?? paths.policy);
+  if (!policy.sessions?.delegate.request) return NOT_DELEGATING;
+  return hasActiveTask(paths) ? TASKS_ACTIVE : null;
+}
+
 function newTask(context: TaskContext, words: string[], values: TaskArgs["values"], now: () => number, out: (line: string) => void,
   fail: (message: string) => number): number {
   const { paths, env } = context;
-  if (taskForSession(paths, sessionIdFromEnv(env))) return fail(NO_CHAINS);
-  const policy = loadPolicy(readConfig(paths.config)?.policyFile ?? paths.policy);
-  if (!policy.sessions?.delegate.request) return fail(NOT_DELEGATING);
-  if (hasActiveTask(paths)) return fail(TASKS_ACTIVE);
+  const blocked = delegationBlocked(paths, env);
+  if (blocked) return fail(blocked);
   const from = senderSession(paths, env);
   if (!from.ok) return fail(from.error);
   const directive = values.directive ?? "";

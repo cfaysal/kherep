@@ -16,12 +16,18 @@ const doneHint = (taskId: string, cli: string, runtime: TaskRuntime): string =>
     : `When you are done, report with: ${cli} task done ${taskId} --summary "...". `)
   + `Coordinate with other sessions of this task through \`${cli} msg\` (your messages carry the task id automatically).`;
 
-export interface Delegation { requestedBy: string; directive: string }
+// label: set for an intercom session (issue #74), which the Control Plane
+// starts for a conversation the requesting session opens with its first message.
+export interface Delegation { requestedBy: string; directive: string; label?: string }
+
+const intercomHint = (delegation: Delegation, cli: string): string => (delegation.label
+  ? `This is an intercom session (${delegation.label}) for a conversation with session ${delegation.requestedBy}; `
+    + `the task text is its first message. Answer it with: ${cli} msg send ${delegation.requestedBy} -- "<answer>". ` : "");
 
 export function framePrompt(taskId: string, text: string, cli: string, delegation?: Delegation, runtime: TaskRuntime = "claude"): string {
   if (!delegation) return `Task ${taskId} from the operator via the Kherep Control Plane: ${text}\n\n${doneHint(taskId, cli, runtime)}`;
   return `Task ${taskId} requested by session ${delegation.requestedBy} on the operator's directive, via the Kherep Control Plane. `
-    + `The operator's directive, quoted: "${delegation.directive}"\n\nTask: ${text}\n\n${doneHint(taskId, cli, runtime)}`;
+    + `The operator's directive, quoted: "${delegation.directive}"\n\nTask: ${text}\n\n${intercomHint(delegation, cli)}${doneHint(taskId, cli, runtime)}`;
 }
 
 export function frameFollowUp(taskId: string, text: string, cli: string, runtime: TaskRuntime = "claude"): string {

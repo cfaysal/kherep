@@ -151,9 +151,10 @@ export class NodeClient {
   }
 
   requestTask(body: TaskRequestBody): string[] {
-    const { requestId, title, text, requirements, directive, requestedBy } = body;
+    const { requestId, title, text, requirements, directive, requestedBy, label } = body;
     return this.authenticated
-      ? [this.frame("task.request", { requestId, title, text, requirements: { ...requirements }, directive, requestedBy })] : [];
+      ? [this.frame("task.request", { requestId, title, text, requirements: { ...requirements }, directive, requestedBy,
+        ...(label ? { label } : {}) })] : [];
   }
 
   // A failing local write is logged; the frame loop goes on.

@@ -49,11 +49,13 @@ export function admitStart(args: SessionStartArgs, deps: RunnerDeps): Admitted {
   if (limit) refuse(deps, args.taskId, limit);
   const cwd = resolveCwd(policy, args.cwd, deps.realpath);
   if (!cwd.ok) return refuse(deps, args.taskId, cwd.reason);
-  const delegation = args.requestedBy !== undefined ? { requestedBy: args.requestedBy, directive: args.directive ?? "" } : undefined;
+  const delegation = args.requestedBy !== undefined
+    ? { requestedBy: args.requestedBy, directive: args.directive ?? "", ...(args.label ? { label: args.label } : {}) } : undefined;
   const record: TaskRecord = {
     taskId: args.taskId, runtime: args.runtime, name: args.name, cwd: cwd.cwd, permissionMode: mode, state: "started",
     startedAt: new Date(now).toISOString(), deadline: new Date(now + policy.maxRuntimeMinutes * 60_000).toISOString(),
     updatedAt: new Date(now).toISOString(), ...(args.requestedBy !== undefined ? { requestedBy: args.requestedBy } : {}),
+    ...(args.label ? { label: args.label } : {}),
   };
   return { record, prompt: framePrompt(args.taskId, args.prompt, deps.cli ?? cliCommand(), delegation, args.runtime) };
 }

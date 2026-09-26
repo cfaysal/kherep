@@ -6,6 +6,7 @@ import { isSessionInfo, type SessionInfo } from "../protocol.mts";
 import { listCodexSessions, listCodexTaskSessions } from "./codex-sessions.mts";
 import type { NodePaths } from "./config.mts";
 import { findOnPath } from "./discovery.mts";
+import { listTasks, type TaskRecord } from "./task-records.mts";
 
 // Agent session discovery (issue #31, step 2). Claude Code lists its running
 // sessions with `claude agents --json` (https://code.claude.com/docs/en/sessions).
@@ -115,7 +116,16 @@ export async function listSessions(deps: SessionDeps = {}): Promise<SessionInfo[
   // A task's thread the delivery hook recorded too is listed once, as the task.
   const codex = deps.paths ? listCodexSessions(deps.paths, now).filter((s) => !tasks.some((t) => t.sessionId === s.sessionId)) : [];
   const claude = await listClaudeSessions(deps);
-  return [...claude, ...tasks, ...codex].slice(0, MAX_SESSIONS);
+  return [...(deps.paths ? withLabels(claude, listTasks(deps.paths)) : claude), ...tasks, ...codex].slice(0, MAX_SESSIONS);
+}
+
+// A Claude task session with a label (issue #74) carries it, found by the
+// session id or the task-<8> name the node started it with.
+export function withLabels(sessions: SessionInfo[], tasks: TaskRecord[]): SessionInfo[] {
+  return sessions.map((s) => {
+    const task = tasks.find((t) => t.label && (t.sessionId === s.sessionId || t.name === s.name));
+    return task ? { ...s, label: task.label } : s;
+  });
 }
 
 async function listClaudeSessions(deps: SessionDeps): Promise<SessionInfo[]> {

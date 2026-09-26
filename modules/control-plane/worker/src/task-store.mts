@@ -28,17 +28,21 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS tasks_node_state ON tasks (node_id, state);
 `;
+// Added with issue #74: the display label of the task's session.
+const ADDED_COLUMNS = ["label"] as const;
 
 export interface NewTask {
   title: string; text: string; requirements: TaskRequirements; permissionMode: PermissionMode; createdBy: string;
   // Delegated tasks only: "<nodeId>/<session>", the directive, the request id.
   requestedBy?: string; directive?: string; requestId?: string; fromNode?: string;
+  // The session's display label (issue #74), for example "intercom: claude@sekhmet".
+  label?: string;
 }
 
 export interface TaskRow {
   taskId: string; title: string; requirements: TaskRequirements; permissionMode: string; state: string; nodeId: string | null;
   sessionId: string | null; createdBy: string; requestedBy: string | null; directive: string | null; createdAt: number; updatedAt: number;
-  resultSummary: string | null; reason: string | null; text?: string;
+  resultSummary: string | null; reason: string | null; label: string | null; text?: string;
 }
 
 export type CreateResult = { ok: true; task: TaskRow; existing: boolean } | { ok: false; reason: string };
@@ -46,7 +50,7 @@ export type CreateResult = { ok: true; task: TaskRow; existing: boolean } | { ok
 type Audit = (actor: string, action: string, target: string | null, detail: unknown) => void;
 
 const COLUMNS = `id, title, requirements, permission_mode, state, node_id, session_id, created_by, requested_by, directive,
-  created_at, updated_at, result_summary, reason`;
+  created_at, updated_at, result_summary, reason, label`;
 
 function toRow(row: Record<string, SqlStorageValue>): TaskRow {
   return {
@@ -54,7 +58,7 @@ function toRow(row: Record<string, SqlStorageValue>): TaskRow {
     permissionMode: String(row.permission_mode), state: String(row.state), nodeId: row.node_id as string | null,
     sessionId: row.session_id as string | null, createdBy: String(row.created_by), requestedBy: row.requested_by as string | null,
     directive: row.directive as string | null, createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
-    resultSummary: row.result_summary as string | null, reason: row.reason as string | null,
+    resultSummary: row.result_summary as string | null, reason: row.reason as string | null, label: row.label as string | null,
     ...(row.text === undefined ? {} : { text: String(row.text) }),
   };
 }
@@ -70,29 +74,47 @@ export class TaskStore {
     this.sql = sql;
     this.audit = audit;
     this.sql.exec(SCHEMA);
+    const present = new Set(this.sql.exec("PRAGMA table_info(tasks)").toArray().map((column) => String(column.name)));
+    for (const column of ADDED_COLUMNS) if (!present.has(column)) this.sql.exec(`ALTER TABLE tasks ADD COLUMN ${column} TEXT`);
   }
 
   // The node for a new task: online, not revoked, advertising sessions.v1
   // (and, for a delegated task, the delegate accept capability), matching
   // runtime, os and capabilities; among those the one with the fewest active
-  // tasks. A string is the reason there is none.
+  // tasks. With requirements.node (issue #74) only that node, never another
+  // one. A string is the reason there is none.
   pickNode(requirements: TaskRequirements, delegated: boolean): string | { reason: string } {
-    const nodes = this.sql.exec("SELECT id, name, os, capabilities FROM nodes WHERE status = 'online' AND revoked_at IS NULL ORDER BY name")
-      .toArray();
     const runtime = requirements.runtime ?? "claude";
     const needed = [SESSIONS_CAPABILITY, ...(delegated ? [DELEGATE_ACCEPT_CAPABILITY] : []), ...(requirements.capabilities ?? [])];
+    if (requirements.node !== undefined) {
+      const node = this.sql.exec("SELECT id, name, status, os, capabilities, revoked_at FROM nodes WHERE id = ?", requirements.node).toArray()[0];
+      if (!node) return { reason: `unknown node ${requirements.node}` };
+      const label = `node ${String(node.name)} (${String(node.id)})`;
+      if (node.revoked_at !== null) return { reason: `${label} is revoked` };
+      if (node.status !== "online") return { reason: `${label} is not online` };
+      const mismatch = this.mismatch(node, requirements, needed, runtime);
+      return mismatch ? { reason: `${label} cannot take the task: ${mismatch}` } : String(node.id);
+    }
+    const nodes = this.sql.exec("SELECT id, name, os, capabilities FROM nodes WHERE status = 'online' AND revoked_at IS NULL ORDER BY name")
+      .toArray();
     let best: { id: string; load: number } | null = null;
     for (const node of nodes) {
-      const caps = JSON.parse(String(node.capabilities)) as string[];
-      if (!needed.every((c) => caps.includes(c))) continue;
-      if (requirements.os !== undefined && node.os !== requirements.os) continue;
-      const hasRuntime = this.sql.exec("SELECT 1 FROM runtimes WHERE node_id = ? AND name = ? AND kind = 'cli'", node.id, runtime).toArray().length > 0;
-      if (!hasRuntime) continue;
+      if (this.mismatch(node, requirements, needed, runtime)) continue;
       const load = Number(this.sql.exec(`SELECT COUNT(*) AS n FROM tasks WHERE node_id = ? AND state IN (${ACTIVE})`, node.id).one().n);
       if (!best || load < best.load) best = { id: String(node.id), load };
     }
     return best ? best.id : { reason: `no online node with ${needed.join(", ")} and runtime ${runtime}`
       + `${requirements.os ? ` on ${requirements.os}` : ""} can take the task` };
+  }
+
+  // Why a node does not fit the requirements, or null when it does.
+  private mismatch(node: Record<string, SqlStorageValue>, requirements: TaskRequirements, needed: string[], runtime: string): string | null {
+    const caps = JSON.parse(String(node.capabilities)) as string[];
+    const missing = needed.filter((c) => !caps.includes(c));
+    if (missing.length > 0) return `it does not advertise ${missing.join(", ")}`;
+    if (requirements.os !== undefined && node.os !== requirements.os) return `it runs ${String(node.os)}, not ${requirements.os}`;
+    const hasRuntime = this.sql.exec("SELECT 1 FROM runtimes WHERE node_id = ? AND name = ? AND kind = 'cli'", node.id, runtime).toArray().length > 0;
+    return hasRuntime ? null : `it has no ${runtime} CLI runtime`;
   }
 
   create(input: NewTask, now: number): CreateResult {
@@ -103,7 +125,7 @@ export class TaskStore {
     }
     const delegated = input.requestedBy !== undefined;
     const audited = { requirements: input.requirements, permissionMode: input.permissionMode, createdBy: input.createdBy,
-      ...(delegated ? { requestedBy: input.requestedBy, directive: input.directive } : {}) };
+      ...(delegated ? { requestedBy: input.requestedBy, directive: input.directive } : {}), ...(input.label ? { label: input.label } : {}) };
     const picked = this.pickNode(input.requirements, delegated);
     if (typeof picked !== "string") {
       this.audit(input.createdBy, "task.refuse", null, { ...audited, reason: picked.reason });
@@ -111,9 +133,9 @@ export class TaskStore {
     }
     const taskId = crypto.randomUUID();
     this.sql.exec(`INSERT INTO tasks (id, title, text, requirements, permission_mode, state, node_id, created_by, requested_by, directive,
-      request_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'dispatched', ?, ?, ?, ?, ?, ?, ?)`,
+      request_id, created_at, updated_at, label) VALUES (?, ?, ?, ?, ?, 'dispatched', ?, ?, ?, ?, ?, ?, ?, ?)`,
     taskId, input.title, input.text, JSON.stringify(input.requirements), input.permissionMode, picked, input.createdBy,
-    input.requestedBy ?? null, input.directive ?? null, input.requestId ?? null, now, now);
+    input.requestedBy ?? null, input.directive ?? null, input.requestId ?? null, now, now, input.label ?? null);
     this.audit(input.createdBy, "task.create", picked, { taskId, name: taskSessionName(taskId), ...audited });
     return { ok: true, task: this.get(taskId, false)!, existing: false };
   }

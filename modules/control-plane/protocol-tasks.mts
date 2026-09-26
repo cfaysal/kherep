@@ -2,7 +2,7 @@
 // start, stop and continue, task reports and delegated task requests. Plain
 // ECMAScript like protocol.mts, so the Worker and the node load it alike.
 
-import { isPhase1Command, isSessionCommand } from "./protocol.mts";
+import { isLabel, isNodeId, isPhase1Command, isSessionCommand } from "./protocol.mts";
 import { isMessageId, isSessionRef } from "./protocol-messages.mts";
 
 // A node advertises sessions.v1 when its policy enables started sessions. The
@@ -35,12 +35,15 @@ export const MAX_SUMMARY = 2_048;
 export const MAX_REASON = 256;
 export const MAX_CWD = 1_024;
 
-export interface TaskRequirements { runtime?: TaskRuntime; os?: string; capabilities?: string[]; cwd?: string }
+// node (issue #74): the id of the one node the task must run on; the Worker
+// dispatches to that node or refuses, never to another one.
+export interface TaskRequirements { runtime?: TaskRuntime; os?: string; capabilities?: string[]; cwd?: string; node?: string }
 // session.start: prompt is the task text; the node frames it. requestedBy and
 // directive are set for a task a session requested on the operator's directive.
+// label (issue #74) is a display name; the session's name stays task-<8>.
 export interface SessionStartArgs {
   taskId: string; runtime: TaskRuntime; name: string; prompt: string; permissionMode: PermissionMode; cwd?: string;
-  requestedBy?: string; directive?: string;
+  requestedBy?: string; directive?: string; label?: string;
 }
 export interface SessionStopArgs { taskId: string }
 export interface SessionContinueArgs { taskId: string; prompt: string }
@@ -48,7 +51,7 @@ export interface SessionContinueArgs { taskId: string; prompt: string }
 export interface TaskReportBody { taskId: string; state: TaskState; sessionId?: string; reason?: string; summary?: string }
 // node -> Worker: a session asks for a task on the operator's directive.
 export interface TaskRequestBody {
-  requestId: string; title: string; text: string; requirements: TaskRequirements; directive: string; requestedBy: string;
+  requestId: string; title: string; text: string; requirements: TaskRequirements; directive: string; requestedBy: string; label?: string;
 }
 // Worker -> requesting node, as the event task.request.result.
 export interface TaskRequestResult { requestId: string; ok: boolean; taskId?: string; nodeId?: string; reason?: string }
@@ -80,20 +83,25 @@ export const isPermissionMode = (value: unknown): value is PermissionMode => (PE
 export const isTaskState = (value: unknown): value is TaskState => (TASK_STATES as readonly unknown[]).includes(value);
 export const isTaskText = (value: unknown): value is string => isText(value, MAX_TASK_TEXT);
 export const isTaskTitle = (value: unknown): value is string => isLine(value, MAX_TASK_TITLE);
+export const isTaskLabel = isLabel;
+// The label of a session the Control Plane starts for a conversation (issue #74).
+export const intercomLabel = (runtime: string, nodeName: string): string => `intercom: ${runtime}@${nodeName}`;
 
 export function isTaskRequirements(value: unknown): value is TaskRequirements {
-  return isObject(value) && only(value, ["runtime", "os", "capabilities", "cwd"]) && optional(value.runtime, isTaskRuntime)
+  return isObject(value) && only(value, ["runtime", "os", "capabilities", "cwd", "node"]) && optional(value.runtime, isTaskRuntime)
+    && optional(value.node, isNodeId)
     && optional(value.os, (v) => isLine(v, 64)) && optional(value.cwd, (v) => isLine(v, MAX_CWD))
     && optional(value.capabilities, (v) => Array.isArray(v) && v.length <= 16 && v.every((c) => isLine(c, 64)));
 }
 
-const START_KEYS = ["taskId", "runtime", "name", "prompt", "permissionMode", "cwd", "requestedBy", "directive"];
+const START_KEYS = ["taskId", "runtime", "name", "prompt", "permissionMode", "cwd", "requestedBy", "directive", "label"];
 
 function isStartArgs(args: Record<string, unknown>): boolean {
   return only(args, START_KEYS) && isTaskId(args.taskId) && isTaskRuntime(args.runtime)
     && args.name === taskSessionName(args.taskId as string) && isTaskText(args.prompt) && isPermissionMode(args.permissionMode)
     && optional(args.cwd, (v) => isLine(v, MAX_CWD)) && optional(args.requestedBy, (v) => isLine(v, 256))
-    && optional(args.directive, (v) => isText(v, MAX_DIRECTIVE)) && (args.requestedBy === undefined) === (args.directive === undefined);
+    && optional(args.directive, (v) => isText(v, MAX_DIRECTIVE)) && (args.requestedBy === undefined) === (args.directive === undefined)
+    && optional(args.label, isTaskLabel);
 }
 
 // Strict per-command validation: the Phase 1 commands take no args; every
@@ -114,9 +122,9 @@ export function isTaskReportBody(body: unknown): body is TaskReportBody {
 
 // The directive may be empty here so the Worker can refuse it with a reason.
 export function isTaskRequestBody(body: unknown): body is TaskRequestBody {
-  return isObject(body) && only(body, ["requestId", "title", "text", "requirements", "directive", "requestedBy"])
+  return isObject(body) && only(body, ["requestId", "title", "text", "requirements", "directive", "requestedBy", "label"])
     && isMessageId(body.requestId) && isTaskTitle(body.title) && isTaskText(body.text) && isTaskRequirements(body.requirements)
-    && isText(body.directive, MAX_DIRECTIVE, 0) && isSessionRef(body.requestedBy);
+    && isText(body.directive, MAX_DIRECTIVE, 0) && isSessionRef(body.requestedBy) && optional(body.label, isTaskLabel);
 }
 
 export function isTaskRequestResult(body: unknown): body is TaskRequestResult {
