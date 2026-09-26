@@ -8,6 +8,7 @@ import { ensureDir, type NodePaths } from "./config.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
 import { writeJsonAtomic } from "./inbox.mts";
 import { KHEREP_SESSION_ENV, SESSION_ENV } from "./msg-resolve.mts";
+import { withNodeOnPath } from "./task-env.mts";
 
 // The Codex processes of tasks (issue #63), from `codex exec --help` and
 // `codex exec resume --help` of Codex CLI 0.153.4 and the measurements in the
@@ -81,9 +82,10 @@ export function resumeArgs(threadId: string, mode: PermissionMode, files: CodexF
 // The environment of a Codex task process: the daemon's own, plus where the
 // node directory is and which session this is, for the msg CLI (msg-resolve.mts).
 // A Claude Code session id the daemon inherited is dropped: the msg CLI would
-// prefer it and speak for that Claude session.
+// prefer it and speak for that Claude session. The node directory goes first
+// on PATH (task-env.mts).
 export function codexEnv(paths: NodePaths, session: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const result: NodeJS.ProcessEnv = { ...base, [KHEREP_SESSION_ENV]: session, KHEREP_CONFIG_DIR: path.dirname(paths.dir) };
+  const result: NodeJS.ProcessEnv = { ...withNodeOnPath(base), [KHEREP_SESSION_ENV]: session, KHEREP_CONFIG_DIR: path.dirname(paths.dir) };
   delete result[SESSION_ENV];
   return result;
 }

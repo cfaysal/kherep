@@ -16,9 +16,14 @@ test("starts claude --bg with the exact arguments, maps the session id by name a
   const node = taskNode(t);
   const result = await startTask(startArgs(), node.deps());
   const real = fs.realpathSync.native(node.workspace);
-  assert.deepEqual(node.calls[0], { file: "/opt/bin/claude",
+  const { env, ...options } = node.calls[0].options;
+  assert.deepEqual({ ...node.calls[0], options }, { file: "/opt/bin/claude",
     args: ["--bg", "--name", "task-3f2a1b0c", "--permission-mode", "auto", FRAMED], options: { timeout: 60_000, cwd: real } });
+  // The task session finds the daemon's node first on PATH (issue #79).
+  const pathKey = Object.keys(env!).find((k) => k.toUpperCase() === "PATH")!;
+  assert.equal(env![pathKey]!.split(path.delimiter)[0], path.dirname(process.execPath));
   assert.deepEqual(node.calls[1].args, ["agents", "--json", "--all"]);
+  assert.equal(node.calls[1].options.env, undefined, "only the task session gets the environment");
   assert.deepEqual(result, { taskId: TASK, state: "started", sessionId: "5e55b0000000-0000-4000-8000-000000000000" });
   assert.deepEqual(node.reports(), [{ taskId: TASK, state: "started", sessionId: "5e55b0000000-0000-4000-8000-000000000000" }]);
   assert.equal(readTask(node.paths, TASK)?.shortId, "b0000000");

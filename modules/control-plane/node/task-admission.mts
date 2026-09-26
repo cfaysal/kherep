@@ -1,5 +1,5 @@
 import { DELEGATED_PERMISSION_MODES, type SessionStartArgs } from "../protocol-tasks.mts";
-import { cliCommand } from "./msg-cli.mts";
+import { taskCliCommand } from "./msg-cli.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { isActive, listTasks, queueReport, type TaskRecord } from "./task-records.mts";
 import { framePrompt, resolveCwd } from "./task-prompt.mts";
@@ -57,5 +57,5 @@ export function admitStart(args: SessionStartArgs, deps: RunnerDeps): Admitted {
     updatedAt: new Date(now).toISOString(), ...(args.requestedBy !== undefined ? { requestedBy: args.requestedBy } : {}),
     ...(args.label ? { label: args.label } : {}),
   };
-  return { record, prompt: framePrompt(args.taskId, args.prompt, deps.cli ?? cliCommand(), delegation, args.runtime) };
+  return { record, prompt: framePrompt(args.taskId, args.prompt, deps.cli ?? taskCliCommand(deps.platform), delegation, args.runtime) };
 }
