@@ -32,6 +32,18 @@ export function toBashPath(value: string): string {
   return drive ? `/${drive[1].toLowerCase()}/${drive[2]}` : slashed;
 }
 
+// Issue #75. The workspace as the settings env block carries it. On a Windows
+// host with the win profile it takes the native drive form D:/Work: Node tools
+// resolve a Git Bash /d/Work to D:\d\Work, while Git Bash consumers accept
+// D:/Work (the commit-msg hook's cd -P, and kherep_shell_path in profile.sh for
+// the installer scripts). Every other host keeps the bash-visible form.
+export function workspaceEnvPath(profile: string, value: string, platform: string = process.platform): string {
+  const bash = toBashPath(value);
+  if (profile !== "win" || platform !== "win32") return bash;
+  const drive = bash.match(/^\/([A-Za-z])(\/.*)?$/);
+  return drive ? `${drive[1].toUpperCase()}:${drive[2] || "/"}` : bash;
+}
+
 const PATH_PLACEHOLDERS: Record<string, keyof PortablePaths> = {
   __KHEREP_WORKSPACE__: "workspace",
   __KHEREP_CREDENTIALS_ROOT__: "credentialsRoot",

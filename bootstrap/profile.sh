@@ -44,6 +44,26 @@ kherep_default_credentials_root() {
   printf '%s\n' "$HOME/.kherep/credentials"
 }
 
+# Issue #75. On Windows the Claude settings carry the workspace in native form
+# (D:/Work), and the harness injects that value into every tool call. Git Bash
+# names the same directory /d/Work. On the win profile a drive path is turned
+# into that form before validation; every other value passes unchanged, so the
+# mac profile still refuses a drive path below.
+kherep_shell_path() {
+  local value="$1"
+  if [ "$KHEREP_PROFILE" = "win" ]; then
+    case "$value" in
+      [A-Za-z]:[/\\]*|[A-Za-z]:)
+        local letter rest
+        letter="$(printf '%s' "${value%%:*}" | tr 'A-Z' 'a-z')"
+        rest="$(printf '%s' "${value#?:}" | tr '\\' '/')"
+        value="/$letter${rest:-/}"
+        ;;
+    esac
+  fi
+  printf '%s\n' "$value"
+}
+
 # Paths consumed by bash file operations must already use the host shell's
 # absolute syntax. In particular, accepting D:\... on macOS would create a
 # relative directory literally named "D:\..." before the JSON renderer could

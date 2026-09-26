@@ -10,7 +10,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/profile.sh"
 source "$HERE/install-retired.sh"
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
-WS="$(kherep_env WORKSPACE "$(kherep_default_workspace)")"
+WS="$(kherep_shell_path "$(kherep_env WORKSPACE "$(kherep_default_workspace)")")"
 CREDENTIALS_ROOT="$(kherep_env CREDENTIALS_ROOT "$(kherep_default_credentials_root)")"
 INSTALL_ATLASSIAN_TOOLS="${KHEREP_INSTALL_ATLASSIAN_TOOLS:-0}"
 kherep_validate_shell_path CLAUDE_HOME "$CLAUDE_HOME" || exit $?
