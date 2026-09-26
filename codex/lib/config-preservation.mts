@@ -210,8 +210,10 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
   const retiredTable = retireUnmanagedCentralBrainTable(next, options.retiredCentralBrain, options.startMarker, options.endMarker);
   next = retiredTable.config;
   const currentRenderOptions = { ...effectiveOptions, mcpServers, pluginMcpServers };
+  // Every block written before issue #68 lacks the commandWindows forms.
+  const beforeWindowsCommands = { ...currentRenderOptions, windowsHookCommands: false };
   // Every block written before the control-plane hook existed lacks it.
-  const beforeControlPlane = { ...currentRenderOptions, controlPlaneHook: undefined };
+  const beforeControlPlane = { ...beforeWindowsCommands, controlPlaneHook: undefined };
   const currentLegacyOptions = { ...beforeControlPlane, memoryProvider: "unconfigured" as const };
   const legacyRenderOptions = { ...currentLegacyOptions, observationStopHook: false };
   const predecessorRenderOptions = {
@@ -238,7 +240,7 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
     startMarker: options.startMarker,
     endMarker: options.endMarker,
     knownManagedFragments: withManagedNodePaths([
-      ...[currentRenderOptions, beforeControlPlane].flatMap((current) => {
+      ...[currentRenderOptions, beforeWindowsCommands, beforeControlPlane].flatMap((current) => {
         const previousStop = { ...current, observationStopHook: false };
         return [...managedFragmentFamily(current, previousStop),
           ...retiredCentralBrainFragments(current, previousStop, options.retiredCentralBrain)];

@@ -271,7 +271,7 @@ test("upgrades the exact pre-observation projection with and without retired nat
     { options: MANAGED_OPTIONS, written: { ...MANAGED_OPTIONS, mcpServers: MANAGED_OPTIONS.registryProjections } },
     { options: { ...MANAGED_OPTIONS, retiredCentralBrain: retired }, written: {
       ...MANAGED_OPTIONS, memoryProvider: "central-brain" as const, nativeHooks: retired.nativeHooks,
-      mcpServers: [...MANAGED_OPTIONS.registryProjections, retired.server],
+      mcpServers: [...MANAGED_OPTIONS.registryProjections, retired.server], windowsHookCommands: false,
     } },
   ];
 
@@ -283,7 +283,7 @@ test("upgrades the exact pre-observation projection with and without retired nat
 
     const result = prepareManagedConfig(config, options);
     assert.equal(result.managedFragment, "retiredCentralBrain" in options ? "replaced" : "current");
-    assert.equal((result.config.match(/codex-confluence-delivery-check\.mts/g) || []).length, 1);
+    assert.equal((result.config.match(/^command = .*codex-confluence-delivery-check\.mts/gm) || []).length, 1);
     assert.equal((result.config.match(/codex-observation-turn-completion\.mts/g) || []).length, 0);
     assert.doesNotMatch(result.config, /central-brain|native-context|native-capture/);
     assert.equal(prepareManagedConfig(result.config, options).managedFragment, "current");

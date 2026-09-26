@@ -45,6 +45,9 @@ export interface RenderOptions extends McpRenderOptions {
   // Legacy renders only: true was the combined macOS Stop hook, false was the
   // separate Windows observation Stop hook. Omitted means quiet observations.
   observationStopHook?: boolean;
+  // Issue #68. false renders the blocks written before every hook carried a
+  // commandWindows form, so the upgrade can recognise and replace them.
+  windowsHookCommands?: boolean;
 }
 
 function tomlString(value: unknown): string {
@@ -85,8 +88,18 @@ function adaptedHook(node: string, hookDir: string, script: string, phase: strin
   };
 }
 
+// Issue #68. Codex on Windows runs a hook as `pwsh -NoProfile -Command <command>`,
+// and a command that starts with a quoted path is a PowerShell ParserError. The
+// call operator makes the same quoted parts a valid command in pwsh 7 and in
+// Windows PowerShell 5.1; macOS and Linux keep running `command`.
+function withWindowsCommand(hook: HookSpec): HookSpec {
+  return { ...hook, commandWindows: `& ${hook.command}` };
+}
+
 export function renderHooks(options: RenderOptions, previousNative = false): string {
   const { contextHook, hookDir, node } = options;
+  const group = (event: string, matcher: string, hooks: HookSpec[]): string =>
+    hookGroup(event, matcher, options.windowsHookCommands === false ? hooks : hooks.map(withWindowsCommand));
   const hook = (script: string, extra?: HookOptions): HookSpec => scriptHook(node, hookDir, script, extra);
   const adapted = (script: string, phase: string, extra?: HookOptions): HookSpec => adaptedHook(node, hookDir, script, phase, extra);
   const native = (cli: string | undefined, timeout = 15): HookSpec[] =>
@@ -95,25 +108,25 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
         : nativeCommand([node, cli, "codex", "--profile", options.nativeHooks.profile], process.platform,
           options.nativeHooks.extraCaCertificates), timeout }] : [];
   const groups = [
-    hookGroup("PreToolUse", "Read|Grep|Glob|Edit|Write|MultiEdit|apply_patch|Bash|shell_command|exec_command|functions\\.exec", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
-    hookGroup("PreToolUse", "Agent|spawn_agent|Task|Workflow|WebSearch|WebFetch|mcp__.*", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
-    hookGroup("PreToolUse", "Bash|shell_command|exec_command|functions\\.exec", [adapted("commit-guard.js", "pre"), adapted("deploy-guard.js", "pre-no-transcript")]),
-    hookGroup("PreToolUse", "Agent|spawn_agent", [hook("codex-dispatch-contract-guard.mts")]),
-    hookGroup("PreToolUse", "mcp__playwright__browser_navigate", [hook("playwright-file-guard.js")]),
-    hookGroup("UserPromptSubmit", "", [
+    group("PreToolUse", "Read|Grep|Glob|Edit|Write|MultiEdit|apply_patch|Bash|shell_command|exec_command|functions\\.exec", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
+    group("PreToolUse", "Agent|spawn_agent|Task|Workflow|WebSearch|WebFetch|mcp__.*", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
+    group("PreToolUse", "Bash|shell_command|exec_command|functions\\.exec", [adapted("commit-guard.js", "pre"), adapted("deploy-guard.js", "pre-no-transcript")]),
+    group("PreToolUse", "Agent|spawn_agent", [hook("codex-dispatch-contract-guard.mts")]),
+    group("PreToolUse", "mcp__playwright__browser_navigate", [hook("playwright-file-guard.js")]),
+    group("UserPromptSubmit", "", [
       {
         command: command(node, contextHook),
         status: "Applying evidence-first routing",
       },
       ...native(options.nativeHooks?.contextCli),
     ]),
-    hookGroup("PostToolUse", "Edit|Write|MultiEdit|apply_patch|functions\\.exec", [
+    group("PostToolUse", "Edit|Write|MultiEdit|apply_patch|functions\\.exec", [
       adapted("manifest-watch.mts", "post"),
       adapted("loc-watch.mts", "post"),
       adapted("umlaut-translit-watch.mts", "post"),
       adapted("simplify-nudge.mts", "post"),
     ]),
-    hookGroup("SessionStart", "startup|resume|clear|compact", [
+    group("SessionStart", "startup|resume|clear|compact", [
       { command: command(node, contextHook), status: "Loading Kherep Maestro" },
       hook("codex-cbm-reminder.mts"),
       // Read-only. Says whether the Confluence write path exists in tools/ yet,
@@ -123,8 +136,8 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
       hook("codex-confluence-delivery-check.mts"),
       ...native(options.nativeHooks?.contextCli),
     ]),
-    hookGroup("PreCompact", "manual|auto", [hook("codex-precompact-checkpoint.mts", { timeout: 30 })]),
-    hookGroup("Stop", "", [
+    group("PreCompact", "manual|auto", [hook("codex-precompact-checkpoint.mts", { timeout: 30 })]),
+    group("Stop", "", [
       ...(options.observationStopHook === true
         ? [hook("codex-observation-stop.mts", { timeout: 30 })]
         : [
@@ -135,19 +148,19 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
         ]),
       ...native(options.nativeHooks?.captureCli, 10),
     ]),
-    hookGroup("SubagentStart", ".*", [hook("codex-cbm-reminder.mts")]),
+    group("SubagentStart", ".*", [hook("codex-cbm-reminder.mts")]),
   ];
   if (options.controlPlaneHook) {
     // Runs from the checkout, because it imports the modules next to it.
     const deliver: HookSpec = { command: command(node, options.controlPlaneHook, "--runtime", "codex") };
     groups.push(
-      hookGroup("SessionStart", "startup|resume|clear|compact", [deliver]),
-      hookGroup("UserPromptSubmit", "", [deliver]),
-      hookGroup("Stop", "", [deliver]),
+      group("SessionStart", "startup|resume|clear|compact", [deliver]),
+      group("UserPromptSubmit", "", [deliver]),
+      group("Stop", "", [deliver]),
     );
   }
   if (native(options.nativeHooks?.captureCli).length)
-    groups.push(hookGroup("SessionEnd", "other", native(options.nativeHooks?.captureCli, 3)));
+    groups.push(group("SessionEnd", "other", native(options.nativeHooks?.captureCli, 3)));
   return groups.join("\n\n");
 }
 
@@ -232,10 +245,17 @@ export function render(options: RenderOptions): string {
   return [renderPrefix(options), renderMcp(options), renderPluginMcp(options), ""].join("\n\n");
 }
 
+// The previous-native, previous-nudges and JavaScript-era renders reproduce
+// blocks written before issue #68, so none of them carries a commandWindows form.
+function beforeWindowsCommands(options: RenderOptions): RenderOptions {
+  return { ...options, windowsHookCommands: false };
+}
+
 export function renderWithoutNativeHooks(options: RenderOptions): string {
   return render({ ...options, nativeHooks: undefined });
 }
-export function renderPreviousNativeHooks(options: RenderOptions): string {
+export function renderPreviousNativeHooks(current: RenderOptions): string {
+  const options = beforeWindowsCommands(current);
   return ["# Managed Kherep Codex Maestro parity projection.", renderHooks(options, true), renderMcp(options), renderPluginMcp(options), ""].join("\n\n");
 }
 
@@ -281,11 +301,11 @@ function withLegacySharedNudges(config: string): string {
 
 // Recognize the previous Kherep projection whose shared nudges still used .js.
 export function renderPreviousNudgesPrefix(options: RenderOptions): string {
-  return withLegacySharedNudges(withoutPostLegacyHooks(renderPrefix({ ...options, nativeHooks: undefined })));
+  return withLegacySharedNudges(withoutPostLegacyHooks(renderPrefix({ ...beforeWindowsCommands(options), nativeHooks: undefined })));
 }
 
 export function renderPreviousNudges(options: RenderOptions): string {
-  return withLegacySharedNudges(withoutPostLegacyHooks(renderWithoutNativeHooks(options)));
+  return withLegacySharedNudges(withoutPostLegacyHooks(renderWithoutNativeHooks(beforeWindowsCommands(options))));
 }
 
 // The projection as it stood BEFORE the post-legacy hooks existed. An installer
@@ -314,7 +334,7 @@ export function renderBeforeObservationHookWithoutNativeHooks(options: RenderOpt
 }
 
 export function renderLegacyJavaScriptPrefix(options: RenderOptions): string {
-  let hooks = withoutPostLegacyHooks(withLegacySharedNudges(renderHooks({ ...options, nativeHooks: undefined })));
+  let hooks = withoutPostLegacyHooks(withLegacySharedNudges(renderHooks({ ...beforeWindowsCommands(options), nativeHooks: undefined })));
   for (const name of LEGACY_JAVASCRIPT_HOOKS) {
     hooks = hooks.replaceAll(`${name}.mts`, `${name}.js`);
   }
