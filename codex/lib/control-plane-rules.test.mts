@@ -86,7 +86,7 @@ function fixture() {
   const capabilities = JSON.parse(fs.readFileSync(
     path.join(import.meta.dirname, "..", "parity", "capabilities.json"), "utf8")) as Capabilities;
   fs.writeFileSync(claudeRegistryFile, JSON.stringify({ mcpServers: Object.fromEntries(
-    capabilities.mcpServers.map((name) => [name, { type: "http", url: `https://example.test/${name}` }])) }));
+    capabilities.mcpServers.map((name) => [name, { type: "http", url: `https://example.test/${name}` }])) }), { mode: 0o600 });
   return {
     root, codexHome,
     options: {
