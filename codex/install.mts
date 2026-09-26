@@ -15,6 +15,7 @@ import { setPluginEnabled } from "./lib/plugin-config.mts";
 import { componentHash } from "./lib/component-hash.mts";
 import { prepareManagedConfig } from "./lib/config-preservation.mts";
 import type { Capabilities, McpCompatibilityOptions, RunCodex } from "./lib/contracts.mts";
+import { controlPlaneCli, controlPlaneRulesPath, renderControlPlaneRules } from "./lib/control-plane-rules.mts";
 import { InstallTransaction } from "./lib/install-transaction.mts";
 import * as localPlugin from "./lib/local-plugin.mts";
 import * as managedConfig from "./lib/managed-config.mts";
@@ -384,6 +385,8 @@ export function install(options: InstallOptions = {}) {
     transaction.copyFile(sources.privacyHook, path.join(targets.hookDir, "codex-privacy-boundary-guard.mts"));
     transaction.copyFile(sources.confluenceDeliveryHook, path.join(targets.hookDir, "codex-confluence-delivery-check.mts"));
     transaction.remove(targets.memoryNotifyHook);
+    // Issue #72. Beside the deliver hook: the msg CLI from the same checkout.
+    transaction.writeFile(controlPlaneRulesPath(codexHome), renderControlPlaneRules(controlPlaneCli(repoRoot)));
     for (const relative of RETIRED_TARGETS) transaction.remove(path.join(codexHome, relative));
 
     const projection = parityProjection.project({
