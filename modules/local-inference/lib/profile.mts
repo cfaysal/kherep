@@ -27,12 +27,23 @@ export function detectProfile(env: Env = process.env, platform: string = process
   return profile;
 }
 
+// Copy of lib/workspace-path.mts (issue #75): this lib is projected on its own
+// and cannot import from the repository root. lib/workspace-path.test.mts
+// asserts that both behave the same.
+export function nativeWorkspacePath(value: string, platform: string = process.platform): string {
+  if (platform !== "win32") return value;
+  const drive = value.match(/^\/([A-Za-z])(\/.*)?$/);
+  return drive ? `${drive[1].toUpperCase()}:${(drive[2] || "/").replace(/\//g, "\\")}` : value;
+}
+
 export function portablePaths(profile: Profile, env: Env = process.env): PortablePaths {
   const home = env.HOME || env.USERPROFILE || os.homedir();
   const pathApi = profile === "mac" ? path.posix : path;
   const workspaceValue = productEnv(env, "WORKSPACE");
   if (workspaceValue === "") throw new Error("KHEREP_WORKSPACE must not be empty");
-  const workspace = pathApi.resolve(workspaceValue ?? pathApi.join(home, "Kherep"));
+  const workspace = pathApi.resolve(
+    workspaceValue === undefined ? pathApi.join(home, "Kherep") : nativeWorkspacePath(workspaceValue),
+  );
   const credentialsValue = productEnv(env, "CREDENTIALS_ROOT");
   if (credentialsValue === "") throw new Error("KHEREP_CREDENTIALS_ROOT must not be empty");
   const credentials = pathApi.resolve(credentialsValue ?? pathApi.join(home, ".kherep", "credentials"));
