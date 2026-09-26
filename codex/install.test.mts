@@ -159,8 +159,11 @@ function occurrences(text: string, value: string): number {
   return text.split(value).length - 1;
 }
 
+// Without the commandWindows lines, which repeat each command (issue #68), so a
+// script name occurs once per hook.
 function renderedHookGroup(config: string, event: string): string {
-  return config.split(`[[hooks.${event}]]`)[1]!.split(/\n\[\[hooks\.[A-Za-z]+\]\]/)[0]!;
+  return config.split(`[[hooks.${event}]]`)[1]!.split(/\n\[\[hooks\.[A-Za-z]+\]\]/)[0]!
+    .replace(/^commandWindows = .*\n/gm, "");
 }
 
 // OP-1429. The Mac state before the retirement: a persisted Central Brain
@@ -1226,7 +1229,8 @@ test("wires the control-plane delivery hook from the checkout and upgrades a blo
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const hookPath = path.resolve(here, "..", "modules", "control-plane", "node", "deliver-hook.mts");
   assert.ok(fs.existsSync(hookPath));
-  const deliver = { command: command(process.execPath, hookPath, "--runtime", "codex") };
+  const deliverCommand = command(process.execPath, hookPath, "--runtime", "codex");
+  const deliver = { command: deliverCommand, commandWindows: `& ${deliverCommand}` };
   const groups = [
     hookGroup("SessionStart", "startup|resume|clear|compact", [deliver]),
     hookGroup("UserPromptSubmit", "", [deliver]),
@@ -1235,10 +1239,11 @@ test("wires the control-plane delivery hook from the checkout and upgrades a blo
   const result = install(installOptions);
   const config = fs.readFileSync(result.targets.config, "utf8");
   assert.equal(occurrences(config, groups), 1);
-  assert.equal(occurrences(config, "deliver-hook.mts"), 3);
-  // The existing hooks are untouched: without the three groups the block is the
-  // one the previous installer wrote, and a reinstall recognises and upgrades it.
-  const previous = config.replace(`\n\n${groups}`, "");
+  assert.equal(occurrences(config, "deliver-hook.mts"), 6);
+  // The existing hooks are untouched: without the three groups and the
+  // commandWindows forms (issue #68) the block is the one the previous installer
+  // wrote, and a reinstall recognises and upgrades it.
+  const previous = config.replace(`\n\n${groups}`, "").replace(/^commandWindows = .*\n/gm, "");
   assert.notEqual(previous, config);
   fs.writeFileSync(result.targets.config, previous);
   assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), config);

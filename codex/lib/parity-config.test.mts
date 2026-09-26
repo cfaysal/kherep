@@ -84,7 +84,7 @@ test("native hooks add exactly one command per event and preserve reminders and 
   const options = { contextHook: "/synthetic/reminder.mts", hookDir: "/synthetic/hooks",
     node: "/synthetic/node", mcpServers: [], memoryProvider: "central-brain" as const,
     nativeHooks: { contextCli: "/synthetic/native-context.js", captureCli: "/synthetic/native-capture.mjs",
-      profile: "/synthetic/profile.json" } };
+      profile: "/synthetic/profile.json" }, windowsHookCommands: false };
   const config = render(options);
   for (const [event, cli] of [["SessionStart", options.nativeHooks.contextCli],
     ["UserPromptSubmit", options.nativeHooks.contextCli], ["Stop", options.nativeHooks.captureCli],
@@ -167,7 +167,7 @@ test("renders the previous Kherep projection with only the four nudges as JavaSc
     restored = restored.replaceAll(`${name}.js`, `${name}.mts`);
   }
   assert.notEqual(previous, current);
-  assert.equal(restored, renderBeforePostLegacyHooks(options),
+  assert.equal(restored, renderBeforePostLegacyHooks({ ...options, windowsHookCommands: false }),
     "the previous projection differs from the exact pre-hook projection in those four hook names only");
   assert.match(prefix, /^# Managed Kherep Codex Maestro parity projection\./);
   assert.match(prefix, /statusMessage = "Loading Kherep Maestro"/);

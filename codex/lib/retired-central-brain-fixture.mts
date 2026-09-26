@@ -22,7 +22,8 @@ export function withRetiredCentralBrain(
     process.platform, hooks.extraCaCertificates);
   const entry = (event: string, cli: string, timeout: number) =>
     hookGroup(event, "", [{ command: bound(cli), timeout }]).slice(`[[hooks.${event}]]`.length);
-  let text = block;
+  // Issue #68. Every pre-retirement installer wrote its hooks without commandWindows.
+  let text = block.replace(/^commandWindows = .*\n/gm, "");
   text = insertBefore(text, "\n\n[[hooks.PostToolUse]]", entry("UserPromptSubmit", hooks.contextCli, 15));
   text = insertBefore(text, "\n\n[[hooks.PreCompact]]", entry("SessionStart", hooks.contextCli, 15));
   text = insertBefore(text, "\n\n[[hooks.SubagentStart]]", entry("Stop", hooks.captureCli, 10));

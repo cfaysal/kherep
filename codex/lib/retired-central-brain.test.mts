@@ -28,7 +28,7 @@ const MANAGED = {
 
 function written(options: RenderOptions): RenderOptions {
   return { ...options, memoryProvider: "central-brain", nativeHooks: retired.nativeHooks,
-    mcpServers: [...options.mcpServers, retired.server] };
+    mcpServers: [...options.mcpServers, retired.server], windowsHookCommands: false };
 }
 
 test("the retired render is the MCP table plus native hooks the old installer derived from the selection", () => {
