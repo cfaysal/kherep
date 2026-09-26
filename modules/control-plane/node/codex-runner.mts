@@ -10,7 +10,7 @@ import { cliCommand } from "./msg-cli.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit, refuse, trim } from "./task-admission.mts";
 import { isActive, listTasks, queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
-import { frameFollowUp } from "./task-prompt.mts";
+import { frameFollowUp, resolveCwd } from "./task-prompt.mts";
 
 // Starts, continues, stops and watches Codex tasks (issue #63) with the same
 // admission, limits and framing as Claude tasks (session-runner.mts). The
@@ -91,8 +91,11 @@ export async function continueCodex(args: SessionContinueArgs, deps: RunnerDeps)
   const limit = overLimit(deps, now, args.taskId);
   if (limit) throw new Error(limit);
   const threadId = record.sessionId;
+  // Again: the directory may have been swapped for a link out of the roots since the start.
+  const cwd = resolveCwd(deps.policy.sessions, record.cwd, deps.realpath);
+  if (!cwd.ok) throw new Error(cwd.reason);
   const prompt = frameFollowUp(args.taskId, args.prompt, deps.cli ?? cliCommand(), "codex");
-  const restarted: TaskRecord = { ...record, state: "started", reason: undefined, pid: undefined, pidStart: undefined,
+  const restarted: TaskRecord = { ...record, cwd: cwd.cwd, state: "started", reason: undefined, pid: undefined, pidStart: undefined,
     deadline: new Date(now + deps.policy.sessions.maxRuntimeMinutes * 60_000).toISOString() };
   const saved = await launch(deps, restarted, (files, outbox) => resumeArgs(threadId, record.permissionMode, files, outbox), prompt);
   return { taskId: saved.taskId, state: saved.state };

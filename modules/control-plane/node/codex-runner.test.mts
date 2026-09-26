@@ -4,7 +4,8 @@ import path from "node:path";
 import test from "node:test";
 
 import { codexNode, LAST_MESSAGE, THREAD, waitFor } from "./codex-fixture.mts";
-import { lastStderrLine, readExit } from "./codex-output.mts";
+import { lastLine, lastStderrLine, readExit } from "./codex-output.mts";
+import { nodePaths } from "./config.mts";
 import { codexEnv, codexFiles, FORBIDDEN_CODEX_FLAGS, processStart, resumeArgs } from "./codex-process.mts";
 import { continueTask, startTask, stopTask } from "./session-runner.mts";
 import { startArgs, T0, TASK, taskId, taskNode } from "./task-fixture.mts";
@@ -72,7 +73,7 @@ test("permission modes map to sandboxes; bypass flags are never passed", posix, 
   }
   // Even a thread id read from codex's own output cannot smuggle one in.
   assert.throws(() => resumeArgs("--dangerously-bypass-approvals-and-sandbox", "auto", codexFiles(node.paths, TASK), node.paths.outbox),
-    /lifts the sandbox/);
+    /not a plain id/);
   // read-only still gets the outbox as its one extra root.
   assert.deepEqual(readOnly.argv.slice(readOnly.argv.indexOf("--add-dir"), readOnly.argv.indexOf("--add-dir") + 2), ["--add-dir", node.paths.outbox]);
   for (const run of node.runs()) assert.equal(run.argv.filter((a) => a === "--add-dir" || a.startsWith("sandbox_workspace_write")).length, 1);
@@ -243,4 +244,33 @@ test("the process environment names this session and the node directory, never a
   const inherited = { PATH: "/usr/bin", HOME: "/home/someone", ["CLAUDE_CODE_" + "SESSION_ID"]: "a-claude-session" };
   assert.deepEqual(codexEnv(node.paths, "task-3f2a1b0c", inherited),
     { PATH: "/usr/bin", HOME: "/home/someone", KHEREP_SESSION_ID: "task-3f2a1b0c", KHEREP_CONFIG_DIR: node.root });
+});
+
+test("a continue checks the working directory again: a directory swapped for a link out of the roots is refused", posix, async (t) => {
+  const node = codexNode(t);
+  const repo = path.join(node.workspace, "repo");
+  await startTask(codexArgs(TASK, { cwd: repo }), node.deps());
+  await waitFor(() => readExit(codexFiles(node.paths, TASK)) !== null, "the run");
+  await watchTasks(node.deps());
+  const outside = path.join(node.root, "outside");
+  fs.mkdirSync(outside);
+  fs.renameSync(repo, path.join(node.workspace, "moved"));
+  fs.symlinkSync(outside, repo);
+  await assert.rejects(continueTask({ taskId: TASK, prompt: "more" }, node.deps()), /outside the workspace roots/);
+  assert.equal(node.runs().length, 1, "nothing resumed");
+});
+
+test("a thread id that is not a plain id never reaches the command line", () => {
+  const files = codexFiles(nodePaths("/tmp/kherep-none"), TASK);
+  for (const bad of ["-c", "--approve-for-me", "a b", "", "x/../y"]) {
+    assert.throws(() => resumeArgs(bad, "auto", files, "/tmp/outbox"), /not a plain id/, bad);
+  }
+});
+
+test("a stderr line is redacted: keys, bearer tokens, JWTs, URL user info and query strings; a framing echo is dropped", () => {
+  assert.equal(lastLine("error: auth failed for sk-proj_AbC1 with Bearer abc.def and eyJhbGci.eyJzdWIi.c2ln-x at "
+    + "https://user:pa55@api.example.invalid/v1/x?token=s3cret&a=1 #frag"),
+  "error: auth failed for sk-<redacted> with Bearer <redacted> and <jwt-redacted> at https://<redacted>@api.example.invalid/v1/x?<redacted> #frag");
+  assert.equal(lastLine("echo: task from the operator via the KHEREP control plane"), "");
+  assert.equal(lastLine("ok line\n\n  \n"), "ok line");
 });

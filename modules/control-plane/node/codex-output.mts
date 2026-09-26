@@ -56,9 +56,8 @@ export function readLastMessage(files: CodexFiles): string {
   }
 }
 
-// The last non-empty stderr line, for a failure reason: API keys redacted,
-// control characters removed, at most 200 characters. The prompt goes in on
-// stdin, and a line that quotes the framing (it names Kherep) is dropped.
+// The last non-empty stderr line, for a failure reason (lastLine). The prompt
+// goes in on stdin.
 export function lastStderrLine(files: CodexFiles): string {
   let text: string;
   try {
@@ -66,7 +65,25 @@ export function lastStderrLine(files: CodexFiles): string {
   } catch {
     return "";
   }
+  return lastLine(text);
+}
+
+// Secrets a CLI error line may carry: API keys, bearer tokens, JWTs, URL user
+// info and URL query strings.
+const REDACTIONS: readonly [RegExp, string][] = [
+  [/sk-[A-Za-z0-9_*-]+/g, "sk-<redacted>"],
+  [/Bearer\s+\S+/gi, "Bearer <redacted>"],
+  [/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, "<jwt-redacted>"],
+  [/\/\/[^\s/@]+@/g, "//<redacted>@"],
+  [/([a-z][a-z0-9+.-]*:\/\/[^\s?#]*)\?[^\s#]*/gi, "$1?<redacted>"],
+];
+
+// The last non-empty line of a CLI's stderr: control characters removed,
+// secrets redacted, at most 200 characters. A line that quotes the framed
+// prompt (it names Kherep, in any case) is dropped.
+export function lastLine(text: string): string {
   const line = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).at(-1) ?? "";
-  if (line.includes("Kherep")) return "";
-  return line.replace(/sk-[A-Za-z0-9_*-]+/g, "sk-<redacted>").replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 200);
+  if (/kherep/i.test(line)) return "";
+  return REDACTIONS.reduce((out, [pattern, replacement]) => out.replace(pattern, replacement),
+    line.replace(/[\u0000-\u001f\u007f]/g, "")).slice(0, 200);
 }

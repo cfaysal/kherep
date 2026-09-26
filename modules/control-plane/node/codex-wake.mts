@@ -10,6 +10,7 @@ import { wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit } from "./task-admission.mts";
 import { isActive, listTasks, type TaskRecord } from "./task-records.mts";
+import { resolveCwd } from "./task-prompt.mts";
 import { killSwitch, STUCK_TEXT, wakeText } from "./wake-hook.mts";
 
 // Peer messages for Codex task sessions (issue #63). A `codex exec` run ends
@@ -89,6 +90,12 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   // offered: a turn denied afterwards (spacing) would count an offer for
   // nothing and refuse the message after MAX_OFFERS rounds. With due messages
   // the context is not empty, unless a delivery hook offered them meanwhile.
+  // Again: the directory may have been swapped for a link out of the roots since the start.
+  const cwd = resolveCwd(deps.policy.sessions!, record.cwd, deps.realpath);
+  if (!cwd.ok) {
+    log(`kherep-node: not resuming task ${record.taskId} for messages: ${cwd.reason}`);
+    return;
+  }
   const budget = takeTurn(paths, sessionId, now);
   if (budget === "spacing" || budget === "locked") return;
   if (budget === "exhausted") return note(paths, now, sessionId, due, "budget");
@@ -100,7 +107,7 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   if (fresh.length > 0) note(paths, now, sessionId, ids(fresh), "wake");
   if (stuck.length > 0) note(paths, now, sessionId, ids(stuck), "stuck-offer");
   const prompt = `${fresh.length > 0 ? wakeText(fresh.length) : STUCK_TEXT}\n\n${context}`;
-  const run: TaskRecord = { ...record, running: true, offered,
+  const run: TaskRecord = { ...record, cwd: cwd.cwd, running: true, offered,
     deadline: new Date(now + deps.policy.sessions!.maxRuntimeMinutes * 60_000).toISOString() };
   try {
     await spawnRun(deps, run, (files, outbox) => resumeArgs(sessionId, record.permissionMode, files, outbox), prompt);
