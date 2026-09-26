@@ -1,8 +1,9 @@
 import { MAX_SUMMARY, type SessionContinueArgs, type SessionStopArgs } from "../protocol-tasks.mts";
 import {
-  codexEnv, codexFiles, findCodex, holdsChild, readEvents, readExit, readLastMessage, resumeArgs, spawnCodex, startArgs, startTimeOf,
-  stillRuns, terminate, type CodexExit, type CodexFiles,
+  codexEnv, codexFiles, holdsChild, resumeArgs, spawnCodex, startArgs, startTimeOf, stillRuns, terminate, type CodexFiles,
 } from "./codex-process.mts";
+import { lastStderrLine, readEvents, readExit, readLastMessage, type CodexExit } from "./codex-output.mts";
+import { findCodex } from "./codex-binary.mts";
 import { ensureDir } from "./config.mts";
 import { getMessage, markDelivered, markRetry } from "./inbox.mts";
 import { cliCommand } from "./msg-cli.mts";
@@ -131,13 +132,15 @@ function outcome(files: CodexFiles): { state: "done"; summary?: string } | { sta
     const summary = readLastMessage(files).slice(0, MAX_SUMMARY);
     return { state: "done", ...(summary ? { summary } : {}) };
   }
-  return { state: "failed", reason: trim(events.error ?? exitReason(exit)) };
+  return { state: "failed", reason: trim(events.error ?? exitReason(exit, lastStderrLine(files))) };
 }
 
-function exitReason(exit: CodexExit | null): string {
-  if (exit?.signal) return `codex ended by ${exit.signal}`;
-  if (exit) return `codex exited with ${String(exit.code)}`;
-  return "codex ended without completing the turn";
+// With codex's own last stderr line, for example its refusal to run outside a
+// trusted directory.
+function exitReason(exit: CodexExit | null, detail: string): string {
+  const reason = exit?.signal ? `codex ended by ${exit.signal}` : exit ? `codex exited with ${String(exit.code)}`
+    : "codex ended without completing the turn";
+  return detail ? `${reason}: ${detail}` : reason;
 }
 
 // The Codex part of the watch round: maps a late thread_id, stops a task past

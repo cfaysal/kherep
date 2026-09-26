@@ -13,7 +13,8 @@ import { taskNode } from "./task-fixture.mts";
 // then prints `codex exec --json` events. The prompt
 // picks the behavior: [sleep] runs until stopped, [ignore-term] also ignores
 // SIGTERM, [fail] ends with turn.failed and exit 1, [silent] exits 2 without
-// events; otherwise the turn completes, -o gets the last message, exit 0.
+// events, [stderr] exits 1 after two stderr lines, [tree] also starts a
+// child that runs until killed (as codex does behind the npm launcher); otherwise the turn completes, -o gets the last message, exit 0.
 // A resume keeps the thread id it was given. A prompt that carries a peer
 // message ("Message id: <id>") is answered first with the real
 // `kherep-node msg send --reply-to <id>`, run with the environment the node gave.
@@ -35,6 +36,15 @@ const out = argv[argv.indexOf("-o") + 1];
 const thread = argv[1] === "resume" ? argv[argv.length - 2] : ${JSON.stringify(THREAD)};
 const emit = (event) => process.stdout.write(JSON.stringify(event) + "\\n");
 if (prompt.includes("[silent]")) process.exit(2);
+// Like the npm launcher: codex runs as a child of this process.
+if (prompt.includes("[tree]")) {
+  const child = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  fs.writeFileSync(${JSON.stringify(log)} + ".child", String(child.pid));
+}
+if (prompt.includes("[stderr]")) {
+  process.stderr.write("warning: first line\\nNot inside a trusted directory; key sk-proj_AbC*12-3 refused\\u0007\\n\\n");
+  process.exit(1);
+}
 const peer = /^Message id: (\\S+)$/m.exec(prompt);
 if (peer) require("node:child_process").spawnSync(process.execPath, [${JSON.stringify(CLI)}, "msg", "send", "--reply-to", peer[1], "--", "ack"],
   { stdio: "ignore" });

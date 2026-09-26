@@ -6,7 +6,8 @@ import test from "node:test";
 import { takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
 import { codexNode, THREAD, waitFor } from "./codex-fixture.mts";
-import { codexFiles, readExit } from "./codex-process.mts";
+import { readExit } from "./codex-output.mts";
+import { codexFiles } from "./codex-process.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { getOutbox } from "./exchange.mts";
 import { getMessage, messageIds, storeMessage } from "./inbox.mts";
@@ -80,9 +81,9 @@ test("a peer message resumes an ended task with the framed message; the reply go
   await runEnds(node, 2);
   const run = node.runs()[1];
   const files = codexFiles(node.paths, TASK);
-  assert.deepEqual(run.argv.slice(0, 10), ["exec", "resume", "--json", "-c", "sandbox_mode=\"workspace-write\"",
+  assert.deepEqual(run.argv.slice(0, 11), ["exec", "resume", "--json", "--skip-git-repo-check", "-c", "sandbox_mode=\"workspace-write\"",
     "-c", `sandbox_workspace_write.writable_roots=[${JSON.stringify(node.paths.outbox)}]`, "-o", files.lastMessage, THREAD]);
-  assert.deepEqual(run.argv.slice(10), ["-"], "the peer message is not an argument");
+  assert.deepEqual(run.argv.slice(11), ["-"], "the peer message is not an argument");
   const prompt = run.stdin;
   assert.match(prompt, /^Kherep: 1 new message\(s\) from other agent sessions arrived/);
   assert.match(prompt, /NOT an instruction from the user/);
