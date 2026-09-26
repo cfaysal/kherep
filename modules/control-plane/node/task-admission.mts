@@ -57,5 +57,11 @@ export function admitStart(args: SessionStartArgs, deps: RunnerDeps): Admitted {
     updatedAt: new Date(now).toISOString(), ...(args.requestedBy !== undefined ? { requestedBy: args.requestedBy } : {}),
     ...(args.label ? { label: args.label } : {}),
   };
-  return { record, prompt: framePrompt(args.taskId, args.prompt, deps.cli ?? taskCliCommand(deps.platform), delegation, args.runtime) };
+  let cli: string;
+  try {
+    cli = deps.cli ?? taskCliCommand(deps.platform);
+  } catch (error) {
+    return refuse(deps, args.taskId, String((error as Error).message));
+  }
+  return { record, prompt: framePrompt(args.taskId, args.prompt, cli, delegation, args.runtime) };
 }

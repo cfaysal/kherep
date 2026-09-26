@@ -24,14 +24,17 @@ export function cliCommand(): string {
   return `node "${CLI_PATH}"`;
 }
 
-// The command line a task session runs (issue #79): the daemon's own node and
-// this CLI by absolute path, quoted for the session's shell, so it needs no
-// PATH lookup. Single quotes keep a path literal in POSIX shells and in
-// PowerShell, which runs a quoted path through the call operator &.
+// The command line a task session runs (issue #79), with this CLI by absolute
+// path in single quotes, which keep it literal. On macOS and Linux the daemon's
+// own node goes by absolute path too. On Windows a session may run it through
+// Git Bash (Claude's Bash tool) or PowerShell (Codex), so the line must work in
+// both: bare `node` (the task's PATH starts with the daemon's node directory,
+// task-env.mts) and the CLI path with forward slashes. No quoting of a single
+// quote works in both shells, so such a path is refused.
 export function taskCliCommand(platform: NodeJS.Platform = process.platform, node: string = process.execPath, cli: string = CLI_PATH): string {
   if (platform === "win32") {
-    const quote = (s: string): string => `'${s.replaceAll("'", "''")}'`;
-    return `& ${quote(node)} ${quote(cli)}`;
+    if (cli.includes("'")) throw new Error("the kherep-node CLI path contains a single quote, which no command line can quote for both Git Bash and PowerShell");
+    return `node '${cli.replaceAll("\\", "/")}'`;
   }
   const quote = (s: string): string => `'${s.replaceAll("'", "'\\''")}'`;
   return `${quote(node)} ${quote(cli)}`;
