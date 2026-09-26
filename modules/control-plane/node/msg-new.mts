@@ -15,9 +15,9 @@ import { readRequest, writeRequest } from "./task-records.mts";
 // task prompt. The operator chooses between an existing session and --new
 // before the first message; the session never chooses on its own (ROUTING).
 
-// The directive when the session passes none: the operator's choice of a new
-// intercom session, which the routing rule requires before this command.
-export const INTERCOM_DIRECTIVE = "The operator chose a new intercom session for this conversation.";
+// --directive is required and quotes the operator's answer verbatim: there is
+// no default, since a default would claim an operator choice nobody made.
+export const DIRECTIVE_REQUIRED = "--new needs --directive with the operator's answer";
 export const DEFAULT_NEW_WAIT_S = 30;
 const POLL_MS = 250;
 
@@ -40,6 +40,9 @@ export async function sendNew(io: NewIo, directory: DirectoryBody, target: strin
   const fail = (message: string): number => { io.err(`kherep-node msg: ${message}`); return 1; };
   const runtime = values.new as string;
   if (!SUPPORTED_RUNTIMES.includes(runtime as TaskRuntime)) return fail(`--new takes claude or codex, got "${runtime}"`);
+  const directive = values.directive;
+  if (directive === undefined || directive.trim() === "") return fail(DIRECTIVE_REQUIRED);
+  if (directive.length > MAX_DIRECTIVE) return fail(`--directive must be at most ${MAX_DIRECTIVE} characters`);
   const blocked = delegationBlocked(io.paths, io.env);
   if (blocked) return fail(blocked);
   const node = resolveNode(directory, target);
@@ -56,8 +59,6 @@ export async function sendNew(io: NewIo, directory: DirectoryBody, target: strin
   if (!from.ok) return fail(from.error);
   const text = words.join(" ");
   if (!isTaskText(text)) return fail("the first message must be 1 to 16384 characters");
-  const directive = values.directive ?? INTERCOM_DIRECTIVE;
-  if (directive.trim() === "" || directive.length > MAX_DIRECTIVE) return fail(`--directive must be 1 to ${MAX_DIRECTIVE} characters`);
   const requirements: TaskRequirements = { runtime: runtime as TaskRuntime, node: node.value.nodeId, ...(values.cwd ? { cwd: values.cwd } : {}) };
   if (!isTaskRequirements(requirements)) return fail("--cwd must be one line of at most 1024 characters");
   const wait = values.wait === undefined ? DEFAULT_NEW_WAIT_S : Number(values.wait);
