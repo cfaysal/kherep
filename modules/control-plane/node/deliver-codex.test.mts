@@ -20,7 +20,7 @@ const withoutTypeStrippingWarning = (stderr: string | Buffer): string => String(
 
 const PEER = "00000000-0000-4000-8000-0000000000cc";
 const SELF = "019a2b3c-4d5e-7f60-8123-456789abcdef";
-const NAME = "codex-019a2b3c";
+const NAME = "codex-89abcdef";
 const HOOK = fileURLToPath(new URL("./deliver-hook.mts", import.meta.url));
 const CLI = 'node "/opt/kherep/modules/control-plane/node/cli.mts"';
 const SECRET = "peer text that must never become a user prompt";
@@ -139,4 +139,16 @@ test("the entry point serves Codex only with --runtime codex and prints valid JS
   const typo = run("SessionStart", ["--runtime", "codx"]);
   assert.deepEqual([typo.status, typo.stdout], [0, ""]);
   assert.match(typo.stderr, /unknown --runtime/);
+});
+
+test("a Stop continuation is an autonomous turn: never in bypassPermissions, and within the budget", (t) => {
+  const paths = setup(t);
+  inbox(paths, 1);
+  assert.equal(hook(paths, "Stop", { stop_hook_active: false, permission_mode: "bypassPermissions" }), "", "bypass: never continued");
+  clock += 60_000;
+  assert.equal(JSON.parse(stop(paths)).decision, "block", "default mode: one continuation");
+  clock += 1_000;
+  assert.equal(stop(paths), "", "30 s spacing");
+  const audit = fs.readFileSync(path.join(paths.dir, "wake.jsonl"), "utf8");
+  assert.deepEqual(audit.trim().split("\n").map((l) => JSON.parse(l).action), ["continue-permission-mode", "continue", "continue-budget"]);
 });

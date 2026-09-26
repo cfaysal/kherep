@@ -19,7 +19,12 @@ increments the minor version; every other release increments the patch version.
   message, no second queue while one is unconfirmed, and never a flag that
   changes the sandbox or approvals. The Codex delivery hook records the
   session's permission mode; a session without one is woken only when the
-  allowlist names it.
+  allowlist names it by its full id. `codex queue` runs on its own lane and is
+  killed with its process tree after 30 seconds. Codex session names now use
+  the random tail of the thread id (`codex-<last 8>`); the old prefix name is
+  accepted only where it is unambiguous, and wake authorization uses the full
+  id only. The Codex Stop continuation is budgeted and never runs in
+  `bypassPermissions`.
 
 - Control Plane Codex tasks: `POST /api/tasks` with `requirements.runtime`
   `codex` goes to a node that lists `codex` as a CLI runtime, and that node

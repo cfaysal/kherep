@@ -29,8 +29,38 @@ export function isCodexSessionId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
 }
 
+// The last 8 characters (issue #66): a Codex thread id is a UUIDv7, whose
+// first 8 characters are the top of its millisecond timestamp, so sessions
+// started within about a minute shared the earlier prefix name; the tail is random.
 export function codexSessionName(sessionId: string): string {
-  return `codex-${sessionId.slice(0, 8)}`;
+  return `codex-${sessionId.slice(-8)}`;
+}
+
+// The name before issue #66, still honoured where it is unambiguous.
+export const legacyCodexSessionName = (sessionId: string): string => `codex-${sessionId.slice(0, 8)}`;
+
+// The inbox references of a Codex session: its id, and each of its names (new
+// and legacy) that no other live recorded session shares; ambiguous lists the
+// names that are shared. live: the ids of the recorded sessions, listed here
+// when not given.
+export function codexSessionRefs(paths: NodePaths, sessionId: string, now: number = Date.now(),
+  live?: string[]): { refs: string[]; ambiguous: string[] } {
+  let ids = live;
+  if (!ids) {
+    try {
+      ids = listCodexSessions(paths, now).map((s) => s.sessionId);
+    } catch {
+      ids = [];
+    }
+  }
+  const all = ids.includes(sessionId) ? ids : [...ids, sessionId];
+  const refs = [sessionId];
+  const ambiguous: string[] = [];
+  for (const name of new Set([codexSessionName(sessionId), legacyCodexSessionName(sessionId)])) {
+    const holders = all.filter((id) => codexSessionName(id) === name || legacyCodexSessionName(id) === name);
+    (holders.length > 1 ? ambiguous : refs).push(name);
+  }
+  return { refs, ambiguous };
 }
 
 const fileOf = (paths: NodePaths, sessionId: string): string => path.join(paths.codexSessions, `${sessionId}.json`);

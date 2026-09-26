@@ -4,9 +4,10 @@ import path from "node:path";
 import test from "node:test";
 
 import { takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
-import { codexNode } from "./codex-fixture.mts";
-import { guardQueue, pollCodexQueue, queueArgs } from "./codex-queue.mts";
-import { readCodexSession, recordCodexSession } from "./codex-sessions.mts";
+import { codexNode, waitFor } from "./codex-fixture.mts";
+import { processStart } from "./codex-process.mts";
+import { codexQueueIdle, guardQueue, pollCodexQueue, queueArgs } from "./codex-queue.mts";
+import { codexSessionName, legacyCodexSessionName, readCodexSession, recordCodexSession } from "./codex-sessions.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
 import { getMessage, markOffered, storeMessage } from "./inbox.mts";
 import { T0, TASK } from "./task-fixture.mts";
@@ -40,6 +41,12 @@ function deliver(node: Node, text: string, depth = 0, toSession = SID): string {
   return id;
 }
 
+// One exchange round, then the queue runs it handed to its lane.
+async function poll(node: Node): Promise<void> {
+  pollCodexQueue(node.deps());
+  await codexQueueIdle();
+}
+
 const queues = (node: Node): string[][] => node.runs().filter((r) => r.argv[0] === "queue").map((r) => r.argv);
 const actions = (node: Node): [string, string[]][] => {
   const file = path.join(node.paths.dir, "wake.jsonl");
@@ -49,7 +56,7 @@ const actions = (node: Node): [string, string[]][] => {
 test("an idle Codex session gets `codex queue` with a pointer only; the message waits for the delivery hook", posix, async (t) => {
   const node = wakeNode(t);
   const id = deliver(node, "secret peer text: deploy now");
-  await pollCodexQueue(node.deps());
+  await poll(node);
   assert.deepEqual(queues(node), [["queue", "--thread", SID, "--message", POINTER]]);
   const all = JSON.stringify(node.runs());
   assert.ok(!all.includes("secret peer text") && !all.includes(PEER.session) && !all.includes(PEER.nodeId), "no peer text or names");
@@ -61,17 +68,17 @@ test("an idle Codex session gets `codex queue` with a pointer only; the message 
 test("one pending wake per session; each message is queued once", posix, async (t) => {
   const node = wakeNode(t);
   const first = deliver(node, "one");
-  await pollCodexQueue(node.deps());
+  await poll(node);
   const second = deliver(node, "two");
   node.tick(TURN_SPACING_MS + 1);
-  await pollCodexQueue(node.deps());
+  await poll(node);
   assert.equal(queues(node).length, 1, "the first wake is still unconfirmed");
   markOffered(node.paths.inbox, first, T0);
-  await pollCodexQueue(node.deps());
+  await poll(node);
   assert.equal(queues(node).length, 2, "offered: the next message may wake");
   // Never offered within 10 minutes (no hook): not queued again, it waits for the next prompt.
   node.tick(11 * 60_000);
-  await pollCodexQueue(node.deps());
+  await poll(node);
   assert.equal(queues(node).length, 2);
   assert.equal(getMessage(node.paths.inbox, second)?.state, "accepted");
 });
@@ -79,7 +86,7 @@ test("one pending wake per session; each message is queued once", posix, async (
 test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply depth, budget", posix, async (t) => {
   const off = wakeNode(t, null);
   deliver(off, "x");
-  await pollCodexQueue(off.deps());
+  await poll(off);
   assert.deepEqual([queues(off), actions(off)], [[], []], "no wake section: nothing, not even an audit line");
 
   const unlisted = wakeNode(t, ["someone-else"]);
@@ -93,21 +100,26 @@ test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply de
   const d = deliver(unknown, "x");
   const deep = wakeNode(t);
   const e = deliver(deep, "x", 6);
-  for (const node of [unlisted, killed, bypass, unknown, deep]) await pollCodexQueue(node.deps());
+  for (const node of [unlisted, killed, bypass, unknown, deep]) await poll(node);
   for (const [n, node] of [unlisted, killed, bypass, unknown, deep].entries()) assert.deepEqual(queues(node), [], String(n));
   assert.deepEqual([actions(unlisted), actions(killed), actions(bypass), actions(unknown), actions(deep)],
     [[["not-allowlisted", [a]]], [["disabled", [b]]], [["permission-mode", [c]]], [["permission-mode-unknown", [d]]], [["depth-limit", [e]]]]);
 
-  // An unknown mode is fine when the allowlist names the session itself.
-  const named = wakeNode(t, [`codex-${SID.slice(0, 8)}`], null);
+  // An unknown mode is fine when the allowlist names the session's full id.
+  const named = wakeNode(t, [SID], null);
   deliver(named, "x");
-  await pollCodexQueue(named.deps());
+  await poll(named);
   assert.equal(queues(named).length, 1);
+  // A codex- name never authorizes: names can be shared.
+  const byName = wakeNode(t, [codexSessionName(SID)]);
+  const g = deliver(byName, "x");
+  await poll(byName);
+  assert.deepEqual([queues(byName), actions(byName)], [[], [["not-allowlisted", [g]]]]);
 
   const spent = wakeNode(t);
   for (let n = 0; n < 6; n++) assert.equal(takeTurn(spent.paths, SID, T0 - 50 * 60_000 + n * 2 * TURN_SPACING_MS), "ok");
   const f = deliver(spent, "x");
-  await pollCodexQueue(spent.deps());
+  await poll(spent);
   assert.deepEqual([queues(spent), actions(spent)], [[], [["budget", [f]]]]);
 });
 
@@ -116,18 +128,19 @@ test("a Codex task's thread is resumed, not queued; a failed queue is logged, re
   writeTask(node.paths, { taskId: TASK, runtime: "codex", name: "task-3f2a1b0c", cwd: node.workspace, permissionMode: "auto", state: "done",
     startedAt: new Date(T0).toISOString(), deadline: new Date(T0).toISOString(), updatedAt: new Date(T0).toISOString(), sessionId: SID });
   deliver(node, "x");
-  await pollCodexQueue(node.deps());
+  await poll(node);
   assert.deepEqual(queues(node), []);
 
   const FAIL = "fa11db01-0000-7000-8000-000000000001";
   const failing = wakeNode(t, [FAIL], "default", FAIL);
   const id = deliver(failing, "x", 0, FAIL);
   const lines: string[] = [];
-  await pollCodexQueue(failing.deps(), (line) => lines.push(line));
+  pollCodexQueue(failing.deps(), (line) => lines.push(line));
+  await codexQueueIdle();
   assert.deepEqual(actions(failing), [["queue-failed", [id]]]);
   assert.deepEqual(lines, [`kherep-node: codex queue for ${FAIL} failed: Error: no app server owns this thread (token sk-<redacted>)`]);
   failing.tick(TURN_SPACING_MS + 1);
-  await pollCodexQueue(failing.deps());
+  await poll(failing);
   assert.equal(queues(failing).length, 1, "not repeated");
 });
 
@@ -150,4 +163,37 @@ test("the Codex delivery hook records the session's permission mode and keeps it
   assert.equal(readCodexSession(node.paths, SID)?.permissionMode, "bypassPermissions");
   deliverForCodex(input({ permission_mode: "not a mode!" }), { paths: node.paths, now: () => T0 + 2000 });
   assert.equal(readCodexSession(node.paths, SID)?.permissionMode, "bypassPermissions", "a malformed value changes nothing");
+});
+
+test("two sessions started in the same minute: their shared old name wakes neither", posix, async (t) => {
+  const A = "01a0db01-0000-7000-8000-00000000aaaa";
+  const B = "01a0db01-1111-7000-8000-00000000bbbb";
+  const node = wakeNode(t, [A, B], "default", A);
+  recordCodexSession(node.paths, B, node.workspace, T0, "default");
+  const shared = deliver(node, "x", 0, legacyCodexSessionName(A));
+  await poll(node);
+  assert.deepEqual(queues(node), []);
+  assert.deepEqual(actions(node), [["ambiguous-name", [shared]]]);
+  const toA = deliver(node, "y", 0, codexSessionName(A));
+  await poll(node);
+  assert.deepEqual(queues(node), [["queue", "--thread", A, "--message", POINTER]]);
+  assert.equal(getMessage(node.paths.inbox, toA)?.state, "accepted");
+});
+
+test("a queue run that never ends is killed with its whole tree, and the exchange round never waits for it", posix, async (t) => {
+  const HANG = "0a9e0001-0000-7000-8000-000000000001";
+  const node = wakeNode(t, [HANG], "default", HANG);
+  deliver(node, "x", 0, HANG);
+  const lines: string[] = [];
+  const began = Date.now();
+  pollCodexQueue(node.deps({ queueTimeoutMs: 3_000 }), (line) => lines.push(line));
+  assert.ok(Date.now() - began < 300, "the round returns at once");
+  const marker = path.join(path.dirname(node.fake), "runs.jsonl.child");
+  await waitFor(() => fs.existsSync(marker), "the grandchild", 10_000);
+  const grandchild = Number(fs.readFileSync(marker, "utf8"));
+  t.after(() => { try { process.kill(grandchild, "SIGKILL"); } catch { /* ended */ } });
+  await codexQueueIdle();
+  assert.match(lines[0] ?? "", /codex queue for .* failed: codex queue did not finish within 3 s/);
+  assert.equal(actions(node).at(-1)?.[0], "queue-failed");
+  await waitFor(() => processStart(grandchild) === null && processStart(node.runs()[0].pid) === null, "the whole tree", 10_000);
 });

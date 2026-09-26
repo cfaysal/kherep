@@ -44,6 +44,8 @@ export interface CodexDeps {
   schedule?: (run: () => void, ms: number) => void;
   // How long a start waits for thread.started.
   startWaitMs?: number;
+  // How long a `codex queue` run may take (codex-queue.mts).
+  queueTimeoutMs?: number;
 }
 
 export interface CodexFiles { dir: string; events: string; lastMessage: string; stderr: string; exit: string }

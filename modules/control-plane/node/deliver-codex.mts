@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
-import { codexSessionName, isCodexSessionId, recordCodexSession } from "./codex-sessions.mts";
+import { mayContinue } from "./autonomy.mts";
+import { codexSessionRefs, isCodexSessionId, recordCodexSession } from "./codex-sessions.mts";
 import { confirmOffered, contextOutput, deliveryContext, sessionInbox, type HookDeps } from "./deliver-core.mts";
 import { cliCommand } from "./msg-cli.mts";
 
@@ -37,7 +38,8 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
   if (event !== "SessionStart" && event !== "UserPromptSubmit" && event !== "Stop") return "";
   if (!isCodexSessionId(sessionId) || !fs.existsSync(deps.paths.config)) return "";
   recordCodexSession(deps.paths, sessionId, cwd, deps.now?.(), mode);
-  const refs = [sessionId, codexSessionName(sessionId)];
+  // Only names no other live Codex session shares (issue #66).
+  const refs = codexSessionRefs(deps.paths, sessionId, deps.now?.()).refs;
   if (event === "SessionStart") {
     const cli = deps.replyCommand ?? cliCommand();
     return contextOutput(event, `Kherep messaging: this session's id is ${sessionId}. To message another session: `
@@ -48,6 +50,11 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
   }
   const mine = sessionInbox(deps.paths, refs);
   confirmOffered(deps.paths, mine);
-  if (continued === true || !mine.some((r) => r.state === "accepted")) return "";
+  const arrived = mine.filter((r) => r.state === "accepted").map((r) => r.messageId);
+  if (continued === true || arrived.length === 0) return "";
+  // A continuation is an autonomous turn: the same budget and bypass check as
+  // the Claude Stop path (autonomy.mts).
+  const allowed = deps.mayContinue ?? ((ids: string[]) => mayContinue(deps.paths, sessionId, mode, ids, deps.now?.() ?? Date.now()));
+  if (!allowed(arrived)) return "";
   return JSON.stringify({ decision: "block", reason: CODEX_STOP_REASON });
 }

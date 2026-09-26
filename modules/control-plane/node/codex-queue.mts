@@ -4,8 +4,9 @@ import path from "node:path";
 
 import { bypassesPermissions, isPlainSessionId, listenerDir, takeTurn } from "./autonomy.mts";
 import { codexCommand, findCodex } from "./codex-binary.mts";
+import { signalGroup } from "./codex-process.mts";
 import { lastLine } from "./codex-output.mts";
-import { codexSessionName, isCodexSessionId, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
+import { codexSessionRefs, isCodexSessionId, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { note, pruneNoted } from "./codex-wake.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { REOFFER_AFTER_MS, sessionInbox } from "./deliver-core.mts";
@@ -62,24 +63,49 @@ function explicitlyListed(policy: NodePolicy, refs: string[]): boolean {
   return refs.some((ref) => policy.wake?.sessions.includes(ref));
 }
 
-export async function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = () => {}): Promise<void> {
+// Queue runs go on their own serial lane, never awaited by the exchange
+// round, with at most one run per session in flight.
+let lane: Promise<void> = Promise.resolve();
+const inFlight = new Set<string>();
+
+// Resolves once every queue run started so far has settled (tests, shutdown).
+export async function codexQueueIdle(): Promise<void> {
+  for (let current = lane; ; current = lane) {
+    await current;
+    if (current === lane) return;
+  }
+}
+
+// Decides synchronously and hands each wake to the lane; returns at once.
+export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = () => {}): void {
   if (!deps.policy.wake) return; // waking is opt-in per node
   const now = deps.now?.() ?? Date.now();
   pruneNoted(deps.paths);
   const tasks = new Set(listTasks(deps.paths).flatMap((t) => (t.sessionId ? [t.sessionId] : [])));
-  for (const session of listCodexSessions(deps.paths, now)) {
-    if (tasks.has(session.sessionId) || !isPlainSessionId(session.sessionId)) continue;
+  let live: string[];
+  try {
+    live = listCodexSessions(deps.paths, now).map((s) => s.sessionId);
+  } catch (error) {
+    log(`kherep-node: could not list Codex sessions: ${String((error as Error).message ?? error)}`);
+    return;
+  }
+  for (const sessionId of live) {
+    if (tasks.has(sessionId) || !isPlainSessionId(sessionId) || inFlight.has(sessionId)) continue;
     try {
-      await queueFor(deps, session.sessionId, now, log);
+      queueFor(deps, sessionId, live, now, log);
     } catch (error) {
-      log(`kherep-node: could not wake Codex session ${session.sessionId}: ${String((error as Error).message ?? error)}`);
+      log(`kherep-node: could not wake Codex session ${sessionId}: ${String((error as Error).message ?? error)}`);
     }
   }
 }
 
-async function queueFor(deps: RunnerDeps, sessionId: string, now: number, log: (line: string) => void): Promise<void> {
+function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: number, log: (line: string) => void): void {
   const { paths, policy } = deps;
-  const refs = [sessionId, codexSessionName(sessionId)];
+  // A name another live session shares addresses neither: the message waits
+  // for its sender to use the full id (codex-<8> names, issue #66).
+  const { refs, ambiguous } = codexSessionRefs(paths, sessionId, now, live);
+  const shared = sessionInbox(paths, ambiguous).filter((r) => r.state === "accepted");
+  if (shared.length > 0) note(paths, now, sessionId, shared.map((r) => r.messageId), "ambiguous-name");
   const waiting = sessionInbox(paths, refs).filter((r) => r.state === "accepted");
   if (waiting.length === 0) return;
   const queued = readQueued(paths, sessionId);
@@ -88,10 +114,11 @@ async function queueFor(deps: RunnerDeps, sessionId: string, now: number, log: (
   if (fresh.length === 0) return;
   const ids = (records: InboxRecord[]): string[] => records.map((r) => r.messageId);
   if (fs.existsSync(killSwitch(paths))) return note(paths, now, sessionId, ids(fresh), "disabled");
-  if (!wakeAllowed(policy, refs)) return note(paths, now, sessionId, ids(fresh), "not-allowlisted");
+  // Authorization by the full thread id only: names can be shared.
+  if (!wakeAllowed(policy, [sessionId])) return note(paths, now, sessionId, ids(fresh), "not-allowlisted");
   const mode = readCodexSession(paths, sessionId)?.permissionMode;
   if (bypassesPermissions(mode)) return note(paths, now, sessionId, ids(fresh), "permission-mode");
-  if (mode === undefined && !explicitlyListed(policy, refs)) return note(paths, now, sessionId, ids(fresh), "permission-mode-unknown");
+  if (mode === undefined && !explicitlyListed(policy, [sessionId])) return note(paths, now, sessionId, ids(fresh), "permission-mode-unknown");
   const deep = fresh.filter((r) => (r.depth ?? 0) >= MAX_REPLY_DEPTH);
   if (deep.length > 0) note(paths, now, sessionId, ids(deep), "depth-limit");
   const due = fresh.filter((r) => (r.depth ?? 0) < MAX_REPLY_DEPTH);
@@ -103,29 +130,50 @@ async function queueFor(deps: RunnerDeps, sessionId: string, now: number, log: (
   ensureDir(listenerDir(paths));
   writeJsonAtomic(queuedFile(paths, sessionId),
     { queued: { ...queued, ...Object.fromEntries(due.map((r) => [r.messageId, new Date(now).toISOString()])) } });
-  try {
-    await runQueue(deps, queueArgs(sessionId, due.length));
-    note(paths, now, sessionId, ids(due), "wake");
-  } catch (error) {
-    note(paths, now, sessionId, ids(due), "queue-failed");
-    log(`kherep-node: codex queue for ${sessionId} failed: ${String((error as Error).message ?? error)}`);
-  }
+  const args = queueArgs(sessionId, due.length);
+  inFlight.add(sessionId);
+  lane = lane.then(() => runQueue(deps, args)).then(
+    () => note(paths, now, sessionId, ids(due), "wake"),
+    (error: unknown) => {
+      note(paths, now, sessionId, ids(due), "queue-failed");
+      log(`kherep-node: codex queue for ${sessionId} failed: ${String((error as Error).message ?? error)}`);
+    },
+  ).finally(() => { inFlight.delete(sessionId); });
 }
 
 // Runs codex (through the npm launcher on Windows, codex-binary.mts) without a
-// shell; rejects with its cleaned last stderr line.
+// shell, in its own process group on POSIX. It settles on exit, or when its
+// timer kills the whole tree (the launcher's codex.exe inherits stderr, so the
+// pipe may never close); rejects with the cleaned last stderr line.
 function runQueue(deps: RunnerDeps, args: string[]): Promise<void> {
   const file = (deps.codex?.findCodex ?? findCodex)();
   if (!file) return Promise.reject(new Error("codex is not installed on this node"));
-  const command = codexCommand(file, args, deps.codex?.platform ?? process.platform);
+  const platform = deps.codex?.platform ?? process.platform;
+  const command = codexCommand(file, args, platform);
+  const timeoutMs = deps.codex?.queueTimeoutMs ?? QUEUE_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
-    const child = spawn(command.file, command.args, { stdio: ["ignore", "ignore", "pipe"], timeout: QUEUE_TIMEOUT_MS, windowsHide: true });
+    const child = spawn(command.file, command.args, { stdio: ["ignore", "ignore", "pipe"], detached: platform !== "win32", windowsHide: true });
     let stderr = "";
+    let settled = false;
+    const settle = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.stderr?.destroy();
+      if (error) reject(error);
+      else resolve();
+    };
+    const timer = setTimeout(() => {
+      if (child.pid !== undefined) (deps.codex?.signal ?? ((pid, signal) => signalGroup(pid, signal, platform)))(child.pid, "SIGKILL");
+      settle(new Error(`codex queue did not finish within ${Math.round(timeoutMs / 1000)} s`));
+    }, timeoutMs);
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString("utf8")).slice(-4096); });
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
-      if (code === 0) resolve();
-      else reject(new Error(lastLine(stderr) || `codex queue ended with ${String(code ?? signal)}`));
+    child.once("error", (error) => settle(error));
+    child.once("exit", (code, signal) => {
+      // stderr may still be draining: wait briefly for it, never for a pipe a grandchild holds.
+      const done = (): void => settle(code === 0 ? undefined : new Error(lastLine(stderr) || `codex queue ended with ${String(code ?? signal)}`));
+      const grace = setTimeout(done, 250);
+      child.once("close", () => { clearTimeout(grace); done(); });
     });
   });
 }
