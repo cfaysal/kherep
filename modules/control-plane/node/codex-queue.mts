@@ -30,8 +30,8 @@ import { killSwitch, wakeText } from "./wake-hook.mts";
 // (codex-wake.mts); so the task grant never applies here. Guards as the Claude
 // wake's: the kill switch, the wake allowlist, never bypassPermissions, reply
 // depth, and the shared per-session budget. A session whose permission mode
-// the hook did not record is woken only when the allowlist names it (by id or
-// codex- name; "*" is not enough). Each message causes at most one queue, and
+// the hook did not record is woken only when the allowlist names its full id
+// ("*" and codex- names are not enough). Each message causes at most one queue, and
 // a session gets no further queue while a queued message is still waiting,
 // for up to REOFFER_AFTER_MS; a message never offered after that waits for
 // the next prompt instead of being queued again.
@@ -138,7 +138,11 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
       note(paths, now, sessionId, ids(due), "queue-failed");
       log(`kherep-node: codex queue for ${sessionId} failed: ${String((error as Error).message ?? error)}`);
     },
-  ).finally(() => { inFlight.delete(sessionId); });
+  ).catch((error: unknown) => {
+    // A failing audit write (ENOSPC, EACCES) must neither reject the lane,
+    // which would skip every later queue run, nor crash the daemon.
+    log(`kherep-node: codex queue bookkeeping for ${sessionId} failed: ${String((error as Error).message ?? error)}`);
+  }).finally(() => { inFlight.delete(sessionId); });
 }
 
 // Runs codex (through the npm launcher on Windows, codex-binary.mts) without a
