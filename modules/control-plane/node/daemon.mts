@@ -109,7 +109,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           // Peer messages for ended Codex task sessions resume them (issue #63).
           await pollCodexInbound(runner, log);
           // ... and wake idle interactive Codex sessions with a pointer (issue #66).
-          await pollCodexQueue(runner, log);
+          // Not awaited: queue runs have their own lane and never block this chain.
+          pollCodexQueue(runner, log);
         })
           .catch((error: unknown) => log(`kherep-node: message exchange failed: ${String(error)}`));
       }, EXCHANGE_INTERVAL_MS);

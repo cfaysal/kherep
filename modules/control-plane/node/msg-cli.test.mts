@@ -168,7 +168,7 @@ test("msg send --from a recorded Codex session id sends as that session's name",
   recordCodexSession(paths, codex, "/work/b", NOW);
   const sent = await run(paths, ["send", "--from", codex, "node-b/docs", "--", "hello"], {});
   assert.equal(sent.code, 0, sent.err);
-  assert.equal(getOutbox(paths, sent.out)?.fromSession, "codex-019a2b3c");
+  assert.equal(getOutbox(paths, sent.out)?.fromSession, "codex-89abcdef");
   // An id that no Codex hook recorded is sent as typed.
   assert.equal(getOutbox(paths, (await run(paths, ["send", "--from", "019a2b3c-other", "node-b/docs", "x"], {})).out)?.fromSession,
     "019a2b3c-other");

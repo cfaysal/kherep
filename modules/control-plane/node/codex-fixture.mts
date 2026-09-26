@@ -33,6 +33,13 @@ const env = { KHEREP_CONFIG_DIR: process.env.KHEREP_CONFIG_DIR, KHEREP_SESSION_I
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, cwd: process.cwd(), stdin, pid: process.pid, env }) + "\\n");
 // codex queue: a thread starting with fa11 has no app server, as when none owns it.
 if (argv[0] === "queue") {
+  // A thread starting with 0a9e hangs: a grandchild holds stderr open, as codex.exe behind the npm launcher does.
+  if (argv[2].startsWith("0a9e")) {
+    const child = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", "ignore", "inherit"] });
+    fs.writeFileSync(${JSON.stringify(log)} + ".child", String(child.pid));
+    setInterval(() => {}, 1000);
+    return;
+  }
   if (argv[2].startsWith("fa11")) { process.stderr.write("Error: no app server owns this thread (token sk-live_Secret1)\\n"); process.exit(1); }
   process.stdout.write("Queued message 01a0db08 for thread " + argv[2] + "\\n");
   process.exit(0);
