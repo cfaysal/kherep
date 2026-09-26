@@ -22,7 +22,8 @@ export interface Delegation { requestedBy: string; directive: string; label?: st
 
 const intercomHint = (delegation: Delegation, cli: string): string => (delegation.label
   ? `This is an intercom session (${delegation.label}) for a conversation with session ${delegation.requestedBy}; `
-    + `the task text is its first message. Answer it with: ${cli} msg send ${delegation.requestedBy} -- "<answer>". ` : "");
+    + `the task text is its first message. Answer it with: ${cli} msg send ${delegation.requestedBy} -- "<answer>". `
+    + "For a plain question, this reply is the only required action before you report done. " : "");
 
 export function framePrompt(taskId: string, text: string, cli: string, delegation?: Delegation, runtime: TaskRuntime = "claude"): string {
   if (!delegation) return `Task ${taskId} from the operator via the Kherep Control Plane: ${text}\n\n${doneHint(taskId, cli, runtime)}`;

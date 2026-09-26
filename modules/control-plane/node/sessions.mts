@@ -17,7 +17,7 @@ export const CLAUDE_RUNTIME = "claude-code";
 export const LIST_TIMEOUT_MS = 10_000;
 const MAX_SESSIONS = 512;
 
-export interface ExecOptions { timeout: number; windowsVerbatimArguments?: boolean; cwd?: string }
+export interface ExecOptions { timeout: number; windowsVerbatimArguments?: boolean; cwd?: string; env?: NodeJS.ProcessEnv }
 // Runs an executable and resolves with its stdout.
 export type Exec = (file: string, args: string[], options: ExecOptions) => Promise<string>;
 

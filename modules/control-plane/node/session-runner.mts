@@ -4,10 +4,11 @@ import type { SessionContinueArgs, SessionStartArgs, SessionStopArgs } from "../
 import { continueCodex, startCodex, stopCodex } from "./codex-runner.mts";
 import type { CodexDeps } from "./codex-process.mts";
 import type { NodePaths } from "./config.mts";
-import { cliCommand } from "./msg-cli.mts";
+import { taskCliCommand } from "./msg-cli.mts";
 import type { NodePolicy } from "./policy.mts";
 import { claudeCall, findClaude, LIST_TIMEOUT_MS, type Exec } from "./sessions.mts";
 import { admitStart, overLimit, refuse, trim } from "./task-admission.mts";
+import { withNodeOnPath } from "./task-env.mts";
 import { queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
 import { frameFollowUp } from "./task-prompt.mts";
 
@@ -53,11 +54,12 @@ const execClaude: Exec = (file, args, options) => new Promise((resolve, reject) 
   });
 });
 
+// A task session (cwd given) gets the node directory first on PATH (task-env.mts).
 export async function runClaude(deps: RunnerDeps, args: string[], cwd?: string): Promise<string> {
   const claude = (deps.findClaude ?? findClaude)();
   if (!claude) throw new Error("claude is not installed on this node");
   const run = claudeCall(claude, args, args[0] === "agents" ? LIST_TIMEOUT_MS : RUN_TIMEOUT_MS, deps.platform, deps.comSpec);
-  return (deps.exec ?? execClaude)(run.file, run.args, { ...run.options, ...(cwd ? { cwd } : {}) });
+  return (deps.exec ?? execClaude)(run.file, run.args, { ...run.options, ...(cwd ? { cwd, env: withNodeOnPath(process.env) } : {}) });
 }
 
 // The rows of `claude agents --json --all`; rejects when the listing fails.
@@ -128,7 +130,7 @@ export async function continueTask(args: SessionContinueArgs, deps: RunnerDeps):
   const restarted: TaskRecord = { ...record, state: "started", reason: undefined,
     deadline: new Date(now + deps.policy.sessions.maxRuntimeMinutes * 60_000).toISOString() };
   const saved = await background(deps, restarted, ["--resume", record.sessionId, "--bg", "--permission-mode", record.permissionMode,
-    frameFollowUp(args.taskId, args.prompt, deps.cli ?? cliCommand())]);
+    frameFollowUp(args.taskId, args.prompt, deps.cli ?? taskCliCommand(deps.platform))]);
   return { taskId: saved.taskId, state: saved.state };
 }
 

@@ -6,7 +6,7 @@ import { lastStderrLine, readEvents, readExit, readLastMessage, type CodexExit }
 import { findCodex } from "./codex-binary.mts";
 import { ensureDir } from "./config.mts";
 import { getMessage, markDelivered, markRetry } from "./inbox.mts";
-import { cliCommand } from "./msg-cli.mts";
+import { taskCliCommand } from "./msg-cli.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit, refuse, trim } from "./task-admission.mts";
 import { isActive, listTasks, queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
@@ -94,7 +94,7 @@ export async function continueCodex(args: SessionContinueArgs, deps: RunnerDeps)
   // Again: the directory may have been swapped for a link out of the roots since the start.
   const cwd = resolveCwd(deps.policy.sessions, record.cwd, deps.realpath);
   if (!cwd.ok) throw new Error(cwd.reason);
-  const prompt = frameFollowUp(args.taskId, args.prompt, deps.cli ?? cliCommand(), "codex");
+  const prompt = frameFollowUp(args.taskId, args.prompt, deps.cli ?? taskCliCommand(deps.platform), "codex");
   const restarted: TaskRecord = { ...record, cwd: cwd.cwd, state: "started", reason: undefined, pid: undefined, pidStart: undefined,
     deadline: new Date(now + deps.policy.sessions.maxRuntimeMinutes * 60_000).toISOString() };
   const saved = await launch(deps, restarted, (files, outbox) => resumeArgs(threadId, record.permissionMode, files, outbox), prompt);

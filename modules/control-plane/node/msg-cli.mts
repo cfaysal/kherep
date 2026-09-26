@@ -24,6 +24,19 @@ export function cliCommand(): string {
   return `node "${CLI_PATH}"`;
 }
 
+// The command line a task session runs (issue #79): the daemon's own node and
+// this CLI by absolute path, quoted for the session's shell, so it needs no
+// PATH lookup. Single quotes keep a path literal in POSIX shells and in
+// PowerShell, which runs a quoted path through the call operator &.
+export function taskCliCommand(platform: NodeJS.Platform = process.platform, node: string = process.execPath, cli: string = CLI_PATH): string {
+  if (platform === "win32") {
+    const quote = (s: string): string => `'${s.replaceAll("'", "''")}'`;
+    return `& ${quote(node)} ${quote(cli)}`;
+  }
+  const quote = (s: string): string => `'${s.replaceAll("'", "'\\''")}'`;
+  return `${quote(node)} ${quote(cli)}`;
+}
+
 export const MSG_USAGE = `usage:
   kherep-node msg sessions
   kherep-node msg send <node>/<session> [--from <session>] [--wait <seconds>] [--] <text...>

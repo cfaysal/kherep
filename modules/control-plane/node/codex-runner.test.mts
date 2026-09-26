@@ -239,11 +239,12 @@ test("codex needs the policy; the workspace root, the limits and the Windows shi
   await assert.rejects(startTask(codexArgs(taskId(4)), node.deps()), /at most 3 task sessions at a time/);
 });
 
-test("the process environment names this session and the node directory, never an inherited Claude session", (t) => {
+test("the process environment names this session and the node directory, puts node first on PATH, never an inherited Claude session", (t) => {
   const node = taskNode(t);
   const inherited = { PATH: "/usr/bin", HOME: "/home/someone", ["CLAUDE_CODE_" + "SESSION_ID"]: "a-claude-session" };
   assert.deepEqual(codexEnv(node.paths, "task-3f2a1b0c", inherited),
-    { PATH: "/usr/bin", HOME: "/home/someone", KHEREP_SESSION_ID: "task-3f2a1b0c", KHEREP_CONFIG_DIR: node.root });
+    { PATH: `${path.dirname(process.execPath)}${path.delimiter}/usr/bin`, HOME: "/home/someone", KHEREP_SESSION_ID: "task-3f2a1b0c",
+      KHEREP_CONFIG_DIR: node.root });
 });
 
 test("a continue checks the working directory again: a directory swapped for a link out of the roots is refused", posix, async (t) => {
