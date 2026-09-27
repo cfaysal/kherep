@@ -102,19 +102,23 @@ export function scanStringArray(text: string, from: number): ArrayScan | null {
   return null;
 }
 
-function samePath(left: string, right: string): boolean {
+function samePath(left: string, right: string, platform: string): boolean {
   const a = path.resolve(left);
   const b = path.resolve(right);
-  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  return platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 type Merge = { text: string; status: "operator-merged" | "operator-present" } | null;
 
+// A multi-line string can hold a line that starts with "[", which the header
+// search would take for the next table; such text is not merged into.
+const MULTILINE_STRING = /"""|'''/;
+
 // Adds the outbox to the array whose value starts at `valueStart`.
-function mergeInto(text: string, valueStart: number, outbox: string): Merge {
+function mergeInto(text: string, valueStart: number, outbox: string, platform: string): Merge {
   const scan = scanStringArray(text, valueStart);
   if (!scan) return null;
-  if (scan.values.some((value) => samePath(value, outbox))) return { text, status: "operator-present" };
+  if (scan.values.some((value) => samePath(value, outbox, platform))) return { text, status: "operator-present" };
   const entry = JSON.stringify(outbox);
   let insert = `, ${entry}`;
   if (scan.values.length === 0) insert = entry;
@@ -133,13 +137,15 @@ function topLevelHead(text: string): string {
 }
 
 // One operator segment (the text before or after the managed block).
-function mergeSegment(segment: string, outbox: string, topLevel: boolean): Merge | "none" | "inline" {
+function mergeSegment(segment: string, outbox: string, topLevel: boolean, platform: string): Merge | "none" | "inline" {
   const newline = newlineOf(segment);
   if (topLevel) {
     const head = topLevelHead(segment);
+    // The head may end early inside a multi-line string, hiding top-level keys after it.
+    if (MULTILINE_STRING.test(head) && new RegExp(`^[ \\t]*${KEY}[ \\t]*[.=]`, "m").test(segment)) return null;
     if (new RegExp(`^[ \\t]*${KEY}[ \\t]*=`, "m").test(head)) return "inline";
     const dotted = new RegExp(`^[ \\t]*${KEY}[ \\t]*\\.[ \\t]*${ROOTS}[ \\t]*=`, "m").exec(head);
-    if (dotted) return mergeInto(segment, dotted.index + dotted[0].length, outbox);
+    if (dotted) return mergeInto(segment, dotted.index + dotted[0].length, outbox, platform);
     const anyDotted = new RegExp(`^[ \\t]*${KEY}[ \\t]*\\.`, "m").exec(head);
     if (anyDotted) {
       const line = `sandbox_workspace_write.writable_roots = [${JSON.stringify(outbox)}]${newline}`;
@@ -152,15 +158,17 @@ function mergeSegment(segment: string, outbox: string, topLevel: boolean): Merge
   const bodyStart = headerLineEnd < 0 ? segment.length : headerLineEnd + 1;
   const nextHeader = segment.slice(bodyStart).search(ANY_HEADER);
   const bodyEnd = nextHeader < 0 ? segment.length : bodyStart + nextHeader;
-  const roots = new RegExp(`^[ \\t]*${ROOTS}[ \\t]*=`, "m").exec(segment.slice(bodyStart, bodyEnd));
-  if (roots) return mergeInto(segment, bodyStart + roots.index + roots[0].length, outbox);
+  const body = segment.slice(bodyStart, bodyEnd);
+  if (MULTILINE_STRING.test(body)) return null;
+  const roots = new RegExp(`^[ \\t]*${ROOTS}[ \\t]*=`, "m").exec(body);
+  if (roots) return mergeInto(segment, bodyStart + roots.index + roots[0].length, outbox, platform);
   const prefix = bodyStart === segment.length && !segment.endsWith("\n") ? newline : "";
   const line = `${prefix}writable_roots = [${JSON.stringify(outbox)}]${newline}`;
   return { text: segment.slice(0, bodyStart) + line + segment.slice(bodyStart), status: "operator-merged" };
 }
 
 export function projectOutboxWritableRoot(
-  config: string, outbox: string, startMarker: string, endMarker: string,
+  config: string, outbox: string, startMarker: string, endMarker: string, platform: string = process.platform,
 ): OutboxRootResult {
   const start = config.indexOf(startMarker);
   const end = config.indexOf(endMarker);
@@ -175,7 +183,7 @@ export function projectOutboxWritableRoot(
 
   const segments: Array<[string, boolean]> = [[before, true], [after, false]];
   for (const [index, [segment, topLevel]] of segments.entries()) {
-    const merged = mergeSegment(segment, outbox, topLevel);
+    const merged = mergeSegment(segment, outbox, topLevel, platform);
     if (merged === "none") continue;
     if (merged === "inline") return skip("skipped-inline-table");
     if (merged === null) return skip("skipped-unparseable");
