@@ -236,6 +236,15 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Windows installation with Claude Code installed through npm (issue #99): the
+  plugin reconciliation no longer fails with `Claude marketplace list failed`
+  when only the npm `claude`/`claude.cmd` shims are on `PATH`. Without
+  `KHEREP_CLAUDE_BIN` it runs the first `claude.exe` on `PATH` or the native
+  `bin/claude.exe` next to an npm shim, still without a shell, and fails naming
+  `KHEREP_CLAUDE_BIN` when neither exists. The installer no longer warns that
+  the global `core.hooksPath` is being replaced when the old value names the
+  same directory in another Windows spelling, and the repository-local binding
+  skips repositories under `_deprecated`.
 - Codex sessions send and reply over the Control Plane on the first try
   (issue #72): the Codex installer makes the node outbox, and only the outbox,
   a writable root of the `workspace-write` sandbox

@@ -164,3 +164,35 @@ test("an opt-in the system file refuses fails the install visibly", (t) => {
   assert.match(run.out, /WARNING .*system core\.hooksPath/);
   assert.match(run.out, /DONE WITH ERRORS/);
 });
+
+// Issue #99. Git for Windows reads back C:/... for the /c/... path the installer
+// wrote, so the global value of the previous run names the same directory in
+// another spelling. Only a really different directory is reported as replaced.
+const replacedLines = (out: string): string[] => out.split(/\r?\n/).filter((line) => line.includes("core.hooksPath was"));
+function writeGlobal(file: string, value: string): void {
+  const run = spawnSync("git", ["config", "--file", file, "core.hooksPath", value], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+}
+
+test("a global value naming the hook directory in another spelling is not reported as replaced", (t) => {
+  const f = fixture(t);
+  const forward = f.hooks.replace(/\\/g, "/");
+  const lowerDrive = forward.replace(/^([A-Za-z]):/, (_match, drive: string) => `${drive.toLowerCase()}:`);
+  for (const spelling of [forward, f.hooks, lowerDrive, slash(f.hooks)]) {
+    writeGlobal(f.global, spelling);
+    const run = install(f);
+    assert.equal(run.status, 0, run.out);
+    assert.deepEqual(replacedLines(run.out), [], `${spelling}\n${run.out}`);
+  }
+});
+
+test("a global value naming another directory is reported as replaced", (t) => {
+  const f = fixture(t);
+  writeGlobal(f.global, OTHER);
+  const run = install(f);
+  assert.equal(run.status, 0, run.out);
+  const lines = replacedLines(run.out);
+  assert.equal(lines.length, 1, run.out);
+  assert.ok(lines[0].includes(`'${OTHER}'`), lines[0]);
+  assert.ok(sameDir(readHooksPath(f.global), f.hooks), run.out);
+});

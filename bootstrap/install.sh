@@ -426,8 +426,11 @@ elif [ -f "$GITHOOKS_DIR/commit-msg" ]; then
   # Windows checkouts routinely drop the mode bit; without +x git skips the hook
   # silently and the rule would bind on one host but not the other.
   chmod +x "$GITHOOKS_DIR/commit-msg" 2>/dev/null || true
+  # Git for Windows stores the drive form C:/... of the /c/... path passed here,
+  # so the same directory must not read as a replacement (issue #99).
+  source "$REPO_ROOT/bootstrap/bind-repo-hookspath.sh"
   PREV_HOOKS_PATH="$(git config --global core.hooksPath 2>/dev/null || true)"
-  if [ -n "$PREV_HOOKS_PATH" ] && [ "$PREV_HOOKS_PATH" != "$GITHOOKS_DIR" ]; then
+  if [ -n "$PREV_HOOKS_PATH" ] && [ "$(norm_hookspath "$PREV_HOOKS_PATH")" != "$(norm_hookspath "$GITHOOKS_DIR")" ]; then
     echo "install: WARNING core.hooksPath was '$PREV_HOOKS_PATH' and is being replaced by '$GITHOOKS_DIR'. The previous directory is NOT merged; move any hooks you still need."
   fi
   # Post-Commit: gesammelt statt abgebrochen, wie die Nachbarzeilen (OP-1085 Review).
@@ -443,7 +446,6 @@ elif [ -f "$GITHOOKS_DIR/commit-msg" ]; then
   # every account (issue #23). The value is only read, and a difference reported,
   # unless KHEREP_INSTALL_SYSTEM_HOOKSPATH is exactly 1. Git for Windows stores
   # the drive form of a /c/... path, so compare like the repo-local binding does.
-  source "$REPO_ROOT/bootstrap/bind-repo-hookspath.sh"
   SYSTEM_HOOKS_PATH="$(git config --system --get core.hooksPath 2>/dev/null || true)"
   if [ "$(norm_hookspath "$SYSTEM_HOOKS_PATH")" != "$(norm_hookspath "$GITHOOKS_DIR")" ]; then
     SYSTEM_HOOKS_SHOWN="'$SYSTEM_HOOKS_PATH'"

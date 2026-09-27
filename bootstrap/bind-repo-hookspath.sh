@@ -86,6 +86,8 @@ failed=0
 # -type d excludes linked worktrees, whose .git is a FILE. A .git without HEAD
 # is not a repository: D:/Work/.git is exactly that, an empty directory
 # that makes tools report "is a git repository" while git itself says no.
+# Parked repositories under _deprecated are skipped, as the smoke test's
+# coverage scan skips them (issue #99).
 while IFS= read -r gitdir; do
   repo="$(dirname "$gitdir")"
   if [ ! -e "$gitdir/HEAD" ]; then
@@ -103,7 +105,7 @@ while IFS= read -r gitdir; do
     echo "bind-repo-hookspath: FAILED $repo (not bound; commits by other accounts stay unenforced there)" >&2
     failed=$((failed + 1))
   fi
-done < <(find "$WS" -maxdepth 4 -name '.git' -type d 2>/dev/null | sort)
+done < <(find "$WS" -maxdepth 4 -name _deprecated -prune -o -name '.git' -type d -print 2>/dev/null | sort)
 
 echo "bind-repo-hookspath: $bound bound, $skipped skipped, $failed failed -> $GITHOOKS_DIR"
 [ "$failed" -eq 0 ] || exit 1

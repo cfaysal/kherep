@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { productEnv } from "../lib/product-env.mts";
+import { findWindowsClaude } from "./claude-binary.mts";
 import {
   ReconcileError,
   assertNoMarketplaceCollision,
@@ -55,8 +56,22 @@ function readManifest(file: string, label: string): unknown {
   }
 }
 
-function getClaudeCommand(env: NodeJS.ProcessEnv = process.env): ClaudeCommand {
-  const executable = productEnv(env, "CLAUDE_BIN") ?? "claude";
+interface LookupDeps {
+  platform?: NodeJS.Platform;
+  isFile?: (file: string) => boolean;
+}
+
+// On Windows a bare "claude" would reach only the npm .cmd shim, which cannot
+// run without a shell (issue #99), so the native executable is resolved here.
+function defaultClaude(env: NodeJS.ProcessEnv, deps: LookupDeps): string {
+  if ((deps.platform ?? process.platform) !== "win32") return "claude";
+  return findWindowsClaude(env.PATH ?? env.Path ?? "", deps.isFile)
+    ?? fail("claude not found on PATH as claude.exe or as an npm shim with its native claude.exe; "
+      + "set KHEREP_CLAUDE_BIN to the claude executable");
+}
+
+export function getClaudeCommand(env: NodeJS.ProcessEnv = process.env, deps: LookupDeps = {}): ClaudeCommand {
+  const executable = productEnv(env, "CLAUDE_BIN") ?? defaultClaude(env, deps);
   if (!safeString(executable)) fail("invalid Claude executable configuration");
   let prefixArgs: unknown = [];
   const rawArgs = productEnv(env, "CLAUDE_BIN_ARGS_JSON");
