@@ -18,12 +18,23 @@ const doneHint = (taskId: string, cli: string, runtime: TaskRuntime): string =>
 
 // label: set for an intercom session (issue #74), which the Control Plane
 // starts for a conversation the requesting session opens with its first message.
-export interface Delegation { requestedBy: string; directive: string; label?: string }
+// framed: an intercom session the node starts on its own for messages to a
+// closed session (issues #102, #105), whose task text frames those messages.
+export interface Delegation { requestedBy: string; directive: string; label?: string; framed?: boolean }
 
-const intercomHint = (delegation: Delegation, cli: string): string => (delegation.label
-  ? `This is an intercom session (${delegation.label}) for a conversation with session ${delegation.requestedBy}; `
-    + `the task text is its first message. Answer it with: ${cli} msg send ${delegation.requestedBy} -- "<answer>". `
-    + "For a plain question, this reply is the only required action before you report done. " : "");
+const PLAIN_QUESTION = "For a plain question, this reply is the only required action before you report done. ";
+
+function intercomHint(delegation: Delegation, cli: string): string {
+  const head = `This is an intercom session${delegation.label ? ` (${delegation.label})` : ""} for a conversation with session `
+    + `${delegation.requestedBy}; `;
+  if (delegation.framed) {
+    return `${head}the task text carries its messages, framed as peer messages. Answer each with the "To reply" command of `
+      + `its block, which keeps --reply-to <message id> so the answer is threaded; do not answer with a plain msg send. ${PLAIN_QUESTION}`;
+  }
+  return delegation.label
+    ? `${head}the task text is its first message. Answer it with: ${cli} msg send ${delegation.requestedBy} -- "<answer>". ${PLAIN_QUESTION}`
+    : "";
+}
 
 export function framePrompt(taskId: string, text: string, cli: string, delegation?: Delegation, runtime: TaskRuntime = "claude"): string {
   if (!delegation) return `Task ${taskId} from the operator via the Kherep Control Plane: ${text}\n\n${doneHint(taskId, cli, runtime)}`;

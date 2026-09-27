@@ -96,6 +96,46 @@ function fitted(record: InboxRecord, directory: DirectoryBody | null, tag: strin
   return result;
 }
 
+// Blocks for the records in order within room bytes: the first always, shortened
+// if needed, later ones only while they fit whole.
+function fitBlocks(records: InboxRecord[], directory: DirectoryBody | null, tag: string, reply: string, cli: string,
+  room: number): string[] {
+  const blocks: string[] = [];
+  let left = room;
+  for (const record of records) {
+    const room = left - 2;
+    const full = block(record, record.text, directory, tag, reply);
+    const fits = bytes(full) <= room;
+    if (!fits && blocks.length > 0) break;
+    const next = fits ? full : fitted(record, directory, tag, reply, cli, room);
+    blocks.push(next);
+    left -= bytes(next) + 2;
+  }
+  return blocks;
+}
+
+function directoryOf(paths: NodePaths): DirectoryBody | null {
+  try {
+    return readDirectory(paths);
+  } catch {
+    return null; // sender names fall back to node ids
+  }
+}
+
+// A per-call tag the sender cannot know, so text inside a message cannot fake
+// the end of its block.
+const newTag = (): string => crypto.randomUUID().slice(-12);
+
+// The records framed as deliveryContext frames them, each with its --reply-to
+// command, within maxBytes and without the offer bookkeeping: for a session
+// that gets them as its first prompt (closed-resume.mts startIntercom).
+export function frameRecords(paths: NodePaths, records: InboxRecord[], cli: string, maxBytes: number): { text: string; carried: InboxRecord[] } {
+  const tag = newTag();
+  const intro = introLine("UserPromptSubmit", tag, true);
+  const blocks = fitBlocks(records, directoryOf(paths), tag, `${cli} msg send`, cli, maxBytes - bytes(intro));
+  return { text: [intro, ...blocks].join("\n\n"), carried: records.slice(0, blocks.length) };
+}
+
 // The inbox records addressed to any of the session's references (id, name).
 export function sessionInbox(paths: NodePaths, refs: string[]): InboxRecord[] {
   return listInbox(paths.inbox).filter((r) => refs.includes(r.toSession));
@@ -144,31 +184,15 @@ export function deliveryContext(event: DeliveryEvent, refs: string[], deps: Hook
   if (waiting.length === 0 && failures.length === 0) return "";
   if (event === "Stop" && deps.mayContinue && !deps.mayContinue(waiting.map((r) => r.messageId))) return "";
 
-  let directory: DirectoryBody | null = null;
-  try {
-    directory = readDirectory(paths);
-  } catch {
-    // sender names fall back to node ids
-  }
-  // A per-call tag the sender cannot know, so text inside a message cannot
-  // fake the end of its block.
-  const tag = deps.nonce?.() ?? crypto.randomUUID().slice(-12);
+  const directory = directoryOf(paths);
+  const tag = deps.nonce?.() ?? newTag();
   const cli = deps.replyCommand ?? cliCommand();
   const reply = `${cli} msg send${deps.replyFrom ? ` --from ${deps.replyFrom}` : ""}`;
   const shown = waiting.slice(0, MAX_MESSAGES_PER_CALL - failures.length);
   const intro = introLine(event, tag, shown.length > 0);
   const notices = failures.length === 0 ? [] : [failures.map((r) => notice(r, directory)).join("\n")];
-  const blocks: string[] = [];
-  let used = bytes(intro) + FOOTER_BYTES + notices.reduce((sum, n) => sum + bytes(n) + 2, 0);
-  for (const record of shown) {
-    const room = maxBytes - used - 2;
-    const full = block(record, record.text, directory, tag, reply);
-    const fits = bytes(full) <= room;
-    if (!fits && blocks.length > 0) break;
-    const next = fits ? full : fitted(record, directory, tag, reply, cli, room);
-    blocks.push(next);
-    used += bytes(next) + 2;
-  }
+  const used = bytes(intro) + FOOTER_BYTES + notices.reduce((sum, n) => sum + bytes(n) + 2, 0);
+  const blocks = fitBlocks(shown, directory, tag, reply, cli, maxBytes - used);
   const offered = waiting.slice(0, blocks.length);
   for (const record of offered) markOffered(paths.inbox, record.messageId, now);
   for (const record of failures) markNoticed(paths, record.messageId, now);

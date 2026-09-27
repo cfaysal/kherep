@@ -9,7 +9,7 @@ import { markRefused, markRetry, MAX_REPLY_DEPTH, messageIds, type InboxRecord }
 import { wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit } from "./task-admission.mts";
-import { isActive, listTasks, type TaskRecord } from "./task-records.mts";
+import { isActive, listTasks, taskGrants, type TaskRecord } from "./task-records.mts";
 import { resolveCwd } from "./task-prompt.mts";
 import { killSwitch, STUCK_TEXT, wakeText } from "./wake-hook.mts";
 
@@ -68,7 +68,7 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   const refs = [sessionId, record.name];
   // Task grant: a task session gets the messages of its task, listed or not.
   const listed = wakeAllowed(policy, refs);
-  const granted = (r: InboxRecord): boolean => listed || r.taskId === record.taskId;
+  const granted = (r: InboxRecord): boolean => listed || taskGrants(record, r);
   const all = sessionInbox(paths, refs);
   const unlisted = all.filter((r) => !granted(r) && r.state === "accepted");
   if (unlisted.length > 0) note(paths, now, sessionId, ids(unlisted), "not-allowlisted");
