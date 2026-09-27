@@ -62,6 +62,18 @@ identity. If the property is absent or has any other value, the agent writes not
 `publication not authorized`. The candidate worker never reads this file or calls the broker.
 Claude's direct broker authorization and publication path is unchanged.
 
+## Waking the current Codex app session
+
+A Codex desktop app restart starts a new session with a new id, so a `wake.sessions` list of full ids stops matching the session the operator works in. The optional node policy field `wake.codexApp` (boolean, default `false`) adds one grant for it:
+
+```json
+"wake": { "enabled": true, "sessions": [], "codexApp": true }
+```
+
+With `codexApp: true` the list may be empty or absent. Any non-boolean value turns waking off, as a malformed list does. The node then wakes exactly one Codex session that the list does not name: the most recently seen session recorded by the delivery hook whose rollout, `<CODEX_HOME or ~/.codex>/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl`, begins with a `session_meta` line for that id with `originator` `"Codex Desktop"` and `source` `"vscode"`, and no parent thread. The node reads that line itself at wake time. It searches the newest 62 date directories, reads at most 256 KiB, follows no links and refuses a missing, unreadable or garbled file or any other value. Exec runs, Codex tasks and app subagent threads are never granted. If two app sessions share the latest time, neither is granted.
+
+All other guards still apply in the same order: the kill switch, the recorded permission mode (never `bypassPermissions`, and an unrecorded mode is refused), reply depth, the turn budget and spacing, and one queue per session. Decisions made under this grant are written to `wake.jsonl` with `"grant": "codexApp"`. Full ids in `wake.sessions` behave as before.
+
 ## Retired memory backend
 
 Earlier installers could select a separate Central Brain MCP server with native context and capture hooks. That backend is retired; the Central Brain is now the Confluence knowledge space described above. A reinstall over such a host reads the persisted `orchestra/memory-provider.json`, resets it to `{ "provider": "unconfigured" }` with the previous file in the installation backup, and replaces the managed configuration block the old installer rendered, which removes its MCP table and native hooks. The receipt reports `retiredMemoryProvider: "central-brain"` for that run. A block that differs from what the old installer wrote is not overwritten; the installer stops and leaves it for review. A `central-brain` MCP table outside the managed block is removed only when it is exactly the table the old installer rendered for the persisted selection; otherwise it stays and the receipt lists it under `retiredMcpServers` as `retained-for-review`. A Codex project trust entry for the old `central-brain` checkout is an operator setting and stays untouched. An explicit `central-brain` selection is refused.
