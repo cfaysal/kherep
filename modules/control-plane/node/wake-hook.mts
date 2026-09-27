@@ -11,6 +11,7 @@ import { MAX_OFFERS, offerEnded, REOFFER_AFTER_MS, sessionInbox } from "./delive
 import { isMainModule } from "./deliver-hook.mts";
 import { localSessionName } from "./exchange.mts";
 import { getMessage, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
+import { launchMode, type LaunchVerdict } from "./launch-mode.mts";
 import { explicitlyListed, loadPolicy, wakeAllowed } from "./policy.mts";
 import { taskForSession } from "./task-records.mts";
 
@@ -41,8 +42,10 @@ import { taskForSession } from "./task-records.mts";
 // keeps an idle session wakeable after its process restarts (issue #97); the
 // session counts as idle, except after compact, which can run inside a turn.
 // Its input carries no permission_mode (measured on Claude Code 2.1.258), so
-// the mode the last prompt or Stop reported stands in; without one, only a
-// session listed by id or name, not through "*", is armed. Waking is opt-in
+// it arms only with a stored mode other than bypassPermissions (the last
+// prompt or Stop reported it), a session listed by id or name, not through
+// "*", and settings and launch flags that point to no bypass (launch-mode.mts);
+// otherwise it refuses, fail closed. Waking is opt-in
 // (policy.mts wake section) and budgeted with Stop continuations
 // (autonomy.mts). The texts are fixed and carry no peer content.
 
@@ -66,7 +69,7 @@ export const REARM_TEXT = "Kherep: message listener re-armed.";
 
 export interface WakeDeps {
   paths: NodePaths; now?: () => number; sleep?: (ms: number) => Promise<void>; pid?: number; maxWaitMs?: number;
-  parentAlive?: () => boolean; token?: () => string;
+  parentAlive?: () => boolean; token?: () => string; launchMode?: (cwd: unknown) => Promise<LaunchVerdict>;
 }
 
 export const killSwitch = (paths: NodePaths): string => path.join(paths.dir, "wake.disabled");
@@ -109,7 +112,7 @@ type WakeResult = { code: 0 } | { code: 2; text: string };
 // Resolves to 2 with a fixed text when it wakes the session, otherwise 0.
 export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResult> {
   const quiet = { code: 0 } as const;
-  const { session_id: sessionId, hook_event_name: event, permission_mode: given, source } = (input ?? {}) as Record<string, unknown>;
+  const { session_id: sessionId, hook_event_name: event, permission_mode: given, source, cwd } = (input ?? {}) as Record<string, unknown>;
   if (!isPlainSessionId(sessionId) || (event !== "Stop" && event !== "UserPromptSubmit" && event !== "SessionStart")) return quiet;
   const { paths } = deps;
   const now = deps.now ?? Date.now;
@@ -140,12 +143,22 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     audit(paths, now(), sessionId, [], "permission-mode");
     return quiet;
   }
-  if (starting && mode === undefined && !explicitlyListed(policy, refs)) {
-    audit(paths, now(), sessionId, [], "permission-mode-unknown");
-    return quiet;
-  }
   const lockFile = listenerLock(paths, sessionId);
-  const mine: ListenerLock = { token: deps.token?.() ?? crypto.randomUUID(), pid: deps.pid ?? process.pid, startedAt: now(), event,
+  const armedAt = now();
+  if (starting && given === undefined) {
+    // No permission_mode in the input: every source must rule bypass out.
+    const launch = mode !== undefined && explicitlyListed(policy, refs) ? await (deps.launchMode ?? launchMode)(cwd) : "unknown";
+    if (launch !== "ok") {
+      audit(paths, now(), sessionId, [], launch === "bypass" ? "permission-mode" : "permission-mode-unknown");
+      return quiet;
+    }
+    // A prompt or Stop armed during the check: its listener is the newer one.
+    if ((readJson<ListenerLock>(lockFile)?.startedAt ?? -Infinity) >= armedAt) {
+      audit(paths, now(), sessionId, [], "superseded");
+      return quiet;
+    }
+  }
+  const mine: ListenerLock = { token: deps.token?.() ?? crypto.randomUUID(), pid: deps.pid ?? process.pid, startedAt: armedAt, event,
     ...(starting && typeof source === "string" ? { source } : {}) };
   ensureDir(listenerDir(paths));
   writeJsonAtomic(lockFile, mine);
