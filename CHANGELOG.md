@@ -280,6 +280,27 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Adopting a resumed intercom session as a copy no longer leaves the previous
+  copy running (issue #111). The intercom task record notes the session it
+  held before the resume (`retire`); once the new copy is adopted, right after
+  the resume or in a later watch round, the node stops the previous one with
+  `claude stop <short id>`, but only while `claude agents --json --all` lists
+  it under that short id with the recorded session id and `status` `idle`. A
+  `busy` or `waiting` one is tried again in each watch round, up to 30 rounds;
+  one that is not listed, holds another session id or has no live process is
+  left alone. Only sessions a node-started intercom record held are stopped,
+  never the closed session the messages were sent to. `wake.jsonl` records
+  each stop with the action `closed-session` and the outcome `retired-copy`,
+  and a give-up with `copy-kept`.
+- A message for a closed session that its intercom session answered is no
+  longer refused as `target session not running` (issue #111). The copy's
+  first turn could start before the node readdressed the message to it, so no
+  turn offered it; the session read it with `msg inbox`, answered with
+  `msg send --reply-to`, and the record stayed `accepted` until the copy
+  ended and the 60-minute sweep refused it. A reply now marks the waiting
+  message it answers as `delivered`. The sweep also judges a message handed to
+  an intercom session (`closedTo` set) by its current `toSession` from the
+  time of the handover (`closedAttempt`), not from its arrival.
 - A node-started Claude Code session whose wake listener armed before the node
   recorded its session id is woken again (issue #109). This happens after a
   resume that Claude Code continued as a copy under a new id. The node now

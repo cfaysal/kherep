@@ -44,6 +44,10 @@ export interface TaskRecord {
   // Set while Claude Code has been asked to start or resume the session and
   // its session id is not confirmed by `claude agents --json` yet (issue #109).
   mappingPendingSince?: string;
+  // Intercom: sessions the record held before a resume continued it as a copy
+  // (issue #111), to stop once idle (copy-retire.mts); rounds counts the watch
+  // rounds that found one busy.
+  retire?: { shortId: string; sessionId: string; rounds?: number }[];
 }
 
 // The sender of a message as an intercom session's requestedBy records it.

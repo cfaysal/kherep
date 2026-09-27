@@ -3,46 +3,17 @@ import test from "node:test";
 
 import { TURN_SPACING_MS } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
-import { closedNode, deliver, SESSION, type Node } from "./closed-fixture.mts";
-import { readLocalSessions, writeLocalSessions } from "./exchange.mts";
+import { closedNode, COPY, copyingExec, endedIntercom, SESSION } from "./closed-fixture.mts";
+import { readLocalSessions } from "./exchange.mts";
 import { getMessage } from "./inbox.mts";
 import type { ExecOptions } from "./sessions.mts";
 import { T0 } from "./task-fixture.mts";
-import { listTasks, writeTask, type TaskRecord } from "./task-records.mts";
+import { listTasks, type TaskRecord } from "./task-records.mts";
 import { watchTasks } from "./task-watch.mts";
 
 // Issue #109: Claude Code may continue a resumed intercom session as a copy
 // under a new id. The node adopts the copy: the same task record takes its id
 // and the messages waiting for the original id are readdressed to it.
-
-const COPY = "c0ffee00-0000-4000-8000-000000000109";
-
-// An ended intercom session and a second message from its sender.
-async function endedIntercom(node: Node): Promise<{ task: TaskRecord; id: string }> {
-  deliver(node);
-  await deliverToClosed(node.deps());
-  const [task] = listTasks(node.paths);
-  writeTask(node.paths, { ...task, state: "done" });
-  node.tick(TURN_SPACING_MS * 2);
-  writeLocalSessions(node.paths, [], T0 + TURN_SPACING_MS * 2);
-  return { task, id: deliver(node, { text: "and the lint?" }) };
-}
-
-// A fake claude whose resume continues as a copy, listed (or, with listed
-// false, missing from the listing until the watch round).
-function copyingExec(node: Node, note: boolean, seen: (record: TaskRecord) => void) {
-  const base = node.deps();
-  let listed = true;
-  const exec = async (file: string, args: string[], options: ExecOptions): Promise<string> => {
-    if (args[0] === "agents" && !listed) throw new Error("the listing failed");
-    if (args[0] !== "--resume") return base.exec!(file, args, options);
-    node.calls.push({ file, args, options });
-    seen(listTasks(node.paths)[0]);
-    node.rows.push({ id: "c0ffee01", sessionId: COPY, state: "working", kind: "background", cwd: options.cwd });
-    return `${note ? "note: continuing as a copy\n" : ""}backgrounded · c0ffee01\n`;
-  };
-  return { deps: { ...base, exec }, unlist: () => { listed = false; }, relist: () => { listed = true; } };
-}
 
 test("a copy made on resume is adopted: same task, its id recorded, the waiting messages readdressed", async (t) => {
   for (const note of [false, true]) {
