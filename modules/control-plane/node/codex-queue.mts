@@ -13,7 +13,7 @@ import { ensureDir, type NodePaths } from "./config.mts";
 import { REOFFER_AFTER_MS, sessionInbox } from "./deliver-core.mts";
 import { messageIds, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
 import type { NodePolicy } from "./policy.mts";
-import { wakeAllowed } from "./policy.mts";
+import { explicitlyListed, wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { listTasks } from "./task-records.mts";
 import { killSwitch, wakeText } from "./wake-hook.mts";
@@ -61,10 +61,6 @@ function readQueued(paths: NodePaths, sessionId: string): Record<string, string>
   const queued = readJson<{ queued?: Record<string, string> }>(queuedFile(paths, sessionId))?.queued ?? {};
   const present = new Set(messageIds(paths.inbox));
   return Object.fromEntries(Object.entries(queued).filter(([id]) => present.has(id)));
-}
-
-function explicitlyListed(policy: NodePolicy, refs: string[]): boolean {
-  return refs.some((ref) => policy.wake?.sessions.includes(ref));
 }
 
 // Queue runs go on their own serial lane, never awaited by the exchange

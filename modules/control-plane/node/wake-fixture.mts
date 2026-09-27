@@ -40,13 +40,14 @@ export function arrive(paths: NodePaths, n: number, at: number, toSession = "rev
 }
 
 export interface ListenOptions {
-  start?: number; tick?: (clock: number) => void; maxWaitMs?: number; event?: string; mode?: string; token?: string;
-  parentAlive?: () => boolean;
+  start?: number; tick?: (clock: number) => void; maxWaitMs?: number; event?: string; mode?: string | null; token?: string;
+  parentAlive?: () => boolean; source?: string;
 }
 
 // A listener on a fake clock; tick(clock) runs after each sleep, before the poll.
 // The Stop input carries stop_hook_active true in a turn a Stop hook continued,
-// the woken turn included; the listener arms all the same.
+// the woken turn included; the listener arms all the same. mode null leaves
+// permission_mode out, as a SessionStart input does.
 export function listen(paths: NodePaths, options: ListenOptions = {}) {
   let clock = options.start ?? T0;
   const deps: WakeDeps = {
@@ -54,7 +55,8 @@ export function listen(paths: NodePaths, options: ListenOptions = {}) {
     sleep: async (ms) => { clock += ms; options.tick?.(clock); }, ...(options.token ? { token: () => options.token as string } : {}),
   };
   return runWake({ session_id: SELF, hook_event_name: options.event ?? "Stop", stop_hook_active: true,
-    permission_mode: options.mode ?? "default" }, deps);
+    ...(options.mode === null ? {} : { permission_mode: options.mode ?? "default" }),
+    ...(options.source === undefined ? {} : { source: options.source }) }, deps);
 }
 
 export const auditLines = (paths: NodePaths) =>

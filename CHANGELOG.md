@@ -11,6 +11,18 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Control Plane: the Claude Code wake listener is armed at `SessionStart` too
+  (issue #97), so an idle session is wakeable again after its process
+  restarts (app restart, `--resume`, `--continue`, `/clear`, fork) without
+  waiting for the user to type. The installer adds the entry last to the
+  `SessionStart` hooks with the same `asyncRewake` and timeout. A following
+  prompt supersedes that listener as before. After `compact` the session
+  counts as busy, because auto-compaction runs inside a turn. A `SessionStart`
+  input carries no `permission_mode`, so the listener uses the mode the
+  session's last prompt or `Stop` reported (`listeners/<id>.mode.json`); with
+  none known, only a session listed by id or name is armed, and the audit
+  says `permission-mode-unknown` otherwise.
+
 - Control Plane: `kherep-node attach <node>/<session>` resolves a session
   through the directory like `msg send` and prints the command to open it on
   its host (issue #81): `claude attach` and `claude logs` with the 8-character
