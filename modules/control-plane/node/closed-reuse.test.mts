@@ -59,6 +59,23 @@ test("a second message from the same sender goes to its running intercom session
   assert.ok(context.includes(`To reply: kherep-node msg send --reply-to ${id} -- <reply text>`));
 });
 
+test("a listener armed after the message arrived but before it was readdressed still wakes for it (#113)", async (t) => {
+  const node = closedNode(t);
+  const task = await firstIntercom(node);
+  later(node);
+  const id = deliver(node, { text: "and the docs?" });
+  const arrived = Date.parse(getMessage(node.paths.inbox, id)!.receivedAt);
+  // Measured order: arrival, then the intercom session's listener arms, then the round readdresses.
+  const armed = { startedAt: arrived + 1_000, event: "Stop" as const };
+  node.tick(10_000);
+  await deliverToClosed(node.deps());
+  const record = getMessage(node.paths.inbox, id)!;
+  assert.equal(record.toSession, task.sessionId);
+  assert.ok(Date.parse(record.closedAttempt!) > armed.startedAt + 3_000, "the handover comes after the listener's grace period");
+  assert.deepEqual(pending(node.paths, [task.sessionId!, task.name], task.sessionId!, armed, Date.parse(record.closedAttempt!), task)
+    .fresh.map((r) => r.messageId), [id], "judged by the handover, not by the arrival");
+});
+
 test("a second message from the same sender resumes its ended intercom session, not the closed one", async (t) => {
   const node = closedNode(t);
   const task = await firstIntercom(node);

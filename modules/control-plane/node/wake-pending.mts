@@ -37,7 +37,8 @@ export function pending(paths: NodePaths, refs: string[], sessionId: string, loc
   now: number, task?: TaskRecord) {
   const mine = sessionInbox(paths, refs).filter((r) => task === undefined || taskGrants(task, r));
   const woken = wokenFor(paths, sessionId);
-  const late = (r: InboxRecord): boolean => Date.parse(r.receivedAt) > lock.startedAt + WAKE_GRACE_MS;
+  // A readdressed record reached this session at its handover, not at its arrival (#113).
+  const late = (r: InboxRecord): boolean => Date.parse((r.closedTo && r.closedAttempt) || r.receivedAt) > lock.startedAt + WAKE_GRACE_MS;
   const accepted = mine.filter((r) => r.state === "accepted");
   const backlog = lock.event === "SessionStart" && now >= lock.startedAt + WAKE_BACKLOG_AFTER_MS
     ? accepted.filter((r) => !late(r) && !woken.includes(r.messageId)) : [];
