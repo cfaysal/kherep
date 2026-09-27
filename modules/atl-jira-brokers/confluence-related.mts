@@ -16,8 +16,10 @@
 //
 // So the semantic side proposes and a mechanical side disposes. A proposal has
 // to be a page in THIS space, it has to be a leaf rather than a shelf, and it
-// has to share a content word with the source title or sit under the same node.
-// An unrankable signal plus an exact one beats either alone.
+// has to share a distinctive content word with the source title. Sitting under
+// the same node is not enough on its own, and neither is a word most titles in
+// the space carry (issue #86). An unrankable signal plus an exact one beats
+// either alone.
 import { ConfluenceError, SCOPES, v1, v2, type ConfluenceSession } from "./confluence-contract.mts";
 
 export interface IndexedPage {
@@ -104,15 +106,44 @@ export interface RelatedSource {
   title: string;
   // Present when the source page already exists. It is never its own neighbour.
   id?: string;
-  // Present when the source already hangs somewhere. Siblings count as related
-  // even without a shared word: the hierarchy says what a page is about.
+  // Present when the source already hangs somewhere. Reported on the result so
+  // a link can be traced, but never a reason to accept one: the hierarchy is
+  // deliberately flat, so a sibling under a broad node says nothing about topic.
   parentId?: string | null;
 }
 
 export interface Related extends IndexedPage {
-  // Why this one survived. Carried with the result, not only logged, so a
-  // caller can tell a topical hit from a structural one.
-  reason: "term" | "sibling";
+  // Why this one survived: the distinctive words it shares with the source.
+  // Carried with the result, not only logged, so a wrong link can be traced to
+  // the word that let it through.
+  terms: string[];
+  // Also under the same parent. Context for the trace, never evidence.
+  sibling: boolean;
+}
+
+// A word in more than this share of the space's titles is a label, not a topic.
+// The product name sits in most titles, so sharing it would link everything to
+// everything. One in five is far below "most titles" and far above what a
+// topical word reaches in a flat space.
+const COMMON_TERM_SHARE = 0.2;
+// Below this many titles a word is never common, whatever its share: in a space
+// of a handful of pages every shared word is a large share, and two pages
+// sharing a word is exactly the pairing this filter exists to find.
+const COMMON_TERM_MIN_TITLES = 3;
+
+// The words that do not count as evidence. Counted over the titles the index
+// already holds, so the cutoff costs no request and follows the space as it grows.
+export function commonTerms(index: SpaceIndex): Set<string> {
+  const counts = new Map<string, number>();
+  for (const page of index.byId.values()) {
+    for (const term of contentTerms(page.title)) counts.set(term, (counts.get(term) ?? 0) + 1);
+  }
+  const share = index.byId.size * COMMON_TERM_SHARE;
+  const common = new Set<string>();
+  for (const [term, n] of counts) {
+    if (n >= COMMON_TERM_MIN_TITLES && n > share) common.add(term);
+  }
+  return common;
 }
 
 // Keeps the proposal order - that order is the only ranking the semantic side
@@ -123,6 +154,7 @@ export function selectRelated(
   proposals: string[],
   limit = 3,
 ): Related[] {
+  const common = commonTerms(index);
   const sourceTerms = contentTerms(source.title);
   const seen = new Set<string>();
   const out: Related[] = [];
@@ -135,12 +167,12 @@ export function selectRelated(
     if (seen.has(hit.id)) continue;
     if (index.parents.has(hit.id)) continue;  // a shelf, not a book
 
-    const sibling = Boolean(source.parentId) && hit.parentId === source.parentId;
-    const shared = [...contentTerms(hit.title)].some((term) => sourceTerms.has(term));
-    if (!sibling && !shared) continue;
+    const terms = [...contentTerms(hit.title)].filter((term) => sourceTerms.has(term) && !common.has(term));
+    if (!terms.length) continue;
 
     seen.add(hit.id);
-    out.push({ ...hit, reason: shared ? "term" : "sibling" });
+    const sibling = Boolean(source.parentId) && hit.parentId === source.parentId;
+    out.push({ ...hit, terms, sibling });
   }
   return out;
 }
