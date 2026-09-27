@@ -34,6 +34,18 @@ export const isPlainSessionId = (value: unknown): value is string =>
 
 export const bypassesPermissions = (permissionMode: unknown): boolean => permissionMode === "bypassPermissions";
 
+// The permission mode the session's last UserPromptSubmit or Stop input
+// reported. A SessionStart input carries none (measured on Claude Code
+// 2.1.258), so the listener armed there falls back to it (issue #97).
+const modeFile = (paths: NodePaths, sessionId: string): string => path.join(listenerDir(paths), `${sessionId}.mode.json`);
+export function rememberMode(paths: NodePaths, sessionId: string, permissionMode: unknown): void {
+  if (typeof permissionMode !== "string" || !/^[A-Za-z-]{1,32}$/.test(permissionMode)) return;
+  ensureDir(listenerDir(paths));
+  writeJsonAtomic(modeFile(paths, sessionId), { permissionMode });
+}
+export const rememberedMode = (paths: NodePaths, sessionId: string): string | undefined =>
+  readJson<{ permissionMode?: string }>(modeFile(paths, sessionId))?.permissionMode;
+
 // Why a session not in wake.sessions may be woken: "codexApp" (codex-app.mts).
 export type WakeGrant = "codexApp";
 
@@ -115,16 +127,23 @@ export function mayContinue(paths: NodePaths, sessionId: unknown, permissionMode
 }
 
 // The listener lock: newest wins; a listener recognises its own by token.
-// event: the hook that armed it; idleAt: set by StopFailure for a listener
-// armed at UserPromptSubmit, whose turn has then ended.
-export interface ListenerLock { token: string; pid: number; startedAt: number; event: "Stop" | "UserPromptSubmit"; idleAt?: number }
+// event: the hook that armed it, with the SessionStart input's source;
+// idleAt: set by StopFailure for a listener armed while a turn could run.
+export interface ListenerLock {
+  token: string; pid: number; startedAt: number; event: "Stop" | "UserPromptSubmit" | "SessionStart"; source?: string; idleAt?: number;
+}
+
+// Whether the session was idle when the listener armed: after Stop, and at a
+// SessionStart other than compaction, which can run inside a turn (issue #97).
+export const armedIdle = (lock: Pick<ListenerLock, "event" | "source">): boolean =>
+  lock.event === "Stop" || (lock.event === "SessionStart" && lock.source !== "compact");
 
 // StopFailure ends the turn without a Stop, so no newer listener takes over:
-// the one armed at UserPromptSubmit learns that the session is idle.
+// the one armed while the turn could run learns that the session is idle.
 export function markListenerIdle(paths: NodePaths, sessionId: unknown, now: number): void {
   if (!isPlainSessionId(sessionId)) return;
   const lock = readJson<ListenerLock>(listenerLock(paths, sessionId));
-  if (lock?.event === "UserPromptSubmit" && lock.idleAt === undefined) {
+  if (lock && !armedIdle(lock) && lock.idleAt === undefined) {
     writeJsonAtomic(listenerLock(paths, sessionId), { ...lock, idleAt: now });
   }
 }

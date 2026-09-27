@@ -111,6 +111,12 @@
           {
             "type": "command",
             "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/critical-file-integrity.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/wake-hook.mts\" --timeout 86400",
+            "asyncRewake": true,
+            "timeout": 86400
           }
         ]
       }

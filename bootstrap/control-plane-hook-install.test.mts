@@ -18,8 +18,9 @@ const HERE = import.meta.dirname;
 const HOOK = "modules/control-plane/node/deliver-hook.mts";
 const WAKE = "modules/control-plane/node/wake-hook.mts";
 const EVENTS = ["UserPromptSubmit", "Stop", "StopFailure"];
-// The events the wake listener is armed at, after the delivery hook.
-const WAKE_EVENTS = ["UserPromptSubmit", "Stop"];
+// The events the wake listener is armed at, after the delivery hook where the
+// event has one. SessionStart (issue #97) has none: the listener ends its group.
+const WAKE_EVENTS = ["SessionStart", "UserPromptSubmit", "Stop"];
 const forward = (value: string): string => value.replace(/\\/g, "/");
 // Git Bash wants /c/... on Windows; install.sh refuses a drive-letter path.
 const slash = (value: string): string =>
@@ -126,6 +127,11 @@ test("install wires the delivery and wake hooks from the checkout, drift-check i
   const source = JSON.parse(fs.readFileSync(path.join(HERE, "..", "claude", "settings.user.json"), "utf8"));
   for (const event of EVENTS) assert.equal(deliverCommand(captured, event), deliverCommand(source, event));
   for (const event of WAKE_EVENTS) assert.deepEqual(wakeEntry(captured, event), wakeEntry(source, event));
+  // The listener joins SessionStart last; the hooks before it keep their order.
+  const scripts = (value: HookGroups) => value.hooks.SessionStart.flatMap((group) => group.hooks)
+    .map((hook) => /\/([^/"]+)"/.exec(hook.command)?.[1]);
+  assert.deepEqual(scripts(settings), scripts(source));
+  assert.equal(scripts(settings).at(-1), "wake-hook.mts");
   assert.ok(!fs.readFileSync(copy, "utf8").includes(forward(KHEREP_REPO)), "capture left the machine path of the checkout");
 
   // Removing the entries by hand, as docs/INSTALLATION.md describes, is drift.

@@ -121,3 +121,8 @@ export function wakeAllowed(policy: NodePolicy, refs: string[]): boolean {
   const sessions = policy.wake?.sessions ?? [];
   return sessions.includes("*") || refs.some((ref) => sessions.includes(ref));
 }
+
+// Listed by id or name, not only through "*".
+export function explicitlyListed(policy: NodePolicy, refs: string[]): boolean {
+  return refs.some((ref) => policy.wake?.sessions.includes(ref));
+}

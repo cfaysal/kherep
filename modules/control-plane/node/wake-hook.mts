@@ -3,19 +3,20 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
-  audit, bypassesPermissions, isPlainSessionId, listenerDir, listenerLock, parentWatch, takeTurn, wakeAudit, type ListenerLock,
+  armedIdle, audit, bypassesPermissions, isPlainSessionId, listenerDir, listenerLock, parentWatch, rememberedMode, rememberMode, takeTurn,
+  wakeAudit, type ListenerLock,
 } from "./autonomy.mts";
 import { ensureDir, nodePaths, readConfig, type NodePaths } from "./config.mts";
 import { MAX_OFFERS, offerEnded, REOFFER_AFTER_MS, sessionInbox } from "./deliver-core.mts";
 import { isMainModule } from "./deliver-hook.mts";
 import { localSessionName } from "./exchange.mts";
 import { getMessage, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
-import { loadPolicy, wakeAllowed } from "./policy.mts";
+import { explicitlyListed, loadPolicy, wakeAllowed } from "./policy.mts";
 import { taskForSession } from "./task-records.mts";
 
 // Wakes an idle Claude Code session when a peer message arrives (issue #31).
-// Installed with "asyncRewake": true on Stop and on UserPromptSubmit, with the
-// same number as "timeout" and as --timeout. Contract, from
+// Installed with "asyncRewake": true on SessionStart, UserPromptSubmit and
+// Stop, with the same number as "timeout" and as --timeout. Contract, from
 // https://code.claude.com/docs/en/hooks (fetched 2026-09-25):
 // - asyncRewake "runs in the background and wakes Claude on exit code 2. The
 //   hook's stderr, or stdout if stderr is empty, is shown to Claude as a
@@ -34,9 +35,16 @@ import { taskForSession } from "./task-records.mts";
 // Code kills the listener without waking the session, which would leave it
 // deaf, so the listener wakes it itself shortly before, and that turn re-arms.
 // Arming at UserPromptSubmit too keeps a listener after a turn that ends
-// without Stop (StopFailure, user interrupt). Waking is opt-in (policy.mts
-// wake section) and budgeted with Stop continuations (autonomy.mts). The texts
-// are fixed and carry no peer content.
+// without Stop (StopFailure, user interrupt). SessionStart "Runs when Claude
+// Code starts a new session or resumes an existing session", with source
+// startup, resume, clear, compact or fork (fetched 2026-09-27). Arming there
+// keeps an idle session wakeable after its process restarts (issue #97); the
+// session counts as idle, except after compact, which can run inside a turn.
+// Its input carries no permission_mode (measured on Claude Code 2.1.258), so
+// the mode the last prompt or Stop reported stands in; without one, only a
+// session listed by id or name, not through "*", is armed. Waking is opt-in
+// (policy.mts wake section) and budgeted with Stop continuations
+// (autonomy.mts). The texts are fixed and carry no peer content.
 
 export { listenerDir, wakeAudit };
 export const WAKE_POLL_MS = 2_000;
@@ -101,8 +109,8 @@ type WakeResult = { code: 0 } | { code: 2; text: string };
 // Resolves to 2 with a fixed text when it wakes the session, otherwise 0.
 export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResult> {
   const quiet = { code: 0 } as const;
-  const { session_id: sessionId, hook_event_name: event, permission_mode: mode } = (input ?? {}) as Record<string, unknown>;
-  if (!isPlainSessionId(sessionId) || (event !== "Stop" && event !== "UserPromptSubmit")) return quiet;
+  const { session_id: sessionId, hook_event_name: event, permission_mode: given, source } = (input ?? {}) as Record<string, unknown>;
+  if (!isPlainSessionId(sessionId) || (event !== "Stop" && event !== "UserPromptSubmit" && event !== "SessionStart")) return quiet;
   const { paths } = deps;
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -125,12 +133,20 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     audit(paths, now(), sessionId, [], "not-allowlisted");
     return quiet;
   }
+  const starting = event === "SessionStart";
+  rememberMode(paths, sessionId, given);
+  const mode = given ?? (starting ? rememberedMode(paths, sessionId) : undefined);
   if (bypassesPermissions(mode)) {
     audit(paths, now(), sessionId, [], "permission-mode");
     return quiet;
   }
+  if (starting && mode === undefined && !explicitlyListed(policy, refs)) {
+    audit(paths, now(), sessionId, [], "permission-mode-unknown");
+    return quiet;
+  }
   const lockFile = listenerLock(paths, sessionId);
-  const mine: ListenerLock = { token: deps.token?.() ?? crypto.randomUUID(), pid: deps.pid ?? process.pid, startedAt: now(), event };
+  const mine: ListenerLock = { token: deps.token?.() ?? crypto.randomUUID(), pid: deps.pid ?? process.pid, startedAt: now(), event,
+    ...(starting && typeof source === "string" ? { source } : {}) };
   ensureDir(listenerDir(paths));
   writeJsonAtomic(lockFile, mine);
   const deadline = mine.startedAt + (deps.maxWaitMs ?? WAKE_MAX_WAIT_MS);
@@ -151,10 +167,10 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
       audit(paths, now(), sessionId, [], "parent-gone");
       return quiet;
     }
-    // Armed at UserPromptSubmit, the session is busy until StopFailure marks the
-    // listener idle or the turn cannot still run; a turn that ends with Stop
-    // replaces this listener.
-    const idle = held.event === "Stop" || held.idleAt !== undefined || now() >= mine.startedAt + REOFFER_AFTER_MS;
+    // Armed at UserPromptSubmit or compaction, the session is busy until
+    // StopFailure marks the listener idle or the turn cannot still run; a turn
+    // that ends with Stop replaces this listener.
+    const idle = armedIdle(held) || held.idleAt !== undefined || now() >= mine.startedAt + REOFFER_AFTER_MS;
     const found = idle ? pending(paths, refs, sessionId, mine.startedAt, now(), listed ? undefined : grant) : { fresh: [], stuck: [] };
     const deep = found.fresh.filter((r) => atReplyLimit(r) && !limited.has(r.messageId));
     if (deep.length > 0) {
