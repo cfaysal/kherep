@@ -9,6 +9,7 @@ import * as parityConfig from "./parity-config.mts";
 import { recognizeHistoricalManagedConfig } from "./historical-managed-artifacts.mts";
 import { configureMemoryNotify } from "./memory-provider.mts";
 import { managedNodePaths, withManagedNodePaths } from "./node-path.mts";
+import { managedOutboxRoots, projectOutboxWritableRoot } from "./outbox-writable-root.mts";
 import { managedFragmentFamily, retiredCentralBrainFragments, retireUnmanagedCentralBrainTable } from "./retired-central-brain.mts";
 import type { RetiredCentralBrainRender } from "./retired-central-brain.mts";
 import { enableHooks, setMarkedBlock, setTopLevelSetting } from "./text-merge.mts";
@@ -48,6 +49,8 @@ export interface ManagedConfigOptions {
   memoryNotifyHook: string;
   mcpCompatibility?: McpCompatibilityOptions;
   controlPlaneHook?: string;
+  // Issue #72. The Control Plane outbox, made a writable root of the sandbox.
+  controlPlaneOutbox?: string;
 }
 
 export function replaceExactManagedFragment(
@@ -212,9 +215,18 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
   next = retiredTable.config;
   const beforeCheckout = next;
   next = pointDeliverHooksAt(next, options.controlPlaneHook, options.startMarker, options.endMarker);
-  const currentRenderOptions = { ...effectiveOptions, mcpServers, pluginMcpServers };
+  const outbox = options.controlPlaneOutbox;
+  const outboxRoot = outbox ? projectOutboxWritableRoot(next, outbox, options.startMarker, options.endMarker) : undefined;
+  if (outboxRoot) next = outboxRoot.config;
+  const withoutOutbox = { ...effectiveOptions, mcpServers, pluginMcpServers, outboxWritableRoot: undefined };
+  const currentRenderOptions = { ...withoutOutbox, outboxWritableRoot: outboxRoot?.managedTable ? outbox : undefined };
+  // A block may carry the table for this outbox or for the one an earlier
+  // install named, and the current render may have dropped it since.
+  const outboxVariants = [...new Set([outbox, ...managedOutboxRoots(next, options.startMarker, options.endMarker)])]
+    .filter((root): root is string => Boolean(root))
+    .map((root) => ({ ...withoutOutbox, outboxWritableRoot: root }));
   // Every block written before issue #68 lacks the commandWindows forms.
-  const beforeWindowsCommands = { ...currentRenderOptions, windowsHookCommands: false };
+  const beforeWindowsCommands = { ...withoutOutbox, windowsHookCommands: false };
   // Every block written before the control-plane hook existed lacks it.
   const beforeControlPlane = { ...beforeWindowsCommands, controlPlaneHook: undefined };
   const currentLegacyOptions = { ...beforeControlPlane, memoryProvider: "unconfigured" as const };
@@ -243,7 +255,7 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
     startMarker: options.startMarker,
     endMarker: options.endMarker,
     knownManagedFragments: withManagedNodePaths([
-      ...[currentRenderOptions, beforeWindowsCommands, beforeControlPlane].flatMap((current) => {
+      ...[withoutOutbox, ...outboxVariants, beforeWindowsCommands, beforeControlPlane].flatMap((current) => {
         const previousStop = { ...current, observationStopHook: false };
         return [...managedFragmentFamily(current, previousStop),
           ...retiredCentralBrainFragments(current, previousStop, options.retiredCentralBrain)];
@@ -270,5 +282,6 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
     existingManagedMcp,
     pluginMcpServers,
     retiredMcpServers: [...retiredMcpServers, ...retiredTable.tables],
+    outboxWritableRoot: outboxRoot?.status,
   };
 }

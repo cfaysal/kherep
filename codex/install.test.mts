@@ -139,6 +139,7 @@ function fixture() {
     workspace, installAtlassianTools: true,
     nodePath: process.execPath, log: (): void => {},
     resolveRegistryRuntime: () => "fixture", runCodex,
+    controlPlaneOutbox: path.join(root, "kherep config", "control-plane", "outbox"),
     mcpCompatibility: {
       operatorBindings: {
         n8n: {
@@ -1243,8 +1244,59 @@ test("wires the control-plane delivery hook from the checkout and upgrades a blo
   // The existing hooks are untouched: without the three groups and the
   // commandWindows forms (issue #68) the block is the one the previous installer
   // wrote, and a reinstall recognises and upgrades it.
-  const previous = config.replace(`\n\n${groups}`, "").replace(/^commandWindows = .*\n/gm, "");
+  const previous = config.replace(`\n\n${groups}`, "").replace(/^commandWindows = .*\n/gm, "")
+    .replace(/^\[sandbox_workspace_write\]\nwritable_roots = .*\n\n/m, "");
   assert.notEqual(previous, config);
   fs.writeFileSync(result.targets.config, previous);
   assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), config);
+});
+
+// Issue #72. The outbox is a writable root of the workspace-write sandbox, in
+// exactly one sandbox_workspace_write table: the managed block's, or the
+// operator's when there is one.
+test("makes the Control Plane outbox a sandbox writable root without ever writing a second table", (t) => {
+  const { root, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const outbox = installOptions.controlPlaneOutbox;
+  const table = `[sandbox_workspace_write]\nwritable_roots = [${JSON.stringify(outbox)}]`;
+  const headers = (text: string): number => text.match(/^\s*\[\s*sandbox_workspace_write\s*\]/gm)?.length ?? 0;
+  const read = (file: string): string => fs.readFileSync(file, "utf8");
+
+  const first = install(installOptions);
+  const managed = read(first.targets.config);
+  const block = managed.slice(managed.indexOf(CONFIG_START));
+  assert.ok(block.includes(`# Managed Kherep Codex Maestro parity projection.\n\n${table}\n\n[[hooks.`));
+  assert.equal(headers(managed), 1);
+  assert.doesNotMatch(managed, /control-plane[\\/]+"|policy\.json|node-ed25519/, "only the outbox, never the node directory");
+  assert.deepEqual(first.receipt.controlPlaneOutbox, { status: "managed" });
+  assert.equal(read(install(installOptions).targets.config), managed, "a reinstall is idempotent");
+
+  // A block from an install with another config directory is still recognised.
+  const moved = managed.replace(JSON.stringify(outbox), JSON.stringify(path.join(root, "old", "outbox")));
+  fs.writeFileSync(first.targets.config, moved);
+  assert.equal(read(install(installOptions).targets.config), managed);
+
+  // The operator adds a table of their own (Codex now refuses the file): the
+  // block drops its table and the outbox joins the operator's list.
+  const operator = `[sandbox_workspace_write]\nwritable_roots = ["/operator/cache"]\nnetwork_access = false\n\n`;
+  const firstTable = managed.search(/^\[/m);
+  fs.writeFileSync(first.targets.config, managed.slice(0, firstTable) + operator + managed.slice(firstTable));
+  const merged = install(installOptions);
+  const config = read(merged.targets.config);
+  assert.equal(headers(config), 1);
+  assert.ok(config.includes(`\n[sandbox_workspace_write]\nwritable_roots = ["/operator/cache", ${JSON.stringify(outbox)}]\n`
+    + "network_access = false\n\n"));
+  assert.ok(!config.includes(table));
+  assert.deepEqual(merged.receipt.controlPlaneOutbox, { status: "operator-merged" });
+  const again = install(installOptions);
+  assert.equal(read(again.targets.config), config);
+  assert.deepEqual(again.receipt.controlPlaneOutbox, { status: "operator-present" });
+
+  // Operator config the installer cannot merge into stays byte-identical.
+  const inline = `sandbox_workspace_write = { network_access = true }\n${managed.replace(`${table}\n\n`, "")}`;
+  fs.writeFileSync(first.targets.config, inline);
+  const skipped = install(installOptions);
+  assert.equal(read(skipped.targets.config), inline);
+  assert.equal(headers(inline), 0);
+  assert.deepEqual(skipped.receipt.controlPlaneOutbox, { status: "skipped-inline-table" });
 });

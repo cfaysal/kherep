@@ -1,5 +1,6 @@
 import path from "node:path";
 import { nativeCommand } from "./memory-provider.mts";
+import { renderOutboxWritableRoot } from "./outbox-writable-root.mts";
 
 import type { McpServerSpec, PluginMcpServer } from "./contracts.mts";
 
@@ -48,6 +49,9 @@ export interface RenderOptions extends McpRenderOptions {
   // Issue #68. false renders the blocks written before every hook carried a
   // commandWindows form, so the upgrade can recognise and replace them.
   windowsHookCommands?: boolean;
+  // Issue #72. The Control Plane outbox as a sandbox writable root, rendered
+  // only when the operator's config defines no sandbox_workspace_write table.
+  outboxWritableRoot?: string;
 }
 
 function tomlString(value: unknown): string {
@@ -237,8 +241,12 @@ export function renderPluginMcp(options: McpRenderOptions): string {
   }).join("\n\n");
 }
 
+// The table sits between the header and the hooks, so the block without it is
+// not a substring of the block with it, and an upgrade that drops the table
+// cannot mistake the block that still has it for current.
 function renderPrefix(options: RenderOptions): string {
-  return ["# Managed Kherep Codex Maestro parity projection.", renderHooks(options)].join("\n\n");
+  const sandbox = options.outboxWritableRoot ? [renderOutboxWritableRoot(options.outboxWritableRoot)] : [];
+  return ["# Managed Kherep Codex Maestro parity projection.", ...sandbox, renderHooks(options)].join("\n\n");
 }
 
 export function render(options: RenderOptions): string {
