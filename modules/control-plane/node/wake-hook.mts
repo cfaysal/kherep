@@ -7,13 +7,15 @@ import {
   wakeAudit, type ListenerLock,
 } from "./autonomy.mts";
 import { ensureDir, nodePaths, readConfig, type NodePaths } from "./config.mts";
-import { MAX_OFFERS, offerEnded, REOFFER_AFTER_MS, sessionInbox } from "./deliver-core.mts";
+import { REOFFER_AFTER_MS } from "./deliver-core.mts";
 import { isMainModule } from "./deliver-hook.mts";
 import { localSessionName } from "./exchange.mts";
-import { getMessage, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
+import { getMessage, readJson, writeJsonAtomic } from "./inbox.mts";
 import { launchMode, type LaunchVerdict } from "./launch-mode.mts";
 import { explicitlyListed, loadPolicy, wakeAllowed } from "./policy.mts";
 import { taskForSession } from "./task-records.mts";
+import { transcriptMode } from "./transcript-mode.mts";
+import { atReplyLimit, pending, rememberWoken } from "./wake-pending.mts";
 
 // Wakes an idle Claude Code session when a peer message arrives (issue #31).
 // Installed with "asyncRewake": true on SessionStart, UserPromptSubmit and
@@ -43,17 +45,17 @@ import { taskForSession } from "./task-records.mts";
 // session counts as idle, except after compact, which can run inside a turn.
 // Its input carries no permission_mode (measured on Claude Code 2.1.258), so
 // it arms only with a stored mode other than bypassPermissions (the last
-// prompt or Stop reported it), a session listed by id or name, not through
-// "*", and settings and launch flags that point to no bypass (launch-mode.mts);
-// otherwise it refuses, fail closed. Waking is opt-in
+// prompt or Stop reported it, else the session transcript: transcript-mode.mts,
+// issue #101), a session listed by id or name, not through "*", and settings
+// and launch flags that point to no bypass (launch-mode.mts); otherwise it
+// refuses, fail closed. There it also wakes once for messages that arrived
+// while no listener ran (wake-pending.mts). Waking is opt-in
 // (policy.mts wake section) and budgeted with Stop continuations
 // (autonomy.mts). The texts are fixed and carry no peer content.
 
 export { listenerDir, wakeAudit };
+export { WAKE_BACKLOG_AFTER_MS, WAKE_GRACE_MS } from "./wake-pending.mts";
 export const WAKE_POLL_MS = 2_000;
-// Arrivals this soon after arming are left to the delivery hook of the same
-// event, which runs in parallel with the listener.
-export const WAKE_GRACE_MS = 3_000;
 // Pause between finding a waiting message and re-reading its state, so an
 // offer made meanwhile by a delivery hook is seen.
 export const WAKE_SETTLE_MS = 250;
@@ -70,10 +72,10 @@ export const REARM_TEXT = "Kherep: message listener re-armed.";
 export interface WakeDeps {
   paths: NodePaths; now?: () => number; sleep?: (ms: number) => Promise<void>; pid?: number; maxWaitMs?: number;
   parentAlive?: () => boolean; token?: () => string; launchMode?: (cwd: unknown) => Promise<LaunchVerdict>;
+  transcriptMode?: (transcriptPath: unknown) => string | undefined;
 }
 
 export const killSwitch = (paths: NodePaths): string => path.join(paths.dir, "wake.disabled");
-const stuckFile = (paths: NodePaths, sessionId: string): string => path.join(listenerDir(paths), `${sessionId}.stuck.json`);
 
 // The wait before the self re-arm for the hook's arguments: --timeout
 // <seconds>, the number its settings entry carries as timeout. Without the flag
@@ -85,34 +87,13 @@ export function wakeMaxWaitMs(argv: string[]): number | null {
   return Number.isInteger(seconds) && seconds * 1000 > 2 * WAKE_REARM_EARLY_MS ? seconds * 1000 - WAKE_REARM_EARLY_MS : null;
 }
 
-const atReplyLimit = (record: InboxRecord): boolean => (record.depth ?? 0) >= MAX_REPLY_DEPTH;
-const stuckWoken = (paths: NodePaths, sessionId: string): string[] =>
-  readJson<{ messageIds?: string[] }>(stuckFile(paths, sessionId))?.messageIds ?? [];
-
-// Records a stuck offer was woken for, kept while the record exists.
-function rememberStuck(paths: NodePaths, sessionId: string, ids: string[]): void {
-  const kept = stuckWoken(paths, sessionId).filter((id) => getMessage(paths.inbox, id) !== null);
-  writeJsonAtomic(stuckFile(paths, sessionId), { messageIds: [...kept, ...ids] });
-}
-
-// fresh: accepted records received after the grace period. stuck: records left
-// offered by a turn that ended without Stop, each woken for once at most.
-// With taskId (a task grant) only the records of that task count.
-function pending(paths: NodePaths, refs: string[], sessionId: string, startedAt: number, now: number, taskId?: string) {
-  const mine = sessionInbox(paths, refs).filter((r) => taskId === undefined || r.taskId === taskId);
-  const fresh = mine.filter((r) => r.state === "accepted" && Date.parse(r.receivedAt) > startedAt + WAKE_GRACE_MS);
-  const woken = stuckWoken(paths, sessionId);
-  const stuck = now < startedAt + WAKE_GRACE_MS ? [] : mine.filter((r) => r.state === "offered" && offerEnded(r, now)
-    && (r.offers ?? 0) < MAX_OFFERS && !atReplyLimit(r) && !woken.includes(r.messageId));
-  return { fresh, stuck: stuck.map((r) => r.messageId) };
-}
-
 type WakeResult = { code: 0 } | { code: 2; text: string };
 
 // Resolves to 2 with a fixed text when it wakes the session, otherwise 0.
 export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResult> {
   const quiet = { code: 0 } as const;
-  const { session_id: sessionId, hook_event_name: event, permission_mode: given, source, cwd } = (input ?? {}) as Record<string, unknown>;
+  const { session_id: sessionId, hook_event_name: event, permission_mode: given, source, cwd, transcript_path: transcript } =
+    (input ?? {}) as Record<string, unknown>;
   if (!isPlainSessionId(sessionId) || (event !== "Stop" && event !== "UserPromptSubmit" && event !== "SessionStart")) return quiet;
   const { paths } = deps;
   const now = deps.now ?? Date.now;
@@ -137,8 +118,9 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     return quiet;
   }
   const starting = event === "SessionStart";
-  rememberMode(paths, sessionId, given);
-  const mode = given ?? (starting ? rememberedMode(paths, sessionId) : undefined);
+  let mode = given ?? (starting ? rememberedMode(paths, sessionId) : undefined);
+  if (starting && mode === undefined) mode = (deps.transcriptMode ?? transcriptMode)(transcript);
+  rememberMode(paths, sessionId, mode);
   if (bypassesPermissions(mode)) {
     audit(paths, now(), sessionId, [], "permission-mode");
     return quiet;
@@ -184,22 +166,27 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     // StopFailure marks the listener idle or the turn cannot still run; a turn
     // that ends with Stop replaces this listener.
     const idle = armedIdle(held) || held.idleAt !== undefined || now() >= mine.startedAt + REOFFER_AFTER_MS;
-    const found = idle ? pending(paths, refs, sessionId, mine.startedAt, now(), listed ? undefined : grant) : { fresh: [], stuck: [] };
-    const deep = found.fresh.filter((r) => atReplyLimit(r) && !limited.has(r.messageId));
+    const found = idle ? pending(paths, refs, sessionId, mine, now(), listed ? undefined : grant) : { fresh: [], backlog: [], stuck: [] };
+    const deep = [...found.fresh, ...found.backlog].filter((r) => atReplyLimit(r) && !limited.has(r.messageId));
     if (deep.length > 0) {
       audit(paths, now(), sessionId, deep.map((r) => r.messageId), "depth-limit");
       for (const r of deep) limited.add(r.messageId);
     }
-    let fresh = found.fresh.filter((r) => !atReplyLimit(r)).map((r) => r.messageId);
+    const below = (records: typeof found.fresh): string[] => records.filter((r) => !atReplyLimit(r)).map((r) => r.messageId);
+    let fresh = below(found.fresh);
+    let backlog = below(found.backlog);
     let stuck = found.stuck;
-    if (fresh.length + stuck.length > 0) {
+    if (fresh.length + backlog.length + stuck.length > 0) {
       // A delivery hook may be offering them right now; wake only for what still waits.
       await sleep(WAKE_SETTLE_MS);
-      fresh = fresh.filter((id) => getMessage(paths.inbox, id)?.state === "accepted");
-      stuck = stuck.filter((id) => getMessage(paths.inbox, id)?.state === "offered");
+      const still = (state: string) => (id: string): boolean => getMessage(paths.inbox, id)?.state === state;
+      fresh = fresh.filter(still("accepted"));
+      backlog = backlog.filter(still("accepted"));
+      stuck = stuck.filter(still("offered"));
     }
+    const messages = fresh.length + backlog.length;
     let due: "wake" | "rearm";
-    if (fresh.length + stuck.length > 0) due = "wake";
+    if (messages + stuck.length > 0) due = "wake";
     else if (now() >= deadline) due = "rearm";
     else continue;
     const budget = takeTurn(paths, sessionId, now());
@@ -207,19 +194,18 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     if (budget === "spacing" || budget === "locked") continue;
     release();
     if (budget === "exhausted") {
-      audit(paths, now(), sessionId, [...fresh, ...stuck], "budget");
+      audit(paths, now(), sessionId, [...fresh, ...backlog, ...stuck], "budget");
       return quiet;
     }
     if (due === "rearm") {
       audit(paths, now(), sessionId, [], "rearm");
       return { code: 2, text: REARM_TEXT };
     }
-    if (stuck.length > 0) {
-      rememberStuck(paths, sessionId, stuck);
-      audit(paths, now(), sessionId, stuck, "stuck-offer");
-    }
+    if (backlog.length + stuck.length > 0) rememberWoken(paths, sessionId, [...backlog, ...stuck]);
+    if (stuck.length > 0) audit(paths, now(), sessionId, stuck, "stuck-offer");
+    if (backlog.length > 0) audit(paths, now(), sessionId, backlog, "backlog");
     if (fresh.length > 0) audit(paths, now(), sessionId, fresh, "wake");
-    return { code: 2, text: fresh.length > 0 ? wakeText(fresh.length) : STUCK_TEXT };
+    return { code: 2, text: messages > 0 ? wakeText(messages) : STUCK_TEXT };
   }
 }
 

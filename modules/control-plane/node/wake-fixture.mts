@@ -43,6 +43,7 @@ export function arrive(paths: NodePaths, n: number, at: number, toSession = "rev
 export interface ListenOptions {
   start?: number; tick?: (clock: number) => void; maxWaitMs?: number; event?: string; mode?: string | null; token?: string;
   parentAlive?: () => boolean; source?: string; launch?: (cwd: unknown) => Promise<LaunchVerdict>;
+  transcript?: string; readTranscript?: (transcriptPath: unknown) => string | undefined;
 }
 
 // A listener on a fake clock; tick(clock) runs after each sleep, before the poll.
@@ -55,11 +56,12 @@ export function listen(paths: NodePaths, options: ListenOptions = {}) {
   const deps: WakeDeps = {
     paths, pid: 4242, maxWaitMs: options.maxWaitMs ?? 60_000, now: () => clock, parentAlive: options.parentAlive ?? (() => true),
     sleep: async (ms) => { clock += ms; options.tick?.(clock); }, ...(options.token ? { token: () => options.token as string } : {}),
-    launchMode: options.launch ?? (async () => "ok"),
+    launchMode: options.launch ?? (async () => "ok"), ...(options.readTranscript ? { transcriptMode: options.readTranscript } : {}),
   };
   return runWake({ session_id: SELF, hook_event_name: options.event ?? "Stop", stop_hook_active: true, cwd: paths.dir,
     ...(options.mode === null ? {} : { permission_mode: options.mode ?? "default" }),
-    ...(options.source === undefined ? {} : { source: options.source }) }, deps);
+    ...(options.source === undefined ? {} : { source: options.source }),
+    ...(options.transcript === undefined ? {} : { transcript_path: options.transcript }) }, deps);
 }
 
 export const auditLines = (paths: NodePaths) =>
