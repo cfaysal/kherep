@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { SCOPES, type ConfluenceSession, type RequestSpec } from "./confluence-contract.mts";
 import {
+  commonTerms,
   contentTerms,
   danglingAnchors,
   neighbourhood,
@@ -67,7 +68,8 @@ test("selectRelated keeps a proposal that shares a word and reports why", () => 
   const out = selectRelated(index, { title: "Forge Bulk Operation Pattern" }, ["Forge Queue Payload Limit"]);
   assert.equal(out.length, 1);
   assert.equal(out[0].id, "1");
-  assert.equal(out[0].reason, "term");
+  assert.deepEqual(out[0].terms, ["forge"], "the result names the word that let it through");
+  assert.equal(out[0].sibling, false);
 });
 
 test("selectRelated drops a proposal that is not a page in this space", () => {
@@ -90,11 +92,53 @@ test("selectRelated never returns the source page itself", () => {
   assert.deepEqual(out, []);
 });
 
-test("selectRelated accepts a sibling without a shared word and marks it as structural", () => {
-  const index = indexOf(page("node", "Pinokio", null), page("2", "Runtime Control Reference", "node"));
-  const out = selectRelated(index, { title: "Setup Walkthrough", parentId: "node" }, ["Runtime Control Reference"]);
-  assert.equal(out.length, 1);
-  assert.equal(out[0].reason, "sibling", "the hierarchy says what a page is about");
+// --- issue #86: a sibling alone and a label word alone are not evidence ------
+// Synthetic titles in the shape of the real case: "Acme" stands for the product
+// name that most titles in the space carry.
+
+function acmeSpace(): SpaceIndex {
+  return indexOf(
+    page("node", "Acme", null),
+    page("src", "Acme brand banner: visual identity and color palette"),
+    page("1", "macOS product-node daemon launchd agent configuration"),
+    page("2", "Acme architecture: governance layer, not agent harness"),
+    page("3", "Acme color palette tokens"),
+    page("4", "Acme installer backup rotation"),
+    page("5", "Acme hook ordering in stop events"),
+    page("6", "Broker verbs and exit codes"),
+    page("7", "Kubernetes inode exhaustion"),
+    page("8", "Jira textarea custom field"),
+    page("9", "Forge queue payload limit"),
+  );
+}
+
+const ACME_SOURCE = { title: "Acme brand banner: visual identity and color palette", id: "src", parentId: "node" };
+
+test("selectRelated rejects a same-parent page that shares no word", () => {
+  const out = selectRelated(acmeSpace(), ACME_SOURCE, ["macOS product-node daemon launchd agent configuration"]);
+  assert.deepEqual(out, [], "a sibling under a broad node says nothing about topic");
+});
+
+test("selectRelated rejects a page that shares only a word most titles carry", () => {
+  const out = selectRelated(acmeSpace(), ACME_SOURCE, ["Acme architecture: governance layer, not agent harness"]);
+  assert.deepEqual(out, [], "the product name is a label, not evidence");
+});
+
+test("selectRelated accepts a page sharing a distinctive word and says which", () => {
+  const out = selectRelated(acmeSpace(), ACME_SOURCE, [
+    "macOS product-node daemon launchd agent configuration",
+    "Acme architecture: governance layer, not agent harness",
+    "Acme color palette tokens",
+  ]);
+  assert.deepEqual(out.map((p) => p.id), ["3"]);
+  assert.deepEqual(out[0].terms, ["color", "palette"], "the common word is not part of the reason");
+  assert.equal(out[0].sibling, true);
+});
+
+test("commonTerms needs both a large share and a minimum number of titles", () => {
+  assert.deepEqual([...commonTerms(acmeSpace())], ["acme"], "6 of 11 titles is far above one in five");
+  const small = indexOf(page("1", "Forge Queue Payload Limit", null), page("2", "Forge Bridge Errors", null));
+  assert.equal(commonTerms(small).size, 0, "two titles sharing a word is a pairing, not a label");
 });
 
 test("selectRelated rejects an unrelated page under a different node", () => {
@@ -104,12 +148,16 @@ test("selectRelated rejects an unrelated page under a different node", () => {
 });
 
 test("selectRelated preserves proposal order, deduplicates and honours the cap", () => {
+  // The unrelated pages keep "jira" below the common-word cutoff: four Jira
+  // titles in a space of 25 is a topic, not a label.
+  const others = Array.from({ length: 20 }, (_, i) => page(`x${i}`, `Unrelated ${i}`));
   const index = indexOf(
     page("root", "Atlassian", null),
     page("1", "Jira REST API Patterns"),
     page("2", "Jira Issue Picker Field"),
     page("3", "Jira Search JQL Token"),
     page("4", "Jira Field Metadata"),
+    ...others,
   );
   const out = selectRelated(
     index,

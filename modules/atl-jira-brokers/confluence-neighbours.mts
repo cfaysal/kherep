@@ -212,6 +212,10 @@ export async function reportStitch(
     );
     if (!neighbours.length) { isolated += 1; continue; }
     for (const neighbour of neighbours) {
+      // One line per link with the words that justified it, so a wrong link
+      // can be traced to its cause instead of only reverted (issue #86).
+      const trace = `term=${neighbour.terms.join(",")}${neighbour.sibling ? "\tsibling" : ""}`;
+      deps.log(`link\t${neighbour.id}\t${orphan.id}\t${trace}`);
       const targets = assignment.get(neighbour.id) ?? new Set<string>();
       targets.add(orphan.id);
       assignment.set(neighbour.id, targets);
