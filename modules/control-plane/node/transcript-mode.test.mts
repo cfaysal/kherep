@@ -84,8 +84,12 @@ test("an unreadable transcript is unknown", { skip: process.platform === "win32"
   const { write, read } = home(t);
   const file = write([user("default")]);
   fs.chmodSync(file, 0o000);
-  t.after(() => fs.chmodSync(file, 0o600));
-  assert.equal(read(file), undefined);
+  try {
+    assert.equal(read(file), undefined);
+  } finally {
+    // Restored here: the home fixture's own cleanup may already have removed the file by the time an after hook runs.
+    fs.chmodSync(file, 0o600);
+  }
 });
 
 test("only the tail of a large transcript is read", (t) => {
