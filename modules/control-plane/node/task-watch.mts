@@ -1,5 +1,6 @@
 import type { TaskState } from "../protocol-tasks.mts";
 import { MAX_RUNTIME_REASON, watchCodexTasks } from "./codex-runner.mts";
+import { retireCopies } from "./copy-retire.mts";
 import { readdress } from "./inbox.mts";
 import { agentRows, findRow, mapIds, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { isActive, listTasks, mappingPendingAt, queueReport, writeTask } from "./task-records.mts";
@@ -16,8 +17,9 @@ export const AGENT_STATES: Readonly<Record<string, TaskState>> = {
 
 export async function watchTasks(deps: RunnerDeps, log: (line: string) => void = () => {}): Promise<void> {
   await watchCodexTasks(deps, log);
-  const active = listTasks(deps.paths).filter((t) => isActive(t) && t.runtime !== "codex");
-  if (active.length === 0) return;
+  const claude = listTasks(deps.paths).filter((t) => t.runtime !== "codex");
+  const active = claude.filter(isActive);
+  if (active.length === 0 && !claude.some((t) => t.retire?.length)) return;
   const now = deps.now?.() ?? Date.now();
   let rows: Record<string, unknown>[] | null = null;
   try {
@@ -61,5 +63,14 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
     }
     const saved = writeTask(deps.paths, { ...mapped, state: next }, now);
     if (reported) queueReport(deps.paths, { taskId: saved.taskId, state: next, ...(saved.sessionId ? { sessionId: saved.sessionId } : {}) });
+  }
+  // Adopted copies (issue #111): the sessions their records held before are stopped once idle.
+  if (!rows) return;
+  for (const record of listTasks(deps.paths).filter((t) => t.retire?.length)) {
+    try {
+      await retireCopies(deps, record, rows);
+    } catch (error) {
+      log(`kherep-node: could not stop a previous copy of task ${record.taskId}: ${String((error as Error).message ?? error)}`);
+    }
   }
 }

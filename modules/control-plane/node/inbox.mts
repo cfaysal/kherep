@@ -131,6 +131,13 @@ export function markDelivered(dir: string, messageId: string): MessageStatusBody
   return { messageId, state: "delivered" };
 }
 
+// A reply this node sends to a waiting message (msg send --reply-to) shows it
+// was read, whether or not a turn offered it (issue #111).
+export function markAnswered(dir: string, messageId: string): void {
+  const record = getMessage(dir, messageId);
+  if (record?.state === "accepted" || record?.state === "offered") markDelivered(dir, messageId);
+}
+
 // Records that the hook handed the message to a turn, which confirms it at
 // its Stop. Returns the updated record, or null when it is not in the inbox.
 export function markOffered(dir: string, messageId: string, now: number = Date.now()): InboxRecord | null {
@@ -189,14 +196,16 @@ export function markReported(dir: string, messageId: string, state: ReportedStat
 }
 
 // Refuses the waiting messages whose session no listed session matches by id
-// or name and that arrived more than afterMs ago. Call it with a successful
+// or name and that arrived more than afterMs ago. A message handed to an
+// intercom session (closedTo, issues #105, #109, #111) is judged by that
+// session, from the time it was handed over. Call it with a successful
 // listing only: a failed listing is not an empty node. Returns the ids.
 export function refuseUndeliverable(dir: string, sessions: SessionInfo[], now: number = Date.now(),
   afterMs: number = UNDELIVERABLE_AFTER_MS): string[] {
   const live = new Set(sessions.flatMap((s) => s.name ? [s.sessionId, s.name] : [s.sessionId]));
+  const since = (r: InboxRecord): number => Date.parse((r.closedTo && r.closedAttempt) || r.receivedAt);
   return listInbox(dir)
-    .filter((r) => (r.state === "accepted" || r.state === "offered") && !live.has(r.toSession)
-      && now - Date.parse(r.receivedAt) > afterMs)
+    .filter((r) => (r.state === "accepted" || r.state === "offered") && !live.has(r.toSession) && now - since(r) > afterMs)
     .filter((r) => markRefused(dir, r.messageId, "target session not running"))
     .map((r) => r.messageId);
 }

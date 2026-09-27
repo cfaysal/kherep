@@ -6,7 +6,7 @@ import {
 } from "../protocol-messages.mts";
 import { readConfig, type NodePaths } from "./config.mts";
 import { getOutbox, getSent, readDirectory, requestDirectory, writeOutbox, type OutboxRecord } from "./exchange.mts";
-import { getMessage, listInbox } from "./inbox.mts";
+import { getMessage, listInbox, markAnswered } from "./inbox.mts";
 import {
   currentSession, DIRECTORY_STALE_MS, nodeLabel, resolveSendTarget, senderSession, SESSION_ENV, sessionIdFromEnv,
 } from "./msg-resolve.mts";
@@ -195,6 +195,7 @@ async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<
   const record: OutboxRecord = { messageId: crypto.randomUUID(), fromSession: from.value, to, text,
     ...(replyTo ? { inReplyTo: replyTo } : {}), ...(taskId ? { taskId } : {}), createdAt: new Date(io.now()).toISOString(), depth };
   writeOutbox(io.paths, record);
+  if (replyTo) markAnswered(io.paths.inbox, replyTo);
   io.out(record.messageId);
   return wait > 0 ? waitForAnswer(io, record.messageId, wait * 1000) : 0;
 }

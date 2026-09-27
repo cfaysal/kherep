@@ -4,6 +4,7 @@ import {
 } from "../protocol-tasks.mts";
 import { resumeArgs } from "./codex-process.mts";
 import { spawnRun } from "./codex-runner.mts";
+import { retireCopies } from "./copy-retire.mts";
 import { deliveryContext, frameRecords, sessionInbox } from "./deliver-core.mts";
 import { addLocalSession, readDirectory } from "./exchange.mts";
 import { markDelivered, markRetry, readdress, type InboxRecord } from "./inbox.mts";
@@ -26,7 +27,8 @@ import { wakeText } from "./wake-hook.mts";
 // it couldn't continue in place." The node looks the resumed session up in
 // `claude agents --json` at once and adopts a copy (issue #109): the task
 // record takes its id and the messages waiting for the original id are
-// readdressed to it. A copy whose id is not listed is stopped and a new
+// readdressed to it; the session it held before is stopped once idle
+// (copy-retire.mts, issue #111). A copy whose id is not listed is stopped and a new
 // intercom session starts. /docs/en/sessions ("Permission mode on resume"): "Pass
 // `--permission-mode` or `--dangerously-skip-permissions` to override the
 // restored mode", so the resumed session runs in its recorded mode. The prompt
@@ -51,7 +53,10 @@ function rerunRecord(deps: RunnerDeps, task: TaskRecord, cwd: string, now: numbe
 // background), and restored if the resume fails.
 export async function resumeClaude(deps: RunnerDeps, task: TaskRecord, cwd: string, count: number, now: number): Promise<string | null> {
   const sessionId = task.sessionId!;
-  const pending: TaskRecord = { ...rerunRecord(deps, task, cwd, now), state: "started", mappingPendingSince: new Date(now).toISOString() };
+  // The session held so far is stopped once a copy is adopted and it is idle (issue #111).
+  const retire = [...(task.retire ?? []), ...(task.shortId ? [{ shortId: task.shortId, sessionId }] : [])];
+  const pending: TaskRecord = { ...rerunRecord(deps, task, cwd, now), state: "started", mappingPendingSince: new Date(now).toISOString(),
+    ...(retire.length > 0 ? { retire } : {}) };
   writeTask(deps.paths, { ...pending, shortId: undefined }, now);
   const failed = (reason: string): string => {
     writeTask(deps.paths, task, now);
@@ -65,12 +70,13 @@ export async function resumeClaude(deps: RunnerDeps, task: TaskRecord, cwd: stri
   }
   const shortId = BACKGROUNDED.exec(output)?.[1];
   if (!shortId) return failed("claude --resume printed no session id");
-  let row: Record<string, unknown> | undefined;
+  let rows: Record<string, unknown>[] | undefined;
   try {
-    row = (await agentRows(deps)).find((r) => r.id === shortId);
+    rows = await agentRows(deps);
   } catch {
     // mapped later by the watch round
   }
+  const row = rows?.find((r) => r.id === shortId);
   // A copy (a `note:` line) whose new id is not listed cannot be adopted.
   if (/^note:/im.test(output) && typeof row?.sessionId !== "string") {
     await runClaude(deps, ["stop", shortId]).catch(() => undefined);
@@ -82,6 +88,7 @@ export async function resumeClaude(deps: RunnerDeps, task: TaskRecord, cwd: stri
   if (adopted !== sessionId) readdress(deps.paths.inbox, sessionId, adopted);
   queueReport(deps.paths, { taskId: saved.taskId, state: "started", sessionId: adopted });
   addLocalSession(deps.paths, { sessionId: adopted, name: task.name });
+  if (rows) await retireCopies(deps, saved, rows);
   return null;
 }
 
