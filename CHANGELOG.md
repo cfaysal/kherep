@@ -11,6 +11,15 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Control Plane: `msg sessions` shows the Codex thread title the Codex app
+  shows next to the session name, quoted, on the listing node and on peer
+  nodes (issue #88). The daemon reads it from `session_index.jsonl` in the
+  Codex home with a bounded, fail-soft read and publishes it as the optional
+  session field `title`; the Worker stores it in a new nullable column.
+  Titles are display only and never an address. Titles appear in the
+  directory only after the Worker is deployed; older nodes and Workers
+  ignore the field.
+
 - Control Plane: the daemon wakes an idle interactive Codex session (TUI or
   app) for peer messages with `codex queue --thread <id> --message <pointer>`,
   a fixed text with the message count only; the woken turn's delivery hook

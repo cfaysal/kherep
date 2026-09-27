@@ -85,6 +85,21 @@ test("msg sessions lists every node, marks this session and warns about a stale 
   assert.match(missing.err, /no session directory yet .*Is the daemon running\?/);
 });
 
+test("msg sessions shows a Codex thread title next to the name, and the title is never an address (issue #88)", async (t) => {
+  const codex = "019a0000-0000-7000-8000-0000d7d07717";
+  const directory: DirectoryBody = { ...DIRECTORY, sessions: [...DIRECTORY.sessions,
+    { nodeId: PEER, sessionId: codex, name: "codex-d7d07717", state: "active", runtime: "codex", kind: "codex", title: "Kherep \"Funktionen\" nachschlagen" }] };
+  const listed = await run(setup(t, directory), ["sessions"]);
+  assert.equal(listed.code, 0);
+  assert.ok(listed.out.includes(`    codex-d7d07717  "Kherep \\"Funktionen\\" nachschlagen"  ${codex}  active  codex`), listed.out);
+  // Sessions without a title keep the earlier format.
+  assert.match(listed.out, /\n    docs  s-b3  idle  claude-code\n/);
+  assert.deepEqual(resolveTarget(directory, "node-b/codex-d7d07717"), { ok: true, value: { nodeId: PEER, session: codex } });
+  const byTitle = resolveTarget(directory, "node-b/Kherep \"Funktionen\" nachschlagen");
+  assert.equal(byTitle.ok, false);
+  assert.match(!byTitle.ok ? byTitle.error : "", /unknown session on node-b/);
+});
+
 test("msg send writes an outbox record from this session's name and prints the message id", async (t) => {
   const paths = setup(t);
   const sent = await run(paths, ["send", "node-b/docs", "please", "review"]);

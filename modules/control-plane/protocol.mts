@@ -106,8 +106,11 @@ export interface RuntimeInfo { name: string; kind: "cli" | "local-endpoint"; ver
 // name, cwd and kind were added in Phase 2 (issue #31); older nodes omit them.
 // label (issue #74) is the display name of a task session, for example
 // "intercom: claude@sekhmet"; the session keeps its task-<8> name.
+// title (issue #88) is the Codex thread title the Codex app shows; display
+// only, never an address. Older nodes and Workers omit or ignore it.
 export interface SessionInfo {
   sessionId: string; runtime: string; state: string; startedAt?: string; name?: string; cwd?: string; kind?: string; label?: string;
+  title?: string;
 }
 export interface NodeFacts { hostname: string; os: string; arch: string; cpus: number; memoryBytes: number }
 export interface RegisterBody { facts: NodeFacts; runtimes: RuntimeInfo[]; capabilities: string[] }
@@ -127,6 +130,14 @@ export function isLabel(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9:@._-]([A-Za-z0-9 :@._-]{0,62}[A-Za-z0-9:@._-])?$/.test(value);
 }
 
+// A session title (issue #88): 1 to MAX_TITLE_CHARS characters without control,
+// format or line-separator characters, not starting or ending with whitespace.
+export const MAX_TITLE_CHARS = 60;
+export function isTitle(value: unknown): value is string {
+  return typeof value === "string" && value === value.trim() && /^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u.test(value)
+    && [...value].length <= MAX_TITLE_CHARS;
+}
+
 function isShortString(value: unknown, max = 256): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= max;
 }
@@ -141,7 +152,8 @@ export function isSessionInfo(value: unknown): value is SessionInfo {
   return isObject(value) && isShortString(value.sessionId, 128) && isShortString(value.runtime, 64)
     && isShortString(value.state, 32) && (value.startedAt === undefined || isShortString(value.startedAt, 64))
     && (value.name === undefined || isShortString(value.name, 128)) && (value.cwd === undefined || isShortString(value.cwd, 512))
-    && (value.kind === undefined || isShortString(value.kind, 32)) && (value.label === undefined || isLabel(value.label));
+    && (value.kind === undefined || isShortString(value.kind, 32)) && (value.label === undefined || isLabel(value.label))
+    && (value.title === undefined || isTitle(value.title));
 }
 
 export function isNodeFacts(value: unknown): value is NodeFacts {
