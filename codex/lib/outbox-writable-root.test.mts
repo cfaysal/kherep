@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
@@ -21,6 +22,17 @@ test("the outbox is the node directory's control-plane/outbox and honours KHEREP
     path.join(path.resolve("/synthetic/roaming"), "kherep", "control-plane", "outbox"));
   assert.equal(controlPlaneOutbox({ XDG_CONFIG_HOME: path.resolve("/synthetic/xdg") }, "linux"),
     path.join(path.resolve("/synthetic/xdg"), "kherep", "control-plane", "outbox"));
+  assert.equal(controlPlaneOutbox({}, "darwin"),
+    path.join(os.homedir(), "Library", "Application Support", "kherep", "control-plane", "outbox"));
+  assert.equal(controlPlaneOutbox({ KHEREP_CONFIG_DIR: dir }, "darwin"), path.join(dir, "control-plane", "outbox"));
+});
+
+test("a path already listed is matched case-insensitively only on win32", () => {
+  const upper = OUTBOX.toUpperCase();
+  const config = `[sandbox_workspace_write]\nwritable_roots = [${JSON.stringify(upper)}]\n\n${BLOCK}`;
+  assert.equal(projectOutboxWritableRoot(config, OUTBOX, START, END, "win32").status, "operator-present");
+  assert.equal(projectOutboxWritableRoot(config, OUTBOX, START, END, "linux").status,
+    upper === OUTBOX ? "operator-present" : "operator-merged");
 });
 
 test("without an operator definition the managed block carries the table and the config is unchanged", () => {
@@ -84,6 +96,10 @@ test("what cannot be merged without rewriting operator text is left alone and re
     ['[sandbox_workspace_write]\nwritable_roots = ["/a" "/b"]\n', "skipped-unparseable"],
     ['[sandbox_workspace_write]\nwritable_roots = [["/a"]]\n', "skipped-unparseable"],
     ['[sandbox_workspace_write]\nwritable_roots = ["/a"\n', "skipped-unparseable"],
+    // A multi-line string with a line starting "[" would end the body scan early.
+    ['[sandbox_workspace_write]\nnote = """\n[x]\n"""\nwritable_roots = ["/a"]\n', "skipped-unparseable"],
+    ['[sandbox_workspace_write]\nnote = \'\'\'\n[x]\n\'\'\'\n', "skipped-unparseable"],
+    ['developer_instructions = """\n[x]\n"""\nsandbox_workspace_write.network_access = true\n', "skipped-unparseable"],
   ];
   for (const [operator, status] of cases) {
     const config = `${operator}\n${BLOCK}`;
