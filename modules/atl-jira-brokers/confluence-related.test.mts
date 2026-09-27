@@ -6,11 +6,11 @@ import test from "node:test";
 
 import { SCOPES, type ConfluenceSession, type RequestSpec } from "./confluence-contract.mts";
 import {
-  commonTerms,
   contentTerms,
   danglingAnchors,
   neighbourhood,
   outgoingIds,
+  rareTerms,
   requireResolvableAnchors,
   selectRelated,
   spaceIndex,
@@ -135,10 +135,44 @@ test("selectRelated accepts a page sharing a distinctive word and says which", (
   assert.equal(out[0].sibling, true);
 });
 
-test("commonTerms needs both a large share and a minimum number of titles", () => {
-  assert.deepEqual([...commonTerms(acmeSpace())], ["acme"], "6 of 11 titles is far above one in five");
+test("selectRelated rejects a page that shares only a generic word", () => {
+  const index = indexOf(
+    page("node", "Tools", null),
+    page("1", "Queue retry instead of polling"),
+    page("2", "Broker test harness for exit codes"),
+    page("3", "Label sync instead of rename"),
+    page("4", "Hook test fixtures"),
+  );
+  const out = selectRelated(
+    index,
+    { title: "Queue retry instead of polling", id: "1" },
+    ["Label sync instead of rename", "Hook test fixtures"],
+  );
+  assert.deepEqual(out, [], "instead is grammar, not a topic, however rare it is in titles");
+  assert.ok(!contentTerms("Broker test harness").has("test"));
+});
+
+// The product name in 5 of 60 titles: under the old one-in-five cutoff, yet
+// still far too frequent to say two pages are about the same thing.
+function productSpace(): SpaceIndex {
+  const acme = [1, 2, 3, 4].map((i) => page(`a${i}`, `Acme module ${["alpha", "bravo", "charlie", "delta"][i - 1]}`));
+  const rest = Array.from({ length: 54 }, (_, i) => page(`r${i}`, `Unrelated topic ${i}`));
+  return indexOf(page("node", "Space", null), page("src", "Acme banner palette"), ...acme, ...rest);
+}
+
+test("selectRelated rejects a page sharing only the product name, even under one in five", () => {
+  const index = productSpace();
+  assert.equal(index.byId.size, 60);
+  const out = selectRelated(index, { title: "Acme banner palette", id: "src" }, ["Acme module alpha"]);
+  assert.deepEqual(out, [], "5 of 60 titles is a label, not evidence");
+});
+
+test("rareTerms keeps a word only when few titles carry it", () => {
+  assert.ok(!rareTerms(acmeSpace()).has("acme"), "6 of 11 titles is a label");
+  assert.ok(rareTerms(acmeSpace()).has("palette"));
+  assert.ok(!rareTerms(productSpace()).has("acme"));
   const small = indexOf(page("1", "Forge Queue Payload Limit", null), page("2", "Forge Bridge Errors", null));
-  assert.equal(commonTerms(small).size, 0, "two titles sharing a word is a pairing, not a label");
+  assert.ok(rareTerms(small).has("forge"), "two titles sharing a word is a pairing, not a label");
 });
 
 test("selectRelated rejects an unrelated page under a different node", () => {
@@ -148,9 +182,9 @@ test("selectRelated rejects an unrelated page under a different node", () => {
 });
 
 test("selectRelated preserves proposal order, deduplicates and honours the cap", () => {
-  // The unrelated pages keep "jira" below the common-word cutoff: four Jira
-  // titles in a space of 25 is a topic, not a label.
-  const others = Array.from({ length: 20 }, (_, i) => page(`x${i}`, `Unrelated ${i}`));
+  // The unrelated pages keep "jira" under the rare-word limit: four Jira titles
+  // in a space of 205 is a topic, not a label.
+  const others = Array.from({ length: 200 }, (_, i) => page(`x${i}`, `Unrelated ${i}`));
   const index = indexOf(
     page("root", "Atlassian", null),
     page("1", "Jira REST API Patterns"),
