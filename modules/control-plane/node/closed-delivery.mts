@@ -5,7 +5,7 @@ import { DELEGATED_PERMISSION_MODES, type PermissionMode, type TaskRuntime } fro
 import { bypassesPermissions, rememberedMode, takeTurn, wakeAudit } from "./autonomy.mts";
 import { stillRuns } from "./codex-process.mts";
 import { CODEX_RUNTIME, isCodexSessionId, readCodexSession } from "./codex-sessions.mts";
-import { resumeClaude, resumeCodex, startIntercom, type ClosedTarget } from "./closed-resume.mts";
+import { resumeClaude, resumeCodex, startIntercom } from "./closed-resume.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { readLocalSessions } from "./exchange.mts";
 import { listInbox, markClosedAttempt, MAX_REPLY_DEPTH, readJson, type InboxRecord } from "./inbox.mts";
@@ -14,41 +14,49 @@ import { acceptsMessage } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { CLAUDE_RUNTIME } from "./sessions.mts";
 import { overLimit } from "./task-admission.mts";
-import { isActive, listTasks } from "./task-records.mts";
+import { intercomFor, isActive, listTasks, type TaskRecord } from "./task-records.mts";
 import { resolveCwd } from "./task-prompt.mts";
 import { killSwitch } from "./wake-hook.mts";
 
 // Delivery to a session that is no longer running (issue #102, operator
-// decision 2026-09-27). Opt-in per node with messaging.resumeClosed. Run by
-// the daemon after each session listing: an accepted message for a known
-// session of this node (known-sessions.json, codex-sessions/ or a task record)
-// that a listing taken after its arrival did not show resumes that session in
-// the background, or, when it cannot be resumed, starts an intercom session as
-// `msg send --new` does (closed-resume.mts). The guards are those of --new and
-// the wake, fail closed: the kill switch, sessions enabled with the runtime
-// listed, delegate.accept and the accept rules, reply depth, never
-// bypassPermissions, maxConcurrent and the session's budget of autonomous
-// turns. A message causes one attempt at most (closedAttempt); a refusal is
-// audited once and the message waits as before (inbox.mts refuseUndeliverable).
+// decision 2026-09-27; issue #105). Opt-in per node with
+// messaging.resumeClosed. Run by the daemon after each session listing: an
+// accepted message for a known session of this node (known-sessions.json,
+// codex-sessions/ or a task record) that a listing taken after its arrival did
+// not show goes to an intercom session of its sender, never to the closed
+// session itself, whose resume would reload its whole conversation:
+// - the newest intercom session this node started for the same sender session
+//   (task record local intercom, requestedBy <sender node>/<sender session>)
+//   gets it: a running one through its delivery hook and wake (task grant,
+//   taskGrants), an ended one is resumed in the background (closed-resume.mts);
+// - otherwise a new intercom session starts, as `msg send --new` does.
+// The guards are those of --new and the wake, fail closed: the kill switch,
+// sessions enabled with the runtime listed, delegate.accept and the accept
+// rules, reply depth, never bypassPermissions, maxConcurrent and the budget of
+// autonomous turns of the session that runs. A message causes one attempt at
+// most (closedAttempt); a refusal is audited once and the message waits as
+// before (inbox.mts refuseUndeliverable).
 
 // A listing older than this decides nothing: a failed one is not an empty node.
 export const LISTING_FRESH_MS = 3 * 60_000;
 
-type Outcome = "resumed" | "new" | "refused";
+type Outcome = "reused" | "new" | "refused";
 
 // Refusals are audited once per message and reason, not at every round.
 const noted = new Set<string>();
-function audit(paths: NodePaths, now: number, sessionId: string, records: InboxRecord[], outcome: Outcome, reason?: string): void {
+function audit(paths: NodePaths, now: number, sessionId: string, records: InboxRecord[], outcome: Outcome, reason?: string,
+  taskId?: string): void {
   const fresh = outcome === "refused" ? records.filter((r) => !noted.has(`${r.messageId} ${reason}`)) : records;
   if (fresh.length === 0) return;
   if (outcome === "refused") for (const r of fresh) noted.add(`${r.messageId} ${reason}`);
   ensureDir(paths.dir);
   fs.appendFileSync(wakeAudit(paths), `${JSON.stringify({ ts: new Date(now).toISOString(), sessionId,
-    messageIds: fresh.map((r) => r.messageId), action: "closed-session", outcome, ...(reason ? { reason } : {}) })}\n`, { mode: 0o600 });
+    messageIds: fresh.map((r) => r.messageId), action: "closed-session", outcome, ...(reason ? { reason } : {}),
+    ...(taskId ? { taskId } : {}) })}\n`, { mode: 0o600 });
 }
 
-// The session a reference names, from what this node recorded about it.
-type Target = Omit<ClosedTarget, "cwd"> & { cwd?: string };
+// The closed session a reference names, from what this node recorded about it.
+interface Target { sessionId: string; runtime: TaskRuntime; cwd?: string; mode?: string; task?: TaskRecord }
 function resolveTarget(paths: NodePaths, ref: string): Target | null {
   const task = listTasks(paths).find((t) => t.sessionId !== undefined && (t.sessionId === ref || t.name === ref));
   const known = findKnown(paths, task?.sessionId ?? ref);
@@ -60,8 +68,7 @@ function resolveTarget(paths: NodePaths, ref: string): Target | null {
   if (!runtime) return null;
   const cwd = task?.cwd ?? known?.cwd ?? codex?.cwd;
   const mode = task?.permissionMode ?? codex?.permissionMode ?? rememberedMode(paths, sessionId);
-  const name = task?.name ?? known?.name;
-  return { sessionId, runtime, ...(name ? { name } : {}), ...(cwd ? { cwd } : {}), ...(mode ? { mode } : {}), ...(task ? { task } : {}) };
+  return { sessionId, runtime, ...(cwd ? { cwd } : {}), ...(mode ? { mode } : {}), ...(task ? { task } : {}) };
 }
 
 export async function deliverToClosed(deps: RunnerDeps, log: (line: string) => void = () => {}): Promise<void> {
@@ -96,11 +103,13 @@ export async function deliverToClosed(deps: RunnerDeps, log: (line: string) => v
   }
 }
 
-// The permission mode of a new or resumed run: a delegated one the policy allows.
+// A delegated permission mode the policy allows.
 const delegated = (deps: RunnerDeps, mode: unknown): mode is PermissionMode =>
   DELEGATED_PERMISSION_MODES.includes(mode as PermissionMode) && deps.policy.sessions!.permissionModes.includes(mode as PermissionMode);
 
-// True when a run was started (or tried) for the burst.
+const runs = (deps: RunnerDeps, task: TaskRecord): boolean => isActive(task) || stillRuns(deps.codex ?? {}, task.pid, task.pidStart);
+
+// True when the burst was handed on or a run was started (or tried) for it.
 async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now: number): Promise<boolean> {
   const { paths, policy } = deps;
   const sessionId = found.sessionId;
@@ -111,7 +120,6 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   const sessions = policy.sessions;
   if (fs.existsSync(killSwitch(paths))) return refuse("wake disabled by the kill switch");
   if (!sessions?.enabled) return refuse("sessions are not enabled on this node");
-  if (!sessions.runtimes.includes(found.runtime)) return refuse(`runtime ${found.runtime} is not enabled on this node`);
   if (!sessions.delegate.accept) return refuse("this node does not accept delegated tasks");
   const local = readLocalSessions(paths);
   const accepted = all.filter((r) => acceptsMessage(policy, r.toSession, r.from.nodeId, local));
@@ -121,34 +129,43 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   const records = accepted.filter((r) => !deep.includes(r));
   if (records.length === 0) return false;
   if (bypassesPermissions(found.mode)) return refuse("permission mode bypassPermissions");
-  // Running already, for example resumed by an earlier burst: its hook takes the messages.
+  // An intercom session answers with msg send, which cannot reach the operator API.
+  if (records[0].from.nodeId === OPERATOR_NODE_ID) return refuse("an operator message goes to no intercom session");
+  // Running already: its hook takes the messages.
   if (listTasks(paths).some((t) => t.sessionId === sessionId && isActive(t))) return false;
-  if (found.task?.pid !== undefined && stillRuns(deps.codex ?? {}, found.task.pid, found.task.pidStart)) return false;
-  const limit = overLimit(deps, now, found.task?.taskId);
+  if (found.task && runs(deps, found.task)) return false;
+  const intercom = intercomFor(paths, records[0]);
+  const runtime = intercom ? intercom.runtime ?? "claude" : found.runtime;
+  if (!sessions.runtimes.includes(runtime)) return refuse(`runtime ${runtime} is not enabled on this node`);
+  if (intercom && runs(deps, intercom)) {
+    // Its delivery hook, or the wake through its task grant, offers them.
+    for (const r of records) markClosedAttempt(paths.inbox, r.messageId, now, intercom.sessionId ?? intercom.name);
+    audit(paths, now, sessionId, records, "reused", "intercom session running", intercom.taskId);
+    return true;
+  }
+  // A new intercom session instead is checked by startTask (admitStart), runtime included.
+  const reusable = intercom?.sessionId !== undefined && delegated(deps, intercom.permissionMode) ? intercom : undefined;
+  const limit = overLimit(deps, now, reusable?.taskId);
   if (limit) return refuse(limit);
-  const cwd = resolveCwd(sessions, found.cwd, deps.realpath);
+  const cwd = resolveCwd(sessions, reusable?.cwd ?? found.cwd, deps.realpath);
   if (!cwd.ok) return refuse(cwd.reason);
-  const budget = takeTurn(paths, sessionId, now);
+  const budget = takeTurn(paths, reusable?.sessionId ?? sessionId, now);
   if (budget === "spacing" || budget === "locked") return false;
   if (budget === "exhausted") return refuse("budget of autonomous turns exhausted");
-  for (const r of records) markClosedAttempt(paths.inbox, r.messageId, now);
-  const target: ClosedTarget = { ...found, cwd: cwd.cwd };
-  let why = "the session's permission mode is unknown or not a delegated mode";
-  if (delegated(deps, found.mode)) {
-    const resumed = found.runtime === "codex"
-      ? await resumeCodex(deps, target, found.mode, records.length, now)
-      : await resumeClaude(deps, target, found.mode, records.length, now);
-    if (resumed === null) {
-      audit(paths, now, sessionId, records, "resumed");
+  for (const r of records) markClosedAttempt(paths.inbox, r.messageId, now, reusable?.sessionId);
+  let why = intercom ? "its intercom session cannot be resumed" : undefined;
+  if (reusable) {
+    const resume = reusable.runtime === "codex" ? resumeCodex : resumeClaude;
+    const failed = await resume(deps, reusable, cwd.cwd, records.length, now);
+    if (failed === null) {
+      audit(paths, now, sessionId, records, "reused", "intercom session resumed", reusable.taskId);
       return true;
     }
-    why = resumed;
+    why = `intercom session not resumed: ${failed}`;
   }
-  // An intercom session answers with msg send, which cannot reach the operator API.
-  if (records[0].from.nodeId === OPERATOR_NODE_ID) return refuse(`not resumed: ${why}; an operator message starts no intercom session`);
   const mode: PermissionMode = delegated(deps, sessions.defaultPermissionMode) ? sessions.defaultPermissionMode : "default";
-  const started = await startIntercom(deps, target, records, mode);
-  if (started === null) audit(paths, now, sessionId, records, "new", `not resumed: ${why}`);
-  else refuse(`not resumed: ${why}; no intercom session: ${started}`);
+  const started = await startIntercom(deps, { sessionId, runtime: found.runtime, cwd: cwd.cwd }, records, mode);
+  if (started === null) audit(paths, now, sessionId, records, "new", why);
+  else refuse(`${why ? `${why}; ` : ""}no intercom session: ${started}`);
   return true;
 }

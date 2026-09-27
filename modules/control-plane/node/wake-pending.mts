@@ -4,6 +4,7 @@ import { listenerDir, type ListenerLock } from "./autonomy.mts";
 import type { NodePaths } from "./config.mts";
 import { MAX_OFFERS, offerEnded, sessionInbox } from "./deliver-core.mts";
 import { getMessage, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
+import { taskGrants, type TaskRecord } from "./task-records.mts";
 
 // Which inbox records a wake listener (wake-hook.mts) wakes its session for.
 
@@ -31,10 +32,10 @@ export function rememberWoken(paths: NodePaths, sessionId: string, ids: string[]
 // SessionStart, accepted records received before it ended; no delivery hook
 // runs at a Claude Code SessionStart, so nothing else offers them before the
 // next prompt. stuck: records left offered by a turn that ended without Stop.
-// With taskId (a task grant) only the records of that task count.
+// With a task (a task grant) only the records it grants count (taskGrants).
 export function pending(paths: NodePaths, refs: string[], sessionId: string, lock: Pick<ListenerLock, "startedAt" | "event">,
-  now: number, taskId?: string) {
-  const mine = sessionInbox(paths, refs).filter((r) => taskId === undefined || r.taskId === taskId);
+  now: number, task?: TaskRecord) {
+  const mine = sessionInbox(paths, refs).filter((r) => task === undefined || taskGrants(task, r));
   const woken = wokenFor(paths, sessionId);
   const late = (r: InboxRecord): boolean => Date.parse(r.receivedAt) > lock.startedAt + WAKE_GRACE_MS;
   const accepted = mine.filter((r) => r.state === "accepted");

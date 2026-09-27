@@ -108,7 +108,7 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
   // task may be woken by messages of that task, listed or not; the budget and
   // the permission mode below still apply.
   const policy = loadPolicy(readConfig(paths.config)?.policyFile ?? paths.policy);
-  const grant = policy.sessions?.enabled ? taskForSession(paths, sessionId)?.taskId : undefined;
+  const grant = policy.sessions?.enabled ? taskForSession(paths, sessionId) ?? undefined : undefined;
   if (!policy.wake && !grant) return quiet;
   const name = localSessionName(paths, sessionId);
   const refs = name === undefined ? [sessionId] : [sessionId, name];

@@ -6,7 +6,7 @@ import {
 } from "../protocol-tasks.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { localSessionName } from "./exchange.mts";
-import { messageIds, readJson, writeJsonAtomic } from "./inbox.mts";
+import { messageIds, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
 
 // The node's task files (issue #31, item 5), in its config directory:
 //   tasks/<taskId>.json          a task session this node started
@@ -36,11 +36,27 @@ export interface TaskRecord {
   // `claude agents` shows the session ended or the deadline stopped it.
   running?: boolean;
   // A record the Worker does not know (issue #102, closed-delivery.mts): an
-  // intercom session the node started on its own, or a closed session it
-  // resumed for peer messages. No task.report is sent for it, its messages
-  // carry no task id, and taskForSession skips a resumed session.
+  // intercom session the node started on its own, or (written before issue
+  // #105) a closed session it resumed for peer messages. No task.report is
+  // sent for it, its messages carry no task id, and taskForSession skips a
+  // resumed session.
   local?: "intercom" | "resume";
 }
+
+// The sender of a message as an intercom session's requestedBy records it.
+export const senderOf = (record: InboxRecord): string => `${record.from.nodeId}/${record.from.session}`;
+
+// Task grant (item 5): a task session may be woken for the messages of its
+// task; an intercom session the node started on its own (issue #105) also for
+// those of the session it answers, whose messages carry no task id.
+export const taskGrants = (task: TaskRecord, record: InboxRecord): boolean =>
+  record.taskId === task.taskId || (task.local === "intercom" && task.requestedBy === senderOf(record));
+
+// The newest intercom session this node started on its own for the sender of
+// a message (issue #105), one that did not fail to start.
+export const intercomFor = (paths: NodePaths, record: InboxRecord): TaskRecord | undefined =>
+  listTasks(paths).filter((t) => t.local === "intercom" && t.requestedBy === senderOf(record) && t.state !== "failed")
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
 
 export type RequestState = "pending" | "dispatched" | "refused";
 export interface TaskRequestRecord extends TaskRequestBody {

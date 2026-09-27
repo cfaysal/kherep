@@ -37,6 +37,23 @@ increments the minor version; every other release increments the patch version.
   at most, and every outcome is audited in `wake.jsonl` as `closed-session`
   `resumed`, `new` or `refused` with the reason. Every successful listing is
   kept for 7 days in `known-sessions.json`.
+- Control Plane: a message for a closed session goes to one intercom session
+  per sender session instead of resuming the closed session, whose whole
+  conversation a resume would reload (issue #105). The newest intercom session
+  the node started itself for the same sender (`requestedBy`
+  `<node id>/<session>`) gets it: a running one through its delivery hook and
+  wake, the message readdressed to it (`closedTo` keeps the closed session)
+  and its task grant extended to the messages of that sender; an ended one is
+  resumed in the background (`claude --resume`, `codex exec resume`). Only
+  without such a session, or when its resume fails, a new one starts. The
+  closed session itself is no longer resumed. Every message now carries its
+  threaded reply command: a new intercom session gets the messages framed as
+  the delivery hook frames them, each with
+  `<cli> msg send --reply-to <message id> -- <reply text>`, and is told to
+  answer with it, as the hook and the Codex resume already frame it. The
+  guards stay fail closed; the audit outcome `resumed` is replaced by
+  `reused` (with the intercom session's `taskId`), next to `new` and
+  `refused`.
 
 - Control Plane: the Claude Code wake listener is armed at `SessionStart` too
   (issue #97), so an idle session is wakeable again after its process
