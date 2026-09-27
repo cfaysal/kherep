@@ -70,6 +70,28 @@ export function resolveTarget(directory: DirectoryBody, target: string): Resolve
   return { ok: true, value: { nodeId: node.value.nodeId, session: session.value.sessionId } };
 }
 
+// A full session id: a UUID, the form of Claude session and Codex thread ids.
+const FULL_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+// resolveTarget for msg send (issue #107): a full session id on an online node
+// resolves even when the directory does not list it, such as a closed session;
+// the note says so, and the target node decides whether it can deliver. Names,
+// labels and codex-<8> still need a listed session.
+export function resolveSendTarget(directory: DirectoryBody, target: string):
+  { ok: true; value: MessageAddress; note?: string } | { ok: false; error: string } {
+  const resolved = resolveTarget(directory, target);
+  const slash = target.indexOf("/");
+  const sessionRef = target.slice(slash + 1);
+  if (resolved.ok || slash <= 0 || !FULL_SESSION_ID.test(sessionRef)) return resolved;
+  const node = resolveNode(directory, target.slice(0, slash));
+  if (!node.ok || node.value.status !== "online") return resolved;
+  // A listed match that failed was ambiguous: that stays an error.
+  if (directory.sessions.some((s) => s.nodeId === node.value.nodeId
+    && (s.sessionId === sessionRef || s.name === sessionRef || s.label === sessionRef))) return resolved;
+  return { ok: true, value: { nodeId: node.value.nodeId, session: sessionRef },
+    note: `session not listed on ${node.value.name}; the node decides whether it can deliver` };
+}
+
 // A readable sender node: its directory name, operator, or the bare id.
 export function nodeLabel(directory: DirectoryBody | null, nodeId: string): string {
   if (nodeId === OPERATOR_NODE_ID) return "operator (control plane API)";

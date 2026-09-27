@@ -8,7 +8,7 @@ import { readConfig, type NodePaths } from "./config.mts";
 import { getOutbox, getSent, readDirectory, requestDirectory, writeOutbox, type OutboxRecord } from "./exchange.mts";
 import { getMessage, listInbox } from "./inbox.mts";
 import {
-  currentSession, DIRECTORY_STALE_MS, nodeLabel, resolveTarget, senderSession, SESSION_ENV, sessionIdFromEnv,
+  currentSession, DIRECTORY_STALE_MS, nodeLabel, resolveSendTarget, senderSession, SESSION_ENV, sessionIdFromEnv,
 } from "./msg-resolve.mts";
 import { sendNew } from "./msg-new.mts";
 import { taskForSession } from "./task-records.mts";
@@ -176,9 +176,10 @@ async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<
   if (!to) {
     const directory = directoryFor(io);
     if (!directory) return 1;
-    const resolved = resolveTarget(directory, target as string);
+    const resolved = resolveSendTarget(directory, target as string);
     if (!resolved.ok) return fail(io, resolved.error);
     to = resolved.value;
+    if (resolved.note) io.err(`kherep-node msg: note: ${resolved.note}`);
   }
   const text = words.join(" ");
   if (!isMessageText(text)) return fail(io, `message text must be 1 to ${MAX_MESSAGE_TEXT} characters`);
