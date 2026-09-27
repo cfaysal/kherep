@@ -16,9 +16,9 @@
 //
 // So the semantic side proposes and a mechanical side disposes. A proposal has
 // to be a page in THIS space, it has to be a leaf rather than a shelf, and it
-// has to share a distinctive content word with the source title. Sitting under
-// the same node is not enough on its own, and neither is a word most titles in
-// the space carry (issue #86). An unrankable signal plus an exact one beats
+// has to share a rare content word with the source title. Sitting under the
+// same node is not enough on its own, and neither is a word many titles in the
+// space carry, such as the product name (issue #86). An unrankable signal plus an exact one beats
 // either alone.
 import { ConfluenceError, SCOPES, v1, v2, type ConfluenceSession } from "./confluence-contract.mts";
 
@@ -86,6 +86,17 @@ const STOP = new Set(
     .split(" "),
 );
 
+// Words that are not grammar but still name no topic: they describe what was
+// done to something, not what it is. Live dry runs on 2026-09-27 linked pages
+// on "test", "instead", "uses" and "missing" alone, so they are listed here
+// rather than left to the frequency rule, which lets a word through while it
+// is still rare.
+const GENERIC = new Set(
+  ("instead test tests testing fixed fixes update updates change changes added adding removed" +
+    " issue issues check checks still need needs make work works like first uses missing")
+    .split(" "),
+);
+
 // A token counts when it carries meaning on its own: a word of four or more
 // letters, or an acronym. The acronyms are the point - AQL, JQL, CQL, JSM, OSGi
 // are the most distinctive tokens in this corpus and a plain length rule throws
@@ -96,7 +107,8 @@ export function contentTerms(source: string): Set<string> {
     const token = raw.replace(/^[.+-]+|[.+-]+$/g, "");
     if (!token) continue;
     const acronym = /^[A-Z][A-Z0-9]{1,}$/.test(token);
-    const word = token.length >= 4 && !STOP.has(token.toLowerCase());
+    const lower = token.toLowerCase();
+    const word = token.length >= 4 && !STOP.has(lower) && !GENERIC.has(lower);
     if (acronym || word) out.add(token.toLowerCase());
   }
   return out;
@@ -121,29 +133,32 @@ export interface Related extends IndexedPage {
   sibling: boolean;
 }
 
-// A word in more than this share of the space's titles is a label, not a topic.
-// The product name sits in most titles, so sharing it would link everything to
-// everything. One in five is far below "most titles" and far above what a
-// topical word reaches in a flat space.
-const COMMON_TERM_SHARE = 0.2;
-// Below this many titles a word is never common, whatever its share: in a space
-// of a handful of pages every shared word is a large share, and two pages
-// sharing a word is exactly the pairing this filter exists to find.
-const COMMON_TERM_MIN_TITLES = 3;
+// Only a rare word is evidence: one that at most this share of the space's
+// titles carry. A shared rare word says two pages are about the same thing; a
+// frequent one says only that they belong to the same product. Measured on the
+// live space (620 titles) on 2026-09-27: the product name sat in 47 titles
+// (7.6%) and a platform name in 83 (13%), both under the earlier one-in-five
+// cutoff, while the specific words (tool and platform names) sat in 2 to 10.
+// Three percent (18 titles there) keeps those and drops the labels.
+const RARE_TERM_SHARE = 0.03;
+// Up to this many titles a word is always rare, whatever its share: in a space
+// of a handful of pages every word is a large share, and two pages sharing a
+// word is exactly the pairing this filter exists to find.
+const RARE_TERM_MIN_TITLES = 3;
 
-// The words that do not count as evidence. Counted over the titles the index
-// already holds, so the cutoff costs no request and follows the space as it grows.
-export function commonTerms(index: SpaceIndex): Set<string> {
+// The words that count as evidence. Counted over the titles the index already
+// holds, so the cutoff costs no request and follows the space as it grows.
+export function rareTerms(index: SpaceIndex): Set<string> {
   const counts = new Map<string, number>();
   for (const page of index.byId.values()) {
     for (const term of contentTerms(page.title)) counts.set(term, (counts.get(term) ?? 0) + 1);
   }
-  const share = index.byId.size * COMMON_TERM_SHARE;
-  const common = new Set<string>();
+  const limit = Math.max(RARE_TERM_MIN_TITLES, index.byId.size * RARE_TERM_SHARE);
+  const rare = new Set<string>();
   for (const [term, n] of counts) {
-    if (n >= COMMON_TERM_MIN_TITLES && n > share) common.add(term);
+    if (n <= limit) rare.add(term);
   }
-  return common;
+  return rare;
 }
 
 // Keeps the proposal order - that order is the only ranking the semantic side
@@ -154,7 +169,7 @@ export function selectRelated(
   proposals: string[],
   limit = 3,
 ): Related[] {
-  const common = commonTerms(index);
+  const rare = rareTerms(index);
   const sourceTerms = contentTerms(source.title);
   const seen = new Set<string>();
   const out: Related[] = [];
@@ -167,7 +182,7 @@ export function selectRelated(
     if (seen.has(hit.id)) continue;
     if (index.parents.has(hit.id)) continue;  // a shelf, not a book
 
-    const terms = [...contentTerms(hit.title)].filter((term) => sourceTerms.has(term) && !common.has(term));
+    const terms = [...contentTerms(hit.title)].filter((term) => sourceTerms.has(term) && rare.has(term));
     if (!terms.length) continue;
 
     seen.add(hit.id);
