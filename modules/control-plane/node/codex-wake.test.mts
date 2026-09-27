@@ -94,10 +94,12 @@ test("a peer message resumes an ended task with the framed message; the reply go
   // The task keeps its reported state while the run carries the message.
   const during = readTask(node.paths, TASK)!;
   assert.deepEqual([during.state, during.running, during.offered], ["done", true, [id]]);
-  assert.equal(getMessage(node.paths.inbox, id)?.state, "offered");
+  // The fake answered it with `msg send --reply-to` during the run, which marks
+  // the message delivered at once (issue #111), before the turn is confirmed.
+  assert.equal(getMessage(node.paths.inbox, id)?.state, "delivered");
 
   await watchTasks(node.deps());
-  assert.equal(getMessage(node.paths.inbox, id)?.state, "delivered", "confirmed by the completed turn");
+  assert.equal(getMessage(node.paths.inbox, id)?.state, "delivered", "still delivered once the completed turn is settled");
   assert.deepEqual(node.reports(), [], "no task report for a message run");
   assert.equal(readTask(node.paths, TASK)?.running, undefined);
   // The fake answered with `msg send --reply-to`: this session, its task, one hop deeper.
