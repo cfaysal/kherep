@@ -17,6 +17,7 @@ import { componentHash } from "./lib/component-hash.mts";
 import { prepareManagedConfig } from "./lib/config-preservation.mts";
 import type { Capabilities, McpCompatibilityOptions, RunCodex } from "./lib/contracts.mts";
 import { controlPlaneCli, controlPlaneRulesPath, renderControlPlaneRules } from "./lib/control-plane-rules.mts";
+import { controlPlaneOutbox } from "./lib/outbox-writable-root.mts";
 import { InstallTransaction } from "./lib/install-transaction.mts";
 import * as localPlugin from "./lib/local-plugin.mts";
 import * as managedConfig from "./lib/managed-config.mts";
@@ -97,6 +98,9 @@ export interface InstallOptions {
   retiredManifest?: string;
   log?: (line: string) => void;
   mcpCompatibility?: McpCompatibilityOptions;
+  // The Control Plane outbox; by default the node config directory's
+  // (KHEREP_CONFIG_DIR or the per-OS location) control-plane/outbox.
+  controlPlaneOutbox?: string;
 }
 
 function timestamp(): string {
@@ -287,6 +291,7 @@ export function install(options: InstallOptions = {}) {
     memoryNotifyHook: targets.memoryNotifyHook,
     mcpCompatibility: options.mcpCompatibility,
     controlPlaneHook: path.join(repoRoot, "modules", "control-plane", "node", "deliver-hook.mts"),
+    controlPlaneOutbox: path.resolve(options.controlPlaneOutbox || controlPlaneOutbox(process.env, platform)),
   };
   prepareManagedConfig(existingPlugin.config, managedConfigOptions);
 
@@ -454,6 +459,8 @@ export function install(options: InstallOptions = {}) {
         status: Object.hasOwn(pluginMcpServers, name) ? "configured" : "preserved-existing",
       })),
       retiredMcpServers,
+      // Issue #72: where the outbox writable root landed, or why it did not.
+      controlPlaneOutbox: { status: preparedConfig.outboxWritableRoot },
       nativePlugins: installAtlassianTools
         ? [{ id: ROVO_PLUGIN_ID, status: "installed-restart-required" }]
         : [],

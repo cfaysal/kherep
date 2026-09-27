@@ -48,6 +48,7 @@ test("onboard enrolls, writes a config without secrets and a 0600 key", async (t
     ["controlUrl", "enrolledAt", "name", "nodeId", "policyFile", "privateKeyFile", "publicKey", "version"]);
   if (process.platform !== "win32") assert.equal(fs.statSync(paths.privateKey).mode & 0o777, 0o600);
   assert.equal(nodeStatus(paths).privateKeyPresent, true);
+  assert.ok(fs.statSync(paths.outbox).isDirectory(), "the outbox exists before the first sandboxed msg send");
 
   await assert.rejects(onboard({ controlUrl: "https://control.example.com", code: "x".repeat(20), paths, facts: FACTS, runtimes: [],
     fetch: fakeEnroll(201, { nodeId: NODE_ID }) }), /already enrolled/);

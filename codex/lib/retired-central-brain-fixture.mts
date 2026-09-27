@@ -24,6 +24,8 @@ export function withRetiredCentralBrain(
     hookGroup(event, "", [{ command: bound(cli), timeout }]).slice(`[[hooks.${event}]]`.length);
   // Issue #68. Every pre-retirement installer wrote its hooks without commandWindows.
   let text = block.replace(/^commandWindows = .*\n/gm, "");
+  // Issue #72. Nor did any of them write the outbox writable root.
+  text = text.replace(/^\[sandbox_workspace_write\]\nwritable_roots = .*\n\n/m, "");
   text = insertBefore(text, "\n\n[[hooks.PostToolUse]]", entry("UserPromptSubmit", hooks.contextCli, 15));
   text = insertBefore(text, "\n\n[[hooks.PreCompact]]", entry("SessionStart", hooks.contextCli, 15));
   text = insertBefore(text, "\n\n[[hooks.SubagentStart]]", entry("Stop", hooks.captureCli, 10));

@@ -59,6 +59,10 @@ export async function onboard(options: OnboardOptions): Promise<NodeConfig> {
     privateKeyFile: paths.privateKey, policyFile: paths.policy, enrolledAt: new Date().toISOString(),
   };
   writeConfig(paths.config, config);
+  // Issue #72. The outbox exists before any session sends: the Codex installer
+  // makes it a sandbox writable root, and a sandboxed `msg send` could not
+  // create it inside the read-only node directory.
+  ensureDir(paths.outbox);
   return config;
 }
 

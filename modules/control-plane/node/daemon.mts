@@ -3,7 +3,7 @@ import { reconnectDelay } from "./backoff.mts";
 import { NodeClient, type CommandHandlers } from "./client.mts";
 import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
-import { connectUrl, type NodeConfig, type NodePaths } from "./config.mts";
+import { connectUrl, ensureDir, type NodeConfig, type NodePaths } from "./config.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
 import {
   DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions, replyDepth,
@@ -48,6 +48,9 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   const identity = readPrivateKey(config.privateKeyFile);
   if (identity.publicKey !== config.publicKey) throw new Error("private key does not match the enrolled public key");
   const policy = loadPolicy(config.policyFile);
+  // Issue #72. For nodes enrolled before onboard created it: a sandboxed
+  // `msg send` can write into the outbox but not create it.
+  ensureDir(paths.outbox);
   try {
     const purged = purgeInbox(paths.inbox);
     if (purged > 0) log(`kherep-node: removed ${purged} inbox message(s) older than 7 days`);

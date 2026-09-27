@@ -201,6 +201,15 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Codex sessions send and reply over the Control Plane on the first try
+  (issue #72): the Codex installer makes the node outbox, and only the outbox,
+  a writable root of the `workspace-write` sandbox
+  (`sandbox_workspace_write.writable_roots`). Without a table of the operator's
+  the managed block carries it; an operator table or dotted keys get the
+  outbox merged into their `writable_roots`, never a second table and never a
+  removed entry; an inline table or `default_permissions` is left alone. The
+  receipt reports the outcome. `node onboard` and the daemon create the outbox,
+  because a sandboxed session can write into it but not create it.
 - Control Plane Codex tasks run in a workspace root that is not a Git
   repository: `codex exec` and `codex exec resume` get `--skip-git-repo-check`
   (the sandbox is unchanged). A failed run reports codex's last stderr line
