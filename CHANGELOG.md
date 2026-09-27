@@ -11,6 +11,18 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Control Plane: an idle Claude Code session wakes after a restart without any
+  user input (issue #101). A `SessionStart` input without `permission_mode`
+  and without a stored mode now takes the mode of the last user entry in the
+  session transcript (`transcript_path`, the last 2 MiB, only the
+  `permissionMode` field, a regular file under `projects/` of the Claude
+  config directory; `node/transcript-mode.mts`) and stores it. A missing,
+  foreign or unreadable transcript, or `bypassPermissions` there, still
+  refuses; the listing, settings and launch flag checks run as before. The
+  listener armed there also wakes once, after 8 s, for messages that arrived
+  while no listener ran (audit `backlog`), each at most once and under the
+  same guards and budget; a prompt within those 8 s supersedes it.
+
 - Control Plane: the Claude Code wake listener is armed at `SessionStart` too
   (issue #97), so an idle session is wakeable again after its process
   restarts (app restart, `--resume`, `--continue`, `/clear`, fork) without
