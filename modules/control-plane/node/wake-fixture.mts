@@ -6,6 +6,7 @@ import type test from "node:test";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { writeLocalSessions } from "./exchange.mts";
 import { storeMessage } from "./inbox.mts";
+import type { LaunchVerdict } from "./launch-mode.mts";
 import { listenerDir, runWake, wakeAudit, type WakeDeps } from "./wake-hook.mts";
 
 // Shared fixture of the wake listener tests (wake-hook.test.mts,
@@ -41,20 +42,22 @@ export function arrive(paths: NodePaths, n: number, at: number, toSession = "rev
 
 export interface ListenOptions {
   start?: number; tick?: (clock: number) => void; maxWaitMs?: number; event?: string; mode?: string | null; token?: string;
-  parentAlive?: () => boolean; source?: string;
+  parentAlive?: () => boolean; source?: string; launch?: (cwd: unknown) => Promise<LaunchVerdict>;
 }
 
 // A listener on a fake clock; tick(clock) runs after each sleep, before the poll.
 // The Stop input carries stop_hook_active true in a turn a Stop hook continued,
 // the woken turn included; the listener arms all the same. mode null leaves
-// permission_mode out, as a SessionStart input does.
+// permission_mode out, as a SessionStart input does. The settings and launch
+// flags check (launch-mode.mts) finds no bypass unless launch says otherwise.
 export function listen(paths: NodePaths, options: ListenOptions = {}) {
   let clock = options.start ?? T0;
   const deps: WakeDeps = {
     paths, pid: 4242, maxWaitMs: options.maxWaitMs ?? 60_000, now: () => clock, parentAlive: options.parentAlive ?? (() => true),
     sleep: async (ms) => { clock += ms; options.tick?.(clock); }, ...(options.token ? { token: () => options.token as string } : {}),
+    launchMode: options.launch ?? (async () => "ok"),
   };
-  return runWake({ session_id: SELF, hook_event_name: options.event ?? "Stop", stop_hook_active: true,
+  return runWake({ session_id: SELF, hook_event_name: options.event ?? "Stop", stop_hook_active: true, cwd: paths.dir,
     ...(options.mode === null ? {} : { permission_mode: options.mode ?? "default" }),
     ...(options.source === undefined ? {} : { source: options.source }) }, deps);
 }

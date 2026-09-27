@@ -18,10 +18,13 @@ increments the minor version; every other release increments the patch version.
   `SessionStart` hooks with the same `asyncRewake` and timeout. A following
   prompt supersedes that listener as before. After `compact` the session
   counts as busy, because auto-compaction runs inside a turn. A `SessionStart`
-  input carries no `permission_mode`, so the listener uses the mode the
-  session's last prompt or `Stop` reported (`listeners/<id>.mode.json`); with
-  none known, only a session listed by id or name is armed, and the audit
-  says `permission-mode-unknown` otherwise.
+  input carries no `permission_mode`, so the listener arms there only when,
+  fail closed, the mode the session's last prompt or `Stop` reported
+  (`listeners/<id>.mode.json`) exists and is not `bypassPermissions`, the
+  session is listed by id or name, no readable settings layer sets
+  `defaultMode` `bypassPermissions`, and no launch flag of the owning Claude
+  process points to bypass (`node/launch-mode.mts`). Anything it cannot read
+  refuses with the audit `permission-mode-unknown`.
 
 - Control Plane: `kherep-node attach <node>/<session>` resolves a session
   through the directory like `msg send` and prints the command to open it on
