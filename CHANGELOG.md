@@ -280,6 +280,21 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- A node-started Claude Code session whose wake listener armed before the node
+  recorded its session id is woken again (issue #109). This happens after a
+  resume that Claude Code continued as a copy under a new id. The node now
+  writes the task record before `claude --bg` or `claude --resume --bg` with
+  `mappingPendingSince`, maps the session through `claude agents --json`
+  right after the run, and clears the field once the id is listed. A resumed
+  intercom session that became a copy is adopted: the same task record takes
+  the new id and its waiting messages are readdressed to it, instead of
+  stopping the copy and starting a new intercom session. A wake listener
+  without grant or allowlist entry keeps polling while an active task record
+  in its working directory has had a pending mapping for at most 2 minutes,
+  and wakes once the node records its id. The grant still comes only from
+  that recorded id. Otherwise the listener exits at once with
+  `not-allowlisted` as before, audited once.
+
 - `msg send <node>/<full session id>` reaches a closed session (issue #107).
   A full session id (a UUID, as Claude Code and Codex use) on a node the
   directory lists as `online` is now sent even when the directory no longer

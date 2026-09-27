@@ -12,8 +12,8 @@ import { readReport, removeReport, reportIds } from "./task-records.mts";
 
 // Shared fixture of the task tests (item 5): a throwaway node directory with a
 // workspace root, a policy with a sessions section, and a fake claude that
-// never runs anything. It answers `--bg` with the documented
-// `backgrounded · <id> · <name>` line and `agents --json --all` with its rows.
+// never runs anything. It answers `--bg` (and `--resume <id> --bg`, in place)
+// with the documented `backgrounded · <id> · <name>` line and `agents --json --all` with its rows.
 
 export const T0 = Date.UTC(2026, 8, 25, 12);
 export const TASK = "3f2a1b0c-0000-4000-8000-000000000001";
@@ -44,7 +44,9 @@ export function taskNode(t: test.TestContext, sessions: Record<string, unknown> 
     if (args[0] === "stop") return "";
     const short = `b${(next++).toString(16).padStart(7, "0")}`;
     const name = args[args.indexOf("--name") + 1];
-    rows.push({ id: short, sessionId: `5e55${short}-0000-4000-8000-000000000000`, ...(args.includes("--name") ? { name } : {}),
+    // A resume continues the session under its own id (a copy is set up by the test).
+    const resumed = args[0] === "--resume" ? args[1] : undefined;
+    rows.push({ id: short, sessionId: resumed ?? `5e55${short}-0000-4000-8000-000000000000`, ...(args.includes("--name") ? { name } : {}),
       state: "working", kind: "background", cwd: options.cwd, startedAt: clock });
     return `Starting background service…\nbackgrounded · ${short}${args.includes("--name") ? ` · ${name}` : ""}\n  claude agents   list sessions\n`;
   };

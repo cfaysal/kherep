@@ -94,7 +94,7 @@ test("a different sender gets its own intercom session", async (t) => {
   assert.deepEqual(claudeRuns(node).map((r) => r.args[0]), ["--bg", "--bg"]);
 });
 
-test("an intercom session that cannot be resumed, or continues as a copy, gives way to a new one", async (t) => {
+test("an intercom session that cannot be resumed, or continues as a copy that is not listed, gives way to a new one", async (t) => {
   for (const output of [null, "note: continuing as a copy\nbackgrounded · c0ffee01\n"]) {
     const node = closedNode(t);
     const task = await firstIntercom(node);
