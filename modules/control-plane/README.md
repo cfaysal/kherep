@@ -1,6 +1,13 @@
-# Kherep Control Plane (Phase 1)
+# Kherep Control Plane
 
-A Cloudflare Worker that Kherep nodes connect to over an outbound WebSocket, plus the `kherep-node` daemon and CLI that runs on each node. Phase 1 covers enrollment, node identity, registration, liveness, a node/runtime/session registry and a fixed set of three read-only commands. Nothing in Phase 1 runs arbitrary commands on a node. The design and its decisions are recorded in GitHub issue #5. Phase 2 step 1 (GitHub issue #31) adds the messaging wire protocol and its routing and queue in the Worker. Step 2 adds Claude Code session discovery, the node's messaging policy and its inbox. Step 3a adds the session side: a directory of addressable sessions, the `msg` CLI a session uses to list, send, read and reply, and a Claude Code hook that hands inbox messages to their session. Step 3b has the Kherep installer wire the hook into Claude Code (see [Delivery hook](#delivery-hook)). Step 4 adds Codex sessions: the same hook, started with `--runtime codex`, records and serves Codex sessions, and the Codex installer wires it (see [Codex sessions](#codex-sessions)). Item 5 adds tasks: the operator, or a session acting on the operator's explicit directive, has a node start, stop or continue a Claude Code background session for a task (see [Tasks](#tasks)); issue #63 adds Codex tasks (see [Codex tasks](#codex-tasks)). Issue #74 adds intercom sessions: a session opens a conversation with a new session on a named node (see [Intercom sessions](#intercom-sessions)).
+A Cloudflare Worker that Kherep nodes connect to over an outbound WebSocket, plus the `kherep-node` daemon and CLI that runs on each node. It provides:
+
+- **Nodes:** enrollment, node identity, registration, liveness and a registry of each node's runtimes and sessions. The operator API dispatches only three read-only commands (`node.status`, `runtime.list`, `session.list`); nothing runs arbitrary commands on a node (see [Commands](#commands)).
+- **Messaging between agent sessions:** Claude Code and Codex sessions on any node list each other, send, read and reply. The receiving node's policy decides which senders it accepts, and delivery hooks hand messages to the session (see [Session messaging](#session-messaging) and [Codex sessions](#codex-sessions)).
+- **Wake:** an opt-in wake resumes an idle Claude Code session, or the current Codex desktop session, when a message arrives, within a per-session budget (see [Listening while idle](#listening-while-idle) and [Waking Codex sessions](#waking-codex-sessions)).
+- **Tasks and intercom:** on the operator's authority, a node starts, continues or stops a Claude Code or Codex task session for the runtimes its policy enables, and a session can open a conversation with a new session on a named node (see [Tasks](#tasks) and [Intercom sessions](#intercom-sessions)).
+
+History: the node registry and read-only commands were the first step (GitHub issue #5); messaging, wake, tasks and intercom followed in issue #31 and its follow-ups (#63, #66, #74, #82, #88, #90).
 
 ## Architecture
 
@@ -12,7 +19,7 @@ operator ----HTTPS behind Cloudflare Access--> Worker --> Registry / NodeSession
 
 | Part | Path | Role |
 | --- | --- | --- |
-| Protocol | `protocol.mts` | Message envelope, message types, the Phase 1 command set and the signed challenge bytes. Used by both sides |
+| Protocol | `protocol.mts` | Message envelope, message types, the read-only command set and the signed challenge bytes. Used by both sides |
 | Worker | `worker/src/index.mts` | Routing and authentication only: `/health`, `/node/connect`, `/node/enroll`, `/api/*` |
 | `NodeSession` | `worker/src/node-session.mts` | The node's hibernatable WebSocket, challenge handshake, pending-command log with seq/ack, offline alarm |
 | Messaging protocol | `protocol-messages.mts` | `message.*` bodies, message states, the `messaging.v1` capability and their validators. Used by both sides |
@@ -47,9 +54,9 @@ Every frame is JSON text with one envelope:
 
 ### Commands
 
-Phase 1 dispatches exactly `node.status`, `runtime.list` and `session.list`. The API refuses anything else, `NodeSession` refuses it again, and the node refuses it a third time against its local policy file, even when the command arrives authenticated. The local policy can narrow the set but never widen it; a malformed policy file allows nothing.
+The operator API dispatches exactly the read-only commands `node.status`, `runtime.list` and `session.list`. The API refuses anything else, `NodeSession` refuses it again, and the node refuses it a third time against its local policy file, even when the command arrives authenticated. The local policy can narrow the set but never widen it; a malformed policy file allows nothing.
 
-Item 5 adds the session commands `session.start`, `session.stop` and `session.continue`. A command body may carry `args`, validated strictly per command (`protocol-tasks.mts` `isCommandArgs`): the Phase 1 commands take none, each session command exactly its own fields. The `commands` API never sends them; only the task dispatch does (see [Tasks](#tasks)). `NodeSession` refuses a session command whose args do not validate, and the node runs one only when its policy enables sessions. The args wait in the `NodeSession` outbox until the node acknowledges them and are not kept in the command history. A node that sends a `command` frame gets an `error`.
+Item 5 adds the session commands `session.start`, `session.stop` and `session.continue`. A command body may carry `args`, validated strictly per command (`protocol-tasks.mts` `isCommandArgs`): the read-only commands take none, each session command exactly its own fields. The `commands` API never sends them; only the task dispatch does (see [Tasks](#tasks)). `NodeSession` refuses a session command whose args do not validate, and the node runs one only when its policy enables sessions. The args wait in the `NodeSession` outbox until the node acknowledges them and are not kept in the command history. A node that sends a `command` frame gets an `error`.
 
 ### Sessions
 
@@ -321,7 +328,7 @@ Issue #74. The first message of a conversation with another node goes either to 
 | `GET /api/nodes` | List nodes |
 | `GET /api/nodes/{id}` | One node with runtimes, connection state and recent commands |
 | `GET /api/sessions` | Sessions reported by all nodes |
-| `POST /api/nodes/{id}/commands` | Body `{"command": "node.status"}`; only the three Phase 1 commands |
+| `POST /api/nodes/{id}/commands` | Body `{"command": "node.status"}`; only the three read-only commands |
 | `POST /api/enrollments` | Body `{"ttlSeconds": 600}` (optional); returns a one-time `code` |
 | `DELETE /api/nodes/{id}` | Revoke a node |
 | `POST /api/nodes/{id}/messages` | Body `{"session": "<target session>", "text": "...", "inReplyTo": "<uuid>"}` (`inReplyTo` optional); sends as `operator` and answers 202 with `messageId` and `state` (`queued`, or `refused` with a `reason`); 404 for an unknown node, 409 for a revoked one |
