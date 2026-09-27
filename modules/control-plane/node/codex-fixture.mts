@@ -17,7 +17,8 @@ import { taskNode } from "./task-fixture.mts";
 // child that runs until killed (as codex does behind the npm launcher); otherwise the turn completes, -o gets the last message, exit 0.
 // A resume keeps the thread id it was given. A prompt that carries a peer
 // message ("Message id: <id>") is answered first with the real
-// `kherep-node msg send --reply-to <id>`, run with the environment the node gave.
+// `kherep-node msg send --reply-to <id>`, run with the environment the node
+// gave, unless the prompt says [fail]: that turn fails before any reply.
 
 export const THREAD = "0199a000-0000-7000-8000-000000000001";
 export const LAST_MESSAGE = "  All tests pass.\n\n";
@@ -59,7 +60,7 @@ if (prompt.includes("[stderr]")) {
   process.exit(1);
 }
 const peer = /^Message id: (\\S+)$/m.exec(prompt);
-if (peer) require("node:child_process").spawnSync(process.execPath, [${JSON.stringify(CLI)}, "msg", "send", "--reply-to", peer[1], "--", "ack"],
+if (peer && !prompt.includes("[fail]")) require("node:child_process").spawnSync(process.execPath, [${JSON.stringify(CLI)}, "msg", "send", "--reply-to", peer[1], "--", "ack"],
   { stdio: "ignore" });
 emit({ type: "thread.started", thread_id: thread });
 emit({ type: "turn.started" });
