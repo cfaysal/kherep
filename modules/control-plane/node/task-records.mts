@@ -35,6 +35,11 @@ export interface TaskRecord {
   // run, so the record stays counted and watched (limits, deadline) until
   // `claude agents` shows the session ended or the deadline stopped it.
   running?: boolean;
+  // A record the Worker does not know (issue #102, closed-delivery.mts): an
+  // intercom session the node started on its own, or a closed session it
+  // resumed for peer messages. No task.report is sent for it, its messages
+  // carry no task id, and taskForSession skips a resumed session.
+  local?: "intercom" | "resume";
 }
 
 export type RequestState = "pending" | "dispatched" | "refused";
@@ -83,12 +88,22 @@ export function taskForSession(paths: NodePaths, sessionId: string | undefined):
   } catch {
     name = undefined;
   }
-  return listTasks(paths).find((t) => t.sessionId === sessionId || t.name === sessionId || (name !== undefined && t.name === name)) ?? null;
+  return listTasks(paths).find((t) => t.local !== "resume"
+    && (t.sessionId === sessionId || t.name === sessionId || (name !== undefined && t.name === name))) ?? null;
 }
 
 export function queueReport(paths: NodePaths, body: TaskReportBody): void {
+  if (isLocal(paths, body.taskId)) return;
   ensureDir(paths.taskReports);
   writeJsonAtomic(fileOf(paths.taskReports, crypto.randomUUID()), body);
+}
+
+function isLocal(paths: NodePaths, taskId: string): boolean {
+  try {
+    return readTask(paths, taskId)?.local !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 export function reportIds(paths: NodePaths): string[] {

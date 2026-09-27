@@ -24,7 +24,7 @@ export const LAST_MESSAGE = "  All tests pass.\n\n";
 
 const CLI = path.join(import.meta.dirname, "cli.mts");
 
-const SCRIPT = (log: string): string => `#!${process.execPath}
+export const SCRIPT = (log: string): string => `#!${process.execPath}
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");

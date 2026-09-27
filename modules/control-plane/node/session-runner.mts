@@ -34,7 +34,7 @@ import { frameFollowUp } from "./task-prompt.mts";
 // only shown in the directory, never used as the name.
 
 export const RUN_TIMEOUT_MS = 60_000;
-const BACKGROUNDED = /^backgrounded · ([A-Za-z0-9]+)/m;
+export const BACKGROUNDED = /^backgrounded · ([A-Za-z0-9]+)/m;
 
 export interface RunnerDeps {
   paths: NodePaths; policy: NodePolicy;
@@ -42,6 +42,9 @@ export interface RunnerDeps {
   now?: () => number; realpath?: (p: string) => string; cli?: string;
   // The Codex runner's process hooks; tests replace them.
   codex?: CodexDeps;
+  // Set for an intercom session the node starts on its own (issue #102):
+  // the Worker does not know the task, so nothing is reported.
+  local?: "intercom";
 }
 
 // Rejects with the CLI's own stderr (or stdout), never with the command line,

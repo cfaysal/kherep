@@ -15,10 +15,13 @@ import { parseSessionsPolicy, type SessionsPolicy } from "./session-policy.mts";
 export interface AcceptRule { session: string; from: string[] }
 // codexApp (issue #82): also wake the current Codex desktop app session (codex-app.mts).
 export interface WakePolicy { sessions: string[]; codexApp?: boolean }
+// resumeClosed (issue #102): a message for a known session of this node that
+// is no longer running resumes it, or starts an intercom session instead
+// (closed-delivery.mts). Only the boolean true enables it.
 export interface NodePolicy {
   version: 1;
   allowedCommands: Phase1Command[];
-  messaging?: { accept: AcceptRule[] };
+  messaging?: { accept: AcceptRule[]; resumeClosed?: true };
   wake?: WakePolicy;
   sessions?: SessionsPolicy;
 }
@@ -46,7 +49,9 @@ export function loadPolicy(file: string): NodePolicy {
     const accept = parseAcceptRules(value.messaging);
     const wake = parseWake(value.wake);
     const sessions = parseSessionsPolicy(value.sessions);
-    return { version: 1, allowedCommands: value.allowedCommands.filter(isPhase1Command), ...(accept ? { messaging: { accept } } : {}),
+    const resumeClosed = (value.messaging as { resumeClosed?: unknown } | undefined)?.resumeClosed === true;
+    return { version: 1, allowedCommands: value.allowedCommands.filter(isPhase1Command),
+      ...(accept ? { messaging: { accept, ...(resumeClosed ? { resumeClosed: true as const } : {}) } } : {}),
       ...(wake ? { wake } : {}), ...(sessions ? { sessions } : {}) };
   } catch {
     return denyAll();

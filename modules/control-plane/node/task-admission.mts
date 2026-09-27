@@ -15,7 +15,7 @@ export const trim = (text: string): string => text.replace(/\s+/g, " ").trim().s
 
 // Queues task.report failed and rejects, so the command result fails too.
 export function refuse(deps: RunnerDeps, taskId: string, reason: string): never {
-  queueReport(deps.paths, { taskId, state: "failed", reason: trim(reason) });
+  if (!deps.local) queueReport(deps.paths, { taskId, state: "failed", reason: trim(reason) });
   throw new Error(reason);
 }
 
@@ -55,7 +55,7 @@ export function admitStart(args: SessionStartArgs, deps: RunnerDeps): Admitted {
     taskId: args.taskId, runtime: args.runtime, name: args.name, cwd: cwd.cwd, permissionMode: mode, state: "started",
     startedAt: new Date(now).toISOString(), deadline: new Date(now + policy.maxRuntimeMinutes * 60_000).toISOString(),
     updatedAt: new Date(now).toISOString(), ...(args.requestedBy !== undefined ? { requestedBy: args.requestedBy } : {}),
-    ...(args.label ? { label: args.label } : {}),
+    ...(args.label ? { label: args.label } : {}), ...(deps.local ? { local: deps.local } : {}),
   };
   let cli: string;
   try {
