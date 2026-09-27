@@ -1,6 +1,7 @@
 import { PING_FRAME, type SessionInfo } from "../protocol.mts";
 import { reconnectDelay } from "./backoff.mts";
 import { NodeClient, type CommandHandlers } from "./client.mts";
+import { codexHome } from "./codex-app.mts";
 import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { connectUrl, ensureDir, type NodeConfig, type NodePaths } from "./config.mts";
@@ -59,7 +60,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   }
   // Every successful listing also updates sessions.json for the session tools
   // and includes the Codex sessions the delivery hook recorded.
-  const sessions = recordingSessions(paths, () => listSessions({ paths }), log);
+  const sessions = recordingSessions(paths, () => listSessions({ paths, codexHome: codexHome() }), log);
   const runner: RunnerDeps = { paths, policy };
   const client = new NodeClient({
     nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions, runner),

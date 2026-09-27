@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { isSessionInfo, type SessionInfo } from "../protocol.mts";
 import { listCodexSessions, listCodexTaskSessions } from "./codex-sessions.mts";
+import { readCodexTitles, withCodexTitles } from "./codex-titles.mts";
 import type { NodePaths } from "./config.mts";
 import { findOnPath } from "./discovery.mts";
 import { listTasks, type TaskRecord } from "./task-records.mts";
@@ -29,6 +30,8 @@ export interface SessionDeps {
   // With paths, the Codex sessions recorded in this node's config directory are listed too.
   paths?: NodePaths;
   now?: () => number;
+  // With the Codex home, Codex sessions carry their thread title (issue #88).
+  codexHome?: string;
 }
 
 export interface Invocation { file: string; args: string[]; options: ExecOptions }
@@ -116,7 +119,8 @@ export async function listSessions(deps: SessionDeps = {}): Promise<SessionInfo[
   // A task's thread the delivery hook recorded too is listed once, as the task.
   const codex = deps.paths ? listCodexSessions(deps.paths, now).filter((s) => !tasks.some((t) => t.sessionId === s.sessionId)) : [];
   const claude = await listClaudeSessions(deps);
-  return [...(deps.paths ? withLabels(claude, listTasks(deps.paths)) : claude), ...tasks, ...codex].slice(0, MAX_SESSIONS);
+  const titled = deps.codexHome ? withCodexTitles([...tasks, ...codex], readCodexTitles(deps.codexHome)) : [...tasks, ...codex];
+  return [...(deps.paths ? withLabels(claude, listTasks(deps.paths)) : claude), ...titled].slice(0, MAX_SESSIONS);
 }
 
 // A Claude task session with a label (issue #74) carries it, found by the

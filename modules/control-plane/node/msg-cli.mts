@@ -133,7 +133,9 @@ function sessions(io: Io): number {
     if (list.length === 0) io.out("    no sessions reported");
     for (const s of list) {
       const mine = node.nodeId === nodeId && s.sessionId === me?.id;
-      io.out(`  ${mine ? "*" : " "} ${s.label ?? s.name ?? "-"}  ${s.sessionId}  ${s.state}  ${s.runtime}${s.cwd ? `  ${s.cwd}` : ""}`);
+      // A Codex thread title (issue #88) is display only, quoted as a JSON string.
+      const title = s.title ? `  ${JSON.stringify(s.title)}` : "";
+      io.out(`  ${mine ? "*" : " "} ${s.label ?? s.name ?? "-"}${title}  ${s.sessionId}  ${s.state}  ${s.runtime}${s.cwd ? `  ${s.cwd}` : ""}`);
     }
   }
   io.out(`(* marks this session${me ? "" : `; ${SESSION_ENV} is not set, so none is marked`})`);
