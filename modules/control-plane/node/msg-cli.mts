@@ -188,7 +188,9 @@ async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<
   if (!Number.isFinite(wait) || wait < 0) return fail(io, `--wait needs a number of seconds, got "${values.wait}"`);
 
   // A session started for a task tags its messages with that task (item 5).
-  taskId = taskForSession(io.paths, sessionIdFromEnv(io.env))?.taskId ?? taskId;
+  // A task the Worker does not know (issue #102) tags nothing.
+  const own = taskForSession(io.paths, sessionIdFromEnv(io.env));
+  taskId = (own && !own.local ? own.taskId : undefined) ?? taskId;
   const record: OutboxRecord = { messageId: crypto.randomUUID(), fromSession: from.value, to, text,
     ...(replyTo ? { inReplyTo: replyTo } : {}), ...(taskId ? { taskId } : {}), createdAt: new Date(io.now()).toISOString(), depth };
   writeOutbox(io.paths, record);

@@ -22,6 +22,21 @@ increments the minor version; every other release increments the patch version.
   listener armed there also wakes once, after 8 s, for messages that arrived
   while no listener ran (audit `backlog`), each at most once and under the
   same guards and budget; a prompt within those 8 s supersedes it.
+- Control Plane: a message for a session of this node that is no longer
+  running is still handled when the node policy sets
+  `messaging.resumeClosed: true` (issue #102, default off). The daemon
+  resumes the known session in the background in its recorded `auto` or
+  `default` mode (Claude Code `claude --resume <id> --bg`, Codex
+  `codex exec resume <thread>`) with the fixed wake text, so the message
+  arrives as framed peer content, or otherwise starts an intercom session
+  with the closed session's runtime and working directory and a directive
+  that names the automatic fallback. The guards of `--new` and the wake apply
+  fail closed (kill switch, sessions and runtime, `delegate.accept` and the
+  accept rules, reply depth, never `bypassPermissions`, `maxConcurrent`,
+  workspace roots, the session's turn budget), a message causes one attempt
+  at most, and every outcome is audited in `wake.jsonl` as `closed-session`
+  `resumed`, `new` or `refused` with the reason. Every successful listing is
+  kept for 7 days in `known-sessions.json`.
 
 - Control Plane: the Claude Code wake listener is armed at `SessionStart` too
   (issue #97), so an idle session is wakeable again after its process

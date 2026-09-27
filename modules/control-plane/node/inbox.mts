@@ -44,6 +44,9 @@ export interface InboxRecord {
   // Reply hops: 0 for a new message, one more than the depth of this node's
   // sent message it answers (exchange.mts replyDepth). Missing means 0.
   depth?: number;
+  // Set by closed-delivery.mts (issue #102) when the message made the node
+  // resume its closed session or start an intercom session: once per message.
+  closedAttempt?: string;
   // Set by the daemon once it sent message.status for reportedState.
   reportedAt?: string;
   reportedState?: ReportedState;
@@ -142,6 +145,11 @@ export function markRetry(dir: string, messageId: string): boolean {
   if (record?.state !== "offered") return false;
   writeJsonAtomic(fileOf(dir, messageId), { ...record, retry: true });
   return true;
+}
+
+export function markClosedAttempt(dir: string, messageId: string, now: number = Date.now()): void {
+  const record = getMessage(dir, messageId);
+  if (record) writeJsonAtomic(fileOf(dir, messageId), { ...record, closedAttempt: new Date(now).toISOString() });
 }
 
 // Refuses a message that still waits for its session; true when it did.

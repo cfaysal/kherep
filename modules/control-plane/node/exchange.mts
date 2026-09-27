@@ -8,6 +8,7 @@ import { ensureDir, type NodePaths } from "./config.mts";
 import {
   markReported, messageIds, readJson, refuseUndeliverable, UNDELIVERABLE_AFTER_MS, unreportedStatuses, writeJsonAtomic,
 } from "./inbox.mts";
+import { rememberSessions } from "./known-sessions.mts";
 
 // The local exchange between the daemon and the session tools (issue #31,
 // step 3a): plain files in the node's config directory, no local socket.
@@ -136,6 +137,14 @@ export function readLocalSessions(paths: NodePaths): LocalSession[] {
   return Array.isArray(value?.sessions) ? value.sessions as LocalSession[] : [];
 }
 
+// Adds a session this node just resumed (issue #102), so the delivery hook of
+// its first turn finds it by name before the next listing replaces the file.
+export function addLocalSession(paths: NodePaths, session: LocalSession): void {
+  const value = readJson<{ sessions?: unknown; updatedAt?: string }>(paths.sessions);
+  const sessions = readLocalSessions(paths).filter((s) => s.sessionId !== session.sessionId);
+  writeJsonAtomic(paths.sessions, { ...value, sessions: [...sessions, session] });
+}
+
 // The name sessions.json records for a local session id, if any.
 export function localSessionName(paths: NodePaths, sessionId: string): string | undefined {
   return readLocalSessions(paths).find((s) => s.sessionId === sessionId)?.name;
@@ -153,6 +162,11 @@ export function recordingSessions(paths: NodePaths, list: () => Promise<SessionI
       writeLocalSessions(paths, sessions);
     } catch (error) {
       log(`kherep-node: could not write sessions.json: ${String(error)}`);
+    }
+    try {
+      rememberSessions(paths, sessions);
+    } catch (error) {
+      log(`kherep-node: could not write known-sessions.json: ${String(error)}`);
     }
     try {
       const refused = refuseUndeliverable(paths.inbox, sessions, now(), undeliverableAfterMs);

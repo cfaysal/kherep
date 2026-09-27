@@ -1,6 +1,7 @@
 import { PING_FRAME, type SessionInfo } from "../protocol.mts";
 import { reconnectDelay } from "./backoff.mts";
 import { NodeClient, type CommandHandlers } from "./client.mts";
+import { deliverToClosed } from "./closed-delivery.mts";
 import { codexHome } from "./codex-app.mts";
 import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
@@ -104,6 +105,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         chain = chain.then(async () => {
           for (const frame of await client.sessionsSnapshot()) if (ws.readyState === WebSocket.OPEN) ws.send(frame);
           await watchTasks(runner, log);
+          // Messages for sessions that are no longer running (issue #102).
+          await deliverToClosed(runner, log);
         }).catch((error: unknown) => log(`kherep-node: session snapshot failed: ${String(error)}`));
       }, SESSIONS_INTERVAL_MS);
       exchange = setInterval(() => {
