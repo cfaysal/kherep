@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
-import { CODEX_CONTEXT_BYTES, CODEX_STOP_REASON, deliverForCodex } from "./deliver-codex.mts";
+import { CODEX_CONTEXT_BYTES, CODEX_ESCALATION_NOTE, CODEX_STOP_REASON, deliverForCodex } from "./deliver-codex.mts";
 import { MAX_OFFERS, REOFFER_AFTER_MS } from "./deliver-core.mts";
 import { hookRuntime } from "./deliver-hook.mts";
 import { getSent, recordSent, writeDirectory, writeOutbox } from "./exchange.mts";
@@ -57,7 +57,7 @@ test("SessionStart records the session and tells it its id and how to send; sile
   const output = JSON.parse(hook(paths, "SessionStart", { source: "startup" }));
   assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart");
   assert.equal(output.hookSpecificOutput.additionalContext, `Kherep messaging: this session's id is ${SELF}. To message another session: `
-    + `${CLI} msg send --from ${SELF} <node>/<session> -- <text>. \`${CLI} msg sessions\` lists sessions.`);
+    + `${CLI} msg send --from ${SELF} <node>/<session> -- <text>. \`${CLI} msg sessions\` lists sessions. ${CODEX_ESCALATION_NOTE}`);
   assert.equal(readJson<{ cwd: string }>(path.join(paths.codexSessions, `${SELF}.json`))?.cwd, "/work/repo");
 
   const none = setup(t, false);
@@ -97,11 +97,11 @@ test("UserPromptSubmit offers by id and name as developer context, with --from i
 
 test("UserPromptSubmit stays within the Codex budget", (t) => {
   const paths = setup(t);
-  for (let n = 1; n <= 3; n++) inbox(paths, n, NAME, "x".repeat(2000));
+  for (let n = 1; n <= 3; n++) inbox(paths, n, NAME, "x".repeat(1800));
   const context: string = JSON.parse(hook(paths, "UserPromptSubmit")).hookSpecificOutput.additionalContext;
   assert.ok(Buffer.byteLength(context) <= CODEX_CONTEXT_BYTES);
   assert.equal(context.match(/=== Kherep peer message/g)?.length, 2);
-  assert.match(context, /1 more message\(s\) wait for the next turn\.$/);
+  assert.ok(context.endsWith(`1 more message(s) wait for the next turn.\n${CODEX_ESCALATION_NOTE}`));
 });
 
 test("Stop confirms, then continues with the fixed text only while new messages wait", (t) => {
