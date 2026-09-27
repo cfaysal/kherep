@@ -2,7 +2,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { bypassesPermissions, isPlainSessionId, listenerDir, takeTurn } from "./autonomy.mts";
+import { bypassesPermissions, isPlainSessionId, listenerDir, takeTurn, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
+import { codexHome, currentCodexApp } from "./codex-app.mts";
 import { codexCommand, findCodex } from "./codex-binary.mts";
 import { signalGroup } from "./codex-process.mts";
 import { lastLine } from "./codex-output.mts";
@@ -35,6 +36,9 @@ import { killSwitch, wakeText } from "./wake-hook.mts";
 // a session gets no further queue while a queued message is still waiting,
 // for up to REOFFER_AFTER_MS; a message never offered after that waits for
 // the next prompt instead of being queued again.
+// wake.codexApp (issue #82) adds one grant in place of the allowlist: the
+// current Codex desktop app session (codex-app.mts), audited with
+// grant "codexApp"; the other guards stay as they are.
 
 export const QUEUE_TIMEOUT_MS = 30_000;
 const FORBIDDEN = /^(--dangerously-|--approve-for-me$|--add-dir$|--sandbox$|-s$|-c$|--config$)/;
@@ -89,17 +93,33 @@ export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = (
     log(`kherep-node: could not list Codex sessions: ${String((error as Error).message ?? error)}`);
     return;
   }
-  for (const sessionId of live) {
-    if (tasks.has(sessionId) || !isPlainSessionId(sessionId) || inFlight.has(sessionId)) continue;
+  const candidates = live.filter((id) => !tasks.has(id) && isPlainSessionId(id));
+  // wake.codexApp: the one app session it grants, looked up at most once per
+  // round and only when a message waits for a session not listed by full id.
+  let app: string | null | undefined;
+  const appSession = (): string | null => {
+    if (app !== undefined) return app;
+    app = null;
+    if (!deps.policy.wake?.codexApp) return app;
     try {
-      queueFor(deps, sessionId, live, now, log);
+      app = currentCodexApp(deps.paths, candidates, deps.codex?.home ?? codexHome());
+    } catch (error) {
+      log(`kherep-node: could not find the current Codex app session: ${String((error as Error).message ?? error)}`);
+    }
+    return app;
+  };
+  for (const sessionId of candidates) {
+    if (inFlight.has(sessionId)) continue;
+    try {
+      queueFor(deps, sessionId, live, now, log, appSession);
     } catch (error) {
       log(`kherep-node: could not wake Codex session ${sessionId}: ${String((error as Error).message ?? error)}`);
     }
   }
 }
 
-function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: number, log: (line: string) => void): void {
+function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: number, log: (line: string) => void,
+  appSession: () => string | null): void {
   const { paths, policy } = deps;
   // A name another live session shares addresses neither: the message waits
   // for its sender to use the full id (codex-<8> names, issue #66).
@@ -114,18 +134,22 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
   if (fresh.length === 0) return;
   const ids = (records: InboxRecord[]): string[] => records.map((r) => r.messageId);
   if (fs.existsSync(killSwitch(paths))) return note(paths, now, sessionId, ids(fresh), "disabled");
-  // Authorization by the full thread id only: names can be shared.
-  if (!wakeAllowed(policy, [sessionId])) return note(paths, now, sessionId, ids(fresh), "not-allowlisted");
+  // Authorization by the full thread id only: names can be shared. Otherwise
+  // wake.codexApp may grant this one session; every guard below still applies.
+  const listed = wakeAllowed(policy, [sessionId]);
+  const grant: WakeGrant | undefined = !listed && appSession() === sessionId ? "codexApp" : undefined;
+  if (!listed && !grant) return note(paths, now, sessionId, ids(fresh), "not-allowlisted");
+  const decide = (records: InboxRecord[], action: AutonomyAction): void => note(paths, now, sessionId, ids(records), action, grant);
   const mode = readCodexSession(paths, sessionId)?.permissionMode;
-  if (bypassesPermissions(mode)) return note(paths, now, sessionId, ids(fresh), "permission-mode");
-  if (mode === undefined && !explicitlyListed(policy, [sessionId])) return note(paths, now, sessionId, ids(fresh), "permission-mode-unknown");
+  if (bypassesPermissions(mode)) return decide(fresh, "permission-mode");
+  if (mode === undefined && !explicitlyListed(policy, [sessionId])) return decide(fresh, "permission-mode-unknown");
   const deep = fresh.filter((r) => (r.depth ?? 0) >= MAX_REPLY_DEPTH);
-  if (deep.length > 0) note(paths, now, sessionId, ids(deep), "depth-limit");
+  if (deep.length > 0) decide(deep, "depth-limit");
   const due = fresh.filter((r) => (r.depth ?? 0) < MAX_REPLY_DEPTH);
   if (due.length === 0) return;
   const budget = takeTurn(paths, sessionId, now);
   if (budget === "spacing" || budget === "locked") return;
-  if (budget === "exhausted") return note(paths, now, sessionId, ids(due), "budget");
+  if (budget === "exhausted") return decide(due, "budget");
   // Recorded first, so a slow or failed queue is not repeated every round.
   ensureDir(listenerDir(paths));
   writeJsonAtomic(queuedFile(paths, sessionId),
@@ -133,9 +157,9 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
   const args = queueArgs(sessionId, due.length);
   inFlight.add(sessionId);
   lane = lane.then(() => runQueue(deps, args)).then(
-    () => note(paths, now, sessionId, ids(due), "wake"),
+    () => decide(due, "wake"),
     (error: unknown) => {
-      note(paths, now, sessionId, ids(due), "queue-failed");
+      decide(due, "queue-failed");
       log(`kherep-node: codex queue for ${sessionId} failed: ${String((error as Error).message ?? error)}`);
     },
   ).catch((error: unknown) => {

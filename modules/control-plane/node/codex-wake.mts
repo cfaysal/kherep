@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import { audit, bypassesPermissions, isPlainSessionId, takeTurn, type AutonomyAction } from "./autonomy.mts";
+import { audit, bypassesPermissions, isPlainSessionId, takeTurn, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
 import { resumeArgs, stillRuns } from "./codex-process.mts";
 import { spawnRun } from "./codex-runner.mts";
 import type { NodePaths } from "./config.mts";
@@ -39,11 +39,12 @@ export function pruneNoted(paths: NodePaths): void {
   const present = new Set(messageIds(paths.inbox));
   for (const id of noted.keys()) if (!present.has(id)) noted.delete(id);
 }
-export function note(paths: NodePaths, now: number, sessionId: string, messageIds: string[], action: AutonomyAction): void {
+export function note(paths: NodePaths, now: number, sessionId: string, messageIds: string[], action: AutonomyAction,
+  grant?: WakeGrant): void {
   const fresh = messageIds.filter((id) => noted.get(id) !== action);
   if (fresh.length === 0) return;
   for (const id of fresh) noted.set(id, action);
-  audit(paths, now, sessionId, fresh, action);
+  audit(paths, now, sessionId, fresh, action, grant);
 }
 
 export async function pollCodexInbound(deps: RunnerDeps, log: (line: string) => void = () => {}): Promise<void> {

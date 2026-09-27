@@ -13,11 +13,13 @@ import { parseSessionsPolicy, type SessionsPolicy } from "./session-policy.mts";
 // The optional messaging section (issue #31) lists which senders may leave a
 // message for which local session. Without a rule nothing is accepted.
 export interface AcceptRule { session: string; from: string[] }
+// codexApp (issue #82): also wake the current Codex desktop app session (codex-app.mts).
+export interface WakePolicy { sessions: string[]; codexApp?: boolean }
 export interface NodePolicy {
   version: 1;
   allowedCommands: Phase1Command[];
   messaging?: { accept: AcceptRule[] };
-  wake?: { sessions: string[] };
+  wake?: WakePolicy;
   sessions?: SessionsPolicy;
 }
 
@@ -103,12 +105,15 @@ export function acceptsMessage(policy: NodePolicy, toSession: string, fromNodeId
 // The optional wake section (issue #31, operator decision 2026-09-25): waking
 // idle sessions is opt-in per node and per session. Anything but enabled true
 // with a non-empty list of session ids or names disables it (fail closed);
-// "*" matches every session, but only where it is written.
-function parseWake(section: unknown): { sessions: string[] } | null {
+// "*" matches every session, but only where it is written. codexApp must be a
+// boolean when present; with codexApp true the list may be empty or absent.
+function parseWake(section: unknown): WakePolicy | null {
   if (typeof section !== "object" || section === null) return null;
-  const { enabled, sessions } = section as { enabled?: unknown; sessions?: unknown };
-  if (enabled !== true || !Array.isArray(sessions) || sessions.length === 0 || !sessions.every(isSessionRef)) return null;
-  return { sessions: [...sessions] as string[] };
+  const { enabled, sessions, codexApp } = section as { enabled?: unknown; sessions?: unknown; codexApp?: unknown };
+  if (enabled !== true || (codexApp !== undefined && typeof codexApp !== "boolean")) return null;
+  const list = sessions === undefined && codexApp === true ? [] : sessions;
+  if (!Array.isArray(list) || !list.every(isSessionRef) || (list.length === 0 && codexApp !== true)) return null;
+  return { sessions: [...list] as string[], ...(codexApp ? { codexApp: true } : {}) };
 }
 
 // refs: the session id and its current name, if any.

@@ -34,11 +34,15 @@ export const isPlainSessionId = (value: unknown): value is string =>
 
 export const bypassesPermissions = (permissionMode: unknown): boolean => permissionMode === "bypassPermissions";
 
-// One line per decision: ids and the action, never message text.
-export function audit(paths: NodePaths, now: number, sessionId: string, messageIds: string[], action: AutonomyAction): void {
+// Why a session not in wake.sessions may be woken: "codexApp" (codex-app.mts).
+export type WakeGrant = "codexApp";
+
+// One line per decision: ids, the action and any grant, never message text.
+export function audit(paths: NodePaths, now: number, sessionId: string, messageIds: string[], action: AutonomyAction,
+  grant?: WakeGrant): void {
   ensureDir(paths.dir);
-  fs.appendFileSync(wakeAudit(paths), `${JSON.stringify({ ts: new Date(now).toISOString(), sessionId, messageIds, action })}\n`,
-    { mode: 0o600 });
+  fs.appendFileSync(wakeAudit(paths), `${JSON.stringify({ ts: new Date(now).toISOString(), sessionId, messageIds, action,
+    ...(grant ? { grant } : {}) })}\n`, { mode: 0o600 });
 }
 
 // "spacing": the last turn is too recent; "exhausted": an hour or day window is
