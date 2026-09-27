@@ -25,10 +25,18 @@ import { cliCommand } from "./msg-cli.mts";
 //   limit where Claude's 8 KB could cross it.
 // - No documented environment variable carries the session id, so the reply
 //   command passes it as --from.
+// - The msg command writes into the node's outbox, which the Codex desktop
+//   app's sandbox does not make writable (measured 2026-09-27, issue #72). The
+//   installed prefix rule (codex/lib/control-plane-rules.mts) runs it outside
+//   the sandbox without asking, but only for an escalation request, so the
+//   context says to request escalation right away instead of failing first.
 
 export const CODEX_CONTEXT_BYTES = 6 * 1024;
 export const CODEX_STOP_REASON = "Kherep: new messages from other agent sessions arrived for this session. "
   + "They are shown as developer context; decide whether they need an answer, otherwise stop.";
+export const CODEX_ESCALATION_NOTE = "Run the msg command on its own, not in a pipeline or script, and request escalated "
+  + "permissions (sandbox_permissions \"require_escalated\") on the first attempt: it writes outside the sandbox, and the "
+  + "installed Kherep rule approves msg send, sessions, inbox and status without asking the user.";
 
 // The hook's stdout for one Codex input: empty when there is nothing to say.
 // On a machine without an enrolled node it writes nothing at all.
@@ -43,10 +51,13 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
   if (event === "SessionStart") {
     const cli = deps.replyCommand ?? cliCommand();
     return contextOutput(event, `Kherep messaging: this session's id is ${sessionId}. To message another session: `
-      + `${cli} msg send --from ${sessionId} <node>/<session> -- <text>. \`${cli} msg sessions\` lists sessions.`);
+      + `${cli} msg send --from ${sessionId} <node>/<session> -- <text>. \`${cli} msg sessions\` lists sessions. `
+      + CODEX_ESCALATION_NOTE);
   }
   if (event === "UserPromptSubmit") {
-    return contextOutput(event, deliveryContext(event, refs, { maxBytes: CODEX_CONTEXT_BYTES, ...deps, replyFrom: sessionId }));
+    const maxBytes = CODEX_CONTEXT_BYTES - Buffer.byteLength(CODEX_ESCALATION_NOTE) - 1;
+    const context = deliveryContext(event, refs, { maxBytes, ...deps, replyFrom: sessionId });
+    return contextOutput(event, context && `${context}\n${CODEX_ESCALATION_NOTE}`);
   }
   const mine = sessionInbox(deps.paths, refs);
   confirmOffered(deps.paths, mine);
