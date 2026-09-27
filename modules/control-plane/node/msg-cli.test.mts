@@ -125,6 +125,30 @@ test("msg send writes an outbox record from this session's name and prints the m
   assert.equal((await run(setup(t, null), ["send", "node-b/docs", "x"])).code, 1);
 });
 
+test("msg send reaches a full session id the directory does not list on an online node, and only that (issue #107)", async (t) => {
+  const paths = setup(t);
+  const closed = "1f0e2c9a-6d0b-4c11-9f39-2a77c1d4e8b5";
+  for (const target of [`node-b/${closed}`, `${PEER}/${closed}`]) {
+    const sent = await run(paths, ["send", target, "--", "still there?"]);
+    assert.equal(sent.code, 0, sent.err);
+    assert.equal(sent.err, "kherep-node msg: note: session not listed on node-b; the node decides whether it can deliver");
+    assert.deepEqual(getOutbox(paths, sent.out)?.to, { nodeId: PEER, session: closed });
+  }
+  // A listed session gets no note.
+  assert.equal((await run(paths, ["send", "node-b/docs", "x"])).err, "");
+  for (const [target, pattern] of [
+    ["node-b/ghost", /unknown session on node-b "ghost"/], ["node-b/codex-2a77c1d4", /unknown session on node-b "codex-2a77c1d4"/],
+    [`node-b/${closed.toUpperCase()}`, /unknown session on node-b/], [`node-x/${closed}`, /unknown node "node-x"/],
+    [`node-c/${closed}`, /unknown session on node-c/],
+  ] as const) {
+    const refused = await run(paths, ["send", target, "x"]);
+    assert.equal(refused.code, 1, target);
+    assert.match(refused.err, pattern);
+  }
+  // attach and every other caller of resolveTarget keep needing a listed session.
+  assert.equal(resolveTarget(DIRECTORY, `node-b/${closed}`).ok, false);
+});
+
 test("msg send --reply-to answers the sender of an inbox message and --wait reports the answer", async (t) => {
   const paths = setup(t);
   // The incoming message is itself a reply at depth 2, so the answer is at depth 3.

@@ -280,6 +280,15 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- `msg send <node>/<full session id>` reaches a closed session (issue #107).
+  A full session id (a UUID, as Claude Code and Codex use) on a node the
+  directory lists as `online` is now sent even when the directory no longer
+  lists that session, with the note `session not listed on <node>; the node
+  decides whether it can deliver` on stderr. The target node decides as for
+  any message: its accept rules, then delivery, the closed-session fallback
+  (`messaging.resumeClosed`), or the refusal after 60 minutes. Names, labels,
+  `codex-<8>` and titles still need a listed session, an unknown node or a
+  node that is not online still fails, and `attach` is unchanged.
 - Windows installation with Claude Code installed through npm (issue #99): the
   plugin reconciliation no longer fails with `Claude marketplace list failed`
   when only the npm `claude`/`claude.cmd` shims are on `PATH`. Without
