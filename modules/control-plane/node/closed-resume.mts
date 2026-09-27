@@ -6,9 +6,9 @@ import { resumeArgs } from "./codex-process.mts";
 import { spawnRun } from "./codex-runner.mts";
 import { deliveryContext, frameRecords, sessionInbox } from "./deliver-core.mts";
 import { addLocalSession, readDirectory } from "./exchange.mts";
-import { markDelivered, markRetry, type InboxRecord } from "./inbox.mts";
+import { markDelivered, markRetry, readdress, type InboxRecord } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
-import { BACKGROUNDED, runClaude, startTask, type RunnerDeps } from "./session-runner.mts";
+import { agentRows, BACKGROUNDED, mapIds, runClaude, startTask, type RunnerDeps } from "./session-runner.mts";
 import { CLAUDE_RUNTIME } from "./sessions.mts";
 import { queueReport, senderOf, writeTask, type TaskRecord } from "./task-records.mts";
 import { wakeText } from "./wake-hook.mts";
@@ -23,9 +23,11 @@ import { wakeText } from "./wake-hook.mts";
 // background, pass its full session ID with `--resume`"; "On Claude Code
 // v2.1.257 or later, Claude Code either continues that session under the same
 // ID, or starts a copy under a new ID and prints a `note:` line explaining why
-// it couldn't continue in place." A copy would not find the inbox records
-// addressed to the original id, so it is stopped and a new intercom session
-// starts. /docs/en/sessions ("Permission mode on resume"): "Pass
+// it couldn't continue in place." The node looks the resumed session up in
+// `claude agents --json` at once and adopts a copy (issue #109): the task
+// record takes its id and the messages waiting for the original id are
+// readdressed to it. A copy whose id is not listed is stopped and a new
+// intercom session starts. /docs/en/sessions ("Permission mode on resume"): "Pass
 // `--permission-mode` or `--dangerously-skip-permissions` to override the
 // restored mode", so the resumed session runs in its recorded mode. The prompt
 // is the fixed wake text; the delivery hook of that turn offers the messages
@@ -44,24 +46,42 @@ function rerunRecord(deps: RunnerDeps, task: TaskRecord, cwd: string, now: numbe
   return { ...task, cwd, deadline: new Date(now + deps.policy.sessions!.maxRuntimeMinutes * 60_000).toISOString(), reason: undefined };
 }
 
-// task: an ended intercom session with a known session id.
+// task: an ended intercom session with a known session id. The record is
+// written before the run with mappingPendingSince (session-runner.mts
+// background), and restored if the resume fails.
 export async function resumeClaude(deps: RunnerDeps, task: TaskRecord, cwd: string, count: number, now: number): Promise<string | null> {
   const sessionId = task.sessionId!;
+  const pending: TaskRecord = { ...rerunRecord(deps, task, cwd, now), state: "started", mappingPendingSince: new Date(now).toISOString() };
+  writeTask(deps.paths, { ...pending, shortId: undefined }, now);
+  const failed = (reason: string): string => {
+    writeTask(deps.paths, task, now);
+    return reason;
+  };
   let output: string;
   try {
     output = await runClaude(deps, ["--resume", sessionId, "--bg", "--permission-mode", task.permissionMode, wakeText(count)], cwd);
   } catch (error) {
-    return reasonOf(error);
+    return failed(reasonOf(error));
   }
   const shortId = BACKGROUNDED.exec(output)?.[1];
-  if (!shortId) return "claude --resume printed no session id";
-  if (/^note:/im.test(output)) {
-    await runClaude(deps, ["stop", shortId]).catch(() => undefined);
-    return "claude continued the session as a copy under a new id";
+  if (!shortId) return failed("claude --resume printed no session id");
+  let row: Record<string, unknown> | undefined;
+  try {
+    row = (await agentRows(deps)).find((r) => r.id === shortId);
+  } catch {
+    // mapped later by the watch round
   }
-  const saved = writeTask(deps.paths, { ...rerunRecord(deps, task, cwd, now), shortId, state: "started" }, now);
-  queueReport(deps.paths, { taskId: saved.taskId, state: "started", sessionId });
-  addLocalSession(deps.paths, { sessionId, name: task.name });
+  // A copy (a `note:` line) whose new id is not listed cannot be adopted.
+  if (/^note:/im.test(output) && typeof row?.sessionId !== "string") {
+    await runClaude(deps, ["stop", shortId]).catch(() => undefined);
+    return failed("claude continued the session as a copy under a new id it did not list");
+  }
+  const saved = writeTask(deps.paths, mapIds({ ...pending, shortId }, row), now);
+  // A copy under a new id (issue #109) takes over the messages waiting for the original id.
+  const adopted = saved.sessionId ?? sessionId;
+  if (adopted !== sessionId) readdress(deps.paths.inbox, sessionId, adopted);
+  queueReport(deps.paths, { taskId: saved.taskId, state: "started", sessionId: adopted });
+  addLocalSession(deps.paths, { sessionId: adopted, name: task.name });
   return null;
 }
 

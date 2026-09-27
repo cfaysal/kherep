@@ -112,3 +112,22 @@ test("stop and continue only a task this node started", async (t) => {
   assert.match(resume?.args[5] ?? "", /^Follow-up for task 3f2a1b0c-.* from the operator via the Kherep Control Plane: one more thing/);
   assert.equal(node.reports()[0].state, "started");
 });
+
+// Issue #109: the record exists while claude starts the session, marked as
+// waiting for its mapping, so a wake listener armed meanwhile waits for it.
+test("the task record is written before the run with a pending mapping, cleared once the id is listed", async (t) => {
+  for (const listed of [true, false]) {
+    const node = taskNode(t);
+    const base = node.deps();
+    let during: ReturnType<typeof readTask> = null;
+    const exec: typeof base.exec = async (file, args, options) => {
+      if (args[0] === "--bg") during = readTask(node.paths, TASK);
+      if (args[0] === "agents" && !listed) throw new Error("the listing failed");
+      return base.exec!(file, args, options);
+    };
+    await startTask(startArgs(), { ...base, exec });
+    assert.deepEqual([during!.state, during!.mappingPendingSince, during!.shortId], ["started", new Date(node.deps().now!()).toISOString(), undefined]);
+    const after = readTask(node.paths, TASK)!;
+    assert.equal(after.mappingPendingSince, listed ? undefined : during!.mappingPendingSince, `listed ${listed}`);
+  }
+});

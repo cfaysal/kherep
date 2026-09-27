@@ -77,26 +77,34 @@ export function findRow(rows: Record<string, unknown>[], record: Pick<TaskRecord
   return rows.find((r) => record.shortId !== undefined && r.id === record.shortId) ?? rows.find((r) => r.name === record.name);
 }
 
+// A row with a session id confirms the mapping (mappingPendingSince, issue #109).
 export function mapIds(record: TaskRecord, row: Record<string, unknown> | undefined): TaskRecord {
-  const sessionId = typeof row?.sessionId === "string" ? row.sessionId : record.sessionId;
+  const confirmed = typeof row?.sessionId === "string" ? row.sessionId : undefined;
+  const sessionId = confirmed ?? record.sessionId;
   const shortId = typeof row?.id === "string" ? row.id : record.shortId;
-  return { ...record, ...(sessionId ? { sessionId } : {}), ...(shortId ? { shortId } : {}) };
+  const { mappingPendingSince, ...rest } = record;
+  return { ...(confirmed ? rest : record), ...(sessionId ? { sessionId } : {}), ...(shortId ? { shortId } : {}) };
 }
 
 // Runs `claude ... --bg ...` and records the task with the short id it
 // printed; the full session id follows from `claude agents --json --all`.
-async function background(deps: RunnerDeps, record: TaskRecord, args: string[]): Promise<TaskRecord> {
+// The record is written before the run with mappingPendingSince and no short
+// id (a launch in flight, task-watch.mts), so a wake listener the session arms
+// before its id is known waits for it (issue #109).
+async function background(deps: RunnerDeps, launched: TaskRecord, args: string[]): Promise<TaskRecord> {
+  const now = deps.now?.() ?? Date.now();
+  const record = writeTask(deps.paths, { ...launched, shortId: undefined, mappingPendingSince: new Date(now).toISOString() }, now);
   let output: string;
   try {
     output = await runClaude(deps, args, record.cwd);
   } catch (error) {
     const message = String((error as Error).message);
-    writeTask(deps.paths, { ...record, state: "failed", reason: trim(message) });
+    writeTask(deps.paths, { ...launched, state: "failed", reason: trim(message) });
     return refuse(deps, record.taskId, message);
   }
   const shortId = BACKGROUNDED.exec(output)?.[1];
   if (!shortId) {
-    writeTask(deps.paths, { ...record, state: "failed", reason: "no session id printed" });
+    writeTask(deps.paths, { ...launched, state: "failed", reason: "no session id printed" });
     return refuse(deps, record.taskId, `claude --bg printed no session id: ${trim(output)}`);
   }
   let mapped: TaskRecord = { ...record, shortId, state: "started" };

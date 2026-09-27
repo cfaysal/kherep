@@ -13,7 +13,7 @@ import { localSessionName } from "./exchange.mts";
 import { getMessage, readJson, writeJsonAtomic } from "./inbox.mts";
 import { launchMode, type LaunchVerdict } from "./launch-mode.mts";
 import { explicitlyListed, loadPolicy, wakeAllowed } from "./policy.mts";
-import { taskForSession } from "./task-records.mts";
+import { mappingPending, taskForSession, type TaskRecord } from "./task-records.mts";
 import { transcriptMode } from "./transcript-mode.mts";
 import { atReplyLimit, pending, rememberWoken } from "./wake-pending.mts";
 
@@ -107,16 +107,28 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
   // wake the session. Task grant (item 5): a session this node started for a
   // task may be woken by messages of that task, listed or not; the budget and
   // the permission mode below still apply.
+  // A session this node is starting or resuming may arm before the node has
+  // mapped its id (a copy after a resume gets a new one, issue #109): while a
+  // task record in the same directory waits for its mapping, the listener
+  // waits too and looks the grant up again at each poll. The grant itself
+  // only ever comes from the session id the node recorded.
   const policy = loadPolicy(readConfig(paths.config)?.policyFile ?? paths.policy);
-  const grant = policy.sessions?.enabled ? taskForSession(paths, sessionId) ?? undefined : undefined;
-  if (!policy.wake && !grant) return quiet;
-  const name = localSessionName(paths, sessionId);
-  const refs = name === undefined ? [sessionId] : [sessionId, name];
+  const grantFor = (): TaskRecord | undefined => policy.sessions?.enabled ? taskForSession(paths, sessionId) ?? undefined : undefined;
+  const mapping = (): boolean => policy.sessions?.enabled === true && mappingPending(paths, cwd, now());
+  let grant = grantFor();
+  if (!policy.wake && !grant && !mapping()) return quiet;
+  const refsOf = (): string[] => {
+    const name = localSessionName(paths, sessionId);
+    return name === undefined ? [sessionId] : [sessionId, name];
+  };
+  let refs = refsOf();
   const listed = wakeAllowed(policy, refs);
-  if (!listed && !grant) {
-    audit(paths, now(), sessionId, [], "not-allowlisted");
+  // Audited once, when the listener gives up; without a wake section quietly, as before.
+  const unlisted = (): WakeResult => {
+    if (policy.wake) audit(paths, now(), sessionId, [], "not-allowlisted");
     return quiet;
-  }
+  };
+  if (!listed && !grant && !mapping()) return unlisted();
   const starting = event === "SessionStart";
   let mode = given ?? (starting ? rememberedMode(paths, sessionId) : undefined);
   if (starting && mode === undefined) mode = (deps.transcriptMode ?? transcriptMode)(transcript);
@@ -161,6 +173,17 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
       release();
       audit(paths, now(), sessionId, [], "parent-gone");
       return quiet;
+    }
+    if (!listed && !grant) {
+      grant = grantFor();
+      if (!grant) {
+        if (now() >= deadline || !mapping()) {
+          release();
+          return unlisted();
+        }
+        continue;
+      }
+      refs = refsOf();
     }
     // Armed at UserPromptSubmit or compaction, the session is busy until
     // StopFailure marks the listener idle or the turn cannot still run; a turn

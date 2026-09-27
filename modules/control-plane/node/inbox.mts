@@ -159,6 +159,14 @@ export function markClosedAttempt(dir: string, messageId: string, now: number = 
   writeJsonAtomic(fileOf(dir, messageId), { ...record, ...moved, closedAttempt: new Date(now).toISOString() });
 }
 
+// Moves the waiting messages of a session to the copy Claude Code continued it
+// as under a new id (issue #109); closedTo keeps the session they were sent to.
+export function readdress(dir: string, from: string, to: string): string[] {
+  const moved = listInbox(dir, from).filter((r) => r.state === "accepted" || r.state === "offered");
+  for (const r of moved) writeJsonAtomic(fileOf(dir, r.messageId), { ...r, toSession: to, closedTo: r.closedTo ?? from });
+  return moved.map((r) => r.messageId);
+}
+
 // Refuses a message that still waits for its session; true when it did.
 export function markRefused(dir: string, messageId: string, reason: string): boolean {
   const record = getMessage(dir, messageId);

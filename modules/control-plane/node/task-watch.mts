@@ -1,7 +1,8 @@
 import type { TaskState } from "../protocol-tasks.mts";
 import { MAX_RUNTIME_REASON, watchCodexTasks } from "./codex-runner.mts";
+import { readdress } from "./inbox.mts";
 import { agentRows, findRow, mapIds, stopTask, type RunnerDeps } from "./session-runner.mts";
-import { isActive, listTasks, queueReport, writeTask } from "./task-records.mts";
+import { isActive, listTasks, mappingPendingAt, queueReport, writeTask } from "./task-records.mts";
 
 // The watch round for started task sessions (issue #31, item 5), run with the
 // daemon's session snapshot. The `state` values of `claude agents --json`
@@ -26,6 +27,8 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
     log(`kherep-node: task watch could not list sessions: ${String((error as Error).message ?? error)}`);
   }
   for (const record of active) {
+    // A launch in flight (session-runner.mts background, closed-resume.mts): its run maps it.
+    if (!record.shortId && mappingPendingAt(record, now)) continue;
     const row = rows ? findRow(rows, record) : undefined;
     const mapped = mapIds(record, row);
     if (now >= Date.parse(record.deadline)) {
@@ -51,7 +54,11 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
     }
     const next = agentState ?? record.state;
     const reported = next !== record.state || mapped.sessionId !== record.sessionId;
-    if (!reported && mapped.shortId === record.shortId) continue;
+    if (!reported && mapped.shortId === record.shortId && mapped.mappingPendingSince === record.mappingPendingSince) continue;
+    // An intercom session resumed as a copy under a new id (issue #109) takes over its waiting messages.
+    if (record.local === "intercom" && record.sessionId && mapped.sessionId && mapped.sessionId !== record.sessionId) {
+      readdress(deps.paths.inbox, record.sessionId, mapped.sessionId);
+    }
     const saved = writeTask(deps.paths, { ...mapped, state: next }, now);
     if (reported) queueReport(deps.paths, { taskId: saved.taskId, state: next, ...(saved.sessionId ? { sessionId: saved.sessionId } : {}) });
   }

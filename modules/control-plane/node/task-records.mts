@@ -41,6 +41,9 @@ export interface TaskRecord {
   // sent for it, its messages carry no task id, and taskForSession skips a
   // resumed session.
   local?: "intercom" | "resume";
+  // Set while Claude Code has been asked to start or resume the session and
+  // its session id is not confirmed by `claude agents --json` yet (issue #109).
+  mappingPendingSince?: string;
 }
 
 // The sender of a message as an intercom session's requestedBy records it.
@@ -106,6 +109,30 @@ export function taskForSession(paths: NodePaths, sessionId: string | undefined):
   }
   return listTasks(paths).find((t) => t.local !== "resume"
     && (t.sessionId === sessionId || t.name === sessionId || (name !== undefined && t.name === name))) ?? null;
+}
+
+// How long a wake listener without a grant waits for a pending mapping (issue #109).
+export const MAPPING_WINDOW_MS = 2 * 60_000;
+
+export const mappingPendingAt = (record: TaskRecord, now: number): boolean =>
+  record.mappingPendingSince !== undefined && now - Date.parse(record.mappingPendingSince) <= MAPPING_WINDOW_MS;
+
+const realPath = (p: string): string => {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return path.resolve(p);
+  }
+};
+const samePath = (a: string, b: string): boolean =>
+  process.platform === "win32" ? realPath(a).toLowerCase() === realPath(b).toLowerCase() : realPath(a) === realPath(b);
+
+// An active task or intercom session of this node in the directory cwd whose
+// session id is still being mapped: a session there that has no grant yet may
+// be that one, so its wake listener waits for the mapping instead of exiting.
+export function mappingPending(paths: NodePaths, cwd: unknown, now: number): boolean {
+  return typeof cwd === "string" && listTasks(paths).some((t) => t.local !== "resume" && isActive(t) && mappingPendingAt(t, now)
+    && samePath(t.cwd, cwd));
 }
 
 export function queueReport(paths: NodePaths, body: TaskReportBody): void {
