@@ -14,8 +14,9 @@ Use Kherep to give your agents consistent working rules, reusable skills and a s
 - **Model and tool routing:** choose available capabilities through operator-configured policies.
 - **MCP integration:** connect explicitly configured services through transport and authentication adapters.
 - **Local inference:** use configured local processing routes, including a separate path for private inputs.
-- **Central Brain:** a shared knowledge base in a dedicated Confluence space. The Claude and Codex observation agents file durable findings from completed turns as pages through the service-account brokers.
+- **Central Brain:** a shared knowledge base in a dedicated Confluence space. With a configured space and brokers, durable findings from completed turns become pages: the Claude observation agent files them itself, and the Codex observation agent returns candidates that the Maestro validates and, when authorized, publishes.
 - **Turn-completion observations:** after a substantial Claude turn a Stop hook has the Maestro dispatch `claude-obs`, and Codex can dispatch one bounded `codex-obs` pass; see [Codex integration](docs/CODEX.md#turn-completion-observations).
+- **Control Plane:** enrolled nodes connect to a Cloudflare Worker. Agent sessions on those nodes can exchange the messages the receiving node's policy accepts, an opt-in wake can resume an eligible idle session when one arrives, and on the operator's authority a node can start, continue or stop a Claude Code or Codex task session for the runtimes its policy enables; see [Control Plane](modules/control-plane/README.md) for prerequisites and platform limits.
 
 Backends and integrations are configured separately. Installing an adapter does not provision a model, MCP service or Confluence space.
 
@@ -40,7 +41,7 @@ Runtime adapters target Windows and macOS. See each component's documentation fo
 | [Installation](docs/INSTALLATION.md) | Claude setup, isolated preview, upgrades and rollback |
 | [Codex integration](docs/CODEX.md) | Codex installer options and runtime verification |
 | [Atlassian brokers](modules/atl-jira-brokers/README.md) | Jira and Confluence service-account operations, including the Central Brain space |
-| [Control Plane](modules/control-plane/README.md) | Cloudflare Worker and node daemon for node enrollment, liveness and read-only commands (Phase 1) |
+| [Control Plane](modules/control-plane/README.md) | Cloudflare Worker and node daemon for node enrollment, liveness, session messaging and task sessions |
 | [Contributing](CONTRIBUTING.md) | Source setup and test commands |
 | [Agent instructions](AGENTS.md) | Reading order and repository working rules |
 
@@ -56,6 +57,8 @@ Runtime adapters target Windows and macOS. See each component's documentation fo
 | `modules/atl-jira-brokers/` | Operator-configured Jira and Confluence service-account operations |
 | `modules/twg/` | Bounded Teamwork Graph reads |
 | `modules/control-plane/` | Control Plane Worker, node daemon and their shared protocol |
+| `lib/` | Shared helpers for `KHEREP_*` environment lookup and Windows workspace paths |
+| `assets/` | Branding banner |
 
 Keep personal configuration and credentials outside the checkout. See the component guides for configuration, permissions and supported integrations.
 
