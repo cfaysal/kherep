@@ -103,7 +103,8 @@ export async function runMsgArgs({ positionals, values }: MsgArgs, context: MsgC
 
 // The directory, with a warning when it is old. A missing one is an error,
 // never an empty list. Every read also asks the daemon for a fresh copy.
-function directoryFor(io: Io): DirectoryBody | null {
+// attach.mts reads the directory the same way.
+export function directoryFor(io: Pick<Io, "paths" | "now" | "err">): DirectoryBody | null {
   try {
     requestDirectory(io.paths);
   } catch {

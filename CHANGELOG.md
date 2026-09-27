@@ -11,6 +11,17 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Control Plane: `kherep-node attach <node>/<session>` resolves a session
+  through the directory like `msg send` and prints the command to open it on
+  its host (issue #81): `claude attach` and `claude logs` with the 8-character
+  short id for a Claude Code background session, a note for an interactive
+  one, and the thread title with `codex resume <thread id>` for Codex. An
+  optional operator-written `attach.json` in the node's `control-plane`
+  directory maps a node to an SSH target, which prefixes each command with
+  `ssh -t <target>`; a session on this node gets no prefix. The command only
+  prints; it runs nothing, opens no connection, and no session content
+  travels through the Worker.
+
 - Control Plane: `msg sessions` shows the Codex thread title the Codex app
   shows next to the session name, quoted, on the listing node and on peer
   nodes (issue #88). The daemon reads it from `session_index.jsonl` in the

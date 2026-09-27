@@ -405,6 +405,7 @@ The config directory is `KHEREP_CONFIG_DIR` when set, otherwise `%APPDATA%\khere
 | `codex-tasks/` | Per Codex task: `events.jsonl`, `last-message.txt`, `stderr.log` and `exit.json` of its latest run, see [Codex tasks](#codex-tasks) |
 | `task-reports/` | `task.report` bodies waiting for the daemon (from the runner, the watch round and `task done`) |
 | `task-requests/` | `task new` requests with the Worker's answer |
+| `attach.json` | Optional, written by the operator and only read by the node: SSH targets for `attach`, see [Attach](#attach) |
 
 ### Node messaging
 
@@ -434,6 +435,35 @@ Messaging is off unless `policy.json` accepts it. The optional `messaging` secti
 Runtime discovery checks `PATH` for `claude` and `codex` without running them, then the per-user and package-manager directories that a service's minimal `PATH` (a macOS LaunchAgent, for example) lacks: `~/.local/bin`, `~/.claude/local`, `~/.npm-global/bin`, `/opt/homebrew/bin` and `/usr/local/bin`, or `%APPDATA%\npm` on Windows. Session discovery uses the same lookup; a Windows npm shim (`claude.cmd`) is replaced by the native `claude.exe` shipped next to it, a shim without one runs through `cmd.exe` with a fixed command line, any other executable runs without a shell. Runtime discovery also probes LM Studio (`127.0.0.1:1234`) and Ollama (`127.0.0.1:11434`) on loopback only.
 
 The control URL must be an `https` origin; plain `http` is accepted only for a loopback development Worker.
+
+### Attach
+
+`kherep-node attach <node>/<session>` (issue #81, operator decision of 2026-09-27, scope A) prints the command that opens a session on the host where it runs. It never runs the command and never opens a connection. No session content travels through the Worker: the command only reads the local directory, and the session is opened by the printed command over whatever path the operator uses to reach that host.
+
+- The target resolves through the directory exactly as for `msg send`: the node by id or name, the session by full id, a unique name or label, or `codex-<8>`. A Codex thread title is never an address. An unknown or ambiguous target fails with the same message as `msg send`.
+- Claude Code: `claude attach <short id>` takes the session over, `claude logs <short id>` follows it read-only. The short id is the first 8 characters of the session id, as `claude agents --json` shows it for a background session. A session the directory reports with `kind` `interactive` gets no command, only a note that it can be opened only where it runs. A session with `kind` `background`, or with a label (a task session the node started with `--bg`), gets both commands. For any other session both commands are printed with a one-line caveat that attach works only for a background session.
+- Codex: the thread title, when the directory has one, and `codex resume <full thread id>`.
+- Output is plain text: a header line and notes start with `#`, every other line is one command. An id that is not safe to print as a command argument is refused, and a runtime without an attach command fails.
+
+The SSH prefix comes from the optional file `attach.json` in the node's `control-plane` directory. The operator writes it; the node never does.
+
+```json
+{ "ssh": { "mac": "me@mac.example.test", "00000000-0000-4000-8000-0000000000cc": "build-host" } }
+```
+
+- A key is a node name or node id; the id wins when both map the node. A value is an SSH host alias, host name or `user@host` of 1 to 64 characters from letters, digits, `.`, `_`, `@` and `-`, not starting with `-`.
+- When the file maps the target node, each command is printed as `ssh -t <target> <command>`. A session on this node never gets a prefix.
+- A missing file means no prefix. A file that is not exactly this shape, including an unknown top-level key or an invalid target, is an error that names the file, and nothing is printed.
+
+Example with the mapping above:
+
+```text
+# mac (00000000-0000-4000-8000-0000000000cc) / intercom: claude@win (0f0e0d0c-1111-4222-8333-444455556666), claude-code, background session
+ssh -t me@mac.example.test claude attach 0f0e0d0c
+ssh -t me@mac.example.test claude logs 0f0e0d0c
+```
+
+Interactive `claude attach` over `ssh -t` is unverified.
 
 ## Tests
 
