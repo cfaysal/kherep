@@ -280,6 +280,19 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: operator Codex tasks (start and continue) no longer open
+  visible console windows on Windows and still survive a daemon restart
+  (issue #124). The daemon starts them detached through a small wrapper,
+  `node/codex-windowless.mts`, run with its own Node: codex runs as the
+  wrapper's attached child with all stdio piped, so Node starts it with
+  `CREATE_NO_WINDOW` and its shells and MCP servers share a console without
+  a window. The wrapper forwards the prompt, the events, stderr and codex's
+  exit code; the pid, start time and `exit.json` the daemon records are the
+  wrapper's, and `taskkill /T` on it ends codex and its children. Intercom
+  runs and macOS and Linux are unchanged. `conhost.exe --headless` was
+  measured and rejected: codex's stdout arrives as terminal escape sequences,
+  the console host ends when its input closes and exits 0 whatever the exit
+  code of codex.
 - Control Plane: finished Codex tasks settle on Windows (issue #121). The
   start-time query exited 1 for a pid that had ended, so the watch took an
   ended process for a failed read: the task stayed `started`, the messages

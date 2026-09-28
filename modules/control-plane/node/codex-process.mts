@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { PermissionMode } from "../protocol-tasks.mts";
-import { codexCommand } from "./codex-binary.mts";
+import { codexCommand, type CodexCommand } from "./codex-binary.mts";
 import type { McpList } from "./codex-mcp.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
@@ -118,13 +118,25 @@ export const holdsChild = (pid: number | undefined): boolean => pid !== undefine
 // every run on other platforms, keep their own process group.
 export const detachCodex = (platform: NodeJS.Platform, intercom: boolean): boolean => !(intercom && platform === "win32");
 
+// Issue #124: a detached run on Windows (an operator task) starts through the
+// wrapper codex-windowless.mts, run with this Node: the wrapper is detached
+// and survives a daemon restart, codex runs attached to it in a console
+// without a window. The pid, start time and exit code the daemon records are
+// the wrapper's; it ends when codex ends, exits with codex's code, and
+// `taskkill /T` on it reaches codex and its children.
+export const WINDOWLESS = path.join(import.meta.dirname, "codex-windowless.mts");
+export function launchCommand(command: CodexCommand, platform: NodeJS.Platform, detached: boolean, node: string = process.execPath): CodexCommand {
+  return platform === "win32" && detached ? { file: node, args: [WINDOWLESS, command.file, ...command.args] } : command;
+}
+
 // Starts codex (detached in its own process group unless told otherwise),
 // writes the prompt to its stdin and closes it, and sends stdout (the events)
 // and stderr into the task's files; exit.json records how it ended while this
 // daemon runs. Resolves with the pid once it runs.
 export async function spawnCodex(deps: CodexDeps, file: string, args: string[], cwd: string, files: CodexFiles,
   env: NodeJS.ProcessEnv, prompt: string, detached = true): Promise<number> {
-  const command = codexCommand(file, args, deps.platform ?? process.platform);
+  const platform = deps.platform ?? process.platform;
+  const command = launchCommand(codexCommand(file, args, platform), platform, detached);
   ensureDir(files.dir);
   for (const f of [files.lastMessage, files.exit]) fs.rmSync(f, { force: true });
   const out = fs.openSync(files.events, "w", 0o600);
