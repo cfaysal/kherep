@@ -133,7 +133,7 @@ function senderLabel(deps: RunnerDeps, from: InboxRecord["from"]): string | unde
 // framed as the delivery hook frames them (each with its --reply-to command),
 // as far as they fit; the messages it carries are delivered.
 export async function startIntercom(deps: RunnerDeps, target: ClosedTarget, records: InboxRecord[],
-  mode: PermissionMode): Promise<string | null> {
+  mode: PermissionMode, directive = fallbackDirective(target.sessionId)): Promise<string | null> {
   const from = records[0].from;
   const taskId = crypto.randomUUID();
   const label = senderLabel(deps, from);
@@ -145,7 +145,7 @@ export async function startIntercom(deps: RunnerDeps, target: ClosedTarget, reco
     return reasonOf(error);
   }
   const args: SessionStartArgs = { taskId, runtime: target.runtime, name: taskSessionName(taskId), prompt: text, permissionMode: mode,
-    cwd: target.cwd, requestedBy: senderOf(records[0]), directive: fallbackDirective(target.sessionId),
+    cwd: target.cwd, requestedBy: senderOf(records[0]), directive,
     ...(label ? { label } : {}) };
   try {
     await startTask(args, { ...deps, local: "intercom" });

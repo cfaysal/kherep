@@ -1268,6 +1268,9 @@ test("makes the Control Plane outbox a sandbox writable root without ever writin
   assert.ok(block.includes(`# Managed Kherep Codex Maestro parity projection.\n\n${table}\n\n[[hooks.`));
   assert.equal(headers(managed), 1);
   assert.doesNotMatch(managed, /control-plane[\\/]+"|policy\.json|node-ed25519/, "only the outbox, never the node directory");
+  // A Kherep permission profile showed up in the Codex app's approval menu and
+  // was reverted on 2026-09-27; the intercom works without one.
+  assert.doesNotMatch(managed, /^\s*\[\s*permissions[.\]]|^\s*default_permissions\s*=/m, "never a permission profile");
   assert.deepEqual(first.receipt.controlPlaneOutbox, { status: "managed" });
   assert.equal(read(install(installOptions).targets.config), managed, "a reinstall is idempotent");
 

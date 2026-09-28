@@ -3,42 +3,37 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { bypassesPermissions, isPlainSessionId, listenerDir, takeTurn, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
-import { codexHome, currentCodexApp } from "./codex-app.mts";
+import { codexAppRollout, codexHome, currentCodexApp } from "./codex-app.mts";
 import { codexCommand, findCodex } from "./codex-binary.mts";
+import { planAppDelivery, startAppDelivery } from "./codex-app-delivery.mts";
 import { signalGroup } from "./codex-process.mts";
 import { lastLine } from "./codex-output.mts";
 import { codexSessionRefs, isCodexSessionId, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { note, pruneNoted } from "./codex-wake.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { REOFFER_AFTER_MS, sessionInbox } from "./deliver-core.mts";
-import { messageIds, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
+import { getMessage, markOffered, markRetry, messageIds, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
 import type { NodePolicy } from "./policy.mts";
 import { explicitlyListed, wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { listTasks } from "./task-records.mts";
 import { killSwitch, wakeText } from "./wake-hook.mts";
 
-// Wakes an idle interactive Codex session (Codex TUI or app) for peer messages
-// (issue #66). Measured with Codex CLI 0.153.4: `codex queue --thread <id>
-// --message <text>` queued a message into an idle app session, which ran a
-// turn by itself within 15 s; the text becomes a user turn. The node queues
-// only a fixed pointer with the count, never peer text or sender names, as the
-// Claude wake hint does; the woken turn's UserPromptSubmit delivery hook
-// (deliver-codex.mts) then offers the framed messages as usual. Without that
-// hook (hook trust missing) the messages stay accepted.
-// Candidates are the Codex sessions the delivery hook recorded and saw within
-// 12 hours, minus the threads of Codex tasks, which are resumed instead
-// (codex-wake.mts); so the task grant never applies here. Guards as the Claude
-// wake's: the kill switch, the wake allowlist, never bypassPermissions, reply
-// depth, and the shared per-session budget. A session whose permission mode
-// the hook did not record is woken only when the allowlist names its full id
-// ("*" and codex- names are not enough). Each message causes at most one queue, and
-// a session gets no further queue while a queued message is still waiting,
-// for up to REOFFER_AFTER_MS; a message never offered after that waits for
-// the next prompt instead of being queued again.
-// wake.codexApp (issue #82) adds one grant in place of the allowlist: the
-// current Codex desktop app session (codex-app.mts), audited with
-// grant "codexApp"; the other guards stay as they are.
+// Wakes an idle interactive Codex TUI session with `codex queue` or sends
+// a Codex Desktop peer message through an intercom `codex exec` session.
+// On Windows with Codex CLI 0.157.1, queue leaves a pending Steer item in
+// the desktop app without starting a turn. When messaging.resumeClosed and
+// sessions policy authorize a process, the app path starts an intercom turn
+// instead, avoiding a pending item that could later duplicate the answer.
+// The app's own thread is never resumed by a second writer. The intercom
+// receives framed peer content on stdin; queue carries only the fixed wake
+// pointer and never peer text. See issue #117 and codex-app-delivery.mts.
+//
+// Candidates are recorded Codex sessions seen within 12 hours, except task
+// threads. Both paths use the kill switch, full-id allowlist or codexApp
+// grant, permission-mode check, reply-depth limit and shared budget. The
+// intercom path also passes sessions admission and process limits. At most
+// one attempt for a message is recorded before launch.
 
 export const QUEUE_TIMEOUT_MS = 30_000;
 const FORBIDDEN = /^(--dangerously-|--approve-for-me$|--add-dir$|--sandbox$|-s$|-c$|--config$)/;
@@ -143,6 +138,47 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
   if (deep.length > 0) decide(deep, "depth-limit");
   const due = fresh.filter((r) => (r.depth ?? 0) < MAX_REPLY_DEPTH);
   if (due.length === 0) return;
+  // A desktop app session gets an intercom turn instead of a queue item (see
+  // the header): a pending item could later be steered into a second answer.
+  let appDelivery = false;
+  if (policy.messaging?.resumeClosed === true) {
+    try {
+      appDelivery = codexAppRollout(deps.codex?.home ?? codexHome(), sessionId) === "ok";
+    } catch {
+      return decide(due, "intercom-refused");
+    }
+  }
+  if (appDelivery) {
+    if (mode === undefined) return decide(due, "permission-mode-unknown");
+    const decision = planAppDelivery(deps, due, readCodexSession(paths, sessionId)?.cwd, now);
+    if ("reason" in decision) return decide(due, "intercom-refused");
+    const plan = decision.plan;
+    inFlight.add(sessionId);
+    lane = lane.then(async () => {
+      const ready = plan.records.filter((r) => getMessage(paths.inbox, r.messageId)?.state === "accepted");
+      if (ready.length === 0) return;
+      const at = deps.now?.() ?? Date.now();
+      const budget = takeTurn(paths, sessionId, at);
+      if (budget === "spacing" || budget === "locked") return;
+      if (budget === "exhausted") return decide(ready, "budget");
+      ensureDir(listenerDir(paths));
+      writeJsonAtomic(queuedFile(paths, sessionId), { queued: { ...readQueued(paths, sessionId),
+        ...Object.fromEntries(ready.map((r) => [r.messageId, new Date(at).toISOString()])) } });
+      const claimed = ready.filter((r) => markOffered(paths.inbox, r.messageId, at) !== null);
+      if (claimed.length === 0) return;
+      try {
+        const failure = await startAppDelivery(deps, sessionId, { ...plan, records: claimed });
+        if (failure) throw new Error(failure);
+        decide(claimed, "intercom");
+      } catch {
+        for (const record of claimed) markRetry(paths.inbox, record.messageId);
+        decide(claimed, "intercom-failed");
+      }
+    }).catch(() => {
+      log(`kherep-node: Codex app delivery bookkeeping failed for ${sessionId}`);
+    }).finally(() => { inFlight.delete(sessionId); });
+    return;
+  }
   const budget = takeTurn(paths, sessionId, now);
   if (budget === "spacing" || budget === "locked") return;
   if (budget === "exhausted") return decide(due, "budget");
