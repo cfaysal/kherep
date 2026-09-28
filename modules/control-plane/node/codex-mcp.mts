@@ -104,8 +104,8 @@ export function runMcpList(file: string, codex: CodexDeps): McpList {
       if (child.pid !== undefined) (codex.signal ?? ((pid, signal) => signalGroup(pid, signal, platform)))(child.pid, "SIGKILL");
       settle({ code: null, stdout: "", stderr: `codex mcp list did not finish within ${Math.round(timeoutMs / 1000)} s` });
     }, timeoutMs);
-    child.stdout?.on("data", (chunk: Buffer) => { stdout = (stdout + chunk.toString("utf8")).slice(-1_048_576); });
-    child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString("utf8")).slice(-4096); });
+    child.stdout?.on("data", (chunk: Buffer) => { stdout = (stdout + chunk.toString()).slice(-1_048_576); });
+    child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4096); });
     child.once("error", (error) => settle({ code: null, stdout: "", stderr: error.message }));
     child.once("close", (code) => settle({ code, stdout, stderr }));
   });
