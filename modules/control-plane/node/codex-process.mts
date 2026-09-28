@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { PermissionMode } from "../protocol-tasks.mts";
 import { codexCommand } from "./codex-binary.mts";
+import type { McpList } from "./codex-mcp.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
 import { writeJsonAtomic } from "./inbox.mts";
@@ -52,6 +53,9 @@ export interface CodexDeps {
   home?: string;
   // Starts the process; tests record the options.
   spawn?: typeof spawn;
+  // Runs `codex <args>` for the MCP server list of intercom runs (codex-mcp.mts).
+  mcpList?: McpList;
+  mcpListTimeoutMs?: number;
 }
 
 export interface CodexFiles { dir: string; events: string; lastMessage: string; stderr: string; exit: string }

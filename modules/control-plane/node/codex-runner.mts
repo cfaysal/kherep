@@ -4,6 +4,7 @@ import {
 } from "./codex-process.mts";
 import { lastStderrLine, readEvents, readExit, readLastMessage, type CodexExit } from "./codex-output.mts";
 import { findCodex } from "./codex-binary.mts";
+import { intercomMcpOverrides } from "./codex-mcp.mts";
 import { ensureDir } from "./config.mts";
 import { getMessage, markDelivered, markRetry } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
@@ -38,8 +39,9 @@ export async function spawnRun(deps: RunnerDeps, record: TaskRecord, args: RunAr
   const file = (codex.findCodex ?? findCodex)();
   if (!file) throw new Error("codex is not installed on this node");
   ensureDir(deps.paths.outbox);
-  const detached = detachCodex(codex.platform ?? process.platform, record.local === "intercom");
-  const pid = await spawnCodex(codex, file, args(files, deps.paths.outbox), record.cwd, files,
+  const intercom = record.local === "intercom";
+  const detached = detachCodex(codex.platform ?? process.platform, intercom);
+  const pid = await spawnCodex(codex, file, [...(intercom ? await mcpOff(deps, record) : []), ...args(files, deps.paths.outbox)], record.cwd, files,
     codexEnv(deps.paths, record.sessionId ?? record.name), prompt, detached);
   let pidStart: string | undefined;
   try {
@@ -48,6 +50,18 @@ export async function spawnRun(deps: RunnerDeps, record: TaskRecord, args: RunAr
     // the watch reads it again while this daemon holds the child
   }
   return writeTask(deps.paths, { ...record, pid, pidStart }, deps.now?.());
+}
+
+// Issue #119: an intercom run keeps the user's Codex config but not its MCP
+// servers (codex-mcp.mts). Without a list it starts as before, logged.
+async function mcpOff(deps: RunnerDeps, record: TaskRecord): Promise<string[]> {
+  const found = await intercomMcpOverrides(deps.codex ?? {}, deps.now?.());
+  if ("reason" in found) {
+    deps.log?.(`kherep-node: task ${record.taskId}: MCP servers left as configured: ${found.reason}`);
+    return [];
+  }
+  if (found.unnamed > 0) deps.log?.(`kherep-node: task ${record.taskId}: ${found.unnamed} MCP server(s) without a bare name stay enabled`);
+  return found.args;
 }
 
 // spawnRun, then up to startWaitMs for thread.started (or the process's end)

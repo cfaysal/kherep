@@ -62,7 +62,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // Every successful listing also updates sessions.json for the session tools
   // and includes the Codex sessions the delivery hook recorded.
   const sessions = recordingSessions(paths, () => listSessions({ paths, codexHome: codexHome() }), log);
-  const runner: RunnerDeps = { paths, policy };
+  const runner: RunnerDeps = { paths, policy, log };
   const client = new NodeClient({
     nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions, runner),
     facts: detectFacts, runtimes: () => discoverRuntimes(), sessions,

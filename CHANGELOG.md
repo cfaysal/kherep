@@ -288,6 +288,21 @@ increments the minor version; every other release increments the patch version.
   and count as `delivered` only when its run completes the turn; a run a
   daemon restart ended offers them again and the next exchange round resumes
   the session for them.
+- Control Plane: daemon-started Codex intercom runs no longer start the MCP
+  servers of the user's Codex config (issue #119, `node/codex-mcp.mts`). The
+  run still loads that config, so its hooks and guards keep working, but gets
+  one `-c mcp_servers.<name>.enabled=false` per enabled server the config
+  defines, before `exec` (also for `exec resume`). The names come from
+  `codex mcp list --json`, run by the daemon without a shell; only bare key
+  names are used, and the overrides are checked once with
+  `codex <overrides> mcp list --json`, dropping each server codex rejects
+  (servers the desktop app or a plugin provides, which make codex fail at
+  startup when overridden). The result is cached per codex binary for
+  5 minutes. When the list cannot be determined the run starts as before and
+  the daemon log names the reason. Operator Codex tasks are unchanged.
+  Measured on Windows with Codex CLI 0.157.1: 10 of 11 enabled servers
+  disabled, local descendant processes of a probe run 22 before, 10 after,
+  with the app-provided `cua_repl` the only MCP server left.
 - Adopting a resumed intercom session as a copy no longer leaves the previous
   copy running (issue #111). The intercom task record notes the session it
   held before the resume (`retire`); once the new copy is adopted, right after
