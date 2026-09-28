@@ -38,7 +38,10 @@ async function wrapped(t: test.TestContext, args: string[], input: string): Prom
   fs.closeSync(err);
   child.stdin!.end(input);
   const code = await new Promise<number | null>((resolve) => { child.on("exit", (c) => resolve(c)); });
-  return { code, out: fs.readFileSync(outFile, "utf8"), err: fs.readFileSync(errFile, "utf8") };
+  // Node versions that still flag type stripping print an ExperimentalWarning
+  // for the wrapper itself; it is Node's line, not one the wrapper forwarded.
+  const nodeWarning = /^\(node:\d+\) ExperimentalWarning: .*\n|^\(Use `node --trace-warnings \.\.\.` .*\n/gm;
+  return { code, out: fs.readFileSync(outFile, "utf8"), err: fs.readFileSync(errFile, "utf8").replace(nodeWarning, "") };
 }
 
 test("the wrapper forwards stdin, stdout, stderr and the exit code", async (t) => {
