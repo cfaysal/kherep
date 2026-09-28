@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -44,7 +44,8 @@ test("only a Windows intercom run shares the daemon's console; operator tasks an
 test("spawnRun passes detached false only for an intercom record on win32", async (t) => {
   const node = taskNode(t, { runtimes: ["claude", "codex"] });
   const seen: { detached: unknown; windowsHide: unknown }[] = [];
-  const exited: Promise<unknown>[] = [];
+  // spawnCodex unrefs the child, so its exit event alone keeps no event loop alive: poll instead.
+  const children: ChildProcess[] = [];
   const record = (n: number, local?: "intercom"): TaskRecord => ({ taskId: taskId(n), runtime: "codex", name: `task-${n}`, cwd: node.workspace,
     permissionMode: "auto", state: "started", startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 3_600_000).toISOString(),
     updatedAt: new Date(T0).toISOString(), ...(local ? { local } : {}) });
@@ -53,12 +54,12 @@ test("spawnRun passes detached false only for an intercom record on win32", asyn
       spawn: ((_file: string, _args: string[], options: { detached?: boolean; windowsHide?: boolean }) => {
         seen.push({ detached: options.detached, windowsHide: options.windowsHide });
         const child = spawn(process.execPath, ["-e", ""], { ...options, cwd: node.workspace });
-        exited.push(new Promise((resolve) => { child.once("exit", resolve); }));
+        children.push(child);
         return child;
       }) as unknown as typeof spawn };
     await spawnRun({ ...node.deps(), codex }, record(n, local), () => ["exec"], "hello");
   }
-  await Promise.all(exited);
+  await waitFor(() => children.every((c) => c.exitCode !== null || c.signalCode !== null), "the spawned processes");
   assert.deepEqual(seen, [{ detached: false, windowsHide: true }, { detached: true, windowsHide: true }, { detached: true, windowsHide: true }]);
 });
 
