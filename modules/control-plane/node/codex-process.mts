@@ -153,10 +153,15 @@ export async function spawnCodex(deps: CodexDeps, file: string, args: string[], 
 // The start time of pid, or null when no such process exists. A failed read
 // throws: it must not look like an ended process. ps prints the start time
 // with a one-second resolution, in the C locale; Windows prints the file time.
+// Issue #121: with -ErrorAction SilentlyContinue powershell.exe exits 1 for a
+// pid that has ended, so that looked like a failed read. Only "no such
+// process" (ProcessCommandException) now exits 0 without output; any other
+// error, such as a start time that cannot be read, still exits non-zero.
 export function processStart(pid: number, platform: NodeJS.Platform = process.platform): string | null {
   if (platform === "win32") {
     const text = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-      `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { $p.StartTime.ToFileTimeUtc() }`],
+      `try { (Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc() } `
+      + "catch [Microsoft.PowerShell.Commands.ProcessCommandException] { exit 0 }"],
     { encoding: "utf8", windowsHide: true, timeout: 10_000 });
     return text.trim() || null;
   }
