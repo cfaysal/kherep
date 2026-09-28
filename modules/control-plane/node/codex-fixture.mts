@@ -28,6 +28,8 @@ const CLI = path.join(import.meta.dirname, "cli.mts");
 export const SCRIPT = (log: string): string => `#!${process.execPath}
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
+// codex mcp list --json (codex-mcp.mts): no MCP server, not logged as a run.
+if (argv.includes("mcp")) { process.stdout.write("[]\\n"); process.exit(0); }
 const stdin = fs.readFileSync(0, "utf8");
 const env = { KHEREP_CONFIG_DIR: process.env.KHEREP_CONFIG_DIR, KHEREP_SESSION_ID: process.env.KHEREP_SESSION_ID,
   CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID };

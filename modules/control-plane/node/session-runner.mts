@@ -45,6 +45,8 @@ export interface RunnerDeps {
   // Set for an intercom session the node starts on its own (issue #102):
   // the Worker does not know the task, so nothing is reported.
   local?: "intercom";
+  // The daemon log, for what a run could not apply (codex-mcp.mts).
+  log?: (line: string) => void;
 }
 
 // Rejects with the CLI's own stderr (or stdout), never with the command line,
