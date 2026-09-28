@@ -280,6 +280,14 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: daemon-started Codex intercom runs no longer open visible
+  console windows on Windows (part of issue #119). They start without
+  `detached` there and share the daemon's hidden console; operator Codex
+  tasks and other platforms stay detached. Such a run ends with the daemon,
+  so the messages of a new Codex intercom session now wait for it `offered`
+  and count as `delivered` only when its run completes the turn; a run a
+  daemon restart ended offers them again and the next exchange round resumes
+  the session for them.
 - Adopting a resumed intercom session as a copy no longer leaves the previous
   copy running (issue #111). The intercom task record notes the session it
   held before the resume (`retire`); once the new copy is adopted, right after

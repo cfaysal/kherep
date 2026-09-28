@@ -50,6 +50,8 @@ export interface CodexDeps {
   // The Codex home whose rollouts wake.codexApp reads (codex-app.mts);
   // CODEX_HOME or ~/.codex when absent.
   home?: string;
+  // Starts the process; tests record the options.
+  spawn?: typeof spawn;
 }
 
 export interface CodexFiles { dir: string; events: string; lastMessage: string; stderr: string; exit: string }
@@ -103,19 +105,28 @@ function guard(args: string[]): string[] {
 const held = new Map<number, ChildProcess>();
 export const holdsChild = (pid: number | undefined): boolean => pid !== undefined && held.has(pid);
 
-// Starts codex detached in its own process group, writes the prompt to its
-// stdin and closes it, and sends stdout (the events) and stderr into the task's
-// files; exit.json records how it ended while this daemon runs. Resolves with
-// the pid once it runs.
+// Issue #119: on Windows a detached codex has no console, so each console
+// child it starts (shell commands, MCP servers behind cmd.exe) opens a new
+// visible window. An intercom run the daemon starts on its own is therefore
+// not detached there: it shares the daemon's hidden console and, as measured
+// in the issue, ends when the daemon exits. Its messages then count as not
+// delivered and are offered again (codex-runner.mts). Operator tasks, and
+// every run on other platforms, keep their own process group.
+export const detachCodex = (platform: NodeJS.Platform, intercom: boolean): boolean => !(intercom && platform === "win32");
+
+// Starts codex (detached in its own process group unless told otherwise),
+// writes the prompt to its stdin and closes it, and sends stdout (the events)
+// and stderr into the task's files; exit.json records how it ended while this
+// daemon runs. Resolves with the pid once it runs.
 export async function spawnCodex(deps: CodexDeps, file: string, args: string[], cwd: string, files: CodexFiles,
-  env: NodeJS.ProcessEnv, prompt: string): Promise<number> {
+  env: NodeJS.ProcessEnv, prompt: string, detached = true): Promise<number> {
   const command = codexCommand(file, args, deps.platform ?? process.platform);
   ensureDir(files.dir);
   for (const f of [files.lastMessage, files.exit]) fs.rmSync(f, { force: true });
   const out = fs.openSync(files.events, "w", 0o600);
   const err = fs.openSync(files.stderr, "w", 0o600);
   try {
-    const child = spawn(command.file, command.args, { cwd, env, detached: true, stdio: ["pipe", out, err], windowsHide: true });
+    const child = (deps.spawn ?? spawn)(command.file, command.args, { cwd, env, detached, stdio: ["pipe", out, err], windowsHide: true });
     child.stdin?.on("error", () => {}); // a codex that exits before reading
     child.on("exit", (code, signal) => {
       held.delete(child.pid!);

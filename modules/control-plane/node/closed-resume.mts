@@ -3,11 +3,11 @@ import {
   intercomLabel, isTaskLabel, MAX_TASK_TEXT, taskSessionName, type PermissionMode, type SessionStartArgs, type TaskRuntime,
 } from "../protocol-tasks.mts";
 import { resumeArgs } from "./codex-process.mts";
-import { spawnRun } from "./codex-runner.mts";
+import { adoptOffered, spawnRun } from "./codex-runner.mts";
 import { retireCopies } from "./copy-retire.mts";
 import { deliveryContext, frameRecords, sessionInbox } from "./deliver-core.mts";
 import { addLocalSession, readDirectory } from "./exchange.mts";
-import { markDelivered, markRetry, readdress, type InboxRecord } from "./inbox.mts";
+import { getMessage, markClosedAttempt, markDelivered, markOffered, markRetry, readdress, type InboxRecord } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
 import { agentRows, BACKGROUNDED, mapIds, runClaude, startTask, type RunnerDeps } from "./session-runner.mts";
 import { CLAUDE_RUNTIME } from "./sessions.mts";
@@ -131,7 +131,8 @@ function senderLabel(deps: RunnerDeps, from: InboxRecord["from"]): string | unde
 
 // A new intercom session with the messages of one sender as its task text,
 // framed as the delivery hook frames them (each with its --reply-to command),
-// as far as they fit; the messages it carries are delivered.
+// as far as they fit; the messages it carries are delivered (for Codex once
+// its run completes the turn, see handOver).
 export async function startIntercom(deps: RunnerDeps, target: ClosedTarget, records: InboxRecord[],
   mode: PermissionMode, directive = fallbackDirective(target.sessionId)): Promise<string | null> {
   const from = records[0].from;
@@ -152,6 +153,25 @@ export async function startIntercom(deps: RunnerDeps, target: ClosedTarget, reco
   } catch (error) {
     return reasonOf(error);
   }
-  for (const record of carried) markDelivered(deps.paths.inbox, record.messageId);
+  if (target.runtime === "codex") handOver(deps, taskId, args.name, carried);
+  else for (const record of carried) markDelivered(deps.paths.inbox, record.messageId);
   return null;
+}
+
+// Issue #119: a Codex intercom run on Windows ends with the daemon, so its
+// messages are delivered only once it completes its turn (codex-runner.mts
+// adoptOffered). Until then they wait, offered, for the intercom session, which
+// the next exchange round resumes for them if the run ends without completing
+// (codex-wake.mts, task grant). A message answered meanwhile stays delivered.
+function handOver(deps: RunnerDeps, taskId: string, name: string, carried: InboxRecord[]): void {
+  const now = deps.now?.() ?? Date.now();
+  const ids: string[] = [];
+  for (const { messageId } of carried) {
+    const state = getMessage(deps.paths.inbox, messageId)?.state;
+    if (state !== "accepted" && state !== "offered") continue;
+    if (state === "accepted") markOffered(deps.paths.inbox, messageId, now);
+    markClosedAttempt(deps.paths.inbox, messageId, now, name);
+    ids.push(messageId);
+  }
+  adoptOffered(deps, taskId, ids);
 }

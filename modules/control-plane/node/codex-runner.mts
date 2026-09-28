@@ -1,6 +1,6 @@
 import { MAX_SUMMARY, type SessionContinueArgs, type SessionStopArgs } from "../protocol-tasks.mts";
 import {
-  codexEnv, codexFiles, holdsChild, resumeArgs, spawnCodex, startArgs, startTimeOf, stillRuns, terminate, type CodexFiles,
+  codexEnv, codexFiles, detachCodex, holdsChild, resumeArgs, spawnCodex, startArgs, startTimeOf, stillRuns, terminate, type CodexFiles,
 } from "./codex-process.mts";
 import { lastStderrLine, readEvents, readExit, readLastMessage, type CodexExit } from "./codex-output.mts";
 import { findCodex } from "./codex-binary.mts";
@@ -38,8 +38,9 @@ export async function spawnRun(deps: RunnerDeps, record: TaskRecord, args: RunAr
   const file = (codex.findCodex ?? findCodex)();
   if (!file) throw new Error("codex is not installed on this node");
   ensureDir(deps.paths.outbox);
+  const detached = detachCodex(codex.platform ?? process.platform, record.local === "intercom");
   const pid = await spawnCodex(codex, file, args(files, deps.paths.outbox), record.cwd, files,
-    codexEnv(deps.paths, record.sessionId ?? record.name), prompt);
+    codexEnv(deps.paths, record.sessionId ?? record.name), prompt, detached);
   let pidStart: string | undefined;
   try {
     pidStart = startTimeOf(codex, pid) ?? undefined;
@@ -124,6 +125,16 @@ function settleOffered(deps: RunnerDeps, record: TaskRecord, completed: boolean)
     if (completed) markDelivered(deps.paths.inbox, id);
     else markRetry(deps.paths.inbox, id);
   }
+}
+
+// Issue #119: the messages a new intercom run carries (closed-resume.mts
+// startIntercom) settle like those of a message run, when the watch round sees
+// it end. A run that ended before they were adopted settles them at once.
+export function adoptOffered(deps: RunnerDeps, taskId: string, ids: string[]): void {
+  const record = readTask(deps.paths, taskId);
+  if (!record || ids.length === 0) return;
+  if (isActive(record)) writeTask(deps.paths, { ...record, offered: [...(record.offered ?? []), ...ids] }, deps.now?.());
+  else settleOffered(deps, { ...record, offered: ids }, record.state === "done");
 }
 
 // How an ended run finished: done after turn.completed and exit 0 (or an exit
@@ -211,7 +222,9 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
       continue;
     }
     const result = outcome(files);
-    const saved = writeTask(deps.paths, { ...mapped, state: result.state, ...(result.state === "failed" ? { reason: result.reason } : {}) }, now);
+    settleOffered(deps, record, result.state === "done");
+    const saved = writeTask(deps.paths, { ...mapped, state: result.state, ...(result.state === "failed" ? { reason: result.reason } : {}),
+      offered: undefined }, now);
     queueReport(deps.paths, { taskId: saved.taskId, ...result, ...sessionOf(saved) });
   }
 }
