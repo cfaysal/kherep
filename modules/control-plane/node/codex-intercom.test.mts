@@ -9,7 +9,7 @@ import { deliverToClosed } from "./closed-delivery.mts";
 import { ACCEPT_ALL, deliver } from "./closed-fixture.mts";
 import { fakeCodexBin, THREAD, waitFor } from "./codex-fixture.mts";
 import { readExit } from "./codex-output.mts";
-import { codexFiles, detachCodex, type CodexDeps } from "./codex-process.mts";
+import { codexFiles, detachCodex, WINDOWLESS, type CodexDeps } from "./codex-process.mts";
 import { spawnRun, watchCodexTasks } from "./codex-runner.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
@@ -41,9 +41,9 @@ test("only a Windows intercom run shares the daemon's console; operator tasks an
   assert.equal(detachCodex("darwin", true), true);
 });
 
-test("spawnRun passes detached false only for an intercom record on win32", async (t) => {
+test("spawnRun passes detached false only for an intercom record on win32, and wraps only the detached win32 run (issue #124)", async (t) => {
   const node = taskNode(t, { runtimes: ["claude", "codex"] });
-  const seen: { detached: unknown; windowsHide: unknown }[] = [];
+  const seen: { detached: unknown; windowsHide: unknown; wrapped: boolean }[] = [];
   // spawnCodex unrefs the child, so its exit event alone keeps no event loop alive: poll instead.
   const children: ChildProcess[] = [];
   const record = (n: number, local?: "intercom"): TaskRecord => ({ taskId: taskId(n), runtime: "codex", name: `task-${n}`, cwd: node.workspace,
@@ -51,8 +51,8 @@ test("spawnRun passes detached false only for an intercom record on win32", asyn
     updatedAt: new Date(T0).toISOString(), ...(local ? { local } : {}) });
   for (const [n, platform, local] of [[1, "win32", "intercom"], [2, "win32", undefined], [3, "linux", "intercom"]] as const) {
     const codex: CodexDeps = { platform, findCodex: () => "codex-fake", processStart: () => "t",
-      spawn: ((_file: string, _args: string[], options: { detached?: boolean; windowsHide?: boolean }) => {
-        seen.push({ detached: options.detached, windowsHide: options.windowsHide });
+      spawn: ((file: string, args: string[], options: { detached?: boolean; windowsHide?: boolean }) => {
+        seen.push({ detached: options.detached, windowsHide: options.windowsHide, wrapped: file === process.execPath && args[0] === WINDOWLESS });
         const child = spawn(process.execPath, ["-e", ""], { ...options, cwd: node.workspace });
         children.push(child);
         return child;
@@ -60,7 +60,8 @@ test("spawnRun passes detached false only for an intercom record on win32", asyn
     await spawnRun({ ...node.deps(), codex }, record(n, local), () => ["exec"], "hello");
   }
   await waitFor(() => children.every((c) => c.exitCode !== null || c.signalCode !== null), "the spawned processes");
-  assert.deepEqual(seen, [{ detached: false, windowsHide: true }, { detached: true, windowsHide: true }, { detached: true, windowsHide: true }]);
+  assert.deepEqual(seen, [{ detached: false, windowsHide: true, wrapped: false }, { detached: true, windowsHide: true, wrapped: true },
+    { detached: true, windowsHide: true, wrapped: false }]);
 });
 
 function closedCodexNode(t: test.TestContext) {
