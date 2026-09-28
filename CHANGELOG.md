@@ -280,6 +280,15 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: finished Codex tasks settle on Windows (issue #121). The
+  start-time query exited 1 for a pid that had ended, so the watch took an
+  ended process for a failed read: the task stayed `started`, the messages
+  its run carried stayed `offered`, and `could not stop task ...` repeated in
+  the daemon log. The query now returns no output and exit 0 only for "no
+  such process" and still fails for any other error. A run whose `exit.json`
+  the daemon recorded counts as ended without a start-time read, also past
+  its deadline, and is not signalled on stop; tasks already stuck `started`
+  with an `exit.json` settle on the first watch round after the upgrade.
 - Control Plane: daemon-started Codex intercom runs no longer open visible
   console windows on Windows (part of issue #119). They start without
   `detached` there and share the daemon's hidden console; operator Codex

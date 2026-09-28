@@ -108,7 +108,8 @@ export async function continueCodex(args: SessionContinueArgs, deps: RunnerDeps)
 export async function stopCodex(args: SessionStopArgs, deps: RunnerDeps, reason: string): Promise<{ taskId: string; state: string }> {
   const record = readTask(deps.paths, args.taskId)!;
   if (record.pid === undefined) throw new Error("the task's process is not known");
-  terminate(deps.codex ?? {}, record.pid, record.pidStart);
+  // A run whose exit this daemon recorded has nothing left to stop (issue #121).
+  if (readExit(codexFiles(deps.paths, record.taskId)) === null) terminate(deps.codex ?? {}, record.pid, record.pidStart);
   settleOffered(deps, record, false);
   const keep = record.state === "done" || record.running === true;
   const saved = writeTask(deps.paths, { ...record, ...(keep ? {} : { state: "stopped", reason }), running: undefined, offered: undefined },
@@ -191,7 +192,11 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
     }
     const threadId = record.sessionId ?? readEvents(files).threadId;
     const mapped: TaskRecord = { ...record, ...(threadId ? { sessionId: threadId } : {}) };
-    if (now >= Date.parse(record.deadline)) {
+    // Issue #121: exit.json exists only for a run this daemon started and saw
+    // end (spawnCodex removes it before each run), so such a run has ended,
+    // even past its deadline or when its start time cannot be read.
+    const ended = readExit(files) !== null;
+    if (!ended && now >= Date.parse(record.deadline)) {
       if (mapped.sessionId !== record.sessionId) writeTask(deps.paths, mapped, now);
       try {
         await stopCodex({ taskId: record.taskId }, deps, MAX_RUNTIME_REASON);
@@ -202,7 +207,7 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
     }
     let running: boolean;
     try {
-      running = stillRuns(codex, record.pid, record.pidStart);
+      running = !ended && stillRuns(codex, record.pid, record.pidStart);
     } catch (error) {
       log(`kherep-node: task ${record.taskId}: ${String((error as Error).message ?? error)}`);
       continue; // a failed read decides nothing
