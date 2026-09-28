@@ -97,6 +97,43 @@ export function codexNode(t: test.TestContext, sessions: Record<string, unknown>
   return { ...node, fake, runs, deps };
 }
 
+// The fake as a codex binary on any platform: on Windows behind an npm-style
+// codex.cmd shim, which codex-binary.mts runs through its launcher with this Node.
+export function fakeCodexBin(t: test.TestContext): { file: string; runs: () => FakeRun[]; child: () => number | null } {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-fake-codex-"));
+  const log = path.join(bin, "runs.jsonl");
+  let file = path.join(bin, "codex");
+  if (process.platform === "win32") {
+    const launcher = path.join(bin, "node_modules", "@openai", "codex", "bin");
+    fs.mkdirSync(launcher, { recursive: true });
+    fs.writeFileSync(path.join(launcher, "codex.js"), SCRIPT(log));
+    file = path.join(bin, "codex.cmd");
+    fs.writeFileSync(file, "@echo off\r\n");
+  } else {
+    fs.writeFileSync(file, SCRIPT(log), { mode: 0o755 });
+  }
+  const runs = (): FakeRun[] => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l) as FakeRun) : []);
+  const childFile = `${log}.child`;
+  const child = (): number | null => (fs.existsSync(childFile) ? Number(fs.readFileSync(childFile, "utf8")) : null);
+  t.after(() => {
+    for (const run of runs()) {
+      try {
+        process.kill(run.pid, "SIGKILL");
+      } catch {
+        // ended
+      }
+    }
+    try {
+      const pid = child();
+      if (pid) process.kill(pid, "SIGKILL");
+    } catch {
+      // ended
+    }
+    fs.rmSync(bin, { recursive: true, force: true });
+  });
+  return { file, runs, child };
+}
+
 // Polls until check is true, for processes that end on their own schedule.
 export async function waitFor(check: () => boolean, what: string, ms = 5_000): Promise<void> {
   const until = Date.now() + ms;
