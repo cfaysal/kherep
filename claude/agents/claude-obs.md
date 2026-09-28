@@ -56,6 +56,13 @@ A work item, report, page or brief that describes a measurement made in another 
 second-hand: reading that text in this turn measures the text, not the thing. Such a finding is
 `assumed`, even when the text says "measured".
 
+A title never claims more than its evidence label. Words such as "confirmed", "verified", "proven",
+"measured" or "works" appear in a title only on a page labelled `evidence-confirmed`. On an
+`assumed` page the title states the finding neutrally or names its source, for example
+"(operator-reported)". Search hits and links carry the title without the label, so a reader who
+sees only the title takes it for a measurement. On 2026-09-28 a page labelled `evidence-assumed`
+was filed with a title ending in "confirmed" and had to be renamed.
+
 You NEVER set an existing observation to `superseded` or `refuted`. You record a contradiction
 by naming the contradicted page in your new observation. Resolving it belongs to the working
 runtime, not to you.
