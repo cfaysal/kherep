@@ -9,7 +9,7 @@ import { ensureDir, type NodePaths } from "./config.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
 import { writeJsonAtomic } from "./inbox.mts";
 import { KHEREP_SESSION_ENV, SESSION_ENV } from "./msg-resolve.mts";
-import type { ProcessIdentity } from "./codex-stop.mts";
+import type { ProcessIdentity, ProcessRelation } from "./codex-stop.mts";
 import { withNodeOnPath } from "./task-env.mts";
 
 // The Codex processes of tasks (issue #63), from `codex exec --help` and
@@ -44,6 +44,7 @@ export interface CodexDeps {
   // Signals the process group of pid.
   signal?: (pid: number, signal: NodeJS.Signals) => void;
   processTree?: (root: number) => ProcessIdentity[];
+  processRelations?: () => ProcessRelation[];
   graceMs?: number;
   // How long a start waits for thread.started.
   startWaitMs?: number;
