@@ -232,16 +232,19 @@ test("a start time missing at spawn is read again while this daemon holds the ch
   assert.deepEqual(node.reports(), []);
 });
 
-test("a held child without start time is still stopped, at the max runtime too", posix, async (t) => {
+test("a held child without a readable identity is not falsely reported stopped at max runtime", posix, async (t) => {
   const node = codexNode(t, { maxRuntimeMinutes: 30 }, { processStart: () => { throw new Error("ps failed"); } });
   await startTask(codexArgs(TASK, { prompt: "work [sleep]" }), node.deps());
   node.reports();
   await watchTasks(node.deps());
   assert.deepEqual(node.reports(), [], "running: no conclusion");
   node.tick(30 * 60_000);
-  await watchTasks(node.deps());
-  assert.deepEqual(node.reports(), [{ taskId: TASK, state: "stopped", reason: "max runtime reached", sessionId: THREAD }]);
-  await waitFor(() => gone(node.runs()[0].pid), "the process");
+  const logs: string[] = [];
+  await watchTasks(node.deps(), (line) => logs.push(line));
+  assert.deepEqual(node.reports(), [], "an unverified stop produces no stopped report");
+  assert.equal(readTask(node.paths, TASK)?.state, "started");
+  assert.equal(gone(node.runs()[0].pid), false, "the process is not assumed stopped");
+  assert.match(logs.at(-1) ?? "", /could not stop task.*ps failed/);
 });
 
 test("after a daemon restart a run without start time fails instead of holding a slot", (t) => {
