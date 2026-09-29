@@ -6,6 +6,11 @@ requests and owner-control records in SQLite. Local node policy remains an
 additional execution gate. The [README](README.md#architecture) maps the existing
 modules and operator API.
 
+The Worker keeps one authenticated WebSocket per node identity. When a newer
+connection replaces it, the older daemon receives close code 4409, clears its
+connection timers and exits instead of reconnecting. Unknown or revoked identity
+code 4403 is terminal too; transport closes continue through the bounded backoff.
+
 ## Owner task control
 
 ```mermaid

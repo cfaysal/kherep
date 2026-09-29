@@ -476,6 +476,12 @@ node modules/control-plane/node/cli.mts node status
 node modules/control-plane/node/cli.mts daemon
 ```
 
+The Worker keeps one authenticated connection per node identity. A daemon whose
+connection is replaced by a newer connection for that identity exits on close
+code 4409 instead of reconnecting. Close code 4403 is also terminal; transient
+transport closes retain the bounded reconnect backoff. If the replacement was
+unintended, stop the newer daemon before restarting the intended one.
+
 The config directory is `KHEREP_CONFIG_DIR` when set, otherwise `%APPDATA%\kherep` on Windows, `~/Library/Application Support/kherep` on macOS and `$XDG_CONFIG_HOME/kherep` (default `~/.config/kherep`) elsewhere. The files live in its `control-plane/` subdirectory:
 
 | File | Content |
