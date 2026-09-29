@@ -13,6 +13,7 @@ const wrap = [
   (input: string): unknown => input,
   (input: string): unknown => ({ input }),
   (input: string): unknown => ({ patch: input }),
+  (input: string): unknown => ({ command: input }),
 ];
 function normalize(input: unknown): HookPayload[] {
   return normalizePayloads({ cwd, tool_name: "apply_patch", tool_input: input }, "pre-privacy");
@@ -71,6 +72,8 @@ test("keeps the complete patch and wrapper visible to privacy classification", (
   for (const input of [
     { input: patch(`${update}\n+${privatePath}`) },
     { input: patch(update), extra: privatePath },
+    { command: patch(`${update}\n+${privatePath}`) },
+    { command: patch(update), extra: privatePath },
   ]) {
     assert.ok(normalize(input).every(p => /Private material/.test(evaluate(p, env) ?? "")));
   }
@@ -79,7 +82,8 @@ test("keeps the complete patch and wrapper visible to privacy classification", (
 test("fails closed when patch framing or any target is missing or malformed", () => {
   for (const input of [null, {}, "", "ordinary text", { input: update },
     { input: "malformed", file_path: path.join(cwd, "public.mts") },
-    { command: patch(update), file_path: path.join(cwd, "public.mts") },
+    { command: "malformed", file_path: path.join(cwd, "public.mts") },
+    { source: patch(update), file_path: path.join(cwd, "public.mts") },
     patch(""), patch("*** Update File: \n@@\n-old\n+new"),
     patch(`${update}\n*** Delete File: `),
     patch("*** Move to: src/new.mts"),
