@@ -46,7 +46,7 @@ export function sessionContext(): string {
     "The banner alone proves nothing; name the concrete applied rule and completion evidence for non-trivial work.",
     "Root Maestro owns intent, routing, synthesis, and acceptance. Delegate only for material benefit.",
     "Live evidence outranks memory. Never invent cross-session continuity.",
-    "Default root tier is gpt-5.6-sol/xhigh; use terra/low-medium only for bounded support work.",
+    "Default root tier is gpt-6.1-sol/xhigh; use terra/low-medium only for bounded support work.",
     "Private material never enters Codex, cloud subagents, web, MCP, or connectors; use only an authorized direct local-inference path or stop.",
   ].join("\n");
 }
