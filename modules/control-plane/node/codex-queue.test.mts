@@ -9,6 +9,7 @@ import { processStart } from "./codex-process.mts";
 import { codexQueueIdle, guardQueue, pollCodexQueue, queueArgs } from "./codex-queue.mts";
 import { codexSessionName, legacyCodexSessionName, readCodexSession, recordCodexSession } from "./codex-sessions.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
+import { writeLocalSessions } from "./exchange.mts";
 import { getMessage, getMessageProgress, markOffered, storeMessage } from "./inbox.mts";
 import { T0, TASK } from "./task-fixture.mts";
 import { writeTask } from "./task-records.mts";
@@ -192,6 +193,9 @@ test("two sessions started in the same minute: their shared old name wakes neith
   const B = "01a0db01-1111-7000-8000-00000000bbbb";
   const node = wakeNode(t, [A, B], "default", A);
   recordCodexSession(node.paths, B, node.workspace, T0, "default");
+  writeLocalSessions(node.paths, [A, B].map((sessionId) => ({
+    sessionId, runtime: "codex", state: "active", name: codexSessionName(sessionId),
+  })), T0);
   const shared = deliver(node, "x", 0, legacyCodexSessionName(A));
   await poll(node);
   assert.deepEqual(queues(node), []);
