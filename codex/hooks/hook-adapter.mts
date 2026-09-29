@@ -69,9 +69,49 @@ export function patchPaths(text: unknown, cwd?: string): string[] {
   return found;
 }
 
+// Privacy checks need every actual target, including move destinations. Unlike
+// the best-effort post-hook scanner, ambiguous patch headers fail closed.
+function privacyPatchPaths(input: unknown, cwd?: string): string[] {
+  if (typeof input !== "string") return [];
+  const lines = input.trim().split(/\r?\n/);
+  if (lines[0] !== "*** Begin Patch" || lines.at(-1) !== "*** End Patch") return [];
+  const found = new Set<string>();
+  let moveAllowed = false;
+  for (const line of lines.slice(1, -1)) {
+    const operation = /^\*\*\* (Add|Update|Delete) File: (.+)$/.exec(line);
+    const move = /^\*\*\* Move to: (.+)$/.exec(line);
+    let value: string;
+    if (operation) {
+      value = operation[2];
+      moveAllowed = operation[1] === "Update";
+    } else if (move && moveAllowed) {
+      value = move[1];
+      moveAllowed = false;
+    } else {
+      moveAllowed = false;
+      if (line.startsWith("*** ") && line !== "*** End of File") return [];
+      continue;
+    }
+    if (!value.trim() || /[\x00-\x1f]/.test(value)) return [];
+    found.add(path.resolve(cwd || process.cwd(), value));
+  }
+  return [...found];
+}
+
 export function normalizePayloads(payload: HookPayload, phase = "pre"): HookPayload[] {
   const tool = String(payload.tool_name || "");
   const text = inputText(payload.tool_input);
+  if (tool === "apply_patch" && phase === "pre-privacy") {
+    const input = payload.tool_input;
+    const record = input && typeof input === "object" ? input as Record<string, unknown> : {};
+    const rawPatch = typeof input === "string" ? input : record.input ?? record.patch;
+    const paths = privacyPatchPaths(rawPatch, payload.cwd);
+    if (!paths.length) return [{ ...payload, tool_name: "Edit", tool_input: { original_input: input } }];
+    return paths.map((filePath) => ({
+      ...payload, tool_name: "Edit",
+      tool_input: { file_path: filePath, new_string: String(rawPatch).replace(/^[+-]/gm, ""), original_input: input },
+    }));
+  }
   if (phase === "post" && (PATCH_TOOLS.has(tool) || tool === "functions.exec")) {
     const paths = patchPaths(text, payload.cwd);
     if (paths.length) return paths.map((filePath) => ({
