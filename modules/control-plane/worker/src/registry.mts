@@ -142,13 +142,33 @@ export class Registry extends DurableObject<Env> {
   }
 
   replaceSessions(nodeId: string, sessions: SessionInfo[]): void {
+    const pending = new Map(sessions.map((session) => [session.sessionId, session]));
     const now = Date.now();
     this.ctx.storage.transactionSync(() => {
-      this.sql.exec("DELETE FROM sessions WHERE node_id = ?", nodeId);
-      for (const s of sessions) {
-        this.sql.exec(`INSERT OR REPLACE INTO sessions (node_id, session_id, runtime, state, started_at, name, cwd, kind, label, title,
-          updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, nodeId, s.sessionId, s.runtime, s.state, s.startedAt ?? null,
-          s.name ?? null, s.cwd ?? null, s.kind ?? null, s.label ?? null, s.title ?? null, now);
+      const existing = this.sql.exec(`SELECT session_id, runtime, state, started_at, name, cwd, kind, label, title
+        FROM sessions WHERE node_id = ?`, nodeId).toArray();
+      for (const row of existing) {
+        const sessionId = String(row.session_id);
+        const session = pending.get(sessionId);
+        if (!session) {
+          this.sql.exec("DELETE FROM sessions WHERE node_id = ? AND session_id = ?", nodeId, sessionId);
+          continue;
+        }
+        pending.delete(sessionId);
+        const unchanged = row.runtime === session.runtime && row.state === session.state
+          && row.started_at === (session.startedAt ?? null) && row.name === (session.name ?? null)
+          && row.cwd === (session.cwd ?? null) && row.kind === (session.kind ?? null)
+          && row.label === (session.label ?? null) && row.title === (session.title ?? null);
+        if (unchanged) continue;
+        this.sql.exec(`UPDATE sessions SET runtime = ?, state = ?, started_at = ?, name = ?, cwd = ?, kind = ?, label = ?, title = ?,
+          updated_at = ? WHERE node_id = ? AND session_id = ?`, session.runtime, session.state, session.startedAt ?? null,
+          session.name ?? null, session.cwd ?? null, session.kind ?? null, session.label ?? null, session.title ?? null, now, nodeId, sessionId);
+      }
+      for (const session of pending.values()) {
+        this.sql.exec(`INSERT INTO sessions (node_id, session_id, runtime, state, started_at, name, cwd, kind, label, title,
+          updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, nodeId, session.sessionId, session.runtime, session.state,
+          session.startedAt ?? null, session.name ?? null, session.cwd ?? null, session.kind ?? null, session.label ?? null,
+          session.title ?? null, now);
       }
     });
   }

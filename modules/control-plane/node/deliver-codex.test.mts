@@ -10,7 +10,7 @@ import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { CODEX_CONTEXT_BYTES, CODEX_ESCALATION_NOTE, CODEX_STOP_REASON, deliverForCodex } from "./deliver-codex.mts";
 import { MAX_OFFERS, REOFFER_AFTER_MS } from "./deliver-core.mts";
 import { hookRuntime } from "./deliver-hook.mts";
-import { getSent, recordSent, writeDirectory, writeOutbox } from "./exchange.mts";
+import { getSent, recordSent, writeDirectory, writeLocalSessions, writeOutbox } from "./exchange.mts";
 import { getMessage, readJson, storeMessage } from "./inbox.mts";
 
 const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
@@ -34,6 +34,7 @@ function setup(t: test.TestContext, enrolled = true): NodePaths {
   writeConfig(paths.config, { version: 1, controlUrl: "https://control.example.com", nodeId: "00000000-0000-4000-8000-0000000000aa",
     name: "node-a", publicKey: "x", privateKeyFile: paths.privateKey, policyFile: paths.policy, enrolledAt: new Date(0).toISOString() });
   writeDirectory(paths, { nodes: [{ nodeId: PEER, name: "node-b", status: "online" }], sessions: [], fetchedAt: new Date(0).toISOString() });
+  writeLocalSessions(paths, [{ sessionId: SELF, runtime: "codex", state: "active", name: NAME }]);
   return paths;
 }
 

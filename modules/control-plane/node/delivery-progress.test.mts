@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { listenerDir, listenerLock } from "./autonomy.mts";
+import { codexNode } from "./codex-fixture.mts";
+import { pollCodexQueue } from "./codex-queue.mts";
+import { codexSessionName, recordCodexSession } from "./codex-sessions.mts";
 import { observeClaudeDeliveryProgress } from "./delivery-progress.mts";
 import { writeLocalSessions } from "./exchange.mts";
-import { getMessageProgress, markOffered, storeMessage, writeJsonAtomic } from "./inbox.mts";
+import { getMessageProgress, markOffered, markReported, storeMessage, unreportedStatuses, writeJsonAtomic } from "./inbox.mts";
 import { T0, taskNode, TASK } from "./task-fixture.mts";
 import { ensureDir } from "./config.mts";
 import { writeTask } from "./task-records.mts";
 
 const SESSION = "8e1f0000-0000-4000-8000-000000000001";
+const SESSION_TWO = "8e1f0000-0000-4000-8000-000000000002";
 const PEER = { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "peer" };
 let sequence = 0;
 const id = (): string => `d138${(++sequence).toString(16).padStart(4, "0")}-0000-4000-8000-000000000000`;
@@ -72,4 +76,124 @@ test("a task association grants no wake while sessions are disabled", (t) => {
   const messageId = deliver(node, "idle", TASK);
   observeClaudeDeliveryProgress(node.deps());
   assert.equal(code(node, messageId), "wake-disabled");
+});
+
+test("ambiguous Claude aliases stay stable across order and receipts, then resolve", (t) => {
+  const node = taskNode(t);
+  const sessions = [
+    { sessionId: SESSION, runtime: "claude-code", state: "idle", name: "shared" },
+    { sessionId: SESSION_TWO, runtime: "claude-code", state: "working", name: "shared" },
+  ];
+  writeLocalSessions(node.paths, sessions, T0);
+  const accepted = id();
+  const offered = id();
+  for (const messageId of [accepted, offered]) {
+    storeMessage(node.paths.inbox, { messageId, from: PEER, toSession: "shared", text: "private",
+      createdAt: new Date(T0).toISOString() }, T0);
+  }
+  markOffered(node.paths.inbox, offered, T0);
+
+  observeClaudeDeliveryProgress(node.deps());
+  const first = getMessageProgress(node.paths.inbox, accepted)!;
+  const offeredFirst = getMessageProgress(node.paths.inbox, offered)!;
+  assert.equal(first.code, "ambiguous-target");
+  assert.equal(offeredFirst.code, "awaiting-turn-confirmation");
+  markReported(node.paths.inbox, accepted, "accepted", "accepted", T0, first.observedAt);
+  assert.deepEqual(unreportedStatuses(node.paths.inbox, T0).map((record) => record.messageId), [offered]);
+
+  node.tick(2_000);
+  writeLocalSessions(node.paths, [...sessions].reverse(), T0 + 2_000);
+  observeClaudeDeliveryProgress(node.deps());
+  assert.deepEqual(getMessageProgress(node.paths.inbox, accepted), first);
+  assert.deepEqual(getMessageProgress(node.paths.inbox, offered), offeredFirst);
+  assert.equal(unreportedStatuses(node.paths.inbox, T0 + 2_000).some((record) => record.messageId === accepted), false,
+    "a covering receipt remains settled when the resolution is unchanged");
+
+  node.tick(2_000);
+  writeLocalSessions(node.paths, [sessions[0]], T0 + 4_000);
+  observeClaudeDeliveryProgress(node.deps());
+  assert.equal(code(node, accepted), "wake-disabled");
+  assert.deepEqual(getMessageProgress(node.paths.inbox, offered), offeredFirst,
+    "an offered message keeps awaiting turn confirmation");
+});
+
+test("an exact Claude session id wins over another session's matching name", (t) => {
+  const node = taskNode(t);
+  const sessions = [
+    { sessionId: "collision", runtime: "claude-code", state: "idle", name: "exact" },
+    { sessionId: SESSION, runtime: "claude-code", state: "working", name: "collision" },
+  ];
+  writeLocalSessions(node.paths, [...sessions].reverse(), T0);
+  const messageId = id();
+  storeMessage(node.paths.inbox, { messageId, from: PEER, toSession: "collision", text: "private",
+    createdAt: new Date(T0).toISOString() }, T0);
+
+  observeClaudeDeliveryProgress(node.deps());
+  const first = getMessageProgress(node.paths.inbox, messageId)!;
+  assert.equal(first.code, "wake-disabled");
+  markReported(node.paths.inbox, messageId, "accepted", "accepted", T0, first.observedAt);
+
+  node.tick(2_000);
+  writeLocalSessions(node.paths, sessions, T0 + 2_000);
+  observeClaudeDeliveryProgress(node.deps());
+  assert.deepEqual(getMessageProgress(node.paths.inbox, messageId), first);
+  assert.equal(unreportedStatuses(node.paths.inbox, T0 + 2_000).length, 0);
+});
+
+test("a Claude name cannot shadow an exact Codex id across observer and queue polls", (t) => {
+  const node = codexNode(t);
+  const codexId = "01a0db01-0000-7000-8000-00000000c0de";
+  recordCodexSession(node.paths, codexId, node.workspace, T0, "default");
+  const sessions = [
+    { sessionId: SESSION, runtime: "claude-code", state: "working", name: codexId },
+    { sessionId: codexId, runtime: "codex", state: "active", name: codexSessionName(codexId) },
+  ];
+  writeLocalSessions(node.paths, sessions, T0);
+  const messageId = id();
+  storeMessage(node.paths.inbox, { messageId, from: PEER, toSession: codexId, text: "private",
+    createdAt: new Date(T0).toISOString() }, T0);
+
+  observeClaudeDeliveryProgress(node.deps());
+  assert.equal(getMessageProgress(node.paths.inbox, messageId), null, "the exact non-Claude id owns the address");
+  pollCodexQueue(node.deps());
+  const first = getMessageProgress(node.paths.inbox, messageId)!;
+  assert.equal(first.code, "wake-disabled");
+  markReported(node.paths.inbox, messageId, "accepted", "accepted", T0, first.observedAt);
+
+  node.tick(2_000);
+  writeLocalSessions(node.paths, [...sessions].reverse(), T0 + 2_000);
+  observeClaudeDeliveryProgress(node.deps());
+  pollCodexQueue(node.deps());
+  assert.deepEqual(getMessageProgress(node.paths.inbox, messageId), first);
+  assert.equal(unreportedStatuses(node.paths.inbox, T0 + 2_000).length, 0);
+  assert.equal(node.runs().length, 0);
+});
+
+test("a Claude and Codex shared name stays ambiguous across observer and queue polls", (t) => {
+  const node = codexNode(t);
+  const codexId = "01a0db01-0000-7000-8000-00000000f00d";
+  const alias = codexSessionName(codexId);
+  recordCodexSession(node.paths, codexId, node.workspace, T0, "default");
+  const sessions = [
+    { sessionId: SESSION, runtime: "claude-code", state: "idle", name: alias },
+    { sessionId: codexId, runtime: "codex", state: "active", name: alias },
+  ];
+  writeLocalSessions(node.paths, sessions, T0);
+  const messageId = id();
+  storeMessage(node.paths.inbox, { messageId, from: PEER, toSession: alias, text: "private",
+    createdAt: new Date(T0).toISOString() }, T0);
+
+  observeClaudeDeliveryProgress(node.deps());
+  pollCodexQueue(node.deps());
+  const first = getMessageProgress(node.paths.inbox, messageId)!;
+  assert.equal(first.code, "ambiguous-target");
+  markReported(node.paths.inbox, messageId, "accepted", "accepted", T0, first.observedAt);
+
+  node.tick(2_000);
+  writeLocalSessions(node.paths, [...sessions].reverse(), T0 + 2_000);
+  observeClaudeDeliveryProgress(node.deps());
+  pollCodexQueue(node.deps());
+  assert.deepEqual(getMessageProgress(node.paths.inbox, messageId), first);
+  assert.equal(unreportedStatuses(node.paths.inbox, T0 + 2_000).length, 0);
+  assert.equal(node.runs().length, 0);
 });

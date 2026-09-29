@@ -49,13 +49,22 @@ sequenceDiagram
 - `node/task-control-cli.mts` queues requests and distinguishes a status timeout
   before stop submission from a pending submitted stop.
 
+## Durable write budget
+
+The Registry reconciles each changed session snapshot inside one atomic transaction:
+new rows are inserted, absent rows are deleted, and existing rows are updated only
+when stored metadata differs. Duplicate ids keep the final snapshot entry.
+Session `updated_at` is the last metadata change, while directory `fetchedAt`
+records response freshness. A duplicate sequenced node frame may advance its
+cumulative acknowledgement, but it does not refresh liveness or dispatch again.
+
 ## Accepted-message delivery progress
 
 The target node reports optional fixed progress on the existing authenticated `message.status` path while the canonical state remains `accepted`. The Registry accepts it only from the stored target node, persists strictly newer observations in additive columns, relays the metadata-only projection to the sender, and clears it on a forward state transition. A same-state duplicate changes neither audit nor sender traffic.
 
 Delivery hooks own `inbox/<messageId>.json`; the daemon owns `inbox/progress/<messageId>.json`; Worker receipts remain in `inbox/receipts/<messageId>.json`. This split prevents a stale daemon read and write from restoring an older delivery state. A receipt settles progress only when `storedProgressAt` covers the current observation. Nodes connected to an older Worker back off before retrying an unacknowledged observation.
 
-Claude progress comes from the current successful session snapshot and freshly loaded node policy. Codex progress annotates the existing single queue or app-delivery attempt. Closed-session fallback annotates its existing start or resume path. These observations add no wake attempt, permission, transcript read, or message-body persistence.
+Claude progress comes from the current successful session snapshot and freshly loaded node policy. Each accepted message resolves once: an exact session id precedes names, a unique name resolves to one session, and a shared name produces one stable `ambiguous-target` observation. An already offered message remains `awaiting-turn-confirmation`. Codex progress annotates the existing single queue or app-delivery attempt. Closed-session fallback annotates its existing start or resume path. These observations add no wake attempt, permission, transcript read, or message-body persistence.
 ## Trust and data boundaries
 
 `sessions.ownTaskControl` defaults to false. Both nodes must advertise the dedicated
