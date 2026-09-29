@@ -166,3 +166,27 @@ jobs:
         run: npm test
       - name: Bundle check (wrangler deploy --dry-run, no credentials)
         run: npm run check:bundle
+
+  client-binding-probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+      - name: Install root TypeScript dependencies
+        run: npm ci
+      - name: Install probe dependencies
+        working-directory: modules/control-plane/client-binding-probe
+        run: npm ci --ignore-scripts
+      - name: Type check client binding probe
+        working-directory: modules/control-plane/client-binding-probe
+        run: npm run typecheck
+      - name: Test client binding probe
+        working-directory: modules/control-plane/client-binding-probe
+        run: npm test
