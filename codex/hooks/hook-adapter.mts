@@ -104,7 +104,7 @@ export function normalizePayloads(payload: HookPayload, phase = "pre"): HookPayl
   if (tool === "apply_patch" && phase === "pre-privacy") {
     const input = payload.tool_input;
     const record = input && typeof input === "object" ? input as Record<string, unknown> : {};
-    const rawPatch = typeof input === "string" ? input : record.input ?? record.patch;
+    const rawPatch = typeof input === "string" ? input : record.input ?? record.patch ?? record.command;
     const paths = privacyPatchPaths(rawPatch, payload.cwd);
     if (!paths.length) return [{ ...payload, tool_name: "Edit", tool_input: { original_input: input } }];
     return paths.map((filePath) => ({
