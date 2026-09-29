@@ -32,7 +32,7 @@ async function wrapped(t: test.TestContext, args: string[], input: string, useWr
   const errFile = path.join(dir, "err");
   const out = fs.openSync(outFile, "w");
   const err = fs.openSync(errFile, "w");
-  const child = spawn(process.execPath, useWrapper ? [WINDOWLESS, ...args] : args,
+  const child = spawn(useWrapper ? process.execPath : args[0]!, useWrapper ? [WINDOWLESS, ...args] : args.slice(1),
     { stdio: ["pipe", out, err], detached: true, windowsHide: true });
   fs.closeSync(out);
   fs.closeSync(err);
@@ -71,6 +71,11 @@ test("a wrapper whose program cannot start exits 1 with the reason on stderr", a
   const result = await wrapped(t, [path.join(os.tmpdir(), "kherep-no-such-codex.exe")], "");
   assert.equal(result.code, 1);
   assert.match(result.err, /ENOENT/);
+});
+
+test("the unwrapped control launches the supplied program", async (t) => {
+  const result = await wrapped(t, [process.execPath, "-e", "process.stdout.write('control\\n')"], "", false);
+  assert.deepEqual(result, { code: 0, out: "control\n", err: "" });
 });
 
 test("a stalled wrapper probe fails within its deadline", async (t) => {
