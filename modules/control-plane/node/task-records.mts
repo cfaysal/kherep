@@ -28,6 +28,8 @@ export interface TaskRecord {
   // instead of the name; the name stays task-<8>.
   label?: string;
   pid?: number; pidStart?: string;
+  // A confirmed operator request blocks autonomous message resumes until an explicit continue.
+  operatorStoppedAt?: string;
   // Codex: the inbox messages a run started for peer messages carries
   // (codex-wake.mts); settled as delivered or retry when that run ends.
   offered?: string[];

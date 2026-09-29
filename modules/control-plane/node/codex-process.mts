@@ -9,6 +9,7 @@ import { ensureDir, type NodePaths } from "./config.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
 import { writeJsonAtomic } from "./inbox.mts";
 import { KHEREP_SESSION_ENV, SESSION_ENV } from "./msg-resolve.mts";
+import type { ProcessIdentity } from "./codex-stop.mts";
 import { withNodeOnPath } from "./task-env.mts";
 
 // The Codex processes of tasks (issue #63), from `codex exec --help` and
@@ -42,8 +43,8 @@ export interface CodexDeps {
   processStart?: (pid: number) => string | null;
   // Signals the process group of pid.
   signal?: (pid: number, signal: NodeJS.Signals) => void;
+  processTree?: (root: number) => ProcessIdentity[];
   graceMs?: number;
-  schedule?: (run: () => void, ms: number) => void;
   // How long a start waits for thread.started.
   startWaitMs?: number;
   // How long a `codex queue` run may take (codex-queue.mts).
@@ -203,15 +204,16 @@ export function processStart(pid: number, platform: NodeJS.Platform = process.pl
 // taskkill for the process tree (/T; /F for SIGKILL). Either way it reaches
 // codex behind the npm launcher too. A process that is gone is no error.
 export function signalGroup(pid: number, signal: NodeJS.Signals, platform: NodeJS.Platform = process.platform,
-  run: (file: string, args: string[]) => unknown = (file, args) => execFileSync(file, args, { windowsHide: true, timeout: 10_000 })): void {
+  run: (file: string, args: string[]) => unknown = (file, args) => execFileSync(file, args, { windowsHide: true, timeout: 10_000 })): boolean {
   try {
     if (platform === "win32") {
       run("taskkill", ["/PID", String(pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])]);
     } else {
       process.kill(-pid, signal);
     }
+    return true;
   } catch {
-    // already gone
+    return false;
   }
 }
 
@@ -229,22 +231,3 @@ export const stillRuns = (deps: CodexDeps, pid: number | undefined, pidStart: st
 
 export const startTimeOf = (deps: CodexDeps, pid: number): string | null =>
   (deps.processStart ?? ((p) => processStart(p, deps.platform)))(pid);
-
-// SIGTERM now, SIGKILL after the grace period, each only after the identity
-// check, since a pid may have been reused by then. A child this daemon still
-// holds needs no check: its pid cannot be reused before it is reaped.
-export function terminate(deps: CodexDeps, pid: number, pidStart: string | undefined): boolean {
-  const ours = (): boolean => stillRuns(deps, pid, pidStart);
-  if (!ours()) return false;
-  const send = deps.signal ?? ((p, s) => signalGroup(p, s, deps.platform));
-  send(pid, "SIGTERM");
-  const later = deps.schedule ?? ((run, ms) => { setTimeout(run, ms).unref(); });
-  later(() => {
-    try {
-      if (ours()) send(pid, "SIGKILL");
-    } catch {
-      // cannot tell: no SIGKILL to a process that may not be ours
-    }
-  }, deps.graceMs ?? 5_000);
-  return true;
-}

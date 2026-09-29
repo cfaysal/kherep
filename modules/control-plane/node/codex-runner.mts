@@ -1,10 +1,11 @@
 import { MAX_SUMMARY, type SessionContinueArgs, type SessionStopArgs } from "../protocol-tasks.mts";
 import {
-  codexEnv, codexFiles, detachCodex, holdsChild, resumeArgs, spawnCodex, startArgs, startTimeOf, stillRuns, terminate, type CodexFiles,
+  codexEnv, codexFiles, detachCodex, holdsChild, resumeArgs, spawnCodex, startArgs, startTimeOf, stillRuns, type CodexFiles,
 } from "./codex-process.mts";
 import { lastStderrLine, readEvents, readExit, readLastMessage, type CodexExit } from "./codex-output.mts";
 import { findCodex } from "./codex-binary.mts";
 import { intercomMcpOverrides } from "./codex-mcp.mts";
+import { terminate } from "./codex-stop.mts";
 import { ensureDir } from "./config.mts";
 import { getMessage, markDelivered, markRetry } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
@@ -110,7 +111,8 @@ export async function continueCodex(args: SessionContinueArgs, deps: RunnerDeps)
   const cwd = resolveCwd(deps.policy.sessions, record.cwd, deps.realpath);
   if (!cwd.ok) throw new Error(cwd.reason);
   const prompt = frameFollowUp(args.taskId, args.prompt, deps.cli ?? taskCliCommand(deps.platform), "codex");
-  const restarted: TaskRecord = { ...record, cwd: cwd.cwd, state: "started", reason: undefined, pid: undefined, pidStart: undefined,
+  const { operatorStoppedAt: _operatorStoppedAt, ...resumable } = record;
+  const restarted: TaskRecord = { ...resumable, cwd: cwd.cwd, state: "started", reason: undefined, pid: undefined, pidStart: undefined,
     deadline: new Date(now + deps.policy.sessions.maxRuntimeMinutes * 60_000).toISOString() };
   const saved = await launch(deps, restarted, (files, outbox) => resumeArgs(threadId, record.permissionMode, files, outbox), prompt);
   return { taskId: saved.taskId, state: saved.state };
@@ -119,15 +121,21 @@ export async function continueCodex(args: SessionContinueArgs, deps: RunnerDeps)
 // Ends the process after the identity check (terminate). A task that already
 // reported done, or whose run was one for peer messages (running), keeps its
 // reported state and sends no report; only the process ends.
-export async function stopCodex(args: SessionStopArgs, deps: RunnerDeps, reason: string): Promise<{ taskId: string; state: string }> {
-  const record = readTask(deps.paths, args.taskId)!;
-  if (record.pid === undefined) throw new Error("the task's process is not known");
-  // A run whose exit this daemon recorded has nothing left to stop (issue #121).
-  if (readExit(codexFiles(deps.paths, record.taskId)) === null) terminate(deps.codex ?? {}, record.pid, record.pidStart);
+export async function stopCodex(args: SessionStopArgs, deps: RunnerDeps, reason: string,
+  operatorStop = reason === "stopped by the operator"): Promise<{ taskId: string; state: string }> {
+  let record = readTask(deps.paths, args.taskId)!;
+  const now = deps.now?.() ?? Date.now();
+  if (operatorStop && record.operatorStoppedAt === undefined) {
+    record = writeTask(deps.paths, { ...record, operatorStoppedAt: new Date(now).toISOString() }, now);
+  }
+  const exited = readExit(codexFiles(deps.paths, record.taskId)) !== null;
+  if (!exited) {
+    if (record.pid === undefined) throw new Error("the task's process is not known");
+    await terminate(deps.codex ?? {}, record.pid, record.pidStart);
+  }
   settleOffered(deps, record, false);
   const keep = record.state === "done" || record.running === true;
-  const saved = writeTask(deps.paths, { ...record, ...(keep ? {} : { state: "stopped", reason }), running: undefined, offered: undefined },
-    deps.now?.());
+  const saved = writeTask(deps.paths, { ...record, ...(keep ? {} : { state: "stopped", reason }), running: undefined, offered: undefined }, now);
   if (!keep) queueReport(deps.paths, { taskId: saved.taskId, state: "stopped", reason, ...sessionOf(saved) });
   return { taskId: saved.taskId, state: saved.state };
 }
@@ -210,6 +218,14 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
     // end (spawnCodex removes it before each run), so such a run has ended,
     // even past its deadline or when its start time cannot be read.
     const ended = readExit(files) !== null;
+    if (!ended && record.operatorStoppedAt !== undefined) {
+      try {
+        await stopCodex({ taskId: record.taskId }, deps, "stopped by the operator");
+      } catch (error) {
+        log(`kherep-node: could not confirm stop of task ${record.taskId}: ${String((error as Error).message ?? error)}`);
+      }
+      continue;
+    }
     if (!ended && now >= Date.parse(record.deadline)) {
       if (mapped.sessionId !== record.sessionId) writeTask(deps.paths, mapped, now);
       try {

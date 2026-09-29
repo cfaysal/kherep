@@ -131,10 +131,12 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   if (bypassesPermissions(found.mode)) return refuse("permission mode bypassPermissions");
   // An intercom session answers with msg send, which cannot reach the operator API.
   if (records[0].from.nodeId === OPERATOR_NODE_ID) return refuse("an operator message goes to no intercom session");
+  if (found.task?.operatorStoppedAt !== undefined) return refuse("session stopped by operator");
   // Running already: its hook takes the messages.
   if (listTasks(paths).some((t) => t.sessionId === sessionId && isActive(t))) return false;
   if (found.task && runs(deps, found.task)) return false;
   const intercom = intercomFor(paths, records[0]);
+  if (intercom?.operatorStoppedAt !== undefined) return refuse("intercom session stopped by operator");
   const runtime = intercom ? intercom.runtime ?? "claude" : found.runtime;
   if (!sessions.runtimes.includes(runtime)) return refuse(`runtime ${runtime} is not enabled on this node`);
   if (intercom && runs(deps, intercom)) {
