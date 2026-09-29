@@ -86,19 +86,19 @@ function introLine(event: DeliveryEvent, tag: string, hasMessages: boolean): str
 
 // A block that exceeds the room left keeps as much text as fits and says
 // where the rest is.
-function fitted(record: InboxRecord, directory: DirectoryBody | null, tag: string, reply: string, cli: string, room: number): string {
+function fitted(record: InboxRecord, directory: DirectoryBody | null, tag: string, reply: string, inboxCommand: string, room: number): string {
   let text = record.text;
   let result = block(record, text, directory, tag, reply);
   while (bytes(result) > room && text.length > 0) {
     text = text.slice(0, Math.floor(text.length * 0.9));
-    result = block(record, `${text}\n[truncated; the full text: ${cli} msg inbox --all]`, directory, tag, reply);
+    result = block(record, `${text}\n[truncated; the full text: ${inboxCommand}]`, directory, tag, reply);
   }
   return result;
 }
 
 // Blocks for the records in order within room bytes: the first always, shortened
 // if needed, later ones only while they fit whole.
-function fitBlocks(records: InboxRecord[], directory: DirectoryBody | null, tag: string, reply: string, cli: string,
+function fitBlocks(records: InboxRecord[], directory: DirectoryBody | null, tag: string, reply: string, inboxCommand: string,
   room: number): string[] {
   const blocks: string[] = [];
   let left = room;
@@ -107,7 +107,7 @@ function fitBlocks(records: InboxRecord[], directory: DirectoryBody | null, tag:
     const full = block(record, record.text, directory, tag, reply);
     const fits = bytes(full) <= room;
     if (!fits && blocks.length > 0) break;
-    const next = fits ? full : fitted(record, directory, tag, reply, cli, room);
+    const next = fits ? full : fitted(record, directory, tag, reply, inboxCommand, room);
     blocks.push(next);
     left -= bytes(next) + 2;
   }
@@ -132,7 +132,7 @@ const newTag = (): string => crypto.randomUUID().slice(-12);
 export function frameRecords(paths: NodePaths, records: InboxRecord[], cli: string, maxBytes: number): { text: string; carried: InboxRecord[] } {
   const tag = newTag();
   const intro = introLine("UserPromptSubmit", tag, true);
-  const blocks = fitBlocks(records, directoryOf(paths), tag, `${cli} msg send`, cli, maxBytes - bytes(intro));
+  const blocks = fitBlocks(records, directoryOf(paths), tag, `${cli} msg send`, `${cli} msg inbox --all`, maxBytes - bytes(intro));
   return { text: [intro, ...blocks].join("\n\n"), carried: records.slice(0, blocks.length) };
 }
 
@@ -192,7 +192,7 @@ export function deliveryContext(event: DeliveryEvent, refs: string[], deps: Hook
   const intro = introLine(event, tag, shown.length > 0);
   const notices = failures.length === 0 ? [] : [failures.map((r) => notice(r, directory)).join("\n")];
   const used = bytes(intro) + FOOTER_BYTES + notices.reduce((sum, n) => sum + bytes(n) + 2, 0);
-  const blocks = fitBlocks(shown, directory, tag, reply, cli, maxBytes - used);
+  const blocks = fitBlocks(shown, directory, tag, reply, cli + " msg inbox" + (deps.replyFrom ? " --from " + deps.replyFrom : "") + " --all", maxBytes - used);
   const offered = waiting.slice(0, blocks.length);
   for (const record of offered) markOffered(paths.inbox, record.messageId, now);
   for (const record of failures) markNoticed(paths, record.messageId, now);

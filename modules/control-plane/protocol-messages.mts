@@ -19,7 +19,7 @@ export const MESSAGE_STATES = ["queued", "accepted", "delivered", "replied", "ex
 export type MessageState = (typeof MESSAGE_STATES)[number];
 
 // The states a node may report. queued and expired are set by the Worker only.
-export const NODE_REPORTED_STATES = ["accepted", "delivered", "replied", "refused"] as const;
+export const NODE_REPORTED_STATES = ["accepted", "delivered", "refused"] as const;
 export type NodeReportedState = (typeof NODE_REPORTED_STATES)[number];
 
 // session is a session id or a session name on that node.
@@ -36,6 +36,12 @@ export interface MessageDeliverBody {
 }
 // node -> Worker (target reports progress) and Worker -> sending node.
 export interface MessageStatusBody { messageId: string; state: MessageState; reason?: string }
+// Worker -> reporting node, carried as an authenticated event only after the
+// Registry transaction completed. requestedState identifies the report being
+// acknowledged; storedState is the canonical state after that transaction.
+export interface MessageReceiptBody {
+  name: "message.receipt"; messageId: string; requestedState: NodeReportedState; storedState: MessageState;
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -101,6 +107,11 @@ export function isMessageStatusBody(body: unknown): body is MessageStatusBody {
 // A status as a node may send it: only the node-reportable states.
 export function isNodeMessageStatusBody(body: unknown): body is MessageStatusBody & { state: NodeReportedState } {
   return isMessageStatusBody(body) && isNodeReportedState(body.state);
+}
+
+export function isMessageReceiptBody(body: unknown): body is MessageReceiptBody {
+  return isObject(body) && body.name === "message.receipt" && isMessageId(body.messageId)
+    && isNodeReportedState(body.requestedState) && isMessageState(body.storedState);
 }
 
 // ---- Directory (step 3a) ---------------------------------------------------

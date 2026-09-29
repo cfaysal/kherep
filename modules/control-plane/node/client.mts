@@ -6,8 +6,8 @@ import {
   isCommandArgs, isTaskRequestResult, TASK_REQUEST_RESULT, type TaskReportBody, type TaskRequestBody, type TaskRequestResult,
 } from "../protocol-tasks.mts";
 import {
-  isDirectoryBody, isMessageDeliverBody, isMessageId, isMessageStatusBody, type DirectoryBody, type MessageDeliverBody,
-  type MessageSendBody, type MessageState,
+  isDirectoryBody, isMessageDeliverBody, isMessageId, isMessageReceiptBody, isMessageStatusBody, type DirectoryBody,
+  type MessageDeliverBody, type MessageReceiptBody, type MessageSendBody, type MessageState,
 } from "../protocol-messages.mts";
 import { signChallenge, type NodeIdentity } from "./identity.mts";
 import { acceptsMessage, advertisedCapabilities, isAllowed, type NodePolicy } from "./policy.mts";
@@ -37,6 +37,7 @@ export interface ClientOptions {
   // Step 3a: the directory frame, and the state of a message this node sent.
   storeDirectory?: (body: DirectoryBody) => void;
   sentUpdate?: (messageId: string, state: SentState, reason?: string) => void;
+  receiptUpdate?: (body: MessageReceiptBody) => void;
   // Item 5: the Worker's answer to a task.request this node sent.
   taskRequestResult?: (result: TaskRequestResult) => void;
   log?: (line: string) => void;
@@ -77,6 +78,11 @@ export class NodeClient {
       case "challenge":
         return [this.frame("auth", this.authBody(envelope.body as unknown as ChallengeBody), false)];
       case "event":
+        if (isMessageReceiptBody(envelope.body) && this.authenticated) {
+          const body = envelope.body;
+          this.callback(body.messageId, () => this.options.receiptUpdate?.(body));
+          return [];
+        }
         if ((envelope.body as { name?: unknown }).name === TASK_REQUEST_RESULT && this.authenticated) {
           const body = envelope.body;
           if (isTaskRequestResult(body)) this.callback(body.requestId, () => this.options.taskRequestResult?.(body));
@@ -142,7 +148,7 @@ export class NodeClient {
   }
 
   // The state the target session reached: delivered, or refused with a reason.
-  reportStatus(messageId: string, state: "delivered" | "refused", reason?: string): string[] {
+  reportStatus(messageId: string, state: "accepted" | "delivered" | "refused", reason?: string): string[] {
     return this.authenticated ? [this.frame("message.status", { messageId, state, ...(reason ? { reason } : {}) })] : [];
   }
 

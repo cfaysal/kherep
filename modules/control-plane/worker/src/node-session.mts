@@ -17,6 +17,7 @@ import { SessionStore, type CommandRecord } from "./session-store.mts";
 // fires every 5 minutes; after 3 intervals without activity it is offline.
 export const ALARM_INTERVAL_MS = 5 * 60_000;
 export const MISSED_INTERVALS = 3;
+export const MESSAGE_STATUS_PAGE_SIZE = 32;
 
 export type EnqueueResult = { ok: true; commandId: string; seq: number; delivered: boolean } | { ok: false; error: string };
 
@@ -155,7 +156,15 @@ export class NodeSession extends DurableObject<Env> {
     this.sendControl(ws, "event", { name: "auth.ok", nodeId: attachment.nodeId });
     for (const pending of this.store.pendingEnvelopes(0)) ws.send(JSON.stringify(pending));
     // Messages queued while the node was away, oldest first.
-    await routeEffects(this.env, await registryStub(this.env).pendingMessagesFor(attachment.nodeId), this.local(ws, attachment.nodeId));
+    const registry = registryStub(this.env);
+    await routeEffects(this.env, await registry.pendingMessagesFor(attachment.nodeId), this.local(ws, attachment.nodeId));
+    let cursor = 0;
+    for (;;) {
+      const page = await registry.messageStatusPageFor(attachment.nodeId, cursor, MESSAGE_STATUS_PAGE_SIZE);
+      await routeEffects(this.env, page.effects, this.local(ws, attachment.nodeId));
+      if (page.nextCursor === null) break;
+      cursor = page.nextCursor;
+    }
   }
 
   // Registry-routed message frames for this node. Returns false when the node
@@ -198,9 +207,13 @@ export class NodeSession extends DurableObject<Env> {
         this.sendControl(ws, "message.status", { ...result.status });
         return routeEffects(this.env, result.effects, this.local(ws, nodeId));
       }
-      case "message.status":
+      case "message.status": {
         if (!isNodeMessageStatusBody(body)) return this.sendControl(ws, "error", { error: "invalid message.status body" });
-        return routeEffects(this.env, await registry.reportMessageStatus(nodeId, body), this.local(ws, nodeId));
+        const result = await registry.reportMessageStatus(nodeId, body);
+        await routeEffects(this.env, result.effects, this.local(ws, nodeId));
+        if (result.receipt) this.sendControl(ws, "event", { ...result.receipt });
+        return;
+      }
       case "directory.get":
         if (!isDirectoryGetBody(body)) return this.sendControl(ws, "error", { error: "invalid directory.get body" });
         return this.sendControl(ws, "directory", { ...await registry.directory() });

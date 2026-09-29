@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 
 import type { NodeFacts, RuntimeInfo, SessionInfo } from "../../protocol.mts";
-import type { DirectoryBody, MessageStatusBody } from "../../protocol-messages.mts";
+import type { DirectoryBody, MessageStatusBody, NodeReportedState } from "../../protocol-messages.mts";
 import { randomToken, sha256 } from "./crypto.mts";
 import type { Env } from "./env.mts";
 import { directoryBody } from "./directory.mts";
@@ -175,12 +175,16 @@ export class Registry extends DurableObject<Env> {
     return result;
   }
 
-  reportMessageStatus(nodeId: string, status: MessageStatusBody): MessageEffects {
+  reportMessageStatus(nodeId: string, status: MessageStatusBody & { state: NodeReportedState }) {
     return this.ctx.storage.transactionSync(() => this.messages.report(nodeId, status, Date.now()));
   }
 
   pendingMessagesFor(nodeId: string): MessageEffects {
     return this.ctx.storage.transactionSync(() => this.messages.pendingFor(nodeId, Date.now()));
+  }
+
+  messageStatusPageFor(nodeId: string, afterRowId: number, limit: number) {
+    return this.messages.statusPageFor(nodeId, afterRowId, limit);
   }
 
   listMessages(nodeId: string | null, limit: number): MessageRecord[] {
