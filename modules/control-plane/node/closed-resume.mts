@@ -8,7 +8,7 @@ import { retireCopies } from "./copy-retire.mts";
 import { deliveryContext, frameRecords, sessionInbox } from "./deliver-core.mts";
 import { attachDelivery, updateDeliverySession } from "./delivery-identity.mts";
 import { addLocalSession, readDirectory } from "./exchange.mts";
-import { getMessage, markClosedAttempt, markDelivered, markOffered, markRetry, readdress, type InboxRecord } from "./inbox.mts";
+import { getMessage, markClosedAttempt, markDelivered, markOffered, markRetry, readdress, setMessageProgress, type InboxRecord } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
 import { agentRows, BACKGROUNDED, mapIds, runClaude, startTask, type RunnerDeps } from "./session-runner.mts";
 import { CLAUDE_RUNTIME } from "./sessions.mts";
@@ -164,6 +164,7 @@ export async function startIntercom(deps: RunnerDeps, target: ClosedTarget, reco
   }
   const linked = attachDelivery(deps.paths, started, carried.map((record) => record.messageId));
   if (linked !== started) writeTask(deps.paths, linked, deps.now?.());
+  for (const record of carried) setMessageProgress(deps.paths.inbox, record.messageId, "fallback", "fallback-running", deps.now?.());
   if (target.runtime === "codex") handOver(deps, taskId, args.name, carried);
   else for (const record of carried) markDelivered(deps.paths.inbox, record.messageId);
   return null;

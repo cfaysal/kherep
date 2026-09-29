@@ -1,5 +1,5 @@
 import {
-  MESSAGING_CAPABILITY, OPERATOR_NODE_ID, type MessageAddress, type MessageDeliverBody, type MessageReceiptBody, type MessageState,
+  MESSAGING_CAPABILITY, OPERATOR_NODE_ID, type MessageAddress, type MessageDeliverBody, type MessageProgress, type MessageReceiptBody, type MessageState,
   type MessageStatusBody, type NodeReportedState,
 } from "../../protocol-messages.mts";
 
@@ -18,6 +18,10 @@ CREATE TABLE IF NOT EXISTS messages (
   text TEXT,
   state TEXT NOT NULL,
   reason TEXT,
+  progress_phase TEXT,
+  progress_code TEXT,
+  progress_observed_at TEXT,
+  progress_retry_at TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL
@@ -34,7 +38,8 @@ const RANK: Partial<Record<MessageState, number>> = { queued: 0, accepted: 1, de
 
 export interface MessageRecord {
   messageId: string; fromNode: string; fromSession: string; toNode: string; toSession: string; inReplyTo: string | null;
-  state: MessageState; reason: string | null; createdAt: number; updatedAt: number; expiresAt: number;
+  state: MessageState; reason: string | null; progress: MessageProgress | null;
+  createdAt: number; updatedAt: number; expiresAt: number;
 }
 
 export interface NewMessage { messageId: string; from: MessageAddress; to: MessageAddress; text: string; inReplyTo?: string; taskId?: string }
@@ -52,23 +57,28 @@ type Audit = (actor: string, action: string, target: string | null, detail: unkn
 // Registered capabilities of an enrolled, non-revoked node, or null.
 type Capabilities = (nodeId: string) => string[] | null;
 
-const COLUMNS = "id, from_node, from_session, to_node, to_session, in_reply_to, state, reason, created_at, updated_at, expires_at";
+const COLUMNS = "id, from_node, from_session, to_node, to_session, in_reply_to, state, reason, progress_phase, progress_code, progress_observed_at, progress_retry_at, created_at, updated_at, expires_at";
 
 function toRecord(row: Record<string, SqlStorageValue>): MessageRecord {
   return {
     messageId: String(row.id), fromNode: String(row.from_node), fromSession: String(row.from_session),
     toNode: String(row.to_node), toSession: String(row.to_session), inReplyTo: row.in_reply_to as string | null,
     state: row.state as MessageState, reason: row.reason as string | null,
+    progress: row.progress_phase === null || row.progress_phase === undefined ? null : {
+      phase: String(row.progress_phase) as MessageProgress["phase"], code: String(row.progress_code) as MessageProgress["code"],
+      observedAt: String(row.progress_observed_at),
+      ...(row.progress_retry_at === null || row.progress_retry_at === undefined ? {} : { retryAt: String(row.progress_retry_at) }),
+    },
     createdAt: Number(row.created_at), updatedAt: Number(row.updated_at), expiresAt: Number(row.expires_at),
   };
 }
 
-function statusBody(messageId: string, state: MessageState, reason: string | null): MessageStatusBody {
-  return { messageId, state, ...(reason === null ? {} : { reason }) };
+function statusBody(messageId: string, state: MessageState, reason: string | null, progress: MessageProgress | null = null): MessageStatusBody {
+  return { messageId, state, ...(reason === null || progress ? {} : { reason }), ...(state === "accepted" && progress ? { progress } : {}) };
 }
 
 function statusOf(record: MessageRecord): MessageStatusBody {
-  return statusBody(record.messageId, record.state, record.reason);
+  return statusBody(record.messageId, record.state, record.reason, record.progress);
 }
 
 // Builds the deliver body from a queued row, which always still has its text.
@@ -98,6 +108,10 @@ export class MessageStore {
     // Item 5: the task a message belongs to, added to an existing table.
     const columns = this.sql.exec("PRAGMA table_info(messages)").toArray().map((c) => String(c.name));
     if (!columns.includes("task_id")) this.sql.exec("ALTER TABLE messages ADD COLUMN task_id TEXT");
+    for (const [name, type] of [["progress_phase", "TEXT"], ["progress_code", "TEXT"], ["progress_observed_at", "TEXT"],
+      ["progress_retry_at", "TEXT"]] as const) {
+      if (!columns.includes(name)) this.sql.exec(`ALTER TABLE messages ADD COLUMN ${name} ${type}`);
+    }
   }
 
   // Records one message as queued, or as refused when the target cannot take
@@ -141,11 +155,16 @@ export class MessageStore {
     let record = this.get(status.messageId);
     if (!record || record.toNode !== nodeId) return { effects, receipt: null };
     if (this.mayAdvance(record.state, status.state)) {
-      this.setState(record, status.state, status.reason ?? null, `node:${nodeId}`, now, effects);
+      this.setState(record, status.state, status.reason ?? null, `node:${nodeId}`, now, effects, status.progress);
+      record = this.get(status.messageId) ?? record;
+    } else if (record.state === "accepted" && status.state === "accepted" && status.progress
+      && (!record.progress || Date.parse(status.progress.observedAt) > Date.parse(record.progress.observedAt))) {
+      this.setProgress(record, status.progress, `node:${nodeId}`, now, effects);
       record = this.get(status.messageId) ?? record;
     }
     return { effects, receipt: {
       name: "message.receipt", messageId: status.messageId, requestedState: status.state, storedState: record.state,
+      ...(record.state === "accepted" && record.progress ? { storedProgressAt: record.progress.observedAt } : {}),
     } };
   }
 
@@ -238,12 +257,26 @@ export class MessageStore {
     return Number(this.sql.exec("SELECT COUNT(*) AS n FROM messages WHERE to_node = ? AND state = 'queued'", nodeId).one().n);
   }
 
-  private setState(record: MessageRecord, state: MessageState, reason: string | null, actor: string, now: number, effects: MessageEffects): void {
-    // Only a queued message keeps its text.
-    this.sql.exec("UPDATE messages SET state = ?, reason = ?, text = NULL, updated_at = ? WHERE id = ?", state, reason, now, record.messageId);
-    this.audit(actor, "message.state", record.toNode, { messageId: record.messageId, state, reason });
+  private setState(record: MessageRecord, state: MessageState, reason: string | null, actor: string, now: number,
+    effects: MessageEffects, progress?: MessageProgress): void {
+    // Only a queued message keeps its text. Progress belongs only to accepted.
+    const kept = state === "accepted" ? progress ?? null : null;
+    this.sql.exec(`UPDATE messages SET state = ?, reason = ?, text = NULL, progress_phase = ?, progress_code = ?,
+      progress_observed_at = ?, progress_retry_at = ?, updated_at = ? WHERE id = ?`, state, reason, kept?.phase ?? null,
+    kept?.code ?? null, kept?.observedAt ?? null, kept?.retryAt ?? null, now, record.messageId);
+    this.audit(actor, "message.state", record.toNode, { messageId: record.messageId, state, reason, ...(kept ? { progress: kept } : {}) });
     if (record.fromNode !== OPERATOR_NODE_ID) {
-      effects.statuses.push({ nodeId: record.fromNode, body: statusBody(record.messageId, state, reason) });
+      effects.statuses.push({ nodeId: record.fromNode, body: statusBody(record.messageId, state, reason, kept) });
+    }
+  }
+
+  private setProgress(record: MessageRecord, progress: MessageProgress, actor: string, now: number, effects: MessageEffects): void {
+    this.sql.exec(`UPDATE messages SET progress_phase = ?, progress_code = ?, progress_observed_at = ?, progress_retry_at = ?,
+      updated_at = ? WHERE id = ? AND state = 'accepted'`, progress.phase, progress.code, progress.observedAt,
+    progress.retryAt ?? null, now, record.messageId);
+    this.audit(actor, "message.progress", record.toNode, { messageId: record.messageId, progress });
+    if (record.fromNode !== OPERATOR_NODE_ID) {
+      effects.statuses.push({ nodeId: record.fromNode, body: statusBody(record.messageId, "accepted", null, progress) });
     }
   }
 }

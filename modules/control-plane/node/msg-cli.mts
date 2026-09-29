@@ -5,7 +5,8 @@ import {
   isMessageId, isMessageText, MAX_MESSAGE_TEXT, OPERATOR_NODE_ID, type DirectoryBody, type MessageAddress,
 } from "../protocol-messages.mts";
 import { readConfig, type NodePaths } from "./config.mts";
-import { getOutbox, getSent, readDirectory, requestDirectory, writeOutbox, type OutboxRecord } from "./exchange.mts";
+import { getOutbox, getSent, readDirectory, requestDirectory, writeOutbox, type OutboxRecord, type SentRecord,
+} from "./exchange.mts";
 import { getMessage, markAnswered } from "./inbox.mts";
 import {
   currentSession, DIRECTORY_STALE_MS, resolveSendTarget, senderSession, SESSION_ENV, sessionIdFromEnv,
@@ -51,6 +52,32 @@ export const MSG_USAGE = `usage:
 
 const FINAL_OK = ["accepted", "delivered", "replied"];
 const WAIT_POLL_MS = 250;
+
+const PROGRESS_TEXT: Record<string, string> = {
+  "awaiting-user-turn": "start the target turn to retry delivery",
+  "awaiting-turn-confirmation": "the target turn received it and has not confirmed completion",
+  "target-busy": "the target session is busy",
+  "wake-unconfirmed": "the automatic wake was not confirmed; start the target turn to retry delivery",
+  "retry-pending": "delivery will retry after the current local limit clears",
+  "wake-disabled": "automatic wake is disabled on the target node; start the target turn to retry delivery",
+  "wake-not-authorized": "the target node did not authorize automatic wake; start the target turn to retry delivery",
+  "permission-restricted": "the target permission mode blocks automatic wake; start the target turn to retry delivery",
+  "operator-stopped": "the target session was stopped by its operator and requires an explicit continue",
+  "reply-limit": "the automatic reply depth limit was reached",
+  "budget-exhausted": "the target's autonomous-turn budget is exhausted",
+  "ambiguous-target": "the target session name is ambiguous; send to its full session id",
+  "wake-pending": "awaiting automatic wake confirmation",
+  "fallback-starting": "a local delivery session is starting",
+  "fallback-running": "a local delivery session is running",
+  "wake-failed": "the automatic wake failed; start the target turn to retry delivery",
+  "fallback-failed": "the local delivery session could not start; the message remains unread",
+};
+
+function progressText(record: SentRecord): string {
+  if (!record.progress) return record.reason ? `: ${record.reason}` : "";
+  const retry = record.progress.retryAt ? `; retry after ${record.progress.retryAt}` : "";
+  return `: ${PROGRESS_TEXT[record.progress.code]} [${record.progress.phase}/${record.progress.code}; observed ${record.progress.observedAt}${retry}]`;
+}
 
 export interface MsgContext {
   paths: NodePaths;
@@ -208,7 +235,7 @@ async function waitForAnswer(io: Io, messageId: string, timeoutMs: number): Prom
   for (;;) {
     const sent = getSent(io.paths, messageId);
     if (sent && sent.state !== "queued") {
-      io.out(`${sent.state}${sent.reason ? `: ${sent.reason}` : ""}`);
+      io.out(`${sent.state}${progressText(sent)}`);
       return FINAL_OK.includes(sent.state) ? 0 : 1;
     }
     if (io.now() >= deadline) {
@@ -223,7 +250,7 @@ function status(io: Io, messageId: string): number {
   if (!isMessageId(messageId)) return fail(io, `not a message id: "${messageId}"`);
   const sent = getSent(io.paths, messageId);
   if (sent) {
-    io.out(`${messageId} ${sent.state}${sent.reason ? `: ${sent.reason}` : ""} (updated ${sent.updatedAt})`);
+    io.out(`${messageId} ${sent.state}${progressText(sent)} (updated ${sent.updatedAt})`);
     return 0;
   }
   if (getOutbox(io.paths, messageId)) {

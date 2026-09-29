@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { makeEnvelope, parseEnvelope, type Envelope, type MessageType } from "../protocol.mts";
-import type { DirectoryBody } from "../protocol-messages.mts";
+import type { DirectoryBody, MessageProgress } from "../protocol-messages.mts";
 import { NodeClient } from "./client.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
 import {
@@ -13,7 +13,7 @@ import {
   type OutboxRecord,
 } from "./exchange.mts";
 import { generateIdentity } from "./identity.mts";
-import { getMessage, getReceipt, markDelivered, markOffered, markRefused, storeMessage, UNDELIVERABLE_AFTER_MS } from "./inbox.mts";
+import { getMessage, getReceipt, markDelivered, markOffered, markRefused, setMessageProgress, storeMessage, UNDELIVERABLE_AFTER_MS, writeJsonAtomic } from "./inbox.mts";
 import { DEFAULT_POLICY } from "./policy.mts";
 
 const SELF = "00000000-0000-4000-8000-0000000000aa";
@@ -30,12 +30,12 @@ function tempPaths(t: test.TestContext): NodePaths {
 const decode = (frames: string[]): Envelope[] => frames.map((f) => { const p = parseEnvelope(f); assert.ok(p.ok); return p.envelope; });
 const incoming = (type: MessageType, body: Record<string, unknown>) => JSON.stringify(makeEnvelope(type, body, 0, 0));
 
-async function connected(paths: NodePaths) {
+async function connected(paths: NodePaths, now: () => number = Date.now) {
   const client = new NodeClient({
     nodeId: SELF, identity: generateIdentity(), policy: DEFAULT_POLICY,
     handlers: { "node.status": async () => ({}), "runtime.list": async () => [], "session.list": async () => [] },
     facts: () => ({ hostname: "node-a.example.com", os: "linux", arch: "x64", cpus: 1, memoryBytes: 1 }),
-    runtimes: async () => [], sessions: async () => [], storeMessage: () => {}, ...exchangeOptions(paths),
+    runtimes: async () => [], sessions: async () => [], storeMessage: () => {}, ...exchangeOptions(paths, now),
   });
   const onAuth = decode(await client.onFrame(incoming("event", { name: "auth.ok" })));
   return { client, onAuth };
@@ -48,9 +48,9 @@ function outbox(paths: NodePaths, messageId = ID_A): OutboxRecord {
   return record;
 }
 
-function poll(client: NodeClient, paths: NodePaths, inflight = new Set<string>(), open = true): Envelope[] {
+function poll(client: NodeClient, paths: NodePaths, inflight = new Set<string>(), open = true, now?: number): Envelope[] {
   const sent: string[] = [];
-  pollExchange(client, paths, inflight, (frame) => { if (open) sent.push(frame); return open; });
+  pollExchange(client, paths, inflight, (frame) => { if (open) sent.push(frame); return open; }, now);
   return decode(sent);
 }
 
@@ -100,6 +100,66 @@ test("sends each outbox record once per connection and moves it to sent/ with th
   assert.equal(getSent(paths, ID_B), null); // not a message of this node
 });
 
+test("same-state accepted progress is monotonic locally and final states clear it", async (t) => {
+  const paths = tempPaths(t);
+  const { client } = await connected(paths);
+  outbox(paths);
+  poll(client, paths);
+  await client.onFrame(incoming("message.status", { messageId: ID_A, state: "accepted" }));
+  const first: MessageProgress = { phase: "waking", code: "wake-pending", observedAt: "2026-09-29T12:00:00.000Z" };
+  await client.onFrame(incoming("message.status", { messageId: ID_A, state: "accepted", progress: first }));
+  assert.deepEqual(getSent(paths, ID_A)?.progress, first);
+  const stale: MessageProgress = { phase: "waiting", code: "wake-unconfirmed", observedAt: "2026-09-29T11:59:00.000Z" };
+  await client.onFrame(incoming("message.status", { messageId: ID_A, state: "accepted", progress: stale }));
+  assert.deepEqual(getSent(paths, ID_A)?.progress, first);
+  await client.onFrame(incoming("message.status", { messageId: ID_A, state: "delivered" }));
+  assert.equal(getSent(paths, ID_A)?.progress, undefined);
+});
+
+test("accepted progress retries until its exact Worker receipt and backs off for an older Worker", async (t) => {
+  const paths = tempPaths(t);
+  const now = Date.UTC(2026, 8, 29, 12);
+  const { client } = await connected(paths, () => now);
+  const record = storeMessage(paths.inbox, { messageId: ID_A, from: { nodeId: PEER, session: "s-a" }, toSession: "review",
+    text: "private", createdAt: new Date(0).toISOString() }, now);
+  const first: MessageProgress = { phase: "waking", code: "wake-pending", observedAt: new Date(now).toISOString() };
+  setMessageProgress(paths.inbox, ID_A, first.phase, first.code, now);
+
+  assert.deepEqual(poll(client, paths, new Set(), true, now).map((e) => e.body), [{ messageId: ID_A, state: "accepted", progress: first }]);
+  assert.deepEqual(poll(client, paths, new Set(), true, now).map((e) => e.body), [{ messageId: ID_A, state: "accepted", progress: first }],
+    "socket enqueue is not persistence");
+  await client.onFrame(incoming("event", { name: "message.receipt", messageId: ID_A,
+    requestedState: "accepted", storedState: "accepted", storedProgressAt: first.observedAt }));
+  assert.deepEqual(poll(client, paths, new Set(), true, now), []);
+
+  const second: MessageProgress = { phase: "waiting", code: "target-busy", observedAt: new Date(now + 1).toISOString() };
+  setMessageProgress(paths.inbox, ID_A, second.phase, second.code, now + 1);
+  assert.equal(poll(client, paths, new Set(), true, now + 1).length, 1);
+  await client.onFrame(incoming("event", { name: "message.receipt", messageId: ID_A,
+    requestedState: "accepted", storedState: "accepted", storedProgressAt: first.observedAt }));
+  assert.equal(poll(client, paths, new Set(), true, now + 1).length, 1, "an old receipt leaves newer progress pending");
+
+  await client.onFrame(incoming("event", { name: "message.receipt", messageId: ID_A,
+    requestedState: "accepted", storedState: "accepted" }));
+  assert.deepEqual(poll(client, paths, new Set(), true, now + 1), [], "an old Worker receipt applies retry backoff");
+  assert.equal(getReceipt(paths.inbox, ID_A)?.reportedProgressAt, first.observedAt,
+    "an older acknowledged observation remains recorded without acknowledging the newer one");
+  assert.equal(poll(client, paths, new Set(), true, now + 60_001).length, 1, "progress retries after the bounded backoff");
+});
+
+test("a malformed progress sidecar never crosses the WebSocket", async (t) => {
+  const paths = tempPaths(t);
+  const { client } = await connected(paths);
+  storeMessage(paths.inbox, { messageId: ID_A, from: { nodeId: PEER, session: "s-a" }, toSession: "review",
+    text: "private", createdAt: new Date(0).toISOString() });
+  await client.onFrame(incoming("event", { name: "message.receipt", messageId: ID_A,
+    requestedState: "accepted", storedState: "accepted" }));
+  const progressDir = path.join(paths.inbox, "progress");
+  fs.mkdirSync(progressDir, { recursive: true });
+  fs.writeFileSync(path.join(progressDir, `${ID_A}.json`), JSON.stringify({ phase: "waiting", code: "wake-unconfirmed",
+    observedAt: new Date(0).toISOString(), text: "private sidecar content" }));
+  assert.deepEqual(poll(client, paths), []);
+});
 test("an error frame naming an outbox message, and a malformed outbox record, end in state error", async (t) => {
   const paths = tempPaths(t);
   const { client } = await connected(paths);
@@ -255,7 +315,10 @@ test("records every successful session listing in sessions.json and keeps it on 
     return [{ sessionId: "s-1", runtime: "claude-code", state: "idle", name: "review", cwd: "/work" }, { sessionId: "s-2", runtime: "claude-code", state: "idle" }];
   }, () => {});
   await list();
-  assert.deepEqual(readLocalSessions(paths), [{ sessionId: "s-1", name: "review" }, { sessionId: "s-2" }]);
+  assert.deepEqual(readLocalSessions(paths), [
+    { sessionId: "s-1", name: "review", runtime: "claude-code", state: "idle" },
+    { sessionId: "s-2", runtime: "claude-code", state: "idle" },
+  ]);
   fail = true;
   await assert.rejects(list());
   assert.equal(readLocalSessions(paths).length, 2);

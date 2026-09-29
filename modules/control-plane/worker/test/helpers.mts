@@ -105,7 +105,9 @@ export class TestSocket {
 }
 
 const observedStatuses = new WeakMap<TestSocket, Set<string>>();
-const statusKey = (body: MessageStatusBody): string => JSON.stringify([body.messageId, body.state, body.reason ?? null]);
+const statusKey = (body: MessageStatusBody): string => JSON.stringify([
+  body.messageId, body.state, body.reason ?? null, body.progress ?? null,
+]);
 
 export async function nextMessageStatus(
   socket: TestSocket,
@@ -121,11 +123,12 @@ export async function nextMessageStatus(
     const envelope = await socket.next();
     if (envelope.type !== "message.status") throw new Error(`expected message.status, got ${envelope.type}`);
     const body = envelope.body as MessageStatusBody;
-    if (body.messageId === expected.messageId && body.state === expected.state) {
-      seen.add(statusKey(body));
+    const key = statusKey(body);
+    if (key === statusKey(expected)) {
+      seen.add(key);
       return body;
     }
-    if (!seen.has(statusKey(body))) return body;
+    if (!seen.has(key)) return body;
   }
   throw new Error(`message status not received after ${maxFrames} frames`);
 }

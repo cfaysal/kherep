@@ -197,6 +197,13 @@ test("msg inbox shows this session's messages, msg status the state of a sent on
   assert.match((await run(paths, ["status", sent])).out, /pending: waiting for the daemon/);
   recordSent(paths, sent, "refused", "not accepted by node policy");
   assert.match((await run(paths, ["status", sent])).out, new RegExp(`${sent} refused: not accepted by node policy`));
+  const progressId = (await run(paths, ["send", "node-b/docs", "x"])).out;
+  recordSent(paths, progressId, "accepted", "legacy text must stay hidden", NOW, {
+    phase: "waiting", code: "wake-unconfirmed", observedAt: new Date(NOW).toISOString(),
+  });
+  const progress = (await run(paths, ["status", progressId])).out;
+  assert.match(progress, /accepted: the automatic wake was not confirmed; start the target turn to retry delivery/);
+  assert.doesNotMatch(progress, /legacy text|private|path/i);
   assert.equal((await run(paths, ["status", INCOMING])).code, 1);
   assert.equal((await run(paths, ["frobnicate"])).code, 2);
 });

@@ -7,7 +7,7 @@ import { takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
 import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { SCRIPT, waitFor, type FakeRun } from "./codex-fixture.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
-import { getMessage, messageIds, storeMessage } from "./inbox.mts";
+import { getMessage, getMessageProgress, messageIds, storeMessage } from "./inbox.mts";
 import { loadPolicy } from "./policy.mts";
 import { T0, taskNode } from "./task-fixture.mts";
 import { listTasks, writeTask } from "./task-records.mts";
@@ -168,11 +168,13 @@ test("a failed desktop intercom launch leaves a retryable offer without queuing 
   assert.equal(listTasks(node.paths).length, 1);
   assert.equal(listTasks(node.paths)[0].state, "failed");
   const audit = fs.readFileSync(path.join(node.paths.dir, "wake.jsonl"), "utf8");
+  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "fallback-failed");
   assert.match(audit, /"action":"intercom-failed"/);
   assert.ok(!audit.includes("reply please"));
   node.tick(TURN_SPACING_MS * 2);
   pollCodexQueue({ ...deps, now: node.deps().now });
   await codexQueueIdle();
   assert.equal(listTasks(node.paths).length, 1, "the failed launch is not repeated");
+  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "fallback-failed", "polling preserves the failed attempt");
 });
 

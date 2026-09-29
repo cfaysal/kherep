@@ -5,7 +5,7 @@ import path from "node:path";
 import type { SessionInfo } from "../protocol.mts";
 import { isTaskId, SUPPORTED_RUNTIMES, type TaskRuntime } from "../protocol-tasks.mts";
 import {
-  isMessageId, isSessionRef, type MessageAddress, type MessageDeliverBody, type MessageState, type MessageStatusBody,
+  isMessageId, isMessageProgress, isSessionRef, type MessageAddress, type MessageDeliverBody, type MessageProgress, type MessageState, type MessageStatusBody,
 } from "../protocol-messages.mts";
 import { ensureDir } from "./config.mts";
 
@@ -23,6 +23,7 @@ export const UNDELIVERABLE_AFTER_MS = 60 * 60_000;
 // A message at this reply depth or deeper wakes no session and asks for no
 // automatic answer (see InboxRecord.depth).
 export const MAX_REPLY_DEPTH = 6;
+export const PROGRESS_RETRY_BACKOFF_MS = 60_000;
 
 export interface InboxRecord {
   messageId: string;
@@ -58,7 +59,7 @@ export interface InboxRecord {
 // The local states the daemon reports to the Worker. An offered message remains
 // accepted in the cloud until the turn confirms delivery.
 export type ReportedState = "accepted" | "delivered" | "refused";
-export interface ReceiptRecord { reportedAt: string; reportedState: ReportedState; workerState: MessageState }
+export interface ReceiptRecord { reportedAt: string; reportedState: ReportedState; workerState: MessageState; reportedProgressAt?: string; progressRetryAt?: string }
 
 export interface DeliveryTaskIdentity { taskId: string; runtime: TaskRuntime; sessionId?: string }
 
@@ -68,6 +69,10 @@ function fileOf(dir: string, messageId: string): string {
 
 function receiptFileOf(dir: string, messageId: string): string {
   return path.join(dir, "receipts", `${messageId}.json`);
+}
+
+function progressFileOf(dir: string, messageId: string): string {
+  return path.join(dir, "progress", `${messageId}.json`);
 }
 
 // Temp file plus rename, so a reader never sees a half-written record. Also
@@ -115,6 +120,33 @@ export function getMessage(dir: string, messageId: string): InboxRecord | null {
 
 export function getReceipt(dir: string, messageId: string): ReceiptRecord | null {
   return isMessageId(messageId) ? readJson<ReceiptRecord>(receiptFileOf(dir, messageId)) : null;
+}
+
+export function getMessageProgress(dir: string, messageId: string): MessageProgress | null {
+  if (!isMessageId(messageId)) return null;
+  const value = readJson<unknown>(progressFileOf(dir, messageId));
+  return isMessageProgress(value) ? value : null;
+}
+
+// Progress is daemon-owned metadata in a sidecar. Delivery hooks keep sole
+// ownership of the message body file, so a stale progress writer cannot
+// restore accepted over a newer offered or delivered state.
+export function setMessageProgress(dir: string, messageId: string, phase: MessageProgress["phase"], code: MessageProgress["code"],
+  now: number = Date.now(), retryAt?: number): MessageProgress | null {
+  const record = getMessage(dir, messageId);
+  if (!record || (record.state !== "accepted" && record.state !== "offered")) return null;
+  const previous = getMessageProgress(dir, messageId);
+  const previousAt = Date.parse(previous?.observedAt ?? "");
+  const requestedRetryAt = retryAt === undefined ? undefined
+    : new Date(Math.max(retryAt, now, Number.isNaN(previousAt) ? now : previousAt)).toISOString();
+  if (previous?.phase === phase && previous.code === code && previous.retryAt === requestedRetryAt) return previous;
+  const observedMs = Math.max(now, Number.isNaN(previousAt) ? now : previousAt + 1);
+  const observedAt = new Date(observedMs).toISOString();
+  const nextRetryAt = retryAt === undefined ? undefined : new Date(Math.max(retryAt, observedMs)).toISOString();
+  const progress: MessageProgress = { phase, code, observedAt, ...(nextRetryAt ? { retryAt: nextRetryAt } : {}) };
+  ensureDir(path.dirname(progressFileOf(dir, messageId)));
+  writeJsonAtomic(progressFileOf(dir, messageId), progress);
+  return progress;
 }
 
 // The message ids of the <messageId>.json files in a directory.
@@ -213,22 +245,38 @@ function reportState(record: InboxRecord): ReportedState | null {
   return record.state === "delivered" || record.state === "refused" ? record.state : null;
 }
 
-export function unreportedStatuses(dir: string): (InboxRecord & { state: ReportedState })[] {
+export function unreportedStatuses(dir: string, now: number = Date.now()): (InboxRecord & { state: ReportedState; progress?: MessageProgress })[] {
   return listInbox(dir).flatMap((record) => {
     const state = reportState(record);
-    return state && getReceipt(dir, record.messageId)?.reportedState !== state ? [{ ...record, state }] : [];
+    if (!state) return [];
+    const receipt = getReceipt(dir, record.messageId);
+    const statePending = receipt?.reportedState !== state;
+    const progress = state === "accepted" ? getMessageProgress(dir, record.messageId) : null;
+    const reportedProgressAt = Date.parse(receipt?.reportedProgressAt ?? "");
+    const progressPending = progress !== null
+      && (Number.isNaN(reportedProgressAt) || reportedProgressAt < Date.parse(progress.observedAt))
+      && now >= Date.parse(receipt?.progressRetryAt ?? new Date(0).toISOString());
+    return statePending || progressPending ? [{ ...record, state, ...(progress ? { progress } : {}) }] : [];
   });
 }
 
 export function markReported(dir: string, messageId: string, state: ReportedState, workerState: MessageState,
-  now: number = Date.now()): void {
+  now: number = Date.now(), storedProgressAt?: string): void {
   const record = getMessage(dir, messageId);
-  if (record && reportState(record) === state) {
-    ensureDir(path.dirname(receiptFileOf(dir, messageId)));
-    writeJsonAtomic(receiptFileOf(dir, messageId), {
-      reportedAt: new Date(now).toISOString(), reportedState: state, workerState,
-    } satisfies ReceiptRecord);
-  }
+  if (!record || reportState(record) !== state) return;
+  const existing = getReceipt(dir, messageId);
+  const progress = state === "accepted" ? getMessageProgress(dir, messageId) : null;
+  const coversProgress = progress !== null && storedProgressAt !== undefined
+    && Date.parse(storedProgressAt) >= Date.parse(progress.observedAt);
+  const progressPending = progress !== null && !coversProgress;
+  ensureDir(path.dirname(receiptFileOf(dir, messageId)));
+  writeJsonAtomic(receiptFileOf(dir, messageId), {
+    reportedAt: new Date(now).toISOString(), reportedState: state, workerState,
+    ...(coversProgress ? { reportedProgressAt: progress.observedAt } : existing?.reportedProgressAt
+      ? { reportedProgressAt: existing.reportedProgressAt } : {}),
+    ...(progressPending && storedProgressAt === undefined
+      ? { progressRetryAt: new Date(now + PROGRESS_RETRY_BACKOFF_MS).toISOString() } : {}),
+  } satisfies ReceiptRecord);
 }
 
 // Refuses the waiting messages whose session no listed session matches by id
@@ -274,6 +322,7 @@ export function purgeInbox(dir: string, now: number = Date.now(), maxAgeMs: numb
     fs.rmSync(file, { force: true });
     if (name.endsWith(".json")) {
       fs.rmSync(receiptFileOf(dir, name.slice(0, -5)), { force: true });
+      fs.rmSync(progressFileOf(dir, name.slice(0, -5)), { force: true });
       removed++;
     }
   }

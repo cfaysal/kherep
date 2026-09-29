@@ -7,6 +7,7 @@ import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { connectUrl, ensureDir, type NodeConfig, type NodePaths } from "./config.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
+import { observeClaudeDeliveryProgress } from "./delivery-progress.mts";
 import {
   DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions, replyDepth,
 } from "./exchange.mts";
@@ -134,9 +135,10 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
       }, SESSIONS_INTERVAL_MS);
       exchange = setInterval(() => {
         chain = chain.then(async () => {
+          const current = loadPolicy(config.policyFile);
+          observeClaudeDeliveryProgress({ ...runner, policy: current });
           pollExchange(client, paths, inflight, send);
           pollTasks(client, paths, policy, requestsInflight, send);
-          const current = loadPolicy(config.policyFile);
           const enabled = current.sessions?.enabled === true && current.sessions.ownTaskControl === true
             && current.sessions.runtimes.length > 0;
           pollTaskControl(client, paths, taskControlInflight, send, Date.now(), enabled);

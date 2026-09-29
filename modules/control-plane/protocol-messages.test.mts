@@ -79,9 +79,38 @@ test("message.status bodies, and the narrower node-reported form", () => {
   assert.equal(isNodeMessageStatusBody({ messageId: ID, state: "expired" }), false);
 });
 
+test("message delivery progress is strict, fixed and accepted-state only", () => {
+  const progress = { phase: "waiting", code: "wake-unconfirmed", observedAt: "2026-09-29T12:00:00.000Z",
+    retryAt: "2026-09-29T12:01:00.000Z" };
+  assert.equal(isMessageStatusBody({ messageId: ID, state: "accepted", progress }), true);
+  assert.equal(isMessageStatusBody({ messageId: ID, state: "accepted", reason: "legacy", progress }), false);
+  for (const body of [
+    { messageId: ID, state: "delivered", progress },
+    { messageId: ID, state: "accepted", progress: { ...progress, phase: "failed" } },
+    { messageId: ID, state: "accepted", progress: { ...progress, phase: "constructor" } },
+    { messageId: ID, state: "accepted", progress: { ...progress, phase: "toString" } },
+    { messageId: ID, state: "accepted", progress: [] },
+    { messageId: ID, state: "accepted", progress: null },
+    { messageId: ID, state: "accepted", progress: { ...progress, code: "raw failure: C:/private/path" } },
+    { messageId: ID, state: "accepted", progress: { ...progress, observedAt: "today" } },
+    { messageId: ID, state: "accepted", progress: { ...progress, retryAt: "2026-09-29T11:59:00.000Z" } },
+    { messageId: ID, state: "accepted", progress: { ...progress, taskId: ID } },
+    { messageId: ID, state: "accepted", progress: { ...progress, text: "private" } },
+    { messageId: ID, state: "accepted", unexpected: true },
+  ]) assert.equal(isMessageStatusBody(body), false, JSON.stringify(body));
+});
+
 test("message receipt events identify the requested and durable states", () => {
   const receipt = { name: "message.receipt", messageId: ID, requestedState: "delivered", storedState: "replied" };
   assert.equal(isMessageReceiptBody(receipt), true);
+  assert.equal(isMessageReceiptBody({ ...receipt, requestedState: "accepted", storedState: "accepted",
+    storedProgressAt: "2026-09-29T12:00:00.000Z" }), true);
+  assert.equal(isMessageReceiptBody({ ...receipt, storedProgressAt: "today" }), false);
+  assert.equal(isMessageReceiptBody({ ...receipt, requestedState: "delivered", storedState: "accepted",
+    storedProgressAt: "2026-09-29T12:00:00.000Z" }), false);
+  assert.equal(isMessageReceiptBody({ ...receipt, requestedState: "accepted", storedState: "delivered",
+    storedProgressAt: "2026-09-29T12:00:00.000Z" }), false);
+  assert.equal(isMessageReceiptBody({ ...receipt, unexpected: true }), false);
   for (const body of [
     { ...receipt, name: "auth.ok" }, { ...receipt, messageId: "m1" }, { ...receipt, requestedState: "queued" },
     { ...receipt, storedState: "error" }, { ...receipt, requestedState: undefined }, null,
