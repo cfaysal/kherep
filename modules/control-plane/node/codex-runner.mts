@@ -112,7 +112,7 @@ export async function continueCodex(args: SessionContinueArgs, deps: RunnerDeps)
   const cwd = resolveCwd(deps.policy.sessions, record.cwd, deps.realpath);
   if (!cwd.ok) throw new Error(cwd.reason);
   const prompt = frameFollowUp(args.taskId, args.prompt, deps.cli ?? taskCliCommand(deps.platform), "codex");
-  const { operatorStoppedAt: _operatorStoppedAt, ...resumable } = record;
+  const { operatorStoppedAt: _operatorStoppedAt, taskControlRecoveryRunVersion: _taskControlRecoveryRunVersion, ...resumable } = record;
   const restarted: TaskRecord = { ...resumable, cwd: cwd.cwd, state: "started", reason: undefined, pid: undefined, pidStart: undefined,
     deadline: new Date(now + deps.policy.sessions.maxRuntimeMinutes * 60_000).toISOString() };
   const saved = await launch(deps, restarted, (files, outbox) => resumeArgs(threadId, record.permissionMode, files, outbox), prompt);
@@ -129,14 +129,26 @@ export async function stopCodex(args: SessionStopArgs, deps: RunnerDeps, reason:
   if (operatorStop && record.operatorStoppedAt === undefined) {
     record = writeTask(deps.paths, { ...record, operatorStoppedAt: new Date(now).toISOString() }, now);
   }
+  const captured = { taskId: record.taskId, pid: record.pid, pidStart: record.pidStart };
   const exited = readExit(codexFiles(deps.paths, record.taskId)) !== null;
+  let fresh = record;
   if (!exited) {
     if (record.pid === undefined) throw new Error("the task's process is not known");
     await terminate(deps.codex ?? {}, record.pid, record.pidStart);
+    // Termination yields to another daemon lane. Reread before touching task,
+    // inbox or report state, and bind every mutation to the captured process.
+    const current = readTask(deps.paths, captured.taskId);
+    if (!current || captured.pidStart === undefined
+      || current.pid !== captured.pid || current.pidStart !== captured.pidStart) {
+      throw new Error("task run changed while stop was in progress");
+    }
+    fresh = current;
   }
-  settleOffered(deps, record, false);
-  const keep = record.state === "done" || record.running === true;
-  const saved = writeTask(deps.paths, { ...record, ...(keep ? {} : { state: "stopped", reason }), running: undefined, offered: undefined }, now);
+  settleOffered(deps, fresh, false);
+  const keep = fresh.state === "done" || fresh.running === true;
+  const marker = operatorStop && fresh.operatorStoppedAt === undefined ? { operatorStoppedAt: record.operatorStoppedAt } : {};
+  const saved = writeTask(deps.paths, { ...fresh, ...marker, ...(keep ? {} : { state: "stopped", reason }),
+    running: undefined, offered: undefined }, now);
   if (!keep) queueReport(deps.paths, { taskId: saved.taskId, state: "stopped", reason, ...sessionOf(saved) });
   return { taskId: saved.taskId, state: saved.state };
 }
@@ -220,6 +232,7 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
     // even past its deadline or when its start time cannot be read.
     const ended = readExit(files) !== null;
     if (!ended && record.operatorStoppedAt !== undefined) {
+      if (record.taskControlRecoveryRunVersion !== undefined) continue;
       try {
         await stopCodex({ taskId: record.taskId }, deps, "stopped by the operator");
       } catch (error) {

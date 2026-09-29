@@ -28,6 +28,8 @@ test("session.start args are validated field by field and nothing else is accept
     undefined,
   ]) assert.equal(isCommandArgs("session.start", bad), false, JSON.stringify(bad));
   assert.equal(isCommandArgs("session.start", { ...START, requestedBy: "n/s", directive: "do it" }), true);
+  assert.equal(isCommandArgs("session.start", { ...START, requestedBy: "n/s", directive: "do it", sourceRequestId: TASK }), true);
+  assert.equal(isCommandArgs("session.start", { ...START, sourceRequestId: TASK }), false);
 });
 
 test("session.stop and session.continue take exactly their fields", () => {

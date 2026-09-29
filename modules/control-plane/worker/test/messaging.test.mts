@@ -5,7 +5,7 @@ import { makeEnvelope, type Envelope, type MessageType } from "../../protocol.mt
 import { MESSAGING_CAPABILITY, type MessageDeliverBody, type MessageReceiptBody, type MessageStatusBody } from "../../protocol-messages.mts";
 import { MAX_QUEUED_PER_NODE } from "../src/message-store.mts";
 import { MESSAGE_STATUS_PAGE_SIZE } from "../src/node-session.mts";
-import { authenticate, enroll, FACTS, newKey, registry, type NodeKey, type TestSocket } from "./helpers.mts";
+import { authenticate, enroll, FACTS, newKey, nextMessageStatus, registry, type NodeKey, type TestSocket } from "./helpers.mts";
 
 async function node(name: string, capabilities: string[] = [MESSAGING_CAPABILITY]): Promise<{ key: NodeKey; nodeId: string }> {
   const key = await newKey();
@@ -29,6 +29,12 @@ async function expectFrame<B>(socket: TestSocket, type: MessageType): Promise<En
   return envelope as Envelope<B>;
 }
 
+async function expectStatus(socket: TestSocket, expected: MessageStatusBody, maxFrames = 8): Promise<MessageStatusBody> {
+  const body = await nextMessageStatus(socket, expected, maxFrames);
+  expect(body).toEqual(expected);
+  return body;
+}
+
 async function row(messageId: string): Promise<Record<string, SqlStorageValue> | undefined> {
   return runInDurableObject(registry(), (_i, state) =>
     state.storage.sql.exec("SELECT * FROM messages WHERE id = ?", messageId).toArray()[0]);
@@ -50,9 +56,9 @@ describe("message routing", () => {
     const first = crypto.randomUUID();
     frame(sender, "message.send", { messageId: first, fromSession: "s-a", to: { nodeId: b.nodeId, session: "s-b" }, text: "secret one",
       from: { nodeId: b.nodeId, session: "forged" } });
-    expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body).toEqual({ messageId: first, state: "queued" });
+    await expectStatus(sender, { messageId: first, state: "queued" });
     const second = send(sender, b.nodeId, "secret two");
-    await expectFrame(sender, "message.status");
+    await expectStatus(sender, { messageId: second, state: "queued" });
     expect(await row(first)).toMatchObject({ from_node: a.nodeId, from_session: "s-a", text: "secret one", state: "queued" });
 
     const target = await authenticate(b.nodeId, b.key);
@@ -61,14 +67,14 @@ describe("message routing", () => {
     expect(delivered[0].body).toMatchObject({ from: { nodeId: a.nodeId, session: "s-a" }, toSession: "s-b", text: "secret one" });
 
     frame(target, "message.status", { messageId: first, state: "accepted" });
-    expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body).toEqual({ messageId: first, state: "accepted" });
+    await expectStatus(sender, { messageId: first, state: "accepted" });
     expect((await expectFrame<MessageReceiptBody>(target, "event")).body).toEqual(
       { name: "message.receipt", messageId: first, requestedState: "accepted", storedState: "accepted" });
     expect(await row(first)).toMatchObject({ state: "accepted", text: null });
     expect(await row(second)).toMatchObject({ state: "queued", text: "secret two" });
 
     frame(target, "message.status", { messageId: first, state: "delivered" });
-    expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body).toEqual({ messageId: first, state: "delivered" });
+    await expectStatus(sender, { messageId: first, state: "delivered" });
     expect((await expectFrame<MessageReceiptBody>(target, "event")).body).toEqual(
       { name: "message.receipt", messageId: first, requestedState: "delivered", storedState: "delivered" });
     // A duplicate or late lower report keeps the canonical state but receives
@@ -94,14 +100,14 @@ describe("message routing", () => {
     const sender = await authenticate(a.nodeId, a.key);
     const target = await authenticate(b.nodeId, b.key);
     const id = send(sender, b.nodeId);
-    await expectFrame(sender, "message.status");
+    await expectStatus(sender, { messageId: id, state: "queued" });
     expect((await expectFrame<MessageDeliverBody>(target, "message.deliver")).body.messageId).toBe(id);
 
     frame(target, "message.status", { messageId: id, state: "accepted" });
-    await expectFrame(sender, "message.status");
+    await expectStatus(sender, { messageId: id, state: "accepted" });
     await expectFrame(target, "event");
     send(sender, b.nodeId, "hello", id);
-    expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body).toEqual({ messageId: id, state: "accepted" });
+    await expectStatus(sender, { messageId: id, state: "accepted" });
     await expect(target.next(200)).rejects.toThrow();
     expect(await runInDurableObject(registry(), (_i, state) =>
       state.storage.sql.exec("SELECT COUNT(*) AS n FROM messages WHERE id = ?", id).one().n)).toBe(1);
@@ -144,18 +150,18 @@ describe("message routing", () => {
     const sender = await authenticate(a.nodeId, a.key);
     const target = await authenticate(b.nodeId, b.key);
     const original = send(sender, b.nodeId, "question");
-    await expectFrame(sender, "message.status");
+    await expectStatus(sender, { messageId: original, state: "queued" });
     await expectFrame(target, "message.deliver");
     frame(target, "message.status", { messageId: original, state: "accepted" });
-    await expectFrame(sender, "message.status");
+    await expectStatus(sender, { messageId: original, state: "accepted" });
     await expectFrame(target, "event");
 
     const reply = crypto.randomUUID();
     frame(target, "message.send", { messageId: reply, fromSession: "s-b", to: { nodeId: a.nodeId, session: "s-a" },
       text: "answer", inReplyTo: original });
-    expect((await expectFrame<MessageStatusBody>(target, "message.status")).body).toEqual({ messageId: reply, state: "queued" });
+    await expectStatus(target, { messageId: reply, state: "queued" });
     expect((await expectFrame<MessageDeliverBody>(sender, "message.deliver")).body).toMatchObject({ messageId: reply, inReplyTo: original });
-    expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body).toEqual({ messageId: original, state: "replied" });
+    await expectStatus(sender, { messageId: original, state: "replied" });
     expect(await row(original)).toMatchObject({ state: "replied", text: null });
     sender.ws.close(1000, "done");
     target.ws.close(1000, "done");
@@ -194,7 +200,7 @@ describe("message routing", () => {
     ];
     for (const [to, reason] of cases) {
       const id = send(sender, to, "refused text");
-      expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body).toEqual({ messageId: id, state: "refused", reason });
+      await expectStatus(sender, { messageId: id, state: "refused", reason });
       expect(await row(id)).toMatchObject({ state: "refused", text: null, reason });
     }
     sender.ws.close(1000, "done");
@@ -205,13 +211,13 @@ describe("message routing", () => {
     const b = await node("target");
     const sender = await authenticate(a.nodeId, a.key);
     const id = send(sender, b.nodeId, "stale text");
-    await expectFrame(sender, "message.status");
+    await expectStatus(sender, { messageId: id, state: "queued" });
     expect(await runInDurableObject(registry(), (_i, state) => state.storage.getAlarm())).not.toBeNull();
     await runInDurableObject(registry(), (_i, state) => {
       state.storage.sql.exec("UPDATE messages SET expires_at = ? WHERE id = ?", Date.now() - 1, id);
     });
     expect(await runDurableObjectAlarm(registry())).toBe(true);
-    expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body).toEqual({ messageId: id, state: "expired" });
+    await expectStatus(sender, { messageId: id, state: "expired" });
     expect(await row(id)).toMatchObject({ state: "expired", text: null });
     expect((await auditFor(id)).at(-1)).toMatchObject({ actor: "system", action: "message.state" });
     sender.ws.close(1000, "done");
@@ -223,15 +229,14 @@ describe("message routing", () => {
     const sender = await authenticate(a.nodeId, a.key);
     const target = await authenticate(b.nodeId, b.key);
     const id = send(sender, b.nodeId);
-    await expectFrame(sender, "message.status");
+    await expectStatus(sender, { messageId: id, state: "queued" });
     await expectFrame(target, "message.deliver");
     frame(target, "message.status", { messageId: id, state: "accepted" });
-    await expectFrame(sender, "message.status");
+    await expectStatus(sender, { messageId: id, state: "accepted" });
 
     // What the node reports when the target session ended before reading it.
     frame(target, "message.status", { messageId: id, state: "refused", reason: "target session not running" });
-    expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body)
-      .toEqual({ messageId: id, state: "refused", reason: "target session not running" });
+    await expectStatus(sender, { messageId: id, state: "refused", reason: "target session not running" });
     expect(await row(id)).toMatchObject({ state: "refused", reason: "target session not running", text: null });
     frame(target, "message.status", { messageId: id, state: "delivered" });
     await expect(sender.next(200)).rejects.toThrow();

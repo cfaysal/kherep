@@ -7,6 +7,8 @@ import {
 import { isDirectoryGetBody, isMessageSendBody, isNodeMessageStatusBody } from "../../protocol-messages.mts";
 import { isCommandArgs } from "../../protocol-tasks.mts";
 import { handleTaskFrame } from "./task-frames.mts";
+import { flushTaskControl, handleTaskControlEvent } from "./task-control-frames.mts";
+import type { LocalControlNode } from "./task-control-routing.mts";
 import { randomToken } from "./crypto.mts";
 import { registryStub, type Env } from "./env.mts";
 import { checkAuth, CLOSE, type Attachment } from "./handshake.mts";
@@ -169,7 +171,7 @@ export class NodeSession extends DurableObject<Env> {
 
   // Registry-routed message frames for this node. Returns false when the node
   // is not connected; queued messages then wait for its next authentication.
-  pushFrame(type: "message.deliver" | "message.status", body: Record<string, unknown>): boolean {
+  pushFrame(type: "message.deliver" | "message.status" | "event", body: Record<string, unknown>): boolean {
     const ws = this.authedSocket();
     if (ws) this.sendControl(ws, type, body);
     return ws !== null;
@@ -179,13 +181,17 @@ export class NodeSession extends DurableObject<Env> {
     return { nodeId, send: (type, body) => this.sendControl(ws, type, body) };
   }
 
+  private localControl(ws: WebSocket, nodeId: string): LocalControlNode {
+    return { nodeId, send: (body) => this.sendControl(ws, "event", { ...body }) };
+  }
   private async dispatch(ws: WebSocket, nodeId: string, envelope: Envelope): Promise<void> {
     const body = envelope.body as Record<string, unknown>;
     const registry = registryStub(this.env);
     switch (envelope.type) {
       case "register":
         if (!isRegisterBody(body)) return this.sendControl(ws, "error", { error: "invalid register body" });
-        return registry.updateRegistration(nodeId, body.facts, body.runtimes, body.capabilities);
+        await registry.updateRegistration(nodeId, body.facts, body.runtimes, body.capabilities);
+        return flushTaskControl(this.env, nodeId, this.localControl(ws, nodeId));
       case "capabilities.update":
         if (!isRuntimeList(body.runtimes)) return this.sendControl(ws, "error", { error: "invalid runtimes" });
         return registry.replaceRuntimes(nodeId, body.runtimes);
@@ -221,6 +227,10 @@ export class NodeSession extends DurableObject<Env> {
       case "task.request":
         return handleTaskFrame(this.env, nodeId, envelope.type, body, (type, reply) => this.sendControl(ws, type, reply));
       case "event":
+        return typeof body.name === "string" && body.name.startsWith("task.control.")
+          ? handleTaskControlEvent(this.env, nodeId, body, (type, reply) => this.sendControl(ws, type, reply),
+            this.localControl(ws, nodeId))
+          : undefined;
       case "error":
         return; // activity already recorded
       default:

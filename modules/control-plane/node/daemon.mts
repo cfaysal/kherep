@@ -17,6 +17,11 @@ import { continueTask, startTask, stopTask, type RunnerDeps } from "./session-ru
 import { listSessions } from "./sessions.mts";
 import { pollTasks, recordRequestResult } from "./task-exchange.mts";
 import { watchTasks } from "./task-watch.mts";
+import { handleTaskControlExecute, pollTaskControl } from "./task-control-exchange.mts";
+import { executeTaskControl } from "./task-control-local.mts";
+import {
+  applyQueryResult, receiptResult, recordRegistrationReceipt, recoverOperations,
+} from "./task-control-store.mts";
 
 // Application ping interval. The Worker answers PING_FRAME through
 // setWebSocketAutoResponse without waking the Durable Object; Node's built-in
@@ -63,11 +68,27 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // and includes the Codex sessions the delivery hook recorded.
   const sessions = recordingSessions(paths, () => listSessions({ paths, codexHome: codexHome() }), log);
   const runner: RunnerDeps = { paths, policy, log };
+  recoverOperations(paths);
+  let taskControlInflight = new Set<string>();
   const client = new NodeClient({
     nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions, runner),
     facts: detectFacts, runtimes: () => discoverRuntimes(), sessions,
     storeMessage: (body) => { storeMessage(paths.inbox, body, Date.now(), replyDepth(paths, body.inReplyTo)); },
     taskRequestResult: (result) => recordRequestResult(paths, result),
+    taskControlRegistrationReceipt: (body) => {
+      taskControlInflight.delete("register:" + body.registrationId);
+      recordRegistrationReceipt(paths, body);
+    },
+    taskControlResultReceipt: (body) => {
+      taskControlInflight.delete("result:" + body.operationId);
+      receiptResult(paths, body.operationId);
+    },
+    taskControlQueryResult: (body) => {
+      taskControlInflight.delete("submit:" + body.requestId);
+      applyQueryResult(paths, body);
+    },
+    taskControlExecute: (body) => handleTaskControlExecute(paths, body,
+      (execute) => executeTaskControl(execute, { nodeId: config.nodeId, paths, runner })),
     ...exchangeOptions(paths), log,
   });
 
@@ -77,6 +98,9 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   let retry: NodeJS.Timeout | null = null;
   let finish: () => void = () => {};
   const done = new Promise<void>((resolve) => { finish = resolve; });
+  // One lane spans reconnects so an old socket cannot finish a state mutation
+  // concurrently with the replacement connection.
+  let chain = Promise.resolve();
 
   const connect = (): void => {
     if (stopped) return;
@@ -89,6 +113,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     // Outbox records sent on this connection; a reconnect sends them again.
     const inflight = new Set<string>();
     const requestsInflight = new Set<string>();
+    taskControlInflight = new Set<string>();
     const send = (frame: string): boolean => {
       if (ws.readyState !== WebSocket.OPEN) return false;
       ws.send(frame);
@@ -97,8 +122,6 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     // Frames are handled strictly in order: command seq/ack depends on it. The
     // periodic snapshot joins the same chain, since the Worker drops a node
     // frame whose seq is not above the last one it saw.
-    let chain = Promise.resolve();
-
     ws.addEventListener("open", () => {
       ping = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send(PING_FRAME); }, PING_INTERVAL_MS);
       snapshots = setInterval(() => {
@@ -113,6 +136,10 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         chain = chain.then(async () => {
           pollExchange(client, paths, inflight, send);
           pollTasks(client, paths, policy, requestsInflight, send);
+          const current = loadPolicy(config.policyFile);
+          const enabled = current.sessions?.enabled === true && current.sessions.ownTaskControl === true
+            && current.sessions.runtimes.length > 0;
+          pollTaskControl(client, paths, taskControlInflight, send, Date.now(), enabled);
           // Peer messages for ended Codex task sessions resume them (issue #63).
           await pollCodexInbound(runner, log);
           // ... and wake idle interactive Codex sessions with a pointer (issue #66).

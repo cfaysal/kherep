@@ -41,7 +41,7 @@ test("an enabled section applies the operator caps, the listed runtimes and neve
     permissionModes: ["auto", "bypassPermissions", "acceptEdits"], maxConcurrent: 7, maxStartsPerDay: 50, maxRuntimeMinutes: 30 });
   assert.deepEqual(policy.sessions, {
     enabled: true, runtimes: ["claude", "codex"], workspaceRoots: [ROOT], permissionModes: ["auto", "acceptEdits"], defaultPermissionMode: "auto",
-    maxConcurrent: 3, maxStartsPerDay: 10, maxRuntimeMinutes: 30, delegate: { request: false, accept: false },
+    maxConcurrent: 3, maxStartsPerDay: 10, maxRuntimeMinutes: 30, delegate: { request: false, accept: false }, ownTaskControl: false,
   });
   assert.equal(isAllowed(policy, "session.start"), true);
   assert.deepEqual(advertisedCapabilities(policy), ["session.list", "sessions.v1"]);
@@ -61,4 +61,18 @@ test("delegation is off by default and each side opts in separately", (t) => {
   assert.equal(isAllowed(request, "session.start"), false);
   // accept without enabled sessions accepts nothing.
   assert.equal(policyWith(t, { enabled: false, workspaceRoots: [ROOT], delegate: { accept: true } }).sessions?.delegate.accept, false);
+});
+
+test("owner task control is default off and advertises only with enabled sessions", (t) => {
+  const base = policyWith(t, { enabled: true, workspaceRoots: [ROOT], runtimes: ["codex"] });
+  assert.equal(base.sessions?.ownTaskControl, false);
+  assert.equal(advertisedCapabilities(base).includes("sessions.own-task-control.v1"), false);
+  const enabled = policyWith(t, { enabled: true, workspaceRoots: [ROOT], runtimes: ["codex"], ownTaskControl: true });
+  assert.equal(enabled.sessions?.ownTaskControl, true);
+  assert.equal(advertisedCapabilities(enabled).includes("sessions.own-task-control.v1"), true);
+  const disabled = policyWith(t, { enabled: false, workspaceRoots: [ROOT], runtimes: ["codex"], ownTaskControl: true });
+  assert.equal(disabled.sessions?.ownTaskControl, false);
+  assert.equal(advertisedCapabilities(disabled).includes("sessions.own-task-control.v1"), false);
+  const noRuntime = policyWith(t, { enabled: true, workspaceRoots: [ROOT], runtimes: [], ownTaskControl: true });
+  assert.equal(advertisedCapabilities(noRuntime).includes("sessions.own-task-control.v1"), false);
 });

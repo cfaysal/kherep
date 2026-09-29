@@ -149,6 +149,12 @@ export class MessageStore {
     } };
   }
 
+  // Metadata-only provenance for local task-control registration. The caller
+  // derives authority from the stored sender and target, never from a frame.
+  taskControlSource(messageId: string): { ownerNodeId: string; targetNodeId: string } | null {
+    const record = this.get(messageId);
+    return record ? { ownerNodeId: record.fromNode, targetNodeId: record.toNode } : null;
+  }
   // Queued messages for a target that just authenticated. The existing queue
   // limit bounds this set independently of sender-status history.
   pendingFor(nodeId: string, now: number): MessageEffects {

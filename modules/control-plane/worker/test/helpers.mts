@@ -3,6 +3,7 @@ import { env, exports } from "cloudflare:workers";
 import {
   challengeMessage, makeEnvelope, parseEnvelope, toBase64Url, type AuthBody, type ChallengeBody, type Envelope,
 } from "../../protocol.mts";
+import type { MessageStatusBody } from "../../protocol-messages.mts";
 import vectors from "../../test-vectors.json";
 import type { Env } from "../src/env.mts";
 
@@ -101,6 +102,32 @@ export class TestSocket {
   send(envelope: Envelope): void {
     this.ws.send(JSON.stringify(envelope));
   }
+}
+
+const observedStatuses = new WeakMap<TestSocket, Set<string>>();
+const statusKey = (body: MessageStatusBody): string => JSON.stringify([body.messageId, body.state, body.reason ?? null]);
+
+export async function nextMessageStatus(
+  socket: TestSocket,
+  expected: MessageStatusBody,
+  maxFrames = 8,
+): Promise<MessageStatusBody> {
+  let seen = observedStatuses.get(socket);
+  if (!seen) {
+    seen = new Set<string>();
+    observedStatuses.set(socket, seen);
+  }
+  for (let count = 0; count < maxFrames; count++) {
+    const envelope = await socket.next();
+    if (envelope.type !== "message.status") throw new Error(`expected message.status, got ${envelope.type}`);
+    const body = envelope.body as MessageStatusBody;
+    if (body.messageId === expected.messageId && body.state === expected.state) {
+      seen.add(statusKey(body));
+      return body;
+    }
+    if (!seen.has(statusKey(body))) return body;
+  }
+  throw new Error(`message status not received after ${maxFrames} frames`);
 }
 
 export async function connect(nodeId: string): Promise<{ socket: TestSocket; challenge: ChallengeBody }> {

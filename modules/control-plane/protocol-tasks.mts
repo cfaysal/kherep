@@ -43,7 +43,7 @@ export interface TaskRequirements { runtime?: TaskRuntime; os?: string; capabili
 // label (issue #74) is a display name; the session's name stays task-<8>.
 export interface SessionStartArgs {
   taskId: string; runtime: TaskRuntime; name: string; prompt: string; permissionMode: PermissionMode; cwd?: string;
-  requestedBy?: string; directive?: string; label?: string;
+  requestedBy?: string; directive?: string; sourceRequestId?: string; label?: string;
 }
 export interface SessionStopArgs { taskId: string }
 export interface SessionContinueArgs { taskId: string; prompt: string }
@@ -94,13 +94,14 @@ export function isTaskRequirements(value: unknown): value is TaskRequirements {
     && optional(value.capabilities, (v) => Array.isArray(v) && v.length <= 16 && v.every((c) => isLine(c, 64)));
 }
 
-const START_KEYS = ["taskId", "runtime", "name", "prompt", "permissionMode", "cwd", "requestedBy", "directive", "label"];
+const START_KEYS = ["taskId", "runtime", "name", "prompt", "permissionMode", "cwd", "requestedBy", "directive", "sourceRequestId", "label"];
 
 function isStartArgs(args: Record<string, unknown>): boolean {
   return only(args, START_KEYS) && isTaskId(args.taskId) && isTaskRuntime(args.runtime)
     && args.name === taskSessionName(args.taskId as string) && isTaskText(args.prompt) && isPermissionMode(args.permissionMode)
     && optional(args.cwd, (v) => isLine(v, MAX_CWD)) && optional(args.requestedBy, (v) => isLine(v, 256))
     && optional(args.directive, (v) => isText(v, MAX_DIRECTIVE)) && (args.requestedBy === undefined) === (args.directive === undefined)
+    && optional(args.sourceRequestId, isMessageId) && (args.sourceRequestId === undefined || args.requestedBy !== undefined)
     && optional(args.label, isTaskLabel);
 }
 

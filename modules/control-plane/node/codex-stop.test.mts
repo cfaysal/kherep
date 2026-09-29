@@ -57,3 +57,26 @@ test("a tree that survives SIGKILL rejects instead of confirming a stop", async 
   await assert.rejects(terminate({ processTree: () => TREE, processStart: (pid) => TREE.find((entry) => entry.pid === pid)?.start ?? null,
     graceMs: 1, signal: () => {} }, ROOT, "root-start"), /did not stop after SIGKILL/);
 });
+
+test("a root lost during capture cannot hide a surviving descendant", async () => {
+  const signals: NodeJS.Signals[] = [];
+  await assert.rejects(terminate({ processTree: () => [TREE[1]],
+    processStart: (pid) => pid === CHILD ? "child-start" : null,
+    signal: (_pid, signal) => { signals.push(signal); } }, ROOT, "root-start"),
+  /root process identity changed during capture/);
+  assert.deepEqual(signals, []);
+});
+
+test("a reused root seen during capture is not accepted as a stopped tree", async () => {
+  const signals: NodeJS.Signals[] = [];
+  await assert.rejects(terminate({ processTree: () => [{ pid: ROOT, start: "reused-root" }, TREE[1]],
+    processStart: (pid) => pid === ROOT ? "reused-root" : "child-start",
+    signal: (_pid, signal) => { signals.push(signal); } }, ROOT, "root-start"),
+  /root process identity changed during capture/);
+  assert.deepEqual(signals, []);
+});
+
+test("a missing root with ended captured descendants needs no signal", async () => {
+  await terminate({ processTree: () => [TREE[1]], processStart: () => null,
+    signal: () => { assert.fail("an ended tree must not be signalled"); } }, ROOT, "root-start");
+});

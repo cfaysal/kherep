@@ -45,6 +45,10 @@ export interface TaskRow {
   resultSummary: string | null; reason: string | null; label: string | null; text?: string;
 }
 
+export interface TaskControlTaskSource {
+  taskId: string; targetNodeId: string | null; ownerNodeId: string | null; runtime: "claude" | "codex";
+  sourceRequestId: string | null; operatorOwned: boolean;
+}
 export type CreateResult = { ok: true; task: TaskRow; existing: boolean } | { ok: false; reason: string };
 
 type Audit = (actor: string, action: string, target: string | null, detail: unknown) => void;
@@ -175,12 +179,32 @@ export class TaskStore {
       match ? match[1] : "--------").toArray().length > 0;
   }
 
+  taskControlSourceByTask(taskId: string): TaskControlTaskSource | null {
+    const row = this.sql.exec("SELECT id, node_id, requested_by, request_id, requirements FROM tasks WHERE id = ?", taskId).toArray()[0];
+    return row ? this.taskControlSource(row) : null;
+  }
+
+  taskControlSourcesByRequest(sourceRequestId: string): TaskControlTaskSource[] {
+    return this.sql.exec(`SELECT id, node_id, requested_by, request_id, requirements FROM tasks
+      WHERE request_id = ? ORDER BY created_at, rowid`, sourceRequestId).toArray().map((row) => this.taskControlSource(row));
+  }
   // True while any task of the node is active. A session names itself, so the
   // Worker takes no task request from a node that runs task sessions.
   hasActiveTasks(nodeId: string): boolean {
     return this.sql.exec(`SELECT 1 FROM tasks WHERE node_id = ? AND state IN (${ACTIVE}) LIMIT 1`, nodeId).toArray().length > 0;
   }
 
+  private taskControlSource(row: Record<string, SqlStorageValue>): TaskControlTaskSource {
+    const requestedBy = row.requested_by as string | null;
+    const slash = requestedBy?.indexOf("/") ?? -1;
+    const requirements = JSON.parse(String(row.requirements)) as TaskRequirements;
+    return {
+      taskId: String(row.id), targetNodeId: row.node_id as string | null,
+      ownerNodeId: slash > 0 ? requestedBy!.slice(0, slash) : null,
+      runtime: requirements.runtime ?? "claude", sourceRequestId: row.request_id as string | null,
+      operatorOwned: requestedBy === null,
+    };
+  }
   // A message may carry a task id only when the sender or the target node runs the task.
   taskOnEitherNode(taskId: string, from: string, to: string): boolean {
     const task = this.get(taskId, false);

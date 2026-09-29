@@ -3,6 +3,11 @@ import {
   type NodeFacts, type Phase1Command, type RuntimeInfo, type SessionCommand, type SessionInfo,
 } from "../protocol.mts";
 import {
+  isTaskControlExecuteBody, isTaskControlQueryResultBody, isTaskControlRegistrationReceiptBody, isTaskControlResultReceiptBody,
+  type TaskControlEventBody, type TaskControlExecuteBody, type TaskControlQueryResultBody, type TaskControlRegistrationReceiptBody,
+  type TaskControlResultReceiptBody,
+} from "../protocol-task-control.mts";
+import {
   isCommandArgs, isTaskRequestResult, TASK_REQUEST_RESULT, type TaskReportBody, type TaskRequestBody, type TaskRequestResult,
 } from "../protocol-tasks.mts";
 import {
@@ -40,6 +45,10 @@ export interface ClientOptions {
   receiptUpdate?: (body: MessageReceiptBody) => void;
   // Item 5: the Worker's answer to a task.request this node sent.
   taskRequestResult?: (result: TaskRequestResult) => void;
+  taskControlExecute?: (body: TaskControlExecuteBody) => Promise<void>;
+  taskControlRegistrationReceipt?: (body: TaskControlRegistrationReceiptBody) => void;
+  taskControlResultReceipt?: (body: TaskControlResultReceiptBody) => void;
+  taskControlQueryResult?: (body: TaskControlQueryResultBody) => void;
   log?: (line: string) => void;
   now?: () => number;
 }
@@ -86,6 +95,26 @@ export class NodeClient {
         if ((envelope.body as { name?: unknown }).name === TASK_REQUEST_RESULT && this.authenticated) {
           const body = envelope.body;
           if (isTaskRequestResult(body)) this.callback(body.requestId, () => this.options.taskRequestResult?.(body));
+          return [];
+        }
+        if (this.authenticated && isTaskControlExecuteBody(envelope.body)) {
+          try {
+            await this.options.taskControlExecute?.(envelope.body);
+          } catch (error) {
+            this.options.log?.(`kherep-node: could not execute task control ${envelope.body.operationId}: ${String((error as Error).message ?? error)}`);
+          }
+          return [];
+        }
+        if (this.authenticated && isTaskControlRegistrationReceiptBody(envelope.body)) {
+          this.callback(envelope.body.registrationId, () => this.options.taskControlRegistrationReceipt?.(envelope.body as TaskControlRegistrationReceiptBody));
+          return [];
+        }
+        if (this.authenticated && isTaskControlResultReceiptBody(envelope.body)) {
+          this.callback(envelope.body.operationId, () => this.options.taskControlResultReceipt?.(envelope.body as TaskControlResultReceiptBody));
+          return [];
+        }
+        if (this.authenticated && isTaskControlQueryResultBody(envelope.body)) {
+          this.callback(envelope.body.requestId, () => this.options.taskControlQueryResult?.(envelope.body as TaskControlQueryResultBody));
           return [];
         }
         if ((envelope.body as { name?: unknown }).name !== "auth.ok") return [];
@@ -156,6 +185,9 @@ export class NodeClient {
     return this.authenticated ? [this.frame("task.report", { ...body })] : [];
   }
 
+  sendTaskControl(body: TaskControlEventBody): string[] {
+    return this.authenticated ? [this.frame("event", { ...body })] : [];
+  }
   requestTask(body: TaskRequestBody): string[] {
     const { requestId, title, text, requirements, directive, requestedBy, label } = body;
     return this.authenticated

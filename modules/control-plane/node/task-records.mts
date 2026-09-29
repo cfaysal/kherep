@@ -23,13 +23,15 @@ export interface TaskRecord {
   // Codex: sessionId is the thread_id of `thread.started`, for `codex exec
   // resume`; pid and pidStart (the process start time) identify the process
   // to stop, since a pid alone may be reused.
-  shortId?: string; sessionId?: string; requestedBy?: string; reason?: string;
+  shortId?: string; sessionId?: string; requestedBy?: string; sourceRequestId?: string; reason?: string;
   // The display label of the session (issue #74), shown in the directory
   // instead of the name; the name stays task-<8>.
   label?: string;
   pid?: number; pidStart?: string;
   // A confirmed operator request blocks autonomous message resumes until an explicit continue.
   operatorStoppedAt?: string;
+  // Exact run whose remote stop may require recovery; blocks automatic retry.
+  taskControlRecoveryRunVersion?: string;
   // Codex: the inbox messages a run started for peer messages carries
   // (codex-wake.mts); settled as delivered or retry when that run ends.
   offered?: string[];

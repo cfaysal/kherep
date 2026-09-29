@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index.mts";
 import { makeEnvelope } from "../../protocol.mts";
-import { authenticate, BASE, enroll, FACTS, newKey, registry, workerFetch } from "./helpers.mts";
+import { authenticate, BASE, enroll, FACTS, newKey, nextMessageStatus, registry, workerFetch } from "./helpers.mts";
 
 const TEAM = "https://team.example.com";
 const AUD = "test-audience";
@@ -157,11 +157,11 @@ describe("operator API", () => {
     const sender = await authenticate(senderId, senderKey);
     const messageId = crypto.randomUUID();
     sender.send(makeEnvelope("message.send", { messageId, fromSession: "s-a", to: { nodeId: targetId, session: "s-b" }, text: "queued secret" }, 0, 0));
-    expect((await sender.next()).body).toEqual({ messageId, state: "queued" });
+    expect(await nextMessageStatus(sender, { messageId, state: "queued" })).toEqual({ messageId, state: "queued" });
 
     expect((await api(`/api/nodes/${targetId}`, { method: "DELETE" }, jwt)).status).toBe(200);
-    const status = await sender.next();
-    expect([status.type, status.body]).toEqual(["message.status", { messageId, state: "refused", reason: "target node revoked" }]);
+    expect(await nextMessageStatus(sender, { messageId, state: "refused", reason: "target node revoked" }))
+      .toEqual({ messageId, state: "refused", reason: "target node revoked" });
     const row = await runInDurableObject(registry(), (_i, state) =>
       state.storage.sql.exec("SELECT state, text FROM messages WHERE id = ?", messageId).one());
     expect(row).toEqual({ state: "refused", text: null });
