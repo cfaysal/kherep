@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,18 +26,34 @@ test("only a detached run on Windows goes through the wrapper, run with this Nod
 });
 
 // Runs the wrapper as spawnCodex does: stdin piped, stdout and stderr into files.
-async function wrapped(t: test.TestContext, args: string[], input: string): Promise<{ code: number | null; out: string; err: string }> {
+async function wrapped(t: test.TestContext, args: string[], input: string, useWrapper = true, timeoutMs = 20_000): Promise<{ code: number | null; out: string; err: string }> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-windowless-"));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const outFile = path.join(dir, "out");
   const errFile = path.join(dir, "err");
   const out = fs.openSync(outFile, "w");
   const err = fs.openSync(errFile, "w");
-  const child = spawn(process.execPath, [WINDOWLESS, ...args], { stdio: ["pipe", out, err], windowsHide: true });
+  const child = spawn(process.execPath, useWrapper ? [WINDOWLESS, ...args] : args,
+    { stdio: ["pipe", out, err], detached: true, windowsHide: true });
   fs.closeSync(out);
   fs.closeSync(err);
+  let killed = false;
+  const stopTree = () => {
+    if (killed || !child.pid || child.exitCode !== null || child.signalCode !== null) return;
+    killed = true;
+    try {
+      if (process.platform === "win32") execFileSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"],
+        { windowsHide: true, timeout: 5_000, stdio: "ignore" });
+      else process.kill(-child.pid, "SIGKILL");
+    } catch { child.kill("SIGKILL"); }
+  };
+  t.after(() => { stopTree(); fs.rmSync(dir, { recursive: true, force: true }); });
+  child.stdin!.on("error", () => {});
   child.stdin!.end(input);
-  const code = await new Promise<number | null>((resolve) => { child.on("exit", (c) => resolve(c)); });
+  const code = await new Promise<number | null>((resolve, reject) => {
+    const timer = setTimeout(() => { stopTree(); reject(new Error("windowless probe timed out")); }, timeoutMs);
+    child.once("error", (error) => { clearTimeout(timer); reject(error); });
+    child.once("close", (code) => { clearTimeout(timer); resolve(code); });
+  });
   // Node versions that still flag type stripping print an ExperimentalWarning
   // for the wrapper itself; it is Node's line, not one the wrapper forwarded.
   const nodeWarning = /^\(node:\d+\) ExperimentalWarning: .*\n|^\(Use `node --trace-warnings \.\.\.` .*\n/gm;
@@ -57,7 +73,40 @@ test("a wrapper whose program cannot start exits 1 with the reason on stderr", a
   assert.match(result.err, /ENOENT/);
 });
 
+test("a stalled wrapper probe fails within its deadline", async (t) => {
+  await assert.rejects(wrapped(t, [process.execPath, "-e", "setInterval(() => {}, 1000)"], "", true, 100),
+    /windowless probe timed out/);
+});
+
 const win32 = { skip: process.platform === "win32" ? false : "Windows only" };
+
+test("Windows: a shell child of wrapped codex has no visible console window", win32, async (t) => {
+  const native = [
+    "using System; using System.Runtime.InteropServices; public static class KherepWindow {",
+    "[DllImport(\"kernel32.dll\")] public static extern IntPtr GetConsoleWindow();",
+    "[DllImport(\"user32.dll\")] public static extern bool IsWindowVisible(IntPtr h); }",
+  ].join(" ");
+  const probe = [
+    `Add-Type -TypeDefinition '${native}'`,
+    "$handle = [KherepWindow]::GetConsoleWindow()",
+    "$visible = [KherepWindow]::IsWindowVisible($handle)",
+    "[Console]::Out.WriteLine(\"visible=$visible\")",
+  ].join("; ");
+  // No windowsHide on the shell: it must inherit the windowless console from
+  // the wrapped process, as a Codex shell child does.
+  const codex = `const { spawn } = require("node:child_process");`
+    + `const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ${JSON.stringify(probe)}], { stdio: "pipe" });`
+    + `child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr);`
+    + `child.on("close", (code) => { process.exitCode = code ?? 1; });`;
+  const command = [process.execPath, "-e", codex];
+  const baseline = await wrapped(t, command, "", false);
+  assert.equal(baseline.code, 0, baseline.err);
+  assert.equal(baseline.out.trim().toLowerCase(), "visible=true",
+    "the runner must reproduce the visible-window regression before checking the fix");
+  const result = await wrapped(t, command, "");
+  assert.equal(result.code, 0, result.err);
+  assert.equal(result.out.trim().toLowerCase(), "visible=false");
+});
 
 function operatorTask(t: test.TestContext) {
   // First, so its cleanup ends the runs before the node directory goes.

@@ -54,6 +54,12 @@ jobs:
         run: node --test modules/twg/*.test.mts
       - name: Bootstrap suites (TypeScript on Node, no build)
         run: npm run test:bootstrap
+      - name: Install dependencies for Windows Control Plane tests
+        if: runner.os == 'Windows'
+        run: npm ci
+      - name: Control Plane protocol and node suites (Windows)
+        if: runner.os == 'Windows'
+        run: npm run test:control-plane
 
   # The unit suites and the node suites of the typescript job (without the type
   # check) on releases the engines field in package.json admits besides the
