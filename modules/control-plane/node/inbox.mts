@@ -3,8 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { SessionInfo } from "../protocol.mts";
+import { isTaskId, SUPPORTED_RUNTIMES, type TaskRuntime } from "../protocol-tasks.mts";
 import {
-  isMessageId, type MessageAddress, type MessageDeliverBody, type MessageState, type MessageStatusBody,
+  isMessageId, isSessionRef, type MessageAddress, type MessageDeliverBody, type MessageState, type MessageStatusBody,
 } from "../protocol-messages.mts";
 import { ensureDir } from "./config.mts";
 
@@ -31,6 +32,8 @@ export interface InboxRecord {
   inReplyTo?: string;
   // Item 5: the task the message belongs to (task grant of the wake listener).
   taskId?: string;
+  // The local task that performed delivery. Separate from the authorization grant above.
+  delivery?: DeliveryTaskIdentity;
   createdAt: string;
   receivedAt: string;
   state: "accepted" | "offered" | "delivered" | "refused";
@@ -56,6 +59,8 @@ export interface InboxRecord {
 // accepted in the cloud until the turn confirms delivery.
 export type ReportedState = "accepted" | "delivered" | "refused";
 export interface ReceiptRecord { reportedAt: string; reportedState: ReportedState; workerState: MessageState }
+
+export interface DeliveryTaskIdentity { taskId: string; runtime: TaskRuntime; sessionId?: string }
 
 function fileOf(dir: string, messageId: string): string {
   return path.join(dir, `${messageId}.json`);
@@ -129,6 +134,18 @@ export function listInbox(dir: string, toSession?: string): InboxRecord[] {
     .sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
 }
 
+// Associates a message with the local execution that delivered it. This does
+// not change taskId, which remains the authorization grant from the sender.
+export function setDeliveryTask(dir: string, messageId: string, identity: DeliveryTaskIdentity): boolean {
+  if (!isTaskId(identity.taskId) || !SUPPORTED_RUNTIMES.includes(identity.runtime)
+    || (identity.sessionId !== undefined && !isSessionRef(identity.sessionId))) {
+    throw new Error("invalid delivery task identity");
+  }
+  const record = getMessage(dir, messageId);
+  if (!record) return false;
+  writeJsonAtomic(fileOf(dir, messageId), { ...record, delivery: identity });
+  return true;
+}
 // Marks a stored message as delivered into its session and returns the
 // message.status body to send, or null when the message is not in the inbox.
 export function markDelivered(dir: string, messageId: string): MessageStatusBody | null {

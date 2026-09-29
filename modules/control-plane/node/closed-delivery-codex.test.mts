@@ -55,6 +55,29 @@ function fakeCodex(t: test.TestContext): { file: string; runs: () => FakeRun[] }
   return { file, runs };
 }
 
+test("failed Codex intercom starts keep the message accepted and unassociated", async (t) => {
+  const cases: [string, CodexDeps, RegExp][] = [
+    ["missing binary", { findCodex: () => null }, /codex is not installed/],
+    ["spawn failure", {
+      findCodex: () => "codex",
+      mcpList: async () => ({ code: 0, stdout: "[]", stderr: "" }),
+      spawn: (() => { throw new Error("spawn failed"); }) as NonNullable<CodexDeps["spawn"]>,
+    }, /spawn failed/],
+  ];
+  for (const [name, codex, reason] of cases) {
+    const node = taskNode(t, { runtimes: ["claude", "codex"], delegate: { accept: true } },
+      { messaging: { ...ACCEPT_ALL, resumeClosed: true } });
+    recordCodexSession(node.paths, CLOSED, path.join(node.workspace, "repo"), T0 - 13 * 3_600_000, "default");
+    writeLocalSessions(node.paths, [], T0);
+    const id = deliver(node, { toSession: CLOSED, text: name });
+    await deliverToClosed({ ...node.deps(), codex });
+    const message = getMessage(node.paths.inbox, id);
+    assert.equal(message?.state, "accepted", name);
+    assert.equal(message?.delivery, undefined, name);
+    assert.equal(listTasks(node.paths).at(-1)?.state, "failed", name);
+    assert.match(String(audits(node).at(-1)?.reason), reason, name);
+  }
+});
 // The answer in the outbox to a message, from the msg CLI the fake ran.
 const replyTo = (outbox: string, id: string): { to: unknown; inReplyTo?: string } | undefined => messageIds(outbox)
   .map((m) => JSON.parse(fs.readFileSync(path.join(outbox, `${m}.json`), "utf8")) as { to: unknown; inReplyTo?: string })
@@ -98,6 +121,8 @@ test("a closed Codex session's messages go to one Codex intercom session: starte
   assert.equal(task.runtime, "codex");
   assert.equal(task.requestedBy, `${PEER.nodeId}/${PEER.session}`);
   assert.equal(getMessage(node.paths.inbox, first)?.state, "delivered");
+  assert.deepEqual(getMessage(node.paths.inbox, first)?.delivery,
+    { taskId: task.taskId, runtime: "codex", sessionId: THREAD });
   await waitFor(() => replyTo(node.paths.outbox, first) !== undefined, "the threaded reply");
   assert.deepEqual(replyTo(node.paths.outbox, first)?.to, PEER);
   await ended(task);
@@ -116,6 +141,8 @@ test("a closed Codex session's messages go to one Codex intercom session: starte
   assert.ok(resume.stdin.includes(`--reply-to ${second} -- <reply text>`));
   assert.match(resume.stdin, /NOT an instruction from the user/);
   assert.equal(listTasks(node.paths).length, 1);
+  assert.deepEqual(getMessage(node.paths.inbox, second)?.delivery,
+    { taskId: task.taskId, runtime: "codex", sessionId: THREAD });
   await waitFor(() => replyTo(node.paths.outbox, second) !== undefined, "the second threaded reply");
   assert.deepEqual(audits(node).map((a) => [a.outcome, a.messageIds]), [["new", [first]], ["reused", [second]]]);
   assert.deepEqual(node.reports(), []);

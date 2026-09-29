@@ -1,6 +1,7 @@
 import type { TaskState } from "../protocol-tasks.mts";
 import { MAX_RUNTIME_REASON, watchCodexTasks } from "./codex-runner.mts";
 import { retireCopies } from "./copy-retire.mts";
+import { resolveDelivery, updateDeliverySession } from "./delivery-identity.mts";
 import { readdress } from "./inbox.mts";
 import { agentRows, findRow, mapIds, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { isActive, listTasks, mappingPendingAt, queueReport, writeTask } from "./task-records.mts";
@@ -59,9 +60,10 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
     if (!reported && mapped.shortId === record.shortId && mapped.mappingPendingSince === record.mappingPendingSince) continue;
     // An intercom session resumed as a copy under a new id (issue #109) takes over its waiting messages.
     if (record.local === "intercom" && record.sessionId && mapped.sessionId && mapped.sessionId !== record.sessionId) {
-      readdress(deps.paths.inbox, record.sessionId, mapped.sessionId);
+      const moved = readdress(deps.paths.inbox, record.sessionId, mapped.sessionId);
+      updateDeliverySession(deps.paths, mapped, moved, mapped.sessionId);
     }
-    const saved = writeTask(deps.paths, { ...mapped, state: next }, now);
+    const saved = writeTask(deps.paths, resolveDelivery(deps.paths, { ...mapped, state: next }), now);
     if (reported) queueReport(deps.paths, { taskId: saved.taskId, state: next, ...(saved.sessionId ? { sessionId: saved.sessionId } : {}) });
   }
   // Adopted copies (issue #111): the sessions their records held before are stopped once idle.

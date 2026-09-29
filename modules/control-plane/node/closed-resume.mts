@@ -6,12 +6,13 @@ import { resumeArgs } from "./codex-process.mts";
 import { adoptOffered, spawnRun } from "./codex-runner.mts";
 import { retireCopies } from "./copy-retire.mts";
 import { deliveryContext, frameRecords, sessionInbox } from "./deliver-core.mts";
+import { attachDelivery, updateDeliverySession } from "./delivery-identity.mts";
 import { addLocalSession, readDirectory } from "./exchange.mts";
 import { getMessage, markClosedAttempt, markDelivered, markOffered, markRetry, readdress, type InboxRecord } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
 import { agentRows, BACKGROUNDED, mapIds, runClaude, startTask, type RunnerDeps } from "./session-runner.mts";
 import { CLAUDE_RUNTIME } from "./sessions.mts";
-import { queueReport, senderOf, writeTask, type TaskRecord } from "./task-records.mts";
+import { queueReport, readTask, senderOf, writeTask, type TaskRecord } from "./task-records.mts";
 import { wakeText } from "./wake-hook.mts";
 
 // How closed-delivery.mts hands messages for a session that is no longer
@@ -85,7 +86,10 @@ export async function resumeClaude(deps: RunnerDeps, task: TaskRecord, cwd: stri
   const saved = writeTask(deps.paths, mapIds({ ...pending, shortId }, row), now);
   // A copy under a new id (issue #109) takes over the messages waiting for the original id.
   const adopted = saved.sessionId ?? sessionId;
-  if (adopted !== sessionId) readdress(deps.paths.inbox, sessionId, adopted);
+  if (adopted !== sessionId) {
+    const moved = readdress(deps.paths.inbox, sessionId, adopted);
+    updateDeliverySession(deps.paths, saved, moved, adopted);
+  }
   queueReport(deps.paths, { taskId: saved.taskId, state: "started", sessionId: adopted });
   addLocalSession(deps.paths, { sessionId: adopted, name: task.name });
   if (rows) await retireCopies(deps, saved, rows);
@@ -134,9 +138,8 @@ function senderLabel(deps: RunnerDeps, from: InboxRecord["from"]): string | unde
 // as far as they fit; the messages it carries are delivered (for Codex once
 // its run completes the turn, see handOver).
 export async function startIntercom(deps: RunnerDeps, target: ClosedTarget, records: InboxRecord[],
-  mode: PermissionMode, directive = fallbackDirective(target.sessionId)): Promise<string | null> {
+  mode: PermissionMode, directive = fallbackDirective(target.sessionId), taskId: string = crypto.randomUUID()): Promise<string | null> {
   const from = records[0].from;
-  const taskId = crypto.randomUUID();
   const label = senderLabel(deps, from);
   let text: string;
   let carried: InboxRecord[];
@@ -148,11 +151,19 @@ export async function startIntercom(deps: RunnerDeps, target: ClosedTarget, reco
   const args: SessionStartArgs = { taskId, runtime: target.runtime, name: taskSessionName(taskId), prompt: text, permissionMode: mode,
     cwd: target.cwd, requestedBy: senderOf(records[0]), directive,
     ...(label ? { label } : {}) };
+  let result: Awaited<ReturnType<typeof startTask>>;
   try {
-    await startTask(args, { ...deps, local: "intercom" });
+    result = await startTask(args, { ...deps, local: "intercom" });
   } catch (error) {
     return reasonOf(error);
   }
+  const started = readTask(deps.paths, taskId);
+  if (!started) return "the local delivery task record was not written";
+  if (!["started", "running"].includes(result.state) || !["started", "running"].includes(started.state)) {
+    return started.reason ?? "the local delivery task did not start";
+  }
+  const linked = attachDelivery(deps.paths, started, carried.map((record) => record.messageId));
+  if (linked !== started) writeTask(deps.paths, linked, deps.now?.());
   if (target.runtime === "codex") handOver(deps, taskId, args.name, carried);
   else for (const record of carried) markDelivered(deps.paths.inbox, record.messageId);
   return null;
