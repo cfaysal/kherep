@@ -7,6 +7,7 @@ import { takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
 import { codexNode, THREAD, waitFor } from "./codex-fixture.mts";
 import { readExit } from "./codex-output.mts";
+import { stopCodex } from "./codex-runner.mts";
 import { codexFiles } from "./codex-process.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { getOutbox } from "./exchange.mts";
@@ -169,7 +170,7 @@ test("a message run past the max runtime keeps the task's state and sends no rep
   await waitFor(() => readExit(codexFiles(node.paths, TASK)) !== null, "the stopped run");
 });
 
-test("one run at a time; a stopped or failed run offers its messages again within the limits", posix, async (t) => {
+test("one run at a time; a system-stopped or failed run offers its messages again within the limits", posix, async (t) => {
   const node = await doneTask(t);
   const slow = deliver(node, "take your time [sleep]");
   await pollCodexInbound(node.deps());
@@ -179,8 +180,9 @@ test("one run at a time; a stopped or failed run offers its messages again withi
   await pollCodexInbound(node.deps());
   assert.equal(node.runs().length, 2, "no second run while one runs");
   assert.equal(getMessage(node.paths.inbox, waiting)?.state, "accepted");
-  await stopTask({ taskId: TASK }, node.deps());
+  await stopCodex({ taskId: TASK }, node.deps(), "test interruption", false);
   assert.equal(readTask(node.paths, TASK)?.state, "done", "the task keeps its reported done");
+  assert.equal(readTask(node.paths, TASK)?.operatorStoppedAt, undefined, "a system stop does not block retry");
   assert.equal(getMessage(node.paths.inbox, slow)?.retry, true);
   await waitFor(() => readExit(codexFiles(node.paths, TASK)) !== null, "the stopped run");
 
