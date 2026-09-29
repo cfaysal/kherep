@@ -183,6 +183,12 @@ describe("task-control grants and operation ledger", () => {
     expect(await registry().recordTaskControlResult(targetNodeId, {
       ...base, runVersion: expectedRunVersion, stopConfirmed: false,
     })).toEqual({ ok: false, errorCode: "result_mismatch" });
+    expect(await registry().recordTaskControlResult(targetNodeId, {
+      ...base, processState: "running", runVersion: expectedRunVersion, stopConfirmed: true,
+    })).toEqual({ ok: false, errorCode: "result_mismatch" });
+    expect(await registry().recordTaskControlResult(targetNodeId, {
+      ...base, stopSupported: false, runVersion: expectedRunVersion, stopConfirmed: true,
+    })).toEqual({ ok: false, errorCode: "result_mismatch" });
     const confirmed = { ...base, runVersion: expectedRunVersion, stopConfirmed: true };
     expect(await registry().recordTaskControlResult(targetNodeId, confirmed)).toEqual({ ok: true, receipt: {
       name: "task.control.result.receipt", operationId: submitted.execute!.operationId, storedState: "succeeded",

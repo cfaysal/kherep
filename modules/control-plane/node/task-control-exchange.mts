@@ -2,7 +2,7 @@ import type { TaskControlEventBody, TaskControlExecuteBody, TaskControlResultBod
 import type { NodePaths } from "./config.mts";
 import {
   beginOperation, completeOperation, ensureDeliveryRegistrations, pendingControlQueries, pendingControlSubmits, pendingRegistrations,
-  pendingResults,
+  pendingResults, recoverOperation,
 } from "./task-control-store.mts";
 
 export interface TaskControlSender {
@@ -13,7 +13,13 @@ export async function handleTaskControlExecute(paths: NodePaths, body: TaskContr
   run: (body: TaskControlExecuteBody) => Promise<TaskControlResultBody>, now: number = Date.now()): Promise<void> {
   const begun = beginOperation(paths, body, now);
   if (begun.kind !== "execute") return;
-  const result = await run(body);
+  let result: TaskControlResultBody;
+  try {
+    result = await run(body);
+  } catch {
+    recoverOperation(paths, body.operationId, now);
+    return;
+  }
   completeOperation(paths, body.operationId, result, now);
 }
 

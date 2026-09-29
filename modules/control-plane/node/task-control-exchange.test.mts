@@ -4,7 +4,9 @@ import test from "node:test";
 import type { TaskControlEventBody, TaskControlExecuteBody, TaskControlResultBody } from "../protocol-task-control.mts";
 import { setDeliveryTask, storeMessage } from "./inbox.mts";
 import { handleTaskControlExecute, pollTaskControl } from "./task-control-exchange.mts";
-import { applyQueryResult, beginOperation, completeOperation, queueControlRequest } from "./task-control-store.mts";
+import { applyQueryResult, beginOperation, completeOperation, pendingResults, queueControlRequest, receiptResult } from "./task-control-store.mts";
+import { runVersionOf } from "./task-control-run.mts";
+import { readTask, writeTask } from "./task-records.mts";
 import { taskNode, TASK, T0 } from "./task-fixture.mts";
 
 const OWNER = "00000000-0000-4000-8000-0000000000bb";
@@ -25,6 +27,41 @@ test("the journal is executing before the effect and a completed replay never ru
   await handleTaskControlExecute(node.paths, execute, run, T0);
   await handleTaskControlExecute(node.paths, execute, run, T0 + 1);
   assert.equal(effects, 1);
+});
+
+test("an executor rejection becomes one replayable recovery result without a second effect", async (t) => {
+  const node = taskNode(t);
+  const task = writeTask(node.paths, {
+    taskId: TASK, runtime: "codex", name: "task-run", cwd: node.workspace, permissionMode: "auto", state: "running",
+    startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60_000).toISOString(),
+    updatedAt: new Date(T0).toISOString(), pid: 1234, pidStart: "start",
+  });
+  const stop = { ...execute, action: "stop" as const, expectedRunVersion: runVersionOf(task)! };
+  let effects = 0;
+  const run = async (): Promise<TaskControlResultBody> => {
+    effects += 1;
+    throw new Error("PRIVATE_EXECUTOR_FAILURE");
+  };
+
+  await handleTaskControlExecute(node.paths, stop, run, T0);
+  await handleTaskControlExecute(node.paths, stop, run, T0 + 1);
+  assert.equal(effects, 1);
+  assert.ok(readTask(node.paths, TASK)?.operatorStoppedAt);
+  const [recovery] = pendingResults(node.paths);
+  assert.deepEqual(recovery, {
+    name: "task.control.result", operationId: OPERATION, taskId: TASK, state: "unknown", runtime: "codex",
+    taskState: "unknown", processState: "unknown", observedAt: new Date(T0).toISOString(), freshness: "fresh",
+    stopSupported: false, stopConfirmed: false, errorCode: "recovery_required",
+  });
+  assert.equal(JSON.stringify(recovery).includes("PRIVATE_EXECUTOR_FAILURE"), false);
+
+  const sent: TaskControlEventBody[] = [];
+  const sender = { sendTaskControl: (body: TaskControlEventBody) => { sent.push(body); return ["frame"]; } };
+  pollTaskControl(sender, node.paths, new Set(), () => true, T0 + 2);
+  pollTaskControl(sender, node.paths, new Set(), () => true, T0 + 3);
+  assert.deepEqual(sent.filter((body) => body.name === "task.control.result"), [recovery, recovery]);
+  receiptResult(node.paths, OPERATION, T0 + 4);
+  assert.deepEqual(pendingResults(node.paths), []);
 });
 
 test("the exchange retries registrations, submits and results, then queries pending requests", (t) => {

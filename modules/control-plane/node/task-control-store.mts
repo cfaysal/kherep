@@ -77,29 +77,32 @@ export function receiptResult(paths: NodePaths, operationId: string, now: number
   writeOperation(paths, { ...existing, receiptAt: iso(now), updatedAt: iso(now) });
 }
 
+export function recoverOperation(paths: NodePaths, operationId: string, now: number = Date.now()): void {
+  const record = readOperation(paths, operationId);
+  if (!record || record.status !== "executing") return;
+  const { execute } = record;
+  if (execute.action === "stop" && execute.expectedRunVersion) {
+    const task = readTask(paths, execute.taskId);
+    if (task && runVersionOf(task) === execute.expectedRunVersion) {
+      writeTask(paths, { ...task, operatorStoppedAt: task.operatorStoppedAt ?? iso(now),
+        taskControlRecoveryRunVersion: execute.expectedRunVersion }, now);
+    }
+  }
+  const result: TaskControlResultBody = {
+    name: "task.control.result", operationId, taskId: execute.taskId, state: "unknown", runtime: execute.runtime,
+    taskState: "unknown", processState: "unknown", observedAt: iso(now), freshness: "fresh",
+    stopSupported: false, stopConfirmed: false, errorCode: "recovery_required",
+  };
+  writeOperation(paths, { ...record, status: "completed", result, updatedAt: iso(now) });
+}
+
 export function recoverOperations(paths: NodePaths, now: number = Date.now()): void {
   for (const operationId of messageIds(operationsDir(paths))) {
-    let record: OperationRecord | null;
     try {
-      record = readOperation(paths, operationId);
+      recoverOperation(paths, operationId, now);
     } catch {
-      continue;
+      // An unreadable journal remains untouched and cannot be replayed automatically.
     }
-    if (!record || record.status !== "executing") continue;
-    const { execute } = record;
-    if (execute.action === "stop" && execute.expectedRunVersion) {
-      const task = readTask(paths, execute.taskId);
-      if (task && runVersionOf(task) === execute.expectedRunVersion) {
-        writeTask(paths, { ...task, operatorStoppedAt: task.operatorStoppedAt ?? iso(now),
-          taskControlRecoveryRunVersion: execute.expectedRunVersion }, now);
-      }
-    }
-    const result: TaskControlResultBody = {
-      name: "task.control.result", operationId, taskId: execute.taskId, state: "unknown", runtime: execute.runtime,
-      taskState: "unknown", processState: "unknown", observedAt: iso(now), freshness: "fresh",
-      stopSupported: false, stopConfirmed: false, errorCode: "recovery_required",
-    };
-    writeOperation(paths, { ...record, status: "completed", result, updatedAt: iso(now) });
   }
 }
 
