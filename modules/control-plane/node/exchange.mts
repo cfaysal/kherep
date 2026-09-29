@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { SessionInfo } from "../protocol.mts";
-import { isDirectoryBody, isMessageId, isMessageSendBody, type DirectoryBody, type MessageSendBody } from "../protocol-messages.mts";
+import { isDirectoryBody, isMessageId, isMessageSendBody, type DirectoryBody, type MessageProgress, type MessageSendBody } from "../protocol-messages.mts";
 import type { ClientOptions, NodeClient, SentState } from "./client.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import {
@@ -27,9 +27,9 @@ export interface OutboxRecord extends MessageSendBody { createdAt: string; depth
 // A malformed outbox file leaves a sent record with only messageId and state error.
 // noticedAt: when the delivery hook told the sending session it failed.
 export type SentRecord = Partial<OutboxRecord> & {
-  messageId: string; state: SentState; reason?: string; updatedAt: string; noticedAt?: string;
+  messageId: string; state: SentState; reason?: string; progress?: MessageProgress; updatedAt: string; noticedAt?: string;
 };
-export interface LocalSession { sessionId: string; name?: string }
+export interface LocalSession { sessionId: string; name?: string; runtime?: string; state?: string }
 
 const fileOf = (dir: string, messageId: string): string => path.join(dir, `${messageId}.json`);
 
@@ -68,7 +68,8 @@ export function getSent(paths: NodePaths, messageId: string): SentRecord | null 
 
 // Moves an outbox record to sent/ with the given state, or updates the state
 // of one already there. Returns false for a message this node does not know.
-export function recordSent(paths: NodePaths, messageId: string, state: SentState, reason?: string, now: number = Date.now()): boolean {
+export function recordSent(paths: NodePaths, messageId: string, state: SentState, reason?: string, now: number = Date.now(),
+  progress?: MessageProgress): boolean {
   let pending: OutboxRecord | null = null;
   try {
     pending = getOutbox(paths, messageId);
@@ -80,13 +81,18 @@ export function recordSent(paths: NodePaths, messageId: string, state: SentState
   const base: Partial<SentRecord> | null = pending ?? recorded ?? (outboxExists ? { messageId } : null);
   if (!base) return false;
   if (recorded && !mayAdvanceSent(recorded.state, state)) {
+    if (recorded.state === "accepted" && state === "accepted" && progress
+      && (!recorded.progress || Date.parse(progress.observedAt) > Date.parse(recorded.progress.observedAt))) {
+      writeJsonAtomic(fileOf(paths.sent, messageId), { ...recorded, progress, updatedAt: new Date(now).toISOString() });
+    }
     if (outboxExists) fs.rmSync(fileOf(paths.outbox, messageId), { force: true });
     return true;
   }
-  const { state: _state, reason: _reason, updatedAt: _updated, ...message } = base;
+  const { state: _state, reason: _reason, progress: _progress, updatedAt: _updated, ...message } = base;
   ensureDir(paths.sent);
   writeJsonAtomic(fileOf(paths.sent, messageId),
-    { ...message, messageId, state, ...(reason ? { reason } : {}), updatedAt: new Date(now).toISOString() });
+    { ...message, messageId, state, ...(reason ? { reason } : {}), ...(state === "accepted" && progress ? { progress } : {}),
+      updatedAt: new Date(now).toISOString() });
   if (outboxExists) fs.rmSync(fileOf(paths.outbox, messageId), { force: true });
   return true;
 }
@@ -153,7 +159,8 @@ function takeDirectoryRequest(paths: NodePaths): boolean {
 
 export function writeLocalSessions(paths: NodePaths, sessions: SessionInfo[], now: number = Date.now()): void {
   ensureDir(paths.dir);
-  const local: LocalSession[] = sessions.map((s) => ({ sessionId: s.sessionId, ...(s.name ? { name: s.name } : {}) }));
+  const local: LocalSession[] = sessions.map((s) => ({ sessionId: s.sessionId, ...(s.name ? { name: s.name } : {}),
+    runtime: s.runtime, state: s.state }));
   writeJsonAtomic(paths.sessions, { sessions: local, updatedAt: new Date(now).toISOString() });
 }
 
@@ -205,14 +212,15 @@ export function recordingSessions(paths: NodePaths, list: () => Promise<SessionI
 
 // The client callbacks that record directory frames and sent states, and read
 // the local session listing for the messaging policy.
-export function exchangeOptions(paths: NodePaths): Pick<ClientOptions, "storeDirectory" | "sentUpdate" | "receiptUpdate" | "localSessions"> {
+export function exchangeOptions(paths: NodePaths, now: () => number = Date.now):
+  Pick<ClientOptions, "storeDirectory" | "sentUpdate" | "receiptUpdate" | "localSessions"> {
   return {
     storeDirectory: (body) => writeDirectory(paths, body),
-    sentUpdate: (messageId, state, reason) => { recordSent(paths, messageId, state, reason); },
+    sentUpdate: (messageId, state, reason, progress) => { recordSent(paths, messageId, state, reason, now(), progress); },
     receiptUpdate: (body) => {
       if ((body.requestedState === "accepted" || body.requestedState === "delivered" || body.requestedState === "refused")
         && receiptSettles(body.requestedState, body.storedState)) {
-        markReported(paths.inbox, body.messageId, body.requestedState, body.storedState);
+        markReported(paths.inbox, body.messageId, body.requestedState, body.storedState, now(), body.storedProgressAt);
       }
     },
     localSessions: () => readLocalSessions(paths),
@@ -229,7 +237,8 @@ function toSendBody(record: OutboxRecord): MessageSendBody | null {
 // outbox record not yet sent on this connection (inflight), and the status of
 // every inbox record that became delivered or refused. send returns false when the
 // socket is gone; nothing counts as sent or reported unless it went out.
-export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Set<string>, send: (frame: string) => boolean): void {
+export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Set<string>, send: (frame: string) => boolean,
+  now: number = Date.now()): void {
   const sendAll = (frames: string[]): boolean => frames.length > 0 && frames.every(send);
   if (takeDirectoryRequest(paths)) sendAll(client.directoryRequest());
   for (const messageId of messageIds(paths.outbox)) {
@@ -249,7 +258,7 @@ export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Set
     // The Worker deduplicates by messageId, so a resend after a reconnect is safe.
     if (sendAll(client.sendMessage(body))) inflight.add(messageId);
   }
-  for (const record of unreportedStatuses(paths.inbox)) {
-    sendAll(client.reportStatus(record.messageId, record.state, record.reason));
+  for (const record of unreportedStatuses(paths.inbox, now)) {
+    sendAll(client.reportStatus(record.messageId, record.state, record.reason, record.progress));
   }
 }

@@ -94,6 +94,54 @@ describe("message routing", () => {
     target.ws.close(1000, "done");
   });
 
+  it("persists and relays only newer target-authenticated accepted progress", async () => {
+    const a = await node("sender");
+    const b = await node("target");
+    const c = await node("foreign");
+    const sender = await authenticate(a.nodeId, a.key);
+    const target = await authenticate(b.nodeId, b.key);
+    const foreign = await authenticate(c.nodeId, c.key);
+    const id = send(sender, b.nodeId);
+    await expectStatus(sender, { messageId: id, state: "queued" });
+    await expectFrame(target, "message.deliver");
+    frame(target, "message.status", { messageId: id, state: "accepted" });
+    await expectStatus(sender, { messageId: id, state: "accepted" });
+    await expectFrame(target, "event");
+
+    await runInDurableObject(registry(), (_i, state) => {
+      state.storage.sql.exec("UPDATE messages SET reason = ? WHERE id = ?", "legacy accepted reason", id);
+    });
+    const first = { phase: "waking", code: "wake-pending", observedAt: "2026-09-29T12:00:00.000Z" } as const;
+    frame(target, "message.status", { messageId: id, state: "accepted", progress: first });
+    await expectStatus(sender, { messageId: id, state: "accepted", progress: first });
+    expect((await expectFrame<MessageReceiptBody>(target, "event")).body).toEqual(
+      { name: "message.receipt", messageId: id, requestedState: "accepted", storedState: "accepted", storedProgressAt: first.observedAt });
+    frame(target, "message.status", { messageId: id, state: "accepted", progress: first });
+    expect((await expectFrame<MessageReceiptBody>(target, "event")).body.storedProgressAt).toBe(first.observedAt);
+    const stale = { phase: "waiting", code: "wake-unconfirmed", observedAt: "2026-09-29T11:59:00.000Z" } as const;
+    frame(target, "message.status", { messageId: id, state: "accepted", progress: stale });
+    expect((await expectFrame<MessageReceiptBody>(target, "event")).body.storedProgressAt).toBe(first.observedAt);
+    const forged = { phase: "failed", code: "wake-failed", observedAt: "2026-09-29T12:01:00.000Z" } as const;
+    frame(foreign, "message.status", { messageId: id, state: "accepted", progress: forged });
+    await expect(foreign.next(200)).rejects.toThrow();
+
+    const newer = { phase: "waiting", code: "target-busy", observedAt: "2026-09-29T12:02:00.000Z" } as const;
+    send(sender, b.nodeId, "hello", id);
+    frame(target, "message.status", { messageId: id, state: "accepted", progress: newer });
+    await expectStatus(sender, { messageId: id, state: "accepted", progress: newer });
+    await expectFrame(target, "event");
+    frame(target, "message.status", { messageId: id, state: "delivered" });
+    await expectStatus(sender, { messageId: id, state: "delivered" });
+    await expectFrame(target, "event");
+    frame(target, "message.status", { messageId: id, state: "accepted", progress: forged });
+    expect((await expectFrame<MessageReceiptBody>(target, "event")).body).toEqual(
+      { name: "message.receipt", messageId: id, requestedState: "accepted", storedState: "delivered" });
+    await expect(sender.next(200)).rejects.toThrow();
+    expect(await row(id)).toMatchObject({ state: "delivered", progress_phase: null, progress_code: null,
+      progress_observed_at: null, progress_retry_at: null });
+    for (const socket of [sender, target, foreign]) socket.ws.close(1000, "done");
+  });
+
   it("delivers at once to a connected target and treats a repeated messageId as the same message", async () => {
     const a = await node("sender");
     const b = await node("target");

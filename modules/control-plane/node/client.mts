@@ -12,7 +12,7 @@ import {
 } from "../protocol-tasks.mts";
 import {
   isDirectoryBody, isMessageDeliverBody, isMessageId, isMessageReceiptBody, isMessageStatusBody, type DirectoryBody,
-  type MessageDeliverBody, type MessageReceiptBody, type MessageSendBody, type MessageState,
+  type MessageDeliverBody, type MessageProgress, type MessageReceiptBody, type MessageSendBody, type MessageState,
 } from "../protocol-messages.mts";
 import { signChallenge, type NodeIdentity } from "./identity.mts";
 import { acceptsMessage, advertisedCapabilities, isAllowed, type NodePolicy } from "./policy.mts";
@@ -41,7 +41,7 @@ export interface ClientOptions {
   localSessions?: () => { sessionId: string; name?: string }[];
   // Step 3a: the directory frame, and the state of a message this node sent.
   storeDirectory?: (body: DirectoryBody) => void;
-  sentUpdate?: (messageId: string, state: SentState, reason?: string) => void;
+  sentUpdate?: (messageId: string, state: SentState, reason?: string, progress?: MessageProgress) => void;
   receiptUpdate?: (body: MessageReceiptBody) => void;
   // Item 5: the Worker's answer to a task.request this node sent.
   taskRequestResult?: (result: TaskRequestResult) => void;
@@ -135,7 +135,7 @@ export class NodeClient {
         return [];
       case "message.status": {
         const body = envelope.body;
-        if (isMessageStatusBody(body)) this.callback(body.messageId, () => this.options.sentUpdate?.(body.messageId, body.state, body.reason));
+        if (isMessageStatusBody(body)) this.callback(body.messageId, () => this.options.sentUpdate?.(body.messageId, body.state, body.reason, body.progress));
         return [];
       }
       case "error": {
@@ -177,8 +177,9 @@ export class NodeClient {
   }
 
   // The state the target session reached: delivered, or refused with a reason.
-  reportStatus(messageId: string, state: "accepted" | "delivered" | "refused", reason?: string): string[] {
-    return this.authenticated ? [this.frame("message.status", { messageId, state, ...(reason ? { reason } : {}) })] : [];
+  reportStatus(messageId: string, state: "accepted" | "delivered" | "refused", reason?: string, progress?: MessageProgress): string[] {
+    return this.authenticated ? [this.frame("message.status",
+      { messageId, state, ...(reason ? { reason } : {}), ...(state === "accepted" && progress ? { progress } : {}) })] : [];
   }
 
   reportTask(body: TaskReportBody): string[] {

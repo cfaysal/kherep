@@ -1,23 +1,22 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 import { bypassesPermissions, isPlainSessionId, listenerDir, takeTurn, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
 import { codexAppRollout, codexHome, currentCodexApp } from "./codex-app.mts";
-import { codexCommand, findCodex } from "./codex-binary.mts";
 import { planAppDelivery, startAppDelivery } from "./codex-app-delivery.mts";
-import { signalGroup } from "./codex-process.mts";
-import { lastLine } from "./codex-output.mts";
-import { codexSessionRefs, isCodexSessionId, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
+import { codexSessionRefs, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { note, pruneNoted } from "./codex-wake.mts";
+import { queueArgs, runQueue } from "./codex-queue-run.mts";
+export { guardQueue, QUEUE_TIMEOUT_MS, queueArgs } from "./codex-queue-run.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
+import { progressRecords } from "./delivery-progress.mts";
 import { REOFFER_AFTER_MS, sessionInbox } from "./deliver-core.mts";
-import { getMessage, markOffered, markRetry, messageIds, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
+import { getMessage, getMessageProgress, markOffered, markRetry, messageIds, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
 import type { NodePolicy } from "./policy.mts";
 import { explicitlyListed, wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { listTasks } from "./task-records.mts";
-import { killSwitch, wakeText } from "./wake-hook.mts";
+import { killSwitch } from "./wake-hook.mts";
 
 // Wakes an idle interactive Codex TUI session with `codex queue` or sends
 // a Codex Desktop peer message through an intercom `codex exec` session.
@@ -34,20 +33,6 @@ import { killSwitch, wakeText } from "./wake-hook.mts";
 // grant, permission-mode check, reply-depth limit and shared budget. The
 // intercom path also passes sessions admission and process limits. At most
 // one attempt for a message is recorded before launch.
-
-export const QUEUE_TIMEOUT_MS = 30_000;
-const FORBIDDEN = /^(--dangerously-|--approve-for-me$|--add-dir$|--sandbox$|-s$|-c$|--config$)/;
-
-// The only argv the node passes to `codex queue`.
-export function queueArgs(thread: string, count: number): string[] {
-  if (!isCodexSessionId(thread)) throw new Error("codex session id is not a plain name");
-  return guardQueue(["queue", "--thread", thread, "--message", wakeText(count)]);
-}
-
-export function guardQueue(args: string[]): string[] {
-  if (args.some((arg) => FORBIDDEN.test(arg))) throw new Error("refusing a codex queue flag that changes the sandbox or approvals");
-  return args;
-}
 
 const queuedFile = (paths: NodePaths, sessionId: string): string => path.join(listenerDir(paths), `${sessionId}.queued.json`);
 
@@ -73,7 +58,6 @@ export async function codexQueueIdle(): Promise<void> {
 
 // Decides synchronously and hands each wake to the lane; returns at once.
 export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = () => {}): void {
-  if (!deps.policy.wake) return; // waking is opt-in per node
   const now = deps.now?.() ?? Date.now();
   pruneNoted(deps.paths);
   const tasks = new Set(listTasks(deps.paths).flatMap((t) => (t.sessionId ? [t.sessionId] : [])));
@@ -100,7 +84,6 @@ export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = (
     return app;
   };
   for (const sessionId of candidates) {
-    if (inFlight.has(sessionId)) continue;
     try {
       queueFor(deps, sessionId, live, now, log, appSession);
     } catch (error) {
@@ -116,26 +99,58 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
   // for its sender to use the full id (codex-<8> names, issue #66).
   const { refs, ambiguous } = codexSessionRefs(paths, sessionId, now, live);
   const shared = sessionInbox(paths, ambiguous).filter((r) => r.state === "accepted");
-  if (shared.length > 0) note(paths, now, sessionId, shared.map((r) => r.messageId), "ambiguous-name");
-  const waiting = sessionInbox(paths, refs).filter((r) => r.state === "accepted");
+  if (shared.length > 0) {
+    progressRecords(paths, shared, "waiting", "ambiguous-target", now);
+    note(paths, now, sessionId, shared.map((r) => r.messageId), "ambiguous-name");
+  }
+  const mine = sessionInbox(paths, refs);
+  if (inFlight.has(sessionId)) return;
+  progressRecords(paths, mine.filter((record) => record.state === "offered"
+    && getMessageProgress(paths.inbox, record.messageId)?.phase !== "failed"),
+    "waiting", "awaiting-turn-confirmation", now);
+  const waiting = mine.filter((r) => r.state === "accepted");
   if (waiting.length === 0) return;
   const queued = readQueued(paths, sessionId);
-  if (waiting.some((r) => queued[r.messageId] && now - Date.parse(queued[r.messageId]) < REOFFER_AFTER_MS)) return;
+  const pending = waiting.filter((r) => queued[r.messageId] && now - Date.parse(queued[r.messageId]) < REOFFER_AFTER_MS);
+  const pendingWithoutFailure = pending.filter((record) => getMessageProgress(paths.inbox, record.messageId)?.phase !== "failed");
+  if (pendingWithoutFailure.length > 0) progressRecords(paths, pendingWithoutFailure, "waking", "wake-pending", now);
   const fresh = waiting.filter((r) => !queued[r.messageId]);
-  if (fresh.length === 0) return;
+  const unconfirmed = waiting.filter((r) => queued[r.messageId] && !pending.includes(r)
+    && getMessageProgress(paths.inbox, r.messageId)?.phase !== "failed");
+  if (unconfirmed.length > 0) progressRecords(paths, unconfirmed, "waiting", "wake-unconfirmed", now);
+  if (pending.length > 0 || fresh.length === 0) return;
   const ids = (records: InboxRecord[]): string[] => records.map((r) => r.messageId);
-  if (fs.existsSync(killSwitch(paths))) return note(paths, now, sessionId, ids(fresh), "disabled");
+  if (!policy.wake) {
+    progressRecords(paths, fresh, "waiting", "wake-disabled", now);
+    return;
+  }
+  if (fs.existsSync(killSwitch(paths))) {
+    progressRecords(paths, fresh, "waiting", "wake-disabled", now);
+    return note(paths, now, sessionId, ids(fresh), "disabled");
+  }
   // Authorization by the full thread id only: names can be shared. Otherwise
   // wake.codexApp may grant this one session; every guard below still applies.
   const listed = wakeAllowed(policy, [sessionId]);
   const grant: WakeGrant | undefined = !listed && appSession() === sessionId ? "codexApp" : undefined;
-  if (!listed && !grant) return note(paths, now, sessionId, ids(fresh), "not-allowlisted");
+  if (!listed && !grant) {
+    progressRecords(paths, fresh, "waiting", "wake-not-authorized", now);
+    return note(paths, now, sessionId, ids(fresh), "not-allowlisted");
+  }
   const decide = (records: InboxRecord[], action: AutonomyAction): void => note(paths, now, sessionId, ids(records), action, grant);
   const mode = readCodexSession(paths, sessionId)?.permissionMode;
-  if (bypassesPermissions(mode)) return decide(fresh, "permission-mode");
-  if (mode === undefined && !explicitlyListed(policy, [sessionId])) return decide(fresh, "permission-mode-unknown");
+  if (bypassesPermissions(mode)) {
+    progressRecords(paths, fresh, "waiting", "permission-restricted", now);
+    return decide(fresh, "permission-mode");
+  }
+  if (mode === undefined && !explicitlyListed(policy, [sessionId])) {
+    progressRecords(paths, fresh, "waiting", "permission-restricted", now);
+    return decide(fresh, "permission-mode-unknown");
+  }
   const deep = fresh.filter((r) => (r.depth ?? 0) >= MAX_REPLY_DEPTH);
-  if (deep.length > 0) decide(deep, "depth-limit");
+  if (deep.length > 0) {
+    progressRecords(paths, deep, "waiting", "reply-limit", now);
+    decide(deep, "depth-limit");
+  }
   const due = fresh.filter((r) => (r.depth ?? 0) < MAX_REPLY_DEPTH);
   if (due.length === 0) return;
   // A desktop app session gets an intercom turn instead of a queue item (see
@@ -149,9 +164,15 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
     }
   }
   if (appDelivery) {
-    if (mode === undefined) return decide(due, "permission-mode-unknown");
+    if (mode === undefined) {
+      progressRecords(paths, due, "waiting", "permission-restricted", now);
+      return decide(due, "permission-mode-unknown");
+    }
     const decision = planAppDelivery(deps, due, readCodexSession(paths, sessionId)?.cwd, now);
-    if ("reason" in decision) return decide(due, "intercom-refused");
+    if ("reason" in decision) {
+      progressRecords(paths, due, "failed", "fallback-failed", now);
+      return decide(due, "intercom-refused");
+    }
     const plan = decision.plan;
     inFlight.add(sessionId);
     lane = lane.then(async () => {
@@ -159,19 +180,28 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
       if (ready.length === 0) return;
       const at = deps.now?.() ?? Date.now();
       const budget = takeTurn(paths, sessionId, at);
-      if (budget === "spacing" || budget === "locked") return;
-      if (budget === "exhausted") return decide(ready, "budget");
+      if (budget === "spacing" || budget === "locked") {
+        progressRecords(paths, ready, "waiting", "retry-pending", at);
+        return;
+      }
+      if (budget === "exhausted") {
+        progressRecords(paths, ready, "waiting", "budget-exhausted", at);
+        return decide(ready, "budget");
+      }
       ensureDir(listenerDir(paths));
       writeJsonAtomic(queuedFile(paths, sessionId), { queued: { ...readQueued(paths, sessionId),
         ...Object.fromEntries(ready.map((r) => [r.messageId, new Date(at).toISOString()])) } });
+      progressRecords(paths, ready, "fallback", "fallback-starting", at);
       const claimed = ready.filter((r) => markOffered(paths.inbox, r.messageId, at) !== null);
       if (claimed.length === 0) return;
       try {
         const failure = await startAppDelivery(deps, sessionId, { ...plan, records: claimed });
         if (failure) throw new Error(failure);
+        progressRecords(paths, claimed, "fallback", "fallback-running", deps.now?.() ?? at);
         decide(claimed, "intercom");
       } catch {
         for (const record of claimed) markRetry(paths.inbox, record.messageId);
+        progressRecords(paths, claimed, "failed", "fallback-failed", deps.now?.() ?? at);
         decide(claimed, "intercom-failed");
       }
     }).catch(() => {
@@ -180,17 +210,25 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
     return;
   }
   const budget = takeTurn(paths, sessionId, now);
-  if (budget === "spacing" || budget === "locked") return;
-  if (budget === "exhausted") return decide(due, "budget");
+  if (budget === "spacing" || budget === "locked") {
+    progressRecords(paths, due, "waiting", "retry-pending", now);
+    return;
+  }
+  if (budget === "exhausted") {
+    progressRecords(paths, due, "waiting", "budget-exhausted", now);
+    return decide(due, "budget");
+  }
   // Recorded first, so a slow or failed queue is not repeated every round.
   ensureDir(listenerDir(paths));
   writeJsonAtomic(queuedFile(paths, sessionId),
     { queued: { ...queued, ...Object.fromEntries(due.map((r) => [r.messageId, new Date(now).toISOString()])) } });
+  progressRecords(paths, due, "waking", "wake-pending", now);
   const args = queueArgs(sessionId, due.length);
   inFlight.add(sessionId);
   lane = lane.then(() => runQueue(deps, args)).then(
     () => decide(due, "wake"),
     (error: unknown) => {
+      progressRecords(paths, due, "failed", "wake-failed", deps.now?.() ?? Date.now());
       decide(due, "queue-failed");
       log(`kherep-node: codex queue for ${sessionId} failed: ${String((error as Error).message ?? error)}`);
     },
@@ -199,41 +237,4 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
     // which would skip every later queue run, nor crash the daemon.
     log(`kherep-node: codex queue bookkeeping for ${sessionId} failed: ${String((error as Error).message ?? error)}`);
   }).finally(() => { inFlight.delete(sessionId); });
-}
-
-// Runs codex (through the npm launcher on Windows, codex-binary.mts) without a
-// shell, in its own process group on POSIX. It settles on exit, or when its
-// timer kills the whole tree (the launcher's codex.exe inherits stderr, so the
-// pipe may never close); rejects with the cleaned last stderr line.
-function runQueue(deps: RunnerDeps, args: string[]): Promise<void> {
-  const file = (deps.codex?.findCodex ?? findCodex)();
-  if (!file) return Promise.reject(new Error("codex is not installed on this node"));
-  const platform = deps.codex?.platform ?? process.platform;
-  const command = codexCommand(file, args, platform);
-  const timeoutMs = deps.codex?.queueTimeoutMs ?? QUEUE_TIMEOUT_MS;
-  return new Promise((resolve, reject) => {
-    const child = spawn(command.file, command.args, { stdio: ["ignore", "ignore", "pipe"], detached: platform !== "win32", windowsHide: true });
-    let stderr = "";
-    let settled = false;
-    const settle = (error?: Error): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.stderr?.destroy();
-      if (error) reject(error);
-      else resolve();
-    };
-    const timer = setTimeout(() => {
-      if (child.pid !== undefined) (deps.codex?.signal ?? ((pid, signal) => signalGroup(pid, signal, platform)))(child.pid, "SIGKILL");
-      settle(new Error(`codex queue did not finish within ${Math.round(timeoutMs / 1000)} s`));
-    }, timeoutMs);
-    child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString("utf8")).slice(-4096); });
-    child.once("error", (error) => settle(error));
-    child.once("exit", (code, signal) => {
-      // stderr may still be draining: wait briefly for it, never for a pipe a grandchild holds.
-      const done = (): void => settle(code === 0 ? undefined : new Error(lastLine(stderr) || `codex queue ended with ${String(code ?? signal)}`));
-      const grace = setTimeout(done, 250);
-      child.once("close", () => { clearTimeout(grace); done(); });
-    });
-  });
 }

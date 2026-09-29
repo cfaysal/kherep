@@ -8,6 +8,7 @@ import { CODEX_RUNTIME, isCodexSessionId, readCodexSession } from "./codex-sessi
 import { resumeClaude, resumeCodex, startIntercom } from "./closed-resume.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { attachDelivery } from "./delivery-identity.mts";
+import { progressRecords } from "./delivery-progress.mts";
 import { readLocalSessions } from "./exchange.mts";
 import { listInbox, markClosedAttempt, MAX_REPLY_DEPTH, readJson, type InboxRecord } from "./inbox.mts";
 import { findKnown } from "./known-sessions.mts";
@@ -114,7 +115,18 @@ const runs = (deps: RunnerDeps, task: TaskRecord): boolean => isActive(task) || 
 async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now: number): Promise<boolean> {
   const { paths, policy } = deps;
   const sessionId = found.sessionId;
+  const refusalCode = (reason: string): Parameters<typeof progressRecords>[3] => {
+    if (reason.includes("budget")) return "budget-exhausted";
+    if (reason.includes("depth")) return "reply-limit";
+    if (reason.includes("permission")) return "permission-restricted";
+    if (reason.includes("stopped by operator")) return "operator-stopped";
+    if (reason.includes("policy")) return "wake-not-authorized";
+    if (reason.includes("disabled") || reason.includes("not enabled")) return "wake-disabled";
+    if (reason.includes("cannot be resumed") || reason.includes("no intercom")) return "fallback-failed";
+    return "fallback-failed";
+  };
   const refuse = (reason: string, records: InboxRecord[] = all): false => {
+    progressRecords(paths, records, refusalCode(reason) === "fallback-failed" ? "failed" : "waiting", refusalCode(reason), now);
     audit(paths, now, sessionId, records, "refused", reason);
     return false;
   };
@@ -134,8 +146,14 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   if (records[0].from.nodeId === OPERATOR_NODE_ID) return refuse("an operator message goes to no intercom session");
   if (found.task?.operatorStoppedAt !== undefined) return refuse("session stopped by operator");
   // Running already: its hook takes the messages.
-  if (listTasks(paths).some((t) => t.sessionId === sessionId && isActive(t))) return false;
-  if (found.task && runs(deps, found.task)) return false;
+  if (listTasks(paths).some((t) => t.sessionId === sessionId && isActive(t))) {
+    progressRecords(paths, records, "waiting", "target-busy", now);
+    return false;
+  }
+  if (found.task && runs(deps, found.task)) {
+    progressRecords(paths, records, "waiting", "target-busy", now);
+    return false;
+  }
   const intercom = intercomFor(paths, records[0]);
   if (intercom?.operatorStoppedAt !== undefined) return refuse("intercom session stopped by operator");
   const runtime = intercom ? intercom.runtime ?? "claude" : found.runtime;
@@ -145,6 +163,7 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
     const linked = attachDelivery(paths, intercom, records.map((r) => r.messageId));
     if (linked !== intercom) writeTask(paths, linked, now);
     for (const r of records) markClosedAttempt(paths.inbox, r.messageId, now, intercom.sessionId ?? intercom.name);
+    progressRecords(paths, records, "fallback", "fallback-running", now);
     audit(paths, now, sessionId, records, "reused", "intercom session running", intercom.taskId);
     return true;
   }
@@ -155,8 +174,12 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   const cwd = resolveCwd(sessions, reusable?.cwd ?? found.cwd, deps.realpath);
   if (!cwd.ok) return refuse(cwd.reason);
   const budget = takeTurn(paths, reusable?.sessionId ?? sessionId, now);
-  if (budget === "spacing" || budget === "locked") return false;
+  if (budget === "spacing" || budget === "locked") {
+    progressRecords(paths, records, "waiting", "retry-pending", now);
+    return false;
+  }
   if (budget === "exhausted") return refuse("budget of autonomous turns exhausted");
+  progressRecords(paths, records, "fallback", "fallback-starting", now);
   for (const r of records) markClosedAttempt(paths.inbox, r.messageId, now, reusable?.sessionId);
   let why = intercom ? "its intercom session cannot be resumed" : undefined;
   if (reusable) {
@@ -166,6 +189,7 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
       const current = readTask(paths, reusable.taskId) ?? reusable;
       const linked = attachDelivery(paths, current, records.map((r) => r.messageId));
       if (linked !== current) writeTask(paths, linked, now);
+      progressRecords(paths, records, "fallback", "fallback-running", deps.now?.() ?? now);
       audit(paths, now, sessionId, records, "reused", "intercom session resumed", reusable.taskId);
       return true;
     }
@@ -173,7 +197,8 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   }
   const mode: PermissionMode = delegated(deps, sessions.defaultPermissionMode) ? sessions.defaultPermissionMode : "default";
   const started = await startIntercom(deps, { sessionId, runtime: found.runtime, cwd: cwd.cwd }, records, mode);
-  if (started === null) audit(paths, now, sessionId, records, "new", why);
-  else refuse(`${why ? `${why}; ` : ""}no intercom session: ${started}`);
+  if (started === null) {
+    audit(paths, now, sessionId, records, "new", why);
+  } else refuse(`${why ? `${why}; ` : ""}no intercom session: ${started}`);
   return true;
 }

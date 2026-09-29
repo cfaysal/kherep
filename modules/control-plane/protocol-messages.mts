@@ -22,6 +22,17 @@ export type MessageState = (typeof MESSAGE_STATES)[number];
 export const NODE_REPORTED_STATES = ["accepted", "delivered", "refused"] as const;
 export type NodeReportedState = (typeof NODE_REPORTED_STATES)[number];
 
+export const MESSAGE_PROGRESS_CODES = {
+  waiting: ["awaiting-user-turn", "awaiting-turn-confirmation", "target-busy", "wake-unconfirmed", "retry-pending", "wake-disabled", "wake-not-authorized",
+    "permission-restricted", "operator-stopped", "reply-limit", "budget-exhausted", "ambiguous-target"],
+  waking: ["wake-pending"],
+  fallback: ["fallback-starting", "fallback-running"],
+  failed: ["wake-failed", "fallback-failed"],
+} as const;
+export type MessageProgressPhase = keyof typeof MESSAGE_PROGRESS_CODES;
+export type MessageProgressCode = (typeof MESSAGE_PROGRESS_CODES)[MessageProgressPhase][number];
+export interface MessageProgress { phase: MessageProgressPhase; code: MessageProgressCode; observedAt: string; retryAt?: string }
+
 // session is a session id or a session name on that node.
 export interface MessageAddress { nodeId: string; session: string }
 // node -> Worker. The sender node is always the authenticated connection;
@@ -35,18 +46,29 @@ export interface MessageDeliverBody {
   messageId: string; from: MessageAddress; toSession: string; text: string; inReplyTo?: string; createdAt: string; taskId?: string;
 }
 // node -> Worker (target reports progress) and Worker -> sending node.
-export interface MessageStatusBody { messageId: string; state: MessageState; reason?: string }
+export interface MessageStatusBody { messageId: string; state: MessageState; reason?: string; progress?: MessageProgress }
 // Worker -> reporting node, carried as an authenticated event only after the
 // Registry transaction completed. requestedState identifies the report being
 // acknowledged; storedState is the canonical state after that transaction.
+// storedProgressAt confirms the newest accepted-state progress made durable.
 export interface MessageReceiptBody {
-  name: "message.receipt"; messageId: string; requestedState: NodeReportedState; storedState: MessageState;
+  name: "message.receipt"; messageId: string; requestedState: NodeReportedState; storedState: MessageState; storedProgressAt?: string;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function only(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
+function isIsoInstant(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const parsed = Date.parse(value);
+  return !Number.isNaN(parsed) && new Date(parsed).toISOString() === value;
 }
 
 function isText(value: unknown, max: number): value is string {
@@ -99,9 +121,19 @@ export function isMessageDeliverBody(body: unknown): body is MessageDeliverBody 
     && typeof body.createdAt === "string" && !Number.isNaN(Date.parse(body.createdAt));
 }
 
+export function isMessageProgress(value: unknown): value is MessageProgress {
+  if (!isObject(value) || !only(value, ["phase", "code", "observedAt", "retryAt"]) || !isIsoInstant(value.observedAt)) return false;
+  if (typeof value.phase !== "string" || !Object.hasOwn(MESSAGE_PROGRESS_CODES, value.phase)) return false;
+  const phase = value.phase as MessageProgressPhase;
+  if (!(MESSAGE_PROGRESS_CODES[phase] as readonly unknown[]).includes(value.code)) return false;
+  return value.retryAt === undefined || (isIsoInstant(value.retryAt) && Date.parse(value.retryAt) >= Date.parse(value.observedAt));
+}
+
 export function isMessageStatusBody(body: unknown): body is MessageStatusBody {
-  return isObject(body) && isMessageId(body.messageId) && isMessageState(body.state)
-    && (body.reason === undefined || isText(body.reason, MAX_STATUS_REASON));
+  return isObject(body) && only(body, ["messageId", "state", "reason", "progress"])
+    && isMessageId(body.messageId) && isMessageState(body.state)
+    && (body.reason === undefined || isText(body.reason, MAX_STATUS_REASON))
+    && (body.progress === undefined || (body.reason === undefined && body.state === "accepted" && isMessageProgress(body.progress)));
 }
 
 // A status as a node may send it: only the node-reportable states.
@@ -110,8 +142,11 @@ export function isNodeMessageStatusBody(body: unknown): body is MessageStatusBod
 }
 
 export function isMessageReceiptBody(body: unknown): body is MessageReceiptBody {
-  return isObject(body) && body.name === "message.receipt" && isMessageId(body.messageId)
-    && isNodeReportedState(body.requestedState) && isMessageState(body.storedState);
+  return isObject(body) && only(body, ["name", "messageId", "requestedState", "storedState", "storedProgressAt"])
+    && body.name === "message.receipt" && isMessageId(body.messageId)
+    && isNodeReportedState(body.requestedState) && isMessageState(body.storedState)
+    && (body.storedProgressAt === undefined || (body.requestedState === "accepted" && body.storedState === "accepted"
+      && isIsoInstant(body.storedProgressAt)));
 }
 
 // ---- Directory (step 3a) ---------------------------------------------------

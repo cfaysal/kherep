@@ -36,6 +36,7 @@ const env = { KHEREP_CONFIG_DIR: process.env.KHEREP_CONFIG_DIR, KHEREP_SESSION_I
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, cwd: process.cwd(), stdin, pid: process.pid, env }) + "\\n");
 // codex queue: a thread starting with fa11 has no app server, as when none owns it.
 if (argv[0] === "queue") {
+  if (argv[2].startsWith("5eec")) { setTimeout(() => process.exit(0), 250); return; }
   // A thread starting with 0a9e hangs: a grandchild holds stderr open, as codex.exe behind the npm launcher does.
   if (argv[2].startsWith("0a9e")) {
     const child = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", "ignore", "inherit"] });
@@ -62,7 +63,7 @@ if (prompt.includes("[stderr]")) {
   process.exit(1);
 }
 const peer = /^Message id: (\\S+)$/m.exec(prompt);
-if (peer && !prompt.includes("[fail]")) require("node:child_process").spawnSync(process.execPath, [${JSON.stringify(CLI)}, "msg", "send", "--reply-to", peer[1], "--", "ack"],
+if (peer && !prompt.includes("[fail]") && !prompt.includes("[no-reply]")) require("node:child_process").spawnSync(process.execPath, [${JSON.stringify(CLI)}, "msg", "send", "--reply-to", peer[1], "--", "ack"],
   { stdio: "ignore" });
 emit({ type: "thread.started", thread_id: thread });
 emit({ type: "turn.started" });

@@ -4,12 +4,12 @@ import path from "node:path";
 import test from "node:test";
 
 import { takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
-import { codexNode, waitFor } from "./codex-fixture.mts";
+import { codexNode, fakeCodexBin, waitFor } from "./codex-fixture.mts";
 import { processStart } from "./codex-process.mts";
 import { codexQueueIdle, guardQueue, pollCodexQueue, queueArgs } from "./codex-queue.mts";
 import { codexSessionName, legacyCodexSessionName, readCodexSession, recordCodexSession } from "./codex-sessions.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
-import { getMessage, markOffered, storeMessage } from "./inbox.mts";
+import { getMessage, getMessageProgress, markOffered, storeMessage } from "./inbox.mts";
 import { T0, TASK } from "./task-fixture.mts";
 import { writeTask } from "./task-records.mts";
 
@@ -62,7 +62,22 @@ test("an idle Codex session gets `codex queue` with a pointer only; the message 
   assert.ok(!all.includes("secret peer text") && !all.includes(PEER.session) && !all.includes(PEER.nodeId), "no peer text or names");
   assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted", "offered only by the hook in the woken turn");
   assert.deepEqual(actions(node), [["wake", [id]]]);
+  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "wake-pending");
   assert.ok(!fs.readFileSync(path.join(node.paths.dir, "wake.jsonl"), "utf8").includes("secret"), "the audit carries no text");
+});
+
+test("a second poll preserves progress while a Codex queue attempt is still running", async (t) => {
+  const session = "5eec0001-0000-7000-8000-000000000002";
+  const node = wakeNode(t, [session], "default", session);
+  const fake = fakeCodexBin(t);
+  const id = deliver(node, "x", 0, session);
+  const deps = node.deps({ findCodex: () => fake.file, queueTimeoutMs: 2_000 });
+  pollCodexQueue(deps);
+  await waitFor(() => fake.runs().length > 0, "the in-flight queue attempt");
+  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "wake-pending");
+  pollCodexQueue(deps);
+  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "wake-pending");
+  await codexQueueIdle();
 });
 
 test("one pending wake per session; each message is queued once", posix, async (t) => {
@@ -81,6 +96,7 @@ test("one pending wake per session; each message is queued once", posix, async (
   await poll(node);
   assert.equal(queues(node).length, 2);
   assert.equal(getMessage(node.paths.inbox, second)?.state, "accepted");
+  assert.equal(getMessageProgress(node.paths.inbox, second)?.code, "wake-unconfirmed");
 });
 
 test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply depth, budget", posix, async (t) => {
@@ -102,6 +118,10 @@ test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply de
   const e = deliver(deep, "x", 6);
   for (const node of [unlisted, killed, bypass, unknown, deep]) await poll(node);
   for (const [n, node] of [unlisted, killed, bypass, unknown, deep].entries()) assert.deepEqual(queues(node), [], String(n));
+  assert.deepEqual([getMessageProgress(unlisted.paths.inbox, a)?.code, getMessageProgress(killed.paths.inbox, b)?.code,
+    getMessageProgress(bypass.paths.inbox, c)?.code, getMessageProgress(unknown.paths.inbox, d)?.code,
+    getMessageProgress(deep.paths.inbox, e)?.code],
+  ["wake-not-authorized", "wake-disabled", "permission-restricted", "permission-restricted", "reply-limit"]);
   assert.deepEqual([actions(unlisted), actions(killed), actions(bypass), actions(unknown), actions(deep)],
     [[["not-allowlisted", [a]]], [["disabled", [b]]], [["permission-mode", [c]]], [["permission-mode-unknown", [d]]], [["depth-limit", [e]]]]);
 
@@ -138,10 +158,12 @@ test("a Codex task's thread is resumed, not queued; a failed queue is logged, re
   pollCodexQueue(failing.deps(), (line) => lines.push(line));
   await codexQueueIdle();
   assert.deepEqual(actions(failing), [["queue-failed", [id]]]);
+  assert.equal(getMessageProgress(failing.paths.inbox, id)?.code, "wake-failed");
   assert.deepEqual(lines, [`kherep-node: codex queue for ${FAIL} failed: Error: no app server owns this thread (token sk-<redacted>)`]);
   failing.tick(TURN_SPACING_MS + 1);
   await poll(failing);
   assert.equal(queues(failing).length, 1, "not repeated");
+  assert.equal(getMessageProgress(failing.paths.inbox, id)?.code, "wake-failed", "polling preserves the failed attempt");
 });
 
 test("codex queue never gets a flag that changes the sandbox or approvals", () => {

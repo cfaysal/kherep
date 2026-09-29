@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import type { MessageDeliverBody } from "../protocol-messages.mts";
-import { getMessage, getReceipt, INBOX_RETENTION_MS, listInbox, markDelivered, markOffered, markReported, markRetry, purgeInbox, setDeliveryTask, storeMessage } from "./inbox.mts";
+import { getMessage, getMessageProgress, getReceipt, INBOX_RETENTION_MS, listInbox, markDelivered, markOffered, markReported, markRetry, purgeInbox, setDeliveryTask, setMessageProgress, storeMessage } from "./inbox.mts";
 
 const ID_A = "00000000-0000-4000-8000-0000000000a1";
 const ID_B = "00000000-0000-4000-8000-0000000000b2";
@@ -82,6 +82,28 @@ test("a delayed receipt uses a sidecar and never rewrites newer hook progress", 
     reportedState: "delivered", workerState: "replied" });
 });
 
+test("progress metadata stays in a sidecar, deduplicates, and never rewrites hook state", (t) => {
+  const dir = tempInbox(t);
+  storeMessage(dir, deliver(ID_A), NOW);
+  const first = setMessageProgress(dir, ID_A, "waking", "wake-pending", NOW);
+  assert.equal(first?.observedAt, new Date(NOW).toISOString());
+  assert.deepEqual(setMessageProgress(dir, ID_A, "waking", "wake-pending", NOW - 1000), first,
+    "unchanged progress does not mint a new observation");
+  const second = setMessageProgress(dir, ID_A, "waiting", "wake-unconfirmed", NOW);
+  assert.equal(Date.parse(second!.observedAt), NOW + 1, "same-tick transitions are strictly monotonic");
+  const third = setMessageProgress(dir, ID_A, "waiting", "target-busy", NOW - 1000);
+  assert.equal(Date.parse(third!.observedAt), NOW + 2, "a backward local clock stays monotonic");
+  const retry = setMessageProgress(dir, ID_A, "waiting", "retry-pending", NOW - 1000, NOW - 1000);
+  assert.equal(retry?.retryAt, retry?.observedAt, "retry time never precedes a monotonic observation");
+  assert.equal("progress" in getMessage(dir, ID_A)!, false, "the private body record contains no progress metadata");
+
+  const staleSnapshot = getMessage(dir, ID_A);
+  markDelivered(dir, ID_A);
+  assert.equal(setMessageProgress(dir, ID_A, "failed", "wake-failed", NOW + 3), null);
+  assert.equal(staleSnapshot?.state, "accepted");
+  assert.equal(getMessage(dir, ID_A)?.state, "delivered", "a stale progress producer cannot restore accepted");
+  assert.deepEqual(getMessageProgress(dir, ID_A), retry, "terminal state precedence does not require rewriting the sidecar");
+});
 test("purges records older than seven days and stale temp files", (t) => {
   const dir = tempInbox(t);
   storeMessage(dir, deliver(ID_A), NOW - INBOX_RETENTION_MS - 1);

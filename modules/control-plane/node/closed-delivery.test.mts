@@ -7,8 +7,9 @@ import { rememberMode, takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
 import { startIntercom } from "./closed-resume.mts";
 import { ACCEPT_ALL, audits, closedNode, deliver, endedIntercom, PEER, SESSION, type Node } from "./closed-fixture.mts";
+import { fakeCodexBin } from "./codex-fixture.mts";
 import { recordingSessions, writeDirectory } from "./exchange.mts";
-import { getMessage } from "./inbox.mts";
+import { getMessage, getMessageProgress } from "./inbox.mts";
 import { readKnownSessions, rememberSessions } from "./known-sessions.mts";
 import { loadPolicy } from "./policy.mts";
 import type { ExecOptions } from "./sessions.mts";
@@ -84,6 +85,18 @@ test("a new intercom session gets the messages framed with their reply commands,
   assert.deepEqual(audits(node).map((a) => [a.action, a.outcome, a.messageIds]), [["closed-session", "new", [first, second]]]);
 });
 
+test("a fresh Codex intercom start reports its running fallback while the turn awaits confirmation", async (t) => {
+  const node = closedNode(t, { runtimes: ["claude", "codex"] });
+  const id = deliver(node, { text: "[no-reply]" });
+  const fake = fakeCodexBin(t);
+  const deps = { ...node.deps(), codex: { findCodex: () => fake.file, startWaitMs: 5_000, graceMs: 300 } };
+  const reason = await startIntercom(deps, { sessionId: SESSION, runtime: "codex", cwd: repo(node) },
+    [getMessage(node.paths.inbox, id)!], "auto");
+  assert.equal(reason, null);
+  assert.equal(getMessage(node.paths.inbox, id)?.state, "offered");
+  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "fallback-running");
+});
+
 test("a failed task result is not treated as a started delivery", async (t) => {
   const node = closedNode(t);
   const id = deliver(node);
@@ -119,6 +132,7 @@ test("failed Claude intercom starts keep the message accepted and unassociated",
     assert.equal(message?.state, "accepted", name);
     assert.equal(message?.delivery, undefined, name);
     assert.equal(listTasks(node.paths).at(-1)?.state, "failed", name);
+    assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "fallback-failed", name);
     assert.match(String(audits(node).at(-1)?.reason), reason, name);
   }
 });
@@ -177,6 +191,9 @@ for (const [what, arrange, sessions, reason] of refusals) {
     assert.match(String(lines[0].reason), reason);
     assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted");
     assert.equal(getMessage(node.paths.inbox, id)?.closedAttempt, undefined);
+    if (what === "a cwd outside the workspace roots") {
+      assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "fallback-failed");
+    }
   });
 }
 
@@ -189,6 +206,7 @@ test("an operator-stopped intercom is neither resumed nor replaced", async (t) =
   assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted");
   assert.equal(getMessage(node.paths.inbox, id)?.closedAttempt, undefined);
   assert.deepEqual(audits(node).at(-1)?.reason, "intercom session stopped by operator");
+  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "operator-stopped");
 });
 test("a sender the accept rules do not name is refused", async (t) => {
   const node = closedNode(t, {}, { accept: [{ session: SESSION, from: ["00000000-0000-4000-8000-0000000000cc"] }] });
