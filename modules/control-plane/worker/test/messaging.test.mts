@@ -2,8 +2,9 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { makeEnvelope, type Envelope, type MessageType } from "../../protocol.mts";
-import { MESSAGING_CAPABILITY, type MessageDeliverBody, type MessageStatusBody } from "../../protocol-messages.mts";
+import { MESSAGING_CAPABILITY, type MessageDeliverBody, type MessageReceiptBody, type MessageStatusBody } from "../../protocol-messages.mts";
 import { MAX_QUEUED_PER_NODE } from "../src/message-store.mts";
+import { MESSAGE_STATUS_PAGE_SIZE } from "../src/node-session.mts";
 import { authenticate, enroll, FACTS, newKey, registry, type NodeKey, type TestSocket } from "./helpers.mts";
 
 async function node(name: string, capabilities: string[] = [MESSAGING_CAPABILITY]): Promise<{ key: NodeKey; nodeId: string }> {
@@ -61,13 +62,20 @@ describe("message routing", () => {
 
     frame(target, "message.status", { messageId: first, state: "accepted" });
     expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body).toEqual({ messageId: first, state: "accepted" });
+    expect((await expectFrame<MessageReceiptBody>(target, "event")).body).toEqual(
+      { name: "message.receipt", messageId: first, requestedState: "accepted", storedState: "accepted" });
     expect(await row(first)).toMatchObject({ state: "accepted", text: null });
     expect(await row(second)).toMatchObject({ state: "queued", text: "secret two" });
 
-    frame(target, "message.status", { messageId: first, state: "replied" });
-    expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body).toEqual({ messageId: first, state: "replied" });
-    // A late or duplicated report never moves a message back, and only the target may report.
     frame(target, "message.status", { messageId: first, state: "delivered" });
+    expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body).toEqual({ messageId: first, state: "delivered" });
+    expect((await expectFrame<MessageReceiptBody>(target, "event")).body).toEqual(
+      { name: "message.receipt", messageId: first, requestedState: "delivered", storedState: "delivered" });
+    // A duplicate or late lower report keeps the canonical state but receives
+    // another receipt, so a lost first receipt heals on retry.
+    frame(target, "message.status", { messageId: first, state: "accepted" });
+    expect((await expectFrame<MessageReceiptBody>(target, "event")).body).toEqual(
+      { name: "message.receipt", messageId: first, requestedState: "accepted", storedState: "delivered" });
     frame(sender, "message.status", { messageId: second, state: "refused", reason: "not mine" });
     await expect(sender.next(200)).rejects.toThrow();
     expect(await row(second)).toMatchObject({ state: "queued" });
@@ -91,6 +99,7 @@ describe("message routing", () => {
 
     frame(target, "message.status", { messageId: id, state: "accepted" });
     await expectFrame(sender, "message.status");
+    await expectFrame(target, "event");
     send(sender, b.nodeId, "hello", id);
     expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body).toEqual({ messageId: id, state: "accepted" });
     await expect(target.next(200)).rejects.toThrow();
@@ -103,6 +112,68 @@ describe("message routing", () => {
     send(other, b.nodeId, "hello", id);
     expect((await expectFrame(other, "error")).body).toMatchObject({ error: "duplicate messageId" });
     for (const s of [sender, target, other]) s.ws.close(1000, "done");
+  });
+
+  it("replays every current sender status after reconnect in bounded pages without message text", async () => {
+    const a = await node("sender");
+    const b = await node("target");
+    expect(MESSAGE_STATUS_PAGE_SIZE).toBeGreaterThan(1);
+    const ids: string[] = [];
+    for (let i = 0; i <= MESSAGE_STATUS_PAGE_SIZE; i++) {
+      const messageId = crypto.randomUUID();
+      ids.push(messageId);
+      const sent = await registry().sendMessage({ messageId, from: { nodeId: a.nodeId, session: "s-a" },
+        to: { nodeId: b.nodeId, session: "s-b" }, text: "private" }, `node:${a.nodeId}`);
+      expect(sent).toMatchObject({ ok: true });
+      const reported = await registry().reportMessageStatus(b.nodeId, { messageId, state: "accepted" });
+      expect(reported.receipt).toMatchObject({ messageId, storedState: "accepted" });
+    }
+
+    const reconnected = await authenticate(a.nodeId, a.key);
+    const replayed: MessageStatusBody[] = [];
+    for (let i = 0; i < ids.length; i++) replayed.push((await expectFrame<MessageStatusBody>(reconnected, "message.status")).body);
+    expect(replayed.map((body) => body.messageId)).toEqual(ids);
+    expect(replayed.every((body) => body.state === "accepted")).toBe(true);
+    for (const body of replayed) expect(body).not.toHaveProperty("text");
+    reconnected.ws.close(1000, "done");
+  });
+
+  it("marks the original replied only after a valid reply is durably accepted", async () => {
+    const a = await node("sender");
+    const b = await node("target");
+    const sender = await authenticate(a.nodeId, a.key);
+    const target = await authenticate(b.nodeId, b.key);
+    const original = send(sender, b.nodeId, "question");
+    await expectFrame(sender, "message.status");
+    await expectFrame(target, "message.deliver");
+    frame(target, "message.status", { messageId: original, state: "accepted" });
+    await expectFrame(sender, "message.status");
+    await expectFrame(target, "event");
+
+    const reply = crypto.randomUUID();
+    frame(target, "message.send", { messageId: reply, fromSession: "s-b", to: { nodeId: a.nodeId, session: "s-a" },
+      text: "answer", inReplyTo: original });
+    expect((await expectFrame<MessageStatusBody>(target, "message.status")).body).toEqual({ messageId: reply, state: "queued" });
+    expect((await expectFrame<MessageDeliverBody>(sender, "message.deliver")).body).toMatchObject({ messageId: reply, inReplyTo: original });
+    expect((await expectFrame<MessageStatusBody>(sender, "message.status")).body).toEqual({ messageId: original, state: "replied" });
+    expect(await row(original)).toMatchObject({ state: "replied", text: null });
+    sender.ws.close(1000, "done");
+    target.ws.close(1000, "done");
+  });
+
+  it("does not mark replied when the response targets another session", async () => {
+    const a = await node("sender");
+    const b = await node("target");
+    const original = crypto.randomUUID();
+    const first = await registry().sendMessage({ messageId: original, from: { nodeId: a.nodeId, session: "s-a" },
+      to: { nodeId: b.nodeId, session: "s-b" }, text: "question" }, `node:${a.nodeId}`);
+    expect(first).toMatchObject({ ok: true });
+    await registry().reportMessageStatus(b.nodeId, { messageId: original, state: "accepted" });
+
+    const wrong = await registry().sendMessage({ messageId: crypto.randomUUID(), from: { nodeId: b.nodeId, session: "s-b" },
+      to: { nodeId: a.nodeId, session: "another-session" }, text: "unrelated", inReplyTo: original }, `node:${b.nodeId}`);
+    expect(wrong).toMatchObject({ ok: true });
+    expect(await row(original)).toMatchObject({ state: "accepted" });
   });
 
   it("refuses targets that are unknown, revoked, lack messaging.v1 or have a full queue", async () => {
@@ -175,6 +246,8 @@ describe("message routing", () => {
     frame(sender, "message.send", { messageId: "m1", fromSession: "s", to: { nodeId: a.nodeId, session: "s" }, text: "x" });
     expect((await expectFrame(sender, "error")).body).toEqual({ error: "invalid message.send body" });
     frame(sender, "message.status", { messageId: crypto.randomUUID(), state: "expired" });
+    expect((await expectFrame(sender, "error")).body).toEqual({ error: "invalid message.status body" });
+    frame(sender, "message.status", { messageId: crypto.randomUUID(), state: "replied" });
     expect((await expectFrame(sender, "error")).body).toEqual({ error: "invalid message.status body" });
     sender.ws.close(1000, "done");
   });

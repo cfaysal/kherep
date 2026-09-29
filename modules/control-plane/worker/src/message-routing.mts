@@ -7,7 +7,7 @@ export interface LocalNode { nodeId: string; send(type: "message.deliver" | "mes
 
 // Pushes the frames a Registry message call produced to the nodes concerned.
 // A node that is not connected gets nothing now: queued messages are flushed
-// again on its next authentication, statuses are not re-sent.
+// again on its next authentication; sender statuses replay there in bounded cursor pages.
 export async function routeEffects(env: Env, effects: MessageEffects, local?: LocalNode): Promise<void> {
   const frames = [
     ...effects.deliveries.map((d) => ({ nodeId: d.nodeId, type: "message.deliver" as const, body: { ...d.body } })),

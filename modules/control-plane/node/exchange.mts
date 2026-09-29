@@ -33,6 +33,26 @@ export interface LocalSession { sessionId: string; name?: string }
 
 const fileOf = (dir: string, messageId: string): string => path.join(dir, `${messageId}.json`);
 
+const SENT_RANK: Partial<Record<SentState, number>> = { queued: 0, accepted: 1, delivered: 2, replied: 3 };
+
+function mayAdvanceSent(from: SentState, to: SentState): boolean {
+  if (from === to || from === "refused" || from === "expired" || from === "error" || from === "replied") return false;
+  if (to === "refused") return from === "queued" || from === "accepted";
+  if (to === "expired") return from === "queued";
+  if (to === "error") return false;
+  const current = SENT_RANK[from];
+  const next = SENT_RANK[to];
+  return current !== undefined && next !== undefined && next > current;
+}
+
+function receiptSettles(requested: "accepted" | "delivered" | "refused", stored: SentState): boolean {
+  if (requested === "refused") return stored === "delivered" || stored === "replied" || stored === "expired" || stored === "refused";
+  const current = SENT_RANK[requested];
+  const durable = SENT_RANK[stored];
+  if (current !== undefined && durable !== undefined && durable >= current) return true;
+  return stored === "refused" || stored === "expired";
+}
+
 export function writeOutbox(paths: NodePaths, record: OutboxRecord): void {
   ensureDir(paths.outbox);
   writeJsonAtomic(fileOf(paths.outbox, record.messageId), record);
@@ -56,8 +76,13 @@ export function recordSent(paths: NodePaths, messageId: string, state: SentState
     // unparseable outbox file: replaced by a bare record below
   }
   const outboxExists = fs.existsSync(fileOf(paths.outbox, messageId));
-  const base: Partial<SentRecord> | null = pending ?? getSent(paths, messageId) ?? (outboxExists ? { messageId } : null);
+  const recorded = getSent(paths, messageId);
+  const base: Partial<SentRecord> | null = pending ?? recorded ?? (outboxExists ? { messageId } : null);
   if (!base) return false;
+  if (recorded && !mayAdvanceSent(recorded.state, state)) {
+    if (outboxExists) fs.rmSync(fileOf(paths.outbox, messageId), { force: true });
+    return true;
+  }
   const { state: _state, reason: _reason, updatedAt: _updated, ...message } = base;
   ensureDir(paths.sent);
   writeJsonAtomic(fileOf(paths.sent, messageId),
@@ -180,10 +205,16 @@ export function recordingSessions(paths: NodePaths, list: () => Promise<SessionI
 
 // The client callbacks that record directory frames and sent states, and read
 // the local session listing for the messaging policy.
-export function exchangeOptions(paths: NodePaths): Pick<ClientOptions, "storeDirectory" | "sentUpdate" | "localSessions"> {
+export function exchangeOptions(paths: NodePaths): Pick<ClientOptions, "storeDirectory" | "sentUpdate" | "receiptUpdate" | "localSessions"> {
   return {
     storeDirectory: (body) => writeDirectory(paths, body),
     sentUpdate: (messageId, state, reason) => { recordSent(paths, messageId, state, reason); },
+    receiptUpdate: (body) => {
+      if ((body.requestedState === "accepted" || body.requestedState === "delivered" || body.requestedState === "refused")
+        && receiptSettles(body.requestedState, body.storedState)) {
+        markReported(paths.inbox, body.messageId, body.requestedState, body.storedState);
+      }
+    },
     localSessions: () => readLocalSessions(paths),
   };
 }
@@ -219,6 +250,6 @@ export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Set
     if (sendAll(client.sendMessage(body))) inflight.add(messageId);
   }
   for (const record of unreportedStatuses(paths.inbox)) {
-    if (sendAll(client.reportStatus(record.messageId, record.state, record.reason))) markReported(paths.inbox, record.messageId, record.state);
+    sendAll(client.reportStatus(record.messageId, record.state, record.reason));
   }
 }

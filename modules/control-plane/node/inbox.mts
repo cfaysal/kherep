@@ -4,7 +4,7 @@ import path from "node:path";
 
 import type { SessionInfo } from "../protocol.mts";
 import {
-  isMessageId, type MessageAddress, type MessageDeliverBody, type MessageStatusBody,
+  isMessageId, type MessageAddress, type MessageDeliverBody, type MessageState, type MessageStatusBody,
 } from "../protocol-messages.mts";
 import { ensureDir } from "./config.mts";
 
@@ -13,7 +13,7 @@ import { ensureDir } from "./config.mts";
 // session reads it through list/get and reports markDelivered.
 // Local states: accepted (stored), offered (handed to a turn that has not
 // confirmed it yet; never sent to the Worker), delivered and refused (each
-// reported to the Worker once).
+// retried until the Worker returns a persistence receipt).
 
 export const INBOX_RETENTION_MS = 7 * 24 * 60 * 60_000;
 // A waiting message for a session that a successful listing does not show is
@@ -50,16 +50,19 @@ export interface InboxRecord {
   // The closed session the message was sent to, when closed-delivery.mts
   // handed it to the sender's intercom session (issue #105).
   closedTo?: string;
-  // Set by the daemon once it sent message.status for reportedState.
-  reportedAt?: string;
-  reportedState?: ReportedState;
 }
 
-// The local states the daemon reports to the Worker.
-export type ReportedState = "delivered" | "refused";
+// The local states the daemon reports to the Worker. An offered message remains
+// accepted in the cloud until the turn confirms delivery.
+export type ReportedState = "accepted" | "delivered" | "refused";
+export interface ReceiptRecord { reportedAt: string; reportedState: ReportedState; workerState: MessageState }
 
 function fileOf(dir: string, messageId: string): string {
   return path.join(dir, `${messageId}.json`);
+}
+
+function receiptFileOf(dir: string, messageId: string): string {
+  return path.join(dir, "receipts", `${messageId}.json`);
 }
 
 // Temp file plus rename, so a reader never sees a half-written record. Also
@@ -103,6 +106,10 @@ export function readJson<T>(file: string): T | null {
 
 export function getMessage(dir: string, messageId: string): InboxRecord | null {
   return isMessageId(messageId) ? readJson<InboxRecord>(fileOf(dir, messageId)) : null;
+}
+
+export function getReceipt(dir: string, messageId: string): ReceiptRecord | null {
+  return isMessageId(messageId) ? readJson<ReceiptRecord>(receiptFileOf(dir, messageId)) : null;
 }
 
 // The message ids of the <messageId>.json files in a directory.
@@ -182,17 +189,29 @@ export function markRefused(dir: string, messageId: string, reason: string): boo
   return true;
 }
 
-// Delivered and refused records whose state the daemon has not reported yet.
-// A record reported before reportedState existed has only reportedAt, which
-// then stands for delivered.
-export function unreportedStatuses(dir: string): (InboxRecord & { state: ReportedState })[] {
-  return listInbox(dir).filter((r): r is InboxRecord & { state: ReportedState } =>
-    (r.state === "delivered" || r.state === "refused") && (r.reportedState ?? (r.reportedAt ? "delivered" : undefined)) !== r.state);
+// Local progress that needs a persistence receipt. offered is intentionally
+// local-only and therefore continues to report accepted until delivered.
+function reportState(record: InboxRecord): ReportedState | null {
+  if (record.state === "accepted" || record.state === "offered") return "accepted";
+  return record.state === "delivered" || record.state === "refused" ? record.state : null;
 }
 
-export function markReported(dir: string, messageId: string, state: ReportedState, now: number = Date.now()): void {
+export function unreportedStatuses(dir: string): (InboxRecord & { state: ReportedState })[] {
+  return listInbox(dir).flatMap((record) => {
+    const state = reportState(record);
+    return state && getReceipt(dir, record.messageId)?.reportedState !== state ? [{ ...record, state }] : [];
+  });
+}
+
+export function markReported(dir: string, messageId: string, state: ReportedState, workerState: MessageState,
+  now: number = Date.now()): void {
   const record = getMessage(dir, messageId);
-  if (record) writeJsonAtomic(fileOf(dir, messageId), { ...record, reportedAt: new Date(now).toISOString(), reportedState: state });
+  if (record && reportState(record) === state) {
+    ensureDir(path.dirname(receiptFileOf(dir, messageId)));
+    writeJsonAtomic(receiptFileOf(dir, messageId), {
+      reportedAt: new Date(now).toISOString(), reportedState: state, workerState,
+    } satisfies ReceiptRecord);
+  }
 }
 
 // Refuses the waiting messages whose session no listed session matches by id
@@ -236,7 +255,10 @@ export function purgeInbox(dir: string, now: number = Date.now(), maxAgeMs: numb
     }
     if (now - received <= maxAgeMs) continue;
     fs.rmSync(file, { force: true });
-    if (name.endsWith(".json")) removed++;
+    if (name.endsWith(".json")) {
+      fs.rmSync(receiptFileOf(dir, name.slice(0, -5)), { force: true });
+      removed++;
+    }
   }
   return removed;
 }

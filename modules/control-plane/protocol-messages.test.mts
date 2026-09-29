@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { makeEnvelope, MESSAGE_TYPES, parseEnvelope } from "./protocol.mts";
 import {
-  isDirectoryBody, isDirectoryGetBody, isMessageAddress, isMessageDeliverBody, isMessageId, isMessageSendBody, isMessageState, isMessageStatusBody,
+  isDirectoryBody, isDirectoryGetBody, isMessageAddress, isMessageDeliverBody, isMessageId, isMessageReceiptBody, isMessageSendBody, isMessageState, isMessageStatusBody,
   isNodeMessageStatusBody, isNodeReportedState, isSessionRef, MAX_MESSAGE_TEXT, MAX_SESSION_REF, MAX_STATUS_REASON,
   MAX_DIRECTORY_SESSIONS, MESSAGE_STATES,
 } from "./protocol-messages.mts";
@@ -31,8 +31,8 @@ test("message ids, session references and states", () => {
   assert.deepEqual([...MESSAGE_STATES], ["queued", "accepted", "delivered", "replied", "expired", "refused"]);
   for (const state of MESSAGE_STATES) assert.equal(isMessageState(state), true);
   assert.equal(isMessageState("QUEUED"), false);
-  for (const state of ["accepted", "delivered", "replied", "refused"]) assert.equal(isNodeReportedState(state), true);
-  for (const state of ["queued", "expired", "done"]) assert.equal(isNodeReportedState(state), false);
+  for (const state of ["accepted", "delivered", "refused"]) assert.equal(isNodeReportedState(state), true);
+  for (const state of ["queued", "replied", "expired", "done"]) assert.equal(isNodeReportedState(state), false);
 });
 
 test("message addresses admit operator only where allowed", () => {
@@ -74,8 +74,18 @@ test("message.status bodies, and the narrower node-reported form", () => {
     { messageId: ID, state: "refused", reason: "r".repeat(MAX_STATUS_REASON + 1) }, { state: "accepted" }, null,
   ]) assert.equal(isMessageStatusBody(body), false);
   assert.equal(isNodeMessageStatusBody({ messageId: ID, state: "accepted" }), true);
+  assert.equal(isNodeMessageStatusBody({ messageId: ID, state: "replied" }), false);
   assert.equal(isNodeMessageStatusBody({ messageId: ID, state: "queued" }), false);
   assert.equal(isNodeMessageStatusBody({ messageId: ID, state: "expired" }), false);
+});
+
+test("message receipt events identify the requested and durable states", () => {
+  const receipt = { name: "message.receipt", messageId: ID, requestedState: "delivered", storedState: "replied" };
+  assert.equal(isMessageReceiptBody(receipt), true);
+  for (const body of [
+    { ...receipt, name: "auth.ok" }, { ...receipt, messageId: "m1" }, { ...receipt, requestedState: "queued" },
+    { ...receipt, storedState: "error" }, { ...receipt, requestedState: undefined }, null,
+  ]) assert.equal(isMessageReceiptBody(body), false);
 });
 
 test("directory.get and directory bodies", () => {

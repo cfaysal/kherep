@@ -112,10 +112,11 @@ test("Stop confirms, then continues with the fixed text only while new messages 
   assert.equal(getMessage(paths.inbox, first)?.state, "delivered");
   const late = inbox(paths, 2);
   const text = stop(paths);
-  assert.deepEqual(JSON.parse(text), { decision: "block", reason: CODEX_STOP_REASON });
+  assert.equal(JSON.parse(text).decision, "block");
+  assert.equal(JSON.parse(text).reason, CODEX_STOP_REASON + "\n" + CLI + " msg inbox --from " + SELF + " --receive\n" + CODEX_ESCALATION_NOTE);
   assert.doesNotMatch(text, new RegExp(SECRET));
   assert.doesNotMatch(text, new RegExp(late));
-  assert.equal(getMessage(paths.inbox, late)?.state, "accepted", "the next UserPromptSubmit offers it");
+  assert.equal(getMessage(paths.inbox, late)?.state, "accepted", "retrieval or the next UserPromptSubmit offers it");
   assert.equal(stop(paths, true), "", "a turn already continued by Stop is not continued again");
   assert.match(hook(paths, "UserPromptSubmit"), new RegExp(late));
   assert.equal(stop(paths, true), "");
@@ -130,8 +131,10 @@ test("the entry point serves Codex only with --runtime codex and prints valid JS
   const run = (event: string, args = ["--runtime", "codex"]) => spawnSync(process.execPath, [HOOK, ...args],
     { input: JSON.stringify({ session_id: SELF, cwd: "/w", hook_event_name: event, stop_hook_active: false }), env, encoding: "utf8" });
   const blocked = run("Stop");
-  assert.deepEqual([blocked.status, JSON.parse(blocked.stdout), withoutTypeStrippingWarning(blocked.stderr)],
-    [0, { decision: "block", reason: CODEX_STOP_REASON }, ""]);
+  assert.ok(JSON.parse(blocked.stdout).reason.startsWith(CODEX_STOP_REASON));
+  assert.ok(JSON.parse(blocked.stdout).reason.includes(" msg inbox --from " + SELF + " --receive"));
+  assert.deepEqual([blocked.status, JSON.parse(blocked.stdout).decision, withoutTypeStrippingWarning(blocked.stderr)],
+    [0, "block", ""]);
   const prompt = run("UserPromptSubmit");
   assert.equal(JSON.parse(prompt.stdout).hookSpecificOutput.hookEventName, "UserPromptSubmit");
   const quiet = run("Stop");

@@ -17,7 +17,9 @@ import { cliCommand } from "./msg-cli.mts";
 //   invalid"; decision "block" makes Codex continue with "a new continuation
 //   prompt that acts as a new user prompt, using your reason as that prompt
 //   text" ("Stop"). The reason is therefore a fixed text and never peer
-//   content. "Exit 0 with no output is treated as success" ("Common output
+//   content. Stop continuations do not fire UserPromptSubmit: they retrieve
+//   the framed peer context through msg inbox --receive. "Exit 0 with no
+//   output is treated as success" ("Common output
 //   fields").
 // - Model-visible hook output above roughly 2,500 tokens is spilled to a file
 //   with a head-and-tail preview ("Large hook output"). Message text, ids and
@@ -33,7 +35,7 @@ import { cliCommand } from "./msg-cli.mts";
 
 export const CODEX_CONTEXT_BYTES = 6 * 1024;
 export const CODEX_STOP_REASON = "Kherep: new messages from other agent sessions arrived for this session. "
-  + "They are shown as developer context; decide whether they need an answer, otherwise stop.";
+  + "Retrieve them with the command below, then decide whether they need an answer; otherwise stop.";
 export const CODEX_ESCALATION_NOTE = "Run the msg command on its own, not in a pipeline or script, and request escalated "
   + "permissions (sandbox_permissions \"require_escalated\") on the first attempt: it writes outside the sandbox, and the "
   + "installed Kherep rule approves msg send, sessions, inbox and status without asking the user.";
@@ -67,5 +69,6 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
   // the Claude Stop path (autonomy.mts).
   const allowed = deps.mayContinue ?? ((ids: string[]) => mayContinue(deps.paths, sessionId, mode, ids, deps.now?.() ?? Date.now()));
   if (!allowed(arrived)) return "";
-  return JSON.stringify({ decision: "block", reason: CODEX_STOP_REASON });
+  const receive = (deps.replyCommand ?? cliCommand()) + " msg inbox --from " + sessionId + " --receive";
+  return JSON.stringify({ decision: "block", reason: CODEX_STOP_REASON + "\n" + receive + "\n" + CODEX_ESCALATION_NOTE });
 }

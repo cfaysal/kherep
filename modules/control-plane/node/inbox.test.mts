@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import type { MessageDeliverBody } from "../protocol-messages.mts";
-import { getMessage, INBOX_RETENTION_MS, listInbox, markDelivered, purgeInbox, storeMessage } from "./inbox.mts";
+import { getMessage, getReceipt, INBOX_RETENTION_MS, listInbox, markDelivered, markOffered, markReported, purgeInbox, storeMessage } from "./inbox.mts";
 
 const ID_A = "00000000-0000-4000-8000-0000000000a1";
 const ID_B = "00000000-0000-4000-8000-0000000000b2";
@@ -63,15 +63,36 @@ test("markDelivered records the state and returns the status to send", (t) => {
   assert.equal(markDelivered(dir, ID_B), null);
 });
 
+test("a delayed receipt uses a sidecar and never rewrites newer hook progress", (t) => {
+  const dir = tempInbox(t);
+  storeMessage(dir, deliver(ID_A), NOW);
+  markOffered(dir, ID_A, NOW + 1);
+  const offered = getMessage(dir, ID_A);
+  markReported(dir, ID_A, "accepted", "accepted", NOW + 2);
+  assert.deepEqual(getMessage(dir, ID_A), offered, "the daemon receipt does not rewrite the message record");
+  assert.deepEqual(getReceipt(dir, ID_A), { reportedAt: new Date(NOW + 2).toISOString(),
+    reportedState: "accepted", workerState: "accepted" });
+
+  markDelivered(dir, ID_A);
+  markReported(dir, ID_A, "accepted", "accepted", NOW + 3);
+  assert.equal(getMessage(dir, ID_A)?.state, "delivered", "a stale accepted receipt cannot revert delivery");
+  assert.equal(getReceipt(dir, ID_A)?.reportedAt, new Date(NOW + 2).toISOString());
+  markReported(dir, ID_A, "delivered", "replied", NOW + 4);
+  assert.deepEqual(getReceipt(dir, ID_A), { reportedAt: new Date(NOW + 4).toISOString(),
+    reportedState: "delivered", workerState: "replied" });
+});
+
 test("purges records older than seven days and stale temp files", (t) => {
   const dir = tempInbox(t);
   storeMessage(dir, deliver(ID_A), NOW - INBOX_RETENTION_MS - 1);
   storeMessage(dir, deliver(ID_B), NOW - INBOX_RETENTION_MS + 60_000);
+  markReported(dir, ID_A, "accepted", "accepted", NOW - INBOX_RETENTION_MS - 1);
   const temp = path.join(dir, `.${ID_B}.json.x.tmp`);
   fs.writeFileSync(temp, "{");
   const old = new Date(NOW - INBOX_RETENTION_MS - 60_000);
   fs.utimesSync(temp, old, old);
   assert.equal(purgeInbox(dir, NOW), 1);
-  assert.deepEqual(fs.readdirSync(dir), [`${ID_B}.json`]);
+  assert.deepEqual(fs.readdirSync(dir).sort(), [`${ID_B}.json`, "receipts"]);
+  assert.equal(getReceipt(dir, ID_A), null);
   assert.equal(purgeInbox(path.join(dir, "missing"), NOW), 0);
 });

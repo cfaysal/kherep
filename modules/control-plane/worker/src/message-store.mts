@@ -1,5 +1,6 @@
 import {
-  MESSAGING_CAPABILITY, OPERATOR_NODE_ID, type MessageAddress, type MessageDeliverBody, type MessageState, type MessageStatusBody,
+  MESSAGING_CAPABILITY, OPERATOR_NODE_ID, type MessageAddress, type MessageDeliverBody, type MessageReceiptBody, type MessageState,
+  type MessageStatusBody, type NodeReportedState,
 } from "../../protocol-messages.mts";
 
 // The Registry's `messages` table (issue #31). Additive: an existing Registry
@@ -45,6 +46,7 @@ export interface MessageEffects {
 }
 
 export type SendResult = { ok: true; status: MessageStatusBody; effects: MessageEffects } | { ok: false; error: string };
+export interface MessageReportResult { effects: MessageEffects; receipt: MessageReceiptBody | null }
 
 type Audit = (actor: string, action: string, target: string | null, detail: unknown) => void;
 // Registered capabilities of an enrolled, non-revoked node, or null.
@@ -126,30 +128,49 @@ export class MessageStore {
         ...(message.inReplyTo === undefined ? {} : { inReplyTo: message.inReplyTo }),
         ...(message.taskId === undefined ? {} : { taskId: message.taskId }), createdAt: new Date(now).toISOString(),
       } });
+      this.markReplied(message, now, effects);
     }
     return { ok: true, status: statusBody(message.messageId, state, reason), effects };
   }
 
-  // A status reported by the target node. Reports from any other node, for
-  // unknown messages or that would move a message backwards are ignored.
-  report(nodeId: string, status: MessageStatusBody, now: number): MessageEffects {
+  // A status reported by the target node. Wrong-node and unknown reports get
+  // no receipt. Valid duplicates get the canonical state again so a lost
+  // receipt heals on the node's next retry.
+  report(nodeId: string, status: MessageStatusBody & { state: NodeReportedState }, now: number): MessageReportResult {
     const effects = this.expireDue(now);
-    const record = this.get(status.messageId);
-    if (!record || record.toNode !== nodeId) return effects;
-    const from = RANK[record.state];
-    const to = RANK[status.state];
-    if (from === undefined || (status.state !== "refused" && (to === undefined || to <= from))) return effects;
-    this.setState(record, status.state, status.reason ?? null, `node:${nodeId}`, now, effects);
-    return effects;
+    let record = this.get(status.messageId);
+    if (!record || record.toNode !== nodeId) return { effects, receipt: null };
+    if (this.mayAdvance(record.state, status.state)) {
+      this.setState(record, status.state, status.reason ?? null, `node:${nodeId}`, now, effects);
+      record = this.get(status.messageId) ?? record;
+    }
+    return { effects, receipt: {
+      name: "message.receipt", messageId: status.messageId, requestedState: status.state, storedState: record.state,
+    } };
   }
 
-  // Queued messages for a node that just authenticated, oldest first.
+  // Queued messages for a target that just authenticated. The existing queue
+  // limit bounds this set independently of sender-status history.
   pendingFor(nodeId: string, now: number): MessageEffects {
     const effects = this.expireDue(now);
     const rows = this.sql.exec(`SELECT id, from_node, from_session, to_session, in_reply_to, text, created_at, task_id FROM messages
       WHERE to_node = ? AND state = 'queued' ORDER BY created_at, rowid`, nodeId).toArray();
     for (const row of rows) effects.deliveries.push({ nodeId, body: deliverBodyOf(row) });
     return effects;
+  }
+
+  // One metadata-only cursor page for a sender reconnect. NodeSession keeps
+  // requesting pages until nextCursor is null, so history is complete without
+  // an unbounded allocation or frame batch.
+  statusPageFor(nodeId: string, afterRowId: number, limit: number): { effects: MessageEffects; nextCursor: number | null } {
+    const effects = none();
+    const pageSize = Math.min(128, Math.max(1, Math.floor(limit)));
+    const cursor = Math.max(0, Math.floor(afterRowId));
+    const rows = this.sql.exec(`SELECT rowid AS cursor, ${COLUMNS} FROM messages
+      WHERE from_node = ? AND rowid > ? ORDER BY rowid LIMIT ?`, nodeId, cursor, pageSize).toArray();
+    for (const row of rows) effects.statuses.push({ nodeId, body: statusOf(toRecord(row)) });
+    const nextCursor = rows.length === pageSize ? Number(rows.at(-1)?.cursor) : null;
+    return { effects, nextCursor };
   }
 
   // Queued messages past their 24 h lifetime become expired and lose their text.
@@ -183,6 +204,23 @@ export class MessageStore {
       : this.sql.exec(`SELECT ${COLUMNS} FROM messages WHERE from_node = ? OR to_node = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`,
         nodeId, nodeId, limit);
     return rows.toArray().map(toRecord);
+  }
+
+  private mayAdvance(from: MessageState, to: NodeReportedState | "replied"): boolean {
+    if (from === "refused" || from === "expired" || from === "replied") return false;
+    if (to === "refused") return from === "queued" || from === "accepted";
+    const current = RANK[from];
+    const next = RANK[to];
+    return current !== undefined && next !== undefined && next > current;
+  }
+
+  private markReplied(message: NewMessage, now: number, effects: MessageEffects): void {
+    if (!message.inReplyTo) return;
+    const original = this.get(message.inReplyTo);
+    if (!original || original.toNode !== message.from.nodeId || original.fromNode !== message.to.nodeId
+      || original.fromSession !== message.to.session) return;
+    if (!this.mayAdvance(original.state, "replied")) return;
+    this.setState(original, "replied", null, `node:${message.from.nodeId}`, now, effects);
   }
 
   private get(messageId: string): MessageRecord | null {

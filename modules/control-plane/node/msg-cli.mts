@@ -6,10 +6,11 @@ import {
 } from "../protocol-messages.mts";
 import { readConfig, type NodePaths } from "./config.mts";
 import { getOutbox, getSent, readDirectory, requestDirectory, writeOutbox, type OutboxRecord } from "./exchange.mts";
-import { getMessage, listInbox, markAnswered } from "./inbox.mts";
+import { getMessage, markAnswered } from "./inbox.mts";
 import {
-  currentSession, DIRECTORY_STALE_MS, nodeLabel, resolveSendTarget, senderSession, SESSION_ENV, sessionIdFromEnv,
+  currentSession, DIRECTORY_STALE_MS, resolveSendTarget, senderSession, SESSION_ENV, sessionIdFromEnv,
 } from "./msg-resolve.mts";
+import { inbox } from "./msg-inbox.mts";
 import { sendNew } from "./msg-new.mts";
 import { taskForSession } from "./task-records.mts";
 
@@ -45,7 +46,7 @@ export const MSG_USAGE = `usage:
   kherep-node msg send <node>/<session> [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg send <node> --new claude|codex --directive <the operator's answer, verbatim> [--cwd <dir>] [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg send --reply-to <messageId> [--to <node>/<session>] [--from <session>] [--wait <seconds>] [--] <text...>
-  kherep-node msg inbox [--all]
+  kherep-node msg inbox [--from <codex-session-id>] [--all | --receive]
   kherep-node msg status <messageId>`;
 
 const FINAL_OK = ["accepted", "delivered", "replied"];
@@ -69,13 +70,13 @@ function fail(io: Io, message: string): number {
 
 export interface MsgArgs {
   positionals: string[];
-  values: { from?: string; to?: string; "reply-to"?: string; wait?: string; all?: boolean; new?: string; cwd?: string; directive?: string };
+  values: { from?: string; to?: string; "reply-to"?: string; wait?: string; all?: boolean; receive?: boolean; new?: string; cwd?: string; directive?: string };
 }
 
 export function parseMsgArgs(argv: string[]): MsgArgs {
   return parseArgs({
     args: argv, allowPositionals: true,
-    options: { from: { type: "string" }, to: { type: "string" }, "reply-to": { type: "string" }, wait: { type: "string" }, all: { type: "boolean" },
+    options: { from: { type: "string" }, to: { type: "string" }, "reply-to": { type: "string" }, wait: { type: "string" }, all: { type: "boolean" }, receive: { type: "boolean" },
       new: { type: "string" }, cwd: { type: "string" }, directive: { type: "string" } },
   });
 }
@@ -95,7 +96,7 @@ export async function runMsgArgs({ positionals, values }: MsgArgs, context: MsgC
   const [command, ...rest] = positionals;
   if (command === "sessions") return sessions(io);
   if (command === "send") return send(io, rest, values);
-  if (command === "inbox") return inbox(io, values.all === true);
+  if (command === "inbox") return inbox(io, values);
   if (command === "status" && rest.length === 1) return status(io, rest[0]);
   io.err(MSG_USAGE);
   return 2;
@@ -216,28 +217,6 @@ async function waitForAnswer(io: Io, messageId: string, timeoutMs: number): Prom
     }
     await io.sleep(WAIT_POLL_MS);
   }
-}
-
-// Messages addressed to this session by its id or its name. Without --all
-// only those the delivery hook has not confirmed as delivered yet.
-function inbox(io: Io, all: boolean): number {
-  const me = currentSession(io.paths, io.env);
-  if (!me) return fail(io, `cannot tell which session this is: ${SESSION_ENV} is not set`);
-  const records = listInbox(io.paths.inbox)
-    .filter((r) => r.toSession === me.id || (me.name !== undefined && r.toSession === me.name))
-    .filter((r) => all || r.state === "accepted" || r.state === "offered");
-  if (records.length === 0) {
-    io.out(all ? "no messages for this session" : "no undelivered messages for this session (--all includes delivered ones)");
-    return 0;
-  }
-  const directory = readDirectory(io.paths);
-  for (const r of records) {
-    io.out(`${r.messageId}  ${r.state}  ${r.createdAt}`);
-    io.out(`  from: node ${nodeLabel(directory, r.from.nodeId)}, session ${r.from.session}`);
-    if (r.inReplyTo) io.out(`  in reply to: ${r.inReplyTo}`);
-    for (const line of r.text.split("\n")) io.out(`  | ${line}`);
-  }
-  return 0;
 }
 
 function status(io: Io, messageId: string): number {

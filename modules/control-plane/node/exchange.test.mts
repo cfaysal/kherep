@@ -9,11 +9,11 @@ import type { DirectoryBody } from "../protocol-messages.mts";
 import { NodeClient } from "./client.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
 import {
-  exchangeOptions, getSent, pollExchange, readDirectory, readLocalSessions, recordingSessions, requestDirectory, writeOutbox,
+  exchangeOptions, getSent, pollExchange, readDirectory, readLocalSessions, recordSent, recordingSessions, requestDirectory, writeOutbox,
   type OutboxRecord,
 } from "./exchange.mts";
 import { generateIdentity } from "./identity.mts";
-import { getMessage, markDelivered, markOffered, markRefused, storeMessage, UNDELIVERABLE_AFTER_MS } from "./inbox.mts";
+import { getMessage, getReceipt, markDelivered, markOffered, markRefused, storeMessage, UNDELIVERABLE_AFTER_MS } from "./inbox.mts";
 import { DEFAULT_POLICY } from "./policy.mts";
 
 const SELF = "00000000-0000-4000-8000-0000000000aa";
@@ -89,6 +89,13 @@ test("sends each outbox record once per connection and moves it to sent/ with th
   // Forwarded statuses of the target update the same file.
   await client.onFrame(incoming("message.status", { messageId: ID_A, state: "refused", reason: "not accepted by node policy" }));
   assert.deepEqual(getSent(paths, ID_A), { ...record, state: "refused", reason: "not accepted by node policy", updatedAt: getSent(paths, ID_A)?.updatedAt });
+  await client.onFrame(incoming("message.status", { messageId: ID_A, state: "accepted" }));
+  assert.equal(getSent(paths, ID_A)?.state, "refused", "a delayed lower state cannot regress a terminal state");
+  writeOutbox(paths, record);
+  assert.equal(fs.existsSync(path.join(paths.outbox, ID_A + ".json")), true, "simulated crash left the outbox copy");
+  recordSent(paths, ID_A, "accepted");
+  assert.equal(getSent(paths, ID_A)?.state, "refused");
+  assert.equal(fs.existsSync(path.join(paths.outbox, ID_A + ".json")), false, "duplicate recovery removes the stale outbox copy");
   await client.onFrame(incoming("message.status", { messageId: ID_B, state: "accepted" }));
   assert.equal(getSent(paths, ID_B), null); // not a message of this node
 });
@@ -119,27 +126,83 @@ test("nothing counts as sent while the socket is closed or the client not authen
   assert.equal(inflight.size, 0);
 });
 
-test("reports each delivered inbox record exactly once", async (t) => {
+test("retries terminal inbox states until the Worker receipt confirms persistence", async (t) => {
   const paths = tempPaths(t);
   const { client } = await connected(paths);
   for (const id of [ID_A, ID_B]) {
     storeMessage(paths.inbox, { messageId: id, from: { nodeId: PEER, session: "s-a" }, toSession: "review", text: "hi", createdAt: new Date(0).toISOString() });
   }
-  assert.deepEqual(poll(client, paths), []); // accepted only: nothing to report
+  assert.deepEqual(poll(client, paths).map((e) => e.body), [
+    { messageId: ID_A, state: "accepted" }, { messageId: ID_B, state: "accepted" },
+  ]);
+  assert.deepEqual(poll(client, paths).map((e) => e.body), [
+    { messageId: ID_A, state: "accepted" }, { messageId: ID_B, state: "accepted" },
+  ], "a lost initial accepted report is retried without reconnecting");
+  for (const messageId of [ID_A, ID_B]) {
+    await client.onFrame(incoming("event", { name: "message.receipt", messageId,
+      requestedState: "accepted", storedState: "accepted" }));
+  }
+  assert.deepEqual(poll(client, paths), []);
   markDelivered(paths.inbox, ID_A);
   // A closed socket reports nothing and marks nothing.
   assert.deepEqual(poll(client, paths, new Set(), false), []);
-  assert.equal(getMessage(paths.inbox, ID_A)?.reportedAt, undefined);
+  assert.equal(getReceipt(paths.inbox, ID_A)?.reportedState, "accepted");
   assert.deepEqual(poll(client, paths).map((e) => [e.type, e.body]), [["message.status", { messageId: ID_A, state: "delivered" }]]);
-  assert.ok(getMessage(paths.inbox, ID_A)?.reportedAt);
+  assert.equal(getReceipt(paths.inbox, ID_A)?.reportedState, "accepted", "socket write is not a persistence receipt");
+  assert.deepEqual(poll(client, paths).map((e) => e.body), [{ messageId: ID_A, state: "delivered" }]);
+  await client.onFrame(incoming("event", { name: "message.receipt", messageId: ID_A,
+    requestedState: "refused", storedState: "refused" }));
+  assert.equal(getReceipt(paths.inbox, ID_A)?.reportedState, "accepted", "a receipt for another requested state cannot acknowledge this report");
+  await client.onFrame(incoming("event", { name: "message.receipt", messageId: ID_A,
+    requestedState: "delivered", storedState: "accepted" }));
+  assert.equal(getReceipt(paths.inbox, ID_A)?.reportedState, "accepted", "a lower canonical state is not a persistence confirmation");
+  assert.deepEqual(poll(client, paths).map((e) => e.body), [{ messageId: ID_A, state: "delivered" }]);
+  await client.onFrame(incoming("event", { name: "message.receipt", messageId: ID_A,
+    requestedState: "delivered", storedState: "refused" }));
+  assert.deepEqual([getReceipt(paths.inbox, ID_A)?.reportedState, getReceipt(paths.inbox, ID_A)?.workerState],
+    ["delivered", "refused"], "a terminal conflict stops retries but preserves the Worker's canonical state");
   assert.deepEqual(poll(client, paths), []);
-  // A refusal goes out once with its reason; offered is local only.
+  // A refusal is retried with its reason; offered is local only.
   markOffered(paths.inbox, ID_B);
   assert.deepEqual(poll(client, paths), []);
   assert.ok(markRefused(paths.inbox, ID_B, "not confirmed by the session after 3 turns"));
   assert.deepEqual(poll(client, paths).map((e) => e.body),
     [{ messageId: ID_B, state: "refused", reason: "not confirmed by the session after 3 turns" }]);
-  assert.equal(getMessage(paths.inbox, ID_B)?.reportedState, "refused");
+  assert.equal(getReceipt(paths.inbox, ID_B)?.reportedState, "accepted");
+  await client.onFrame(incoming("event", { name: "message.receipt", messageId: ID_B,
+    requestedState: "refused", storedState: "delivered" }));
+  assert.deepEqual(getReceipt(paths.inbox, ID_B), { reportedAt: getReceipt(paths.inbox, ID_B)?.reportedAt,
+    reportedState: "refused", workerState: "delivered" });
+  assert.deepEqual(poll(client, paths), []);
+});
+
+test("a canonical forward-state receipt confirms the local report and records Worker truth", async (t) => {
+  const paths = tempPaths(t);
+  const { client } = await connected(paths);
+  storeMessage(paths.inbox, { messageId: ID_A, from: { nodeId: PEER, session: "s-a" }, toSession: "review",
+    text: "hi", createdAt: new Date(0).toISOString() });
+  markDelivered(paths.inbox, ID_A);
+  assert.deepEqual(poll(client, paths).map((e) => e.body), [{ messageId: ID_A, state: "delivered" }]);
+  await client.onFrame(incoming("event", { name: "message.receipt", messageId: ID_A,
+    requestedState: "delivered", storedState: "replied" }));
+  assert.deepEqual([getReceipt(paths.inbox, ID_A)?.reportedState, getReceipt(paths.inbox, ID_A)?.workerState],
+    ["delivered", "replied"]);
+  assert.deepEqual(poll(client, paths), []);
+});
+
+test("legacy optimistic report markers are retried until a receipt from the Worker", async (t) => {
+  const paths = tempPaths(t);
+  const { client } = await connected(paths);
+  storeMessage(paths.inbox, { messageId: ID_A, from: { nodeId: PEER, session: "s-a" }, toSession: "review",
+    text: "hi", createdAt: new Date(0).toISOString() });
+  markDelivered(paths.inbox, ID_A);
+  const file = path.join(paths.inbox, ID_A + ".json");
+  const legacy = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+  fs.writeFileSync(file, JSON.stringify({ ...legacy, reportedAt: new Date(0).toISOString(), reportedState: "delivered" }));
+
+  assert.deepEqual(poll(client, paths).map((e) => e.body), [{ messageId: ID_A, state: "delivered" }]);
+  await client.onFrame(incoming("event", { name: "message.receipt", messageId: ID_A,
+    requestedState: "delivered", storedState: "delivered" }));
   assert.deepEqual(poll(client, paths), []);
 });
 
@@ -172,8 +235,15 @@ test("a successful listing refuses messages for sessions that stopped running; a
   assert.deepEqual([ID_A, ID_B, ID_C, ID_D].map((id) => [getMessage(paths.inbox, id)?.state, getMessage(paths.inbox, id)?.reason]), [
     ["refused", "target session not running"], ["accepted", undefined], ["accepted", undefined], ["refused", "target session not running"]]);
   assert.deepEqual(logs, ["kherep-node: refused 2 message(s) for sessions that are not running"]);
-  assert.deepEqual(poll(client, paths).map((e) => e.body), [ID_A, ID_D].map((messageId) =>
-    ({ messageId, state: "refused", reason: "target session not running" })));
+  const reports = poll(client, paths).map((e) => e.body as { messageId: string; state: "accepted" | "refused"; reason?: string });
+  assert.deepEqual(reports, [
+    { messageId: ID_A, state: "refused", reason: "target session not running" },
+    { messageId: ID_B, state: "accepted" },
+    { messageId: ID_C, state: "accepted" },
+    { messageId: ID_D, state: "refused", reason: "target session not running" },
+  ]);
+  for (const report of reports) await client.onFrame(incoming("event", { name: "message.receipt",
+    messageId: report.messageId, requestedState: report.state, storedState: report.state }));
   assert.deepEqual(poll(client, paths), []);
 });
 
