@@ -170,9 +170,12 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
       for (const timer of [ping, snapshots, exchange, directory]) if (timer) clearInterval(timer);
       client.connectionClosed();
       if (stopped) return finish();
-      // Revoked or unknown keys will not succeed on retry; stop instead of hammering.
-      if (event.code === 4403) {
-        log("kherep-node: the control plane refused this node (unknown or revoked); stopping");
+      // Revoked keys and a connection superseded by the same node identity
+      // cannot succeed by reconnecting this daemon; stop instead of hammering.
+      if (event.code === 4403 || event.code === 4409) {
+        log(event.code === 4403
+          ? "kherep-node: the control plane refused this node (unknown or revoked); stopping"
+          : "kherep-node: another connection replaced this daemon for the same node; stopping");
         stopped = true;
         return finish();
       }

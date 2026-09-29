@@ -53,3 +53,16 @@
 - [x] Emit one stable `ambiguous-target` observation for a shared name and preserve offered messages as `awaiting-turn-confirmation`.
 - [x] Cover reversed snapshot order, repeated ticks, ambiguity resolution, covering receipts, id/name collisions, and Claude/Codex collisions.
 - [x] Run the focused progress suite and the root control-plane suite.
+
+### Task 5: End a superseded daemon connection
+
+**Files:**
+- Modify: `modules/control-plane/node/daemon.mts`
+- Create: `modules/control-plane/node/daemon-close.test.mts`
+- Modify: `modules/control-plane/ARCHITECTURE.md`
+- Modify: `modules/control-plane/README.md`
+
+- [x] Treat Worker close code 4409 as a terminal handoff after clearing connection timers.
+- [x] Preserve terminal 4403 handling and retry transient closes with the existing backoff.
+- [x] Drive the real daemon close handler with a synthetic WebSocket and retain RED/GREEN evidence outside the repository.
+- [x] Run the focused daemon tests, root typecheck, and final diff audit.
