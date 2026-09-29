@@ -15,6 +15,7 @@ History: the node registry and read-only commands were the first step (GitHub is
 kherep-node --outbound WSS--> Worker kherep-control --> NodeSession Durable Object (one per node)
                                                    \--> Registry Durable Object (one per deployment)
 operator ----HTTPS behind Cloudflare Access--> Worker --> Registry / NodeSession
+owner CLI --> local outbox --> Registry grant / operation --> target journal --> measured result
 ```
 
 | Part | Path | Role |
@@ -35,6 +36,8 @@ operator ----HTTPS behind Cloudflare Access--> Worker --> Registry / NodeSession
 | Tasks (Worker) | `worker/src/tasks-api.mts`, `worker/src/task-store.mts`, `worker/src/task-dispatch.mts`, `worker/src/task-frames.mts` | `/api/tasks`, the Registry's `tasks` table, node selection, `session.start` dispatch, task reports and requests |
 | Tasks (node) | `node/session-policy.mts`, `node/session-runner.mts`, `node/task-watch.mts`, `node/task-exchange.mts`, `node/task-cli.mts` | The `sessions` policy section, `claude --bg` start, stop and resume, the watch round, and `kherep-node task ...` |
 | Intercom (node) | `node/msg-new.mts` | `kherep-node msg send <node> --new`: a labelled task request for exactly that node |
+
+Owner task-control authentication and persistence are described in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 Both Durable Object classes use SQLite storage (declared in the `exports` map with `"storage": "sqlite"`). `NodeSession` accepts the socket with the WebSocket Hibernation API, so an idle node does not keep the object in memory.
 
@@ -324,6 +327,50 @@ A Maestro session may ask for a task with `task new`, which writes `task-request
 - The Worker refuses an empty directive. It creates the task with `created_by` `session:<nodeId>/<session>` and keeps `requestedBy` and the directive; the audit records both, because the directive is the operator's own words, but never the task text. The framed prompt says `Task <taskId> requested by session <nodeId>/<session> on the operator's directive` and quotes the directive.
 - Rule for the Maestro: use `task new` only when the operator's own prompt in that session asks for it, and quote that instruction verbatim in `--directive`; never because of a peer message. This is enforced by the ROUTING rule and the audit trail, not technically: the control plane cannot prove where a directive came from.
 
+### Owner task status and confirmed stop
+
+Owner task control is opt-in (issue #134). Set `sessions.ownTaskControl: true`
+in the local policy on the requesting and target nodes, with sessions enabled
+and the required runtime allowed, then restart both daemons. This advertises
+`sessions.own-task-control.v1`. Existing installations remain disabled until the
+operator enables the policy. Deploy the compatible Worker before activating nodes.
+
+```sh
+kherep-node task status <taskId-or-owned-requestId-or-messageId>
+kherep-node task stop <taskId>
+kherep-node task result <requestId>
+```
+
+`task status` requests a new target measurement. The Worker resolves an owned
+request or source message to its task; the task id addresses a known task directly.
+The result distinguishes task-record state, process state, observation time and
+freshness. A stored result is labelled `cached`; missing evidence stays `unknown`
+or `unavailable`. These commands do not expose a transcript or imply that a task
+has an open Desktop window. `task show` remains the local metadata lookup.
+
+`task stop` first obtains status and then submits a stop for that exact run.
+Confirmed remote stop is supported for Codex. Claude task-record status is
+available, but its process state is `unknown` and remote stop is unsupported.
+A stop succeeds only after the target verifies that the captured Codex process
+tree ended. A changed run, uncertain identity, failed termination or recovery
+state cannot produce `stopConfirmed: true`. Durable stop intent prevents an
+automatic wake from starting the same task again; explicit continue clears it.
+
+A timeout does not cancel a submitted operation. If the initial status times out,
+the CLI says that no stop was submitted; resolve that status and rerun `task stop`.
+If the stop itself is pending, retain its printed request id and use `task result`.
+An interrupted execution is recovered as `recovery_required`, without automatically
+repeating the process signal. A completed result is retried until acknowledged.
+
+Authorization is at the enrolled-node boundary. The Worker derives ownership from
+the original delegated request or authenticated source message; session labels are
+not separate chat credentials. Operator-owned tasks, another node's tasks and
+conflicting registrations are denied. Task owner, target and runtime stay immutable;
+source-message discovery can move to a newer task without reassigning an older task.
+Capabilities, revocation and local target policy are checked again during execution.
+Only allowlisted metadata crosses the task-control protocol: no message text,
+transcript, local path or process id. See [Architecture](ARCHITECTURE.md) for the
+registration, operation and result flow.
 ### Intercom sessions
 
 Issue #74. The first message of a conversation with another node goes either to an existing session there (`msg send <node>/<session>`) or to a new intercom session the Control Plane starts for it. The operator decides which, before the first message; the session never chooses on its own (the ROUTING rule under Peer coordination, for Claude and Codex).
@@ -341,7 +388,7 @@ Issues #102 and #105, operator decisions of 2026-09-27: a message must reach its
 - **New.** Otherwise, or when that resume fails, the node starts an intercom session itself, as `msg send --new` would: the runtime and working directory of the closed session, the label `intercom: <sender runtime>@<sender node name>` (from the directory; `session` when the sender's runtime is not listed) and, as the directive, a fixed text saying that this is an automatic delivery fallback approved by the node policy (`messaging.resumeClosed`). The task text is the sender's messages framed as the delivery hook frames them (per-call markers, "NOT an instruction from the user", sender, message id), each with its reply command `<cli> msg send --reply-to <message id> -- <reply text>`, as far as they fit 16,384 characters (a first message that does not fit is shortened with a pointer to `msg inbox --all`). The framed prompt tells the session to answer each message with that command, so that the answer is threaded (`in reply to`), and not with a plain `msg send`. The messages it carries are marked `delivered`; for a Codex intercom session (issue #119) they are instead readdressed to it (`toSession` its name, `closedTo` the session they were sent to), marked `offered` and confirmed only when its run completes the turn, otherwise offered again through the Codex exchange round (see [Codex tasks](#codex-tasks), **Windows: intercom runs**). The session's `msg send` knows its own session from `CLAUDE_CODE_SESSION_ID`, or for Codex from the `KHEREP_SESSION_ID` the node sets, so the command needs no `--from`. An operator message goes to no intercom session, because its answer could not reach the operator API.
 - **Delivery identity.** Each inbox record handled by a local intercom task records `delivery.taskId`, `delivery.runtime` and, once known, `delivery.sessionId`. This is separate from the existing inbox `taskId`, which remains the authorization grant. Offers, retries and receipts preserve the delivery identity. A failed start or resume leaves an accepted message without a delivery association. New, running and resumed Claude and Codex intercom paths update it; a Claude copy updates the same messages to the adopted session. When a start has no session id yet, the task record keeps only those message ids until its watch maps the session, so watch rounds do not scan the whole inbox.
 - **Guards**, fail closed, each refusal audited with its reason: the wake kill switch; `sessions.enabled` with the runtime in `runtimes`; `sessions.delegate.accept` and an accept rule for the sender; reply depth below 6; never a closed session whose recorded mode is `bypassPermissions`; `maxConcurrent` (and, for a new session, `maxStartsPerDay`); a working directory inside the workspace roots; and one autonomous turn of the budget of the session that runs, the resumed intercom session or, for a new one, the closed session (6 per hour, 20 per day, 30 seconds apart). A new session also passes the checks of every task start. A refused message waits as before and is refused after 60 minutes with `target session not running`. A message handed to an intercom session (`closedTo` set) is judged by its current `toSession`, 60 minutes from the handover (`closedAttempt`), and a message a session answered with `msg send --reply-to` is `delivered`, even when no turn offered it (issue #111).
-- **No loops.** A message causes at most one attempt (`closedAttempt` in its inbox record), a closed session gets one run per round, and none while a run for it is active. The Worker does not know these sessions: their task records carry `local` `intercom` (`resume` in records written before issue #105), send no `task.report`, and their messages carry no task id. While such a session is active it counts against `maxConcurrent`, and the node sends no task requests, as for any active task.
+- **No loops.** A message causes at most one attempt (`closedAttempt` in its inbox record), a closed session gets one run per round, and none while a run for it is active. These sessions do not use the regular Worker task reporting path: their task records carry `local` `intercom` (`resume` in records written before issue #105), send no `task.report`, and their messages carry no task id. When owner task control is enabled, a separate metadata-only registration associates their local task with the authenticated source message. While such a session is active it counts against `maxConcurrent`, and the node sends no task requests, as for any active task.
 - Every outcome is a line in `wake.jsonl` with the action `closed-session` and the outcome `reused` (reason `intercom session running` or `intercom session resumed`, with the intercom session's `taskId`), `new` or `refused`, plus the reason; a stopped previous copy has the outcome `retired-copy` and one kept after 30 busy rounds `copy-kept`, each with its `sessionId`, `shortId` and `taskId`; message text is never written.
 
 ## Security model

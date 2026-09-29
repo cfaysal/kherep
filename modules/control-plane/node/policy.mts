@@ -2,6 +2,7 @@ import fs from "node:fs";
 
 import { isNodeId, isPhase1Command, isSessionCommand, PHASE1_COMMANDS, type NodeCommand, type Phase1Command } from "../protocol.mts";
 import { isSessionRef, MESSAGING_CAPABILITY, OPERATOR_NODE_ID } from "../protocol-messages.mts";
+import { TASK_CONTROL_CAPABILITY } from "../protocol-task-control.mts";
 import { DELEGATE_ACCEPT_CAPABILITY, DELEGATE_REQUEST_CAPABILITY, SESSIONS_CAPABILITY } from "../protocol-tasks.mts";
 import { parseSessionsPolicy, type SessionsPolicy } from "./session-policy.mts";
 
@@ -92,7 +93,7 @@ export function advertisedCapabilities(policy: NodePolicy): string[] {
   const s = policy.sessions;
   return [...policy.allowedCommands, ...(messagingEnabled(policy) ? [MESSAGING_CAPABILITY] : []),
     ...(s?.enabled ? [SESSIONS_CAPABILITY] : []), ...(s?.delegate.accept ? [DELEGATE_ACCEPT_CAPABILITY] : []),
-    ...(s?.delegate.request ? [DELEGATE_REQUEST_CAPABILITY] : [])];
+    ...(s?.delegate.request ? [DELEGATE_REQUEST_CAPABILITY] : []), ...(s?.ownTaskControl && s.runtimes.length > 0 ? [TASK_CONTROL_CAPABILITY] : [])];
 }
 
 // session "*" matches any local session, from "*" any sender. Otherwise both

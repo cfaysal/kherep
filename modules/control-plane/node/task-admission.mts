@@ -56,6 +56,7 @@ export function admitStart(args: SessionStartArgs, deps: RunnerDeps): Admitted {
     taskId: args.taskId, runtime: args.runtime, name: args.name, cwd: cwd.cwd, permissionMode: mode, state: "started",
     startedAt: new Date(now).toISOString(), deadline: new Date(now + policy.maxRuntimeMinutes * 60_000).toISOString(),
     updatedAt: new Date(now).toISOString(), ...(args.requestedBy !== undefined ? { requestedBy: args.requestedBy } : {}),
+    ...(args.sourceRequestId ? { sourceRequestId: args.sourceRequestId } : {}),
     ...(args.label ? { label: args.label } : {}), ...(deps.local ? { local: deps.local } : {}),
   };
   let cli: string;

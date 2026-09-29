@@ -127,7 +127,10 @@ export async function terminate(deps: CodexDeps, pid: number, pidStart: string |
   if (pidStart === undefined && !holdsChild(pid)) throw new Error("process identity unknown");
   const identities = processTree(deps, pid);
   const root = identities.find((entry) => entry.pid === pid);
-  if (!root || (pidStart !== undefined && root.start !== pidStart)) return; // the recorded process already ended
+  if (!root || (pidStart !== undefined && root.start !== pidStart)) {
+    if (allStopped(deps, identities)) return;
+    throw new Error("root process identity changed during capture while captured processes still run");
+  }
   const send = deps.signal ?? ((target, signal) => {
     const sent = signalGroup(target, signal, deps.platform);
     // Windows taskkill /T reports failure when descendants require /F; that is

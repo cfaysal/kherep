@@ -314,3 +314,67 @@ test("a stderr line is redacted: keys, bearer tokens, JWTs, URL user info and qu
   assert.equal(lastLine("echo: task from the operator via the KHEREP control plane"), "");
   assert.equal(lastLine("ok line\n\n  \n"), "ok line");
 });
+
+test("a stop in flight never overwrites a replacement run", async (t) => {
+  const node = codexNode(t);
+  const base = { taskId: TASK, runtime: "codex" as const, name: "task-3f2a1b0c", cwd: node.workspace, permissionMode: "auto" as const,
+    state: "started" as const, startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60 * 60_000).toISOString(),
+    updatedAt: new Date(T0).toISOString(), sessionId: THREAD, pid: 4_000_000, pidStart: "old-start" };
+  writeTask(node.paths, base);
+  let running = true;
+  const replacement = { ...base, pid: 5_000_000, pidStart: "new-start", sessionId: "0199a000-0000-7000-8000-000000000002" };
+  await assert.rejects(stopTask({ taskId: TASK }, node.deps({
+    processTree: () => [{ pid: 4_000_000, start: "old-start" }], processStart: () => running ? "old-start" : null, graceMs: 1,
+    signal: () => { writeTask(node.paths, replacement, T0 + 1); running = false; },
+  })), /task run changed while stop was in progress/);
+  assert.deepEqual(readTask(node.paths, TASK), { ...replacement, updatedAt: new Date(T0 + 1).toISOString() });
+  assert.deepEqual(node.reports(), []);
+});
+
+test("a stop in flight never overwrites the same pid with a changed start identity", async (t) => {
+  const node = codexNode(t);
+  const base = { taskId: TASK, runtime: "codex" as const, name: "task-3f2a1b0c", cwd: node.workspace, permissionMode: "auto" as const,
+    state: "started" as const, startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60 * 60_000).toISOString(),
+    updatedAt: new Date(T0).toISOString(), sessionId: THREAD, pid: 4_000_000, pidStart: "old-start" };
+  writeTask(node.paths, base);
+  let running = true;
+  const replacement = { ...base, pidStart: "reused-start" };
+  await assert.rejects(stopTask({ taskId: TASK }, node.deps({
+    processTree: () => [{ pid: 4_000_000, start: "old-start" }], processStart: () => running ? "old-start" : null, graceMs: 1,
+    signal: () => { writeTask(node.paths, replacement, T0 + 1); running = false; },
+  })), /task run changed while stop was in progress/);
+  assert.deepEqual(readTask(node.paths, TASK), { ...replacement, updatedAt: new Date(T0 + 1).toISOString() });
+  assert.deepEqual(node.reports(), []);
+});
+
+test("a same-run done report written during stop is preserved", async (t) => {
+  const node = codexNode(t);
+  const base = { taskId: TASK, runtime: "codex" as const, name: "task-3f2a1b0c", cwd: node.workspace, permissionMode: "auto" as const,
+    state: "started" as const, startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60 * 60_000).toISOString(),
+    updatedAt: new Date(T0).toISOString(), sessionId: THREAD, pid: 4_000_000, pidStart: "same-start" };
+  writeTask(node.paths, base);
+  let running = true;
+  const result = await stopTask({ taskId: TASK }, node.deps({
+    processTree: () => [{ pid: 4_000_000, start: "same-start" }], processStart: () => running ? "same-start" : null, graceMs: 1,
+    signal: () => { writeTask(node.paths, { ...base, state: "done", running: true }, T0 + 1); running = false; },
+  }));
+  assert.deepEqual(result, { taskId: TASK, state: "done" });
+  assert.equal(readTask(node.paths, TASK)?.state, "done");
+  assert.equal(readTask(node.paths, TASK)?.running, undefined);
+  assert.deepEqual(node.reports(), []);
+});
+
+
+test("a local stop finalizes an already exited run without requiring missing process identity", async (t) => {
+  const node = codexNode(t);
+  writeTask(node.paths, { taskId: TASK, runtime: "codex", name: "task-3f2a1b0c", cwd: node.workspace, permissionMode: "auto",
+    state: "started", startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60_000).toISOString(),
+    updatedAt: new Date(T0).toISOString(), sessionId: THREAD });
+  const files = codexFiles(node.paths, TASK);
+  fs.mkdirSync(files.dir, { recursive: true });
+  fs.writeFileSync(files.exit, JSON.stringify({ code: 0, signal: null }));
+  const signals: unknown[] = [];
+  const stopped = await stopTask({ taskId: TASK }, node.deps({ signal: (pid, signal) => { signals.push([pid, signal]); } }));
+  assert.deepEqual(stopped, { taskId: TASK, state: "stopped" });
+  assert.deepEqual(signals, []);
+});

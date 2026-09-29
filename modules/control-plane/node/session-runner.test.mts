@@ -131,3 +131,10 @@ test("the task record is written before the run with a pending mapping, cleared 
     assert.equal(after.mappingPendingSince, listed ? undefined : during!.mappingPendingSince, `listed ${listed}`);
   }
 });
+
+test("a delegated start persists the exact source request provenance", async (t) => {
+  const node = taskNode(t, { delegate: { accept: true } });
+  const sourceRequestId = "30000000-0000-4000-8000-000000000001";
+  await startTask(startArgs(TASK, { requestedBy: "00000000-0000-4000-8000-0000000000bb/owner", directive: "run it", sourceRequestId }), node.deps());
+  assert.equal(readTask(node.paths, TASK)?.sourceRequestId, sourceRequestId);
+});

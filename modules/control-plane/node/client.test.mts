@@ -15,6 +15,7 @@ const FACTS = { hostname: "node-a.example.com", os: "linux", arch: "x64", cpus: 
 function setup(policy: NodePolicy = DEFAULT_POLICY) {
   const identity = generateIdentity();
   const calls: string[] = [];
+  const taskControl: unknown[] = [];
   const handlers: CommandHandlers = {
     "node.status": async () => { calls.push("node.status"); return { ok: true }; },
     "runtime.list": async () => { calls.push("runtime.list"); return []; },
@@ -23,8 +24,12 @@ function setup(policy: NodePolicy = DEFAULT_POLICY) {
   const client = new NodeClient({
     nodeId: NODE_ID, identity, policy, handlers, facts: () => FACTS, runtimes: async () => [], sessions: async () => [],
     storeMessage: () => { throw new Error("messaging is not enabled in these tests"); },
+    taskControlExecute: async (body) => { taskControl.push(body); },
+    taskControlRegistrationReceipt: (body) => { taskControl.push(body); },
+    taskControlResultReceipt: (body) => { taskControl.push(body); },
+    taskControlQueryResult: (body) => { taskControl.push(body); },
   });
-  return { client, identity, calls };
+  return { client, identity, calls, taskControl };
 }
 
 const decode = (frames: string[]): Envelope[] => frames.map((f) => {
@@ -101,4 +106,37 @@ test("a policy file can narrow but never widen the allowlist; a broken file allo
   assert.deepEqual(loadPolicy(file).allowedCommands, []);
   fs.writeFileSync(file, JSON.stringify({ allowedCommands: ["node.status"] }));
   assert.deepEqual(loadPolicy(file).allowedCommands, []);
+});
+
+test("typed task-control events are handled only after authentication and outbound bodies use event envelopes", async () => {
+  const { client, taskControl } = await authed();
+  const execute = { name: "task.control.execute", operationId: "20000000-0000-4000-8000-000000000001",
+    requestId: "10000000-0000-4000-8000-000000000001", taskId: "30000000-0000-4000-8000-000000000001",
+    action: "status", ownerNodeId: "00000000-0000-4000-8000-0000000000bb", targetNodeId: NODE_ID, runtime: "codex",
+    origin: { kind: "source-request", sourceRequestId: "40000000-0000-4000-8000-000000000001" }, grantVersion: 1 };
+  assert.deepEqual(await client.onFrame(JSON.stringify(makeEnvelope("event", execute, 0, 0))), []);
+  assert.deepEqual(taskControl, [execute]);
+  await client.onFrame(JSON.stringify(makeEnvelope("event", { ...execute, taskId: "not-an-id" }, 0, 0)));
+  assert.equal(taskControl.length, 1, "invalid execute ignored");
+  const [out] = decode(client.sendTaskControl({ name: "task.control.query", requestId: execute.requestId }));
+  assert.equal(out.type, "event");
+  assert.deepEqual(out.body, { name: "task.control.query", requestId: execute.requestId });
+
+  const registrationId = "50000000-0000-4000-8000-000000000001";
+  await client.onFrame(JSON.stringify(makeEnvelope("event", { name: "task.control.registration.receipt",
+    registrationId, ok: false, errorCode: "capability_required" }, 0, 0)));
+  await client.onFrame(JSON.stringify(makeEnvelope("event", { name: "task.control.registration.receipt",
+    registrationId, ok: false, errorCode: "source_not_found" }, 0, 0)));
+  const pending = { name: "task.control.query.result", requestId: execute.requestId, operationId: execute.operationId,
+    state: "pending", taskId: execute.taskId, targetNodeId: NODE_ID, action: "status", freshness: "unavailable" };
+  await client.onFrame(JSON.stringify(makeEnvelope("event", pending, 0, 0)));
+  const completed = { ...pending, state: "succeeded", runtime: "codex", taskState: "running", processState: "running",
+    runVersion: "a".repeat(64), observedAt: new Date(0).toISOString(), freshness: "cached",
+    stopSupported: true, stopConfirmed: false };
+  await client.onFrame(JSON.stringify(makeEnvelope("event", completed, 0, 0)));
+  assert.deepEqual(taskControl.slice(1), [
+    { name: "task.control.registration.receipt", registrationId, ok: false, errorCode: "capability_required" },
+    { name: "task.control.registration.receipt", registrationId, ok: false, errorCode: "source_not_found" },
+    pending, completed,
+  ], "retry receipts and pending-to-terminal queries are not deduplicated by correlation id");
 });

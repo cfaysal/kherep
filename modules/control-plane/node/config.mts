@@ -31,7 +31,7 @@ export interface NodePaths {
   dir: string; config: string; privateKey: string; policy: string; inbox: string;
   outbox: string; sent: string; directory: string; sessions: string; directoryRequest: string; codexSessions: string;
   // Item 5: the tasks this node started, the task reports and task requests the daemon sends.
-  tasks: string; taskReports: string; taskRequests: string;
+  tasks: string; taskReports: string; taskRequests: string; taskControl: string;
 }
 
 export function nodePaths(root: string = configRoot()): NodePaths {
@@ -51,6 +51,7 @@ export function nodePaths(root: string = configRoot()): NodePaths {
     tasks: path.join(dir, "tasks"),
     taskReports: path.join(dir, "task-reports"),
     taskRequests: path.join(dir, "task-requests"),
+    taskControl: path.join(dir, "task-control"),
   };
 }
 

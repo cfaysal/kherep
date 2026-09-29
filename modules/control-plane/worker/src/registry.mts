@@ -2,12 +2,16 @@ import { DurableObject } from "cloudflare:workers";
 
 import type { NodeFacts, RuntimeInfo, SessionInfo } from "../../protocol.mts";
 import type { DirectoryBody, MessageStatusBody, NodeReportedState } from "../../protocol-messages.mts";
+import type {
+  TaskControlRegisterBody, TaskControlResultBody, TaskControlSubmitBody,
+} from "../../protocol-task-control.mts";
 import { randomToken, sha256 } from "./crypto.mts";
 import type { Env } from "./env.mts";
 import { directoryBody } from "./directory.mts";
 import { routeEffects } from "./message-routing.mts";
 import { MessageStore, type MessageEffects, type MessageRecord, type NewMessage, type SendResult } from "./message-store.mts";
 import { TaskStore, type CreateResult, type NewTask, type TaskRow } from "./task-store.mts";
+import { TaskControlRegistry } from "./task-control-registry.mts";
 import type { TaskReportBody } from "../../protocol-tasks.mts";
 import {
   ENROLLMENT_TTL_DEFAULT_S, ENROLLMENT_TTL_MAX_S, ENROLLMENT_TTL_MIN_S, migrateRegistry, NODE_COLUMNS, REGISTRY_SCHEMA, toNodeRow,
@@ -24,6 +28,7 @@ export class Registry extends DurableObject<Env> {
   private readonly sql: SqlStorage;
   private readonly messages: MessageStore;
   private readonly tasks: TaskStore;
+  private readonly taskControl: TaskControlRegistry;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -32,6 +37,7 @@ export class Registry extends DurableObject<Env> {
     migrateRegistry(this.sql);
     this.messages = new MessageStore(this.sql, (...args) => this.audit(...args), (nodeId) => this.capabilitiesOf(nodeId));
     this.tasks = new TaskStore(this.sql, (...args) => this.audit(...args));
+    this.taskControl = new TaskControlRegistry(this.sql, this.messages, this.tasks, (...args) => this.audit(...args));
   }
 
   audit(actor: string, action: string, target: string | null, detail: unknown = null): void {
@@ -221,6 +227,39 @@ export class Registry extends DurableObject<Env> {
     return this.tasks.hasActiveTasks(nodeId);
   }
 
+  // ---- Owner task control (issue #134). Registry owns durable delivery. ----
+
+  registerTaskControl(nodeId: string, body: TaskControlRegisterBody) {
+    return this.ctx.storage.transactionSync(() => this.taskControl.register(nodeId, body));
+  }
+
+  submitTaskControl(nodeId: string, body: TaskControlSubmitBody) {
+    return this.ctx.storage.transactionSync(() => this.taskControl.submit(nodeId, body));
+  }
+
+  queryTaskControl(nodeId: string, requestId: string) {
+    return this.ctx.storage.transactionSync(() => this.taskControl.query(nodeId, requestId));
+  }
+
+  retryTaskControl(nodeId: string, requestId: string) {
+    return this.ctx.storage.transactionSync(() => this.taskControl.retry(nodeId, requestId));
+  }
+
+  pendingTaskControlFor(nodeId: string, limit: number) {
+    return this.ctx.storage.transactionSync(() => this.taskControl.pendingFor(nodeId, limit));
+  }
+
+  pendingTaskControlPageFor(nodeId: string, afterRowId: number, limit: number) {
+    return this.ctx.storage.transactionSync(() => this.taskControl.pendingPageFor(nodeId, afterRowId, limit));
+  }
+
+  recordTaskControlResult(nodeId: string, body: TaskControlResultBody) {
+    return this.ctx.storage.transactionSync(() => this.taskControl.recordResult(nodeId, body));
+  }
+
+  markTaskControlDelivered(operationId: string): void {
+    this.taskControl.markDelivered(operationId);
+  }
   // Expiry is checked on every message access and, so that the text of an
   // expired message never waits for the next access, by an alarm set to the
   // earliest expiry of a queued message.

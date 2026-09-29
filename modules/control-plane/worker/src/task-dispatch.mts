@@ -17,7 +17,8 @@ export async function dispatchTask(env: Env, input: NewTask): Promise<DispatchRe
   const args: SessionStartArgs = {
     taskId: task.taskId, runtime: input.requirements.runtime ?? "claude", name: taskSessionName(task.taskId), prompt: input.text,
     permissionMode: input.permissionMode, ...(input.requirements.cwd ? { cwd: input.requirements.cwd } : {}),
-    ...(input.requestedBy !== undefined ? { requestedBy: input.requestedBy, directive: input.directive ?? "" } : {}),
+    ...(input.requestedBy !== undefined ? { requestedBy: input.requestedBy, directive: input.directive ?? "",
+      ...(input.requestId ? { sourceRequestId: input.requestId } : {}) } : {}),
     ...(input.label ? { label: input.label } : {}),
   };
   const queued = await sessionStub(env, task.nodeId as string).enqueue("session.start", { ...args });

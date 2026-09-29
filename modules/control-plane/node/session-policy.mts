@@ -26,6 +26,8 @@ export interface SessionsPolicy {
   // request: sessions of this node may ask for tasks; accept: this node runs
   // tasks other sessions asked for. Both default to false.
   delegate: { request: boolean; accept: boolean };
+  // Explicit opt-in for owner task control; effective only with enabled sessions.
+  ownTaskControl: boolean;
 }
 
 type Parsed = { ok: true; value: number } | { ok: false };
@@ -61,5 +63,6 @@ export function parseSessionsPolicy(section: unknown): SessionsPolicy | null {
     workspaceRoots: [...roots], permissionModes, defaultPermissionMode,
     maxConcurrent: concurrent.value, maxStartsPerDay: perDay.value, maxRuntimeMinutes: runtime.value,
     delegate: { request: delegate.request === true, accept: enabled && delegate.accept === true },
+    ownTaskControl: enabled && s.ownTaskControl === true,
   };
 }
