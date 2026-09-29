@@ -67,10 +67,10 @@ export class NodeSession extends DurableObject<Env> {
     const envelope = parsed.envelope;
     if (!attachment.authed) return this.handleAuth(ws, attachment, envelope);
 
-    this.store.set("lastSeen", Date.now());
     if (envelope.ack > 0) this.store.ackThrough(envelope.ack);
+    if (envelope.seq > 0 && envelope.seq <= attachment.lastNodeSeq) return; // duplicate on this connection
+    this.store.set("lastSeen", Date.now());
     if (envelope.seq > 0) {
-      if (envelope.seq <= attachment.lastNodeSeq) return; // duplicate on this connection
       attachment.lastNodeSeq = envelope.seq;
       ws.serializeAttachment(attachment);
     }

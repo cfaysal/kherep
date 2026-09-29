@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { isSessionInfo, type SessionInfo } from "../protocol.mts";
+import { isSessionInfo, isSessionList, type SessionInfo } from "../protocol.mts";
 import { isSessionRef } from "../protocol-messages.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { readJson, writeJsonAtomic } from "./inbox.mts";
@@ -39,6 +39,18 @@ export function codexSessionName(sessionId: string): string {
 // The name before issue #66, still honoured where it is unambiguous.
 export const legacyCodexSessionName = (sessionId: string): string => `codex-${sessionId.slice(0, 8)}`;
 
+function readCompleteLocalSessions(paths: NodePaths): SessionInfo[] | null {
+  try {
+    const snapshot = readJson<{ sessions?: unknown }>(paths.sessions);
+    if (!snapshot || !isSessionList(snapshot.sessions)) return null;
+    const valid = snapshot.sessions.every((session) => isSessionRef(session.sessionId)
+      && (session.name === undefined || isSessionRef(session.name)));
+    return valid ? snapshot.sessions : null;
+  } catch {
+    return null;
+  }
+}
+
 // The inbox references of a Codex session: its id, and each of its names (new
 // and legacy) that no other live recorded session shares; ambiguous lists the
 // names that are shared. live: the ids of the recorded sessions, listed here
@@ -54,11 +66,21 @@ export function codexSessionRefs(paths: NodePaths, sessionId: string, now: numbe
     }
   }
   const all = ids.includes(sessionId) ? ids : [...ids, sessionId];
+  const snapshot = readCompleteLocalSessions(paths);
+  const local = snapshot ?? [];
+  const localKnown = snapshot !== null;
+  const exactIds = new Set([...all, ...local.map((session) => session.sessionId)]);
   const refs = [sessionId];
   const ambiguous: string[] = [];
   for (const name of new Set([codexSessionName(sessionId), legacyCodexSessionName(sessionId)])) {
-    const holders = all.filter((id) => codexSessionName(id) === name || legacyCodexSessionName(id) === name);
-    (holders.length > 1 ? ambiguous : refs).push(name);
+    if (!localKnown) {
+      ambiguous.push(name);
+      continue;
+    }
+    if (exactIds.has(name)) continue;
+    const holders = new Set(all.filter((id) => codexSessionName(id) === name || legacyCodexSessionName(id) === name));
+    for (const session of local) if (session.name === name) holders.add(session.sessionId);
+    (holders.size > 1 ? ambiguous : refs).push(name);
   }
   return { refs, ambiguous };
 }

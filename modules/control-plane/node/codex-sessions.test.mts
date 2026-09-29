@@ -8,7 +8,7 @@ import {
   CODEX_ACTIVE_MS, CODEX_RETENTION_MS, codexSessionName, codexSessionRefs, isCodexSession, listCodexSessions, recordCodexSession,
 } from "./codex-sessions.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
-import { readLocalSessions, recordingSessions } from "./exchange.mts";
+import { readLocalSessions, recordingSessions, writeLocalSessions } from "./exchange.mts";
 import { getMessage, readJson, storeMessage, UNDELIVERABLE_AFTER_MS } from "./inbox.mts";
 import { listSessions } from "./sessions.mts";
 
@@ -73,6 +73,7 @@ test("the daemon listing adds Codex sessions, and the undeliverable check keeps 
 test("codex names use the random tail of the id; a name two live sessions share addresses neither", (t) => {
   const paths = nodePaths(fs.mkdtempSync(path.join(os.tmpdir(), "kherep-codex-names-")));
   t.after(() => fs.rmSync(path.dirname(paths.dir), { recursive: true, force: true }));
+  writeLocalSessions(paths, [], NOW);
   // Two UUIDv7 thread ids started in the same minute share their first 8 characters.
   const A = "01a0db01-0000-7000-8000-00000000aaaa";
   const B = "01a0db01-1111-7000-8000-00000000bbbb";
@@ -82,4 +83,49 @@ test("codex names use the random tail of the id; a name two live sessions share 
   recordCodexSession(paths, B, "/w", NOW);
   assert.deepEqual(codexSessionRefs(paths, A, NOW), { refs: [A, "codex-0000aaaa"], ambiguous: ["codex-01a0db01"] });
   assert.deepEqual(codexSessionRefs(paths, B, NOW), { refs: [B, "codex-0000bbbb"], ambiguous: ["codex-01a0db01"] });
+});
+
+test("Codex aliases defer to exact all-runtime ids and reject cross-runtime name collisions", (t) => {
+  const paths = setup(t);
+  const sessionId = "01a0db01-0000-7000-8000-00000000aaaa";
+  const alias = codexSessionName(sessionId);
+  recordCodexSession(paths, sessionId, "/w", NOW);
+
+  writeLocalSessions(paths, [
+    { sessionId, runtime: "codex", state: "active", name: alias },
+    { sessionId: "claude-one", runtime: "claude-code", state: "idle", name: alias },
+  ], NOW);
+  assert.deepEqual(codexSessionRefs(paths, sessionId, NOW),
+    { refs: [sessionId, "codex-01a0db01"], ambiguous: [alias] });
+
+  writeLocalSessions(paths, [
+    { sessionId, runtime: "codex", state: "active", name: alias },
+    { sessionId: alias, runtime: "claude-code", state: "idle", name: "claude-exact" },
+  ], NOW);
+  assert.deepEqual(codexSessionRefs(paths, sessionId, NOW),
+    { refs: [sessionId, "codex-01a0db01"], ambiguous: [] }, "an exact id owns the generated alias");
+});
+
+test("Codex aliases fail closed when the all-runtime snapshot is missing or invalid", (t) => {
+  const paths = setup(t);
+  const sessionId = "01a0db01-0000-7000-8000-00000000aaaa";
+  const aliases = [codexSessionName(sessionId), "codex-01a0db01"];
+  recordCodexSession(paths, sessionId, "/w", NOW);
+
+  assert.deepEqual(codexSessionRefs(paths, sessionId, NOW), { refs: [sessionId], ambiguous: aliases });
+
+  fs.writeFileSync(paths.sessions, JSON.stringify({ sessions: "unknown" }));
+  assert.deepEqual(codexSessionRefs(paths, sessionId, NOW), { refs: [sessionId], ambiguous: aliases });
+
+  for (const sessions of [
+    [{ sessionId: "", runtime: "codex", state: "active" }],
+    [{ sessionId: "other", runtime: "", state: "active" }],
+    [{ sessionId: "other", runtime: "claude-code", state: "idle", name: "bad\nname" }],
+  ]) {
+    fs.writeFileSync(paths.sessions, JSON.stringify({ sessions }));
+    assert.deepEqual(codexSessionRefs(paths, sessionId, NOW), { refs: [sessionId], ambiguous: aliases });
+  }
+
+  fs.writeFileSync(paths.sessions, "{");
+  assert.deepEqual(codexSessionRefs(paths, sessionId, NOW), { refs: [sessionId], ambiguous: aliases });
 });
