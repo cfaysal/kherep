@@ -5,7 +5,7 @@ import test from "node:test";
 
 import { rememberMode, takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
-import { ACCEPT_ALL, audits, closedNode, deliver, PEER, SESSION, type Node } from "./closed-fixture.mts";
+import { ACCEPT_ALL, audits, closedNode, deliver, endedIntercom, PEER, SESSION, type Node } from "./closed-fixture.mts";
 import { recordingSessions, writeDirectory } from "./exchange.mts";
 import { getMessage } from "./inbox.mts";
 import { readKnownSessions, rememberSessions } from "./known-sessions.mts";
@@ -136,6 +136,16 @@ for (const [what, arrange, sessions, reason] of refusals) {
   });
 }
 
+test("an operator-stopped intercom is neither resumed nor replaced", async (t) => {
+  const node = closedNode(t);
+  const { task, id } = await endedIntercom(node);
+  writeTask(node.paths, { ...readTask(node.paths, task.taskId)!, operatorStoppedAt: new Date(T0).toISOString() });
+  await deliverToClosed(node.deps());
+  assert.equal(claudeRuns(node).length, 1, "only the original intercom start");
+  assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted");
+  assert.equal(getMessage(node.paths.inbox, id)?.closedAttempt, undefined);
+  assert.deepEqual(audits(node).at(-1)?.reason, "intercom session stopped by operator");
+});
 test("a sender the accept rules do not name is refused", async (t) => {
   const node = closedNode(t, {}, { accept: [{ session: SESSION, from: ["00000000-0000-4000-8000-0000000000cc"] }] });
   deliver(node);

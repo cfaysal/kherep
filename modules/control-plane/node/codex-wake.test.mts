@@ -11,10 +11,10 @@ import { codexFiles } from "./codex-process.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { getOutbox } from "./exchange.mts";
 import { getMessage, messageIds, storeMessage } from "./inbox.mts";
-import { startTask, stopTask } from "./session-runner.mts";
+import { continueTask, startTask, stopTask } from "./session-runner.mts";
 import { listSessions } from "./sessions.mts";
 import { startArgs, T0, TASK } from "./task-fixture.mts";
-import { readTask } from "./task-records.mts";
+import { readTask, writeTask } from "./task-records.mts";
 import { watchTasks } from "./task-watch.mts";
 
 // Codex task sessions in the directory and in messaging (issue #63): visible
@@ -198,6 +198,17 @@ test("one run at a time; a stopped or failed run offers its messages again withi
   assert.equal(auditLines(node).at(-1)?.action, "stuck-offer");
 });
 
+test("an operator stop blocks message auto-resume until an explicit continue", posix, async (t) => {
+  const node = await doneTask(t);
+  writeTask(node.paths, { ...readTask(node.paths, TASK)!, operatorStoppedAt: new Date(T0).toISOString() });
+  const id = deliver(node, "wait for the operator");
+  await pollCodexInbound(node.deps());
+  assert.equal(node.runs().length, 1);
+  assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted");
+
+  await continueTask({ taskId: TASK, prompt: "continue now" }, node.deps());
+  assert.equal(readTask(node.paths, TASK)?.operatorStoppedAt, undefined);
+});
 test("a message resume checks the working directory again", posix, async (t) => {
   const node = await doneTask(t, {}, "repo");
   const outside = path.join(node.root, "outside");

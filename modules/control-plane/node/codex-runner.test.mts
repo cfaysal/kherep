@@ -138,8 +138,10 @@ test("stop ends the process group with SIGTERM, then SIGKILL after the grace per
   await startTask(codexArgs(taskId(2), { prompt: "work [ignore-term]" }), node.deps());
   node.reports();
   const began = Date.now();
-  for (const n of [1, 2]) assert.deepEqual(await stopTask({ taskId: taskId(n) }, node.deps()), { taskId: taskId(n), state: "stopped" });
-  await waitFor(() => node.runs().every((r) => gone(r.pid)), "both processes", 10_000);
+  for (const n of [1, 2]) {
+    assert.deepEqual(await stopTask({ taskId: taskId(n) }, node.deps()), { taskId: taskId(n), state: "stopped" });
+    assert.equal(gone(node.runs()[n - 1].pid), true, "stop returns only after that run ended");
+  }
   assert.ok(Date.now() - began < 10_000, "stopped within 10 s");
   assert.deepEqual(node.reports().map((r) => [r.state, r.reason]), [["stopped", "stopped by the operator"], ["stopped", "stopped by the operator"]]);
   await watchTasks(node.deps());
@@ -170,6 +172,40 @@ test("a pid this daemon no longer holds is signalled only with its recorded star
   assert.equal(readTask(node.paths, TASK)?.state, "stopped");
 });
 
+test("an unknown process identity or failed signal never claims the task stopped", async (t) => {
+  const node = codexNode(t);
+  const base = { taskId: TASK, runtime: "codex" as const, name: "task-3f2a1b0c", cwd: node.workspace, permissionMode: "auto" as const,
+    state: "started" as const, startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60 * 60_000).toISOString(),
+    updatedAt: new Date(T0).toISOString(), sessionId: THREAD, pid: 4_000_000, pidStart: "recorded" };
+  writeTask(node.paths, base);
+  await assert.rejects(stopTask({ taskId: TASK }, node.deps({ processTree: () => { throw new Error("identity unavailable"); } })),
+    /identity unavailable/);
+  assert.deepEqual([readTask(node.paths, TASK)?.state, readTask(node.paths, TASK)?.operatorStoppedAt !== undefined], ["started", true]);
+  assert.deepEqual(node.reports(), []);
+
+  await assert.rejects(stopTask({ taskId: TASK }, node.deps({ processTree: () => [{ pid: 4_000_000, start: "recorded" }], processStart: () => "recorded", graceMs: 1,
+    signal: () => { throw new Error("signal denied"); } })), /signal denied/);
+  assert.equal(readTask(node.paths, TASK)?.state, "started");
+  assert.deepEqual(node.reports(), []);
+});
+test("the watch retries a durable operator stop after a transient signal failure", async (t) => {
+  const node = codexNode(t);
+  writeTask(node.paths, { taskId: TASK, runtime: "codex", name: "task-3f2a1b0c", cwd: node.workspace, permissionMode: "auto", state: "started",
+    startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60 * 60_000).toISOString(), updatedAt: new Date(T0).toISOString(),
+    sessionId: THREAD, pid: 4_000_000, pidStart: "recorded" });
+  let running = true;
+  let attempts = 0;
+  const deps = node.deps({ processTree: () => running ? [{ pid: 4_000_000, start: "recorded" }] : [],
+    processStart: () => running ? "recorded" : null, graceMs: 1, signal: () => {
+      if (attempts++ === 0) throw new Error("transient signal failure");
+      running = false;
+    } });
+  await assert.rejects(stopTask({ taskId: TASK }, deps), /transient signal failure/);
+  assert.equal(readTask(node.paths, TASK)?.state, "started");
+  await watchTasks(deps);
+  assert.equal(readTask(node.paths, TASK)?.state, "stopped");
+  assert.deepEqual(node.reports(), [{ taskId: TASK, state: "stopped", reason: "stopped by the operator", sessionId: THREAD }]);
+});
 test("the deadline stops a run at the policy's max runtime; a failed identity read decides nothing", posix, async (t) => {
   const node = codexNode(t, { maxRuntimeMinutes: 30 });
   await startTask(codexArgs(TASK, { prompt: "work [sleep]" }), node.deps());

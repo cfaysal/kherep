@@ -52,7 +52,7 @@ export async function pollCodexInbound(deps: RunnerDeps, log: (line: string) => 
   if (!sessions?.enabled || !sessions.runtimes.includes("codex")) return;
   pruneNoted(deps.paths);
   for (const record of listTasks(deps.paths)) {
-    if (record.runtime !== "codex" || !isPlainSessionId(record.sessionId) || isActive(record)) continue;
+    if (record.runtime !== "codex" || !isPlainSessionId(record.sessionId) || isActive(record) || record.operatorStoppedAt !== undefined) continue;
     try {
       await wakeTask(deps, record, log);
     } catch (error) {
