@@ -175,8 +175,9 @@ export class TaskControlStore {
     if (operation.state !== "pending" || operation.runtime !== body.runtime) return { ok: false, errorCode: "result_mismatch" };
     if (operation.action === "status" && body.stopConfirmed) return { ok: false, errorCode: "result_mismatch" };
     if (operation.action === "stop") {
-      const confirmed = body.state === "succeeded" && body.stopConfirmed
-        && body.runVersion !== undefined && body.runVersion === operation.expectedRunVersion;
+      const confirmed = body.state === "succeeded" && body.stopConfirmed && body.stopSupported
+        && body.processState === "closed" && body.runVersion !== undefined
+        && body.runVersion === operation.expectedRunVersion;
       if (body.state === "succeeded" ? !confirmed : body.stopConfirmed) return { ok: false, errorCode: "result_mismatch" };
     }
     this.sql.exec(`UPDATE task_control_operations SET state = ?, error_code = ?, result_json = ?, updated_at = ?

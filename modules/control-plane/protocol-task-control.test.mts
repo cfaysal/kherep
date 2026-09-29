@@ -83,6 +83,11 @@ test("target results are measured and query results distinguish cached from unav
   assert.equal(isTaskControlResultBody(result), true);
   assert.equal(isTaskControlResultBody({ ...result, freshness: "cached" }), false);
   assert.equal(isTaskControlResultBody({ ...result, exception: "private stack" }), false);
+  assert.equal(isTaskControlResultBody({ ...result, stopConfirmed: true, stopSupported: false }), false);
+  assert.equal(isTaskControlResultBody({ ...result, stopConfirmed: true, processState: "running" }), false);
+  const confirmedStop = { ...result, taskState: "stopped", processState: "closed",
+    stopSupported: true, stopConfirmed: true };
+  assert.equal(isTaskControlResultBody(confirmedStop), true);
 
   const pending = {
     name: "task.control.query.result", requestId: REQUEST, operationId: OPERATION, state: "pending",
@@ -97,6 +102,9 @@ test("target results are measured and query results distinguish cached from unav
   };
   assert.equal(isTaskControlQueryResultBody(cached), true);
   assert.equal(isTaskControlQueryResultBody({ ...cached, transcript: "secret" }), false);
+  assert.equal(isTaskControlQueryResultBody({ ...cached, stopConfirmed: true, processState: "running" }), false);
+  assert.equal(isTaskControlQueryResultBody({ ...confirmedStop, name: "task.control.query.result",
+    requestId: REQUEST, targetNodeId: TARGET, action: "stop", freshness: "cached" }), true);
 });
 
 test("all fixed node and Worker error codes are accepted without raw error text", () => {

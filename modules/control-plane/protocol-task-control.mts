@@ -143,7 +143,9 @@ function validMeasurement(value: Record<string, unknown>, freshness: "fresh" | "
   return isTaskId(value.taskId) && isTaskRuntime(value.runtime) && member(TASK_CONTROL_TASK_STATES, value.taskState)
     && member(TASK_CONTROL_PROCESS_STATES, value.processState) && optional(value.runVersion, runVersion)
     && isoDate(value.observedAt) && value.freshness === freshness && typeof value.stopSupported === "boolean"
-    && typeof value.stopConfirmed === "boolean" && optional(value.errorCode, isTaskControlErrorCode);
+    && typeof value.stopConfirmed === "boolean" && optional(value.errorCode, isTaskControlErrorCode)
+    && (!value.stopConfirmed || (value.state === "succeeded" && value.stopSupported
+      && value.processState === "closed" && runVersion(value.runVersion)));
 }
 export function isTaskControlResultBody(value: unknown): value is TaskControlResultBody {
   return object(value) && only(value, RESULT_KEYS) && value.name === "task.control.result" && uuid(value.operationId)
