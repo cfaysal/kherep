@@ -167,9 +167,12 @@ test("a pid this daemon no longer holds is signalled only with its recorded star
     startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60 * 60_000).toISOString(), updatedAt: new Date(T0).toISOString(),
     sessionId: THREAD, pid: process.pid, pidStart: "Thu Jan  1 00:00:00 1970" });
   const signals: unknown[] = [];
-  await stopTask({ taskId: TASK }, node.deps({ signal: (pid, signal) => { signals.push([pid, signal]); } }));
+  // A reused root is not a signal target and cannot prove that the old tree ended.
+  await assert.rejects(stopTask({ taskId: TASK }, node.deps({ signal: (pid, signal) => { signals.push([pid, signal]); } })),
+    /root process identity changed during capture/);
   assert.deepEqual(signals, []);
-  assert.equal(readTask(node.paths, TASK)?.state, "stopped");
+  assert.equal(readTask(node.paths, TASK)?.state, "started");
+  assert.deepEqual(node.reports(), []);
 });
 
 test("an unknown process identity or failed signal never claims the task stopped", async (t) => {
