@@ -24,6 +24,7 @@ function run(input: unknown, env: NodeJS.ProcessEnv = {}) {
   assert.match(result.stdout, /KHEREP CODEX ORCHESTRA ACTIVE/);
   assert.match(result.stdout, /\[Maestro on \| routing loaded \| evidence-first\]/);
   assert.match(result.stdout, /ROUTING\.md/);
+  assert.match(result.stdout, /Default root tier is gpt-6\.1-sol\/xhigh/);
 }
 
 {
