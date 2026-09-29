@@ -7,9 +7,10 @@ import {
 import { readConfig, type NodePaths } from "./config.mts";
 import { senderSession, sessionIdFromEnv } from "./msg-resolve.mts";
 import { loadPolicy } from "./policy.mts";
+import { listTaskLines, resolveTaskDetail } from "./task-detail.mts";
 import { NO_CHAINS, NOT_DELEGATING, TASKS_ACTIVE } from "./task-exchange.mts";
 import {
-  hasActiveTask, isActive, listTasks, queueReport, readRequest, readTask, requestIds, taskForSession, writeRequest, writeTask,
+  hasActiveTask, isActive, queueReport, readTask, taskForSession, writeRequest, writeTask,
 } from "./task-records.mts";
 
 // kherep-node task: the session side of tasks (issue #31, item 5). Like the msg
@@ -23,6 +24,7 @@ import {
 export const TASK_USAGE = `usage:
   kherep-node task done <taskId> [--summary <text>]
   kherep-node task show [<taskId or requestId>]
+  kherep-node task list
   kherep-node task new --title <title> --directive <the operator's instruction, verbatim> [--runtime claude|codex] [--os <os>]
     [--cwd <dir>] [--capability <name>]... [--] <task text...>`;
 
@@ -65,18 +67,14 @@ export function runTaskArgs({ positionals, values }: TaskArgs, context: TaskCont
     out(`task ${taskId} reported done`);
     return 0;
   }
-  if (command === "show" && rest.length <= 1) {
-    if (rest.length === 1) {
-      const record = readTask(paths, rest[0]) ?? readRequest(paths, rest[0]);
-      if (!record) return fail(`unknown task or request ${rest[0]}`);
-      out(JSON.stringify(record, null, 2));
-      return 0;
-    }
-    for (const t of listTasks(paths)) out(`task ${t.taskId}  ${t.state}  ${t.name}  ${t.sessionId ?? "-"}  ${t.cwd}`);
-    for (const id of requestIds(paths)) {
-      const r = readRequest(paths, id);
-      if (r) out(`request ${r.requestId}  ${r.state}${r.taskId ? `  task ${r.taskId}` : ""}${r.reason ? `  ${r.reason}` : ""}`);
-    }
+  if ((command === "show" && rest.length === 0) || (command === "list" && rest.length === 0)) {
+    for (const line of listTaskLines(paths)) out(line);
+    return 0;
+  }
+  if (command === "show" && rest.length === 1) {
+    const resolved = resolveTaskDetail(paths, rest[0]);
+    if (!resolved.ok) return fail(resolved.error);
+    out(JSON.stringify(resolved.detail, null, 2));
     return 0;
   }
   if (command === "new") return newTask(context, rest, values, now, out, fail);

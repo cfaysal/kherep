@@ -5,11 +5,13 @@ import test from "node:test";
 
 import { rememberMode, takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
+import { startIntercom } from "./closed-resume.mts";
 import { ACCEPT_ALL, audits, closedNode, deliver, endedIntercom, PEER, SESSION, type Node } from "./closed-fixture.mts";
 import { recordingSessions, writeDirectory } from "./exchange.mts";
 import { getMessage } from "./inbox.mts";
 import { readKnownSessions, rememberSessions } from "./known-sessions.mts";
 import { loadPolicy } from "./policy.mts";
+import type { ExecOptions } from "./sessions.mts";
 import { T0, taskId } from "./task-fixture.mts";
 import { listTasks, queueReport, readTask, reportIds, writeTask } from "./task-records.mts";
 import { killSwitch } from "./wake-hook.mts";
@@ -71,6 +73,10 @@ test("a new intercom session gets the messages framed with their reply commands,
   assert.equal(task.local, "intercom");
   assert.equal(task.label, "intercom: claude@mac");
   assert.equal(task.requestedBy, `${PEER.nodeId}/${PEER.session}`);
+  assert.deepEqual(getMessage(node.paths.inbox, first)?.delivery,
+    { taskId: task.taskId, runtime: "claude", sessionId: task.sessionId });
+  assert.deepEqual(getMessage(node.paths.inbox, second)?.delivery,
+    { taskId: task.taskId, runtime: "claude", sessionId: task.sessionId });
   assert.equal(runs[0].options.cwd, repo(node));
   assert.equal(getMessage(node.paths.inbox, first)?.state, "delivered");
   assert.equal(getMessage(node.paths.inbox, second)?.state, "delivered");
@@ -78,6 +84,44 @@ test("a new intercom session gets the messages framed with their reply commands,
   assert.deepEqual(audits(node).map((a) => [a.action, a.outcome, a.messageIds]), [["closed-session", "new", [first, second]]]);
 });
 
+test("a failed task result is not treated as a started delivery", async (t) => {
+  const node = closedNode(t);
+  const id = deliver(node);
+  const failedId = taskId(42);
+  writeTask(node.paths, { taskId: failedId, name: "task-0000002a", cwd: repo(node), permissionMode: "auto", state: "failed",
+    reason: "previous launch failed", runtime: "claude", local: "intercom", startedAt: new Date(T0).toISOString(),
+    deadline: new Date(T0 + 60_000).toISOString(), updatedAt: new Date(T0).toISOString() });
+  const reason = await startIntercom(node.deps(), { sessionId: SESSION, runtime: "claude", cwd: repo(node) },
+    [getMessage(node.paths.inbox, id)!], "auto", undefined, failedId);
+  assert.equal(reason, "previous launch failed");
+  assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted");
+  assert.equal(getMessage(node.paths.inbox, id)?.delivery, undefined);
+});
+test("failed Claude intercom starts keep the message accepted and unassociated", async (t) => {
+  const cases: [string, (node: Node) => ReturnType<Node["deps"]>, RegExp][] = [
+    ["missing binary", (node) => ({ ...node.deps(), findClaude: () => null }), /claude is not installed/],
+    ["spawn failure", (node) => {
+      node.failNext("spawn failed");
+      return node.deps();
+    }, /spawn failed/],
+    ["bad background id", (node) => {
+      const base = node.deps();
+      const exec = async (file: string, args: string[], options: ExecOptions): Promise<string> =>
+        args[0] === "--bg" ? "started without an id" : base.exec!(file, args, options);
+      return { ...base, exec };
+    }, /printed no session id/],
+  ];
+  for (const [name, deps, reason] of cases) {
+    const node = closedNode(t);
+    const id = deliver(node, { text: name });
+    await deliverToClosed(deps(node));
+    const message = getMessage(node.paths.inbox, id);
+    assert.equal(message?.state, "accepted", name);
+    assert.equal(message?.delivery, undefined, name);
+    assert.equal(listTasks(node.paths).at(-1)?.state, "failed", name);
+    assert.match(String(audits(node).at(-1)?.reason), reason, name);
+  }
+});
 test("a message addressed by the closed session's name starts an intercom session too", async (t) => {
   const node = closedNode(t);
   deliver(node, { toSession: "review" });

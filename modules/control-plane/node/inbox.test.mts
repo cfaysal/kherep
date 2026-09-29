@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import type { MessageDeliverBody } from "../protocol-messages.mts";
-import { getMessage, getReceipt, INBOX_RETENTION_MS, listInbox, markDelivered, markOffered, markReported, purgeInbox, storeMessage } from "./inbox.mts";
+import { getMessage, getReceipt, INBOX_RETENTION_MS, listInbox, markDelivered, markOffered, markReported, markRetry, purgeInbox, setDeliveryTask, storeMessage } from "./inbox.mts";
 
 const ID_A = "00000000-0000-4000-8000-0000000000a1";
 const ID_B = "00000000-0000-4000-8000-0000000000b2";
@@ -95,4 +95,33 @@ test("purges records older than seven days and stale temp files", (t) => {
   assert.deepEqual(fs.readdirSync(dir).sort(), [`${ID_B}.json`, "receipts"]);
   assert.equal(getReceipt(dir, ID_A), null);
   assert.equal(purgeInbox(path.join(dir, "missing"), NOW), 0);
+});
+
+test("delivery task identity is separate from the grant and survives offers, retries, receipts and confirmation", (t) => {
+  const dir = tempInbox(t);
+  const grantTaskId = "00000000-0000-4000-8000-000000000009";
+  const deliveryTaskId = "00000000-0000-4000-8000-000000000010";
+  storeMessage(dir, { ...deliver(ID_A), taskId: grantTaskId }, NOW);
+  assert.equal(setDeliveryTask(dir, ID_A, { taskId: deliveryTaskId, runtime: "codex" }), true);
+  assert.deepEqual(getMessage(dir, ID_A)?.delivery, { taskId: deliveryTaskId, runtime: "codex" });
+  assert.equal(getMessage(dir, ID_A)?.taskId, grantTaskId);
+
+  markOffered(dir, ID_A, NOW + 1);
+  markRetry(dir, ID_A);
+  markReported(dir, ID_A, "accepted", "accepted", NOW + 2);
+  assert.deepEqual(getMessage(dir, ID_A)?.delivery, { taskId: deliveryTaskId, runtime: "codex" });
+  setDeliveryTask(dir, ID_A, { taskId: deliveryTaskId, runtime: "codex", sessionId: "019a0000-0000-7000-8000-000000000001" });
+  markDelivered(dir, ID_A);
+  assert.deepEqual(getMessage(dir, ID_A)?.delivery,
+    { taskId: deliveryTaskId, runtime: "codex", sessionId: "019a0000-0000-7000-8000-000000000001" });
+  assert.equal(getMessage(dir, ID_A)?.taskId, grantTaskId);
+});
+
+test("delivery task identity validates ids and runtime before writing", (t) => {
+  const dir = tempInbox(t);
+  storeMessage(dir, deliver(ID_A), NOW);
+  assert.throws(() => setDeliveryTask(dir, ID_A, { taskId: "../task", runtime: "codex" }), /invalid delivery task identity/);
+  assert.throws(() => setDeliveryTask(dir, ID_A, { taskId: ID_B, runtime: "gemini" as "codex" }), /invalid delivery task identity/);
+  assert.equal(setDeliveryTask(dir, ID_B, { taskId: ID_A, runtime: "claude" }), false);
+  assert.equal(getMessage(dir, ID_A)?.delivery, undefined);
 });

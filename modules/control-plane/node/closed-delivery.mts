@@ -7,6 +7,7 @@ import { stillRuns } from "./codex-process.mts";
 import { CODEX_RUNTIME, isCodexSessionId, readCodexSession } from "./codex-sessions.mts";
 import { resumeClaude, resumeCodex, startIntercom } from "./closed-resume.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
+import { attachDelivery } from "./delivery-identity.mts";
 import { readLocalSessions } from "./exchange.mts";
 import { listInbox, markClosedAttempt, MAX_REPLY_DEPTH, readJson, type InboxRecord } from "./inbox.mts";
 import { findKnown } from "./known-sessions.mts";
@@ -14,7 +15,7 @@ import { acceptsMessage } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { CLAUDE_RUNTIME } from "./sessions.mts";
 import { overLimit } from "./task-admission.mts";
-import { intercomFor, isActive, listTasks, type TaskRecord } from "./task-records.mts";
+import { intercomFor, isActive, listTasks, readTask, writeTask, type TaskRecord } from "./task-records.mts";
 import { resolveCwd } from "./task-prompt.mts";
 import { killSwitch } from "./wake-hook.mts";
 
@@ -141,6 +142,8 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   if (!sessions.runtimes.includes(runtime)) return refuse(`runtime ${runtime} is not enabled on this node`);
   if (intercom && runs(deps, intercom)) {
     // Its delivery hook, or the wake through its task grant, offers them.
+    const linked = attachDelivery(paths, intercom, records.map((r) => r.messageId));
+    if (linked !== intercom) writeTask(paths, linked, now);
     for (const r of records) markClosedAttempt(paths.inbox, r.messageId, now, intercom.sessionId ?? intercom.name);
     audit(paths, now, sessionId, records, "reused", "intercom session running", intercom.taskId);
     return true;
@@ -160,6 +163,9 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
     const resume = reusable.runtime === "codex" ? resumeCodex : resumeClaude;
     const failed = await resume(deps, reusable, cwd.cwd, records.length, now);
     if (failed === null) {
+      const current = readTask(paths, reusable.taskId) ?? reusable;
+      const linked = attachDelivery(paths, current, records.map((r) => r.messageId));
+      if (linked !== current) writeTask(paths, linked, now);
       audit(paths, now, sessionId, records, "reused", "intercom session resumed", reusable.taskId);
       return true;
     }

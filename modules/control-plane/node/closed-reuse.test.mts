@@ -46,6 +46,7 @@ test("a second message from the same sender goes to its running intercom session
   const record = getMessage(node.paths.inbox, id)!;
   assert.equal(record.toSession, task.sessionId);
   assert.equal(record.closedTo, SESSION);
+  assert.deepEqual(record.delivery, { taskId: task.taskId, runtime: "claude", sessionId: task.sessionId });
   assert.equal(record.state, "accepted");
   assert.ok(record.closedAttempt);
   assert.equal(taskGrants(task, record), true, "the wake's task grant covers the sender's messages");
@@ -92,6 +93,8 @@ test("a second message from the same sender resumes its ended intercom session, 
   assert.equal(resumed.state, "started");
   assert.equal(resumed.local, "intercom");
   assert.equal(getMessage(node.paths.inbox, id)?.toSession, task.sessionId);
+  assert.deepEqual(getMessage(node.paths.inbox, id)?.delivery,
+    { taskId: task.taskId, runtime: "claude", sessionId: task.sessionId });
   const last = audits(node).at(-1)!;
   assert.deepEqual([last.outcome, last.reason, last.taskId], ["reused", "intercom session resumed", task.taskId]);
   assert.deepEqual(node.reports(), []);
@@ -136,6 +139,26 @@ test("an intercom session that cannot be resumed, or continues as a copy that is
   }
 });
 
+test("failed resume and failed fallback leave no delivery task association", async (t) => {
+  const node = closedNode(t);
+  const task = await firstIntercom(node);
+  writeTask(node.paths, { ...task, state: "done" });
+  later(node);
+  const id = deliver(node);
+  const base = node.deps();
+  const exec = async (file: string, args: string[], options: ExecOptions): Promise<string> => {
+    if (args[0] === "--resume") throw new Error("resume failed");
+    if (args[0] === "--bg") throw new Error("fallback failed");
+    return base.exec!(file, args, options);
+  };
+
+  await deliverToClosed({ ...base, exec });
+  const message = getMessage(node.paths.inbox, id);
+  assert.equal(message?.state, "accepted");
+  assert.equal(message?.delivery, undefined);
+  assert.equal(listTasks(node.paths).filter((record) => record.state === "failed").length, 1);
+  assert.match(String(audits(node).at(-1)?.reason), /resume failed.*fallback failed/);
+});
 test("an ended intercom session is not resumed past the budget of its session", async (t) => {
   const node = closedNode(t);
   const task = await firstIntercom(node);

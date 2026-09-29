@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 
 import { makeEnvelope, parseEnvelope } from "../protocol.mts";
 import { NodeClient } from "./client.mts";
+import { codexFiles } from "./codex-process.mts";
 import { getOutbox, writeDirectory, writeLocalSessions } from "./exchange.mts";
 import { generateIdentity } from "./identity.mts";
 import { runMsg } from "./msg-cli.mts";
@@ -10,8 +13,8 @@ import { loadPolicy } from "./policy.mts";
 import { startTask } from "./session-runner.mts";
 import { parseTaskArgs, runTaskArgs } from "./task-cli.mts";
 import { pollTasks, recordRequestResult, TASKS_ACTIVE } from "./task-exchange.mts";
-import { startArgs, T0, TASK, taskNode } from "./task-fixture.mts";
-import { readRequest, readTask, writeRequest } from "./task-records.mts";
+import { startArgs, T0, TASK, taskId, taskNode } from "./task-fixture.mts";
+import { readRequest, readTask, writeRequest, writeTask } from "./task-records.mts";
 
 const PEER = "00000000-0000-4000-8000-0000000000bb";
 const SESSION = "5e55b0000000-0000-4000-8000-000000000000";
@@ -112,4 +115,118 @@ test("task new is refused unless the node allows requests, and never from a task
   pollTasks(client, node.paths, loadPolicy(node.paths.policy), new Set(), send);
   assert.deepEqual(frames.filter((f) => f.type === "task.request"), []);
   assert.equal(readRequest(node.paths, handWritten)?.reason, TASKS_ACTIVE);
+});
+
+test("task show resolves an exact dispatched task id to metadata-only cached request detail", (t) => {
+  const node = taskNode(t);
+  const requestId = crypto.randomUUID();
+  writeRequest(node.paths, { requestId, title: "private title", text: "private task text", requirements: { runtime: "codex", node: PEER },
+    directive: "private directive", requestedBy: "maestro", createdAt: new Date(T0).toISOString(), state: "dispatched", taskId: TASK });
+
+  const shown = task(node, ["show", TASK]);
+  assert.equal(shown.code, 0);
+  assert.deepEqual(JSON.parse(shown.out[0]), {
+    kind: "remote-request", requestId, taskId: TASK, target: { requestedNode: PEER, dispatchedNode: "unknown" },
+    runtime: "codex", dispatchState: "dispatched",
+    source: "local request cache", liveExecutionState: "unknown", desktopChatVisibility: "unknown",
+    createdAt: new Date(T0).toISOString(),
+  });
+  assert.ok(!shown.out[0].includes("private"), "task text, title and directive stay out of detail output");
+});
+
+test("task show rejects invalid, unknown and ambiguous ids explicitly", (t) => {
+  const node = taskNode(t);
+  assert.match(task(node, ["show", "../tasks/private"]).err[0], /invalid task or request id/);
+  assert.match(task(node, ["show", taskId(8)]).err[0], /unknown task or request/);
+
+  const first = crypto.randomUUID();
+  const second = crypto.randomUUID();
+  for (const requestId of [first, second]) {
+    writeRequest(node.paths, { requestId, title: "t", text: "x", requirements: { node: PEER }, directive: "d", requestedBy: "maestro",
+      createdAt: new Date(T0).toISOString(), state: "dispatched", taskId: TASK });
+  }
+  const ambiguous = task(node, ["show", TASK]);
+  assert.equal(ambiguous.code, 1);
+  assert.match(ambiguous.err[0], /ambiguous task id/);
+  assert.ok(ambiguous.err[0].includes(first));
+  assert.ok(ambiguous.err[0].includes(second));
+});
+
+test("task list labels execution separately from cached request dispatch", async (t) => {
+  const node = taskNode(t);
+  await startTask(startArgs(), node.deps());
+  const requestId = crypto.randomUUID();
+  writeRequest(node.paths, { requestId, title: "t", text: "x", requirements: { node: PEER }, directive: "d", requestedBy: "maestro",
+    createdAt: new Date(T0).toISOString(), state: "dispatched", taskId: taskId(9) });
+
+  const listed = task(node, ["list"]);
+  assert.equal(listed.code, 0);
+  assert.match(listed.out[0], new RegExp(`^execution  ${TASK}  started`));
+  assert.match(listed.out[1], new RegExp(`^request-dispatch  ${requestId}  dispatched  task ${taskId(9)}  target ${PEER}$`));
+  assert.deepEqual(task(node, ["show"]).out, listed.out, "show without an id remains a listing alias");
+});
+
+test("local task detail exposes task-specific Claude inspection without private task input", async (t) => {
+  const node = taskNode(t, { delegate: { accept: true } });
+  await startTask(startArgs(TASK, { prompt: "private task input", directive: "private directive", requestedBy: "maestro" }), node.deps());
+  const record = readTask(node.paths, TASK)!;
+  const shown = task(node, ["show", TASK]);
+  assert.equal(shown.code, 0);
+  const detail = JSON.parse(shown.out[0]) as Record<string, unknown>;
+  assert.deepEqual(detail, {
+    kind: "local-execution", taskId: TASK, runtime: "claude", name: record.name, sessionId: record.sessionId, shortId: record.shortId,
+    source: "local task record", recorded: { state: "started", running: "not-recorded", active: true },
+    cwd: record.cwd, startedAt: record.startedAt, updatedAt: record.updatedAt,
+    output: { scope: "local", inspectionCommand: `claude logs ${record.shortId}` },
+  });
+  assert.ok(!shown.out[0].includes("private"));
+});
+
+test("local execution wins when its task id also appears in an outgoing request", async (t) => {
+  const node = taskNode(t);
+  await startTask(startArgs(), node.deps());
+  const requestId = crypto.randomUUID();
+  writeRequest(node.paths, { requestId, title: "private title", text: "private text", requirements: { node: PEER },
+    directive: "private directive", requestedBy: "maestro", createdAt: new Date(T0).toISOString(), state: "dispatched", taskId: TASK });
+
+  const shown = task(node, ["show", TASK]);
+  assert.equal(shown.code, 0);
+  assert.equal((JSON.parse(shown.out[0]) as { kind: string }).kind, "local-execution");
+  assert.ok(!shown.out[0].includes("private"));
+});
+
+test("refused request detail keeps its actionable reason without task content", (t) => {
+  const node = taskNode(t);
+  const requestId = crypto.randomUUID();
+  writeRequest(node.paths, { requestId, title: "private title", text: "private text", requirements: {},
+    directive: "private directive", requestedBy: "maestro", createdAt: new Date(T0).toISOString(), state: "refused",
+    reason: "no eligible node" });
+
+  const shown = task(node, ["show", requestId]);
+  assert.equal(shown.code, 0);
+  assert.equal((JSON.parse(shown.out[0]) as { refusalReason: string }).refusalReason, "no eligible node");
+  assert.ok(!shown.out[0].includes("private"));
+  assert.match(task(node, ["list"]).out[0], /reason no eligible node$/);
+});
+test("local Codex task detail reports latest-run file paths and existence without output bodies", (t) => {
+  const node = taskNode(t);
+  writeTask(node.paths, { taskId: TASK, name: "task-3f2a1b0c", cwd: node.workspace, permissionMode: "auto", state: "done", runtime: "codex",
+    startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60_000).toISOString(), updatedAt: new Date(T0).toISOString() }, T0);
+  const files = codexFiles(node.paths, TASK);
+  fs.mkdirSync(files.dir, { recursive: true });
+  fs.writeFileSync(files.lastMessage, "PRIVATE OUTPUT BODY");
+  fs.writeFileSync(files.exit, "{}");
+
+  const shown = task(node, ["show", TASK]);
+  assert.equal(shown.code, 0);
+  const detail = JSON.parse(shown.out[0]) as { output: { latestRun: boolean; files: { name: string; path: string; available: boolean }[] } };
+  assert.equal(detail.output.latestRun, true);
+  assert.deepEqual(detail.output.files, [
+    { name: "events", path: files.events, available: false },
+    { name: "lastMessage", path: files.lastMessage, available: true },
+    { name: "stderr", path: files.stderr, available: false },
+    { name: "exit", path: files.exit, available: true },
+  ]);
+  assert.equal(detail.output.files.every((file) => path.isAbsolute(file.path)), true);
+  assert.ok(!shown.out[0].includes("PRIVATE OUTPUT BODY"));
 });

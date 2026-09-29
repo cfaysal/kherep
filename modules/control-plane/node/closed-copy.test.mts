@@ -32,6 +32,7 @@ test("a copy made on resume is adopted: same task, its id recorded, the waiting 
       [task.taskId, COPY, "c0ffee01", undefined]);
     const record = getMessage(node.paths.inbox, id)!;
     assert.deepEqual([record.toSession, record.closedTo, record.state], [COPY, SESSION, "accepted"]);
+    assert.deepEqual(record.delivery, { taskId: task.taskId, runtime: "claude", sessionId: COPY });
     assert.ok(readLocalSessions(node.paths).some((s) => s.sessionId === COPY && s.name === task.name));
     assert.deepEqual(node.calls.filter((c) => c.args[0] !== "agents").map((c) => c.args[0]), ["--bg", "--resume"], "nothing stopped");
   }
@@ -49,6 +50,7 @@ test("a copy the listing misses at resume is adopted by the watch round", async 
   [record] = listTasks(node.paths);
   assert.deepEqual([record.sessionId, record.mappingPendingSince], [COPY, undefined]);
   assert.equal(getMessage(node.paths.inbox, id)?.toSession, COPY);
+  assert.deepEqual(getMessage(node.paths.inbox, id)?.delivery, { taskId: task.taskId, runtime: "claude", sessionId: COPY });
 });
 
 test("a failed resume restores the record it wrote before the run", async (t) => {

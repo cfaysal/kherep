@@ -7,6 +7,7 @@ import { findCodex } from "./codex-binary.mts";
 import { intercomMcpOverrides } from "./codex-mcp.mts";
 import { terminate } from "./codex-stop.mts";
 import { ensureDir } from "./config.mts";
+import { resolveDelivery } from "./delivery-identity.mts";
 import { getMessage, markDelivered, markRetry } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
 import type { RunnerDeps } from "./session-runner.mts";
@@ -213,7 +214,7 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
       continue;
     }
     const threadId = record.sessionId ?? readEvents(files).threadId;
-    const mapped: TaskRecord = { ...record, ...(threadId ? { sessionId: threadId } : {}) };
+    const mapped: TaskRecord = resolveDelivery(deps.paths, { ...record, ...(threadId ? { sessionId: threadId } : {}) });
     // Issue #121: exit.json exists only for a run this daemon started and saw
     // end (spawnCodex removes it before each run), so such a run has ended,
     // even past its deadline or when its start time cannot be read.
