@@ -76,7 +76,7 @@ For a listed Desktop session, the message stays addressed to that chat with prog
 
 The kill switch, full-id authorization or `codexApp` grant, permission-mode check and reply-depth limit still apply. Waiting consumes no process slot or autonomous-turn budget. Decisions made under this grant are written to `wake.jsonl` with `"grant": "codexApp"`. Interactive TUI sessions continue to use `codex queue`, turn budget and spacing; genuinely closed targets retain the separate closed-session policy.
 
-A Codex intercom fallback that fails because its configured model is unavailable for the account refuses its linked message with a fixed reason instead of retrying the same failure three times. Other failures retain bounded retries. The status identifies an exhausted fallback separately from a missing confirmation in the original session, and raw CLI error text stays local.
+A Codex intercom fallback that fails because its configured model is unavailable for the account refuses its linked message with a fixed reason instead of retrying the same failure three times. Other failures retain bounded retries. The status identifies an exhausted fallback separately from a missing confirmation in the original session; raw CLI error text is not copied into message status.
 
 ## Retired memory backend
 
