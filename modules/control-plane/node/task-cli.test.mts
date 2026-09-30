@@ -168,8 +168,11 @@ test("task list labels execution separately from cached request dispatch", async
 
 test("local task detail exposes task-specific Claude inspection without private task input", async (t) => {
   const node = taskNode(t, { delegate: { accept: true } });
-  await startTask(startArgs(TASK, { prompt: "private task input", directive: "private directive", requestedBy: "maestro" }), node.deps());
+  const cwd = path.join(node.workspace, "private-repo");
+  fs.mkdirSync(cwd);
+  await startTask(startArgs(TASK, { cwd, prompt: "private task input", directive: "private directive", requestedBy: "maestro" }), node.deps());
   const record = readTask(node.paths, TASK)!;
+  assert.equal(record.cwd, fs.realpathSync(cwd));
   const shown = task(node, ["show", TASK]);
   assert.equal(shown.code, 0);
   const detail = JSON.parse(shown.out[0]) as Record<string, unknown>;
@@ -179,12 +182,12 @@ test("local task detail exposes task-specific Claude inspection without private 
     cwd: record.cwd, startedAt: record.startedAt, updatedAt: record.updatedAt,
     output: { scope: "local", inspectionCommand: `claude logs ${record.shortId}` },
   });
-  assert.ok(!shown.out[0].includes("private"));
+  for (const input of ["private task input", "private directive"]) assert.ok(!shown.out[0].includes(input));
 });
 
 test("local execution wins when its task id also appears in an outgoing request", async (t) => {
   const node = taskNode(t);
-  await startTask(startArgs(), node.deps());
+  await startTask(startArgs(TASK, { prompt: "private local task input" }), node.deps());
   const requestId = crypto.randomUUID();
   writeRequest(node.paths, { requestId, title: "private title", text: "private text", requirements: { node: PEER },
     directive: "private directive", requestedBy: "maestro", createdAt: new Date(T0).toISOString(), state: "dispatched", taskId: TASK });
@@ -192,7 +195,7 @@ test("local execution wins when its task id also appears in an outgoing request"
   const shown = task(node, ["show", TASK]);
   assert.equal(shown.code, 0);
   assert.equal((JSON.parse(shown.out[0]) as { kind: string }).kind, "local-execution");
-  assert.ok(!shown.out[0].includes("private"));
+  for (const input of ["private local task input", "private title", "private text", "private directive"]) assert.ok(!shown.out[0].includes(input));
 });
 
 test("refused request detail keeps its actionable reason without task content", (t) => {
