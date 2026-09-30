@@ -45,8 +45,8 @@ function rollout(home: string, sessionId: string, first: string | Record<string,
 
 type Node = ReturnType<typeof codexNode>;
 
-// A node with the given wake section and no codex binary: a granted wake ends
-// as queue-failed, which shows the decision without running anything.
+// A node with the given wake section and no codex binary: Desktop grants
+// wait for the original hook; an attempted TUI queue ends as queue-failed.
 function appNode(t: test.TestContext, wake: Record<string, unknown>): { node: Node; home: string; poll: () => Promise<void> } {
   const home = codexHome(t);
   const node = codexNode(t, {}, { home, findCodex: () => null });
@@ -148,7 +148,7 @@ test("currentCodexApp picks the most recently seen app session, never an exec on
   assert.equal(currentCodexApp(node.paths, [EXEC], home), null);
 });
 
-test("codexApp wakes the app session and not a newer exec session; the audit names the grant", async (t) => {
+test("codexApp keeps the app mailbox waiting and does not grant a newer exec session", async (t) => {
   const { node, home, poll } = appNode(t, { codexApp: true });
   rollout(home, APP, APP_META);
   rollout(home, EXEC, EXEC_META);
@@ -157,7 +157,7 @@ test("codexApp wakes the app session and not a newer exec session; the audit nam
   const toApp = deliver(node, APP);
   const toExec = deliver(node, EXEC);
   await poll();
-  assert.deepEqual(decisions(node).sort(), [[APP, "queue-failed", "codexApp"], [EXEC, "not-allowlisted", undefined]]);
+  assert.deepEqual(decisions(node).sort(), [[APP, "awaiting-user-turn", "codexApp"], [EXEC, "not-allowlisted", undefined]]);
   assert.ok(!JSON.stringify(audit(node)).includes("secret"), "the audit carries no text");
   assert.equal(getMessage(node.paths.inbox, toExec)?.state, "accepted");
   assert.equal(getMessage(node.paths.inbox, toApp)?.state, "accepted", "the delivery hook offers it");
@@ -208,7 +208,7 @@ test("codexApp keeps the kill switch first", async (t) => {
   assert.deepEqual(decisions(node), [[APP, "disabled", undefined]]);
 });
 
-test("without codexApp an app session is not woken; a listed full id works as before", async (t) => {
+test("without codexApp a Desktop has no grant; a full-id grant preserves Desktop or TUI behavior", async (t) => {
   for (const wake of [{ sessions: ["someone-else"] }, { sessions: ["someone-else"], codexApp: false }]) {
     const { node, home, poll } = appNode(t, wake);
     rollout(home, APP, APP_META);
@@ -217,10 +217,14 @@ test("without codexApp an app session is not woken; a listed full id works as be
     await poll();
     assert.deepEqual(decisions(node), [[APP, "not-allowlisted", undefined]], JSON.stringify(wake));
   }
-  // A full id in wake.sessions works as before, without a grant field.
-  const { node, poll } = appNode(t, { sessions: [APP], codexApp: true });
-  recordCodexSession(node.paths, APP, node.workspace, T0, "default");
-  deliver(node, APP);
-  await poll();
-  assert.deepEqual(decisions(node), [[APP, "queue-failed", undefined]]);
+  // Full-id authorization uses no codexApp grant field. A verified Desktop
+  // waits; a session without a Desktop rollout still attempts the TUI queue.
+  for (const desktop of [false, true]) {
+    const { node, home, poll } = appNode(t, { sessions: [APP], codexApp: true });
+    if (desktop) rollout(home, APP, APP_META);
+    recordCodexSession(node.paths, APP, node.workspace, T0, "default");
+    deliver(node, APP);
+    await poll();
+    assert.deepEqual(decisions(node), [[APP, desktop ? "awaiting-user-turn" : "queue-failed", undefined]]);
+  }
 });
