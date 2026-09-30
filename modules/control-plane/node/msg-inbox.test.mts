@@ -100,3 +100,76 @@ test("ambiguous Codex aliases do not expose handover history, while the exact or
   assert.doesNotMatch(shown.out, /ambiguous reply input/);
   assert.match(shown.out, /exact original reply/);
 });
+
+async function runLocal(paths: NodePaths, sessionId = SESSION) {
+  const out: string[] = [];
+  const err: string[] = [];
+  const code = await runMsg(["inbox", "--all"], {
+    paths, env: { KHEREP_SESSION_ID: sessionId }, now: () => NOW,
+    out: line => out.push(line), err: line => err.push(line),
+  });
+  return { code, out: out.join("\n"), err: err.join("\n") };
+}
+
+test("duplicate non-Codex names exclude ambiguous history for both callers but preserve exact ids", async (t) => {
+  const paths = setup(t);
+  writeLocalSessions(paths, [SESSION, OTHER].map(sessionId => ({
+    sessionId, name: "shared-name", runtime: "claude-code", state: "idle",
+  })));
+  forwarded(paths, MESSAGE, "shared-name", "ambiguous local reply");
+  forwarded(paths, SECOND, SESSION, "exact local reply");
+  const before = getMessage(paths.inbox, MESSAGE);
+  for (const id of [SESSION, OTHER]) {
+    const shown = await runLocal(paths, id);
+    assert.equal(shown.code, 0, shown.err);
+    assert.doesNotMatch(shown.out, /ambiguous local reply/);
+    assert.equal(shown.out.includes("exact local reply"), id === SESSION);
+  }
+  assert.deepEqual(getMessage(paths.inbox, MESSAGE), before);
+});
+
+test("a unique non-Codex name still inspects original-address history without receiving it", async (t) => {
+  const paths = setup(t);
+  writeLocalSessions(paths, [{ sessionId: SESSION, name: "unique-name", runtime: "claude-code", state: "idle" }]);
+  forwarded(paths, MESSAGE, "unique-name", "unique local reply");
+  const before = getMessage(paths.inbox, MESSAGE);
+  const shown = await runLocal(paths);
+  assert.equal(shown.code, 0, shown.err);
+  assert.match(shown.out, /unique local reply/);
+  assert.deepEqual(getMessage(paths.inbox, MESSAGE), before);
+});
+
+test("a non-Codex name colliding with another session id is not a unique address", async (t) => {
+  const paths = setup(t);
+  writeLocalSessions(paths, [
+    { sessionId: SESSION, name: OTHER, runtime: "claude-code", state: "idle" },
+    { sessionId: OTHER, name: "other-name", runtime: "claude-code", state: "idle" },
+  ]);
+  forwarded(paths, MESSAGE, OTHER, "id collision reply");
+  const shown = await runLocal(paths);
+  assert.equal(shown.code, 0, shown.err);
+  assert.doesNotMatch(shown.out, /id collision reply/);
+});
+
+test("invalid or unreadable non-Codex listings cannot establish alias ownership", async (t) => {
+  const paths = setup(t);
+  forwarded(paths, MESSAGE, "unverified-name", "unverified local reply");
+  forwarded(paths, SECOND, SESSION, "exact local reply");
+  for (const listing of ["invalid JSON", "{}", JSON.stringify({ sessions: "invalid" }), JSON.stringify({ sessions: [
+    { sessionId: SESSION, name: "unverified-name" }, null,
+  ] })]) {
+    fs.writeFileSync(paths.sessions, listing);
+    const shown = await runLocal(paths);
+    assert.equal(shown.code, 0, shown.err);
+    assert.doesNotMatch(shown.out, /unverified local reply/);
+    assert.match(shown.out, /exact local reply/);
+    assert.match(shown.err, /cannot verify local session names/);
+  }
+  fs.rmSync(paths.sessions);
+  fs.mkdirSync(paths.sessions);
+  const unreadable = await runLocal(paths);
+  assert.equal(unreadable.code, 0, unreadable.err);
+  assert.doesNotMatch(unreadable.out, /unverified local reply/);
+  assert.match(unreadable.out, /exact local reply/);
+  assert.match(unreadable.err, /cannot verify local session names/);
+});

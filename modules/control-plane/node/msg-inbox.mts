@@ -1,10 +1,10 @@
 import { codexSessionRefs, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { CODEX_CONTEXT_BYTES, CODEX_ESCALATION_NOTE } from "./deliver-codex.mts";
 import { deliveryContext } from "./deliver-core.mts";
-import { readDirectory } from "./exchange.mts";
-import { listInbox } from "./inbox.mts";
+import { readDirectory, type LocalSession } from "./exchange.mts";
+import { listInbox, readJson } from "./inbox.mts";
 import type { MsgArgs, MsgContext } from "./msg-cli.mts";
-import { currentSession, nodeLabel, SESSION_ENV } from "./msg-resolve.mts";
+import { nodeLabel, SESSION_ENV, sessionIdFromEnv } from "./msg-resolve.mts";
 
 type InboxIo = Required<MsgContext>;
 
@@ -29,9 +29,21 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
       return fail("cannot read Codex sessions safely; inbox was not received");
     }
   } else {
-    const me = currentSession(io.paths, io.env);
-    if (!me) return fail("cannot tell which session this is: " + SESSION_ENV + " is not set; Codex uses --from <session-id>");
-    refs = [me.id, ...(me.name ? [me.name] : [])];
+    const id = sessionIdFromEnv(io.env);
+    if (!id) return fail("cannot tell which session this is: " + SESSION_ENV + " is not set; Codex uses --from <session-id>");
+    refs = [id];
+    try {
+      const sessions = readJson<{ sessions?: LocalSession[] }>(io.paths.sessions)?.sessions;
+      if (!Array.isArray(sessions) || !sessions.every(s => s && typeof s.sessionId === "string" && s.sessionId.length > 0
+        && (s.name === undefined || (typeof s.name === "string" && s.name.length > 0)))) {
+        throw new Error("invalid local sessions");
+      }
+      const name = sessions.find(s => s.sessionId === id)?.name;
+      const matches = name ? sessions.filter(s => s.sessionId === name || s.name === name) : [];
+      if (name && matches.length === 1 && matches[0].sessionId === id) refs.push(name);
+    } catch {
+      io.err("kherep-node msg: cannot verify local session names; inspecting only the exact session id");
+    }
   }
 
   if (values.receive) {
