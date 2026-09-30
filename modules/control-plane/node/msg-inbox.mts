@@ -1,7 +1,8 @@
 import { codexSessionRefs, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { CODEX_CONTEXT_BYTES, CODEX_ESCALATION_NOTE } from "./deliver-codex.mts";
-import { deliveryContext, sessionInbox } from "./deliver-core.mts";
+import { deliveryContext } from "./deliver-core.mts";
 import { readDirectory } from "./exchange.mts";
+import { listInbox } from "./inbox.mts";
 import type { MsgArgs, MsgContext } from "./msg-cli.mts";
 import { currentSession, nodeLabel, SESSION_ENV } from "./msg-resolve.mts";
 
@@ -41,7 +42,9 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
     io.out(context ? context + "\n" + CODEX_ESCALATION_NOTE : "no messages waiting for this continuation");
     return 0;
   }
-  const records = sessionInbox(io.paths, refs).filter(r => values.all || r.state === "accepted" || r.state === "offered");
+  const records = listInbox(io.paths.inbox)
+    .filter(r => refs.includes(r.toSession) || (r.closedTo !== undefined && refs.includes(r.closedTo)))
+    .filter(r => values.all || r.state === "accepted" || r.state === "offered");
   if (records.length === 0) {
     io.out(values.all ? "no messages for this session" : "no undelivered messages for this session (--all includes delivered ones)");
     return 0;
@@ -51,6 +54,11 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
     io.out(r.messageId + "  " + r.state + "  " + r.createdAt);
     io.out("  from: node " + nodeLabel(directory, r.from.nodeId) + ", session " + r.from.session);
     if (r.inReplyTo) io.out("  in reply to: " + r.inReplyTo);
+    if (r.closedTo !== undefined) io.out("  forwarded to: session " + r.toSession);
+    if (r.delivery) {
+      io.out("  delivery task: " + r.delivery.taskId);
+      if (r.delivery.sessionId) io.out("  delivery session: " + r.delivery.sessionId);
+    }
     for (const line of r.text.split("\n")) io.out("  | " + line);
   }
   return 0;
