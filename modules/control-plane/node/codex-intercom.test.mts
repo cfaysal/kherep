@@ -154,7 +154,7 @@ test("the deadline stops an attached intercom run with its whole process tree", 
   await waitFor(() => codex.child() !== null, "the child of the run");
   const [task] = listTasks(node.paths);
   node.tick(2 * 60 * 60_000);
-  await watchCodexTasks(deps());
+  await watchCodexTasks(deps(), (line) => t.diagnostic(line));
   await waitFor(() => alive(codex.runs()[0].pid) === null && alive(codex.child()!) === null, "the whole tree", 15_000);
   assert.equal(readTask(node.paths, task.taskId)?.state, "stopped");
   const retry = getMessage(node.paths.inbox, id)!;
