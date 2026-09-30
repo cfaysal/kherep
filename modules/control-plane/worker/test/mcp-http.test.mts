@@ -5,6 +5,9 @@ import { describe, expect, it } from "vitest";
 
 import { REMOTE_MCP_CAPABILITY, digestMcpArguments } from "../../protocol-mcp.mts";
 import { makeEnvelope } from "../../protocol.mts";
+import { NodeClient } from "../../node/client.mts";
+import { generateIdentity } from "../../node/identity.mts";
+import { DEFAULT_POLICY } from "../../node/policy.mts";
 import { MESSAGING_CAPABILITY } from "../../protocol-messages.mts";
 import { handleMcp } from "../src/mcp-http.mts";
 import type { Env } from "../src/env.mts";
@@ -160,6 +163,53 @@ describe("stateless remote MCP HTTP", () => {
     expect(noMeta.content).toEqual([{ type: "text", text: "verified Codex native call metadata is required" }]);
     await instance.close();
   });
+
+  it("resolves an oversized production node response to an actionable MCP error", async () => {
+    const online = await source();
+    const socket = await authenticate(online.nodeId, online.key);
+    const requestId = "20000000-0000-4000-8000-000000000011";
+    await registry().registerMcpIntent(online.nodeId, { requestId, runtime: "codex", sessionId: "thread-source",
+      callId: "call-oversize", tool: "inbox", argumentsDigest: await digestMcpArguments({}) });
+    const instance = await client(online.credential.token);
+    try {
+      const node = new NodeClient({
+        nodeId: online.nodeId, identity: generateIdentity(), policy: { ...DEFAULT_POLICY, remoteMcp: { enabled: true } },
+        handlers: { "node.status": async () => ({}), "runtime.list": async () => [], "session.list": async () => [] },
+        facts: () => FACTS, runtimes: async () => [{ name: "codex", kind: "cli" }],
+        sessions: async () => [{ sessionId: "thread-source", runtime: "codex", state: "running" }],
+        storeMessage: () => {}, mcpCredentialPresent: () => true,
+        readMcpInbox: (sessionId, limit) => {
+          expect(sessionId).toBe("thread-source");
+          expect(limit).toBe(10);
+          return Array.from({ length: 4 }, (_, index) => ({
+            messageId: `40000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+            from: { nodeId: online.nodeId, session: "peer" }, createdAt: "2026-09-30T00:00:00.000Z",
+            text: "SYNTHETIC_LOCAL_ONLY_BODY".padEnd(16384, "A"), depth: 0,
+          }));
+        },
+      });
+      await node.onFrame(JSON.stringify(makeEnvelope("event", { name: "auth.ok" }, 0, 0)));
+      const pending = instance.callTool({ name: "inbox", arguments: { requestId },
+        _meta: { sessionId: "thread-source", threadId: "native-thread", callId: "call-oversize" } });
+      const read = await socket.next();
+      expect(read.type).toBe("mcp.inbox.request");
+      const [response] = await node.onFrame(JSON.stringify(read));
+      expect(response).toBeTypeOf("string");
+      socket.ws.send(response!);
+      const result = await pending;
+      const error = "inbox response exceeds transport limit; retry with a smaller limit or use the local inbox CLI";
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([{ type: "text", text: error }]);
+      expect(result.structuredContent).toEqual({ ok: false, error });
+      expect(JSON.stringify(await session(online.nodeId).recentCommands())).not.toContain("SYNTHETIC_LOCAL_ONLY_BODY");
+      const row = await runInDurableObject(registry(), (_instance, state) =>
+        state.storage.sql.exec("SELECT * FROM mcp_intents WHERE request_id = ?", requestId).one());
+      expect(JSON.stringify(row)).not.toContain("SYNTHETIC_LOCAL_ONLY_BODY");
+    } finally {
+      await instance.close();
+      socket.ws.close();
+    }
+  }, 10000);
 
   it("retries a write with the immutable requestId through router idempotency", async () => {
     const sourceNode = await source();

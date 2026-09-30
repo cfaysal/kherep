@@ -2,6 +2,7 @@
 // Workers imports so the authenticated node and Worker validate identical data.
 
 export const REMOTE_MCP_CAPABILITY = "mcp.messaging.v1";
+export const MCP_INBOX_TOO_LARGE = "inbox response exceeds transport limit; retry with a smaller limit or use the local inbox CLI";
 export const MCP_INTENT_TTL_DEFAULT_MS = 120_000;
 export const MCP_INTENT_TTL_MAX_MS = 300_000;
 

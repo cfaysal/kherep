@@ -1,5 +1,5 @@
 import {
-  isCommandBody, makeEnvelope, parseEnvelope, PONG_FRAME, type ChallengeBody, type Envelope, type MessageType,
+  isCommandBody, makeEnvelope, MAX_FRAME_BYTES, parseEnvelope, PONG_FRAME, type ChallengeBody, type Envelope, type MessageType,
   type NodeFacts, type Phase1Command, type RuntimeInfo, type SessionCommand, type SessionInfo,
 } from "../protocol.mts";
 import {
@@ -17,7 +17,7 @@ import {
 import { signChallenge, type NodeIdentity } from "./identity.mts";
 import { acceptsMessage, advertisedCapabilities, isAllowed, type NodePolicy } from "./policy.mts";
 import {
-  isMcpCredentialBody, isMcpInboxRequestBody, isMcpIntentReceiptBody,
+  isMcpCredentialBody, isMcpInboxRequestBody, isMcpIntentReceiptBody, MCP_INBOX_TOO_LARGE,
   type McpCredentialBody, type McpInboxItem, type McpIntentReceiptBody, type McpIntentRegistration,
 } from "../protocol-mcp.mts";
 
@@ -186,9 +186,13 @@ export class NodeClient {
         const body = envelope.body;
         try {
           const items = await this.options.readMcpInbox?.(body.sessionId, body.limit);
-          return [this.frame("mcp.inbox.response", items
+          const response = this.frame("mcp.inbox.response", items
             ? { requestId: body.requestId, ok: true, items }
-            : { requestId: body.requestId, ok: false, error: "local inbox reader is unavailable" })];
+            : { requestId: body.requestId, ok: false, error: "local inbox reader is unavailable" });
+          if (Buffer.byteLength(response, "utf8") > MAX_FRAME_BYTES) {
+            return [this.frame("mcp.inbox.response", { requestId: body.requestId, ok: false, error: MCP_INBOX_TOO_LARGE })];
+          }
+          return [response];
         } catch {
           return [this.frame("mcp.inbox.response", { requestId: body.requestId, ok: false, error: "local inbox read failed" })];
         }
