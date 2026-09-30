@@ -59,7 +59,8 @@ jobs:
         run: npm ci
       - name: Control Plane protocol and node suites (Windows)
         if: runner.os == 'Windows'
-        run: npm run test:control-plane
+        # Bound simultaneous native process/PowerShell fixtures on the hosted runner.
+        run: node --test --test-concurrency=1 "modules/control-plane/*.test.mts" "modules/control-plane/node/*.test.mts"
 
   # The unit suites and the node suites of the typescript job (without the type
   # check) on releases the engines field in package.json admits besides the
