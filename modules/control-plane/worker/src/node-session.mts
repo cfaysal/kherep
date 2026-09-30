@@ -7,7 +7,7 @@ import {
 import { isDirectoryGetBody, isMessageSendBody, isNodeMessageStatusBody } from "../../protocol-messages.mts";
 import { isCommandArgs } from "../../protocol-tasks.mts";
 import {
-  isMcpCredentialRotateBody, isMcpInboxResponseBody, isMcpIntentRegistration,
+  isMcpCredentialRotateBody, isMcpInboxResponseBody, isMcpIntentRegistration, MCP_INBOX_TOO_LARGE,
   type McpInboxResponseBody,
 } from "../../protocol-mcp.mts";
 import { handleTaskFrame } from "./task-frames.mts";
@@ -269,7 +269,8 @@ export class NodeSession extends DurableObject<Env> {
         if (!pending || pending.socket !== ws) return;
         clearTimeout(pending.timer);
         this.pendingInbox.delete(body.requestId);
-        pending.resolve(body.ok ? body : { requestId: body.requestId, ok: false, error: "originating node inbox read failed" });
+        pending.resolve(body.ok ? body : { requestId: body.requestId, ok: false,
+          error: body.error === MCP_INBOX_TOO_LARGE ? MCP_INBOX_TOO_LARGE : "originating node inbox read failed" });
         return;
       }
       case "task.report":

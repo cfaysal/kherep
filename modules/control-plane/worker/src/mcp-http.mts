@@ -2,7 +2,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import { digestMcpArguments, type McpIntentClaim, type McpTool } from "../../protocol-mcp.mts";
+import { digestMcpArguments, MCP_INBOX_TOO_LARGE, type McpIntentClaim, type McpTool } from "../../protocol-mcp.mts";
 import { registryStub, sessionStub, type Env } from "./env.mts";
 import { routeEffects } from "./message-routing.mts";
 
@@ -23,7 +23,7 @@ function result(value: Record<string, unknown>) {
 
 function inboxError(value: string): string {
   if (value === "originating node is offline" || value === "originating node did not answer inbox request"
-    || value === "originating node inbox reader is busy") return value;
+    || value === "originating node inbox reader is busy" || value === MCP_INBOX_TOO_LARGE) return value;
   return "originating node inbox read failed";
 }
 
