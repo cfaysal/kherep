@@ -36,6 +36,7 @@
     // operator's override supplies https://<team-name>.cloudflareaccess.com
     // and the Access application AUD tag.
     "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": ""
+    "ACCESS_AUD": "",
+    "REMOTE_MCP_ENABLED": "false"
   }
 }

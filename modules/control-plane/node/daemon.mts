@@ -23,6 +23,9 @@ import { executeTaskControl } from "./task-control-local.mts";
 import {
   applyQueryResult, receiptResult, recordRegistrationReceipt, recoverOperations,
 } from "./task-control-store.mts";
+import {
+  disableMcp, hasMcpCredential, pollMcpIntents, readMcpInbox, recordMcpCredential, recordMcpIntentReceipt,
+} from "./mcp-local.mts";
 
 // Application ping interval. The Worker answers PING_FRAME through
 // setWebSocketAutoResponse without waking the Durable Object; Node's built-in
@@ -71,6 +74,10 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   const runner: RunnerDeps = { paths, policy, log };
   recoverOperations(paths);
   let taskControlInflight = new Set<string>();
+  let mcpInflight = new Set<string>();
+  if (policy.remoteMcp?.enabled !== true) {
+    try { disableMcp(paths, mcpInflight); } catch (error) { log(`kherep-node: remote MCP cleanup failed: ${String(error)}`); }
+  }
   const client = new NodeClient({
     nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions, runner),
     facts: detectFacts, runtimes: () => discoverRuntimes(), sessions,
@@ -88,6 +95,11 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
       taskControlInflight.delete("submit:" + body.requestId);
       applyQueryResult(paths, body);
     },
+    mcpCredentialPresent: () => hasMcpCredential(paths),
+    mcpCredential: (body) => recordMcpCredential(paths, body),
+    mcpIntentReceipt: (body) => recordMcpIntentReceipt(paths, mcpInflight, body),
+    mcpDisabled: () => disableMcp(paths, mcpInflight),
+    readMcpInbox: (sessionId, limit) => readMcpInbox(paths, sessionId, limit),
     taskControlExecute: (body) => handleTaskControlExecute(paths, body,
       (execute) => executeTaskControl(execute, { nodeId: config.nodeId, paths, runner })),
     ...exchangeOptions(paths), log,
@@ -115,9 +127,16 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     const inflight = new Set<string>();
     const requestsInflight = new Set<string>();
     taskControlInflight = new Set<string>();
+    mcpInflight = new Set<string>();
     const send = (frame: string): boolean => {
       if (ws.readyState !== WebSocket.OPEN) return false;
       ws.send(frame);
+      return true;
+    };
+    const publishRegistration = (frames: string[]): boolean => {
+      if (frames.length === 0) return true;
+      for (const frame of frames) if (!send(frame)) return false;
+      client.registrationSent();
       return true;
     };
     // Frames are handled strictly in order: command seq/ack depends on it. The
@@ -136,12 +155,14 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
       exchange = setInterval(() => {
         chain = chain.then(async () => {
           const current = loadPolicy(config.policyFile);
+          publishRegistration(await client.refreshPolicy(current));
           observeClaudeDeliveryProgress({ ...runner, policy: current });
           pollExchange(client, paths, inflight, send);
           pollTasks(client, paths, policy, requestsInflight, send);
           const enabled = current.sessions?.enabled === true && current.sessions.ownTaskControl === true
             && current.sessions.runtimes.length > 0;
           pollTaskControl(client, paths, taskControlInflight, send, Date.now(), enabled);
+          pollMcpIntents(client, paths, mcpInflight, send);
           // Peer messages for ended Codex task sessions resume them (issue #63).
           await pollCodexInbound(runner, log);
           // ... and wake idle interactive Codex sessions with a pointer (issue #66).
@@ -158,8 +179,12 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
       if (typeof event.data !== "string") return;
       const data = event.data;
       chain = chain.then(async () => {
+        publishRegistration(await client.refreshPolicy(loadPolicy(config.policyFile)));
         const wasAuthed = client.authenticated;
-        for (const frame of await client.onFrame(data)) if (ws.readyState === WebSocket.OPEN) ws.send(frame);
+        const frames = await client.onFrame(data);
+        let sent = true;
+        for (const frame of frames) if (!send(frame)) { sent = false; break; }
+        if (!wasAuthed && client.authenticated && sent) client.registrationSent();
         if (!wasAuthed && client.authenticated) {
           attempt = 0;
           log(`kherep-node: connected as ${config.nodeId}`);

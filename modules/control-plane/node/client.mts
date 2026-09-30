@@ -16,6 +16,10 @@ import {
 } from "../protocol-messages.mts";
 import { signChallenge, type NodeIdentity } from "./identity.mts";
 import { acceptsMessage, advertisedCapabilities, isAllowed, type NodePolicy } from "./policy.mts";
+import {
+  isMcpCredentialBody, isMcpInboxRequestBody, isMcpIntentReceiptBody,
+  type McpCredentialBody, type McpInboxItem, type McpIntentReceiptBody, type McpIntentRegistration,
+} from "../protocol-mcp.mts";
 
 // Session commands (item 5) take their validated args; a node without them
 // answers ok:false.
@@ -49,6 +53,11 @@ export interface ClientOptions {
   taskControlRegistrationReceipt?: (body: TaskControlRegistrationReceiptBody) => void;
   taskControlResultReceipt?: (body: TaskControlResultReceiptBody) => void;
   taskControlQueryResult?: (body: TaskControlQueryResultBody) => void;
+  mcpCredentialPresent?: () => boolean;
+  mcpCredential?: (body: McpCredentialBody) => void;
+  mcpIntentReceipt?: (body: McpIntentReceiptBody) => void;
+  mcpDisabled?: () => void;
+  readMcpInbox?: (sessionId: string, limit: number) => McpInboxItem[] | Promise<McpInboxItem[]>;
   log?: (line: string) => void;
   now?: () => number;
 }
@@ -58,6 +67,12 @@ export interface ClientOptions {
 // socket; tests drive this class directly.
 export class NodeClient {
   private readonly options: ClientOptions;
+  private policy: NodePolicy;
+  private lastRuntimes: RuntimeInfo[] = [];
+  private registrationDirty = false;
+  private registrationFrames: string[] | null = null;
+  private credentialRotationPending = false;
+  private credentialRequestPending: string | null = null;
   private seq = 0;
   // Highest command seq processed. Survives reconnects within this process so
   // the auth message tells the server what not to resend.
@@ -68,6 +83,7 @@ export class NodeClient {
 
   constructor(options: ClientOptions) {
     this.options = options;
+    this.policy = options.policy;
   }
 
   get ack(): number {
@@ -76,6 +92,9 @@ export class NodeClient {
 
   connectionClosed(): void {
     this.authenticated = false;
+    this.registrationDirty = true;
+    this.registrationFrames = null;
+    this.credentialRequestPending = null;
   }
 
   async onFrame(raw: string): Promise<string[]> {
@@ -120,8 +139,12 @@ export class NodeClient {
         if ((envelope.body as { name?: unknown }).name !== "auth.ok") return [];
         this.authenticated = true;
         this.lastSnapshot = null;
+        this.lastRuntimes = await this.options.runtimes();
+        this.registrationDirty = true;
+        this.credentialRotationPending ||= this.policy.remoteMcp?.enabled === true
+          && this.options.mcpCredentialPresent?.() !== true;
         return [
-          this.frame("register", { facts: this.options.facts(), runtimes: await this.options.runtimes(), capabilities: advertisedCapabilities(this.options.policy) }),
+          ...this.pendingRegistrationFrames(),
           ...await this.sessionsSnapshot(),
           ...this.directoryRequest(),
         ];
@@ -137,6 +160,38 @@ export class NodeClient {
         const body = envelope.body;
         if (isMessageStatusBody(body)) this.callback(body.messageId, () => this.options.sentUpdate?.(body.messageId, body.state, body.reason, body.progress));
         return [];
+      }
+      case "mcp.credential":
+        if (this.authenticated && this.policy.remoteMcp?.enabled === true) {
+          const body = envelope.body;
+          if (isMcpCredentialBody(body) && body.requestId === this.credentialRequestPending) {
+            const stored = body.ok && this.callback(body.requestId, () => this.options.mcpCredential?.(body));
+            this.credentialRequestPending = null;
+            if (!stored) {
+              this.registrationDirty = true;
+              this.registrationFrames = null;
+              this.credentialRotationPending = true;
+            }
+          }
+        }
+        return [];
+      case "mcp.intent.receipt":
+        if (this.authenticated && this.policy.remoteMcp?.enabled === true) {
+          const body = envelope.body;
+          if (isMcpIntentReceiptBody(body)) this.callback(body.requestId, () => this.options.mcpIntentReceipt?.(body));
+        }
+        return [];
+      case "mcp.inbox.request": {
+        if (!this.authenticated || this.policy.remoteMcp?.enabled !== true || !isMcpInboxRequestBody(envelope.body)) return [];
+        const body = envelope.body;
+        try {
+          const items = await this.options.readMcpInbox?.(body.sessionId, body.limit);
+          return [this.frame("mcp.inbox.response", items
+            ? { requestId: body.requestId, ok: true, items }
+            : { requestId: body.requestId, ok: false, error: "local inbox reader is unavailable" })];
+        } catch {
+          return [this.frame("mcp.inbox.response", { requestId: body.requestId, ok: false, error: "local inbox read failed" })];
+        }
       }
       case "error": {
         // The Worker answers a message.send it cannot take with an error frame
@@ -168,12 +223,48 @@ export class NodeClient {
     return [this.frame("sessions.snapshot", { sessions })];
   }
 
+  async refreshPolicy(policy: NodePolicy): Promise<string[]> {
+    const previous = advertisedCapabilities(this.policy);
+    const capabilities = advertisedCapabilities(policy);
+    const wasMcpEnabled = this.policy.remoteMcp?.enabled === true;
+    const mcpEnabled = policy.remoteMcp?.enabled === true;
+    this.policy = policy;
+    if (wasMcpEnabled && !mcpEnabled) {
+      this.credentialRequestPending = null;
+      this.credentialRotationPending = false;
+      this.callback("remote MCP state", () => this.options.mcpDisabled?.());
+    }
+    if (JSON.stringify(previous) !== JSON.stringify(capabilities)) {
+      this.registrationDirty = true;
+      this.registrationFrames = null;
+      this.credentialRotationPending ||= !wasMcpEnabled && mcpEnabled;
+    }
+    if (mcpEnabled && !this.registrationDirty && !this.credentialRequestPending
+      && this.options.mcpCredentialPresent?.() !== true) {
+      this.registrationDirty = true;
+      this.registrationFrames = null;
+      this.credentialRotationPending = true;
+    }
+    return this.pendingRegistrationFrames();
+  }
+
+  registrationSent(): void {
+    this.registrationDirty = false;
+    this.registrationFrames = null;
+    this.credentialRotationPending = false;
+  }
+
   directoryRequest(): string[] {
     return this.authenticated ? [this.frame("directory.get", {})] : [];
   }
 
   sendMessage(body: MessageSendBody): string[] {
     return this.authenticated ? [this.frame("message.send", { ...body, to: { ...body.to } })] : [];
+  }
+
+  registerMcpIntent(body: McpIntentRegistration): string[] {
+    return this.authenticated && this.policy.remoteMcp?.enabled === true
+      ? [this.frame("mcp.intent.register", { ...body })] : [];
   }
 
   // The state the target session reached: delivered, or refused with a reason.
@@ -197,11 +288,13 @@ export class NodeClient {
   }
 
   // A failing local write is logged; the frame loop goes on.
-  private callback(what: string, run: () => void): void {
+  private callback(what: string, run: () => void): boolean {
     try {
       run();
+      return true;
     } catch (error) {
       this.options.log?.(`kherep-node: could not record ${what}: ${String((error as Error).message ?? error)}`);
+      return false;
     }
   }
 
@@ -216,7 +309,7 @@ export class NodeClient {
     } catch {
       // unreadable listing: only the addressed reference itself matches
     }
-    if (!acceptsMessage(this.options.policy, body.toSession, body.from.nodeId, local)) {
+    if (!acceptsMessage(this.policy, body.toSession, body.from.nodeId, local)) {
       return [this.frame("message.status", { messageId, state: "refused", reason: "not accepted by node policy" })];
     }
     try {
@@ -241,7 +334,7 @@ export class NodeClient {
     if (envelope.seq <= this.processedSeq) return [this.frame("command.ack", { commandId })];
     this.processedSeq = envelope.seq;
     const out = [this.frame("command.ack", { commandId })];
-    if (!isAllowed(this.options.policy, command)) {
+    if (!isAllowed(this.policy, command)) {
       out.push(this.frame("command.result", { commandId, ok: false, error: "rejected by local policy" }));
       return out;
     }
@@ -261,5 +354,23 @@ export class NodeClient {
 
   private frame(type: MessageType, body: Record<string, unknown>, sequenced = true): string {
     return JSON.stringify(makeEnvelope(type, body, sequenced ? ++this.seq : 0, this.processedSeq));
+  }
+
+  private registrationFrame(): string {
+    return this.frame("register", {
+      facts: this.options.facts(), runtimes: this.lastRuntimes, capabilities: advertisedCapabilities(this.policy),
+    });
+  }
+
+  private pendingRegistrationFrames(): string[] {
+    if (!this.authenticated || !this.registrationDirty) return [];
+    if (!this.registrationFrames) {
+      this.registrationFrames = [this.registrationFrame()];
+      if (this.credentialRotationPending) {
+        this.credentialRequestPending = crypto.randomUUID();
+        this.registrationFrames.push(this.frame("mcp.credential.rotate", { requestId: this.credentialRequestPending }));
+      }
+    }
+    return [...this.registrationFrames];
   }
 }

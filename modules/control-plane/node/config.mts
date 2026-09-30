@@ -32,6 +32,8 @@ export interface NodePaths {
   outbox: string; sent: string; directory: string; sessions: string; directoryRequest: string; codexSessions: string;
   // Item 5: the tasks this node started, the task reports and task requests the daemon sends.
   tasks: string; taskReports: string; taskRequests: string; taskControl: string;
+  // Remote MCP remains opt-in. Credential material and intent exchange stay in the private config root.
+  mcp: string; mcpCredential: string; mcpIntents: string; mcpReceipts: string;
 }
 
 export function nodePaths(root: string = configRoot()): NodePaths {
@@ -52,6 +54,10 @@ export function nodePaths(root: string = configRoot()): NodePaths {
     taskReports: path.join(dir, "task-reports"),
     taskRequests: path.join(dir, "task-requests"),
     taskControl: path.join(dir, "task-control"),
+    mcp: path.join(dir, "mcp"),
+    mcpCredential: path.join(dir, "mcp", "credential.json"),
+    mcpIntents: path.join(dir, "mcp", "intents"),
+    mcpReceipts: path.join(dir, "mcp", "receipts"),
   };
 }
 

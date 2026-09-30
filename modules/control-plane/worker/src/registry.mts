@@ -12,7 +12,10 @@ import { routeEffects } from "./message-routing.mts";
 import { MessageStore, type MessageEffects, type MessageRecord, type NewMessage, type SendResult } from "./message-store.mts";
 import { TaskStore, type CreateResult, type NewTask, type TaskRow } from "./task-store.mts";
 import { TaskControlRegistry } from "./task-control-registry.mts";
+import { McpRegistry, type McpOutcome } from "./mcp-registry.mts";
+import { REMOTE_MCP_CAPABILITY, type McpIntentClaim, type McpIntentRegistration } from "../../protocol-mcp.mts";
 import type { TaskReportBody } from "../../protocol-tasks.mts";
+import { MAX_REPLY_DEPTH } from "../../protocol-messages.mts";
 import {
   ENROLLMENT_TTL_DEFAULT_S, ENROLLMENT_TTL_MAX_S, ENROLLMENT_TTL_MIN_S, migrateRegistry, NODE_COLUMNS, REGISTRY_SCHEMA, toNodeRow,
   type NodeRow, type NodeStatus,
@@ -29,6 +32,7 @@ export class Registry extends DurableObject<Env> {
   private readonly messages: MessageStore;
   private readonly tasks: TaskStore;
   private readonly taskControl: TaskControlRegistry;
+  private readonly mcp: McpRegistry;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -38,6 +42,10 @@ export class Registry extends DurableObject<Env> {
     this.messages = new MessageStore(this.sql, (...args) => this.audit(...args), (nodeId) => this.capabilitiesOf(nodeId));
     this.tasks = new TaskStore(this.sql, (...args) => this.audit(...args));
     this.taskControl = new TaskControlRegistry(this.sql, this.messages, this.tasks, (...args) => this.audit(...args));
+    this.mcp = new McpRegistry(this.sql, (nodeId) => this.capabilitiesOf(nodeId), (nodeId, sessionId) => {
+      const row = this.sql.exec("SELECT runtime FROM sessions WHERE node_id = ? AND session_id = ?", nodeId, sessionId).toArray()[0];
+      return row ? String(row.runtime) : null;
+    });
   }
 
   audit(actor: string, action: string, target: string | null, detail: unknown = null): void {
@@ -134,6 +142,7 @@ export class Registry extends DurableObject<Env> {
         WHERE id = ? AND revoked_at IS NULL`,
         facts.hostname, facts.os, facts.arch, facts.cpus, facts.memoryBytes, JSON.stringify(capabilities), nodeId);
       this.writeRuntimes(nodeId, runtimes);
+      if (!capabilities.includes(REMOTE_MCP_CAPABILITY)) this.mcp.removeNode(nodeId);
     });
   }
 
@@ -185,9 +194,60 @@ export class Registry extends DurableObject<Env> {
       this.sql.exec("UPDATE nodes SET public_key = NULL, status = 'revoked', revoked_at = ? WHERE id = ?", now, nodeId);
       this.sql.exec("DELETE FROM runtimes WHERE node_id = ?", nodeId);
       this.sql.exec("DELETE FROM sessions WHERE node_id = ?", nodeId);
+      this.mcp.removeNode(nodeId);
       this.audit(actor, "node.revoke", nodeId);
       return this.messages.refuseQueuedFor(nodeId, "target node revoked", actor, now);
     });
+  }
+
+  async rotateMcpCredential(nodeId: string) {
+    const token = randomToken(32);
+    const hash = await sha256(token);
+    return this.ctx.storage.transactionSync(() => this.mcp.rotateHashed(nodeId, token, hash, Date.now()));
+  }
+
+  async authenticateMcpCredential(token: string) {
+    return this.mcp.authenticateHashed(await sha256(token));
+  }
+
+  registerMcpIntent(nodeId: string, intent: McpIntentRegistration, now = Date.now()) {
+    return this.ctx.storage.transactionSync(() => this.mcp.register(nodeId, intent, now));
+  }
+
+  claimMcpIntent(intent: McpIntentClaim, now = Date.now()) {
+    return this.ctx.storage.transactionSync(() => this.mcp.claim(intent, now));
+  }
+
+  async sendMcpMessage(intent: McpIntentClaim, to: { nodeId: string; session: string }, text: string, inReplyTo?: string) {
+    const combined = this.ctx.storage.transactionSync(() => {
+      const claim = this.mcp.claim(intent, Date.now());
+      if (!claim.ok) return claim;
+      const sent = this.messages.send({ messageId: claim.effectId,
+        from: { nodeId: intent.nodeId, session: claim.sessionId }, to, text, inReplyTo }, `mcp:${intent.nodeId}`, Date.now());
+      this.mcp.recordOutcome(intent.nodeId, intent.requestId, sent.ok ? "succeeded" : "failed");
+      return sent.ok ? { ...sent, claim } : sent;
+    });
+    await this.armExpiry();
+    return combined;
+  }
+
+  recordMcpOutcome(nodeId: string, requestId: string, outcome: McpOutcome): void {
+    this.ctx.storage.transactionSync(() => this.mcp.recordOutcome(nodeId, requestId, outcome));
+  }
+
+  async replyMcpMessage(intent: McpIntentClaim, inReplyTo: string, text: string) {
+    const combined = this.ctx.storage.transactionSync(() => {
+      const claim = this.mcp.claim(intent, Date.now());
+      if (!claim.ok) return claim;
+      const target = this.messages.replyTarget(inReplyTo, intent.nodeId, claim.sessionId);
+      if (!target || target.depth >= MAX_REPLY_DEPTH) return { ok: false as const, error: "reply relationship or depth is not allowed" };
+      const sent = this.messages.send({ messageId: claim.effectId,
+        from: { nodeId: intent.nodeId, session: claim.sessionId }, to: target.to, text, inReplyTo }, `mcp:${intent.nodeId}`, Date.now());
+      this.mcp.recordOutcome(intent.nodeId, intent.requestId, sent.ok ? "succeeded" : "failed");
+      return sent.ok ? { ...sent, claim } : sent;
+    });
+    await this.armExpiry();
+    return combined;
   }
 
   // ---- Messages (issue #31). The caller pushes the returned effects. -------
@@ -215,6 +275,10 @@ export class Registry extends DurableObject<Env> {
 
   listMessages(nodeId: string | null, limit: number): MessageRecord[] {
     return this.messages.list(nodeId, limit);
+  }
+
+  mcpMessageStatus(nodeId: string, messageId: string): MessageRecord | null {
+    return this.messages.visibleTo(nodeId, messageId);
   }
 
   // ---- Tasks (issue #31, item 5). The caller dispatches session.start. ----

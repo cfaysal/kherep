@@ -4,6 +4,7 @@ import { handleApi } from "./api.mts";
 import { handleEnroll } from "./enroll.mts";
 import { sessionStub, type Env } from "./env.mts";
 import { fail, json } from "./http.mts";
+import { handleMcp } from "./mcp-http.mts";
 
 export { NodeSession } from "./node-session.mts";
 export { Registry } from "./registry.mts";
@@ -26,6 +27,8 @@ export default {
     }
 
     if (path === "/node/enroll") return handleEnroll(request, env);
+
+    if (path === "/mcp") return handleMcp(request, env);
 
     if (path === "/api" || path.startsWith("/api/")) {
       const access = await verifyAccess(request, env);

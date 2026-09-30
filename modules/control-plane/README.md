@@ -16,6 +16,7 @@ kherep-node --outbound WSS--> Worker kherep-control --> NodeSession Durable Obje
                                                    \--> Registry Durable Object (one per deployment)
 operator ----HTTPS behind Cloudflare Access--> Worker --> Registry / NodeSession
 owner CLI --> local outbox --> Registry grant / operation --> target journal --> measured result
+verified MCP client --stateless HTTPS, disabled by default--> Worker --> Registry / online originating node
 ```
 
 | Part | Path | Role |
@@ -36,6 +37,7 @@ owner CLI --> local outbox --> Registry grant / operation --> target journal -->
 | Tasks (Worker) | `worker/src/tasks-api.mts`, `worker/src/task-store.mts`, `worker/src/task-dispatch.mts`, `worker/src/task-frames.mts` | `/api/tasks`, the Registry's `tasks` table, node selection, `session.start` dispatch, task reports and requests |
 | Tasks (node) | `node/session-policy.mts`, `node/session-runner.mts`, `node/task-watch.mts`, `node/task-exchange.mts`, `node/task-cli.mts` | The `sessions` policy section, `claude --bg` start, stop and resume, the watch round, and `kherep-node task ...` |
 | Intercom (node) | `node/msg-new.mts` | `kherep-node msg send <node> --new`: a labelled task request for exactly that node |
+| Remote MCP candidate | `MCP.md`, `protocol-mcp.mts`, `worker/src/mcp-http.mts` | Disabled stateless messaging tools with per-node bearer authentication and exact native call intents |
 
 Owner task-control authentication and persistence are described in [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -49,7 +51,7 @@ Every frame is JSON text with one envelope:
 { "v": 1, "type": "command", "id": "<uuid>", "seq": 3, "ack": 2, "ts": "<iso8601>", "body": {} }
 ```
 
-- Types: `challenge`, `auth`, `register`, `capabilities.update`, `sessions.snapshot`, `command`, `command.ack`, `command.result`, `event`, `error`, `message.send`, `message.deliver`, `message.status`, `directory.get`, `directory`, `task.report`, `task.request`.
+- Types: `challenge`, `auth`, `register`, `capabilities.update`, `sessions.snapshot`, `command`, `command.ack`, `command.result`, `event`, `error`, `message.send`, `message.deliver`, `message.status`, `directory.get`, `directory`, `task.report`, `task.request`, plus the `mcp.*` frames described in [MCP.md](MCP.md).
 - Server-to-node `seq` numbers are assigned to commands only; control frames carry `seq` 0. The node's `ack` is the highest command `seq` it has processed. Commands stay in the `NodeSession` log until acknowledged or answered, and a reconnect resends everything after the node's `ack` (at-least-once). The command `id` lets the node drop a duplicate without running it again.
 - Liveness: the node sends the fixed frame `{"type":"ping"}` every 30 seconds. The Durable Object answers `{"type":"pong"}` through `setWebSocketAutoResponse`, which does not wake it.
 - Offline detection: while a node is online, a `NodeSession` alarm runs every 5 minutes. It takes the later of the last message and the last auto-response; after 3 intervals without either, the node is marked `offline` in the registry and the alarm stops. A closed socket alone does not mark a node offline, so a reconnect within the backoff window does not flap its status.

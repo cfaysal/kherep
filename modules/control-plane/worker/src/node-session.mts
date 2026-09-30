@@ -6,6 +6,10 @@ import {
 } from "../../protocol.mts";
 import { isDirectoryGetBody, isMessageSendBody, isNodeMessageStatusBody } from "../../protocol-messages.mts";
 import { isCommandArgs } from "../../protocol-tasks.mts";
+import {
+  isMcpCredentialRotateBody, isMcpInboxResponseBody, isMcpIntentRegistration,
+  type McpInboxResponseBody,
+} from "../../protocol-mcp.mts";
 import { handleTaskFrame } from "./task-frames.mts";
 import { flushTaskControl, handleTaskControlEvent } from "./task-control-frames.mts";
 import type { LocalControlNode } from "./task-control-routing.mts";
@@ -20,6 +24,8 @@ import { SessionStore, type CommandRecord } from "./session-store.mts";
 export const ALARM_INTERVAL_MS = 5 * 60_000;
 export const MISSED_INTERVALS = 3;
 export const MESSAGE_STATUS_PAGE_SIZE = 32;
+export const MCP_INBOX_TIMEOUT_MS = 5_000;
+export const MCP_INBOX_MAX_PENDING = 32;
 
 export type EnqueueResult = { ok: true; commandId: string; seq: number; delivered: boolean } | { ok: false; error: string };
 
@@ -27,6 +33,11 @@ export type EnqueueResult = { ok: true; commandId: string; seq: number; delivere
 // WebSocket, the pending-command log and the liveness state.
 export class NodeSession extends DurableObject<Env> {
   private readonly store: SessionStore;
+  private readonly pendingInbox = new Map<string, {
+    socket: WebSocket;
+    resolve: (body: McpInboxResponseBody) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -177,6 +188,23 @@ export class NodeSession extends DurableObject<Env> {
     return ws !== null;
   }
 
+  requestMcpInbox(sessionId: string, limit: number): Promise<McpInboxResponseBody> {
+    const ws = this.authedSocket();
+    if (!ws) return Promise.resolve({ requestId: crypto.randomUUID(), ok: false, error: "originating node is offline" });
+    const requestId = crypto.randomUUID();
+    if (this.pendingInbox.size >= MCP_INBOX_MAX_PENDING) {
+      return Promise.resolve({ requestId, ok: false, error: "originating node inbox reader is busy" });
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingInbox.delete(requestId);
+        resolve({ requestId, ok: false, error: "originating node did not answer inbox request" });
+      }, MCP_INBOX_TIMEOUT_MS);
+      this.pendingInbox.set(requestId, { socket: ws, resolve, timer });
+      this.sendControl(ws, "mcp.inbox.request", { requestId, sessionId, limit });
+    });
+  }
+
   private local(ws: WebSocket, nodeId: string): LocalNode {
     return { nodeId, send: (type, body) => this.sendControl(ws, type, body) };
   }
@@ -223,6 +251,27 @@ export class NodeSession extends DurableObject<Env> {
       case "directory.get":
         if (!isDirectoryGetBody(body)) return this.sendControl(ws, "error", { error: "invalid directory.get body" });
         return this.sendControl(ws, "directory", { ...await registry.directory() });
+      case "mcp.credential.rotate": {
+        if (!isMcpCredentialRotateBody(body)) return this.sendControl(ws, "error", { error: "invalid MCP credential request" });
+        const rotated = await registry.rotateMcpCredential(nodeId);
+        return this.sendControl(ws, "mcp.credential", { requestId: body.requestId, ...rotated });
+      }
+      case "mcp.intent.register": {
+        if (!isMcpIntentRegistration(body)) return this.sendControl(ws, "error", { error: "invalid MCP intent metadata" });
+        const registered = await registry.registerMcpIntent(nodeId, body);
+        return this.sendControl(ws, "mcp.intent.receipt", registered.ok
+          ? { requestId: body.requestId, ok: true, expiresAt: registered.expiresAt, version: registered.version }
+          : { requestId: body.requestId, ok: false, error: registered.error });
+      }
+      case "mcp.inbox.response": {
+        if (!isMcpInboxResponseBody(body)) return this.sendControl(ws, "error", { error: "invalid MCP inbox response" });
+        const pending = this.pendingInbox.get(body.requestId);
+        if (!pending || pending.socket !== ws) return;
+        clearTimeout(pending.timer);
+        this.pendingInbox.delete(body.requestId);
+        pending.resolve(body.ok ? body : { requestId: body.requestId, ok: false, error: "originating node inbox read failed" });
+        return;
+      }
       case "task.report":
       case "task.request":
         return handleTaskFrame(this.env, nodeId, envelope.type, body, (type, reply) => this.sendControl(ws, type, reply));
