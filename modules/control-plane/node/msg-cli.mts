@@ -54,7 +54,7 @@ const FINAL_OK = ["accepted", "delivered", "replied"];
 const WAIT_POLL_MS = 250;
 
 const PROGRESS_TEXT: Record<string, string> = {
-  "awaiting-user-turn": "start the target turn to retry delivery",
+  "awaiting-user-turn": "waiting for the target session's next turn; delivery is not confirmed",
   "awaiting-turn-confirmation": "the target turn received it and has not confirmed completion",
   "target-busy": "the target session is busy",
   "wake-unconfirmed": "the automatic wake was not confirmed; start the target turn to retry delivery",
@@ -70,7 +70,7 @@ const PROGRESS_TEXT: Record<string, string> = {
   "fallback-starting": "a local delivery session is starting",
   "fallback-running": "a local delivery session is running",
   "wake-failed": "the automatic wake failed; start the target turn to retry delivery",
-  "fallback-failed": "the local delivery session could not start; the message remains unread",
+  "fallback-failed": "the local delivery session failed; delivery is not confirmed",
 };
 
 function progressText(record: SentRecord): string {

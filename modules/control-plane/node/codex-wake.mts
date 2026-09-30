@@ -5,6 +5,7 @@ import { resumeArgs, stillRuns } from "./codex-process.mts";
 import { spawnRun } from "./codex-runner.mts";
 import type { NodePaths } from "./config.mts";
 import { deliveryContext, MAX_OFFERS, offerEnded, sessionInbox } from "./deliver-core.mts";
+import { exhaustedOfferReason, permanentFallbackFailure } from "./delivery-failure.mts";
 import { markRefused, markRetry, MAX_REPLY_DEPTH, messageIds, type InboxRecord } from "./inbox.mts";
 import { wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
@@ -72,13 +73,18 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   const all = sessionInbox(paths, refs);
   const unlisted = all.filter((r) => !granted(r) && r.state === "accepted");
   if (unlisted.length > 0) note(paths, now, sessionId, ids(unlisted), "not-allowlisted");
-  const mine = all.filter(granted);
+  const mine = all.filter(granted).filter((message) => {
+    const failure = record.state === "failed" && !record.running ? permanentFallbackFailure(record, message, record.reason) : null;
+    if (message.state !== "offered" || !failure) return true;
+    markRefused(paths.inbox, message.messageId, failure);
+    return false;
+  });
   const deep = mine.filter((r) => r.state === "accepted" && atReplyLimit(r));
   if (deep.length > 0) note(paths, now, sessionId, ids(deep), "depth-limit");
   const fresh = mine.filter((r) => r.state === "accepted" && !atReplyLimit(r));
   const ended = mine.filter((r) => r.state === "offered" && offerEnded(r, now));
   // As the delivery hook does: an offer no run confirmed MAX_OFFERS times is refused.
-  for (const r of ended) if ((r.offers ?? 0) >= MAX_OFFERS) markRefused(paths.inbox, r.messageId, `not confirmed by the session after ${MAX_OFFERS} turns`);
+  for (const r of ended) if ((r.offers ?? 0) >= MAX_OFFERS) markRefused(paths.inbox, r.messageId, exhaustedOfferReason(r, MAX_OFFERS));
   const stuck = ended.filter((r) => (r.offers ?? 0) < MAX_OFFERS && !atReplyLimit(r));
   const due = [...ids(fresh), ...ids(stuck)];
   if (due.length === 0) return;

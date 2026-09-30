@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
+import { planAppDelivery, startAppDelivery } from "./codex-app-delivery.mts";
 import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { SCRIPT, waitFor, type FakeRun } from "./codex-fixture.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
@@ -35,7 +36,7 @@ function fakeCodex(t: test.TestContext): { file: string; runs: () => FakeRun[] }
   return { file, runs };
 }
 
-test("Codex desktop peer message starts an intercom turn and receives a threaded reply without Steer", async (t) => {
+test("an explicitly selected alternate intercom receives a threaded reply without resuming the Desktop", async (t) => {
   const node = taskNode(t, { runtimes: ["codex"], delegate: { accept: true } }, {
     wake: { enabled: true, codexApp: true },
     messaging: { accept: [{ session: "*", from: ["*"] }], resumeClosed: true },
@@ -51,8 +52,9 @@ test("Codex desktop peer message starts an intercom turn and receives a threaded
     createdAt: new Date(T0).toISOString() }, T0);
   const codex = fakeCodex(t);
   const deps = { ...node.deps(), policy: loadPolicy(node.paths.policy), codex: { findCodex: () => codex.file, home, startWaitMs: 5_000 } };
-  pollCodexQueue(deps);
-  await codexQueueIdle();
+  const decision = planAppDelivery(deps, [getMessage(node.paths.inbox, MESSAGE)!], path.join(node.workspace, "repo"), T0);
+  assert.ok("plan" in decision);
+  assert.equal(await startAppDelivery(deps, APP, decision.plan), null);
   await waitFor(() => codex.runs().length > 0, "Codex intercom start");
   assert.equal(codex.runs().length, 1);
   assert.equal(codex.runs()[0].argv[0], "exec");
@@ -60,7 +62,7 @@ test("Codex desktop peer message starts an intercom turn and receives a threaded
   assert.ok(!codex.runs()[0].argv.includes(APP), "the app thread is never resumed by a second writer");
   assert.match(codex.runs()[0].stdin, /what changed\?/);
   assert.match(codex.runs()[0].stdin, /--reply-to a1170000-0000-4000-8000-000000000001/);
-  assert.equal(getMessage(node.paths.inbox, MESSAGE)?.state, "delivered");
+  await waitFor(() => getMessage(node.paths.inbox, MESSAGE)?.state === "delivered", "confirmed alternate delivery");
   assert.equal(listTasks(node.paths)[0].local, "intercom");
   await waitFor(() => messageIds(node.paths.outbox).length === 1, "the peer reply");
   const reply = JSON.parse(fs.readFileSync(path.join(node.paths.outbox, messageIds(node.paths.outbox)[0] + ".json"), "utf8")) as
@@ -70,7 +72,7 @@ test("Codex desktop peer message starts an intercom turn and receives a threaded
 });
 
 
-test("desktop intercom requires sessions authority and process capacity", async (t) => {
+test("an explicit alternate intercom requires sessions authority and process capacity", (t) => {
   const cases: { name: string; sessions: Record<string, unknown>; prior?: "active" | "done" }[] = [
     { name: "sessions disabled", sessions: { enabled: false } },
     { name: "codex runtime absent", sessions: { runtimes: ["claude"], delegate: { accept: true } } },
@@ -96,22 +98,24 @@ test("desktop intercom requires sessions authority and process capacity", async 
     if (item.prior) writeTask(node.paths, { taskId: "a117f000-0000-4000-8000-000000000001", name: "task-a117f000",
       runtime: "codex", cwd: node.workspace, permissionMode: "auto", state: item.prior === "active" ? "running" : "done",
       startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60_000).toISOString(), updatedAt: new Date(T0).toISOString() });
-    pollCodexQueue({ ...node.deps(), policy: loadPolicy(node.paths.policy), codex: { findCodex: () => null, home } });
-    await codexQueueIdle();
+    const decision = planAppDelivery(node.deps(), [getMessage(node.paths.inbox, id)!], path.join(node.workspace, "repo"), T0);
+    assert.ok("reason" in decision, item.name);
     assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted", item.name);
     assert.equal(listTasks(node.paths).length, item.prior ? 1 : 0, item.name);
-    const auditFile = path.join(node.paths.dir, "wake.jsonl");
-    const audit = fs.readFileSync(auditFile, "utf8");
-    assert.match(audit, /"action":"intercom-refused"/, item.name);
-    assert.ok(!audit.includes("private message"), item.name);
+    assert.ok(!decision.reason.includes("private message"), item.name);
   }
 });
 
 
-test("desktop intercom preserves wake authorization, mode, depth, kill switch, budget and cwd guards", async (t) => {
-  const cases = ["disabled", "not-allowlisted", "permission-mode", "permission-mode-unknown",
-    "depth-limit", "budget", "intercom-refused", "intercom-refused"] as const;
-  for (const [index, expected] of cases.entries()) {
+test("Desktop waiting preserves wake guards and needs no process budget or working directory", async (t) => {
+  const cases: { expected: string; mode?: string | null; cwd?: "outside" | "unknown"; exhaustBudget?: boolean }[] = [
+    { expected: "disabled" }, { expected: "not-allowlisted" },
+    { expected: "permission-mode", mode: "bypassPermissions" }, { expected: "permission-mode-unknown", mode: null },
+    { expected: "depth-limit" }, { expected: "awaiting-user-turn", exhaustBudget: true },
+    { expected: "awaiting-user-turn", cwd: "outside" }, { expected: "awaiting-user-turn", cwd: "unknown" },
+  ];
+  for (const [index, item] of cases.entries()) {
+    const { expected } = item;
     const node = taskNode(t, { runtimes: ["codex"], delegate: { accept: true } }, {
       wake: expected === "not-allowlisted" ? { enabled: true, sessions: ["someone-else"] }
         : { enabled: true, codexApp: true },
@@ -123,21 +127,21 @@ test("desktop intercom preserves wake authorization, mode, depth, kill switch, b
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "rollout-2026-09-28T10-00-00-" + APP + ".jsonl"),
       JSON.stringify({ type: "session_meta", payload: { id: APP, originator: "Codex Desktop", source: "vscode" } }) + "\n");
-    const mode = expected === "permission-mode" ? "bypassPermissions"
-      : expected === "permission-mode-unknown" ? undefined : "default";
-    const cwd = expected === "intercom-refused" ? (index === 6 ? os.tmpdir() : undefined) : path.join(node.workspace, "repo");
+    const mode = item.mode === null ? undefined : item.mode ?? "default";
+    const cwd = item.cwd === "outside" ? os.tmpdir() : item.cwd === "unknown" ? undefined : path.join(node.workspace, "repo");
     recordCodexSession(node.paths, APP, cwd, T0, mode);
     const id = "a1170000-0000-4000-8000-" + (index + 20).toString(16).padStart(12, "0");
     storeMessage(node.paths.inbox, { messageId: id, from: PEER, toSession: APP, text: "private message",
       createdAt: new Date(T0).toISOString() }, T0, expected === "depth-limit" ? 6 : 0);
     if (expected === "disabled") fs.writeFileSync(path.join(node.paths.dir, "wake.disabled"), "");
-    if (expected === "budget") for (let n = 0; n < 6; n++) {
+    if (item.exhaustBudget) for (let n = 0; n < 6; n++) {
       assert.equal(takeTurn(node.paths, APP, T0 - 50 * 60_000 + n * 2 * TURN_SPACING_MS), "ok");
     }
     pollCodexQueue({ ...node.deps(), policy: loadPolicy(node.paths.policy), codex: { findCodex: () => null, home } });
     await codexQueueIdle();
     assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted", expected);
     assert.equal(listTasks(node.paths).length, 0, expected);
+    if (expected === "awaiting-user-turn") assert.equal(getMessageProgress(node.paths.inbox, id)?.code, expected);
     const audit = fs.readFileSync(path.join(node.paths.dir, "wake.jsonl"), "utf8");
     assert.ok(audit.includes('"action":"' + expected + '"'), expected);
     assert.ok(!audit.includes("private message"), expected);
@@ -145,7 +149,7 @@ test("desktop intercom preserves wake authorization, mode, depth, kill switch, b
 });
 
 
-test("a failed desktop intercom launch leaves a retryable offer without queuing or relaunching", async (t) => {
+test("an explicit alternate intercom validates its working directory before launch", (t) => {
   const node = taskNode(t, { runtimes: ["codex"], delegate: { accept: true } }, {
     wake: { enabled: true, sessions: [APP] },
     messaging: { accept: [{ session: "*", from: ["*"] }], resumeClosed: true },
@@ -161,20 +165,11 @@ test("a failed desktop intercom launch leaves a retryable offer without queuing 
   storeMessage(node.paths.inbox, { messageId: id, from: PEER, toSession: APP, text: "reply please",
     createdAt: new Date(T0).toISOString() }, T0);
   const deps = { ...node.deps(), policy: loadPolicy(node.paths.policy), codex: { findCodex: () => null, home } };
-  pollCodexQueue(deps);
-  await codexQueueIdle();
-  assert.equal(getMessage(node.paths.inbox, id)?.state, "offered");
-  assert.equal(getMessage(node.paths.inbox, id)?.retry, true);
-  assert.equal(listTasks(node.paths).length, 1);
-  assert.equal(listTasks(node.paths)[0].state, "failed");
-  const audit = fs.readFileSync(path.join(node.paths.dir, "wake.jsonl"), "utf8");
-  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "fallback-failed");
-  assert.match(audit, /"action":"intercom-failed"/);
-  assert.ok(!audit.includes("reply please"));
-  node.tick(TURN_SPACING_MS * 2);
-  pollCodexQueue({ ...deps, now: node.deps().now });
-  await codexQueueIdle();
-  assert.equal(listTasks(node.paths).length, 1, "the failed launch is not repeated");
-  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "fallback-failed", "polling preserves the failed attempt");
+  for (const cwd of [undefined, os.tmpdir()]) {
+    const decision = planAppDelivery(deps, [getMessage(node.paths.inbox, id)!], cwd, T0);
+    assert.ok("reason" in decision);
+  }
+  assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted");
+  assert.equal(listTasks(node.paths).length, 0);
 });
 

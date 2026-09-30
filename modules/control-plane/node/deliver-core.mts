@@ -1,6 +1,7 @@
 import type { DirectoryBody } from "../protocol-messages.mts";
 import type { NodePaths } from "./config.mts";
 import { markNoticed, readDirectory, unnoticedFailures, type SentRecord } from "./exchange.mts";
+import { exhaustedOfferReason } from "./delivery-failure.mts";
 import { listInbox, markDelivered, markOffered, markRefused, markRetry, MAX_REPLY_DEPTH, type InboxRecord } from "./inbox.mts";
 import { cliCommand } from "./msg-cli.mts";
 import { nodeLabel } from "./msg-resolve.mts";
@@ -177,7 +178,7 @@ export function deliveryContext(event: DeliveryEvent, refs: string[], deps: Hook
       waiting.push(r);
     } else if (r.state === "offered" && event === "UserPromptSubmit" && offerEnded(r, now)) {
       if ((r.offers ?? 0) < MAX_OFFERS) waiting.push(r);
-      else markRefused(paths.inbox, r.messageId, `not confirmed by the session after ${MAX_OFFERS} turns`);
+      else markRefused(paths.inbox, r.messageId, exhaustedOfferReason(r, MAX_OFFERS));
     }
   }
   const failures = unnoticedFailures(paths, refs).slice(0, MAX_MESSAGES_PER_CALL);
