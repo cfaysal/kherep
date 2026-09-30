@@ -12,6 +12,7 @@ export const MESSAGING_CAPABILITY = "messaging.v1";
 export const OPERATOR_NODE_ID = "operator";
 
 export const MAX_MESSAGE_TEXT = 16_384;
+export const MAX_REPLY_DEPTH = 6;
 export const MAX_SESSION_REF = 128;
 export const MAX_STATUS_REASON = 256;
 

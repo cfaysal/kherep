@@ -5,8 +5,9 @@ import path from "node:path";
 import type { SessionInfo } from "../protocol.mts";
 import { isTaskId, SUPPORTED_RUNTIMES, type TaskRuntime } from "../protocol-tasks.mts";
 import {
-  isMessageId, isMessageProgress, isSessionRef, type MessageAddress, type MessageDeliverBody, type MessageProgress, type MessageState, type MessageStatusBody,
+  isMessageId, isMessageProgress, isSessionRef, MAX_REPLY_DEPTH, type MessageAddress, type MessageDeliverBody, type MessageProgress, type MessageState, type MessageStatusBody,
 } from "../protocol-messages.mts";
+export { MAX_REPLY_DEPTH } from "../protocol-messages.mts";
 import { ensureDir } from "./config.mts";
 
 // The node inbox (issue #31, step 2): one JSON file per accepted message,
@@ -22,7 +23,6 @@ export const INBOX_RETENTION_MS = 7 * 24 * 60 * 60_000;
 export const UNDELIVERABLE_AFTER_MS = 60 * 60_000;
 // A message at this reply depth or deeper wakes no session and asks for no
 // automatic answer (see InboxRecord.depth).
-export const MAX_REPLY_DEPTH = 6;
 export const PROGRESS_RETRY_BACKOFF_MS = 60_000;
 
 export interface InboxRecord {

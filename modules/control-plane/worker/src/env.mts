@@ -9,6 +9,8 @@ export interface Env {
   // override config; empty values make every /api/* request fail closed.
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
+  // Exact string opt-in. The committed Worker config keeps the route absent.
+  REMOTE_MCP_ENABLED: string;
 }
 
 // One Registry object per deployment (design section 1).

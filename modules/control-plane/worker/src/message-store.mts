@@ -1,5 +1,5 @@
 import {
-  MESSAGING_CAPABILITY, OPERATOR_NODE_ID, type MessageAddress, type MessageDeliverBody, type MessageProgress, type MessageReceiptBody, type MessageState,
+  MAX_REPLY_DEPTH, MESSAGING_CAPABILITY, OPERATOR_NODE_ID, type MessageAddress, type MessageDeliverBody, type MessageProgress, type MessageReceiptBody, type MessageState,
   type MessageStatusBody, type NodeReportedState,
 } from "../../protocol-messages.mts";
 
@@ -229,6 +229,30 @@ export class MessageStore {
       : this.sql.exec(`SELECT ${COLUMNS} FROM messages WHERE from_node = ? OR to_node = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`,
         nodeId, nodeId, limit);
     return rows.toArray().map(toRecord);
+  }
+
+  visibleTo(nodeId: string, messageId: string): MessageRecord | null {
+    const record = this.get(messageId);
+    return record && (record.fromNode === nodeId || record.toNode === nodeId) ? record : null;
+  }
+
+  replyTarget(messageId: string, nodeId: string, session: string): { to: MessageAddress; depth: number } | null {
+    let record = this.get(messageId);
+    if (!record || record.toNode !== nodeId || record.toSession !== session
+      || !["accepted", "delivered", "replied"].includes(record.state)) return null;
+    const to = { nodeId: record.fromNode, session: record.fromSession };
+    let depth = 0;
+    const seen = new Set<string>();
+    while (record.inReplyTo !== null) {
+      if (seen.has(record.messageId) || depth >= MAX_REPLY_DEPTH) return null;
+      seen.add(record.messageId);
+      const parent = this.get(record.inReplyTo);
+      if (!parent || record.fromNode !== parent.toNode || record.fromSession !== parent.toSession
+        || record.toNode !== parent.fromNode || record.toSession !== parent.fromSession) return null;
+      record = parent;
+      depth++;
+    }
+    return { to, depth };
   }
 
   private mayAdvance(from: MessageState, to: NodeReportedState | "replied"): boolean {

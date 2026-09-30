@@ -5,6 +5,7 @@ import { isSessionRef, MESSAGING_CAPABILITY, OPERATOR_NODE_ID } from "../protoco
 import { TASK_CONTROL_CAPABILITY } from "../protocol-task-control.mts";
 import { DELEGATE_ACCEPT_CAPABILITY, DELEGATE_REQUEST_CAPABILITY, SESSIONS_CAPABILITY } from "../protocol-tasks.mts";
 import { parseSessionsPolicy, type SessionsPolicy } from "./session-policy.mts";
+import { REMOTE_MCP_CAPABILITY } from "../protocol-mcp.mts";
 
 // Local allowlist (issue #5, design section 4). The node refuses any command
 // outside this list even when it arrives authenticated from the control plane.
@@ -25,6 +26,7 @@ export interface NodePolicy {
   messaging?: { accept: AcceptRule[]; resumeClosed?: true };
   wake?: WakePolicy;
   sessions?: SessionsPolicy;
+  remoteMcp?: { enabled: true };
 }
 
 export const DEFAULT_POLICY: NodePolicy = { version: 1, allowedCommands: [...PHASE1_COMMANDS] };
@@ -45,15 +47,17 @@ export function loadPolicy(file: string): NodePolicy {
   }
   try {
     const value = JSON.parse(text) as { version?: unknown; allowedCommands?: unknown; messaging?: unknown; wake?: unknown;
-      sessions?: unknown };
+      sessions?: unknown; remoteMcp?: unknown };
     if (value.version !== 1 || !Array.isArray(value.allowedCommands)) return denyAll();
     const accept = parseAcceptRules(value.messaging);
     const wake = parseWake(value.wake);
     const sessions = parseSessionsPolicy(value.sessions);
+    const remoteMcp = typeof value.remoteMcp === "object" && value.remoteMcp !== null
+      && (value.remoteMcp as { enabled?: unknown }).enabled === true ? { enabled: true as const } : null;
     const resumeClosed = (value.messaging as { resumeClosed?: unknown } | undefined)?.resumeClosed === true;
     return { version: 1, allowedCommands: value.allowedCommands.filter(isPhase1Command),
       ...(accept ? { messaging: { accept, ...(resumeClosed ? { resumeClosed: true as const } : {}) } } : {}),
-      ...(wake ? { wake } : {}), ...(sessions ? { sessions } : {}) };
+      ...(wake ? { wake } : {}), ...(sessions ? { sessions } : {}), ...(remoteMcp ? { remoteMcp } : {}) };
   } catch {
     return denyAll();
   }
@@ -93,7 +97,8 @@ export function advertisedCapabilities(policy: NodePolicy): string[] {
   const s = policy.sessions;
   return [...policy.allowedCommands, ...(messagingEnabled(policy) ? [MESSAGING_CAPABILITY] : []),
     ...(s?.enabled ? [SESSIONS_CAPABILITY] : []), ...(s?.delegate.accept ? [DELEGATE_ACCEPT_CAPABILITY] : []),
-    ...(s?.delegate.request ? [DELEGATE_REQUEST_CAPABILITY] : []), ...(s?.ownTaskControl && s.runtimes.length > 0 ? [TASK_CONTROL_CAPABILITY] : [])];
+    ...(s?.delegate.request ? [DELEGATE_REQUEST_CAPABILITY] : []), ...(s?.ownTaskControl && s.runtimes.length > 0 ? [TASK_CONTROL_CAPABILITY] : []),
+    ...(policy.remoteMcp?.enabled ? [REMOTE_MCP_CAPABILITY] : [])];
 }
 
 // session "*" matches any local session, from "*" any sender. Otherwise both
