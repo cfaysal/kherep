@@ -21,7 +21,7 @@ const DAY_MS = 24 * HOUR_MS;
 export type AutonomyAction = "wake" | "stuck-offer" | "budget" | "depth-limit" | "superseded" | "disabled" | "rearm"
   | "permission-mode" | "not-allowlisted" | "parent-gone" | "continue" | "continue-budget" | "continue-permission-mode"
   // codex-queue.mts: waking an interactive Codex session with `codex queue`.
-  | "queue-failed" | "permission-mode-unknown" | "ambiguous-name" | "intercom" | "intercom-refused" | "intercom-failed"
+  | "queue-failed" | "permission-mode-unknown" | "ambiguous-name" | "intercom" | "intercom-refused" | "intercom-failed" | "awaiting-user-turn"
   // wake-hook.mts at SessionStart: messages that arrived while no listener ran (issue #101).
   | "backlog";
 

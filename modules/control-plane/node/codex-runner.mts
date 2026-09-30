@@ -8,7 +8,8 @@ import { intercomMcpOverrides } from "./codex-mcp.mts";
 import { terminate } from "./codex-stop.mts";
 import { ensureDir } from "./config.mts";
 import { resolveDelivery } from "./delivery-identity.mts";
-import { getMessage, markDelivered, markRetry } from "./inbox.mts";
+import { permanentFallbackFailure } from "./delivery-failure.mts";
+import { getMessage, markDelivered, markRefused, markRetry } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit, refuse, trim } from "./task-admission.mts";
@@ -155,10 +156,13 @@ export async function stopCodex(args: SessionStopArgs, deps: RunnerDeps, reason:
 
 // The messages a run carried: delivered when it completed its turn, otherwise
 // offered again later within the offer limits (deliver-core.mts).
-function settleOffered(deps: RunnerDeps, record: TaskRecord, completed: boolean): void {
+function settleOffered(deps: RunnerDeps, record: TaskRecord, completed: boolean, reason?: string): void {
   for (const id of record.offered ?? []) {
-    if (getMessage(deps.paths.inbox, id)?.state !== "offered") continue;
+    const message = getMessage(deps.paths.inbox, id);
+    if (message?.state !== "offered") continue;
+    const failure = permanentFallbackFailure(record, message, reason);
     if (completed) markDelivered(deps.paths.inbox, id);
+    else if (failure) markRefused(deps.paths.inbox, id, failure);
     else markRetry(deps.paths.inbox, id);
   }
 }
@@ -170,7 +174,7 @@ export function adoptOffered(deps: RunnerDeps, taskId: string, ids: string[]): v
   const record = readTask(deps.paths, taskId);
   if (!record || ids.length === 0) return;
   if (isActive(record)) writeTask(deps.paths, { ...record, offered: [...(record.offered ?? []), ...ids] }, deps.now?.());
-  else settleOffered(deps, { ...record, offered: ids }, record.state === "done");
+  else settleOffered(deps, { ...record, offered: ids }, record.state === "done", record.reason);
 }
 
 // How an ended run finished: done after turn.completed and exit 0 (or an exit
@@ -265,13 +269,12 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
     }
     // Reported done by the session (task done), or a run for peer messages:
     // released without a new report.
+    const result = outcome(files);
+    settleOffered(deps, record, result.state === "done", result.state === "failed" ? result.reason : undefined);
     if (record.running) {
-      settleOffered(deps, record, outcome(files).state === "done");
       writeTask(deps.paths, { ...mapped, running: undefined, offered: undefined }, now);
       continue;
     }
-    const result = outcome(files);
-    settleOffered(deps, record, result.state === "done");
     const saved = writeTask(deps.paths, { ...mapped, state: result.state, ...(result.state === "failed" ? { reason: result.reason } : {}),
       offered: undefined }, now);
     queueReport(deps.paths, { taskId: saved.taskId, ...result, ...sessionOf(saved) });

@@ -62,7 +62,7 @@ identity. If the property is absent or has any other value, the agent writes not
 `publication not authorized`. The candidate worker never reads this file or calls the broker.
 Claude's direct broker authorization and publication path is unchanged.
 
-## Waking the current Codex app session
+## Messages for the current Codex app session
 
 A Codex desktop app restart starts a new session with a new id, so a `wake.sessions` list of full ids stops matching the session the operator works in. The optional node policy field `wake.codexApp` (boolean, default `false`) adds one grant for it:
 
@@ -70,9 +70,13 @@ A Codex desktop app restart starts a new session with a new id, so a `wake.sessi
 "wake": { "enabled": true, "sessions": [], "codexApp": true }
 ```
 
-With `codexApp: true` the list may be empty or absent. Any non-boolean value turns waking off, as a malformed list does. The node then wakes exactly one Codex session that the list does not name: the most recently seen session recorded by the delivery hook whose rollout, `<CODEX_HOME or ~/.codex>/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl`, begins with a `session_meta` line for that id with `originator` `"Codex Desktop"` and `source` `"vscode"`, and no parent thread. The node reads that line itself at wake time. It searches the newest 62 date directories, reads at most 256 KiB, follows no links and refuses a missing, unreadable or garbled file or any other value. Exec runs, Codex tasks and app subagent threads are never granted. If two app sessions share the latest time, neither is granted.
+With `codexApp: true` the list may be empty or absent. Any non-boolean value turns waking off, as a malformed list does. The grant selects exactly one Codex session that the list does not name: the most recently seen session recorded by the delivery hook whose rollout, `<CODEX_HOME or ~/.codex>/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl`, begins with a `session_meta` line for that id with `originator` `"Codex Desktop"` and `source` `"vscode"`, and no parent thread. The node reads that line itself. It searches the newest 62 date directories, reads at most 256 KiB, follows no links and refuses a missing, unreadable or garbled file or any other value. Exec runs, Codex tasks and app subagent threads are never granted. If two app sessions share the latest time, neither is granted.
 
-All other guards still apply in the same order: the kill switch, the recorded permission mode (never `bypassPermissions`, and an unrecorded mode is refused), reply depth, the turn budget and spacing, and one queue per session. Decisions made under this grant are written to `wake.jsonl` with `"grant": "codexApp"`. Full ids in `wake.sessions` behave as before.
+For a listed Desktop session, the message stays addressed to that chat with progress `awaiting-user-turn`. Its next trusted `UserPromptSubmit` or `Stop` delivery hook can offer it, and a subsequent confirming turn marks it delivered. A recent hook registration does not prove that a Desktop chat is closed. Even with `messaging.resumeClosed: true`, this path neither redirects the message to a background intercom task nor queues a pending Steer item. External waking of the visible Desktop chat remains unverified.
+
+The kill switch, full-id authorization or `codexApp` grant, permission-mode check and reply-depth limit still apply. Waiting consumes no process slot or autonomous-turn budget. Decisions made under this grant are written to `wake.jsonl` with `"grant": "codexApp"`. Interactive TUI sessions continue to use `codex queue`, turn budget and spacing; genuinely closed targets retain the separate closed-session policy.
+
+A Codex intercom fallback that fails because its configured model is unavailable for the account refuses its linked message with a fixed reason instead of retrying the same failure three times. Other failures retain bounded retries. The status identifies an exhausted fallback separately from a missing confirmation in the original session, and raw CLI error text stays local.
 
 ## Retired memory backend
 
