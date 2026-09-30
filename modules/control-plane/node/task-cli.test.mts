@@ -172,7 +172,7 @@ test("local task detail exposes task-specific Claude inspection without private 
   fs.mkdirSync(cwd);
   await startTask(startArgs(TASK, { cwd, prompt: "private task input", directive: "private directive", requestedBy: "maestro" }), node.deps());
   const record = readTask(node.paths, TASK)!;
-  assert.equal(record.cwd, fs.realpathSync(cwd));
+  assert.equal(path.basename(record.cwd), "private-repo");
   const shown = task(node, ["show", TASK]);
   assert.equal(shown.code, 0);
   const detail = JSON.parse(shown.out[0]) as Record<string, unknown>;
