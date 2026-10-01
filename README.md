@@ -6,6 +6,10 @@ Kherep coordinates coding agents, tools and shared knowledge across Claude Code 
 
 Use Kherep to give your agents consistent working rules, reusable skills and a shared approach to choosing models and tools. Runtime adapters keep Claude and Codex configuration separate while applying the same orchestration principles.
 
+[![Kherep - Your runtimes, Your rules (video)](https://img.youtube.com/vi/w9pLDRU_ulo/maxresdefault.jpg)](https://youtu.be/w9pLDRU_ulo)
+
+*Watch the overview: [Kherep - Your runtimes, Your rules](https://youtu.be/w9pLDRU_ulo)*
+
 ## Features
 
 - **Maestro agent orchestration:** plan work, delegate focused tasks and verify the combined result.
