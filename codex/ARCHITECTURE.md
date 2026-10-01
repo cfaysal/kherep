@@ -71,6 +71,20 @@ The Central Brain Confluence space is the supported shared knowledge base. Confi
 
 The only product-specific stdio binding is the n8n secret-file bearer adapter. A caller supplies its auth file and HTTPS endpoint through `InstallOptions.mcpCompatibility.operatorBindings.n8n`. The installer constructs the Node command and `supergateway-secret-wrapper.mts` arguments. Normal operating-system trust is the default. An existing CA file may be supplied with `caFile`. The mutually exclusive `tlsMode: "legacy-disabled"` preserves an already-authorized per-process compatibility setting only when the caller explicitly requests it.
 
+The Control Plane messaging client is a separate opt-in stdio projection selected through
+`InstallOptions.messagingClient` or `--enable-messaging-client`. Its managed table contains the Node
+runtime, installed bridge and non-secret config-root paths only. The installer copies the bridge,
+intent hook and their public Control Plane dependency graph together. It also renders one exact
+PreToolUse matcher for the five messaging tools. The hook supplies updated arguments after durable
+intent registration and adds no approval decision.
+
+The bridge reads current policy and the private credential for every HTTP call, so rotation and
+disable take effect without restarting the stdio process. It verifies POSIX ownership and private
+mode or the equivalent current-user Windows ACL allowlist before reading credential bytes. It derives the credential-free `/mcp`
+endpoint from local node configuration and forwards native JSON-RPC metadata without substitution.
+The bearer is confined to the HTTP Authorization header. The normal projection remains free of this
+table and hook; client opt-in does not enable the node capability or Worker route.
+
 ## Upgrade repair
 
 The installer repairs only exact, owned historical forms. `sourceNames` maps a canonical capability to a differently named private registry source. `legacyServerNames` lists old Codex table names for that capability. `legacyEnvPrefixes` lists explicit old product prefixes and each value must include its trailing underscore, for example `LEGACY_`.

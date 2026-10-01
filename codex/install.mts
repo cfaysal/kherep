@@ -101,6 +101,8 @@ export interface InstallOptions {
   // The Control Plane outbox; by default the node config directory's
   // (KHEREP_CONFIG_DIR or the per-OS location) control-plane/outbox.
   controlPlaneOutbox?: string;
+  // Disabled by default. Enables the local rotating-credential messaging MCP client projection.
+  messagingClient?: boolean;
 }
 
 function timestamp(): string {
@@ -173,6 +175,7 @@ export function install(options: InstallOptions = {}) {
     hookAdapter: path.join(sourceRoot, "hooks", "hook-adapter.mts"),
     privacyHook: path.join(sourceRoot, "hooks", "privacy-boundary-guard.mts"),
     confluenceDeliveryHook: path.join(sourceRoot, "hooks", "confluence-delivery-check.mts"),
+    controlPlane: path.join(repoRoot, "modules", "control-plane"),
     registryBridge: path.join(repoRoot, "modules", "mcp-auth-bridge", "registry-http-wrapper.mts"),
     registryRuntime: path.join(repoRoot, "modules", "mcp-auth-bridge", "supergateway-secret-wrapper.mts"),
     localInferenceRunner: path.join(repoRoot, "modules", "local-inference", "runner.mts"),
@@ -245,6 +248,7 @@ export function install(options: InstallOptions = {}) {
     codexConfluenceBroker: path.join(workspace, "tools", "atl-confluence.mts"),
     claudeConfluenceBroker: path.join(workspace, "tools", "atl-confluence-ccoder.mts"),
     hook: contextHook,
+    messagingClient: path.join(codexHome, "orchestra", "control-plane"),
   };
   const mcp = managedConfig.resolveRegistry({
     ...options,
@@ -271,6 +275,13 @@ export function install(options: InstallOptions = {}) {
     ...RETIRED_MCP_SERVERS,
     ...(capabilities.retiredMcpServers || []),
   ])];
+  const controlPlaneOutboxPath = path.resolve(options.controlPlaneOutbox || controlPlaneOutbox(process.env, platform));
+  const messagingClient = {
+    enabled: options.messagingClient === true,
+    bridge: path.join(targets.messagingClient, "node", "mcp-stdio-bridge.mts"),
+    intentHook: path.join(targets.messagingClient, "node", "mcp-intent-hook.mts"),
+    configRoot: path.dirname(path.dirname(controlPlaneOutboxPath)),
+  };
   const managedConfigOptions = {
     memoryProvider: memoryProvider.provider,
     // OP-1429. A block an older installer wrote for the retired Central Brain is
@@ -291,7 +302,8 @@ export function install(options: InstallOptions = {}) {
     memoryNotifyHook: targets.memoryNotifyHook,
     mcpCompatibility: options.mcpCompatibility,
     controlPlaneHook: path.join(repoRoot, "modules", "control-plane", "node", "deliver-hook.mts"),
-    controlPlaneOutbox: path.resolve(options.controlPlaneOutbox || controlPlaneOutbox(process.env, platform)),
+    controlPlaneOutbox: controlPlaneOutboxPath,
+    messagingClient,
   };
   prepareManagedConfig(existingPlugin.config, managedConfigOptions);
 
@@ -390,6 +402,15 @@ export function install(options: InstallOptions = {}) {
     transaction.copyFile(sources.hookAdapter, path.join(targets.hookDir, "codex-hook-adapter.mts"));
     transaction.copyFile(sources.privacyHook, path.join(targets.hookDir, "codex-privacy-boundary-guard.mts"));
     transaction.copyFile(sources.confluenceDeliveryHook, path.join(targets.hookDir, "codex-confluence-delivery-check.mts"));
+    if (messagingClient.enabled) {
+      for (const relative of [
+        "protocol.mts", "protocol-mcp.mts", "protocol-messages.mts", "protocol-task-control.mts", "protocol-tasks.mts",
+        path.join("node", "config.mts"), path.join("node", "inbox.mts"), path.join("node", "mcp-local.mts"),
+        path.join("node", "mcp-credential-file.mts"),
+        path.join("node", "policy.mts"), path.join("node", "session-policy.mts"),
+        path.join("node", "mcp-intent-hook.mts"), path.join("node", "mcp-stdio-bridge.mts"),
+      ]) transaction.copyFile(path.join(sources.controlPlane, relative), path.join(targets.messagingClient, relative));
+    }
     transaction.remove(targets.memoryNotifyHook);
     // Issue #72. Beside the deliver hook: the msg CLI from the same checkout.
     transaction.writeFile(controlPlaneRulesPath(codexHome), renderControlPlaneRules(controlPlaneCli(repoRoot)));
@@ -461,6 +482,7 @@ export function install(options: InstallOptions = {}) {
       retiredMcpServers,
       // Issue #72: where the outbox writable root landed, or why it did not.
       controlPlaneOutbox: { status: preparedConfig.outboxWritableRoot },
+      messagingClient: { status: messagingClient.enabled ? "configured" : "disabled" },
       nativePlugins: installAtlassianTools
         ? [{ id: ROVO_PLUGIN_ID, status: "installed-restart-required" }]
         : [],
@@ -494,12 +516,14 @@ export function install(options: InstallOptions = {}) {
 }
 
 type CliOptions = Pick<InstallOptions,
-  "codexHome" | "claudeConfigDir" | "registryFile" | "workspace" | "memoryProviderConfig" | "authorizeObservationPublishing">;
+  "codexHome" | "claudeConfigDir" | "registryFile" | "workspace" | "memoryProviderConfig"
+  | "authorizeObservationPublishing" | "messagingClient">;
 
 export function parseArgs(argv: string[]): CliOptions {
   const args = [...argv];
   const options: CliOptions = {};
-  const fields = new Map<string, Exclude<keyof CliOptions, "authorizeObservationPublishing">>([
+  type ValueField = "codexHome" | "claudeConfigDir" | "registryFile" | "workspace" | "memoryProviderConfig";
+  const fields = new Map<string, ValueField>([
     ["--codex-home", "codexHome"],
     ["--claude-config-dir", "claudeConfigDir"],
     ["--mcp-registry", "registryFile"],
@@ -510,6 +534,10 @@ export function parseArgs(argv: string[]): CliOptions {
     const flag = args.shift();
     if (flag === "--authorize-observation-publishing") {
       options.authorizeObservationPublishing = true;
+      continue;
+    }
+    if (flag === "--enable-messaging-client") {
+      options.messagingClient = true;
       continue;
     }
     const field = flag === undefined ? undefined : fields.get(flag);
