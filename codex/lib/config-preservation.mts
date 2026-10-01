@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { pointDeliverHooksAt } from "./control-plane-hook-path.mts";
+import { hasExactExternalDeliverHooks, pointDeliverHooksAt } from "./control-plane-hook-path.mts";
 import type { McpCompatibilityOptions, McpProjection, McpServerSpec, PluginMcpServer } from "./contracts.mts";
 import * as managedConfig from "./managed-config.mts";
 import { repairManagedMcp } from "./mcp-config-repair.mts";
@@ -220,7 +220,12 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
   const outboxRoot = outbox ? projectOutboxWritableRoot(next, outbox, options.startMarker, options.endMarker) : undefined;
   if (outboxRoot) next = outboxRoot.config;
   const withoutOutbox = { ...effectiveOptions, mcpServers, pluginMcpServers, outboxWritableRoot: undefined };
-  const currentRenderOptions = { ...withoutOutbox, outboxWritableRoot: outboxRoot?.managedTable ? outbox : undefined };
+  const externalDeliverHooks = hasExactExternalDeliverHooks(
+    next, options.node, options.controlPlaneHook, options.startMarker, options.endMarker,
+  );
+  const currentRenderOptions = { ...withoutOutbox,
+    controlPlaneHook: externalDeliverHooks ? undefined : withoutOutbox.controlPlaneHook,
+    outboxWritableRoot: outboxRoot?.managedTable ? outbox : undefined };
   // A block may carry the table for this outbox or for the one an earlier
   // install named, and the current render may have dropped it since.
   const outboxVariants = [...new Set([outbox, ...managedOutboxRoots(next, options.startMarker, options.endMarker)])]

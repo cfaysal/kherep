@@ -1,4 +1,4 @@
-import { command } from "./parity-config.mts";
+import { command, hookGroup } from "./parity-config.mts";
 
 // Issue #70. The deliver hook runs from the checkout, so a block written from
 // another checkout names a path that no fragment of this install renders. The
@@ -7,6 +7,44 @@ import { command } from "./parity-config.mts";
 // the block is matched. Both `command` and `commandWindows` carry the same form.
 const DELIVER_HOOK = /\\"((?:[^"\\]|\\\\)*?(?:\\\\|\/)modules(?:\\\\|\/)control-plane(?:\\\\|\/)node(?:\\\\|\/)deliver-hook\.mts)\\" \\"--runtime\\" \\"codex\\"/g;
 const DELIVER_COMMAND = new RegExp(`^command = ".*${DELIVER_HOOK.source}"$`, "m");
+const DELIVER_EVENTS = [
+  ["SessionStart", "startup|resume|clear|compact"],
+  ["UserPromptSubmit", ""],
+  ["Stop", ""],
+] as const;
+
+function hookGroups(config: string): string[] {
+  const tables = config.split(/^(?=\[)/m);
+  const groups: string[] = [];
+  for (let index = 0; index < tables.length;) {
+    const event = /^\[\[hooks\.(\w+)\]\]\n/.exec(tables[index])?.[1];
+    if (!event) { index += 1; continue; }
+    let next = index + 1;
+    while (next < tables.length && /^\[\[?hooks\.(\w+)\./.exec(tables[next])?.[1] === event) next += 1;
+    groups.push(tables.slice(index, next).join("").trim());
+    index = next;
+  }
+  return groups;
+}
+
+export function hasExactExternalDeliverHooks(
+  config: string, node: string, controlPlaneHook: string | undefined,
+  startMarker: string, endMarker: string,
+): boolean {
+  if (!controlPlaneHook) return false;
+  const start = config.indexOf(startMarker);
+  const end = start < 0 ? -1 : config.indexOf(endMarker, start);
+  if (start >= 0 && end < start) return false;
+  const external = start < 0 ? config
+    : config.slice(0, start) + config.slice(end + endMarker.length);
+  const bound = command(node, controlPlaneHook, "--runtime", "codex");
+  const hook = { command: bound, commandWindows: `& ${bound}` };
+  const groups = hookGroups(external);
+  return DELIVER_EVENTS.every(([event, matcher]) => {
+    const expected = hookGroup(event, matcher, [hook]);
+    return groups.filter((group) => group === expected).length === 1;
+  });
+}
 
 export function pointDeliverHooksAt(
   config: string, controlPlaneHook: string | undefined, startMarker: string, endMarker: string,
