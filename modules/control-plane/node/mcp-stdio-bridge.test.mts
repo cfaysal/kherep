@@ -14,6 +14,10 @@ const NODE = "00000000-0000-4000-8000-0000000000aa";
 const REQUEST = "40000000-0000-4000-8000-000000000001";
 const TOKEN_A = `synthetic-a-${"a".repeat(40)}`;
 const TOKEN_B = `synthetic-b-${"b".repeat(40)}`;
+// Supported Node 24.1.0 emits this exact warning when loading .mts files.
+const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
+  + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
+  + "created\\)\\r?\\n", "gm");
 
 function fixture(t: test.TestContext, controlUrl = "wss://control.example.invalid/") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-mcp-bridge-"));
@@ -238,6 +242,7 @@ test("stdio errors and arguments never expose credential material", (t) => {
     encoding: "utf8",
   });
   assert.equal(oversized.status, 1);
-  assert.equal(oversized.stderr.trim(), "remote_mcp_input_too_large");
+  assert.equal(oversized.stderr.replace(TYPE_STRIPPING_WARNING, "").trim(), "remote_mcp_input_too_large");
   assert.equal(oversized.stdout, "");
+  assert.doesNotMatch(`${oversized.stdout}\n${oversized.stderr}`, new RegExp(TOKEN_A));
 });
