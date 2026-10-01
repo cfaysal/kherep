@@ -257,6 +257,11 @@ test("parses an explicit memory selection config without reading a native profil
   });
 });
 
+test("parses only an explicit messaging client opt-in", () => {
+  assert.deepEqual(parseArgs(["--enable-messaging-client"]), { messagingClient: true });
+  assert.equal(parseArgs([]).messagingClient, undefined);
+});
+
 
 function mcpTable(config: string, name: string): string {
   const start = config.indexOf(`[mcp_servers.${name}]`);
@@ -278,6 +283,7 @@ test("Windows entrypoint delegates to the shared Node installer", () => {
   assert.match(entrypoint, /"--claude-config-dir"/);
   assert.match(entrypoint, /"--mcp-registry"/);
   assert.match(entrypoint, /"--workspace"/);
+  assert.match(entrypoint, /"--enable-messaging-client"/);
   assert.doesNotMatch(entrypoint, /Set-MarkedBlock/);
 });
 test("uses the CLI-installable Atlassian Rovo plugin id", () => {
@@ -1249,6 +1255,50 @@ test("wires the control-plane delivery hook from the checkout and upgrades a blo
   assert.notEqual(previous, config);
   fs.writeFileSync(result.targets.config, previous);
   assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), config);
+});
+
+test("installs the disabled-by-default messaging client with its public dependency graph", (t) => {
+  const { root, codexHome, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const normal = install(installOptions);
+  const normalConfig = fs.readFileSync(normal.targets.config, "utf8");
+  assert.doesNotMatch(normalConfig, /kherep_messaging|mcp-intent-hook|mcp-stdio-bridge/);
+  assert.equal(fs.existsSync(path.join(codexHome, "orchestra", "control-plane")), false);
+
+  const enabled = install({ ...installOptions, messagingClient: true });
+  const config = fs.readFileSync(enabled.targets.config, "utf8");
+  const clientRoot = path.join(codexHome, "orchestra", "control-plane");
+  const matcher = "^mcp__kherep_messaging__(sessions|send|inbox|reply|status)$";
+  assert.match(config, new RegExp(`matcher = ${JSON.stringify(matcher).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(config, /\[mcp_servers\.kherep_messaging\]/);
+  assert.match(config, new RegExp(JSON.stringify(path.join(clientRoot, "node", "mcp-stdio-bridge.mts"))
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  const clientTable = mcpTable(config, "kherep_messaging");
+  const clientHook = config.split(`matcher = ${JSON.stringify(matcher)}`)[1]!.split("[[hooks.")[0]!;
+  assert.doesNotMatch(`${clientTable}\n${clientHook}`, /Authorization|Bearer|token|approval_mode/i);
+  for (const relative of [
+    "protocol.mts", "protocol-mcp.mts", "protocol-messages.mts", "protocol-task-control.mts", "protocol-tasks.mts",
+    "node/config.mts", "node/inbox.mts", "node/mcp-local.mts", "node/mcp-credential-file.mts",
+    "node/policy.mts", "node/session-policy.mts",
+    "node/mcp-intent-hook.mts", "node/mcp-stdio-bridge.mts",
+  ]) assert.ok(fs.statSync(path.join(clientRoot, relative)).isFile(), relative);
+  const configRoot = path.dirname(path.dirname(installOptions.controlPlaneOutbox));
+  fs.mkdirSync(path.join(configRoot, "control-plane"), { recursive: true });
+  fs.writeFileSync(path.join(configRoot, "control-plane", "policy.json"),
+    JSON.stringify({ version: 1, allowedCommands: [], remoteMcp: { enabled: true } }));
+  const hook = spawnSync(process.execPath, [path.join(clientRoot, "node", "mcp-intent-hook.mts"),
+    "--config-root", configRoot], {
+    input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "mcp__kherep_messaging__sessions",
+      tool_input: {} }), encoding: "utf8",
+    env: { ...process.env, KHEREP_CONFIG_DIR: path.join(root, "wrong ambient root") },
+  });
+  assert.equal(hook.status, 0, hook.stderr);
+  assert.equal(JSON.parse(hook.stdout).hookSpecificOutput.permissionDecisionReason, "remote_mcp_missing_native_identity");
+  assert.equal(fs.readFileSync(install({ ...installOptions, messagingClient: true }).targets.config, "utf8"), config);
+  const disabledAgain = install(installOptions);
+  assert.doesNotMatch(fs.readFileSync(disabledAgain.targets.config, "utf8"), /kherep_messaging|mcp-intent-hook/);
+  assert.deepEqual(disabledAgain.receipt.messagingClient, { status: "disabled" });
 });
 
 // Issue #72. The outbox is a writable root of the workspace-write sandbox, in

@@ -22,7 +22,7 @@ To record standing authority for Codex observation publication, add the explicit
 `-AuthorizeObservationPublishing` switch. The switch is intentionally separate from target
 configuration: a configured space alone never grants publication authority.
 
-Review a disposable candidate before replacing an existing setup. The CLI supports these options, each with a value:
+Review a disposable candidate before replacing an existing setup. The CLI supports these options:
 
 | Option | Purpose |
 | --- | --- |
@@ -31,10 +31,30 @@ Review a disposable candidate before replacing an existing setup. The CLI suppor
 | `--claude-config-dir` | Shared Claude dependency/configuration home |
 | `--mcp-registry` | Absolute path to your source MCP registry |
 | `--memory-provider-config` | Absolute path to explicit memory-backend selection JSON; only `{ "provider": "unconfigured" }` is accepted |
+| `--enable-messaging-client` | Install the disabled-by-default local Control Plane messaging MCP client and exact intent hook |
 
 Both entry points run `codex/install.mts`, so the two host-owned values it needs are resolved by the same run whichever one you use: the Confluence knowledge space for this host, written to `kherep/confluence.json` in the resolved Codex home, and the Atlassian service-account credential. Each prompts only when a terminal is attached and otherwise fails with the variable named, so a scripted install does not block on stdin. If either is missing the parity installation above it still stands, and the observation agent writes nothing until the space file exists.
 
 Keep private registry configuration outside the checkout. Read [adapter architecture](../codex/ARCHITECTURE.md) for supported transport, authentication and backend-selection formats.
+
+### Remote messaging client opt-in
+
+`--enable-messaging-client`, or `-EnableMessagingClient` through `install.ps1`, adds the
+`kherep_messaging` stdio MCP table and the exact five-tool PreToolUse intent hook. API callers use
+`install({ messagingClient: true })`. The table contains only the Node executable, installed bridge
+path and non-secret Kherep config-root path. It contains no bearer, endpoint, native identity or
+approval override. A normal install without this option projects neither the table nor the hook.
+
+The local bridge reloads node configuration, effective policy and the private rotating credential
+for every HTTP request. It derives `/mcp` from the enrolled node's control URL, sends the bearer only
+in the HTTP Authorization header, rejects redirects, and forwards native JSON-RPC and `_meta`
+without adding caller, thread or session identities. The hook returns only `updatedInput` after a
+durable intent receipt and does not approve the MCP call. Normal Codex MCP approval remains in force.
+
+This client option does not enable the Worker's committed remote MCP flag or the node's
+`remoteMcp.enabled` policy. Both remain separate explicit activation gates. Validate installed source
+and config at the target, then run direct and two-distinct-chat production canaries before treating
+the client as supported. The binding probe's Code Mode result is separate probe evidence.
 
 ## Turn-completion observations
 

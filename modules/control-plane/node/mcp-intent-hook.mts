@@ -61,16 +61,23 @@ export async function processMcpIntentHook(input: Record<string, unknown>, root:
   }
 }
 
-function main(): Promise<void> {
+function main(argv: string[]): Promise<void> {
+  if (argv.length !== 2 || argv[0] !== "--config-root" || !path.isAbsolute(argv[1] ?? "")) {
+    return Promise.resolve(void process.stdout.write(JSON.stringify(deny("remote_mcp_invalid_arguments"))));
+  }
   const raw = fs.readFileSync(0);
   if (raw.length > MAX_INPUT_BYTES) return Promise.resolve(void process.stdout.write(JSON.stringify(deny("remote_mcp_input_too_large"))));
   let input: unknown;
   try { input = JSON.parse(raw.toString("utf8")); } catch { input = null; }
   if (!record(input)) return Promise.resolve(void process.stdout.write(JSON.stringify(deny("remote_mcp_invalid_input"))));
-  return processMcpIntentHook(input, path.dirname(nodePaths().dir)).then((output) => {
+  return processMcpIntentHook(input, argv[1]!).then((output) => {
     if (output) process.stdout.write(JSON.stringify(output));
   });
 }
 
 const entry = process.argv[1] ?? "";
-if (entry && import.meta.url === pathToFileURL(path.resolve(entry)).href) void main();
+if (entry) {
+  let isMain = import.meta.url === pathToFileURL(path.resolve(entry)).href;
+  try { isMain ||= import.meta.url === pathToFileURL(fs.realpathSync(entry)).href; } catch { /* invalid entry is not main */ }
+  if (isMain) void main(process.argv.slice(2));
+}

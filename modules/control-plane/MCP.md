@@ -25,9 +25,32 @@ sequenceDiagram
 - `worker/src/mcp-http.mts` uses the official SDK v2 stateless `createMcpHandler` transport at `/mcp`.
 - `worker/src/mcp-registry.mts` stores credential hashes and bounded intent metadata in the existing Registry Durable Object.
 - `node/mcp-intent-hook.mts` creates an intent only for the exact `mcp__kherep_messaging__*` tools. It rejects an input that already contains `requestId`, waits for the Registry receipt, and then adds the generated id. It does not approve the tool call.
+- `node/mcp-stdio-bridge.mts` is the opt-in Codex stdio client. It reloads local state per request, derives `/mcp` from the node control URL, and carries the current bearer only in the HTTP Authorization header.
 - `node/mcp-local.mts` keeps the raw bearer and metadata exchange files in the private Kherep config directory. Inbox text crosses the authenticated WebSocket response in memory and is not written to an MCP result journal.
 
 No MCP protocol session Durable Object is added. Each HTTP request creates a fresh SDK server. MCP transport session ids, `clientInfo`, tool arguments and shared connector identity are not authorization inputs.
+
+## Codex client transport
+
+The Codex installer exposes an explicit `--enable-messaging-client` CLI switch and
+`InstallOptions.messagingClient` API option. Without it, the installation contains no messaging MCP
+table or intent hook. With it, the managed table starts the local bridge over stdio and passes only
+its installed path and the non-secret Kherep config-root path. The installer does not enable node
+policy or the Worker route.
+
+For each native JSON-RPC request or notification, the bridge reloads `node.json`, its effective
+policy file and `mcp/credential.json`. The credential must be an owned private regular file. POSIX
+requires an owner-only mode; Windows verifies the current-user owner and permits read grants only to
+that user, SYSTEM and local administrators. Links, unsafe access, invalid schema, missing state and a removed opt-in fail before HTTP. The control URL is
+the only endpoint source. Secure WebSocket becomes HTTPS and the path becomes `/mcp`; credentials in
+the URL are refused. The bearer exists only in the request Authorization header, with redirects
+disabled and bounded request, response and deadline handling.
+
+The request body crosses unchanged, including Codex native `params._meta`. The bridge never creates
+session, thread or call identifiers and never changes tool arguments. JSON and SSE responses become
+stdio JSON-RPC responses; HTTP 202 for a notification produces no response. Fixed local error codes
+contain no endpoint, credential or server body. The exact-tool hook returns `updatedInput` only, so
+normal native MCP approval remains separate.
 
 ## Authentication and intent claim
 
@@ -83,9 +106,9 @@ The complete serialized inbox response must fit the existing 64 KiB transport li
 
 The committed `REMOTE_MCP_ENABLED` value is `false`, and the default node policy has no `remoteMcp` section. This candidate does not change live config.
 
-Source tests use synthetic native metadata. They cover SDK transport, opt-in, provisioning, revocation, rotation, session removal, runtime replacement, missing metadata, changed arguments, cross-node reuse, expiry, recovery, online and offline inbox behavior and metadata-body exclusion. They do not establish actual-client support.
+Source tests use synthetic native metadata. They cover SDK transport, client and node opt-in, provisioning, revocation, per-call credential rotation, local policy removal, session removal, runtime replacement, missing metadata, changed arguments, cross-node reuse, expiry, recovery, online and offline inbox behavior, metadata-body exclusion, bounded JSON and SSE responses, and secret-free installed settings. They do not establish actual-client support.
 
-Before activation, each client path needs a successful direct canary and two-distinct-chat canary. Codex Code Mode still needs the native deny boundary confirmed for the deployed backend. Claude Code remains disabled until its runtime metadata join is proven. The existing binding probe is evidence for its measured probe only and is not product authentication.
+Before activation, the production Codex path needs a successful direct canary and two-distinct-chat canary against the deployed backend, including missing-metadata denial and the updatedInput-only hook result under normal approval. A Code Mode binding-probe success is evidence for that probe only and is not production authentication. Claude Code remains disabled until its runtime metadata join is proven.
 
 ## Dependencies
 

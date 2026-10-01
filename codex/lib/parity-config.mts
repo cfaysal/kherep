@@ -35,6 +35,13 @@ export interface McpRenderOptions {
   registryBridge?: string;
 }
 
+export interface MessagingClientRenderOptions {
+  enabled: boolean;
+  bridge: string;
+  intentHook: string;
+  configRoot: string;
+}
+
 export interface RenderOptions extends McpRenderOptions {
   contextHook: string;
   hookDir: string;
@@ -52,6 +59,7 @@ export interface RenderOptions extends McpRenderOptions {
   // Issue #72. The Control Plane outbox as a sandbox writable root, rendered
   // only when the operator's config defines no sandbox_workspace_write table.
   outboxWritableRoot?: string;
+  messagingClient?: MessagingClientRenderOptions;
 }
 
 function tomlString(value: unknown): string {
@@ -117,6 +125,10 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
     group("PreToolUse", "Bash|shell_command|exec_command|functions\\.exec", [adapted("commit-guard.js", "pre"), adapted("deploy-guard.js", "pre-no-transcript")]),
     group("PreToolUse", "Agent|spawn_agent", [hook("codex-dispatch-contract-guard.mts")]),
     group("PreToolUse", "mcp__playwright__browser_navigate", [hook("playwright-file-guard.js")]),
+    ...(options.messagingClient?.enabled
+      ? [group("PreToolUse", "^mcp__kherep_messaging__(sessions|send|inbox|reply|status)$",
+        [{ command: command(node, options.messagingClient.intentHook, "--config-root", options.messagingClient.configRoot) }])]
+      : []),
     group("UserPromptSubmit", "", [
       {
         command: command(node, contextHook),
@@ -241,6 +253,20 @@ export function renderPluginMcp(options: McpRenderOptions): string {
   }).join("\n\n");
 }
 
+function renderMessagingClient(options: RenderOptions): string {
+  const client = options.messagingClient;
+  if (!client?.enabled) return "";
+  return [
+    "[mcp_servers.kherep_messaging]",
+    "enabled = true",
+    "required = false",
+    `command = ${tomlString(options.node)}`,
+    `args = [${[client.bridge, "--config-root", client.configRoot].map(tomlString).join(", ")}]`,
+    "startup_timeout_sec = 30.0",
+    "tool_timeout_sec = 60.0",
+  ].join("\n");
+}
+
 // The table sits between the header and the hooks, so the block without it is
 // not a substring of the block with it, and an upgrade that drops the table
 // cannot mistake the block that still has it for current.
@@ -250,7 +276,9 @@ function renderPrefix(options: RenderOptions): string {
 }
 
 export function render(options: RenderOptions): string {
-  return [renderPrefix(options), renderMcp(options), renderPluginMcp(options), ""].join("\n\n");
+  const messaging = renderMessagingClient(options);
+  return [renderPrefix(options), renderMcp(options), renderPluginMcp(options), ...(messaging ? [messaging] : []), ""]
+    .join("\n\n");
 }
 
 // The previous-native, previous-nudges and JavaScript-era renders reproduce

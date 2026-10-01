@@ -51,6 +51,7 @@ export interface ManagedConfigOptions {
   controlPlaneHook?: string;
   // Issue #72. The Control Plane outbox, made a writable root of the sandbox.
   controlPlaneOutbox?: string;
+  messagingClient?: parityConfig.MessagingClientRenderOptions;
 }
 
 export function replaceExactManagedFragment(
@@ -225,6 +226,10 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
   const outboxVariants = [...new Set([outbox, ...managedOutboxRoots(next, options.startMarker, options.endMarker)])]
     .filter((root): root is string => Boolean(root))
     .map((root) => ({ ...withoutOutbox, outboxWritableRoot: root }));
+  const currentVariants = [withoutOutbox, ...outboxVariants]
+    .flatMap((value) => value.messagingClient
+      ? [value, { ...value, messagingClient: { ...value.messagingClient, enabled: !value.messagingClient.enabled } }]
+      : [value]);
   // Every block written before issue #68 lacks the commandWindows forms.
   const beforeWindowsCommands = { ...withoutOutbox, windowsHookCommands: false };
   // Every block written before the control-plane hook existed lacks it.
@@ -255,7 +260,7 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
     startMarker: options.startMarker,
     endMarker: options.endMarker,
     knownManagedFragments: withManagedNodePaths([
-      ...[withoutOutbox, ...outboxVariants, beforeWindowsCommands, beforeControlPlane].flatMap((current) => {
+      ...[...currentVariants, beforeWindowsCommands, beforeControlPlane].flatMap((current) => {
         const previousStop = { ...current, observationStopHook: false };
         return [...managedFragmentFamily(current, previousStop),
           ...retiredCentralBrainFragments(current, previousStop, options.retiredCentralBrain)];
