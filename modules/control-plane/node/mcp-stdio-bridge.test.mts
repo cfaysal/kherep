@@ -109,6 +109,7 @@ test("fails closed for missing, unsafe and invalid credentials before HTTP", asy
 
   fs.rmSync(paths.mcpCredential);
   await assert.rejects(invoke(), (error) => code(error) === "remote_mcp_credential_unavailable");
+  recordMcpCredential(paths, { requestId: REQUEST, ok: true, token: TOKEN_A, version: 1 });
   fs.writeFileSync(paths.mcpCredential, "not-json", { mode: 0o600 });
   await assert.rejects(invoke(), (error) => code(error) === "remote_mcp_credential_invalid");
   fs.rmSync(paths.mcpCredential);
@@ -198,18 +199,7 @@ test("Windows verifier reads a private credential and rejects a broad Users gran
     const windows = process.env.SystemRoot || process.env.WINDIR || "";
     const powershell = path.win32.join(windows, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     const env = { SystemRoot: windows, WINDIR: windows, KHEREP_MCP_TEST_FILE: paths.mcpCredential };
-    const privateAcl = String.raw`
-$file = [Environment]::GetEnvironmentVariable('KHEREP_MCP_TEST_FILE', 'Process')
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-$acl = [Security.AccessControl.FileSecurity]::new()
-$acl.SetOwner($identity.User)
-$acl.SetAccessRuleProtection($true, $false)
-$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($identity.User, [Security.AccessControl.FileSystemRights]::FullControl, [Security.AccessControl.AccessControlType]::Allow))
-Set-Acl -LiteralPath $file -AclObject $acl
-`;
-    const restricted = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", privateAcl],
-      { encoding: "utf8", windowsHide: true, env });
-    assert.equal(restricted.status, 0, restricted.stderr);
+    // The real credential writer in fixture() already created the protected DACL.
     assert.equal(readPrivateMcpCredential(paths.mcpCredential, "win32").ok, true);
 
     const broadAcl = String.raw`

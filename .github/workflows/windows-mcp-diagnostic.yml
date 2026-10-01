@@ -1,0 +1,33 @@
+name: Windows MCP credential diagnostic
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/windows-mcp-diagnostic.yml
+      - modules/control-plane/node/mcp-credential-file.mts
+      - modules/control-plane/node/windows-mcp-diagnostic.mts
+      - modules/control-plane/node/windows-mcp-diagnostic.test.mts
+
+permissions:
+  contents: read
+
+jobs:
+  cold-start:
+    name: ${{ matrix.probe }} / ${{ matrix.environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        probe: [minimal, composite]
+        environment: [current, system-plus]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0
+      - name: Measure one cold Windows PowerShell 5.1 launch
+        run: >-
+          node modules/control-plane/node/windows-mcp-diagnostic.mts
+          --probe=${{ matrix.probe }}
+          --environment=${{ matrix.environment }}
