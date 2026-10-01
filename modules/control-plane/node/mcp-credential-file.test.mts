@@ -140,6 +140,25 @@ test("Windows ACL read distinguishes an unreadable verifier from a measured unsa
     { ok: false, code: "remote_mcp_credential_unsafe" });
 });
 
+test("Windows ACL reader uses bounded native APIs without account translation or cmdlets", (t) => {
+  const { file } = temporary(t);
+  fs.writeFileSync(file, `${JSON.stringify(BODY)}\n`);
+  const fake = fakePowerShell();
+
+  assert.equal(readPrivateMcpCredential(file, "win32", { env: windowsEnv(), spawn: fake.spawn }).ok, true);
+
+  assert.equal(fake.calls.length, 1);
+  const script = fake.calls[0]?.args.at(-1) ?? "";
+  assert.match(script, /\[IO\.File\]::GetAccessControl/);
+  assert.match(script, /\.GetOwner\(\[Security\.Principal\.SecurityIdentifier\]\)/);
+  assert.match(script, /\.GetAccessRules\(\$true, \$true, \[Security\.Principal\.SecurityIdentifier\]\)/);
+  assert.match(script, /\$count -ge 32/);
+  assert.match(script, /\[Text\.StringBuilder\]::new/);
+  assert.doesNotMatch(script, /\b(?:Get-Acl|ConvertTo-Json|ForEach-Object)\b/);
+  assert.doesNotMatch(script, /\b[A-Z][A-Za-z]+-[A-Z][A-Za-z]+\b/);
+  assert.doesNotMatch(script, /NTAccount|\.Translate\(/);
+});
+
 test("Windows writer creates a private credential under a broad parent and rejects later broadening",
   { skip: process.platform !== "win32" }, (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-mcp-windows-writer-"));

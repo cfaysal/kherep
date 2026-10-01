@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 export type DiagnosticProbe = "minimal" | "composite";
 export type DiagnosticEnvironment = "current" | "system-plus";
@@ -64,13 +65,17 @@ try {
     $stream.Flush($true)
   } finally { $stream.Dispose() }
   Mark 'flush_done'
-  $acl = Get-Acl -LiteralPath $file
+  $sections = [Security.AccessControl.AccessControlSections]([int][Security.AccessControl.AccessControlSections]::Access -bor [int][Security.AccessControl.AccessControlSections]::Owner)
+  $acl = [IO.File]::GetAccessControl($file, $sections)
   $me = $identity.User.Value
-  $owner = ([Security.Principal.NTAccount]::new([string]$acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value
+  $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
   if ($owner -ne $me) { throw 'owner mismatch' }
   $allowed = @($me, 'S-1-5-18', 'S-1-5-32-544')
   $userCanRead = $false
-  foreach ($entry in @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))) {
+  $count = 0
+  foreach ($entry in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    if ($count -ge 32) { throw 'too many access rules' }
+    $count += 1
     if ($entry.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
     if ($allowed -notcontains $entry.IdentityReference.Value) { throw 'broad access' }
     if ($entry.IdentityReference.Value -eq $me -and (([int64]$entry.FileSystemRights -band 1) -eq 1)) { $userCanRead = $true }
@@ -187,7 +192,17 @@ function argumentsFrom(values: string[]): { probe: DiagnosticProbe; environment:
   return { probe, environment };
 }
 
-if (import.meta.main) {
+function isMainModule(): boolean {
+  const entry = process.argv[1] || "";
+  try {
+    return import.meta.url === pathToFileURL(path.resolve(entry)).href
+      || import.meta.url === pathToFileURL(fs.realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   const selected = argumentsFrom(process.argv.slice(2));
   let report: Record<string, unknown>;
   try {

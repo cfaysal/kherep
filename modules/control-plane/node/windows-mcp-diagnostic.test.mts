@@ -68,6 +68,14 @@ test("diagnostic launches PowerShell once with a bounded child and returns sanit
       calls += 1;
       assert.equal(command, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
       assert.deepEqual(args.slice(0, 3), ["-NoProfile", "-NonInteractive", "-Command"]);
+      const script = args.at(-1) ?? "";
+      assert.match(script, /\[IO\.File\]::GetAccessControl/);
+      assert.match(script, /\.GetOwner\(\[Security\.Principal\.SecurityIdentifier\]\)/);
+      assert.match(script, /\.GetAccessRules\(\$true, \$true, \[Security\.Principal\.SecurityIdentifier\]\)/);
+      assert.match(script, /\$count -ge 32/);
+      assert.doesNotMatch(script, /\b(?:Get-Acl|ConvertTo-Json|ForEach-Object)\b/);
+      assert.doesNotMatch(script, /\b[A-Z][A-Za-z]+-[A-Z][A-Za-z]+\b/);
+      assert.doesNotMatch(script, /NTAccount|\.Translate\(/);
       assert.equal(options.timeout, 60_000);
       assert.equal(options.maxBuffer, 64 * 1024);
       assert.ok(Buffer.byteLength(options.input ?? "") <= 4096);
