@@ -11,6 +11,8 @@ import type { McpServerSpec } from "./contracts.mts";
 import * as parityConfigApi from "./parity-config.mts";
 import {
   render,
+  renderBeforeResearchHooks,
+  renderBeforeResearchHooksWithoutNativeHooks,
   renderBeforePostLegacyHooks,
   renderBeforePostLegacyHooksWithoutNativeHooks,
   renderLegacyJavaScript,
@@ -101,6 +103,8 @@ test("native hooks add exactly one command per event and preserve reminders and 
   }
   assert.match(config, /codex-cbm-reminder\.mts/);
   assert.match(config, /codex-acceptance-gate\.mts/);
+  assert.match(config, /codex-research-first\.mts/);
+  assert.match(config, /codex-research-stop\.mts/);
   const stop = config.split("[[hooks.Stop]]")[1]!.split(/\n\[\[hooks\.[A-Za-z]+\]\]/)[0]!;
   assert.equal((stop.match(/codex-acceptance-gate\.mts/g) || []).length, 1);
   assert.equal((stop.match(/codex-observation-turn-completion\.mts/g) || []).length, 0);
@@ -117,9 +121,53 @@ test("native hooks add exactly one command per event and preserve reminders and 
   assert.doesNotMatch(render({ ...options, memoryProvider: "unconfigured" }), /native-capture|native-context/);
 });
 
+test("exports the exact projection immediately before Codex research hooks", () => {
+  const options = { contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks",
+    node: "/synthetic/node", mcpServers: [] };
+  for (const previous of [
+    renderBeforeResearchHooks(options), renderBeforeResearchHooksWithoutNativeHooks(options),
+  ]) {
+    assert.match(previous, /codex-confluence-delivery-check\.mts/);
+    assert.match(previous, /codex-acceptance-gate\.mts/);
+    assert.doesNotMatch(previous, /codex-research-(?:first|stop)\.mts/);
+  }
+  const current = render(options);
+  assert.match(current, /codex-research-first\.mts/);
+  assert.match(current, /codex-research-stop\.mts/);
+});
+
+test("upgrades the exact pre-research managed block and then settles", () => {
+  const options = { contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks",
+    node: "/synthetic/node", mcpServers: [] };
+  const managed = { ...options, startMarker: "# start synthetic", endMarker: "# end synthetic",
+    retiredMcpServerNames: [], registryProjections: [], pluginMcpServers: {}, registry: "/synthetic/registry.json",
+    registryBridge: "/synthetic/bridge.mts", registryRuntime: "/synthetic/runtime.mts",
+    memoryNotifyHook: "/synthetic/notify.mts" };
+  const old = `${managed.startMarker}\n${renderBeforeResearchHooks(options)}${managed.endMarker}`;
+  const upgraded = prepareManagedConfig(old, managed).config;
+  assert.match(upgraded, /codex-research-first\.mts/);
+  assert.match(upgraded, /codex-research-stop\.mts/);
+  assert.equal(prepareManagedConfig(upgraded, managed).config, upgraded);
+});
+
 test("exports the exact JavaScript predecessor projection renderers", () => {
   assert.equal(typeof Reflect.get(parityConfigApi, "renderLegacyJavaScript"), "function");
   assert.equal(typeof Reflect.get(parityConfigApi, "renderLegacyJavaScriptPrefix"), "function");
+});
+
+test("historical native and observation renderers retain their pre-research bytes", () => {
+  const options = { contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks", node: "/synthetic/node",
+    mcpServers: [], memoryProvider: "central-brain" as const,
+    nativeHooks: { contextCli: "/synthetic/context.js", captureCli: "/synthetic/capture.mjs", profile: "/synthetic/profile.json" } };
+  const renderers = [
+    Reflect.get(parityConfigApi, "renderPreviousNativeHooks") as (value: typeof options) => string,
+    Reflect.get(parityConfigApi, "renderBeforeObservationHook") as (value: typeof options) => string,
+    Reflect.get(parityConfigApi, "renderBeforeObservationHookWithoutNativeHooks") as (value: typeof options) => string,
+  ];
+  for (const renderer of renderers) {
+    const historical = renderer(options);
+    assert.doesNotMatch(historical, /codex-research-(?:first|stop)\.mts/);
+  }
 });
 
 test("renders the exact JavaScript predecessor hook prefix and full MCP projection", () => {
@@ -381,6 +429,7 @@ test('exports exact renderers for the immediately preceding observation-free pro
     const previous = renderer(options);
     assert.match(previous, /codex-confluence-delivery-check\.mts/);
     assert.doesNotMatch(previous, /codex-observation-turn-completion\.mts/);
+    assert.doesNotMatch(previous, /codex-research-(?:first|stop)\.mts/);
   }
   const oldest = renderBeforePostLegacyHooks(options);
   assert.doesNotMatch(oldest, /codex-confluence-delivery-check\.mts/);

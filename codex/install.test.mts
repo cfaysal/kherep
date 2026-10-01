@@ -160,6 +160,28 @@ function occurrences(text: string, value: string): number {
   return text.split(value).length - 1;
 }
 
+test("installs native Codex research hooks and every local dependency idempotently", (t) => {
+  const { root, codexHome, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const first = install(installOptions);
+  const hookDir = path.join(codexHome, "hooks", "kherep-maestro");
+  const projected = new Map([
+    ["codex-research-first.mts", "research-first.mts"],
+    ["codex-research-stop.mts", "research-stop.mts"],
+    ["research-common.mts", "research-common.mts"],
+    ["research-exec-parser.mts", "research-exec-parser.mts"],
+    ["research-transcript.mts", "research-transcript.mts"],
+  ]);
+  for (const [target, source] of projected) {
+    assert.equal(fs.readFileSync(path.join(hookDir, target), "utf8"),
+      fs.readFileSync(path.join(import.meta.dirname, "hooks", source), "utf8"), target);
+  }
+  const config = fs.readFileSync(first.targets.config, "utf8");
+  assert.match(renderedHookGroup(config, "UserPromptSubmit"), /codex-research-first\.mts/);
+  assert.match(renderedHookGroup(config, "Stop"), /codex-research-stop\.mts/);
+  assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), config);
+});
+
 // Without the commandWindows lines, which repeat each command (issue #68), so a
 // script name occurs once per hook.
 function renderedHookGroup(config: string, event: string): string {

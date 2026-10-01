@@ -23,12 +23,15 @@ export function retiredCentralBrainRender(binding: CentralBrainBinding, node: st
 // Every render the current installer accepts as its own block, for the render
 // options it installs now and for those before the observation Stop hook.
 export function managedFragmentFamily(current: RenderOptions, previousStop: RenderOptions): string[] {
-  return [current, previousStop, { ...current, observationStopHook: true }].flatMap((options) => [
+  return [current, previousStop, { ...current, observationStopHook: true },
+    { ...current, observationStopHook: undefined }].flatMap((options) => [
     parityConfig.render(options),
     parityConfig.renderWithoutNativeHooks(options),
     parityConfig.renderPreviousNativeHooks(options),
     parityConfig.renderBeforeObservationHook(options),
     parityConfig.renderBeforeObservationHookWithoutNativeHooks(options),
+    parityConfig.renderBeforeResearchHooks(options),
+    parityConfig.renderBeforeResearchHooksWithoutNativeHooks(options),
     parityConfig.renderBeforePostLegacyHooks(options),
     parityConfig.renderBeforePostLegacyHooksWithoutNativeHooks(options),
   ]);
