@@ -46,7 +46,12 @@ with a protected current-user `FullControl` DACL in the `FileStream` constructor
 the credential bytes. The fixed Windows PowerShell 5.1 helper receives those bounded UTF-8 bytes
 only on stdin, runs by absolute `SystemRoot` path with an allowlisted environment and the built-in
 module path, and never receives the bearer in arguments or environment. Node atomically publishes
-the file, then the strict reader verifies its ACL and content digest at the published path. Links,
+the file, then the strict reader verifies its ACL and content digest at the published path. The
+Windows reader calls .NET [`File.GetAccessControl`](https://learn.microsoft.com/en-us/dotnet/api/system.io.file.getaccesscontrol?view=netframework-4.8.1)
+for access and owner data, requests the owner through
+[`GetOwner(SecurityIdentifier)`](https://learn.microsoft.com/en-us/dotnet/api/system.security.accesscontrol.objectsecurity.getowner?view=netframework-4.8.1),
+and requests rules as `SecurityIdentifier` values. It uses no PowerShell cmdlets or account-name translation.
+Links,
 unsafe access, an unreadable ACL, invalid schema, missing state and a removed opt-in fail before
 HTTP. The control URL is the only endpoint source. Secure WebSocket becomes HTTPS and the path becomes `/mcp`; credentials in
 the URL are refused. The bearer exists only in the request Authorization header, with redirects

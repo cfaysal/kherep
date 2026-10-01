@@ -52,12 +52,26 @@ $ErrorActionPreference = 'Stop'
 $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $file = [Environment]::GetEnvironmentVariable('KHEREP_MCP_CREDENTIAL_FILE', 'Process')
 if ([string]::IsNullOrEmpty($file)) { throw 'credential path missing' }
-$acl = Get-Acl -LiteralPath $file
-$owner = ([Security.Principal.NTAccount]::new([string]$acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value
-$rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | ForEach-Object {
-  [pscustomobject]@{ sid = $_.IdentityReference.Value; allow = ($_.AccessControlType -eq 'Allow'); rights = [int64]$_.FileSystemRights }
-})
-[pscustomobject]@{ user = $me; owner = $owner; rules = $rules } | ConvertTo-Json -Compress -Depth 4
+$sections = [Security.AccessControl.AccessControlSections]([int][Security.AccessControl.AccessControlSections]::Access -bor [int][Security.AccessControl.AccessControlSections]::Owner)
+$acl = [IO.File]::GetAccessControl($file, $sections)
+$owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+$json = [Text.StringBuilder]::new()
+[void]$json.Append('{"user":"'); [void]$json.Append($me)
+[void]$json.Append('","owner":"'); [void]$json.Append($owner)
+[void]$json.Append('","rules":[')
+$count = 0
+foreach ($entry in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+  if ($count -ge 32) { throw 'too many access rules' }
+  if ($count -gt 0) { [void]$json.Append(',') }
+  $allow = if ($entry.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow) { 'true' } else { 'false' }
+  $rights = ([int64]$entry.FileSystemRights).ToString([Globalization.CultureInfo]::InvariantCulture)
+  [void]$json.Append('{"sid":"'); [void]$json.Append($entry.IdentityReference.Value)
+  [void]$json.Append('","allow":'); [void]$json.Append($allow)
+  [void]$json.Append(',"rights":'); [void]$json.Append($rights); [void]$json.Append('}')
+  $count += 1
+}
+[void]$json.Append(']}')
+[Console]::Out.Write($json.ToString())
 `;
 
 const WRITE_SCRIPT = String.raw`
