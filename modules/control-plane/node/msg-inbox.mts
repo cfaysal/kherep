@@ -50,6 +50,7 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
     const context = deliveryContext("UserPromptSubmit", refs, {
       paths: io.paths, now: io.now, replyFrom: values.from,
       maxBytes: CODEX_CONTEXT_BYTES - Buffer.byteLength(CODEX_ESCALATION_NOTE) - 1,
+      reofferOffered: false,
     });
     io.out(context ? context + "\n" + CODEX_ESCALATION_NOTE : "no messages waiting for this continuation");
     return 0;

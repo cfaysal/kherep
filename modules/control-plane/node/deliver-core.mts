@@ -35,9 +35,12 @@ const FOOTER_BYTES = 160;
 // maxBytes: the context budget, MAX_CONTEXT_BYTES by default.
 // mayContinue: asked before a Stop keeps the turn going, which is an
 // autonomous turn (autonomy.mts); false leaves everything for the next prompt.
+// reofferOffered: false when a caller can only introduce new accepted records
+// to an already-running turn; hooks leave it true by default.
 export interface HookDeps {
   paths: NodePaths; nonce?: () => string; replyCommand?: string; now?: () => number; replyFrom?: string; maxBytes?: number;
   mayContinue?: (messageIds: string[]) => boolean;
+  reofferOffered?: boolean;
 }
 
 export type DeliveryEvent = "UserPromptSubmit" | "Stop";
@@ -176,7 +179,7 @@ export function deliveryContext(event: DeliveryEvent, refs: string[], deps: Hook
   for (const r of mine) {
     if (r.state === "accepted") {
       waiting.push(r);
-    } else if (r.state === "offered" && event === "UserPromptSubmit" && offerEnded(r, now)) {
+    } else if (r.state === "offered" && event === "UserPromptSubmit" && deps.reofferOffered !== false && offerEnded(r, now)) {
       if ((r.offers ?? 0) < MAX_OFFERS) waiting.push(r);
       else markRefused(paths.inbox, r.messageId, exhaustedOfferReason(r, MAX_OFFERS));
     }

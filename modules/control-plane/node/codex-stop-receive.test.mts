@@ -34,9 +34,9 @@ function setup(t: test.TestContext) {
   const put = (toSession = SELF) => storeMessage(paths.inbox, {
     messageId: MESSAGE, from: { nodeId: PEER, session: "peer" }, toSession, text: TEXT, createdAt: new Date(NOW).toISOString(),
   }, NOW);
-  const run = async (argv: string[]) => {
+  const run = async (argv: string[], at = NOW) => {
     const output: string[] = [], errors: string[] = [];
-    const code = await runMsg(argv, { paths, env: {}, now: () => NOW, out: text => output.push(text), err: text => errors.push(text) });
+    const code = await runMsg(argv, { paths, env: {}, now: () => at, out: text => output.push(text), err: text => errors.push(text) });
     return { code, output: output.join("\n"), errors: errors.join("\n") };
   };
   return { paths, hook, put, run };
@@ -72,6 +72,23 @@ test("plain inbox inspection does not confirm delivery and explicit receive rema
   const invalid = await run(["inbox", "--from", SELF, "--receive", "--all"]);
   assert.equal(invalid.code, 1);
   assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "accepted");
+});
+
+test("repeated receive during one long continuation does not spend retry offers", async t => {
+  const { paths, hook, put, run } = setup(t);
+  put();
+  for (const [index, minutes] of [0, 10, 20, 30].entries()) {
+    const received = await run(["inbox", "--from", SELF, "--receive"], NOW + minutes * 60_000);
+    assert.equal(received.code, 0, received.errors);
+    assert.equal(received.output.includes(TEXT), index === 0);
+    assert.notEqual(getMessage(paths.inbox, MESSAGE)?.state, "delivered");
+  }
+  assert.deepEqual(
+    { state: getMessage(paths.inbox, MESSAGE)?.state, offers: getMessage(paths.inbox, MESSAGE)?.offers },
+    { state: "offered", offers: 1 },
+  );
+  assert.equal(hook("Stop", { stop_hook_active: true }), "");
+  assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "delivered");
 });
 
 test("receive refuses unknown identities and does not read a colliding Codex alias", async t => {
