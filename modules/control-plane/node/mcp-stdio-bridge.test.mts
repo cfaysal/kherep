@@ -214,10 +214,10 @@ Set-Acl -LiteralPath $file -AclObject $acl
 
     const broadAcl = String.raw`
 $file = [Environment]::GetEnvironmentVariable('KHEREP_MCP_TEST_FILE', 'Process')
-$acl = Get-Acl -LiteralPath $file
+$acl = [IO.File]::GetAccessControl($file, [Security.AccessControl.AccessControlSections]::Access)
 $users = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
 $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($users, [Security.AccessControl.FileSystemRights]::ReadData, [Security.AccessControl.AccessControlType]::Allow))
-Set-Acl -LiteralPath $file -AclObject $acl
+[IO.File]::SetAccessControl($file, $acl)
 `;
     const broadened = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", broadAcl],
       { encoding: "utf8", windowsHide: true, env });

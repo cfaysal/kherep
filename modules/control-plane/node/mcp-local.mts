@@ -8,6 +8,7 @@ import {
 import type { NodeClient } from "./client.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { listInbox, writeJsonAtomic } from "./inbox.mts";
+import { writePrivateWindowsMcpCredential } from "./mcp-credential-file.mts";
 
 const fileOf = (dir: string, requestId: string): string => path.join(dir, `${requestId}.json`);
 const MAX_LOCAL_INTENTS = 128;
@@ -53,7 +54,8 @@ export function hasMcpCredential(paths: NodePaths): boolean {
 export function recordMcpCredential(paths: NodePaths, body: McpCredentialBody): void {
   if (!body.ok) return;
   ensureDir(paths.mcp);
-  writeJsonAtomic(paths.mcpCredential, body);
+  if (process.platform === "win32") writePrivateWindowsMcpCredential(paths.mcpCredential, body);
+  else writeJsonAtomic(paths.mcpCredential, body);
 }
 
 export function disableMcp(paths: NodePaths, inflight: Set<string>): void {
