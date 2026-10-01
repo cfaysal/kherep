@@ -99,12 +99,11 @@ test("reloads the credential and policy for every HTTP call", async (t) => {
   assert.equal(calls, 2);
 });
 
-test("fails closed for missing, unsafe and invalid credentials before HTTP", async (t) => {
+test("fails closed for missing, invalid and unsafe-mode credentials before HTTP", async (t) => {
   const { root, paths } = fixture(t);
   let calls = 0;
   const invoke = () => forwardMcpLine(rpc(), root, { fetch: async () => {
-    calls += 1;
-    return jsonResponse({});
+    calls += 1; return jsonResponse({});
   } });
 
   fs.rmSync(paths.mcpCredential);
@@ -112,16 +111,29 @@ test("fails closed for missing, unsafe and invalid credentials before HTTP", asy
   recordMcpCredential(paths, { requestId: REQUEST, ok: true, token: TOKEN_A, version: 1 });
   fs.writeFileSync(paths.mcpCredential, "not-json", { mode: 0o600 });
   await assert.rejects(invoke(), (error) => code(error) === "remote_mcp_credential_invalid");
-  fs.rmSync(paths.mcpCredential);
-  const target = path.join(root, "synthetic-credential.json");
-  fs.writeFileSync(target, JSON.stringify({ requestId: REQUEST, ok: true, token: TOKEN_A, version: 1 }), { mode: 0o600 });
-  fs.symlinkSync(target, paths.mcpCredential);
-  await assert.rejects(invoke(), (error) => code(error) === "remote_mcp_credential_unsafe");
   if (process.platform !== "win32") {
     fs.rmSync(paths.mcpCredential);
-    fs.writeFileSync(paths.mcpCredential, fs.readFileSync(target), { mode: 0o644 });
+    recordMcpCredential(paths, { requestId: REQUEST, ok: true, token: TOKEN_A, version: 1 });
+    fs.chmodSync(paths.mcpCredential, 0o644);
     await assert.rejects(invoke(), (error) => code(error) === "remote_mcp_credential_unsafe");
   }
+  assert.equal(calls, 0);
+});
+
+test("rejects a credential symlink before HTTP", async (t) => {
+  const { root, paths } = fixture(t);
+  fs.rmSync(paths.mcpCredential);
+  fs.writeFileSync(path.join(root, "synthetic-credential.json"),
+    JSON.stringify({ requestId: REQUEST, ok: true, token: TOKEN_A, version: 1 }), { mode: 0o600 });
+  try { fs.symlinkSync(path.join(root, "synthetic-credential.json"), paths.mcpCredential); } catch (error) {
+    if (process.platform === "win32" && (error as NodeJS.ErrnoException).code === "EPERM")
+      return t.skip("Windows fixture requires symbolic-link privilege");
+    throw error;
+  }
+  let calls = 0; const invoke = () => forwardMcpLine(rpc(), root, { fetch: async () => {
+    calls += 1; return jsonResponse({});
+  } });
+  await assert.rejects(invoke(), (error) => code(error) === "remote_mcp_credential_unsafe");
   assert.equal(calls, 0);
 });
 
