@@ -134,6 +134,7 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
         command: command(node, contextHook),
         status: "Applying evidence-first routing",
       },
+      hook("codex-research-first.mts"),
       ...native(options.nativeHooks?.contextCli),
     ]),
     group("PostToolUse", "Edit|Write|MultiEdit|apply_patch|functions\\.exec", [
@@ -154,6 +155,7 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
     ]),
     group("PreCompact", "manual|auto", [hook("codex-precompact-checkpoint.mts", { timeout: 30 })]),
     group("Stop", "", [
+      hook("codex-research-stop.mts", { timeout: 30 }),
       ...(options.observationStopHook === true
         ? [hook("codex-observation-stop.mts", { timeout: 30 })]
         : [
@@ -292,7 +294,8 @@ export function renderWithoutNativeHooks(options: RenderOptions): string {
 }
 export function renderPreviousNativeHooks(current: RenderOptions): string {
   const options = beforeWindowsCommands(current);
-  return ["# Managed Kherep Codex Maestro parity projection.", renderHooks(options, true), renderMcp(options), renderPluginMcp(options), ""].join("\n\n");
+  const hooks = withoutHooks(renderHooks(options, true), PRE_RESEARCH_HOOKS);
+  return ["# Managed Kherep Codex Maestro parity projection.", hooks, renderMcp(options), renderPluginMcp(options), ""].join("\n\n");
 }
 
 // Hooks that did not exist in the JavaScript-era projection. An older installer
@@ -303,8 +306,11 @@ export function renderPreviousNativeHooks(current: RenderOptions): string {
 export const POST_LEGACY_HOOKS = [
   "codex-confluence-delivery-check",
   "codex-observation-turn-completion",
+  "codex-research-first",
+  "codex-research-stop",
 ];
 const PRE_OBSERVATION_HOOKS = ["codex-observation-turn-completion"];
+const PRE_RESEARCH_HOOKS = ["codex-research-first", "codex-research-stop"];
 
 function withoutHooks(config: string, names: readonly string[]): string {
   return config
@@ -362,11 +368,19 @@ export function renderBeforePostLegacyHooksWithoutNativeHooks(options: RenderOpt
 }
 
 export function renderBeforeObservationHook(options: RenderOptions): string {
-  return withoutHooks(render(options), PRE_OBSERVATION_HOOKS);
+  return withoutHooks(render(options), [...PRE_OBSERVATION_HOOKS, ...PRE_RESEARCH_HOOKS]);
 }
 
 export function renderBeforeObservationHookWithoutNativeHooks(options: RenderOptions): string {
-  return withoutHooks(renderWithoutNativeHooks(options), PRE_OBSERVATION_HOOKS);
+  return withoutHooks(renderWithoutNativeHooks(options), [...PRE_OBSERVATION_HOOKS, ...PRE_RESEARCH_HOOKS]);
+}
+
+export function renderBeforeResearchHooks(options: RenderOptions): string {
+  return withoutHooks(render(options), PRE_RESEARCH_HOOKS);
+}
+
+export function renderBeforeResearchHooksWithoutNativeHooks(options: RenderOptions): string {
+  return withoutHooks(renderWithoutNativeHooks(options), PRE_RESEARCH_HOOKS);
 }
 
 export function renderLegacyJavaScriptPrefix(options: RenderOptions): string {

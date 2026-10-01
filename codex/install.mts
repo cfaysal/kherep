@@ -28,6 +28,7 @@ import { retiredCentralBrainRender } from "./lib/retired-central-brain.mts";
 import { readRetiredWorkspaceEntries, retireWorkspaceEntries } from "./lib/retired-workspace.mts";
 import * as parityProjection from "./lib/parity-projection.mts";
 import { resolveRegistryFile } from "./lib/registry-file.mts";
+import { assertResearchHookParity } from "./lib/research-hook-parity.mts";
 import { setMarkedBlock } from "./lib/text-merge.mts";
 
 export { setMarkedBlock };
@@ -137,6 +138,7 @@ function declaredMissing(capabilities: Capabilities): string[] {
 export function install(options: InstallOptions = {}) {
   const sourceRoot = import.meta.dirname;
   const repoRoot = path.resolve(sourceRoot, "..");
+  assertResearchHookParity(repoRoot);
   const platform = options.platform || process.platform;
   const codexHome = path.resolve(options.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
   const selectionFile = memoryProviderFile(codexHome);
@@ -176,6 +178,11 @@ export function install(options: InstallOptions = {}) {
     privacyHook: path.join(sourceRoot, "hooks", "privacy-boundary-guard.mts"),
     confluenceDeliveryHook: path.join(sourceRoot, "hooks", "confluence-delivery-check.mts"),
     controlPlane: path.join(repoRoot, "modules", "control-plane"),
+    researchFirstHook: path.join(sourceRoot, "hooks", "research-first.mts"),
+    researchStopHook: path.join(sourceRoot, "hooks", "research-stop.mts"),
+    researchCommon: path.join(sourceRoot, "hooks", "research-common.mts"),
+    researchExecParser: path.join(sourceRoot, "hooks", "research-exec-parser.mts"),
+    researchTranscript: path.join(sourceRoot, "hooks", "research-transcript.mts"),
     registryBridge: path.join(repoRoot, "modules", "mcp-auth-bridge", "registry-http-wrapper.mts"),
     registryRuntime: path.join(repoRoot, "modules", "mcp-auth-bridge", "supergateway-secret-wrapper.mts"),
     localInferenceRunner: path.join(repoRoot, "modules", "local-inference", "runner.mts"),
@@ -411,6 +418,11 @@ export function install(options: InstallOptions = {}) {
         path.join("node", "mcp-intent-hook.mts"), path.join("node", "mcp-stdio-bridge.mts"),
       ]) transaction.copyFile(path.join(sources.controlPlane, relative), path.join(targets.messagingClient, relative));
     }
+    transaction.copyFile(sources.researchFirstHook, path.join(targets.hookDir, "codex-research-first.mts"));
+    transaction.copyFile(sources.researchStopHook, path.join(targets.hookDir, "codex-research-stop.mts"));
+    transaction.copyFile(sources.researchCommon, path.join(targets.hookDir, "research-common.mts"));
+    transaction.copyFile(sources.researchExecParser, path.join(targets.hookDir, "research-exec-parser.mts"));
+    transaction.copyFile(sources.researchTranscript, path.join(targets.hookDir, "research-transcript.mts"));
     transaction.remove(targets.memoryNotifyHook);
     // Issue #72. Beside the deliver hook: the msg CLI from the same checkout.
     transaction.writeFile(controlPlaneRulesPath(codexHome), renderControlPlaneRules(controlPlaneCli(repoRoot)));
