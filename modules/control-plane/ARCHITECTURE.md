@@ -25,6 +25,9 @@ Streamable HTTP call. The node config supplies the endpoint origin; the bridge c
 WebSocket to HTTPS and targets `/mcp`. It forwards native JSON-RPC and `_meta` unchanged, places the
 bearer only in the HTTP Authorization header, and emits fixed local errors. The exact five-tool
 PreToolUse hook registers intent metadata and returns updated arguments without approving the call.
+On Windows the daemon creates the credential with a protected current-user DACL before writing its
+bytes, publishes it atomically, then verifies the published ACL and content through the bridge's
+strict reader. The bearer reaches the fixed Windows PowerShell helper only through bounded stdin.
 Installer opt-in changes only the Codex client projection; Worker and node activation stay separate.
 
 MCP inbox RPC bounds the fully serialized UTF-8 envelope against the unchanged frame limit. An oversized response becomes a fixed actionable error that the HTTP tool explicitly preserves through error sanitization. No partial message list, body truncation, cloud result journal or delivery-state mutation is introduced.

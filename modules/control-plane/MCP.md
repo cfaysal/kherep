@@ -41,8 +41,14 @@ policy or the Worker route.
 For each native JSON-RPC request or notification, the bridge reloads `node.json`, its effective
 policy file and `mcp/credential.json`. The credential must be an owned private regular file. POSIX
 requires an owner-only mode; Windows verifies the current-user owner and permits read grants only to
-that user, SYSTEM and local administrators. Links, unsafe access, invalid schema, missing state and a removed opt-in fail before HTTP. The control URL is
-the only endpoint source. Secure WebSocket becomes HTTPS and the path becomes `/mcp`; credentials in
+that user, SYSTEM and local administrators. On Windows the daemon creates a random temporary file
+with a protected current-user `FullControl` DACL in the `FileStream` constructor, before it writes
+the credential bytes. The fixed Windows PowerShell 5.1 helper receives those bounded UTF-8 bytes
+only on stdin, runs by absolute `SystemRoot` path with an allowlisted environment and the built-in
+module path, and never receives the bearer in arguments or environment. Node atomically publishes
+the file, then the strict reader verifies its ACL and content digest at the published path. Links,
+unsafe access, an unreadable ACL, invalid schema, missing state and a removed opt-in fail before
+HTTP. The control URL is the only endpoint source. Secure WebSocket becomes HTTPS and the path becomes `/mcp`; credentials in
 the URL are refused. The bearer exists only in the request Authorization header, with redirects
 disabled and bounded request, response and deadline handling.
 
