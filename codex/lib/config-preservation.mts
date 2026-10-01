@@ -230,6 +230,8 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
     .flatMap((value) => value.messagingClient
       ? [value, { ...value, messagingClient: { ...value.messagingClient, enabled: !value.messagingClient.enabled } }]
       : [value]);
+  const beforeControlPlaneWindowsVariants = currentVariants
+    .map((value) => ({ ...value, controlPlaneHook: undefined }));
   // Every block written before issue #68 lacks the commandWindows forms.
   const beforeWindowsCommands = { ...withoutOutbox, windowsHookCommands: false };
   // Every block written before the control-plane hook existed lacks it.
@@ -260,7 +262,8 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
     startMarker: options.startMarker,
     endMarker: options.endMarker,
     knownManagedFragments: withManagedNodePaths([
-      ...[...currentVariants, beforeWindowsCommands, beforeControlPlane].flatMap((current) => {
+      ...[...currentVariants, ...beforeControlPlaneWindowsVariants,
+        beforeWindowsCommands, beforeControlPlane].flatMap((current) => {
         const previousStop = { ...current, observationStopHook: false };
         return [...managedFragmentFamily(current, previousStop),
           ...retiredCentralBrainFragments(current, previousStop, options.retiredCentralBrain)];
