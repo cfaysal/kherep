@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { prepareManagedConfig } from "./config-preservation.mts";
 import type { McpProjection, McpServerSpec } from "./contracts.mts";
-import { render } from "./parity-config.mts";
+import { hookGroup, render } from "./parity-config.mts";
 
 // Issue #70. The deliver hook runs from the checkout, so a block written from one
 // checkout names a path that an install from another checkout does not render.
@@ -128,6 +128,27 @@ test("deliver hooks outside the managed block and mixed groups are left alone", 
   assert.ok(config.endsWith(`${END}\n\n${outside}\n`));
   assert.ok(config.includes(mixed));
   assert.equal(deliverCommands(config).length, 7);
+});
+
+test("exact external delivery groups remain the single owner during a managed predecessor upgrade", () => {
+  const predecessor = prepareManagedConfig("", { ...B, controlPlaneHook: undefined }).config;
+  const external = deliverGroups(render(renderB));
+  const operatorHooks = hookGroup("SessionStart", "startup", [
+    { command: "operator-first" }, { command: "operator-unknown" },
+  ]);
+  const operatorMcp = [
+    "[mcp_servers.operator_fixture]", 'command = "operator-owned"', 'args = ["--keep"]', "",
+  ].join("\n");
+  const operatorTail = [external, operatorHooks, TRUST, operatorMcp].join("\n\n");
+  const written = `${predecessor.trimEnd()}\n\n${operatorTail}\n`;
+  assert.deepEqual(deliverEvents(written), ["SessionStart", "UserPromptSubmit", "Stop"]);
+
+  const result = prepareManagedConfig(written, B);
+
+  assert.deepEqual(deliverEvents(result.config), ["SessionStart", "UserPromptSubmit", "Stop"]);
+  assert.equal(deliverCommands(result.config).length, 3);
+  assert.ok(result.config.endsWith(`\n\n${operatorTail}\n`));
+  assert.equal(prepareManagedConfig(result.config, B).config, result.config);
 });
 
 test("an install from another checkout keeps the Codex trust tables", () => {
