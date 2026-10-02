@@ -190,18 +190,19 @@ export function recordingSessions(paths: NodePaths, list: () => Promise<SessionI
   now: () => number = Date.now, undeliverableAfterMs: number = UNDELIVERABLE_AFTER_MS): () => Promise<SessionInfo[]> {
   return async () => {
     const sessions = await list();
+    const observedAt = now();
     try {
-      writeLocalSessions(paths, sessions);
+      writeLocalSessions(paths, sessions, observedAt);
     } catch (error) {
       log(`kherep-node: could not write sessions.json: ${String(error)}`);
     }
     try {
-      rememberSessions(paths, sessions);
+      rememberSessions(paths, sessions, observedAt);
     } catch (error) {
       log(`kherep-node: could not write known-sessions.json: ${String(error)}`);
     }
     try {
-      const refused = refuseUndeliverable(paths.inbox, sessions, now(), undeliverableAfterMs);
+      const refused = refuseUndeliverable(paths.inbox, sessions, observedAt, undeliverableAfterMs);
       if (refused.length > 0) log(`kherep-node: refused ${refused.length} message(s) for sessions that are not running`);
     } catch (error) {
       log(`kherep-node: could not check the inbox for ended sessions: ${String(error)}`);
