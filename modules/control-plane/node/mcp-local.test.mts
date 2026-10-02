@@ -27,6 +27,16 @@ function customPolicy(paths: NodePaths, file: string): void {
     enrolledAt: new Date(0).toISOString() });
 }
 
+async function queuedRequestId(paths: NodePaths): Promise<string> {
+  let names: string[] = [];
+  for (let attempt = 0; attempt < 100 && names.length === 0; attempt++) {
+    try { names = fs.readdirSync(paths.mcpIntents); } catch { /* created asynchronously */ }
+    if (names.length === 0) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(names.length, 1);
+  return names[0]!.slice(0, -5);
+}
+
 test("credential is stored privately and inbox reads do not alter delivery state", (t) => {
   const { paths } = temporary(t);
   assert.equal(hasMcpCredential(paths), false);
@@ -69,21 +79,45 @@ test("trusted hook rejects a model requestId and waits for durable registration 
   const base = { hook_event_name: "PreToolUse", tool_name: "mcp__kherep_messaging__sessions",
     session_id: "session-a", tool_use_id: "call-a" };
   const denied = await processMcpIntentHook({ ...base, tool_input: { requestId: MESSAGE, limit: 5 } }, root);
-  assert.equal(denied?.hookSpecificOutput.permissionDecisionReason, "remote_mcp_request_id_must_be_native");
+  assert.deepEqual(denied?.hookSpecificOutput, { hookEventName: "PreToolUse", permissionDecision: "deny",
+    permissionDecisionReason: "remote_mcp_request_id_must_be_native" });
 
   const pending = processMcpIntentHook({ ...base, tool_input: { limit: 5 } }, root);
-  let names: string[] = [];
-  for (let attempt = 0; attempt < 100 && names.length === 0; attempt++) {
-    try { names = fs.readdirSync(paths.mcpIntents); } catch { /* created asynchronously */ }
-    if (names.length === 0) await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.equal(names.length, 1);
-  const requestId = names[0]?.slice(0, -5) ?? "";
+  const requestId = await queuedRequestId(paths);
   recordMcpIntentReceipt(paths, new Set([requestId]), { requestId, ok: true, expiresAt: Date.now() + 120_000, version: 1 });
   const accepted = await pending;
-  assert.deepEqual(accepted?.hookSpecificOutput.updatedInput, { limit: 5, requestId });
-  assert.equal(accepted?.hookSpecificOutput.permissionDecision, undefined);
+  assert.deepEqual(accepted?.hookSpecificOutput, {
+    hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: { limit: 5, requestId },
+  });
 
+  assert.equal(fs.existsSync(path.join(paths.mcpReceipts, `${requestId}.json`)), false);
+});
+
+test("trusted hook denies missing native identity without queuing an intent", async (t) => {
+  const { root, paths } = temporary(t);
+  fs.mkdirSync(paths.dir, { recursive: true });
+  fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [], remoteMcp: { enabled: true } }));
+  const base = { hook_event_name: "PreToolUse", tool_name: "mcp__kherep_messaging__sessions",
+    session_id: "session-a", tool_use_id: "call-a", tool_input: { limit: 5 } };
+  for (const invalid of [{ session_id: undefined }, { tool_use_id: undefined },
+    { hook_event_name: "PostToolUse" }, { tool_input: [] }]) {
+    const result = await processMcpIntentHook({ ...base, ...invalid }, root);
+    assert.deepEqual(result?.hookSpecificOutput, { hookEventName: "PreToolUse", permissionDecision: "deny",
+      permissionDecisionReason: "remote_mcp_missing_native_identity" });
+  }
+  assert.equal(fs.existsSync(paths.mcpIntents), false);
+});
+
+test("trusted hook denies rejected durable registration without rewriting arguments", async (t) => {
+  const { root, paths } = temporary(t);
+  fs.mkdirSync(paths.dir, { recursive: true });
+  fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [], remoteMcp: { enabled: true } }));
+  const pending = processMcpIntentHook({ hook_event_name: "PreToolUse", tool_name: "mcp__kherep_messaging__sessions",
+    session_id: "session-a", tool_use_id: "call-a", tool_input: { limit: 5 } }, root);
+  const requestId = await queuedRequestId(paths);
+  recordMcpIntentReceipt(paths, new Set([requestId]), { requestId, ok: false, error: "synthetic-rejection" });
+  assert.deepEqual((await pending)?.hookSpecificOutput, { hookEventName: "PreToolUse", permissionDecision: "deny",
+    permissionDecisionReason: "remote_mcp_intent_rejected" });
   assert.equal(fs.existsSync(path.join(paths.mcpReceipts, `${requestId}.json`)), false);
 });
 
