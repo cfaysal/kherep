@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import { digestMcpArguments, MCP_INBOX_TOO_LARGE, type McpIntentClaim, type McpTool } from "../../protocol-mcp.mts";
+import { isMessageProgress } from "../../protocol-messages.mts";
 import { registryStub, sessionStub, type Env } from "./env.mts";
 import { routeEffects } from "./message-routing.mts";
 
@@ -93,7 +94,9 @@ function server(env: Env, principal: Principal): McpServer {
     if (!verified.ok) return error(verified.error);
     const record = await registryStub(env).mcpMessageStatus(principal.nodeId, messageId);
     if (!record) return error("message status is not available to this node");
-    return result({ ok: true, messageId, state: record.state, updatedAt: record.updatedAt });
+    const progress = record.state === "accepted" && isMessageProgress(record.progress) ? record.progress : undefined;
+    return result({ ok: true, messageId, state: record.state, updatedAt: record.updatedAt,
+      ...(progress ? { progress } : {}) });
   });
 
   mcp.registerTool("inbox", { description: "Read the verified originating session inbox from its online node.",

@@ -108,6 +108,8 @@ Intent rows contain identifiers, digests, timestamps and one fixed outcome value
 | `reply` | Derives the recipient from stored message provenance and enforces the reply-depth limit |
 | `status` | Returns metadata-only state for a message visible to the caller's node |
 
+For an accepted message, `status` also returns validated `progress` metadata when available: a fixed `phase` and `code`, `observedAt`, and optional `retryAt`. These codes distinguish waiting for a user turn, waking, fallback activity and delivery failures. Accepted progress does not prove delivery. Invalid progress and stale progress on terminal states are omitted. Arbitrary persisted reasons and message bodies are never included in a status result.
+
 Inbox has three distinct results: items, a successful empty list, or a fixed offline/read error. The body transits from the expected authenticated node socket directly to the waiting HTTP request. It does not enter `SessionStore`, the command-result journal, Registry SQLite, an audit record or a log. The read uses the exact current session id. Alias ownership is not inferred from a reused display name.
 
 Codex CLI replies preserve the full sender session id supplied by the delivery hook, so a native MCP message and its CLI response retain the same exact identities. Explicit aliases remain supported by the CLI, but historical alias messages are not reinterpreted as full-id hops in a native reply chain.
