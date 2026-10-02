@@ -117,7 +117,7 @@ describe("cross-runtime reply", () => {
     await vi.waitFor(() => expect(getSent(pathsB, reply))
       .toMatchObject({ state: "accepted", inReplyTo: question, to: { nodeId: a.nodeId, session: "planner" } }), WAIT);
     await vi.waitFor(() => expect(getMessage(pathsA.inbox, reply)).toMatchObject({
-      from: { nodeId: b.nodeId, session: `codex-${THREAD.slice(-8)}` }, toSession: "planner", text: "main", inReplyTo: question, state: "accepted",
+      from: { nodeId: b.nodeId, session: THREAD }, toSession: "planner", text: "main", inReplyTo: question, state: "accepted",
     }), WAIT);
 
     await Promise.all([a.idle(), b.idle()]);

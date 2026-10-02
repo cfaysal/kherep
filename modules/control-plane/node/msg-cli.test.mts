@@ -208,13 +208,20 @@ test("msg inbox shows this session's messages, msg status the state of a sent on
   assert.equal((await run(paths, ["frobnicate"])).code, 2);
 });
 
-test("msg send --from a recorded Codex session id sends as that session's name", async (t) => {
+test("msg send --from preserves a recorded Codex session id", async (t) => {
   const paths = setup(t);
   const codex = "019a2b3c-4d5e-7f60-8123-456789abcdef";
   recordCodexSession(paths, codex, "/work/b", NOW);
   const sent = await run(paths, ["send", "--from", codex, "node-b/docs", "--", "hello"], {});
   assert.equal(sent.code, 0, sent.err);
-  assert.equal(getOutbox(paths, sent.out)?.fromSession, "codex-89abcdef");
+  assert.equal(getOutbox(paths, sent.out)?.fromSession, codex);
+  writeLocalSessions(paths, [{ sessionId: codex, name: "codex-89abcdef", runtime: "codex", state: "running" }]);
+  const implicit = await run(paths, ["send", "node-b/docs", "hello"], { KHEREP_SESSION_ID: codex });
+  assert.equal(implicit.code, 0, implicit.err);
+  assert.equal(getOutbox(paths, implicit.out)?.fromSession, codex);
+  const alias = await run(paths, ["send", "--from", "codex-89abcdef", "node-b/docs", "hello"], {});
+  assert.equal(alias.code, 0, alias.err);
+  assert.equal(getOutbox(paths, alias.out)?.fromSession, "codex-89abcdef");
   // An id that no Codex hook recorded is sent as typed.
   assert.equal(getOutbox(paths, (await run(paths, ["send", "--from", "019a2b3c-other", "node-b/docs", "x"], {})).out)?.fromSession,
     "019a2b3c-other");
