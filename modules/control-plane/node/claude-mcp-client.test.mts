@@ -32,15 +32,15 @@ test("renders an exact hook-only plugin and one credential-free MCP server", () 
   const handler = hooks.hooks.PreToolUse[0];
   assert.equal(handler.matcher, CLAUDE_TOOL_MATCHER);
   assert.deepEqual(handler.hooks, [{ type: "command", command: "/usr/local/bin/node", args: [
-    path.join(clientRoot, "control-plane/node/mcp-intent-hook.mts"), "--config-root", configRoot,
+    "/opt/Kherep Client/control-plane/node/mcp-intent-hook.mts", "--config-root", configRoot,
     "--runtime", "claude-code",
   ] }]);
   assert.deepEqual(JSON.parse(rendered.mcpJson), { mcpServers: { kherep_messaging: {
-    command: "/usr/local/bin/node", args: [path.join(clientRoot, "control-plane/node/mcp-stdio-bridge.mts"),
+    command: "/usr/local/bin/node", args: ["/opt/Kherep Client/control-plane/node/mcp-stdio-bridge.mts",
       "--config-root", configRoot],
   } } });
-  assert.deepEqual(rendered.activationArgs, ["--plugin-dir", path.join(clientRoot, "plugin"),
-    "--mcp-config", path.join(clientRoot, "mcp.json"), "--strict-mcp-config"]);
+  assert.deepEqual(rendered.activationArgs, ["--plugin-dir", "/opt/Kherep Client/plugin",
+    "--mcp-config", "/opt/Kherep Client/mcp.json", "--strict-mcp-config"]);
   assert.doesNotMatch(`${rendered.pluginJson}${rendered.hooksJson}${rendered.mcpJson}`,
     /allowedTools|permissionDecision|Authorization|Bearer|token|listen|env/i);
 });
