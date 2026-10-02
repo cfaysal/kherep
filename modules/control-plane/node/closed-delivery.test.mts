@@ -220,12 +220,14 @@ test("every successful listing is remembered, and an ended session stays known",
   const node = closedNode(t);
   const listed = [{ sessionId: "2a2a2a2a-0000-4000-8000-000000000000", runtime: "codex", state: "active", cwd: node.workspace }];
   let answer = listed;
-  const list = recordingSessions(node.paths, async () => answer, () => {});
+  const list = recordingSessions(node.paths, async () => answer, () => {}, () => T0);
   await list();
   answer = [];
   await list();
   assert.deepEqual(readKnownSessions(node.paths).map((s) => s.sessionId).sort(), [listed[0].sessionId, SESSION].sort());
   assert.equal(readKnownSessions(node.paths).find((s) => s.sessionId === listed[0].sessionId)?.cwd, node.workspace);
+  assert.equal(readKnownSessions(node.paths).find((s) => s.sessionId === listed[0].sessionId)?.lastSeen, new Date(T0).toISOString());
+  assert.equal(JSON.parse(fs.readFileSync(node.paths.sessions, "utf8")).updatedAt, new Date(T0).toISOString());
 });
 
 test("a message at the reply depth limit is refused, others of the burst still go to an intercom session", async (t) => {
