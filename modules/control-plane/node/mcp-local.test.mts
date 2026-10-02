@@ -33,7 +33,10 @@ function customPolicy(paths: NodePaths, file: string): void {
 async function queuedRequestId(paths: NodePaths): Promise<string> {
   let names: string[] = [];
   for (let attempt = 0; attempt < 100 && names.length === 0; attempt++) {
-    try { names = fs.readdirSync(paths.mcpIntents); } catch { /* created asynchronously */ }
+    try {
+      names = fs.readdirSync(paths.mcpIntents).filter((name) =>
+        /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}\.json$/.test(name));
+    } catch { /* created asynchronously */ }
     if (names.length === 0) await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.equal(names.length, 1);
@@ -52,6 +55,15 @@ async function runHookCli(root: string, input: Record<string, unknown>, extra: s
   assert.equal(code, 0, Buffer.concat(stderr).toString("utf8"));
   return JSON.parse(Buffer.concat(stdout).toString("utf8")) as Record<string, unknown>;
 }
+
+test("queued intent polling waits for the published UUID file and ignores atomic staging files", async (t) => {
+  const { paths } = temporary(t);
+  fs.mkdirSync(paths.mcpIntents, { recursive: true });
+  fs.writeFileSync(path.join(paths.mcpIntents, `.${MESSAGE}.${NODE}.json`), "synthetic-staging");
+  const publish = setTimeout(() => fs.writeFileSync(path.join(paths.mcpIntents, `${MESSAGE}.json`), "{}"), 30);
+  t.after(() => clearTimeout(publish));
+  assert.equal(await queuedRequestId(paths), MESSAGE);
+});
 
 test("credential is stored privately and inbox reads do not alter delivery state", (t) => {
   const { paths } = temporary(t);
