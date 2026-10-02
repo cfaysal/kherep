@@ -9,10 +9,14 @@ import type { NodeClient } from "./client.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { listInbox, writeJsonAtomic } from "./inbox.mts";
 import { writePrivateWindowsMcpCredential } from "./mcp-credential-file.mts";
+import { publishSessionFrames } from "./session-publication.mts";
 
 const fileOf = (dir: string, requestId: string): string => path.join(dir, `${requestId}.json`);
 const MAX_LOCAL_INTENTS = 128;
 const LOCAL_RECORD_RETENTION_MS = 10 * 60_000;
+// The trusted hook still waits eight seconds. Unregistered requests cannot
+// occupy the discovery lane after their originating hook has stopped waiting.
+const NATIVE_INTENT_WINDOW_MS = 8_000;
 
 function readJson(file: string): unknown {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -85,17 +89,46 @@ export function enqueueMcpIntent(paths: NodePaths, body: McpIntentRegistration):
   writeJsonAtomic(fileOf(paths.mcpIntents, body.requestId), body);
 }
 
-export function pollMcpIntents(client: NodeClient, paths: NodePaths, inflight: Set<string>, send: (frame: string) => boolean): void {
+export async function pollMcpIntents(client: NodeClient, paths: NodePaths, inflight: Set<string>, send: (frame: string) => boolean,
+  beforeSnapshot?: () => Promise<boolean>): Promise<void> {
   if (!client.authenticated) return;
   ensureDir(paths.mcpIntents);
+  const pending: McpIntentRegistration[] = [];
+  const deadlines = new Map<string, number>();
   for (const name of fs.readdirSync(paths.mcpIntents).filter((entry) => entry.endsWith(".json")).slice(0, 128)) {
     const file = path.join(paths.mcpIntents, name);
     let body: unknown;
     try { body = readJson(file); } catch { continue; }
     if (!isMcpIntentRegistration(body) || inflight.has(body.requestId)) continue;
-    const [frame] = client.registerMcpIntent(body);
-    if (frame && send(frame)) inflight.add(body.requestId);
+    const deadline = fs.statSync(file).mtimeMs + NATIVE_INTENT_WINDOW_MS;
+    if (deadline <= Date.now()) { fs.rmSync(file, { force: true }); continue; }
+    pending.push(body);
+    deadlines.set(body.requestId, deadline);
   }
+  if (pending.length === 0) return;
+  const expired = (body: McpIntentRegistration): boolean => {
+    if (deadlines.get(body.requestId)! > Date.now()) return false;
+    fs.rmSync(fileOf(paths.mcpIntents, body.requestId), { force: true });
+    return true;
+  };
+  const register = (body: McpIntentRegistration): boolean => {
+    if (expired(body)) return true;
+    const [frame] = client.registerMcpIntent(body);
+    if (!frame || !send(frame)) return false;
+    inflight.add(body.requestId);
+    return true;
+  };
+  const known = new Set(client.knownMcpIntents(pending));
+  for (const body of known) if (!register(body)) return;
+  let unresolved = pending.filter(body => !known.has(body));
+  if (unresolved.length === 0) return;
+  const remainingMs = Math.min(...unresolved.map(body => deadlines.get(body.requestId)!)) - Date.now();
+  const snapshots = await client.sessionsBeforeMcpIntents(beforeSnapshot, remainingMs);
+  if (snapshots === null) return;
+  unresolved = unresolved.filter(body => !expired(body));
+  if (unresolved.length === 0) { client.invalidateSessionsSnapshot(); return; }
+  if (!publishSessionFrames(client, snapshots, send)) return;
+  for (const body of unresolved) if (!register(body)) return;
 }
 
 export function recordMcpIntentReceipt(paths: NodePaths, inflight: Set<string>, body: McpIntentReceiptBody): void {

@@ -15,6 +15,7 @@ import {
   type MessageDeliverBody, type MessageProgress, type MessageReceiptBody, type MessageSendBody, type MessageState,
 } from "../protocol-messages.mts";
 import { signChallenge, type NodeIdentity } from "./identity.mts";
+import { discoverMcpSessions } from "./mcp-session-discovery.mts";
 import { acceptsMessage, advertisedCapabilities, isAllowed, type NodePolicy } from "./policy.mts";
 import {
   isMcpCredentialBody, isMcpInboxRequestBody, isMcpIntentReceiptBody, MCP_INBOX_TOO_LARGE,
@@ -37,7 +38,7 @@ export interface ClientOptions {
   facts: () => NodeFacts;
   runtimes: () => Promise<RuntimeInfo[]>;
   // Rejects when the listing failed, which is not the same as no sessions.
-  sessions: () => Promise<SessionInfo[]>;
+  sessions: (signal?: AbortSignal) => Promise<SessionInfo[]>;
   // Stores an accepted message in the node inbox; throws when it cannot.
   storeMessage: (body: MessageDeliverBody) => void;
   // The last local session listing (sessions.json), so a policy rule for a
@@ -221,6 +222,11 @@ export class NodeClient {
       this.options.log?.(`kherep-node: session listing failed, snapshot skipped: ${String((error as Error).message ?? error)}`);
       return [];
     }
+    return this.sessionFrames(sessions);
+  }
+
+  sessionFrames(sessions: SessionInfo[]): string[] {
+    if (!this.authenticated) return [];
     const json = JSON.stringify(sessions);
     if (json === this.lastSnapshot) return [];
     this.lastSnapshot = json;
@@ -269,6 +275,29 @@ export class NodeClient {
   registerMcpIntent(body: McpIntentRegistration): string[] {
     return this.authenticated && this.policy.remoteMcp?.enabled === true
       ? [this.frame("mcp.intent.register", { ...body })] : [];
+  }
+
+  knownMcpIntents(intents: McpIntentRegistration[]): McpIntentRegistration[] {
+    const sessions: SessionInfo[] = JSON.parse(this.lastSnapshot ?? "[]");
+    const runtimes = new Map(sessions.map(session => [session.sessionId, session.runtime]));
+    return intents.filter(intent => runtimes.get(intent.sessionId) === intent.runtime);
+  }
+
+  async sessionsBeforeMcpIntents(beforeSnapshot?: () => Promise<boolean>, remainingMs?: number): Promise<string[] | null> {
+    if (!this.authenticated || this.policy.remoteMcp?.enabled !== true) return null;
+    let discovered: SessionInfo[];
+    try { discovered = await discoverMcpSessions(this.options.sessions, remainingMs); }
+    catch (error) {
+      this.options.log?.(`kherep-node: native session discovery failed, registration skipped: ${String((error as Error).message ?? error)}`);
+      return null;
+    }
+    if (beforeSnapshot && !await beforeSnapshot()) return null;
+    if (!this.authenticated || this.policy.remoteMcp?.enabled !== true) return null;
+    return this.sessionFrames(discovered);
+  }
+
+  invalidateSessionsSnapshot(): void {
+    this.lastSnapshot = null;
   }
 
   // The state the target session reached: delivered, or refused with a reason.

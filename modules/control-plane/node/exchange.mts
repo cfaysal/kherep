@@ -186,10 +186,11 @@ export function localSessionName(paths: NodePaths, sessionId: string): string | 
 // sessions.json; the delivery hook reads names from there instead of running
 // claude on every prompt. The same successful listing refuses inbox messages
 // whose session has ended (refuseUndeliverable); a failed one decides nothing.
-export function recordingSessions(paths: NodePaths, list: () => Promise<SessionInfo[]>, log: (line: string) => void,
-  now: () => number = Date.now, undeliverableAfterMs: number = UNDELIVERABLE_AFTER_MS): () => Promise<SessionInfo[]> {
-  return async () => {
-    const sessions = await list();
+export function recordingSessions(paths: NodePaths, list: (signal?: AbortSignal) => Promise<SessionInfo[]>, log: (line: string) => void,
+  now: () => number = Date.now, undeliverableAfterMs: number = UNDELIVERABLE_AFTER_MS): (signal?: AbortSignal) => Promise<SessionInfo[]> {
+  return async (signal) => {
+    const sessions = await list(signal);
+    signal?.throwIfAborted();
     const observedAt = now();
     try {
       writeLocalSessions(paths, sessions, observedAt);

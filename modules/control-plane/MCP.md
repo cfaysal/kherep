@@ -12,6 +12,9 @@ sequenceDiagram
     participant MCP as Stateless /mcp handler
     participant Peer as Target node
     Hook->>Node: Metadata-only exact call intent
+    opt Native caller absent from the last published snapshot
+        Node->>Registry: Current sessions.snapshot before the intent
+    end
     Node->>Registry: Authenticated mcp.intent.register
     Registry-->>Node: Durable registration receipt
     Hook-->>Hook: Add unpredictable requestId to tool arguments
@@ -27,6 +30,10 @@ sequenceDiagram
 - `node/mcp-intent-hook.mts` creates an intent only for the exact `mcp__kherep_messaging__*` tools. Callers omit `requestId`; the hook rejects an input that already contains it, waits for the Registry receipt, and then adds the generated id through the supported native rewrite result. Normal MCP approval remains separate.
 - `node/mcp-stdio-bridge.mts` is the opt-in Codex stdio client. It reloads local state per request, derives `/mcp` from the node control URL, and carries the current bearer only in the HTTP Authorization header.
 - `node/mcp-local.mts` keeps the raw bearer and metadata exchange files in the private Kherep config directory. Inbox text crosses the authenticated WebSocket response in memory and is not written to an MCP result journal.
+
+The daemon awaits native-intent polling on its existing ordered connection. It registers cached known callers before awaiting discovery for the unresolved subset, so an unknown caller cannot starve them. The unresolved subset refreshes the complete session listing once and sends its changed snapshot before intent registration. First-call discovery is bounded by two seconds and the remaining local enqueue window inside the unchanged eight-second native-hook deadline. Expired unregistered local intents are removed without inventing a receipt. Cancellation reaches the discovery executable, and late results cannot update local session records. After discovery, the daemon reloads the policy file and publishes any capability change before allocating the snapshot frame. Authentication and MCP opt-in are then rechecked. Known callers and empty or inflight-only rounds add no session discovery. A failed snapshot send blocks unresolved registrations and invalidates that cached snapshot for the next round. A failed or timed-out listing leaves the previous population intact and sends no unknown-session intent.
+
+Periodic session discovery retains its normal budget but waits outside the ordered frame lane. Its publication and task maintenance join that lane. Any newer recorded listing, including native discovery and an ordinary `session.list` command, cancels an outstanding periodic listing or queued publication; an aborted listing cannot rewrite session records or publish a stale snapshot. Socket closure also cancels it. Task maintenance still runs after listing failure or cancellation on the current connection.
 
 No MCP protocol session Durable Object is added. Each HTTP request creates a fresh SDK server. MCP transport session ids, `clientInfo`, tool arguments and shared connector identity are not authorization inputs.
 
