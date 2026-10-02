@@ -16,6 +16,7 @@ import { purgeInbox, storeMessage } from "./inbox.mts";
 import { loadPolicy } from "./policy.mts";
 import { continueTask, startTask, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { listSessions } from "./sessions.mts";
+import { recordAndPublishSessions } from "./session-publication.mts";
 import { pollTasks, recordRequestResult } from "./task-exchange.mts";
 import { watchTasks } from "./task-watch.mts";
 import { handleTaskControlExecute, pollTaskControl } from "./task-control-exchange.mts";
@@ -55,7 +56,8 @@ export function commandHandlers(config: NodeConfig, startedAt: number,
   };
 }
 
-export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: string) => void = (line) => console.error(line)): DaemonHandle {
+export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: string) => void = (line) => console.error(line),
+  sessionSource?: (signal?: AbortSignal) => Promise<SessionInfo[]>): DaemonHandle {
   const identity = readPrivateKey(config.privateKeyFile);
   if (identity.publicKey !== config.publicKey) throw new Error("private key does not match the enrolled public key");
   const policy = loadPolicy(config.policyFile);
@@ -68,9 +70,13 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   } catch (error) {
     log(`kherep-node: inbox purge failed: ${String(error)}`);
   }
-  // Every successful listing also updates sessions.json for the session tools
-  // and includes the Codex sessions the delivery hook recorded.
-  const sessions = recordingSessions(paths, () => listSessions({ paths, codexHome: codexHome() }), log);
+  // Successful listings update sessions.json and include hook-recorded Codex sessions.
+  let periodicDiscovery: AbortController | null = null;
+  const source = sessionSource ?? ((signal?: AbortSignal) => listSessions({ paths, codexHome: codexHome(), signal }));
+  const sessions = recordingSessions(paths, (signal) => {
+    periodicDiscovery?.abort();
+    return source(signal);
+  }, log);
   const runner: RunnerDeps = { paths, policy, log };
   recoverOperations(paths);
   let taskControlInflight = new Set<string>();
@@ -80,7 +86,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   }
   const client = new NodeClient({
     nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions, runner),
-    facts: detectFacts, runtimes: () => discoverRuntimes(), sessions,
+    facts: detectFacts, runtimes: () => discoverRuntimes(),
+    sessions,
     storeMessage: (body) => { storeMessage(paths.inbox, body, Date.now(), replyDepth(paths, body.inReplyTo)); },
     taskRequestResult: (result) => recordRequestResult(paths, result),
     taskControlRegistrationReceipt: (body) => {
@@ -140,18 +147,26 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
       client.registrationSent();
       return true;
     };
-    // Frames are handled strictly in order: command seq/ack depends on it. The
-    // periodic snapshot joins the same chain, since the Worker drops a node
-    // frame whose seq is not above the last one it saw.
+    // Allocate and publish every frame on the same lane. Periodic discovery
+    // waits outside it so an unrelated slow listing cannot postpone native ACKs.
     ws.addEventListener("open", () => {
       ping = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send(PING_FRAME); }, PING_INTERVAL_MS);
       snapshots = setInterval(() => {
-        chain = chain.then(async () => {
-          for (const frame of await client.sessionsSnapshot()) if (ws.readyState === WebSocket.OPEN) ws.send(frame);
-          await watchTasks(runner, log);
-          // Messages for sessions that are no longer running (issue #102).
-          await deliverToClosed(runner, log);
-        }).catch((error: unknown) => log(`kherep-node: session snapshot failed: ${String(error)}`));
+        if (periodicDiscovery) return;
+        const controller = new AbortController();
+        periodicDiscovery = controller;
+        void source(controller.signal).catch((error: unknown) => {
+          if (!controller.signal.aborted) log(`kherep-node: session listing failed, snapshot skipped: ${String(error)}`);
+          return null;
+        }).then((listed) => {
+          chain = chain.then(async () => {
+            if (socket !== ws || ws.readyState !== WebSocket.OPEN) return;
+            if (listed && !controller.signal.aborted) await recordAndPublishSessions(client, paths, listed, send, log, controller.signal);
+            await watchTasks(runner, log);
+            await deliverToClosed(runner, log);
+          }).catch((error: unknown) => log(`kherep-node: session snapshot failed: ${String(error)}`));
+          return chain;
+        }).finally(() => { if (periodicDiscovery === controller) periodicDiscovery = null; });
       }, SESSIONS_INTERVAL_MS);
       exchange = setInterval(() => {
         // Coalesce ticks while one round waits or runs so inbound receipts
@@ -167,7 +182,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           const enabled = current.sessions?.enabled === true && current.sessions.ownTaskControl === true
             && current.sessions.runtimes.length > 0;
           pollTaskControl(client, paths, taskControlInflight, send, Date.now(), enabled);
-          pollMcpIntents(client, paths, mcpInflight, send);
+          await pollMcpIntents(client, paths, mcpInflight, send,
+            async () => publishRegistration(await client.refreshPolicy(loadPolicy(config.policyFile))));
           // Peer messages for ended Codex task sessions resume them (issue #63).
           await pollCodexInbound(runner, log);
           // ... and wake idle interactive Codex sessions with a pointer (issue #66).
@@ -199,6 +215,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     });
     ws.addEventListener("close", (event) => {
       for (const timer of [ping, snapshots, exchange, directory]) if (timer) clearInterval(timer);
+      periodicDiscovery?.abort();
+      periodicDiscovery = null;
       client.connectionClosed();
       if (stopped) return finish();
       // Revoked keys and a connection superseded by the same node identity

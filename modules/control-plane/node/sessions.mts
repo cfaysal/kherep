@@ -18,7 +18,7 @@ export const CLAUDE_RUNTIME = "claude-code";
 export const LIST_TIMEOUT_MS = 10_000;
 const MAX_SESSIONS = 512;
 
-export interface ExecOptions { timeout: number; windowsVerbatimArguments?: boolean; cwd?: string; env?: NodeJS.ProcessEnv }
+export interface ExecOptions { timeout: number; windowsVerbatimArguments?: boolean; cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal }
 // Runs an executable and resolves with its stdout.
 export type Exec = (file: string, args: string[], options: ExecOptions) => Promise<string>;
 
@@ -32,6 +32,7 @@ export interface SessionDeps {
   now?: () => number;
   // With the Codex home, Codex sessions carry their thread title (issue #88).
   codexHome?: string;
+  signal?: AbortSignal;
 }
 
 export interface Invocation { file: string; args: string[]; options: ExecOptions }
@@ -114,11 +115,13 @@ export function mapClaudeAgents(value: unknown): SessionInfo[] | null {
 // Codex sessions, and rejects when a listing fails: a failed read must not
 // look like an empty node. Without claude on PATH it contributes nothing.
 export async function listSessions(deps: SessionDeps = {}): Promise<SessionInfo[]> {
+  deps.signal?.throwIfAborted();
   const now = deps.now?.() ?? Date.now();
   const tasks = deps.paths ? listCodexTaskSessions(deps.paths, now) : [];
   // A task's thread the delivery hook recorded too is listed once, as the task.
   const codex = deps.paths ? listCodexSessions(deps.paths, now).filter((s) => !tasks.some((t) => t.sessionId === s.sessionId)) : [];
   const claude = await listClaudeSessions(deps);
+  deps.signal?.throwIfAborted();
   const titled = deps.codexHome ? withCodexTitles([...tasks, ...codex], readCodexTitles(deps.codexHome)) : [...tasks, ...codex];
   return [...(deps.paths ? withLabels(claude, listTasks(deps.paths)) : claude), ...titled].slice(0, MAX_SESSIONS);
 }
@@ -136,6 +139,7 @@ async function listClaudeSessions(deps: SessionDeps): Promise<SessionInfo[]> {
   const claude = (deps.findClaude ?? findClaude)();
   if (!claude) return [];
   const run = claudeInvocation(claude, deps.platform, deps.comSpec);
+  if (deps.signal) run.options.signal = deps.signal;
   const output = await (deps.exec ?? execFileText)(run.file, run.args, run.options)
     .catch((error: unknown) => { throw new Error(`claude agents failed: ${String((error as Error).message ?? error).slice(0, 200)}`); });
   let parsed: unknown;

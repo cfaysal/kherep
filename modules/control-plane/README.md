@@ -17,6 +17,7 @@ kherep-node --outbound WSS--> Worker kherep-control --> NodeSession Durable Obje
 operator ----HTTPS behind Cloudflare Access--> Worker --> Registry / NodeSession
 owner CLI --> local outbox --> Registry grant / operation --> target journal --> measured result
 verified MCP client --stateless HTTPS, disabled by default--> Worker --> Registry / online originating node
+new native caller --> node sessions.snapshot --> Registry --> subsequent native intent registration
 ```
 
 | Part | Path | Role |

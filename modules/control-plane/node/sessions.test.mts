@@ -68,6 +68,17 @@ test("a failing, timed out or non-JSON listing rejects instead of reporting no s
   await assert.rejects(listSessions({ findClaude: claude, exec: async () => "{}" }), /no session list/);
 });
 
+test("native discovery cancellation reaches the executable and never returns a late population", async () => {
+  const controller = new AbortController();
+  await assert.rejects(listSessions({ findClaude: () => "/opt/bin/claude", signal: controller.signal,
+    exec: async (_file, _args, options) => {
+      assert.equal(options.signal, controller.signal);
+      controller.abort();
+      return JSON.stringify([ROW]);
+    },
+  }), /abort/i);
+});
+
 function client(sessions: () => Promise<SessionInfo[]>) {
   const identity = generateIdentity();
   const results = { log: [] as string[] };
