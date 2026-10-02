@@ -17,6 +17,8 @@ kherep-node --outbound WSS--> Worker kherep-control --> NodeSession Durable Obje
 operator ----HTTPS behind Cloudflare Access--> Worker --> Registry / NodeSession
 owner CLI --> local outbox --> Registry grant / operation --> target journal --> measured result
 verified MCP client --stateless HTTPS, disabled by default--> Worker --> Registry / online originating node
+trusted Codex or Claude hook --> node --> prior intent with actual source session and call
+native HTTP claim --> Registry: Codex session/thread/call, or Claude tool-use ID joined to prior intent
 new native caller --> node sessions.snapshot --> Registry --> subsequent native intent registration
 ```
 
@@ -38,9 +40,14 @@ new native caller --> node sessions.snapshot --> Registry --> subsequent native 
 | Tasks (Worker) | `worker/src/tasks-api.mts`, `worker/src/task-store.mts`, `worker/src/task-dispatch.mts`, `worker/src/task-frames.mts` | `/api/tasks`, the Registry's `tasks` table, node selection, `session.start` dispatch, task reports and requests |
 | Tasks (node) | `node/session-policy.mts`, `node/session-runner.mts`, `node/task-watch.mts`, `node/task-exchange.mts`, `node/task-cli.mts` | The `sessions` policy section, `claude --bg` start, stop and resume, the watch round, and `kherep-node task ...` |
 | Intercom (node) | `node/msg-new.mts` | `kherep-node msg send <node> --new`: a labelled task request for exactly that node |
-| Remote MCP candidate | `MCP.md`, `protocol-mcp.mts`, `worker/src/mcp-http.mts` | Disabled stateless messaging tools with per-node bearer authentication and exact native call intents |
+| Remote MCP candidate | `MCP.md`, `protocol-mcp.mts`, `worker/src/mcp-http.mts` | Disabled-by-default stateless messaging tools with per-node bearer authentication and runtime-specific native call intents |
 
 Owner task-control authentication and persistence are described in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+The optional Claude Code messaging client has a dedicated [client-only installer](../../docs/INSTALLATION.md#optional-claude-messaging-client).
+It preserves persistent settings and MCP entries, activates only the chosen invocation and requires
+the separate Claude runtime policy opt-in. Source/candidate checks, actual-client canaries and
+deployed cross-host acceptance are distinct, as recorded in [MCP.md](MCP.md#activation-gates).
 
 Both Durable Object classes use SQLite storage (declared in the `exports` map with `"storage": "sqlite"`). `NodeSession` accepts the socket with the WebSocket Hibernation API, so an idle node does not keep the object in memory.
 

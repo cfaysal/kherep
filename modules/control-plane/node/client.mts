@@ -16,9 +16,9 @@ import {
 } from "../protocol-messages.mts";
 import { signChallenge, type NodeIdentity } from "./identity.mts";
 import { discoverMcpSessions } from "./mcp-session-discovery.mts";
-import { acceptsMessage, advertisedCapabilities, isAllowed, type NodePolicy } from "./policy.mts";
+import { acceptsMessage, advertisedCapabilities, isAllowed, mcpRuntimeEnabled, type NodePolicy } from "./policy.mts";
 import {
-  isMcpCredentialBody, isMcpInboxRequestBody, isMcpIntentReceiptBody, MCP_INBOX_TOO_LARGE,
+  isMcpCredentialBody, isMcpInboxRequestBody, isMcpIntentReceiptBody, isMcpIntentRegistration, MCP_INBOX_TOO_LARGE,
   type McpCredentialBody, type McpInboxItem, type McpIntentReceiptBody, type McpIntentRegistration,
 } from "../protocol-mcp.mts";
 
@@ -183,8 +183,9 @@ export class NodeClient {
         }
         return [];
       case "mcp.inbox.request": {
-        if (!this.authenticated || this.policy.remoteMcp?.enabled !== true || !isMcpInboxRequestBody(envelope.body)) return [];
+        if (!this.authenticated || !isMcpInboxRequestBody(envelope.body)) return [];
         const body = envelope.body;
+        if (!mcpRuntimeEnabled(this.policy, body.runtime ?? "codex")) return [];
         try {
           const items = await this.options.readMcpInbox?.(body.sessionId, body.limit);
           const response = this.frame("mcp.inbox.response", items
@@ -273,7 +274,7 @@ export class NodeClient {
   }
 
   registerMcpIntent(body: McpIntentRegistration): string[] {
-    return this.authenticated && this.policy.remoteMcp?.enabled === true
+    return this.authenticated && isMcpIntentRegistration(body) && mcpRuntimeEnabled(this.policy, body.runtime)
       ? [this.frame("mcp.intent.register", { ...body })] : [];
   }
 

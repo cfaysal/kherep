@@ -8,7 +8,9 @@ import { registryStub, sessionStub, type Env } from "./env.mts";
 import { routeEffects } from "./message-routing.mts";
 
 interface Principal { nodeId: string; credentialVersion: number }
-interface NativeMetadata { sessionId: string; threadId: string; callId: string }
+type NativeMetadata = { runtime: "codex"; sessionId: string; threadId: string; callId: string }
+  | { runtime: "claude-code"; callId: string };
+const REQUEST_ID_INSTRUCTION = "The native hook supplies requestId; omit it from tool arguments.";
 
 const requestId = z.string().uuid();
 const address = z.object({ nodeId: z.string().uuid(), session: z.string().min(1).max(128) });
@@ -31,33 +33,46 @@ function inboxError(value: string): string {
 function nativeMetadata(value: unknown): NativeMetadata | null {
   if (typeof value !== "object" || value === null) return null;
   const meta = value as Record<string, unknown>;
-  return typeof meta.sessionId === "string" && meta.sessionId.length <= 128
-    && typeof meta.threadId === "string" && meta.threadId.length <= 128
-    && typeof meta.callId === "string" && meta.callId.length <= 128
-    ? { sessionId: meta.sessionId, threadId: meta.threadId, callId: meta.callId } : null;
+  const codexKeys = ["sessionId", "threadId", "callId"];
+  const hasClaude = Object.hasOwn(meta, "claudecode/toolUseId");
+  const hasCodex = codexKeys.some((key) => Object.hasOwn(meta, key));
+  if (hasClaude) {
+    const callId = meta["claudecode/toolUseId"];
+    return !hasCodex && typeof callId === "string" && callId.length > 0 && callId.length <= 128
+      ? { runtime: "claude-code", callId } : null;
+  }
+  return codexKeys.every((key) => Object.hasOwn(meta, key))
+    && typeof meta.sessionId === "string" && meta.sessionId.length > 0 && meta.sessionId.length <= 128
+    && typeof meta.threadId === "string" && meta.threadId.length > 0 && meta.threadId.length <= 128
+    && typeof meta.callId === "string" && meta.callId.length > 0 && meta.callId.length <= 128
+    ? { runtime: "codex", sessionId: meta.sessionId, threadId: meta.threadId, callId: meta.callId } : null;
 }
 
 async function claimReadIntent(env: Env, principal: Principal, tool: McpTool, request: string,
   args: Record<string, unknown>, metaValue: unknown) {
   const prepared = await prepareIntentClaim(principal, tool, request, args, metaValue);
   if (!prepared.ok) return prepared;
-  return registryStub(env).claimMcpIntent(prepared.intent);
+  const claimed = await registryStub(env).claimMcpIntent(prepared.intent);
+  return claimed.ok ? { ...claimed, runtime: prepared.intent.runtime } : claimed;
 }
 
 async function prepareIntentClaim(principal: Principal, tool: McpTool, request: string,
   args: Record<string, unknown>, metaValue: unknown): Promise<{ ok: true; intent: McpIntentClaim } | { ok: false; error: string }> {
   const meta = nativeMetadata(metaValue);
-  if (!meta) return { ok: false as const, error: "verified Codex native call metadata is required" };
+  if (!meta) return { ok: false as const, error: "verified native call metadata is required" };
   const argumentsDigest = await digestMcpArguments(args);
-  return { ok: true, intent: { nodeId: principal.nodeId, credentialVersion: principal.credentialVersion,
-    requestId: request, runtime: "codex", sessionId: meta.sessionId, threadId: meta.threadId, callId: meta.callId,
-    tool, argumentsDigest } };
+  const common = { nodeId: principal.nodeId, credentialVersion: principal.credentialVersion,
+    requestId: request, callId: meta.callId, tool, argumentsDigest };
+  const intent: McpIntentClaim = meta.runtime === "codex"
+    ? { ...common, runtime: "codex", sessionId: meta.sessionId, threadId: meta.threadId }
+    : { ...common, runtime: "claude-code" };
+  return { ok: true, intent };
 }
 
 function server(env: Env, principal: Principal): McpServer {
   const mcp = new McpServer({ name: "kherep-messaging", version: "0.1.0" });
 
-  mcp.registerTool("sessions", { description: "List addressable Kherep session references.",
+  mcp.registerTool("sessions", { description: `List addressable Kherep session references. ${REQUEST_ID_INSTRUCTION}`,
     inputSchema: z.object({ requestId, limit: z.number().int().min(1).max(100).optional() }), outputSchema: baseResult,
     annotations: { readOnlyHint: true } }, async ({ requestId: id, limit }, ctx) => {
     const args = limit === undefined ? {} : { limit };
@@ -69,7 +84,7 @@ function server(env: Env, principal: Principal): McpServer {
     return result({ ok: true, source: { nodeId: principal.nodeId, sessionId: verified.sessionId }, sessions });
   });
 
-  mcp.registerTool("send", { description: "Queue one message from the verified originating session.",
+  mcp.registerTool("send", { description: `Queue one message from the verified originating session. ${REQUEST_ID_INSTRUCTION}`,
     inputSchema: z.object({ requestId, to: address, text: z.string().min(1).max(16_384) }), outputSchema: baseResult },
   async ({ requestId: id, to, text }, ctx) => {
     const args = { to, text };
@@ -86,7 +101,7 @@ function server(env: Env, principal: Principal): McpServer {
     return result({ ok: true, messageId: prepared.intent.requestId, state: sent.status.state });
   });
 
-  mcp.registerTool("status", { description: "Read metadata-only status for one message visible to this node.",
+  mcp.registerTool("status", { description: `Read metadata-only status for one message visible to this node. ${REQUEST_ID_INSTRUCTION}`,
     inputSchema: z.object({ requestId, messageId: z.string().uuid() }), outputSchema: baseResult,
     annotations: { readOnlyHint: true } }, async ({ requestId: id, messageId }, ctx) => {
     const args = { messageId };
@@ -99,18 +114,18 @@ function server(env: Env, principal: Principal): McpServer {
       ...(progress ? { progress } : {}) });
   });
 
-  mcp.registerTool("inbox", { description: "Read the verified originating session inbox from its online node.",
+  mcp.registerTool("inbox", { description: `Read the verified originating session inbox from its online node. ${REQUEST_ID_INSTRUCTION}`,
     inputSchema: z.object({ requestId, limit: z.number().int().min(1).max(20).optional() }), outputSchema: baseResult,
     annotations: { readOnlyHint: true } }, async ({ requestId: id, limit }, ctx) => {
     const args = limit === undefined ? {} : { limit };
     const verified = await claimReadIntent(env, principal, "inbox", id, args, ctx.mcpReq._meta);
     if (!verified.ok) return error(verified.error);
-    const response = await sessionStub(env, principal.nodeId).requestMcpInbox(verified.sessionId, limit ?? 10);
+    const response = await sessionStub(env, principal.nodeId).requestMcpInbox(verified.sessionId, limit ?? 10, verified.runtime);
     if (!response.ok) return error(inboxError(response.error));
     return result({ ok: true, source: { nodeId: principal.nodeId, sessionId: verified.sessionId }, items: response.items });
   });
 
-  mcp.registerTool("reply", { description: "Reply through an existing message relationship.",
+  mcp.registerTool("reply", { description: `Reply through an existing message relationship. ${REQUEST_ID_INSTRUCTION}`,
     inputSchema: z.object({ requestId, inReplyTo: z.string().uuid(), text: z.string().min(1).max(16_384) }), outputSchema: baseResult },
   async ({ requestId: id, inReplyTo, text }, ctx) => {
     const prepared = await prepareIntentClaim(principal, "reply", id, { inReplyTo, text }, ctx.mcpReq._meta);

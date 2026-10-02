@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { digestMcpArguments } from "../protocol-mcp.mts";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { getMessage, storeMessage } from "./inbox.mts";
 import { processMcpIntentHook } from "./mcp-intent-hook.mts";
@@ -35,6 +38,19 @@ async function queuedRequestId(paths: NodePaths): Promise<string> {
   }
   assert.equal(names.length, 1);
   return names[0]!.slice(0, -5);
+}
+
+async function runHookCli(root: string, input: Record<string, unknown>, extra: string[]): Promise<Record<string, unknown>> {
+  const child = spawn(process.execPath, [path.join(import.meta.dirname, "mcp-intent-hook.mts"), "--config-root", root, ...extra],
+    { stdio: ["pipe", "pipe", "pipe"] });
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+  child.stdin.end(JSON.stringify(input));
+  const [code] = await once(child, "close");
+  assert.equal(code, 0, Buffer.concat(stderr).toString("utf8"));
+  return JSON.parse(Buffer.concat(stdout).toString("utf8")) as Record<string, unknown>;
 }
 
 test("credential is stored privately and inbox reads do not alter delivery state", (t) => {
@@ -119,6 +135,62 @@ test("trusted hook denies rejected durable registration without rewriting argume
   assert.deepEqual((await pending)?.hookSpecificOutput, { hookEventName: "PreToolUse", permissionDecision: "deny",
     permissionDecisionReason: "remote_mcp_intent_rejected" });
   assert.equal(fs.existsSync(path.join(paths.mcpReceipts, `${requestId}.json`)), false);
+});
+
+test("trusted Claude hook records native identity and rewrites only after a positive durable receipt", async (t) => {
+  const { root, paths } = temporary(t);
+  fs.mkdirSync(paths.dir, { recursive: true });
+  fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [],
+    remoteMcp: { enabled: true, claudeCode: true } }));
+  const input = { hook_event_name: "PreToolUse", tool_name: "mcp__kherep_messaging__sessions",
+    session_id: "actual-claude-session", tool_use_id: "actual-claude-call", tool_input: { limit: 5 } };
+  const pending = runHookCli(root, input, ["--runtime", "claude-code"]);
+  const requestId = await queuedRequestId(paths);
+  const recorded = JSON.parse(fs.readFileSync(path.join(paths.mcpIntents, `${requestId}.json`), "utf8"));
+  assert.deepEqual(recorded, { requestId, runtime: "claude-code", sessionId: "actual-claude-session",
+    callId: "actual-claude-call", tool: "sessions", argumentsDigest: await digestMcpArguments(input.tool_input) });
+  recordMcpIntentReceipt(paths, new Set([requestId]), { requestId, ok: true, expiresAt: Date.now() + 120_000, version: 1 });
+  assert.deepEqual((await pending).hookSpecificOutput, {
+    hookEventName: "PreToolUse", updatedInput: { limit: 5, requestId },
+  });
+});
+
+test("trusted hook CLI rejects every explicit runtime except Claude Code", async (t) => {
+  const { root } = temporary(t);
+  const output = await runHookCli(root, {}, ["--runtime", "codex"]);
+  assert.deepEqual(output.hookSpecificOutput, { hookEventName: "PreToolUse", permissionDecision: "deny",
+    permissionDecisionReason: "remote_mcp_invalid_arguments" });
+});
+
+test("trusted Claude hook denies caller request IDs and negative durable receipts", async (t) => {
+  const { root, paths } = temporary(t);
+  fs.mkdirSync(paths.dir, { recursive: true });
+  fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [],
+    remoteMcp: { enabled: true, claudeCode: true } }));
+  const base = { hook_event_name: "PreToolUse", tool_name: "mcp__kherep_messaging__sessions",
+    session_id: "actual-claude-session", tool_use_id: "actual-claude-call" };
+  const supplied = await processMcpIntentHook({ ...base, tool_input: { requestId: MESSAGE } }, root, Date.now(), "claude-code");
+  assert.equal(supplied?.hookSpecificOutput.permissionDecisionReason, "remote_mcp_request_id_must_be_native");
+
+  const pending = processMcpIntentHook({ ...base, tool_input: {} }, root, Date.now(), "claude-code");
+  const requestId = await queuedRequestId(paths);
+  recordMcpIntentReceipt(paths, new Set([requestId]), { requestId, ok: false, error: "synthetic-rejection" });
+  assert.deepEqual((await pending)?.hookSpecificOutput, { hookEventName: "PreToolUse", permissionDecision: "deny",
+    permissionDecisionReason: "remote_mcp_intent_rejected" });
+});
+
+test("trusted Claude hook fails closed without the literal Claude runtime opt-in", async (t) => {
+  for (const [index, remoteMcp] of [{ enabled: true }, { enabled: true, claudeCode: false },
+    { enabled: true, claudeCode: "true" }].entries()) {
+    const { root, paths } = temporary(t);
+    fs.mkdirSync(paths.dir, { recursive: true });
+    fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [], remoteMcp }));
+    const result = await processMcpIntentHook({ hook_event_name: "PreToolUse",
+      tool_name: "mcp__kherep_messaging__sessions", session_id: `session-${index}`,
+      tool_use_id: `call-${index}`, tool_input: {} }, root, Date.now(), "claude-code");
+    assert.equal(result?.hookSpecificOutput.permissionDecisionReason, "remote_mcp_disabled");
+    assert.equal(fs.existsSync(paths.mcpIntents), false);
+  }
 });
 
 test("trusted hook fails closed without the current remote MCP policy opt-in", async (t) => {

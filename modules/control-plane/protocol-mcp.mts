@@ -2,37 +2,49 @@
 // Workers imports so the authenticated node and Worker validate identical data.
 
 export const REMOTE_MCP_CAPABILITY = "mcp.messaging.v1";
+export const CLAUDE_MCP_CAPABILITY = "mcp.messaging.claude.v1";
 export const MCP_INBOX_TOO_LARGE = "inbox response exceeds transport limit; retry with a smaller limit or use the local inbox CLI";
 export const MCP_INTENT_TTL_DEFAULT_MS = 120_000;
 export const MCP_INTENT_TTL_MAX_MS = 300_000;
 
 export const MCP_TOOLS = ["sessions", "send", "inbox", "reply", "status"] as const;
 export type McpTool = (typeof MCP_TOOLS)[number];
-export type McpRuntime = "codex";
+export type McpRuntime = "codex" | "claude-code";
 
-export interface McpIntentRegistration {
+interface McpIntentCommon {
   requestId: string;
-  runtime: McpRuntime;
   sessionId: string;
-  threadId?: string;
   callId: string;
   tool: McpTool;
   argumentsDigest: string;
   ttlMs?: number;
 }
 
-export interface McpIntentClaim extends Omit<McpIntentRegistration, "threadId"> {
+export type McpIntentRegistration = McpIntentCommon & (
+  { runtime: "codex"; threadId?: string }
+  | { runtime: "claude-code"; threadId?: never }
+);
+
+interface McpIntentClaimCommon {
   nodeId: string;
   credentialVersion: number;
-  threadId: string;
+  requestId: string;
+  callId: string;
+  tool: McpTool;
+  argumentsDigest: string;
 }
+
+export type McpIntentClaim = McpIntentClaimCommon & (
+  { runtime: "codex"; sessionId: string; threadId: string }
+  | { runtime: "claude-code"; sessionId?: never; threadId?: never }
+);
 
 export interface McpCredentialRotateBody { requestId: string }
 export type McpCredentialBody = { requestId: string; ok: true; token: string; version: number }
   | { requestId: string; ok: false; error: string };
 export type McpIntentReceiptBody = { requestId: string; ok: true; expiresAt: number; version: number }
   | { requestId: string; ok: false; error: string };
-export interface McpInboxRequestBody { requestId: string; sessionId: string; limit: number }
+export interface McpInboxRequestBody { requestId: string; sessionId: string; limit: number; runtime?: McpRuntime }
 export interface McpInboxItem {
   messageId: string;
   from: { nodeId: string; session: string };
@@ -62,14 +74,28 @@ export function isMcpTool(value: unknown): value is McpTool {
 export function isMcpIntentRegistration(value: unknown): value is McpIntentRegistration {
   if (!isObject(value)) return false;
   const ttl = value.ttlMs;
+  const runtime = value.runtime;
   return typeof value.requestId === "string" && UUID.test(value.requestId)
-    && value.runtime === "codex"
+    && (runtime === "codex" || runtime === "claude-code")
     && isShortString(value.sessionId, 128)
-    && (value.threadId === undefined || isShortString(value.threadId, 128))
+    && (runtime === "claude-code" ? !Object.hasOwn(value, "threadId")
+      : value.threadId === undefined || isShortString(value.threadId, 128))
     && isShortString(value.callId, 128)
     && isMcpTool(value.tool)
     && typeof value.argumentsDigest === "string" && DIGEST.test(value.argumentsDigest)
     && (ttl === undefined || (Number.isSafeInteger(ttl) && Number(ttl) > 0 && Number(ttl) <= MCP_INTENT_TTL_MAX_MS));
+}
+
+export function isMcpIntentClaim(value: unknown): value is McpIntentClaim {
+  if (!isObject(value)) return false;
+  const common = typeof value.nodeId === "string" && UUID.test(value.nodeId)
+    && Number.isSafeInteger(value.credentialVersion) && Number(value.credentialVersion) > 0
+    && typeof value.requestId === "string" && UUID.test(value.requestId)
+    && isShortString(value.callId, 128) && isMcpTool(value.tool)
+    && typeof value.argumentsDigest === "string" && DIGEST.test(value.argumentsDigest);
+  if (!common) return false;
+  if (value.runtime === "codex") return isShortString(value.sessionId, 128) && isShortString(value.threadId, 128);
+  return value.runtime === "claude-code" && !Object.hasOwn(value, "sessionId") && !Object.hasOwn(value, "threadId");
 }
 
 export function isMcpCredentialRotateBody(value: unknown): value is McpCredentialRotateBody {
@@ -92,7 +118,8 @@ export function isMcpIntentReceiptBody(value: unknown): value is McpIntentReceip
 
 export function isMcpInboxRequestBody(value: unknown): value is McpInboxRequestBody {
   return isObject(value) && typeof value.requestId === "string" && UUID.test(value.requestId)
-    && isShortString(value.sessionId, 128) && Number.isSafeInteger(value.limit) && Number(value.limit) > 0 && Number(value.limit) <= 20;
+    && isShortString(value.sessionId, 128) && Number.isSafeInteger(value.limit) && Number(value.limit) > 0 && Number(value.limit) <= 20
+    && (value.runtime === undefined || value.runtime === "codex" || value.runtime === "claude-code");
 }
 
 export function isMcpInboxResponseBody(value: unknown): value is McpInboxResponseBody {

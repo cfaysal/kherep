@@ -56,6 +56,40 @@ The installer also wires the control-plane delivery hook, `modules/control-plane
 
 For a files-only installation, set `SKIP_DEPS=1`. Install and configure the required external tools separately before relying on their integrations.
 
+### Optional Claude messaging client
+
+For an enrolled control-plane node, the messaging MCP client can be installed separately from the
+broad Claude adapter. Pass the existing Claude home and the same non-secret config root used by the
+node daemon. Use absolute POSIX paths on macOS and Git Bash paths on Windows, including `--node`
+when supplied.
+
+```sh
+bash bootstrap/install-claude-messaging-client.sh \
+  --home /absolute/path/to/claude-home \
+  --config-root /absolute/path/to/enrolled-node-config-root
+```
+
+The optional `--node /absolute/path/to/node` selects the executable for both projection and
+transaction comparisons. No-argument and help invocations install nothing. A successful install
+prints the client identity and a session activation command:
+
+```sh
+claude --plugin-dir /absolute/claude-home/kherep/claude-messaging-client/plugin \
+  --mcp-config /absolute/claude-home/kherep/claude-messaging-client/mcp.json --strict-mcp-config
+```
+
+Only that invocation uses the supplied MCP configuration. Persistent settings, independent MCP
+entries, hooks and permissions are unchanged. The managed client is a closed directory with a
+verified fixed public module graph; updates refuse drift, undeclared content and symlinks. A changed
+installation retains its previous client under `<home>/backups/claude-messaging-client/`, and failed
+transactions restore the prior target. This installer shares the normal bootstrap lock and does not
+run the broad installer, copy node state or enable any tool permission, node policy or Worker route.
+
+Claude messaging additionally requires the node's literal `remoteMcp.claudeCode: true` opt-in and
+an enabled remote MCP Worker route. Review [MCP activation and native identity](../modules/control-plane/MCP.md)
+before activation. An isolated installed candidate does not prove an actual native client or
+cross-host acceptance.
+
 ## 4. Set up Codex
 
 After setting up the shared dependencies, follow [Codex integration](CODEX.md). It has a separate installer and configuration home. Select the MCP registry appropriate to your setup.
