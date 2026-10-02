@@ -12,7 +12,7 @@ const MAX_INPUT_BYTES = 32 * 1024;
 const ACK_WAIT_MS = 8_000;
 
 type Output = { hookSpecificOutput: { hookEventName: "PreToolUse"; updatedInput?: Record<string, unknown>;
-  permissionDecision?: "deny"; permissionDecisionReason?: string } };
+  permissionDecision: "allow" | "deny"; permissionDecisionReason?: string } };
 
 const deny = (reason: string): Output => ({ hookSpecificOutput: {
   hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason,
@@ -51,7 +51,8 @@ export async function processMcpIntentHook(input: Record<string, unknown>, root:
       const receipt = consumeMcpIntentReceipt(paths, requestId);
       if (receipt) {
         if (!receipt.ok) return deny("remote_mcp_intent_rejected");
-        return { hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: { ...input.tool_input, requestId } } };
+        return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow",
+          updatedInput: { ...input.tool_input, requestId } } };
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }

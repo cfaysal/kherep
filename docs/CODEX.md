@@ -48,8 +48,10 @@ approval override. A normal install without this option projects neither the tab
 The local bridge reloads node configuration, effective policy and the private rotating credential
 for every HTTP request. It derives `/mcp` from the enrolled node's control URL, sends the bearer only
 in the HTTP Authorization header, rejects redirects, and forwards native JSON-RPC and `_meta`
-without adding caller, thread or session identities. The hook returns only `updatedInput` after a
-durable intent receipt and does not approve the MCP call. Normal Codex MCP approval remains in force.
+without adding caller, thread or session identities. Callers omit the hook-owned `requestId`. After
+a durable intent receipt, the hook returns `permissionDecision: "allow"` together with `updatedInput`
+to apply the [native PreToolUse argument rewrite](https://learn.chatgpt.com/docs/hooks#pretooluse).
+Normal Codex MCP approval remains in force.
 
 This client option does not enable the Worker's committed remote MCP flag or the node's
 `remoteMcp.enabled` policy. Both remain separate explicit activation gates. Validate installed source
