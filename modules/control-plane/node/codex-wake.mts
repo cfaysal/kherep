@@ -6,7 +6,7 @@ import { spawnRun } from "./codex-runner.mts";
 import type { NodePaths } from "./config.mts";
 import { deliveryContext, MAX_OFFERS, offerEnded, sessionInbox } from "./deliver-core.mts";
 import { exhaustedOfferReason, permanentFallbackFailure } from "./delivery-failure.mts";
-import { markRefused, markRetry, MAX_REPLY_DEPTH, messageIds, type InboxRecord } from "./inbox.mts";
+import { listInbox, markRefused, markRetry, MAX_REPLY_DEPTH, messageIds, type InboxRecord } from "./inbox.mts";
 import { wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit } from "./task-admission.mts";
@@ -51,9 +51,19 @@ export function note(paths: NodePaths, now: number, sessionId: string, messageId
 export async function pollCodexInbound(deps: RunnerDeps, log: (line: string) => void = () => {}): Promise<void> {
   const sessions = deps.policy.sessions;
   if (!sessions?.enabled || !sessions.runtimes.includes("codex")) return;
+  const tasks = listTasks(deps.paths).filter((record) => record.runtime === "codex" && isPlainSessionId(record.sessionId)
+    && !isActive(record) && record.operatorStoppedAt === undefined);
+  if (tasks.length === 0) return;
   pruneNoted(deps.paths);
-  for (const record of listTasks(deps.paths)) {
-    if (record.runtime !== "codex" || !isPlainSessionId(record.sessionId) || isActive(record) || record.operatorStoppedAt !== undefined) continue;
+  try {
+    const targets = new Set(listInbox(deps.paths.inbox).filter((r) => r.state === "accepted" || r.state === "offered").map((r) => r.toSession));
+    if (!tasks.some((record) => targets.has(record.sessionId!) || targets.has(record.name))) return;
+  } catch (error) {
+    log(`kherep-node: could not read inbox for Codex task routing: ${String((error as Error).message ?? error)}`);
+  }
+  // Only an initially empty round skips the loop. A pending round keeps every
+  // task's fresh read, including messages arriving while another wake awaits.
+  for (const record of tasks) {
     try {
       await wakeTask(deps, record, log);
     } catch (error) {
