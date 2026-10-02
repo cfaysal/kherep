@@ -110,6 +110,8 @@ Intent rows contain identifiers, digests, timestamps and one fixed outcome value
 
 Inbox has three distinct results: items, a successful empty list, or a fixed offline/read error. The body transits from the expected authenticated node socket directly to the waiting HTTP request. It does not enter `SessionStore`, the command-result journal, Registry SQLite, an audit record or a log. The read uses the exact current session id. Alias ownership is not inferred from a reused display name.
 
+Codex CLI replies preserve the full sender session id supplied by the delivery hook, so a native MCP message and its CLI response retain the same exact identities. Explicit aliases remain supported by the CLI, but historical alias messages are not reinterpreted as full-id hops in a native reply chain.
+
 An inbox read is read-only. Returning text over HTTP does not mark a message offered or delivered and does not prove that a chat saw or understood it. Existing delivery hooks and `message.receipt` remain the delivery confirmation path.
 
 The complete serialized inbox response must fit the existing 64 KiB transport limit, measured as UTF-8 bytes including JSON escaping and envelope metadata. If the requested messages do not fit, the tool returns a fixed error rather than truncating messages, omitting records or reporting a successful empty inbox. Retry with a smaller `limit` and a fresh native intent. If one message alone exceeds the serialized limit, use the local `msg inbox` CLI. Message bodies and delivery state remain unchanged.
