@@ -1,11 +1,13 @@
 import { parseArgs } from "node:util";
+import { isNodeId } from "../protocol.mts";
 
 import {
   isTaskId, isTaskRequirements, isTaskText, isTaskTitle, MAX_DIRECTIVE, MAX_SUMMARY, SUPPORTED_RUNTIMES, type TaskRequirements,
   type TaskRuntime,
 } from "../protocol-tasks.mts";
 import { readConfig, type NodePaths } from "./config.mts";
-import { senderSession, sessionIdFromEnv } from "./msg-resolve.mts";
+import { CODEX_ACTIVE_MS, readCodexSession } from "./codex-sessions.mts";
+import { KHEREP_SESSION_ENV, senderSession, SESSION_ENV, sessionIdFromEnv } from "./msg-resolve.mts";
 import { loadPolicy } from "./policy.mts";
 import { listTaskLines, resolveTaskDetail } from "./task-detail.mts";
 import { NO_CHAINS, NOT_DELEGATING, TASKS_ACTIVE } from "./task-exchange.mts";
@@ -25,12 +27,12 @@ export const TASK_USAGE = `usage:
   kherep-node task done <taskId> [--summary <text>]
   kherep-node task show [<taskId or requestId>]
   kherep-node task list
-  kherep-node task new --title <title> --directive <the operator's instruction, verbatim> [--runtime claude|codex] [--os <os>]
-    [--cwd <dir>] [--capability <name>]... [--] <task text...>`;
+  kherep-node task new --title <title> --directive <the operator's instruction, verbatim> [--from <recorded-codex-session-id>] [--runtime claude|codex] [--os <os>]
+    [--node <target-node-id>] [--cwd <dir>] [--capability <name>]... [--] <task text...>`;
 
 export interface TaskArgs {
   positionals: string[];
-  values: { summary?: string; title?: string; directive?: string; runtime?: string; os?: string; cwd?: string; capability?: string[] };
+  values: { summary?: string; title?: string; directive?: string; from?: string; node?: string; runtime?: string; os?: string; cwd?: string; capability?: string[] };
 }
 
 export interface TaskContext { paths: NodePaths; env: NodeJS.ProcessEnv; now?: () => number; out?: (line: string) => void; err?: (line: string) => void }
@@ -39,7 +41,7 @@ export function parseTaskArgs(argv: string[]): TaskArgs {
   return parseArgs({
     args: argv, allowPositionals: true,
     options: { summary: { type: "string" }, title: { type: "string" }, directive: { type: "string" }, runtime: { type: "string" },
-      os: { type: "string" }, cwd: { type: "string" }, capability: { type: "string", multiple: true } },
+      from: { type: "string" }, node: { type: "string" }, os: { type: "string" }, cwd: { type: "string" }, capability: { type: "string", multiple: true } },
   });
 }
 
@@ -51,6 +53,8 @@ export function runTaskArgs({ positionals, values }: TaskArgs, context: TaskCont
   const fail = (message: string): number => { err(`kherep-node task: ${message}`); return 1; };
   const { paths, env } = context;
   const [command, ...rest] = positionals;
+  if (values.from !== undefined && command !== "new") return fail("--from is only supported for task new");
+  if (values.node !== undefined && command !== "new") return fail("--node is only supported for task new");
 
   if (command === "done" && rest.length === 1) {
     const [taskId] = rest;
@@ -84,8 +88,8 @@ export function runTaskArgs({ positionals, values }: TaskArgs, context: TaskCont
 
 // Why this session may not request a task, or null: the checks `task new` and
 // `msg send --new` share (no chains, the node's delegate.request, no active task).
-export function delegationBlocked(paths: NodePaths, env: NodeJS.ProcessEnv): string | null {
-  if (taskForSession(paths, sessionIdFromEnv(env))) return NO_CHAINS;
+export function delegationBlocked(paths: NodePaths, env: NodeJS.ProcessEnv, from?: string): string | null {
+  if (taskForSession(paths, sessionIdFromEnv(env)) || (from && taskForSession(paths, from))) return NO_CHAINS;
   const policy = loadPolicy(readConfig(paths.config)?.policyFile ?? paths.policy);
   if (!policy.sessions?.delegate.request) return NOT_DELEGATING;
   return hasActiveTask(paths) ? TASKS_ACTIVE : null;
@@ -94,9 +98,26 @@ export function delegationBlocked(paths: NodePaths, env: NodeJS.ProcessEnv): str
 function newTask(context: TaskContext, words: string[], values: TaskArgs["values"], now: () => number, out: (line: string) => void,
   fail: (message: string) => number): number {
   const { paths, env } = context;
-  const blocked = delegationBlocked(paths, env);
+  if (values.node !== undefined && !isNodeId(values.node)) return fail("--node requires a full target node id");
+  if (values.from !== undefined) {
+    if (!isTaskId(values.from)) return fail("--from requires a full recorded Codex session id");
+    if ([env[SESSION_ENV], env[KHEREP_SESSION_ENV]]
+      .some(session => session !== undefined && session !== values.from)) {
+      return fail("--from conflicts with the current runtime session");
+    }
+    let valid = false;
+    try {
+      const record = readCodexSession(paths, values.from);
+      const seen = Date.parse(record?.lastSeen ?? "");
+      valid = record?.sessionId === values.from && record.runtime === "codex" && Number.isFinite(seen)
+        && seen <= now() + 5_000 && now() - seen <= CODEX_ACTIVE_MS;
+    } catch { /* A failed hook-record read cannot establish sender identity. */ }
+    if (!valid) return fail("--from requires a complete recent Codex hook record");
+  }
+  const blocked = delegationBlocked(paths, env, values.from);
   if (blocked) return fail(blocked);
-  const from = senderSession(paths, env);
+  // Keep the exact id rather than a short alias that another recorded chat may share.
+  const from = values.from !== undefined ? { ok: true as const, value: values.from } : senderSession(paths, env);
   if (!from.ok) return fail(from.error);
   const directive = values.directive ?? "";
   if (directive.trim() === "" || directive.length > MAX_DIRECTIVE) {
@@ -105,6 +126,7 @@ function newTask(context: TaskContext, words: string[], values: TaskArgs["values
   const runtime = values.runtime ?? "claude";
   if (!SUPPORTED_RUNTIMES.includes(runtime as never)) return fail(`runtime ${runtime} is not supported; use claude or codex`);
   const requirements: TaskRequirements = { runtime: runtime as TaskRuntime, ...(values.os ? { os: values.os } : {}), ...(values.cwd ? { cwd: values.cwd } : {}),
+    ...(values.node !== undefined ? { node: values.node } : {}),
     ...(values.capability?.length ? { capabilities: values.capability } : {}) };
   const text = words.join(" ");
   if (!isTaskTitle(values.title)) return fail("--title is required (one line, at most 200 characters)");

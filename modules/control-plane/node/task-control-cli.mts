@@ -9,7 +9,7 @@ import { queueControlRequest, readControlRequest } from "./task-control-store.mt
 
 export const TASK_CONTROL_USAGE = `usage:
   kherep-node task status <taskId or owned requestId or messageId>
-  kherep-node task stop <taskId>
+  kherep-node task stop <taskId> [--expected-run-version <captured-run-version>]
   kherep-node task result <requestId>`;
 
 export interface TaskControlCliContext {
@@ -68,7 +68,10 @@ export async function runTaskControlArgs(argv: string[], context: TaskControlCli
   const err = context.err ?? ((line: string) => console.error(line));
   const fail = (message: string): number => { err(`kherep-node task: ${message}`); return 1; };
   const [command, id, ...extra] = argv;
-  if (extra.length > 0 || !id || !["status", "stop", "result"].includes(command ?? "")) {
+  const pinned = command === "stop" && extra.length === 2 && extra[0] === "--expected-run-version";
+  const expectedRunVersion = pinned ? extra[1] : undefined;
+  if (pinned && !/^[a-f0-9]{64}$/.test(expectedRunVersion!)) return fail("expected run version must be a lowercase SHA-256 digest");
+  if ((extra.length > 0 && !pinned) || !id || !["status", "stop", "result"].includes(command ?? "")) {
     err(TASK_CONTROL_USAGE);
     return 2;
   }
@@ -90,7 +93,10 @@ export async function runTaskControlArgs(argv: string[], context: TaskControlCli
   if (!status.result) return status.code;
   if (status.result.state !== "succeeded" || status.result.processState !== "running"
     || !status.result.stopSupported || !status.result.runVersion) return fail("fresh status does not identify a stoppable run");
+  if (expectedRunVersion !== undefined && status.result.runVersion !== expectedRunVersion) {
+    return fail("fresh status does not match the expected run version; stop not submitted");
+  }
   const stopId = crypto.randomUUID();
   return (await queueAndWait({ name: "task.control.submit", requestId: stopId, action: "stop", taskId: id,
-    expectedRunVersion: status.result.runVersion }, context)).code;
+    expectedRunVersion: expectedRunVersion ?? status.result.runVersion }, context)).code;
 }

@@ -322,6 +322,19 @@ A task with `requirements.runtime` `codex` (issue #63) runs as `codex exec` on a
 
 A Maestro session may ask for a task with `task new`, which writes `task-requests/<requestId>.json`; the daemon sends it as `task.request` with `title`, `text`, `requirements`, `directive` and `requestedBy` (this session's name or id), and records the Worker's answer (`task.request.result`: `dispatched` with `taskId` and `nodeId`, or `refused` with a reason) in the same file.
 
+Codex Desktop callers without a session environment may supply
+`task new --from <full-codex-session-id>`. The ID must have a complete, matching
+Codex hook record seen within 12 hours. Unknown IDs, short aliases, unreadable or
+malformed records and conflicts with an existing runtime session are refused.
+Every present `CLAUDE_CODE_SESSION_ID` and `KHEREP_SESSION_ID` marker must match;
+one matching marker cannot hide another conflicting or empty marker.
+The request retains the full ID. This option does not enable delegation or
+permit a task session to request another task.
+
+Supply `task new --node <full-target-node-id>` to bind a request to one node.
+The Worker then applies runtime, OS and capability requirements to that exact
+node; it cannot select another eligible node as a fallback.
+
 - Both nodes opt in: the requesting node needs `sessions.delegate.request: true`, the target node `sessions.delegate.accept: true` (with sessions enabled). Both default to false. The requesting node checks before it sends; the Worker checks the capability again, and picks only nodes that advertise `sessions.delegate.accept.v1`. All start limits of the target apply.
 - A delegated task always runs in permission mode `auto` (the target refuses anything but `auto` or the stricter `default`), never `bypassPermissions`.
 - No chains in v1: a session that was itself started for a task cannot request tasks. `task new`, the daemon and the Worker each refuse it.
@@ -340,8 +353,16 @@ operator enables the policy. Deploy the compatible Worker before activating node
 ```sh
 kherep-node task status <taskId-or-owned-requestId-or-messageId>
 kherep-node task stop <taskId>
+kherep-node task stop <taskId> --expected-run-version <captured-run-version>
 kherep-node task result <requestId>
 ```
+
+When stopping a captured run, supply its original 64-character lowercase run
+version. Fresh status for a different run submits no Stop. The Stop request
+retains the supplied version, and the Worker and target node check it again at
+execution. Resolve a pending Stop with `task result <requestId>` using that same
+request ID; do not submit another Stop. Omitting the option retains the existing
+behavior of stopping the run identified by fresh status.
 
 `task status` requests a new target measurement. The Worker resolves an owned
 request or source message to its task; the task id addresses a known task directly.
