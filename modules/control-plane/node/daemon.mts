@@ -16,7 +16,7 @@ import { purgeInbox, storeMessage } from "./inbox.mts";
 import { loadPolicy } from "./policy.mts";
 import { continueTask, startTask, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { listSessions } from "./sessions.mts";
-import { recordAndPublishSessions } from "./session-publication.mts";
+import { recordAndPublishSessions } from "./periodic-session-publication.mts";
 import { pollTasks, recordRequestResult } from "./task-exchange.mts";
 import { watchTasks } from "./task-watch.mts";
 import { handleTaskControlExecute, pollTaskControl } from "./task-control-exchange.mts";
