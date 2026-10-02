@@ -123,6 +123,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     let snapshots: NodeJS.Timeout | null = null;
     let exchange: NodeJS.Timeout | null = null;
     let directory: NodeJS.Timeout | null = null;
+    let exchangePending = false;
     // Outbox records sent on this connection; a reconnect sends them again.
     const inflight = new Set<string>();
     const requestsInflight = new Set<string>();
@@ -153,6 +154,10 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         }).catch((error: unknown) => log(`kherep-node: session snapshot failed: ${String(error)}`));
       }, SESSIONS_INTERVAL_MS);
       exchange = setInterval(() => {
+        // Coalesce ticks while one round waits or runs so inbound receipts
+        // cannot accumulate behind redundant periodic exchange work.
+        if (exchangePending) return;
+        exchangePending = true;
         chain = chain.then(async () => {
           const current = loadPolicy(config.policyFile);
           publishRegistration(await client.refreshPolicy(current));
@@ -169,7 +174,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           // Not awaited: queue runs have their own lane and never block this chain.
           pollCodexQueue(runner, log);
         })
-          .catch((error: unknown) => log(`kherep-node: message exchange failed: ${String(error)}`));
+          .catch((error: unknown) => log(`kherep-node: message exchange failed: ${String(error)}`))
+          .finally(() => { exchangePending = false; });
       }, EXCHANGE_INTERVAL_MS);
       directory = setInterval(() => {
         chain = chain.then(() => { client.directoryRequest().forEach(send); });
