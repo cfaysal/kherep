@@ -414,6 +414,7 @@ export function install(options: InstallOptions = {}) {
         "protocol.mts", "protocol-mcp.mts", "protocol-messages.mts", "protocol-task-control.mts", "protocol-tasks.mts",
         path.join("node", "config.mts"), path.join("node", "inbox.mts"), path.join("node", "mcp-local.mts"),
         path.join("node", "mcp-credential-file.mts"),
+        path.join("node", "session-publication.mts"),
         path.join("node", "policy.mts"), path.join("node", "session-policy.mts"),
         path.join("node", "mcp-intent-hook.mts"), path.join("node", "mcp-stdio-bridge.mts"),
       ]) transaction.copyFile(path.join(sources.controlPlane, relative), path.join(targets.messagingClient, relative));
