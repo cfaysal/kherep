@@ -13,7 +13,9 @@ import { MessageStore, type MessageEffects, type MessageRecord, type NewMessage,
 import { TaskStore, type CreateResult, type NewTask, type TaskRow } from "./task-store.mts";
 import { TaskControlRegistry } from "./task-control-registry.mts";
 import { McpRegistry, type McpOutcome } from "./mcp-registry.mts";
-import { REMOTE_MCP_CAPABILITY, type McpIntentClaim, type McpIntentRegistration } from "../../protocol-mcp.mts";
+import {
+  CLAUDE_MCP_CAPABILITY, REMOTE_MCP_CAPABILITY, type McpIntentClaim, type McpIntentRegistration,
+} from "../../protocol-mcp.mts";
 import type { TaskReportBody } from "../../protocol-tasks.mts";
 import { MAX_REPLY_DEPTH } from "../../protocol-messages.mts";
 import {
@@ -143,6 +145,7 @@ export class Registry extends DurableObject<Env> {
         facts.hostname, facts.os, facts.arch, facts.cpus, facts.memoryBytes, JSON.stringify(capabilities), nodeId);
       this.writeRuntimes(nodeId, runtimes);
       if (!capabilities.includes(REMOTE_MCP_CAPABILITY)) this.mcp.removeNode(nodeId);
+      else if (!capabilities.includes(CLAUDE_MCP_CAPABILITY)) this.mcp.removeRuntime(nodeId, "claude-code");
     });
   }
 

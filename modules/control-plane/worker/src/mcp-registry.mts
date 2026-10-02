@@ -1,6 +1,6 @@
 import {
-  MCP_INTENT_TTL_DEFAULT_MS, REMOTE_MCP_CAPABILITY, isMcpIntentRegistration,
-  type McpIntentClaim, type McpIntentRegistration,
+  CLAUDE_MCP_CAPABILITY, MCP_INTENT_TTL_DEFAULT_MS, REMOTE_MCP_CAPABILITY, isMcpIntentClaim, isMcpIntentRegistration,
+  type McpIntentClaim, type McpIntentRegistration, type McpRuntime,
 } from "../../protocol-mcp.mts";
 
 const SCHEMA = `
@@ -71,8 +71,8 @@ export class McpRegistry {
   }
 
   register(nodeId: string, intent: McpIntentRegistration, now: number): Registration {
-    if (!this.enabled(nodeId)) return { ok: false, error: "remote MCP is not enabled for this node" };
     if (!isMcpIntentRegistration(intent)) return { ok: false, error: "invalid intent metadata" };
+    if (!this.enabled(nodeId, intent.runtime)) return { ok: false, error: this.disabledError(nodeId, intent.runtime) };
     if (this.sessionRuntime(nodeId, intent.sessionId) !== intent.runtime) {
       return { ok: false, error: "native session is not registered on this node" };
     }
@@ -100,13 +100,11 @@ export class McpRegistry {
   }
 
   claim(input: McpIntentClaim, now: number): Claim {
-    if (!this.enabled(input.nodeId)) return { ok: false, error: "remote MCP is not enabled for this node" };
+    if (!isMcpIntentClaim(input)) return { ok: false, error: "invalid intent claim metadata" };
+    if (!this.enabled(input.nodeId, input.runtime)) return { ok: false, error: this.disabledError(input.nodeId, input.runtime) };
     const credential = this.sql.exec("SELECT version FROM mcp_credentials WHERE node_id = ?", input.nodeId).toArray()[0];
     if (!credential || Number(credential.version) !== input.credentialVersion) {
       return { ok: false, error: "MCP credential is stale" };
-    }
-    if (this.sessionRuntime(input.nodeId, input.sessionId) !== input.runtime) {
-      return { ok: false, error: "native session is no longer registered" };
     }
     const row = this.sql.exec("SELECT * FROM mcp_intents WHERE request_id = ?", input.requestId).toArray()[0];
     if (!row || String(row.node_id) !== input.nodeId || Number(row.credential_version) !== input.credentialVersion) {
@@ -114,19 +112,23 @@ export class McpRegistry {
     }
     if (Number(row.expires_at) <= now) return { ok: false, error: "intent expired; register a fresh native intent" };
     if (String(row.arguments_digest) !== input.argumentsDigest) return { ok: false, error: "tool arguments do not match intent" };
-    if (!this.matches(row, input.nodeId, input.credentialVersion, input, false)) {
+    if (!this.matchesClaim(row, input)) {
       return { ok: false, error: "native call identity does not match intent" };
     }
-    if (row.thread_id === null) {
+    const sessionId = String(row.session_id);
+    if (this.sessionRuntime(input.nodeId, sessionId) !== input.runtime) {
+      return { ok: false, error: "native session is no longer registered" };
+    }
+    if (input.runtime === "codex" && row.thread_id === null) {
       this.sql.exec("UPDATE mcp_intents SET thread_id = ? WHERE request_id = ? AND thread_id IS NULL", input.threadId, input.requestId);
-    } else if (String(row.thread_id) !== input.threadId) {
+    } else if (input.runtime === "codex" && String(row.thread_id) !== input.threadId) {
       return { ok: false, error: "native call identity does not match intent" };
     }
     if (row.claimed_at !== null) {
-      return { ok: true, disposition: "recovery", sessionId: String(row.session_id), effectId: input.requestId };
+      return { ok: true, disposition: "recovery", sessionId, effectId: input.requestId };
     }
     this.sql.exec("UPDATE mcp_intents SET claimed_at = ?, outcome = 'claimed' WHERE request_id = ?", now, input.requestId);
-    return { ok: true, disposition: "new", sessionId: String(row.session_id), effectId: input.requestId };
+    return { ok: true, disposition: "new", sessionId, effectId: input.requestId };
   }
 
   removeNode(nodeId: string): void {
@@ -134,20 +136,41 @@ export class McpRegistry {
     this.sql.exec("DELETE FROM mcp_credentials WHERE node_id = ?", nodeId);
   }
 
+  removeRuntime(nodeId: string, runtime: McpRuntime): void {
+    this.sql.exec("DELETE FROM mcp_intents WHERE node_id = ? AND runtime = ?", nodeId, runtime);
+  }
+
   recordOutcome(nodeId: string, requestId: string, outcome: McpOutcome): void {
     this.sql.exec("UPDATE mcp_intents SET outcome = ? WHERE request_id = ? AND node_id = ?", outcome, requestId, nodeId);
   }
 
-  private enabled(nodeId: string): boolean {
-    return this.capabilitiesOf(nodeId)?.includes(REMOTE_MCP_CAPABILITY) === true;
+  private enabled(nodeId: string, runtime: McpRuntime = "codex"): boolean {
+    const capabilities = this.capabilitiesOf(nodeId);
+    return capabilities?.includes(REMOTE_MCP_CAPABILITY) === true
+      && (runtime !== "claude-code" || capabilities.includes(CLAUDE_MCP_CAPABILITY));
   }
 
-  private matches(row: Record<string, SqlStorageValue>, nodeId: string, version: number, intent: McpIntentRegistration,
-    compareThread = true): boolean {
+  private disabledError(nodeId: string, runtime: McpRuntime): string {
+    const capabilities = this.capabilitiesOf(nodeId);
+    return capabilities?.includes(REMOTE_MCP_CAPABILITY) === true && runtime === "claude-code"
+      ? "remote MCP runtime is not enabled for this node" : "remote MCP is not enabled for this node";
+  }
+
+  private matches(row: Record<string, SqlStorageValue>, nodeId: string, version: number,
+    intent: McpIntentRegistration): boolean {
     return String(row.node_id) === nodeId && Number(row.credential_version) === version
       && String(row.runtime) === intent.runtime && String(row.session_id) === intent.sessionId
-      && (!compareThread || (row.thread_id === null ? intent.threadId === undefined : String(row.thread_id) === intent.threadId))
+      && (row.thread_id === null ? intent.threadId === undefined : String(row.thread_id) === intent.threadId)
       && String(row.call_id) === intent.callId && String(row.tool_name) === intent.tool
       && String(row.arguments_digest) === intent.argumentsDigest;
+  }
+
+  private matchesClaim(row: Record<string, SqlStorageValue>, intent: McpIntentClaim): boolean {
+    return String(row.node_id) === intent.nodeId && Number(row.credential_version) === intent.credentialVersion
+      && String(row.runtime) === intent.runtime && String(row.call_id) === intent.callId
+      && String(row.tool_name) === intent.tool && String(row.arguments_digest) === intent.argumentsDigest
+      && (intent.runtime === "claude-code"
+        ? row.thread_id === null
+        : String(row.session_id) === intent.sessionId && (row.thread_id === null || String(row.thread_id) === intent.threadId));
   }
 }

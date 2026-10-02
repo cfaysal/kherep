@@ -160,7 +160,7 @@ describe("stateless remote MCP HTTP", () => {
       callId: "call-no-meta", tool: "sessions", argumentsDigest: await digestMcpArguments({}) });
     const noMeta = await instance.callTool({ name: "sessions", arguments: { requestId: noMetaId },
       _meta: { "claudecode/toolUseId": "unverified" } });
-    expect(noMeta.content).toEqual([{ type: "text", text: "verified Codex native call metadata is required" }]);
+    expect(noMeta.content).toEqual([{ type: "text", text: "remote MCP runtime is not enabled for this node" }]);
     await instance.close();
   });
 

@@ -17,22 +17,37 @@ The daemon serializes native-intent polling with other node frames. It registers
 
 The optional `/mcp` route composes a stateless official SDK v2 handler with the existing Registry and message router. It adds no protocol-session Durable Object. A per-node bearer authenticates HTTP, while each tool effect also requires a short-lived native call intent registered and durably acknowledged over that node's authenticated WebSocket. Registry claim and message creation share one transaction for write tools. Capability, credential version and exact session runtime are rechecked at claim time.
 
+The base `mcp.messaging.v1` opt-in enables Codex. Claude Code also requires literal
+`remoteMcp.claudeCode: true`, advertised as `mcp.messaging.claude.v1`. Its hook records the actual
+native session and tool-use ID before HTTP; the HTTP claim carries only the actual Claude native
+tool-use ID and resolves the source session from that prior intent. Codex continues to supply native
+session, thread and call metadata. Mixed identity fields are refused, and neither path accepts
+model-supplied session identity. Removing only the extra Claude capability deletes its intents while
+preserving Codex intents and the shared credential; re-enabling cannot revive deleted intents.
+The exact identity contracts are tabulated in [MCP.md](MCP.md#runtime-specific-native-identity).
+
 Inbox reads use a typed in-memory request on the originating `NodeSession`. The response is accepted only from the socket that received the request. Body text is returned to the waiting HTTP call and is absent from command history, Registry storage, audits and logs. Reading does not advance delivery state. [MCP.md](MCP.md) defines the complete flow, activation gates and tested limits.
 
 The route flag and node capability both default off. Credential provisioning happens only on the authenticated node socket. The daemon applies policy changes on each exchange round and before processing authentication completion. Removing the MCP opt-in immediately blocks local inbox and intent handling and clears private local MCP exchange state. The daemon retries a reduced registration after a failed socket send; once received, Registry capability retraction transactionally invalidates the credential and intents. Reconnect polling resends only unacknowledged local intent metadata while enabled; idempotent Registry registration preserves the original expiry and does not rewrite an unchanged intent.
 
-Codex can project an additional disabled-by-default local stdio client. Its bridge opens no listener
+Codex can project an additional disabled-by-default local stdio client. Claude Code has a separate
+explicit client-only installer, with a hook-only plugin and named MCP configuration activated per
+invocation. It changes no persistent settings, MCP registries or permissions, refuses drift in its
+closed managed directory and uses the existing reversible bootstrap transaction. Both clients use
+the same bridge. It opens no listener
 and reloads the node config, effective policy and private rotating credential for every outbound
 Streamable HTTP call. The node config supplies the endpoint origin; the bridge converts secure
 WebSocket to HTTPS and targets `/mcp`. It forwards native JSON-RPC and `_meta` unchanged, places the
 bearer only in the HTTP Authorization header, and emits fixed local errors. The exact five-tool
-PreToolUse hook registers intent metadata and returns updated arguments without approving the call.
+PreToolUse hook registers intent metadata before returning updated arguments. Claude emits no
+permission decision; Codex retains its required allow-plus-rewrite contract. Normal native MCP
+approval remains separate.
 On Windows the daemon creates the credential with a protected current-user DACL before writing its
 bytes, publishes it atomically, then verifies the published ACL and content through the bridge's
 strict reader. That reader uses native .NET ACL and `SecurityIdentifier` APIs without PowerShell
 cmdlets or account-name translation. The bearer reaches the fixed Windows PowerShell helper only
 through bounded stdin.
-Installer opt-in changes only the Codex client projection; Worker and node activation stay separate.
+Installer opt-in changes only the selected client projection; Worker and node runtime activation stay separate.
 
 MCP inbox RPC bounds the fully serialized UTF-8 envelope against the unchanged frame limit. An oversized response becomes a fixed actionable error that the HTTP tool explicitly preserves through error sanitization. No partial message list, body truncation, cloud result journal or delivery-state mutation is introduced.
 

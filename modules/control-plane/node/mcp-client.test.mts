@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { makeEnvelope, parseEnvelope, type Envelope } from "../protocol.mts";
-import { REMOTE_MCP_CAPABILITY, type McpIntentRegistration } from "../protocol-mcp.mts";
+import { CLAUDE_MCP_CAPABILITY, REMOTE_MCP_CAPABILITY, type McpIntentRegistration } from "../protocol-mcp.mts";
 import { NodeClient } from "./client.mts";
 import { generateIdentity } from "./identity.mts";
-import { advertisedCapabilities, DEFAULT_POLICY, type NodePolicy } from "./policy.mts";
+import { advertisedCapabilities, DEFAULT_POLICY, loadPolicy, mcpRuntimeEnabled, type NodePolicy } from "./policy.mts";
 
 const NODE = "00000000-0000-4000-8000-0000000000aa";
 const REQUEST = "30000000-0000-4000-8000-000000000001";
@@ -17,12 +20,12 @@ const decode = (frames: string[]): Envelope[] => frames.map((frame) => {
   return parsed.envelope;
 });
 
-function setup(hasCredential = false) {
+function setup(hasCredential = false, activePolicy: NodePolicy = policy) {
   const credentials: unknown[] = [];
   const receipts: unknown[] = [];
   let disabled = 0;
   const client = new NodeClient({
-    nodeId: NODE, identity: generateIdentity(), policy,
+    nodeId: NODE, identity: generateIdentity(), policy: activePolicy,
     handlers: { "node.status": async () => ({}), "runtime.list": async () => [], "session.list": async () => [] },
     facts: () => ({ hostname: "node.example.com", os: "linux", arch: "x64", cpus: 1, memoryBytes: 1 }),
     runtimes: async () => [{ name: "codex", kind: "cli" }],
@@ -37,6 +40,27 @@ function setup(hasCredential = false) {
   });
   return { client, credentials, receipts, disabled: () => disabled };
 }
+
+test("Claude MCP policy requires a literal nested opt-in and advertises its separate capability", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-claude-mcp-policy-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "policy.json");
+  const read = (remoteMcp: unknown) => {
+    fs.writeFileSync(file, JSON.stringify({ version: 1, allowedCommands: [], remoteMcp }));
+    return loadPolicy(file);
+  };
+
+  for (const remoteMcp of [{ enabled: true }, { enabled: true, claudeCode: false }, { enabled: true, claudeCode: "true" }]) {
+    const parsed = read(remoteMcp);
+    assert.equal(mcpRuntimeEnabled(parsed, "codex"), true);
+    assert.equal(mcpRuntimeEnabled(parsed, "claude-code"), false);
+    assert.equal(advertisedCapabilities(parsed).includes(CLAUDE_MCP_CAPABILITY), false);
+  }
+  const enabled = read({ enabled: true, claudeCode: true });
+  assert.equal(mcpRuntimeEnabled(enabled, "claude-code"), true);
+  assert.equal(mcpRuntimeEnabled(enabled, "unknown"), false);
+  assert.deepEqual(advertisedCapabilities(enabled), [REMOTE_MCP_CAPABILITY, CLAUDE_MCP_CAPABILITY]);
+});
 
 function rotationId(frames: Envelope[]): string {
   const body = frames.find((frame) => frame.type === "mcp.credential.rotate")?.body as { requestId?: unknown } | undefined;
@@ -107,6 +131,21 @@ test("a connected node retracts remote MCP immediately when current policy remov
 
   const enabledAgain = decode(await ctx.client.refreshPolicy(policy));
   assert.deepEqual(enabledAgain.map((frame) => frame.type), ["register", "mcp.credential.rotate"]);
+});
+
+test("a connected node cannot register a Claude intent after only the Claude opt-in is retracted", async () => {
+  const claudePolicy: NodePolicy = { ...policy, remoteMcp: { enabled: true, claudeCode: true } };
+  const ctx = setup(true, claudePolicy);
+  await ctx.client.onFrame(JSON.stringify(makeEnvelope("event", { name: "auth.ok" }, 0, 0)));
+  const intent: McpIntentRegistration = { requestId: REQUEST, runtime: "claude-code", sessionId: "session-a", callId: "call-a",
+    tool: "inbox", argumentsDigest: "a".repeat(64) };
+  assert.equal(decode(ctx.client.registerMcpIntent(intent))[0]?.type, "mcp.intent.register");
+  assert.deepEqual(ctx.client.registerMcpIntent({ ...intent, threadId: "invented-thread" } as unknown as McpIntentRegistration), []);
+
+  const refreshed = decode(await ctx.client.refreshPolicy(policy));
+  assert.equal((refreshed[0]?.body as { capabilities: string[] }).capabilities.includes(CLAUDE_MCP_CAPABILITY), false);
+  assert.deepEqual(ctx.client.registerMcpIntent(intent), []);
+  assert.equal(decode(ctx.client.registerMcpIntent({ ...intent, runtime: "codex" }))[0]?.type, "mcp.intent.register");
 });
 
 test("failed credential provisioning remains bounded and retryable while enabled", async () => {

@@ -8,7 +8,7 @@ import { isDirectoryGetBody, isMessageSendBody, isNodeMessageStatusBody } from "
 import { isCommandArgs } from "../../protocol-tasks.mts";
 import {
   isMcpCredentialRotateBody, isMcpInboxResponseBody, isMcpIntentRegistration, MCP_INBOX_TOO_LARGE,
-  type McpInboxResponseBody,
+  type McpInboxResponseBody, type McpRuntime,
 } from "../../protocol-mcp.mts";
 import { handleTaskFrame } from "./task-frames.mts";
 import { flushTaskControl, handleTaskControlEvent } from "./task-control-frames.mts";
@@ -188,7 +188,7 @@ export class NodeSession extends DurableObject<Env> {
     return ws !== null;
   }
 
-  requestMcpInbox(sessionId: string, limit: number): Promise<McpInboxResponseBody> {
+  requestMcpInbox(sessionId: string, limit: number, runtime: McpRuntime): Promise<McpInboxResponseBody> {
     const ws = this.authedSocket();
     if (!ws) return Promise.resolve({ requestId: crypto.randomUUID(), ok: false, error: "originating node is offline" });
     const requestId = crypto.randomUUID();
@@ -201,7 +201,7 @@ export class NodeSession extends DurableObject<Env> {
         resolve({ requestId, ok: false, error: "originating node did not answer inbox request" });
       }, MCP_INBOX_TIMEOUT_MS);
       this.pendingInbox.set(requestId, { socket: ws, resolve, timer });
-      this.sendControl(ws, "mcp.inbox.request", { requestId, sessionId, limit });
+      this.sendControl(ws, "mcp.inbox.request", { requestId, sessionId, limit, runtime });
     });
   }
 
@@ -317,4 +317,3 @@ export class NodeSession extends DurableObject<Env> {
     }
   }
 }
-

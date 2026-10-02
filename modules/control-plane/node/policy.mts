@@ -1,11 +1,11 @@
 import fs from "node:fs";
 
 import { isNodeId, isPhase1Command, isSessionCommand, PHASE1_COMMANDS, type NodeCommand, type Phase1Command } from "../protocol.mts";
+import { CLAUDE_MCP_CAPABILITY, REMOTE_MCP_CAPABILITY, type McpRuntime } from "../protocol-mcp.mts";
 import { isSessionRef, MESSAGING_CAPABILITY, OPERATOR_NODE_ID } from "../protocol-messages.mts";
 import { TASK_CONTROL_CAPABILITY } from "../protocol-task-control.mts";
 import { DELEGATE_ACCEPT_CAPABILITY, DELEGATE_REQUEST_CAPABILITY, SESSIONS_CAPABILITY } from "../protocol-tasks.mts";
 import { parseSessionsPolicy, type SessionsPolicy } from "./session-policy.mts";
-import { REMOTE_MCP_CAPABILITY } from "../protocol-mcp.mts";
 
 // Local allowlist (issue #5, design section 4). The node refuses any command
 // outside this list even when it arrives authenticated from the control plane.
@@ -26,7 +26,7 @@ export interface NodePolicy {
   messaging?: { accept: AcceptRule[]; resumeClosed?: true };
   wake?: WakePolicy;
   sessions?: SessionsPolicy;
-  remoteMcp?: { enabled: true };
+  remoteMcp?: { enabled: true; claudeCode?: true };
 }
 
 export const DEFAULT_POLICY: NodePolicy = { version: 1, allowedCommands: [...PHASE1_COMMANDS] };
@@ -52,8 +52,9 @@ export function loadPolicy(file: string): NodePolicy {
     const accept = parseAcceptRules(value.messaging);
     const wake = parseWake(value.wake);
     const sessions = parseSessionsPolicy(value.sessions);
-    const remoteMcp = typeof value.remoteMcp === "object" && value.remoteMcp !== null
-      && (value.remoteMcp as { enabled?: unknown }).enabled === true ? { enabled: true as const } : null;
+    const remoteMcpValue = value.remoteMcp as { enabled?: unknown; claudeCode?: unknown } | null;
+    const remoteMcp = typeof remoteMcpValue === "object" && remoteMcpValue !== null && remoteMcpValue.enabled === true
+      ? { enabled: true as const, ...(remoteMcpValue.claudeCode === true ? { claudeCode: true as const } : {}) } : null;
     const resumeClosed = (value.messaging as { resumeClosed?: unknown } | undefined)?.resumeClosed === true;
     return { version: 1, allowedCommands: value.allowedCommands.filter(isPhase1Command),
       ...(accept ? { messaging: { accept, ...(resumeClosed ? { resumeClosed: true as const } : {}) } } : {}),
@@ -90,6 +91,12 @@ export function messagingEnabled(policy: NodePolicy): boolean {
   return (policy.messaging?.accept.length ?? 0) > 0;
 }
 
+export function mcpRuntimeEnabled(policy: NodePolicy, runtime: unknown): runtime is McpRuntime {
+  if (policy.remoteMcp?.enabled !== true) return false;
+  if (runtime === "codex") return true;
+  return runtime === "claude-code" && policy.remoteMcp.claudeCode === true;
+}
+
 // What this node advertises in register: its allowed commands, plus
 // messaging.v1 only when at least one accept rule exists, and the session
 // capabilities its sessions section enables.
@@ -98,7 +105,8 @@ export function advertisedCapabilities(policy: NodePolicy): string[] {
   return [...policy.allowedCommands, ...(messagingEnabled(policy) ? [MESSAGING_CAPABILITY] : []),
     ...(s?.enabled ? [SESSIONS_CAPABILITY] : []), ...(s?.delegate.accept ? [DELEGATE_ACCEPT_CAPABILITY] : []),
     ...(s?.delegate.request ? [DELEGATE_REQUEST_CAPABILITY] : []), ...(s?.ownTaskControl && s.runtimes.length > 0 ? [TASK_CONTROL_CAPABILITY] : []),
-    ...(policy.remoteMcp?.enabled ? [REMOTE_MCP_CAPABILITY] : [])];
+    ...(mcpRuntimeEnabled(policy, "codex") ? [REMOTE_MCP_CAPABILITY] : []),
+    ...(mcpRuntimeEnabled(policy, "claude-code") ? [CLAUDE_MCP_CAPABILITY] : [])];
 }
 
 // session "*" matches any local session, from "*" any sender. Otherwise both

@@ -26,7 +26,9 @@ async function enrolled(capabilities: string[] = [REMOTE_MCP_CAPABILITY]) {
   return result.nodeId;
 }
 
-function registration(digest: string, extra: Partial<McpIntentRegistration> = {}): McpIntentRegistration {
+type CodexRegistration = Extract<McpIntentRegistration, { runtime: "codex" }>;
+
+function registration(digest: string, extra: Partial<CodexRegistration> = {}): CodexRegistration {
   return {
     requestId: REQUEST, runtime: "codex", sessionId: SESSION, threadId: SESSION, callId: CALL,
     tool: "send", argumentsDigest: digest, ...extra,
