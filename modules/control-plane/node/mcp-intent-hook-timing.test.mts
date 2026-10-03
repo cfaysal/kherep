@@ -81,7 +81,7 @@ test("opt-in ACK timing records the monotonic receipt wait of a native send with
 test("opt-in ACK timing labels rejected and timed-out receipts without changing the decision", async (t) => {
   const { root, paths, diagnostics, log } = enabled(t);
   fs.mkdirSync(diagnostics, { recursive: true });
-  const pending = processMcpIntentHook(input, root, Date.now(), "codex");
+  const pending = processMcpIntentHook(input, root);
   const requestId = await queued(paths);
   recordMcpIntentReceipt(paths, new Set([requestId]), { requestId, ok: false, error: "synthetic-rejection" });
   assert.equal((await pending)?.hookSpecificOutput.permissionDecisionReason, "remote_mcp_intent_rejected");
