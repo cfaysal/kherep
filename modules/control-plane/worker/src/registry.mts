@@ -281,14 +281,12 @@ export class Registry extends DurableObject<Env> {
     return this.messages.list(nodeId, limit);
   }
 
-  // A replied message also names its reply (issue #200): the earliest message
-  // that answers it under the same relationship MessageStore uses to mark it.
+  // A replied message also names the reply that marked it (issue #200).
   mcpMessageStatus(nodeId: string, messageId: string): (MessageRecord & { replyMessageId?: string }) | null {
     const record = this.messages.visibleTo(nodeId, messageId);
     if (record?.state !== "replied") return record;
-    const reply = this.sql.exec(`SELECT id FROM messages WHERE to_node = ? AND to_session = ? AND from_node = ?
-      AND in_reply_to = ? ORDER BY created_at, rowid LIMIT 1`, record.fromNode, record.fromSession, record.toNode, messageId).toArray()[0];
-    return reply ? { ...record, replyMessageId: String(reply.id) } : record;
+    const replyMessageId = this.messages.replyMessageIdOf(messageId);
+    return replyMessageId ? { ...record, replyMessageId } : record;
   }
 
   // ---- Tasks (issue #31, item 5). The caller dispatches session.start. ----
