@@ -37,8 +37,7 @@ function effectivePolicyFile(root: string): string | null {
 }
 
 type AckOutcome = "accepted" | "rejected" | "timeout" | "storage_error";
-interface AckTiming { runtime: McpRuntime; tool: McpTool; outcome: AckOutcome; end: number; hookStart: number;
-  enqueued: number | null }
+interface AckTiming { runtime: McpRuntime; tool: McpTool; outcome: AckOutcome; ackWaitMs: number | null; hookMs: number }
 
 const round = (ms: number): number => Math.round(ms * 1000) / 1000;
 
@@ -60,8 +59,7 @@ function recordAckTiming(paths: NodePaths, timing: AckTiming): void {
     } catch { /* absent or concurrently rotated */ }
     const record = { at: new Date().toISOString(), method: "hook-intent-receipt", runtime: timing.runtime,
       tool: timing.tool, outcome: timing.outcome, pollIntervalMs: ACK_POLL_MS,
-      ackWaitMs: timing.enqueued === null ? null : round(timing.end - timing.enqueued),
-      hookMs: round(timing.end - timing.hookStart), hookSha256: hookSha256() };
+      ackWaitMs: timing.ackWaitMs, hookMs: timing.hookMs, hookSha256: hookSha256() };
     const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND
       | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
     try { fs.writeSync(fd, `${JSON.stringify(record)}\n`); } finally { fs.closeSync(fd); }
@@ -82,7 +80,9 @@ export async function processMcpIntentHook(input: Record<string, unknown>, root:
   const hookStart = performance.now();
   let enqueued: number | null = null;
   const timed = (outcome: AckOutcome, output: Output): Output => {
-    recordAckTiming(paths, { runtime, tool, outcome, end: performance.now(), hookStart, enqueued });
+    const end = performance.now();
+    recordAckTiming(paths, { runtime, tool, outcome, hookMs: round(end - hookStart),
+      ackWaitMs: enqueued === null ? null : round(end - enqueued) });
     return output;
   };
   try {

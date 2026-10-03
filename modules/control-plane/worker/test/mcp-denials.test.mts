@@ -168,9 +168,8 @@ describe("native MCP send authorization denials", () => {
     const rotatedId = "81000000-0000-4000-8000-000000000007";
     await intent(rotated, rotatedId, "synthetic-call");
     const next = await registry().rotateMcpCredential(rotated.source);
-    expect(next.ok).toBe(true);
+    if (!next.ok) throw new Error(next.error);
     await expectUnauthorized(await rawSend(rotated.token, rotatedId, rotated.args));
-    if (!next.ok) return;
     expectDenied(await send(next.token, rotatedId, rotated.args, meta("synthetic-call")), "intent not found");
     await expectNoMessage(rotated);
 
