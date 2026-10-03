@@ -30,6 +30,8 @@ Inbox reads use a typed in-memory request on the originating `NodeSession`. The 
 
 The route flag and node capability both default off. Credential provisioning happens only on the authenticated node socket. The daemon applies policy changes on each exchange round and before processing authentication completion. Removing the MCP opt-in immediately blocks local inbox and intent handling and clears private local MCP exchange state. The daemon retries a reduced registration after a failed socket send; once received, Registry capability retraction transactionally invalidates the credential and intents. Reconnect polling resends only unacknowledged local intent metadata while enabled; idempotent Registry registration preserves the original expiry and does not rewrite an unchanged intent.
 
+Registry admission separates the per-node limit of 128 unexpired intents from the replay ledger limit of 32,768 retained rows. A claim does not release active capacity before the intent's original expiry. Rows become eligible for pruning 24 hours after that expiry; a later new request-ID registration prunes them at the exact boundary before checking both limits. Exact duplicate registration is resolved before pruning or capacity checks and preserves the original row.
+
 Codex can project an additional disabled-by-default local stdio client. Claude Code has a separate
 explicit client-only installer, with a hook-only plugin and named MCP configuration activated per
 invocation. It changes no persistent settings, MCP registries or permissions, refuses drift in its

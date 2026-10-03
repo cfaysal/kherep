@@ -171,6 +171,8 @@ runtime. Removal or runtime replacement of the originating session invalidates f
 
 Intent rows contain identifiers, digests, timestamps and one fixed outcome value. They contain no message body, inbox result or arbitrary tool result. Unchanged registration retries do not write or extend the row.
 
+Each node may hold at most 128 unexpired intents. Claimed intents continue to count until their original expiry. Expired rows remain as replay metadata for 24 hours after that original expiry, bounded to 32,768 retained rows per node. Before admitting a new request ID, the Registry removes only rows whose original `expires_at` is at or before `now - 24 hours`, then checks the unexpired and retained limits independently. The fixed errors are `too many unexpired MCP intents` and `too many retained MCP intents`. Duplicate lookup remains first: an exact duplicate keeps its original identity and expiry, while changed metadata is refused.
+
 ## Tools
 
 | Tool | Behavior |

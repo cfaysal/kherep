@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS mcp_intents (
 );
 CREATE INDEX IF NOT EXISTS mcp_intents_expiry ON mcp_intents(expires_at);
 `;
-const MAX_INTENTS_PER_NODE = 128;
+const MAX_UNEXPIRED_INTENTS_PER_NODE = 128;
+const MAX_RETAINED_INTENTS_PER_NODE = 32_768;
 const INTENT_REUSE_RETENTION_MS = 24 * 60 * 60_000;
 
 type Failure = { ok: false; error: string };
@@ -85,12 +86,15 @@ export class McpRegistry {
       }
       return { ok: false, error: "requestId already has different intent metadata" };
     }
-    let count = Number(this.sql.exec("SELECT COUNT(*) AS n FROM mcp_intents WHERE node_id = ?", nodeId).one().n);
-    if (count >= MAX_INTENTS_PER_NODE) {
-      this.sql.exec("DELETE FROM mcp_intents WHERE node_id = ? AND expires_at <= ?", nodeId, now - INTENT_REUSE_RETENTION_MS);
-      count = Number(this.sql.exec("SELECT COUNT(*) AS n FROM mcp_intents WHERE node_id = ?", nodeId).one().n);
-      if (count >= MAX_INTENTS_PER_NODE) return { ok: false, error: "too many retained MCP intents" };
+    this.sql.exec("DELETE FROM mcp_intents WHERE node_id = ? AND expires_at <= ?", nodeId, now - INTENT_REUSE_RETENTION_MS);
+    const unexpired = Number(this.sql.exec(
+      "SELECT COUNT(*) AS n FROM mcp_intents WHERE node_id = ? AND expires_at > ?", nodeId, now,
+    ).one().n);
+    if (unexpired >= MAX_UNEXPIRED_INTENTS_PER_NODE) {
+      return { ok: false, error: "too many unexpired MCP intents" };
     }
+    const retained = Number(this.sql.exec("SELECT COUNT(*) AS n FROM mcp_intents WHERE node_id = ?", nodeId).one().n);
+    if (retained >= MAX_RETAINED_INTENTS_PER_NODE) return { ok: false, error: "too many retained MCP intents" };
     const expiresAt = now + (intent.ttlMs ?? MCP_INTENT_TTL_DEFAULT_MS);
     this.sql.exec(`INSERT INTO mcp_intents (request_id, node_id, credential_version, runtime, session_id, thread_id, call_id,
       tool_name, arguments_digest, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
