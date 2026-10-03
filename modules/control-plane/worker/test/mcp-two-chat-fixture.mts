@@ -7,7 +7,7 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { expect, vi } from "vitest";
 
 import { makeEnvelope, parseEnvelope, type Envelope, type SessionInfo } from "../../protocol.mts";
-import type { McpCredentialBody, McpInboxItem, McpIntentReceiptBody } from "../../protocol-mcp.mts";
+import type { McpCredentialBody, McpInboxItem, McpIntentReceiptBody, McpRuntime } from "../../protocol-mcp.mts";
 import { MESSAGING_CAPABILITY, type MessageDeliverBody } from "../../protocol-messages.mts";
 import { NodeClient } from "../../node/client.mts";
 import { nodePaths, type NodePaths } from "../../node/config.mts";
@@ -34,8 +34,12 @@ export const PEER_SESSION = "synthetic-peer";
 // compile; the root typecheck covers both modules with Node types. vitest loads
 // them unchanged at runtime under nodejs_compat. These are their signatures.
 interface HookModule {
-  processMcpIntentHook(input: Record<string, unknown>, root: string, now: number, runtime: "claude-code"):
-    Promise<{ hookSpecificOutput: { updatedInput?: Record<string, unknown> } } | null>;
+  processMcpIntentHook(input: Record<string, unknown>, root: string, now: number, runtime: McpRuntime):
+    Promise<HookOutput | null>;
+}
+export interface HookOutput {
+  hookSpecificOutput: { hookEventName: "PreToolUse"; updatedInput?: Record<string, unknown>;
+    permissionDecision?: "allow" | "deny"; permissionDecisionReason?: string };
 }
 interface LocalModule {
   hasMcpCredential(paths: NodePaths): boolean;
@@ -60,10 +64,17 @@ export interface NativeNode {
   // Every session the local MCP inbox reader was asked for.
   inboxReads: string[];
   hook(sessionId: string, toolUseId: string, tool: string, input: Record<string, unknown>): Promise<Record<string, unknown>>;
+  // The trusted hook's complete output for a raw native PreToolUse input.
+  nativeHook(input: Record<string, unknown>, runtime?: McpRuntime): Promise<HookOutput | null>;
+  // Publishes the current session listing, as periodic publication does.
+  publishSessions(): Promise<void>;
+  // Replaces the daemon connection: a fresh client and in-memory state over the same node files.
+  restart(): Promise<void>;
   mcp(): Promise<Client>;
   close(): Promise<void>;
 }
 
+// `sessions` is read on every listing, so a caller may change it in place.
 export async function startNativeNode(name: string, sessions: SessionInfo[]): Promise<NativeNode> {
   const { processMcpIntentHook } = await runtimeOnly("mcp-intent-hook") as HookModule;
   const { disableMcp, hasMcpCredential, pollMcpIntents, readMcpInbox, recordMcpCredential, recordMcpIntentReceipt } =
@@ -83,56 +94,80 @@ export async function startNativeNode(name: string, sessions: SessionInfo[]): Pr
   fs.writeFileSync(paths.policy, JSON.stringify(POLICY));
   const identity = generateIdentity();
   const nodeId = await enroll({ publicKey: identity.publicKey, privateKey: undefined as unknown as CryptoKey }, name);
-  const inflight = new Set<string>();
   const received: Envelope[] = [];
   const inboxReads: string[] = [];
   const list = recordingSessions(paths, async () => sessions, () => {});
-  const client = new NodeClient({
-    nodeId, identity, policy: POLICY,
-    handlers: { "node.status": async () => ({}), "runtime.list": async () => [], "session.list": list },
-    facts: () => FACTS, runtimes: async () => [{ name: "claude-code", kind: "cli" }], sessions: list,
-    storeMessage: (body) => { storeMessage(paths.inbox, body); },
-    mcpCredentialPresent: () => hasMcpCredential(paths),
-    mcpCredential: (body) => recordMcpCredential(paths, body),
-    mcpIntentReceipt: (body) => recordMcpIntentReceipt(paths, inflight, body),
-    mcpDisabled: () => disableMcp(paths, inflight),
-    readMcpInbox: (sessionId, limit) => { inboxReads.push(sessionId); return readMcpInbox(paths, sessionId, limit); },
-    ...exchangeOptions(paths),
-  });
-  const response = await workerFetch(`/node/connect?nodeId=${nodeId}`, { headers: { upgrade: "websocket" } });
-  const ws = response.webSocket!;
+  let inflight = new Set<string>();
+  let client: NodeClient;
+  let ws: WebSocket;
   // One ordered lane for received frames and intent rounds, as in the daemon.
   let chain = Promise.resolve();
   const send = (frame: string): boolean => { ws.send(frame); return true; };
-  ws.addEventListener("message", (event) => {
-    const parsed = parseEnvelope(event.data as string);
-    if (parsed.ok) received.push(parsed.envelope);
-    chain = chain.then(async () => { for (const frame of await client.onFrame(event.data as string)) send(frame); });
-  });
-  ws.accept();
-  await vi.waitFor(() => expect(client.authenticated && hasMcpCredential(paths)).toBe(true), WAIT);
-  const token = (JSON.parse(fs.readFileSync(paths.mcpCredential, "utf8")) as { token: string }).token;
+  const connect = async (): Promise<void> => {
+    const current = new Set<string>();
+    inflight = current;
+    const connected = new NodeClient({
+      nodeId, identity, policy: POLICY,
+      handlers: { "node.status": async () => ({}), "runtime.list": async () => [], "session.list": list },
+      facts: () => FACTS, runtimes: async () => [{ name: "claude-code", kind: "cli" }], sessions: list,
+      storeMessage: (body) => { storeMessage(paths.inbox, body); },
+      mcpCredentialPresent: () => hasMcpCredential(paths),
+      mcpCredential: (body) => recordMcpCredential(paths, body),
+      mcpIntentReceipt: (body) => recordMcpIntentReceipt(paths, current, body),
+      mcpDisabled: () => disableMcp(paths, current),
+      readMcpInbox: (sessionId, limit) => { inboxReads.push(sessionId); return readMcpInbox(paths, sessionId, limit); },
+      ...exchangeOptions(paths),
+    });
+    client = connected;
+    const response = await workerFetch(`/node/connect?nodeId=${nodeId}`, { headers: { upgrade: "websocket" } });
+    const socket = response.webSocket!;
+    ws = socket;
+    socket.addEventListener("message", (event) => {
+      const parsed = parseEnvelope(event.data as string);
+      if (parsed.ok) received.push(parsed.envelope);
+      chain = chain.then(async () => {
+        for (const frame of await connected.onFrame(event.data as string)) socket.send(frame);
+      });
+    });
+    socket.accept();
+    await vi.waitFor(() => expect(connected.authenticated && hasMcpCredential(paths)).toBe(true), WAIT);
+  };
+  await connect();
+  const token = (): string => (JSON.parse(fs.readFileSync(paths.mcpCredential, "utf8")) as { token: string }).token;
 
   const pump = (): void => { chain = chain.then(() => pollMcpIntents(client, paths, inflight, send)); };
+  const nativeHook = async (input: Record<string, unknown>, runtime: McpRuntime = "claude-code") => {
+    const timer = setInterval(pump, 25);
+    try {
+      return await processMcpIntentHook(input, root, Date.now(), runtime);
+    } finally {
+      clearInterval(timer);
+    }
+  };
   const clients: Client[] = [];
   return {
-    nodeId, root, paths, received, inboxReads,
+    nodeId, root, paths, received, inboxReads, nativeHook,
     async hook(sessionId, toolUseId, tool, input) {
-      const timer = setInterval(pump, 25);
-      try {
-        const output = await processMcpIntentHook({ hook_event_name: "PreToolUse", tool_name: `mcp__kherep_messaging__${tool}`,
-          session_id: sessionId, tool_use_id: toolUseId, tool_input: input }, root, Date.now(), "claude-code");
-        const updated = output?.hookSpecificOutput.updatedInput;
-        if (!updated) throw new Error(`hook denied: ${JSON.stringify(output)}`);
-        return updated;
-      } finally {
-        clearInterval(timer);
-      }
+      const output = await nativeHook({ hook_event_name: "PreToolUse", tool_name: `mcp__kherep_messaging__${tool}`,
+        session_id: sessionId, tool_use_id: toolUseId, tool_input: input });
+      const updated = output?.hookSpecificOutput.updatedInput;
+      if (!updated) throw new Error(`hook denied: ${JSON.stringify(output)}`);
+      return updated;
+    },
+    async publishSessions() {
+      chain = chain.then(async () => { for (const frame of await client.sessionsSnapshot()) send(frame); });
+      await chain;
+    },
+    async restart() {
+      await chain;
+      ws.close(1000, "restart");
+      await connect();
     },
     async mcp() {
+      const bearer = token();
       const instance = new Client({ name: "synthetic-claude-chat", version: "1.0.0" });
       await instance.connect(new StreamableHTTPClientTransport(new URL(`${BASE}/mcp`), {
-        authProvider: { token: async () => token }, fetch: (input, init) => handleMcp(new Request(input, init), enabledEnv),
+        authProvider: { token: async () => bearer }, fetch: (input, init) => handleMcp(new Request(input, init), enabledEnv),
       }));
       clients.push(instance);
       return instance;
