@@ -206,9 +206,11 @@ its hooks. Other runtimes' kinds pass through as their node reported them.
 The kind does not distinguish an Intercom run from an explicitly requested task, and it does not
 imply that the run appears in a desktop session list.
 
-For a `replied` message, `status` also returns `replyMessageId`: the earliest reply under the same
-sender and recipient relationship that marked the message replied. The sending session can read
-that reply with `status` and, while its node is online, with `inbox`.
+For a `replied` message, `status` also returns `replyMessageId`: the reply that marked the message
+replied, recorded by the Registry at that moment. A reply refused at send time never marks the
+original and is never named; a marking reply that its recipient later refuses stays named. Messages
+marked replied before this column existed carry no `replyMessageId`. The sending session can read
+the reply with `status` and, while its node is online, with `inbox`.
 
 For an accepted message, `status` also returns validated `progress` metadata when available: a fixed `phase` and `code`, `observedAt`, and optional `retryAt`. These codes distinguish waiting for a user turn, waking, fallback activity and delivery failures. Accepted progress does not prove delivery. Invalid progress and stale progress on terminal states are omitted. Arbitrary persisted reasons and message bodies are never included in a status result.
 

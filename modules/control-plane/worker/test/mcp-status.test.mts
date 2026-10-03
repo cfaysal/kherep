@@ -6,6 +6,7 @@ import { expect, it } from "vitest";
 import { REMOTE_MCP_CAPABILITY, digestMcpArguments } from "../../protocol-mcp.mts";
 import { MESSAGING_CAPABILITY, type MessageProgress } from "../../protocol-messages.mts";
 import { handleMcp } from "../src/mcp-http.mts";
+import { MessageStore } from "../src/message-store.mts";
 import type { Env } from "../src/env.mts";
 import { FACTS, BASE, newKey, registry } from "./helpers.mts";
 
@@ -138,4 +139,46 @@ it("does not name an unrelated message that only claims to answer", async () => 
   const result = await status(source, SOURCE, messageId);
   expect(result.structuredContent).toMatchObject({ ok: true, state: "accepted" });
   expect(result.structuredContent).not.toHaveProperty("replyMessageId");
+});
+
+it("names the reply that marked the message, not an earlier refused reply", async () => {
+  const { source, target, messageId } = await message();
+  await registry().reportMessageStatus(target, { messageId, state: "accepted" });
+  const reply = (replyId: string) => registry().sendMessage({ messageId: replyId, from: { nodeId: target, session: TARGET },
+    to: { nodeId: source, session: SOURCE }, text: SENTINEL, inReplyTo: messageId }, "test");
+  await registry().updateRegistration(source, FACTS, [{ name: "codex", kind: "cli" }], [REMOTE_MCP_CAPABILITY]);
+  const refusedId = crypto.randomUUID();
+  expect(await reply(refusedId)).toMatchObject({ ok: true, status: { messageId: refusedId, state: "refused" } });
+  expect((await status(source, SOURCE, messageId)).structuredContent).not.toHaveProperty("replyMessageId");
+
+  await registry().updateRegistration(source, FACTS, [{ name: "codex", kind: "cli" }],
+    [REMOTE_MCP_CAPABILITY, MESSAGING_CAPABILITY]);
+  const queuedId = crypto.randomUUID();
+  expect(await reply(queuedId)).toMatchObject({ ok: true, status: { messageId: queuedId, state: "queued" } });
+  expect((await status(source, SOURCE, messageId)).structuredContent)
+    .toMatchObject({ ok: true, state: "replied", replyMessageId: queuedId });
+
+  // A later refusal of the marking reply by its recipient keeps it named.
+  await registry().reportMessageStatus(source, { messageId: queuedId, state: "refused" });
+  expect((await status(source, SOURCE, messageId)).structuredContent).toMatchObject({ replyMessageId: queuedId });
+});
+
+it("adds the reply column to an earlier messages table once and leaves migrated rows unnamed", async () => {
+  await runInDurableObject(registry(), (_instance, state) => {
+    const sql = state.storage.sql;
+    const columns = () => sql.exec("PRAGMA table_info(messages)").toArray().map((column) => String(column.name));
+    sql.exec("DROP TABLE messages");
+    sql.exec(`CREATE TABLE messages (id TEXT PRIMARY KEY, from_node TEXT NOT NULL, from_session TEXT NOT NULL,
+      to_node TEXT NOT NULL, to_session TEXT NOT NULL, in_reply_to TEXT, text TEXT, state TEXT NOT NULL, reason TEXT,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)`);
+    sql.exec(`INSERT INTO messages (id, from_node, from_session, to_node, to_session, state, created_at, updated_at, expires_at)
+      VALUES ('legacy', 'a', 'sa', 'b', 'sb', 'replied', 1, 1, 9999999999999)`);
+    expect(columns()).not.toContain("reply_message_id");
+    const store = new MessageStore(sql, () => {}, () => null);
+    new MessageStore(sql, () => {}, () => null);
+    expect(columns().filter((name) => name === "reply_message_id")).toHaveLength(1);
+    expect(sql.exec("SELECT id, state, reply_message_id FROM messages").toArray())
+      .toEqual([{ id: "legacy", state: "replied", reply_message_id: null }]);
+    expect(store.replyMessageIdOf("legacy")).toBeNull();
+  });
 });

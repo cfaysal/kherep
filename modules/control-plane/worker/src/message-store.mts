@@ -109,7 +109,7 @@ export class MessageStore {
     const columns = this.sql.exec("PRAGMA table_info(messages)").toArray().map((c) => String(c.name));
     if (!columns.includes("task_id")) this.sql.exec("ALTER TABLE messages ADD COLUMN task_id TEXT");
     for (const [name, type] of [["progress_phase", "TEXT"], ["progress_code", "TEXT"], ["progress_observed_at", "TEXT"],
-      ["progress_retry_at", "TEXT"]] as const) {
+      ["progress_retry_at", "TEXT"], ["reply_message_id", "TEXT"]] as const) {
       if (!columns.includes(name)) this.sql.exec(`ALTER TABLE messages ADD COLUMN ${name} ${type}`);
     }
   }
@@ -270,6 +270,15 @@ export class MessageStore {
       || original.fromSession !== message.to.session) return;
     if (!this.mayAdvance(original.state, "replied")) return;
     this.setState(original, "replied", null, `node:${message.from.nodeId}`, now, effects);
+    // The reply that marked the original, kept for MCP status (issue #200).
+    this.sql.exec("UPDATE messages SET reply_message_id = ? WHERE id = ?", message.messageId, original.messageId);
+  }
+
+  // The reply recorded when a message was marked replied; null for other
+  // states and for rows marked before the column existed.
+  replyMessageIdOf(messageId: string): string | null {
+    const row = this.sql.exec("SELECT reply_message_id FROM messages WHERE id = ?", messageId).toArray()[0];
+    return typeof row?.reply_message_id === "string" ? row.reply_message_id : null;
   }
 
   private get(messageId: string): MessageRecord | null {
