@@ -23,7 +23,7 @@ export interface Call { file: string; args: string[]; options: ExecOptions }
 
 export function taskNode(t: test.TestContext, sessions: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-task-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   const workspace = path.join(root, "workspace");
   fs.mkdirSync(path.join(workspace, "repo"), { recursive: true });
   const paths = nodePaths(root);
