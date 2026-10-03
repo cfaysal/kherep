@@ -237,7 +237,7 @@ describe("remote MCP credentials and native intents", () => {
     expect(Object.keys(metadata)).not.toContain("result");
   });
 
-  it("bounds retained intent metadata per node", async () => {
+  it("bounds unexpired intent metadata per node", async () => {
     const nodeId = await enrolled();
     const credential = await registry().rotateMcpCredential(nodeId);
     if (!credential.ok) throw new Error(credential.error);
@@ -249,6 +249,6 @@ describe("remote MCP credentials and native intents", () => {
     }
     expect(await registry().registerMcpIntent(nodeId, registration(digest, {
       requestId: "60000000-0000-4000-8000-000000000128", tool: "sessions",
-    }), 1_001)).toEqual({ ok: false, error: "too many retained MCP intents" });
+    }), 1_001)).toEqual({ ok: false, error: "too many unexpired MCP intents" });
   });
 });

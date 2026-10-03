@@ -48,6 +48,7 @@ The optional Claude Code messaging client has a dedicated [client-only installer
 It preserves persistent settings and MCP entries, activates only the chosen invocation and requires
 the separate Claude runtime policy opt-in. Source/candidate checks, actual-client canaries and
 deployed cross-host acceptance are distinct, as recorded in [MCP.md](MCP.md#activation-gates).
+The Registry admits at most 128 unexpired native call intents per node and retains at most 32,768 intent rows for replay protection. Claimed rows count until their original expiry. Rows become eligible for pruning 24 hours after that expiry and are removed before a later new request ID is admitted. Exact duplicate registration keeps its original expiry and identity.
 
 Both Durable Object classes use SQLite storage (declared in the `exports` map with `"storage": "sqlite"`). `NodeSession` accepts the socket with the WebSocket Hibernation API, so an idle node does not keep the object in memory.
 
