@@ -20,6 +20,10 @@ import { rememberSessions } from "./known-sessions.mts";
 
 export const EXCHANGE_INTERVAL_MS = 2_000;
 export const DIRECTORY_INTERVAL_MS = 60_000;
+// An outbox record the Worker has not answered this long after it went out is
+// sent again on the same connection, so a lost answer on a live connection
+// heals without a reconnect (issue #195). The Worker deduplicates by messageId.
+export const SEND_RETRY_MS = 30_000;
 
 // depth: the reply depth (inbox.mts InboxRecord.depth); stays local, the
 // Worker never sees it.
@@ -236,15 +240,17 @@ function toSendBody(record: OutboxRecord): MessageSendBody | null {
 }
 
 // One exchange round while connected: a requested directory refresh, every
-// outbox record not yet sent on this connection (inflight), and the status of
-// every inbox record that became delivered or refused. send returns false when the
-// socket is gone; nothing counts as sent or reported unless it went out.
-export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Set<string>, send: (frame: string) => boolean,
+// outbox record not sent on this connection within SEND_RETRY_MS (inflight
+// maps it to its send time), and the status of every inbox record that became
+// delivered or refused. send returns false when the socket is gone; nothing
+// counts as sent or reported unless it went out.
+export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Map<string, number>, send: (frame: string) => boolean,
   now: number = Date.now()): void {
   const sendAll = (frames: string[]): boolean => frames.length > 0 && frames.every(send);
   if (takeDirectoryRequest(paths)) sendAll(client.directoryRequest());
   for (const messageId of messageIds(paths.outbox)) {
-    if (inflight.has(messageId)) continue;
+    const sentAt = inflight.get(messageId);
+    if (sentAt !== undefined && now - sentAt < SEND_RETRY_MS) continue;
     let record: OutboxRecord | null | undefined;
     try {
       record = getOutbox(paths, messageId);
@@ -257,8 +263,8 @@ export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Set
       recordSent(paths, messageId, "error", "invalid outbox record");
       continue;
     }
-    // The Worker deduplicates by messageId, so a resend after a reconnect is safe.
-    if (sendAll(client.sendMessage(body))) inflight.add(messageId);
+    // The Worker deduplicates by messageId, so a resend is safe.
+    if (sendAll(client.sendMessage(body))) inflight.set(messageId, now);
   }
   for (const record of unreportedStatuses(paths.inbox, now)) {
     sendAll(client.reportStatus(record.messageId, record.state, record.reason, record.progress));

@@ -295,7 +295,10 @@ export function refuseUndeliverable(dir: string, sessions: SessionInfo[], now: n
 }
 
 // Removes records received more than the retention period ago, and leftover
-// temp files of that age. Returns the number of records removed.
+// temp files of that age. Returns the number of records removed. A record is
+// never dropped while its sender could still see it accepted (issue #195): a
+// waiting one is refused first, and a final one stays until a receipt confirms
+// that state, or for one more retention period when no receipt comes.
 export function purgeInbox(dir: string, now: number = Date.now(), maxAgeMs: number = INBOX_RETENTION_MS): number {
   let entries: string[];
   try {
@@ -308,9 +311,11 @@ export function purgeInbox(dir: string, now: number = Date.now(), maxAgeMs: numb
   for (const name of entries) {
     const file = path.join(dir, name);
     let received = fs.statSync(file).mtimeMs;
+    let record: InboxRecord | null = null;
     if (name.endsWith(".json")) {
       try {
-        const at = Date.parse((JSON.parse(fs.readFileSync(file, "utf8")) as InboxRecord).receivedAt);
+        record = JSON.parse(fs.readFileSync(file, "utf8")) as InboxRecord;
+        const at = Date.parse(record.receivedAt);
         if (!Number.isNaN(at)) received = at;
       } catch {
         // unreadable record: its file time decides
@@ -319,6 +324,11 @@ export function purgeInbox(dir: string, now: number = Date.now(), maxAgeMs: numb
       continue;
     }
     if (now - received <= maxAgeMs) continue;
+    if (record && isMessageId(record.messageId) && name === `${record.messageId}.json`) {
+      if (markRefused(dir, record.messageId, "not delivered within the inbox retention period")) continue;
+      const confirmed = getReceipt(dir, record.messageId)?.reportedState === record.state;
+      if (!confirmed && now - received <= 2 * maxAgeMs) continue;
+    }
     fs.rmSync(file, { force: true });
     if (name.endsWith(".json")) {
       fs.rmSync(receiptFileOf(dir, name.slice(0, -5)), { force: true });

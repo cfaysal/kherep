@@ -108,7 +108,9 @@ test("purges records older than seven days and stale temp files", (t) => {
   const dir = tempInbox(t);
   storeMessage(dir, deliver(ID_A), NOW - INBOX_RETENTION_MS - 1);
   storeMessage(dir, deliver(ID_B), NOW - INBOX_RETENTION_MS + 60_000);
-  markReported(dir, ID_A, "accepted", "accepted", NOW - INBOX_RETENTION_MS - 1);
+  // A confirmed final record goes; a waiting one is refused first (exchange-recovery.test.mts).
+  markDelivered(dir, ID_A);
+  markReported(dir, ID_A, "delivered", "delivered", NOW - INBOX_RETENTION_MS - 1);
   const temp = path.join(dir, `.${ID_B}.json.x.tmp`);
   fs.writeFileSync(temp, "{");
   const old = new Date(NOW - INBOX_RETENTION_MS - 60_000);

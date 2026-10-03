@@ -48,7 +48,7 @@ async function startNode(name: string, paths: NodePaths, sessions: SessionInfo[]
   ws.accept();
   // Wait for the handshake instead of a fixed time; a slow runner needs longer.
   await vi.waitFor(() => expect(client.authenticated).toBe(true), WAIT);
-  const inflight = new Set<string>();
+  const inflight = new Map<string, number>();
   const exchange = async () => { chain = chain.then(() => pollExchange(client, paths, inflight, send)); await settle(); };
   // Resolves once every frame received so far has been handled, so the test can
   // close the socket without an RPC still pending at teardown.
