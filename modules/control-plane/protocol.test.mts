@@ -41,5 +41,8 @@ test("session info validates with and without the optional name, cwd and kind", 
   assert.equal(isSessionInfo({ ...base, name: "n".repeat(129) }), false);
   assert.equal(isSessionInfo({ ...base, cwd: "c".repeat(513) }), false);
   assert.equal(isSessionInfo({ ...base, kind: "" }), false);
+  // Any kind up to 32 characters passes, so a newer kind (issue #198) reaches an older Worker.
+  assert.equal(isSessionInfo({ ...base, kind: "codex-intercom" }), true);
+  assert.equal(isSessionInfo({ ...base, kind: "k".repeat(33) }), false);
   assert.equal(isSessionInfo({ ...base, name: 7 }), false);
 });

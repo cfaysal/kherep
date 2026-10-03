@@ -17,6 +17,14 @@ increments the minor version; every other release increments the patch version.
   minutes gets a fixed actionable reason (issue #197). Messages for Codex task
   sessions now carry a progress code while the task is busy, stopped by its
   operator, held by a wake guard, failing to resume or running.
+- Control Plane: the MCP `status` tool also returns `senderState` (`running`,
+  `stopped` or the canonical state, from the same `senderState` function as
+  `msg status`) and, for an accepted message without progress for 5 minutes,
+  a fixed `hint` (issue #197). The `state` field is unchanged.
+- Control Plane: a Codex intercom run the node started on its own is listed
+  with `kind` `codex-intercom` instead of `codex-task`, so the MCP `sessions`
+  tool tells it apart from a requested task; `msg sessions` marks both as
+  `[background task]` (issue #198).
 - Control Plane: an idle Claude Code session wakes after a restart without any
   user input (issue #101). A `SessionStart` input without `permission_mode`
   and without a stored mode now takes the mode of the last user entry in the

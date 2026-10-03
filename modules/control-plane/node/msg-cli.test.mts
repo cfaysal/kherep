@@ -266,6 +266,8 @@ test("msg sessions marks background tasks and the session --from names (issue #1
     { nodeId: SELF, sessionId: codex, name: "codex-89abcdef", state: "idle", runtime: "codex", kind: "codex" },
     { nodeId: PEER, sessionId: "019a0000-0000-7000-8000-000000000002", name: "task-3f2a1b0c", label: "intercom: codex@node-a",
       state: "running", runtime: "codex", kind: "codex-task" },
+    { nodeId: PEER, sessionId: "019a0000-0000-7000-8000-000000000003", name: "task-4e5f6a7b", state: "idle", runtime: "codex",
+      kind: "codex-intercom" },
     { nodeId: PEER, sessionId: "s-b4", name: "notes", state: "idle", runtime: "claude-code", kind: "interactive" }] });
   recordCodexSession(paths, codex, "/work/b", NOW);
   const listed = await run(paths, ["sessions", "--from", codex], {});
@@ -273,6 +275,8 @@ test("msg sessions marks background tasks and the session --from names (issue #1
   const lines = listed.out.split("\n");
   assert.ok(lines.includes(`  * codex-89abcdef  ${codex}  idle  codex`), listed.out);
   assert.ok(lines.includes("    intercom: codex@node-a  019a0000-0000-7000-8000-000000000002  running  codex  [background task]"), listed.out);
+  // An unlabelled intercom run is still marked by its kind.
+  assert.ok(lines.includes("    task-4e5f6a7b  019a0000-0000-7000-8000-000000000003  idle  codex  [background task]"), listed.out);
   assert.ok(lines.includes("    notes  s-b4  idle  claude-code"), listed.out);
   assert.ok(lines.includes("    review  s-self  busy  claude-code  /work/a"), listed.out);
   assert.match(listed.out, /\[background task\] runs as a Control Plane task, not as a desktop app chat, and the desktop apps may not list it/);

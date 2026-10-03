@@ -5,12 +5,14 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  CODEX_ACTIVE_MS, CODEX_RETENTION_MS, codexSessionName, codexSessionRefs, isCodexSession, listCodexSessions, recordCodexSession,
+  CODEX_ACTIVE_MS, CODEX_RETENTION_MS, codexSessionName, codexSessionRefs, isCodexSession, listCodexSessions, listCodexTaskSessions,
+  recordCodexSession,
 } from "./codex-sessions.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
 import { readLocalSessions, recordingSessions, writeLocalSessions } from "./exchange.mts";
 import { getMessage, readJson, storeMessage, UNDELIVERABLE_AFTER_MS } from "./inbox.mts";
 import { listSessions } from "./sessions.mts";
+import { writeTask, type TaskRecord } from "./task-records.mts";
 
 const CODEX = "019a2b3c-4d5e-7f60-8123-456789abcdef";
 const NOW = Date.UTC(2026, 8, 25, 12);
@@ -128,4 +130,17 @@ test("Codex aliases fail closed when the all-runtime snapshot is missing or inva
 
   fs.writeFileSync(paths.sessions, "{");
   assert.deepEqual(codexSessionRefs(paths, sessionId, NOW), { refs: [sessionId], ambiguous: aliases });
+});
+
+test("a Codex intercom run is listed with its own kind, a requested task as codex-task (issue #198)", (t) => {
+  const paths = setup(t);
+  const task = (n: number, sessionId: string, local?: TaskRecord["local"]): TaskRecord => ({
+    taskId: `00000000-0000-4000-8000-00000000000${n}`, runtime: "codex", name: `task-0000000${n}`, cwd: "/w", permissionMode: "auto",
+    state: "running", startedAt: new Date(NOW).toISOString(), deadline: new Date(NOW + 60_000).toISOString(),
+    updatedAt: new Date(NOW).toISOString(), sessionId, ...(local ? { local } : {}) });
+  writeTask(paths, task(1, "019a0000-0000-7000-8000-000000000001"), NOW);
+  writeTask(paths, task(2, "019a0000-0000-7000-8000-000000000002", "intercom"), NOW);
+  writeTask(paths, task(3, "019a0000-0000-7000-8000-000000000003", "resume"), NOW);
+  assert.deepEqual(listCodexTaskSessions(paths, NOW).map((s) => [s.name, s.kind]),
+    [["task-00000001", "codex-task"], ["task-00000002", "codex-intercom"], ["task-00000003", "codex-task"]]);
 });

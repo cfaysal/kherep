@@ -54,6 +54,10 @@ export function silentlyAccepted(state: string, progress: MessageProgress | null
   return state === "accepted" && !progress && now - updatedAt >= ACCEPTED_SILENCE_MS;
 }
 
+// The likely causes of such a silence, shared by `msg status` and the MCP status tool.
+export const ACCEPTED_SILENCE_CAUSES = "the target session may not be running (refused after 60 minutes), "
+  + "or the target node is offline or runs an older kherep-node";
+
 // session is a session id or a session name on that node.
 export interface MessageAddress { nodeId: string; session: string }
 // node -> Worker. The sender node is always the authenticated connection;

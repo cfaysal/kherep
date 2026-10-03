@@ -3,7 +3,9 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import { digestMcpArguments, MCP_INBOX_TOO_LARGE, type McpIntentClaim, type McpTool } from "../../protocol-mcp.mts";
-import { isMessageProgress } from "../../protocol-messages.mts";
+import {
+  ACCEPTED_SILENCE_CAUSES, ACCEPTED_SILENCE_MS, isMessageProgress, senderState, silentlyAccepted,
+} from "../../protocol-messages.mts";
 import { registryStub, sessionStub, type Env } from "./env.mts";
 import { routeEffects } from "./message-routing.mts";
 
@@ -15,6 +17,9 @@ const REQUEST_ID_INSTRUCTION = "The native hook supplies requestId; omit it from
 const requestId = z.string().uuid();
 const address = z.object({ nodeId: z.string().uuid(), session: z.string().min(1).max(128) });
 const baseResult = z.object({ ok: z.boolean() }).passthrough();
+// A fixed text, never a persisted reason, for an accepted message without progress (issue #197).
+const SILENCE_HINT = `no delivery progress from the target node for at least ${ACCEPTED_SILENCE_MS / 60_000} minutes; `
+  + `${ACCEPTED_SILENCE_CAUSES}; check the sessions tool`;
 
 function error(message: string) {
   return { isError: true as const, content: [{ type: "text" as const, text: message }], structuredContent: { ok: false, error: message } };
@@ -110,8 +115,10 @@ function server(env: Env, principal: Principal): McpServer {
     const record = await registryStub(env).mcpMessageStatus(principal.nodeId, messageId);
     if (!record) return error("message status is not available to this node");
     const progress = record.state === "accepted" && isMessageProgress(record.progress) ? record.progress : undefined;
-    return result({ ok: true, messageId, state: record.state, updatedAt: record.updatedAt,
-      ...(progress ? { progress } : {}), ...(record.replyMessageId ? { replyMessageId: record.replyMessageId } : {}) });
+    const silent = silentlyAccepted(record.state, progress, record.updatedAt, Date.now());
+    return result({ ok: true, messageId, state: record.state, senderState: senderState(record.state, progress), updatedAt: record.updatedAt,
+      ...(progress ? { progress } : {}), ...(silent ? { hint: SILENCE_HINT } : {}),
+      ...(record.replyMessageId ? { replyMessageId: record.replyMessageId } : {}) });
   });
 
   mcp.registerTool("inbox", { description: `Read the verified originating session inbox from its online node. ${REQUEST_ID_INSTRUCTION}`,
