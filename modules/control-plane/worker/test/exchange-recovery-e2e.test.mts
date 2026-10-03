@@ -91,10 +91,19 @@ describe("exchange recovery", () => {
     const target = await start(b);
     const sender = await start(a);
     // Every status for the message is lost on the way to the sender: its answer and the forwarded accepted.
-    sender.dropIncoming((type, body) => type === "message.status" && body.messageId === messageId);
+    const lost: unknown[] = [];
+    sender.dropIncoming((type, body) => {
+      if (type !== "message.status" || body.messageId !== messageId) return false;
+      lost.push(body.state);
+      return true;
+    });
     const t0 = Date.now();
     await sender.exchange(t0);
     await vi.waitFor(() => expect(getMessage(b.paths.inbox, messageId)?.state).toBe("accepted"), WAIT);
+    // The target stored it before its accepted report reached the Worker; wait
+    // until the forwarded accepted was lost too, or it could still arrive and
+    // settle the message without a resend.
+    await vi.waitFor(() => expect(lost).toEqual(["queued", "accepted"]), WAIT);
     await sender.idle();
     expect(getSent(a.paths, messageId)).toBeNull();
     expect(getOutbox(a.paths, messageId)).not.toBeNull();
