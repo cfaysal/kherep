@@ -57,7 +57,12 @@ test("msg send --new writes a labelled task request for exactly that node and pr
   writeDirectory(node.paths, DIRECTORY);
   const sent = await send(node, ["send", "sekhmet", "--new", "codex", ...D, "--cwd", "/w/repo", "--", "please", "review", "PR", "12"],
     { ok: true, taskId: TASK });
-  assert.deepEqual([sent.code, sent.out, sent.err], [0, [TASK], []]);
+  // Issue #198: the result marks the task as background and says how to read its status and transcript.
+  assert.deepEqual([sent.code, sent.out, sent.err], [0, [TASK,
+    "background task on sekhmet: a Control Plane task, not a desktop app chat; the Codex and Claude desktop apps may not list it",
+    `  status: kherep-node task status ${TASK}`,
+    "  transcript: kherep-node msg sessions marks it [background task]; kherep-node attach sekhmet/<its session id> prints the command that opens it",
+  ], []]);
   const [requestId] = requestIds(node.paths);
   assert.deepEqual(readRequest(node.paths, requestId), {
     requestId, title: LABEL, text: "please review PR 12", requirements: { runtime: "codex", node: PEER, cwd: "/w/repo" },
@@ -112,7 +117,12 @@ test("msg send --new prints refusals with the reason and exits non-zero", async 
   }
   assert.deepEqual(requestIds(fresh.paths), []);
   assert.match((await send(node, ["send", "sekhmet/s-peer", "--cwd", "/w", "--", "hi"])).err[0], /--cwd and --directive go with --new/);
-  assert.match((await send(node, ["send", "sekhmet", "--new", "claude", ...D, "--", "hi"], undefined, {})).err[0], /cannot tell this session's runtime/);
+  assert.match((await send(node, ["send", "sekhmet", "--new", "claude", ...D, "--", "hi"], undefined, {})).err[0],
+    /neither CLAUDE_CODE_SESSION_ID \(Claude Code\) nor KHEREP_SESSION_ID .* passes --from/);
+  // Issue #200: an unverified --from starts nothing.
+  assert.match((await send(node, ["send", "sekhmet", "--new", "claude", ...D, "--from", "someone", "--", "hi"], undefined, {})).err[0],
+    /--from "someone" is not a verified sender/);
+  assert.equal(requestIds(node.paths).length, 1, "only the earlier refused request exists");
 });
 
 test("msg sessions shows the label as the session name, and a label addresses the session", async (t) => {
@@ -120,7 +130,7 @@ test("msg sessions shows the label as the session name, and a label addresses th
   writeDirectory(node.paths, DIRECTORY);
   const listed = await send(node, ["sessions"]);
   assert.equal(listed.code, 0);
-  assert.ok(listed.out.includes("    intercom: codex@isis  s-peer  working  claude-code"), listed.out.join("\n"));
+  assert.ok(listed.out.includes("    intercom: codex@isis  s-peer  working  claude-code  [background task]"), listed.out.join("\n"));
   assert.equal((await send(node, ["send", "sekhmet/intercom: codex@isis", "--", "hello"])).code, 0);
 });
 

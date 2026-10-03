@@ -23,13 +23,14 @@ export interface TaskControlCliContext {
 
 type Waited = { code: number; result: TaskControlQueryResultBody | null };
 
-function enabled(paths: NodePaths): boolean {
+export function taskControlEnabled(paths: NodePaths): boolean {
   const file = readConfig(paths.config)?.policyFile ?? paths.policy;
   const policy = loadPolicy(file);
   return policy.sessions?.enabled === true && policy.sessions.ownTaskControl === true && policy.sessions.runtimes.length > 0;
 }
 
-function statusSubmit(paths: NodePaths, id: string, requestId: string): TaskControlSubmitBody | null {
+// A status request for a task id, an owned request id or a sent message id.
+export function statusSubmit(paths: NodePaths, id: string, requestId: string): TaskControlSubmitBody | null {
   if (!isMessageId(id)) return null;
   if (readRequest(paths, id)) return { name: "task.control.submit", requestId, action: "status", sourceRequestId: id };
   if (getSent(paths, id)) return { name: "task.control.submit", requestId, action: "status", sourceMessageId: id };
@@ -64,6 +65,36 @@ async function queueAndWait(submit: TaskControlSubmitBody, context: TaskControlC
   return waitForResult(submit.requestId, context, pending);
 }
 
+export interface StopRun {
+  code: number;
+  error?: string;
+  status: TaskControlQueryResultBody | null;
+  stopRequestId?: string;
+  stop?: TaskControlQueryResultBody | null;
+}
+
+// A fresh status, then a stop bound to the task and the run that status
+// measured (and to expectedRunVersion when given), so it cannot reach a later
+// run. Shared by task stop and msg stop (issue #199).
+export async function stopRun(status: TaskControlSubmitBody, context: TaskControlCliContext, expectedRunVersion: string | undefined,
+  rerun: string): Promise<StopRun> {
+  const fresh = await queueAndWait(status, context,
+    (requestId) => `status request ${requestId} pending; stop not submitted; resolve status and rerun ${rerun}`);
+  const measured = fresh.result;
+  if (!measured) return { code: fresh.code, status: null };
+  if (measured.state !== "succeeded" || measured.processState !== "running" || !measured.stopSupported || !measured.runVersion
+    || !measured.taskId || (status.taskId !== undefined && measured.taskId !== status.taskId)) {
+    return { code: 1, error: "fresh status does not identify a stoppable run", status: measured };
+  }
+  if (expectedRunVersion !== undefined && measured.runVersion !== expectedRunVersion) {
+    return { code: 1, error: "fresh status does not match the expected run version; stop not submitted", status: measured };
+  }
+  const stopRequestId = crypto.randomUUID();
+  const stop = await queueAndWait({ name: "task.control.submit", requestId: stopRequestId, action: "stop", taskId: measured.taskId,
+    expectedRunVersion: measured.runVersion }, context);
+  return { code: stop.code, status: measured, stopRequestId, stop: stop.result };
+}
+
 export async function runTaskControlArgs(argv: string[], context: TaskControlCliContext): Promise<number> {
   const err = context.err ?? ((line: string) => console.error(line));
   const fail = (message: string): number => { err(`kherep-node task: ${message}`); return 1; };
@@ -79,7 +110,7 @@ export async function runTaskControlArgs(argv: string[], context: TaskControlCli
     if (!isMessageId(id) || !readControlRequest(context.paths, id)) return fail(`unknown task-control request ${id}`);
     return (await waitForResult(id, context)).code;
   }
-  if (!enabled(context.paths)) return fail("owner task control is not enabled by node policy");
+  if (!taskControlEnabled(context.paths)) return fail("owner task control is not enabled by node policy");
   if (command === "status") {
     const requestId = crypto.randomUUID();
     const submit = statusSubmit(context.paths, id, requestId);
@@ -87,16 +118,7 @@ export async function runTaskControlArgs(argv: string[], context: TaskControlCli
     return (await queueAndWait(submit, context)).code;
   }
   if (!isTaskId(id)) return fail(`invalid task id ${id}`);
-  const statusId = crypto.randomUUID();
-  const status = await queueAndWait({ name: "task.control.submit", requestId: statusId, action: "status", taskId: id }, context,
-    (requestId) => `status request ${requestId} pending; stop not submitted; resolve status and rerun task stop`);
-  if (!status.result) return status.code;
-  if (status.result.state !== "succeeded" || status.result.processState !== "running"
-    || !status.result.stopSupported || !status.result.runVersion) return fail("fresh status does not identify a stoppable run");
-  if (expectedRunVersion !== undefined && status.result.runVersion !== expectedRunVersion) {
-    return fail("fresh status does not match the expected run version; stop not submitted");
-  }
-  const stopId = crypto.randomUUID();
-  return (await queueAndWait({ name: "task.control.submit", requestId: stopId, action: "stop", taskId: id,
-    expectedRunVersion: expectedRunVersion ?? status.result.runVersion }, context)).code;
+  const run = await stopRun({ name: "task.control.submit", requestId: crypto.randomUUID(), action: "status", taskId: id }, context,
+    expectedRunVersion, "task stop");
+  return run.error ? fail(run.error) : run.code;
 }

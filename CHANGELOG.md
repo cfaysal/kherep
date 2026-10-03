@@ -220,6 +220,25 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- **BREAKING** Control Plane: `msg send`, `msg send --new`, `msg inbox --from`
+  and `msg sessions --from` no longer take `--from` as typed (issue #200).
+  `--from` must name the session of `CLAUDE_CODE_SESSION_ID` or
+  `KHEREP_SESSION_ID` by id or name, or be the full id of a Codex session a
+  Kherep hook recorded within the last 12 hours, with no conflicting
+  `KHEREP_SESSION_ID`. Refused with `is not a verified sender`, and nothing is
+  written: an arbitrary name such as `--from ops`, a short `codex-<8>` alias, an
+  id no hook recorded, and a record older than 12 hours. Call it correctly by
+  omitting `--from` in Claude Code sessions and node-started Codex runs, or, in
+  Codex, by passing the full session id the `SessionStart` hook context names
+  (`msg send --from <session_id>`). A Claude Code variable that a Codex process
+  inherited does not block its hook-recorded id. Missing-session errors now
+  name both variables.
+- Control Plane: `msg sessions` and the `msg send --new` result mark
+  node-started background tasks and name the commands for their status and
+  transcript (issue #198); `msg status` lists threaded replies (issue #200);
+  new `msg stop` stops one task through owner task control and reports
+  `stopped` only for a confirmed process-tree exit of the measured run
+  (issue #199).
 - The Claude user settings now set `attribution` with an empty `commit`, an
   empty `pr` and `sessionUrl: false`, so Claude Code no longer instructs a
   `Co-Authored-By` trailer in commit messages or an attribution line in pull

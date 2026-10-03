@@ -94,7 +94,11 @@ sequenceDiagram
   process identity and calls the awaited Codex stop path. A run hash binds task,
   runtime, process id and process creation time; these process details stay local.
 - `node/task-control-cli.mts` queues requests and distinguishes a status timeout
-  before stop submission from a pending submitted stop.
+  before stop submission from a pending submitted stop. Its `stopRun` binds the
+  stop to the task and run version that a fresh status measured.
+- `node/msg-stop.mts` (`msg stop`) resolves a task id, sent message id or owned
+  request id through that status, shares `stopRun`, and prints `stopped` only for a
+  result that confirms the stop of exactly the measured run.
 
 ## Durable write budget
 
@@ -119,6 +123,23 @@ Claude progress comes from the current successful session snapshot and freshly l
 ## Exchange recovery
 
 The sender's outbox file is removed only after the Worker's answer has been written to `sent/`, so a daemon crash between the socket send and that write leaves the file to be sent again by the next daemon. On a live connection an unanswered send is repeated after 30 seconds. The Worker's `messageId` deduplication answers every repeat with the current state and creates no second delivery. A target that crashes before its `accepted` answer leaves the message `queued`; the Worker hands it over again after the next authentication, and the idempotent inbox keeps the first record. A message whose target never returns expires after 24 hours and the sender is told. Inbox retention refuses rather than deletes a waiting record and keeps final records until their state is confirmed.
+
+## CLI sender identity
+
+`node/msg-resolve.mts` decides the sender of `msg send`, `msg send --new`,
+`msg inbox --from` and `msg sessions --from`. A runtime variable names the session
+(`CLAUDE_CODE_SESSION_ID`, or the `KHEREP_SESSION_ID` the node sets for its Codex
+runs); `--from` must name that session or be the full id of a Codex session a hook
+recorded within 12 hours, with no other node-set session; an inherited Claude Code variable is ambient
+and neither verifies nor blocks the hook-recorded id.
+An unverified `--from` is refused, never used as typed. This prevents mistaken or
+unknown senders; it is not authentication, since the node's processes still assert
+the session. Native MCP binds the session in the Worker instead.
+
+`msg status` lists threaded replies from the local inbox by the Worker's `replied`
+rule, so the sender reads reply ids without another Worker query. The Registry's
+`reply_message_id` (MCP `replyMessageId`) names only the reply that marked the
+message; the CLI shows every matching reply its inbox still holds.
 
 ## Trust and data boundaries
 

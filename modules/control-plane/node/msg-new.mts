@@ -4,7 +4,7 @@ import {
 import type { DirectoryBody } from "../protocol-messages.mts";
 import { isCodexSession } from "./codex-sessions.mts";
 import { readConfig, type NodePaths } from "./config.mts";
-import { KHEREP_SESSION_ENV, resolveNode, senderSession, SESSION_ENV } from "./msg-resolve.mts";
+import { KHEREP_SESSION_ENV, NO_SESSION, resolveNode, senderSession, SESSION_ENV } from "./msg-resolve.mts";
 import { delegationBlocked } from "./task-cli.mts";
 import { readRequest, writeRequest } from "./task-records.mts";
 
@@ -49,14 +49,15 @@ export async function sendNew(io: NewIo, directory: DirectoryBody, target: strin
   if (!node.ok) return fail(node.error);
   const config = readConfig(io.paths.config);
   const selfName = directory.nodes.find((n) => n.nodeId === config?.nodeId)?.name ?? config?.name;
+  // A sender that cannot be verified starts nothing (issue #200).
+  const from = senderSession(io.paths, io.env, values.from, io.now());
+  if (!from.ok) return fail(from.error);
   const own = ownRuntime(io.paths, io.env, values.from);
-  if (!own) return fail(`cannot tell this session's runtime: ${SESSION_ENV} is not set; pass --from <session>`);
+  if (!own) return fail(NO_SESSION);
   const label = intercomLabel(own, selfName ?? "");
   if (!selfName || !isTaskLabel(label)) {
     return fail(`this node's name "${selfName ?? ""}" cannot form a label (letters, digits, space, : @ - _ . and at most 64 characters)`);
   }
-  const from = senderSession(io.paths, io.env, values.from);
-  if (!from.ok) return fail(from.error);
   const text = words.join(" ");
   if (!isTaskText(text)) return fail("the first message must be 1 to 16384 characters");
   const requirements: TaskRequirements = { runtime: runtime as TaskRuntime, node: node.value.nodeId, ...(values.cwd ? { cwd: values.cwd } : {}) };
@@ -66,16 +67,29 @@ export async function sendNew(io: NewIo, directory: DirectoryBody, target: strin
   const requestId = crypto.randomUUID();
   writeRequest(io.paths, { requestId, title: label, text, requirements, directive, requestedBy: from.value, label,
     createdAt: new Date(io.now()).toISOString(), state: "pending" });
-  return waitForTask(io, requestId, wait * 1000, fail);
+  return waitForTask(io, requestId, wait * 1000, fail, node.value.name);
+}
+
+// Issue #198: the result says that the task runs in the background, and how to
+// read its status and open its transcript. It promises no desktop app listing:
+// the desktop apps do not show tasks the node starts (issue #74).
+function backgroundNotice(taskId: string, nodeName: string): string[] {
+  return [
+    `background task on ${nodeName}: a Control Plane task, not a desktop app chat; the Codex and Claude desktop apps may not list it`,
+    `  status: kherep-node task status ${taskId}`,
+    `  transcript: kherep-node msg sessions marks it [background task]; kherep-node attach ${nodeName}/<its session id> prints the command that opens it`,
+  ];
 }
 
 // Waits for the Worker's answer, which the daemon writes into the request file.
-async function waitForTask(io: NewIo, requestId: string, timeoutMs: number, fail: (message: string) => number): Promise<number> {
+async function waitForTask(io: NewIo, requestId: string, timeoutMs: number, fail: (message: string) => number,
+  nodeName: string): Promise<number> {
   const deadline = io.now() + timeoutMs;
   for (;;) {
     const record = readRequest(io.paths, requestId);
     if (record?.state === "dispatched" && record.taskId) {
       io.out(record.taskId);
+      for (const line of backgroundNotice(record.taskId, nodeName)) io.out(line);
       return 0;
     }
     if (record?.state === "refused") return fail(`refused: ${record.reason ?? "no reason given"} (request ${requestId})`);

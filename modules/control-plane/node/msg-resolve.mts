@@ -1,7 +1,8 @@
 import { OPERATOR_NODE_ID, type DirectoryBody, type DirectoryNode, type MessageAddress } from "../protocol-messages.mts";
-import { isCodexSession } from "./codex-sessions.mts";
+import { CODEX_ACTIVE_MS, isCodexSession, readCodexSession } from "./codex-sessions.mts";
 import type { NodePaths } from "./config.mts";
 import { localSessionName } from "./exchange.mts";
+import { taskForSession } from "./task-records.mts";
 
 // Name resolution shared by the msg CLI and the delivery hook (issue #31, step 3a).
 
@@ -28,13 +29,48 @@ export function currentSession(paths: NodePaths, env: NodeJS.ProcessEnv): { id: 
   return name ? { id, name } : { id };
 }
 
-// Preserve --from exactly. Recorded Codex senders use their full session id,
-// which also binds native MCP reply chains; other runtimes retain named senders.
-export function senderSession(paths: NodePaths, env: NodeJS.ProcessEnv, from?: string): Resolved<string> {
-  if (from) return { ok: true, value: from };
+// Without --from, the sender is the session a runtime variable names. Codex
+// documents no such variable for its own sessions, so they pass --from.
+export const NO_SESSION = `cannot tell which session this is: neither ${SESSION_ENV} (Claude Code) nor ${KHEREP_SESSION_ENV} `
+  + "(the node's Codex runs) is set; a Codex session passes --from <its full session id>";
+
+// A full Codex session id that a Kherep hook recorded within CODEX_ACTIVE_MS.
+// A failed read establishes no identity.
+function recentCodexSession(paths: NodePaths, sessionId: string, now: number): boolean {
+  try {
+    const record = readCodexSession(paths, sessionId);
+    const seen = Date.parse(record?.lastSeen ?? "");
+    return record?.sessionId === sessionId && record.runtime === "codex" && Number.isFinite(seen)
+      && seen <= now + 5_000 && now - seen <= CODEX_ACTIVE_MS;
+  } catch {
+    return false;
+  }
+}
+
+// The sender session (issue #200). CLI identity stays what this node's
+// processes report (README, Security model), but it is taken only from a source
+// the node can check, never as typed: the runtime variable; --from naming that
+// same session by id or name; or --from with the full id of a Codex session a
+// hook recorded within 12 hours, while a node-set KHEREP_SESSION_ID, if any,
+// names the task run of that thread. The hook record is the identity there: an
+// inherited CLAUDE_CODE_SESSION_ID (a Codex started from a Claude Code tool or
+// plugin) is ambient and proves nothing about the caller, so it neither verifies
+// nor vetoes it; refusing would break every command the Codex hooks emit.
+// Without --from, recorded Codex senders use their full session id, which also
+// binds native MCP reply chains; other runtimes keep named senders.
+export function senderSession(paths: NodePaths, env: NodeJS.ProcessEnv, from?: string, now: number = Date.now()): Resolved<string> {
   const session = currentSession(paths, env);
-  if (!session) return { ok: false, error: `cannot tell which session this is: ${SESSION_ENV} is not set; pass --from <session>` };
-  return { ok: true, value: isCodexSession(paths, session.id) ? session.id : session.name ?? session.id };
+  if (from === undefined) {
+    if (!session) return { ok: false, error: NO_SESSION };
+    return { ok: true, value: isCodexSession(paths, session.id) ? session.id : session.name ?? session.id };
+  }
+  if (session && (from === session.id || from === session.name)) return { ok: true, value: from };
+  const nodeRunSession = env[KHEREP_SESSION_ENV];
+  if (recentCodexSession(paths, from, now)
+    && (nodeRunSession === undefined || taskForSession(paths, nodeRunSession)?.sessionId === from)) return { ok: true, value: from };
+  return { ok: false, error: `--from ${JSON.stringify(from)} is not a verified sender: it must name this session `
+    + `(${SESSION_ENV} or ${KHEREP_SESSION_ENV}) or be the full id of a Codex session a Kherep hook recorded within 12 hours, `
+    + `with no other ${KHEREP_SESSION_ENV} set` };
 }
 
 function pick<T>(what: string, ref: string, matches: T[], all: T[], label: (item: T) => string): Resolved<T> {

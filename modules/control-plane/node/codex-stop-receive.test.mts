@@ -9,6 +9,7 @@ import test from "node:test";
 import { recordCodexSession } from "./codex-sessions.mts";
 import { nodePaths, writeConfig } from "./config.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
+import { getOutbox, writeDirectory } from "./exchange.mts";
 import { getMessage, storeMessage } from "./inbox.mts";
 import { runMsg } from "./msg-cli.mts";
 
@@ -128,7 +129,10 @@ test("receive without a session id or with an unreadable identity fails without 
 test("hook and CLI processes deliver the Stop continuation without a prompt hook", t => {
   const { paths, put } = setup(t);
   put();
-  const env = { ...process.env, KHEREP_CONFIG_DIR: path.dirname(paths.dir) };
+  // A Codex process: no session variable of another runtime leaks in from the test runner.
+  const env: NodeJS.ProcessEnv = { ...process.env, KHEREP_CONFIG_DIR: path.dirname(paths.dir) };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  delete env.KHEREP_SESSION_ID;
   const hookPath = fileURLToPath(new URL("./deliver-hook.mts", import.meta.url));
   const cliPath = fileURLToPath(new URL("./cli.mts", import.meta.url));
   const stop = (continued: boolean) => spawnSync(process.execPath, [hookPath, "--runtime", "codex"], {
@@ -148,5 +152,37 @@ test("hook and CLI processes deliver the Stop continuation without a prompt hook
   const confirmed = stop(true);
   assert.equal(confirmed.status, 0, confirmed.stderr);
   assert.equal(confirmed.stdout, "");
+  assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "delivered");
+});
+
+test("hook-emitted commands work in a Codex that inherited a Claude Code session variable (issue #200)", t => {
+  const { paths, put } = setup(t);
+  put();
+  writeDirectory(paths, { nodes: [{ nodeId: PEER, name: "test", status: "online" }],
+    sessions: [{ nodeId: PEER, sessionId: "s-peer", name: "peer", state: "idle", runtime: "claude-code" }], fetchedAt: new Date().toISOString() });
+  // Codex started from a Claude Code Bash tool or plugin: the Claude variable leaks into its hooks and commands.
+  const env: NodeJS.ProcessEnv = { ...process.env, KHEREP_CONFIG_DIR: path.dirname(paths.dir), CLAUDE_CODE_SESSION_ID: "claude-parent" };
+  delete env.KHEREP_SESSION_ID;
+  const hookPath = fileURLToPath(new URL("./deliver-hook.mts", import.meta.url));
+  const cliPath = fileURLToPath(new URL("./cli.mts", import.meta.url));
+  const hook = (input: Record<string, unknown>) => spawnSync(process.execPath, [hookPath, "--runtime", "codex"], {
+    env, windowsHide: true, encoding: "utf8", input: JSON.stringify({ session_id: SELF, cwd: "/test", ...input }) });
+  const cli = (...args: string[]) => spawnSync(process.execPath, [cliPath, "msg", ...args], { env, windowsHide: true, encoding: "utf8" });
+  const continuation = hook({ hook_event_name: "Stop", stop_hook_active: false });
+  assert.equal(continuation.status, 0, continuation.stderr);
+  assert.ok(JSON.parse(continuation.stdout).reason.includes(`msg inbox --from ${SELF} --receive`));
+  const received = cli("inbox", "--from", SELF, "--receive");
+  assert.equal(received.status, 0, received.stderr);
+  assert.ok(received.stdout.includes(TEXT));
+  assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "offered");
+  // The reply command the SessionStart context advertises speaks as the Codex thread, never as the Claude parent.
+  const sent = cli("send", "--from", SELF, "--reply-to", MESSAGE, "--to", "test/s-peer", "--", "391");
+  assert.equal(sent.status, 0, sent.stderr);
+  assert.equal(getOutbox(paths, sent.stdout.trim())?.fromSession, SELF);
+  // An id no hook recorded stays refused in the same environment.
+  const posed = cli("send", "--from", OTHER, "test/s-peer", "--", "x");
+  assert.equal(posed.status, 1);
+  assert.match(posed.stderr, /is not a verified sender/);
+  assert.equal(hook({ hook_event_name: "Stop", stop_hook_active: true }).status, 0);
   assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "delivered");
 });

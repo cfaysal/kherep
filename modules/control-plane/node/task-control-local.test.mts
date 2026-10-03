@@ -121,3 +121,56 @@ test("source-message execution requires the exact stored registration grant", as
     nodeId: TARGET, paths: node.paths, runner: { ...node.deps(), codex: { processStart: () => "process-start" } }, now: () => T0 + 1 });
   assert.equal(retained.state, "succeeded", "fallback discovery does not revoke the immutable grant for the old task");
 });
+
+test("an owner stop during an active run confirms only after the run and every child process ended (issue #199)", async (t) => {
+  const node = taskNode(t, { runtimes: ["codex"], ownTaskControl: true });
+  const task = writeTask(node.paths, record(node));
+  const CHILD = 4_000_001;
+  const alive = new Map([[4_000_000, "process-start"], [CHILD, "child-start"]]);
+  const signals: [number, NodeJS.Signals][] = [];
+  const context = { nodeId: TARGET, paths: node.paths, now: () => T0, runner: { ...node.deps(), codex: {
+    processTree: () => [...alive].map(([pid, start]) => ({ pid, start })), processStart: (pid: number) => alive.get(pid) ?? null, graceMs: 1,
+    // The tree ignores SIGTERM and ends only on SIGKILL to its group.
+    signal: (pid: number, signal: NodeJS.Signals) => {
+      signals.push([pid, signal]);
+      if (signal === "SIGKILL") alive.clear();
+    } } } };
+  const status = await executeTaskControl(operation("status"), context);
+  assert.equal(status.processState, "running");
+  const stopped = await executeTaskControl(operation("stop", runVersionOf(task)!), context);
+  assert.deepEqual(signals, [[4_000_000, "SIGTERM"], [4_000_000, "SIGKILL"]]);
+  assert.equal(alive.size, 0);
+  assert.deepEqual([stopped.state, stopped.stopConfirmed, stopped.processState, stopped.runVersion, stopped.taskState],
+    ["succeeded", true, "closed", runVersionOf(task), "stopped"]);
+});
+
+test("an owner stop is not confirmed while a captured child outlives its root (issue #199)", async (t) => {
+  const node = taskNode(t, { runtimes: ["codex"], ownTaskControl: true });
+  const task = writeTask(node.paths, record(node));
+  const CHILD = 4_000_001;
+  const alive = new Map([[4_000_000, "process-start"], [CHILD, "child-start"]]);
+  const context = { nodeId: TARGET, paths: node.paths, now: () => T0, runner: { ...node.deps(), codex: {
+    processTree: () => [...alive].map(([pid, start]) => ({ pid, start })), processStart: (pid: number) => alive.get(pid) ?? null, graceMs: 1,
+    // Only the root ends; its child keeps running.
+    signal: () => { alive.delete(4_000_000); } } } };
+  const stop = await executeTaskControl(operation("stop", runVersionOf(task)!), context);
+  assert.deepEqual([stop.state, stop.stopConfirmed, stop.errorCode], ["failed", false, "stop_failed"]);
+  assert.equal(alive.get(CHILD), "child-start");
+  assert.notEqual(readTask(node.paths, TASK)?.state, "stopped");
+});
+
+test("after a failed run status reports no stoppable process and a stop signals nothing (issue #199)", async (t) => {
+  const node = taskNode(t, { runtimes: ["codex"], ownTaskControl: true });
+  const task = writeTask(node.paths, record(node, { state: "failed" }));
+  fs.mkdirSync(codexFiles(node.paths, TASK).dir, { recursive: true });
+  fs.writeFileSync(codexFiles(node.paths, TASK).exit, JSON.stringify({ code: 1, signal: null }));
+  const signals: unknown[] = [];
+  const context = { nodeId: TARGET, paths: node.paths, now: () => T0, runner: { ...node.deps(), codex: {
+    processStart: () => null, signal: (pid: number, signal: NodeJS.Signals) => { signals.push([pid, signal]); } } } };
+  const status = await executeTaskControl(operation("status"), context);
+  assert.deepEqual([status.state, status.taskState, status.processState, status.stopSupported], ["succeeded", "failed", "closed", false]);
+  const stop = await executeTaskControl(operation("stop", runVersionOf(task)!), context);
+  assert.equal(stop.stopConfirmed, false);
+  assert.equal(stop.errorCode, "recovery_required");
+  assert.deepEqual(signals, []);
+});
