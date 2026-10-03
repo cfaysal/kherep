@@ -201,7 +201,7 @@ describe("remote MCP credentials and native intents", () => {
     await registry().rotateMcpCredential(rotatedNode);
     expect(await registry().sendMcpMessage({ nodeId: rotatedNode, credentialVersion: first.version, requestId: id,
       runtime: "codex", sessionId: SESSION, threadId: SESSION, callId: CALL, tool: "send", argumentsDigest: digest },
-    args.to, args.text)).toEqual({ ok: false, error: "MCP credential is stale" });
+    args.to, args.text)).toEqual({ ok: false, error: "MCP credential is stale", denied: true });
 
     const revokedNode = await enrolled();
     const current = await registry().rotateMcpCredential(revokedNode);
@@ -211,7 +211,7 @@ describe("remote MCP credentials and native intents", () => {
     await registry().revoke(revokedNode, "test");
     expect(await registry().sendMcpMessage({ nodeId: revokedNode, credentialVersion: current.version, requestId: revokedId,
       runtime: "codex", sessionId: SESSION, threadId: SESSION, callId: CALL, tool: "send", argumentsDigest: digest },
-    args.to, args.text)).toEqual({ ok: false, error: "remote MCP is not enabled for this node" });
+    args.to, args.text)).toEqual({ ok: false, error: "remote MCP is not enabled for this node", denied: true });
   });
 
   it("recovers a write with one immutable messageId and stores no body in intent metadata", async () => {

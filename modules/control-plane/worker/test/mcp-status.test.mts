@@ -113,3 +113,29 @@ it("keeps progress hidden from a node outside the message relationship", async (
   expect(result.isError).toBe(true);
   expect(result.structuredContent).toEqual({ ok: false, error: "message status is not available to this node" });
 });
+
+it("names the reply of a replied message so the sending session can retrieve it", async () => {
+  const { source, target, messageId } = await message();
+  await registry().reportMessageStatus(target, { messageId, state: "accepted" });
+  const before = await status(source, SOURCE, messageId);
+  expect(before.structuredContent).toMatchObject({ ok: true, state: "accepted" });
+  expect(before.structuredContent).not.toHaveProperty("replyMessageId");
+
+  const replyId = crypto.randomUUID();
+  expect((await registry().sendMessage({ messageId: replyId, from: { nodeId: target, session: TARGET },
+    to: { nodeId: source, session: SOURCE }, text: SENTINEL, inReplyTo: messageId }, "test")).ok).toBe(true);
+  const replied = await status(source, SOURCE, messageId);
+  expect(replied.structuredContent).toMatchObject({ ok: true, messageId, state: "replied", replyMessageId: replyId });
+  expect((await status(source, SOURCE, replyId)).structuredContent).toMatchObject({ ok: true, messageId: replyId, state: "queued" });
+});
+
+it("does not name an unrelated message that only claims to answer", async () => {
+  const { source, target, messageId } = await message();
+  await registry().reportMessageStatus(target, { messageId, state: "accepted" });
+  const foreign = await enrolled("synthetic-foreign");
+  expect((await registry().sendMessage({ messageId: crypto.randomUUID(), from: { nodeId: foreign, session: "synthetic-foreign" },
+    to: { nodeId: source, session: SOURCE }, text: SENTINEL, inReplyTo: messageId }, "test")).ok).toBe(true);
+  const result = await status(source, SOURCE, messageId);
+  expect(result.structuredContent).toMatchObject({ ok: true, state: "accepted" });
+  expect(result.structuredContent).not.toHaveProperty("replyMessageId");
+});

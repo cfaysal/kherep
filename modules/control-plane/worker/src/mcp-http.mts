@@ -80,7 +80,7 @@ function server(env: Env, principal: Principal): McpServer {
     if (!verified.ok) return error(verified.error);
     const directory = await registryStub(env).directory();
     const sessions = directory.sessions.map((session) => ({ nodeId: session.nodeId, sessionId: session.sessionId,
-      runtime: session.runtime, state: session.state })).slice(0, limit ?? 20);
+      runtime: session.runtime, state: session.state, ...(session.kind ? { kind: session.kind } : {}) })).slice(0, limit ?? 20);
     return result({ ok: true, source: { nodeId: principal.nodeId, sessionId: verified.sessionId }, sessions });
   });
 
@@ -91,7 +91,7 @@ function server(env: Env, principal: Principal): McpServer {
     const prepared = await prepareIntentClaim(principal, "send", id, args, ctx.mcpReq._meta);
     if (!prepared.ok) return error(prepared.error);
     const sent = await registryStub(env).sendMcpMessage(prepared.intent, to, text);
-    if (!sent.ok) return error("message was not accepted");
+    if (!sent.ok) return error("denied" in sent ? sent.error : "message was not accepted");
     try {
       await routeEffects(env, sent.effects);
     } catch {
@@ -111,7 +111,7 @@ function server(env: Env, principal: Principal): McpServer {
     if (!record) return error("message status is not available to this node");
     const progress = record.state === "accepted" && isMessageProgress(record.progress) ? record.progress : undefined;
     return result({ ok: true, messageId, state: record.state, updatedAt: record.updatedAt,
-      ...(progress ? { progress } : {}) });
+      ...(progress ? { progress } : {}), ...(record.replyMessageId ? { replyMessageId: record.replyMessageId } : {}) });
   });
 
   mcp.registerTool("inbox", { description: `Read the verified originating session inbox from its online node. ${REQUEST_ID_INSTRUCTION}`,
@@ -131,7 +131,7 @@ function server(env: Env, principal: Principal): McpServer {
     const prepared = await prepareIntentClaim(principal, "reply", id, { inReplyTo, text }, ctx.mcpReq._meta);
     if (!prepared.ok) return error(prepared.error);
     const sent = await registryStub(env).replyMcpMessage(prepared.intent, inReplyTo, text);
-    if (!sent.ok) return error("reply was not accepted");
+    if (!sent.ok) return error("denied" in sent ? sent.error : "reply was not accepted");
     try {
       await routeEffects(env, sent.effects);
     } catch {
