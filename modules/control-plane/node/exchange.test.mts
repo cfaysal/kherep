@@ -48,7 +48,7 @@ function outbox(paths: NodePaths, messageId = ID_A): OutboxRecord {
   return record;
 }
 
-function poll(client: NodeClient, paths: NodePaths, inflight = new Set<string>(), open = true, now?: number): Envelope[] {
+function poll(client: NodeClient, paths: NodePaths, inflight = new Map<string, number>(), open = true, now?: number): Envelope[] {
   const sent: string[] = [];
   pollExchange(client, paths, inflight, (frame) => { if (open) sent.push(frame); return open; }, now);
   return decode(sent);
@@ -76,7 +76,7 @@ test("sends each outbox record once per connection and moves it to sent/ with th
   const paths = tempPaths(t);
   const { client } = await connected(paths);
   const record = outbox(paths);
-  const inflight = new Set<string>();
+  const inflight = new Map<string, number>();
   const [frame] = poll(client, paths, inflight);
   assert.equal(frame.type, "message.send");
   assert.deepEqual(frame.body, { messageId: ID_A, fromSession: "review", to: { nodeId: PEER, session: "build" }, text: "hello" });
@@ -125,26 +125,26 @@ test("accepted progress retries until its exact Worker receipt and backs off for
   const first: MessageProgress = { phase: "waking", code: "wake-pending", observedAt: new Date(now).toISOString() };
   setMessageProgress(paths.inbox, ID_A, first.phase, first.code, now);
 
-  assert.deepEqual(poll(client, paths, new Set(), true, now).map((e) => e.body), [{ messageId: ID_A, state: "accepted", progress: first }]);
-  assert.deepEqual(poll(client, paths, new Set(), true, now).map((e) => e.body), [{ messageId: ID_A, state: "accepted", progress: first }],
+  assert.deepEqual(poll(client, paths, new Map(), true, now).map((e) => e.body), [{ messageId: ID_A, state: "accepted", progress: first }]);
+  assert.deepEqual(poll(client, paths, new Map(), true, now).map((e) => e.body), [{ messageId: ID_A, state: "accepted", progress: first }],
     "socket enqueue is not persistence");
   await client.onFrame(incoming("event", { name: "message.receipt", messageId: ID_A,
     requestedState: "accepted", storedState: "accepted", storedProgressAt: first.observedAt }));
-  assert.deepEqual(poll(client, paths, new Set(), true, now), []);
+  assert.deepEqual(poll(client, paths, new Map(), true, now), []);
 
   const second: MessageProgress = { phase: "waiting", code: "target-busy", observedAt: new Date(now + 1).toISOString() };
   setMessageProgress(paths.inbox, ID_A, second.phase, second.code, now + 1);
-  assert.equal(poll(client, paths, new Set(), true, now + 1).length, 1);
+  assert.equal(poll(client, paths, new Map(), true, now + 1).length, 1);
   await client.onFrame(incoming("event", { name: "message.receipt", messageId: ID_A,
     requestedState: "accepted", storedState: "accepted", storedProgressAt: first.observedAt }));
-  assert.equal(poll(client, paths, new Set(), true, now + 1).length, 1, "an old receipt leaves newer progress pending");
+  assert.equal(poll(client, paths, new Map(), true, now + 1).length, 1, "an old receipt leaves newer progress pending");
 
   await client.onFrame(incoming("event", { name: "message.receipt", messageId: ID_A,
     requestedState: "accepted", storedState: "accepted" }));
-  assert.deepEqual(poll(client, paths, new Set(), true, now + 1), [], "an old Worker receipt applies retry backoff");
+  assert.deepEqual(poll(client, paths, new Map(), true, now + 1), [], "an old Worker receipt applies retry backoff");
   assert.equal(getReceipt(paths.inbox, ID_A)?.reportedProgressAt, first.observedAt,
     "an older acknowledged observation remains recorded without acknowledging the newer one");
-  assert.equal(poll(client, paths, new Set(), true, now + 60_001).length, 1, "progress retries after the bounded backoff");
+  assert.equal(poll(client, paths, new Map(), true, now + 60_001).length, 1, "progress retries after the bounded backoff");
 });
 
 test("a malformed progress sidecar never crosses the WebSocket", async (t) => {
@@ -178,7 +178,7 @@ test("nothing counts as sent while the socket is closed or the client not authen
   const paths = tempPaths(t);
   const { client } = await connected(paths);
   outbox(paths);
-  const inflight = new Set<string>();
+  const inflight = new Map<string, number>();
   assert.deepEqual(poll(client, paths, inflight, false), []);
   assert.equal(inflight.size, 0);
   client.connectionClosed();
@@ -205,7 +205,7 @@ test("retries terminal inbox states until the Worker receipt confirms persistenc
   assert.deepEqual(poll(client, paths), []);
   markDelivered(paths.inbox, ID_A);
   // A closed socket reports nothing and marks nothing.
-  assert.deepEqual(poll(client, paths, new Set(), false), []);
+  assert.deepEqual(poll(client, paths, new Map(), false), []);
   assert.equal(getReceipt(paths.inbox, ID_A)?.reportedState, "accepted");
   assert.deepEqual(poll(client, paths).map((e) => [e.type, e.body]), [["message.status", { messageId: ID_A, state: "delivered" }]]);
   assert.equal(getReceipt(paths.inbox, ID_A)?.reportedState, "accepted", "socket write is not a persistence receipt");

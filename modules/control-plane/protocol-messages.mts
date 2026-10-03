@@ -34,6 +34,26 @@ export type MessageProgressPhase = keyof typeof MESSAGE_PROGRESS_CODES;
 export type MessageProgressCode = (typeof MESSAGE_PROGRESS_CODES)[MessageProgressPhase][number];
 export interface MessageProgress { phase: MessageProgressPhase; code: MessageProgressCode; observedAt: string; retryAt?: string }
 
+// What a sender reads (issue #197). running and stopped refine accepted from
+// its existing progress codes and never go on the wire, so a Worker or node
+// of an older version validates every frame as before.
+export type SenderState<S extends string = MessageState> = S | "running" | "stopped";
+const RUNNING_CODES: readonly MessageProgressCode[] = ["awaiting-turn-confirmation", "fallback-running"];
+
+export function senderState<S extends string>(state: S, progress?: MessageProgress | null): SenderState<S> {
+  if (state !== "accepted" || !progress) return state;
+  if (progress.code === "operator-stopped") return "stopped";
+  return RUNNING_CODES.includes(progress.code) ? "running" : state;
+}
+
+// An accepted message without any progress from its target node for this
+// long is shown with an actionable reason instead of a bare accepted.
+export const ACCEPTED_SILENCE_MS = 5 * 60_000;
+
+export function silentlyAccepted(state: string, progress: MessageProgress | null | undefined, updatedAt: number, now: number): boolean {
+  return state === "accepted" && !progress && now - updatedAt >= ACCEPTED_SILENCE_MS;
+}
+
 // session is a session id or a session name on that node.
 export interface MessageAddress { nodeId: string; session: string }
 // node -> Worker. The sender node is always the authenticated connection;

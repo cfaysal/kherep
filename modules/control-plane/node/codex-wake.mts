@@ -5,6 +5,7 @@ import { resumeArgs, stillRuns } from "./codex-process.mts";
 import { spawnRun } from "./codex-runner.mts";
 import type { NodePaths } from "./config.mts";
 import { deliveryContext, MAX_OFFERS, offerEnded, sessionInbox } from "./deliver-core.mts";
+import { progressRecords } from "./delivery-progress.mts";
 import { exhaustedOfferReason, permanentFallbackFailure } from "./delivery-failure.mts";
 import { listInbox, markRefused, markRetry, MAX_REPLY_DEPTH, messageIds, type InboxRecord } from "./inbox.mts";
 import { wakeAllowed } from "./policy.mts";
@@ -82,7 +83,14 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   const granted = (r: InboxRecord): boolean => listed || taskGrants(record, r);
   const all = sessionInbox(paths, refs);
   const unlisted = all.filter((r) => !granted(r) && r.state === "accepted");
-  if (unlisted.length > 0) note(paths, now, sessionId, ids(unlisted), "not-allowlisted");
+  // Every early return below leaves a fixed progress code on the waiting
+  // messages, so none stays accepted without a reason (issue #197).
+  const explain = (records: InboxRecord[], code: Parameters<typeof progressRecords>[3]): void =>
+    progressRecords(paths, records, code === "wake-failed" ? "failed" : "waiting", code, now);
+  if (unlisted.length > 0) {
+    explain(unlisted, "wake-not-authorized");
+    note(paths, now, sessionId, ids(unlisted), "not-allowlisted");
+  }
   const mine = all.filter(granted).filter((message) => {
     const failure = record.state === "failed" && !record.running ? permanentFallbackFailure(record, message, record.reason) : null;
     if (message.state !== "offered" || !failure) return true;
@@ -90,19 +98,29 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
     return false;
   });
   const deep = mine.filter((r) => r.state === "accepted" && atReplyLimit(r));
-  if (deep.length > 0) note(paths, now, sessionId, ids(deep), "depth-limit");
+  if (deep.length > 0) {
+    explain(deep, "reply-limit");
+    note(paths, now, sessionId, ids(deep), "depth-limit");
+  }
   const fresh = mine.filter((r) => r.state === "accepted" && !atReplyLimit(r));
   const ended = mine.filter((r) => r.state === "offered" && offerEnded(r, now));
   // As the delivery hook does: an offer no run confirmed MAX_OFFERS times is refused.
   for (const r of ended) if ((r.offers ?? 0) >= MAX_OFFERS) markRefused(paths.inbox, r.messageId, exhaustedOfferReason(r, MAX_OFFERS));
   const stuck = ended.filter((r) => (r.offers ?? 0) < MAX_OFFERS && !atReplyLimit(r));
-  const due = [...ids(fresh), ...ids(stuck)];
+  const waiting = [...fresh, ...stuck];
+  const due = ids(waiting);
   if (due.length === 0) return;
-  if (fs.existsSync(killSwitch(paths))) return note(paths, now, sessionId, due, "disabled");
-  if (bypassesPermissions(record.permissionMode)) return note(paths, now, sessionId, due, "permission-mode");
+  if (fs.existsSync(killSwitch(paths))) {
+    explain(waiting, "wake-disabled");
+    return note(paths, now, sessionId, due, "disabled");
+  }
+  if (bypassesPermissions(record.permissionMode)) {
+    explain(waiting, "permission-restricted");
+    return note(paths, now, sessionId, due, "permission-mode");
+  }
   // The previous run may still be ending (a stop's grace period); a failed read throws.
-  if (stillRuns(deps.codex ?? {}, record.pid, record.pidStart)) return;
-  if (overLimit(deps, now, record.taskId)) return;
+  if (stillRuns(deps.codex ?? {}, record.pid, record.pidStart)) return explain(waiting, "target-busy");
+  if (overLimit(deps, now, record.taskId)) return explain(waiting, "retry-pending");
   // The turn is taken before deliveryContext because that marks the messages
   // offered: a turn denied afterwards (spacing) would count an offer for
   // nothing and refuse the message after MAX_OFFERS rounds. With due messages
@@ -110,12 +128,16 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   // Again: the directory may have been swapped for a link out of the roots since the start.
   const cwd = resolveCwd(deps.policy.sessions!, record.cwd, deps.realpath);
   if (!cwd.ok) {
+    explain(waiting, "wake-failed");
     log(`kherep-node: not resuming task ${record.taskId} for messages: ${cwd.reason}`);
     return;
   }
   const budget = takeTurn(paths, sessionId, now);
-  if (budget === "spacing" || budget === "locked") return;
-  if (budget === "exhausted") return note(paths, now, sessionId, due, "budget");
+  if (budget === "spacing" || budget === "locked") return explain(waiting, "retry-pending");
+  if (budget === "exhausted") {
+    explain(waiting, "budget-exhausted");
+    return note(paths, now, sessionId, due, "budget");
+  }
 
   const context = deliveryContext("UserPromptSubmit", refs, { paths, now: () => now, ...(deps.cli ? { replyCommand: deps.cli } : {}) });
   const offeredAt = new Date(now).toISOString();
@@ -126,9 +148,13 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   const prompt = `${fresh.length > 0 ? wakeText(fresh.length) : STUCK_TEXT}\n\n${context}`;
   const run: TaskRecord = { ...record, cwd: cwd.cwd, running: true, offered,
     deadline: new Date(now + deps.policy.sessions!.maxRuntimeMinutes * 60_000).toISOString() };
+  const carried = sessionInbox(paths, refs).filter((r) => offered.includes(r.messageId));
   try {
     await spawnRun(deps, run, (files, outbox) => resumeArgs(sessionId, record.permissionMode, files, outbox), prompt);
+    // The run's turn carries them: running for the sender until it confirms.
+    explain(carried, "awaiting-turn-confirmation");
   } catch (error) {
+    explain(carried, "wake-failed");
     for (const id of offered) markRetry(paths.inbox, id);
     log(`kherep-node: could not resume task ${record.taskId} for messages: ${String((error as Error).message ?? error)}`);
   }

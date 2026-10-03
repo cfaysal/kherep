@@ -1,12 +1,12 @@
 import fs from "node:fs";
 
-import { bypassesPermissions, listenerLock, rememberedMode, type ListenerLock } from "./autonomy.mts";
+import { bypassesPermissions, isPlainSessionId, listenerLock, rememberedMode, type ListenerLock } from "./autonomy.mts";
 import type { NodePaths } from "./config.mts";
 import { readLocalSessions, type LocalSession } from "./exchange.mts";
 import { listInbox, readJson, setMessageProgress, type InboxRecord } from "./inbox.mts";
 import { wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
-import { taskForSession, taskGrants } from "./task-records.mts";
+import { isActive, listTasks, taskForSession, taskGrants } from "./task-records.mts";
 import { killSwitch, WAKE_MAX_WAIT_MS } from "./wake-hook.mts";
 
 const refsOf = (session: { sessionId: string; name?: string }): string[] =>
@@ -92,4 +92,22 @@ export function observeClaudeDeliveryProgress(deps: RunnerDeps): void {
   }
   progressRecords(deps.paths, ambiguous, "waiting", "ambiguous-target", now);
   for (const session of claudeSessions.values()) observeAccepted(deps, session, assigned.get(session.sessionId) ?? [], now);
+}
+
+// Codex task sessions the message resume (codex-wake.mts) skips: a running
+// task is busy, an operator-stopped one waits for an explicit continue (issue
+// #197). Only accepted messages addressed to the task itself are annotated;
+// a message closed-session delivery handed over keeps that path's progress.
+// Without such a task the inbox is not read.
+export function observeCodexTaskProgress(deps: RunnerDeps): void {
+  const held = listTasks(deps.paths).filter((task) => task.runtime === "codex" && isPlainSessionId(task.sessionId)
+    && (task.operatorStoppedAt !== undefined || isActive(task)));
+  if (held.length === 0) return;
+  const now = deps.now?.() ?? Date.now();
+  const waiting = listInbox(deps.paths.inbox).filter((record) => record.state === "accepted" && record.closedTo === undefined);
+  for (const task of held) {
+    const records = waiting.filter((record) => record.toSession === task.sessionId || record.toSession === task.name);
+    if (task.operatorStoppedAt !== undefined) progressRecords(deps.paths, records, "waiting", "operator-stopped", now);
+    else progressRecords(deps.paths, records, "waiting", "target-busy", now);
+  }
 }
