@@ -1,5 +1,6 @@
 import fs from "node:fs";
 
+import type { MessageProgressCode } from "../protocol-messages.mts";
 import { audit, bypassesPermissions, isPlainSessionId, takeTurn, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
 import { resumeArgs, stillRuns } from "./codex-process.mts";
 import { spawnRun } from "./codex-runner.mts";
@@ -85,7 +86,7 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   const unlisted = all.filter((r) => !granted(r) && r.state === "accepted");
   // Every early return below leaves a fixed progress code on the waiting
   // messages, so none stays accepted without a reason (issue #197).
-  const explain = (records: InboxRecord[], code: Parameters<typeof progressRecords>[3]): void =>
+  const explain = (records: InboxRecord[], code: MessageProgressCode): void =>
     progressRecords(paths, records, code === "wake-failed" ? "failed" : "waiting", code, now);
   if (unlisted.length > 0) {
     explain(unlisted, "wake-not-authorized");
