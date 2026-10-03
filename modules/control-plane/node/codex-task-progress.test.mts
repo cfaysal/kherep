@@ -74,7 +74,7 @@ test("a busy or operator-stopped Codex task explains its waiting messages withou
   observeCodexTaskProgress(node.deps());
 });
 
-test("each wake guard of an ended Codex task leaves a reason on its waiting messages", (t) => {
+test("each wake guard of an ended Codex task leaves a reason on its waiting messages", async (t) => {
   const node = taskNode(t, { runtimes: ["codex"] });
   const ended = task(node);
   const deps = () => ({ ...node.deps(), codex: { findCodex: () => null } });
@@ -82,24 +82,22 @@ test("each wake guard of an ended Codex task leaves a reason on its waiting mess
   const deep = message(node, ended.name, { taskId: ended.taskId, depth: 6 });
   const granted = message(node, ended.name, { taskId: ended.taskId });
   fs.writeFileSync(path.join(node.paths.dir, "wake.disabled"), "");
-  return (async () => {
-    await pollCodexInbound(deps());
-    assert.equal(code(node, unlisted), "wake-not-authorized");
-    assert.equal(code(node, deep), "reply-limit");
-    assert.equal(code(node, granted), "wake-disabled");
-    fs.rmSync(path.join(node.paths.dir, "wake.disabled"));
+  await pollCodexInbound(deps());
+  assert.equal(code(node, unlisted), "wake-not-authorized");
+  assert.equal(code(node, deep), "reply-limit");
+  assert.equal(code(node, granted), "wake-disabled");
+  fs.rmSync(path.join(node.paths.dir, "wake.disabled"));
 
-    for (let n = 0; n < 6; n++) assert.equal(takeTurn(node.paths, ended.sessionId!, T0 - 50 * 60_000 + n * TURN_SPACING_MS * 2), "ok");
-    await pollCodexInbound(deps());
-    assert.equal(code(node, granted), "budget-exhausted");
-    node.tick(2 * 60 * 60_000);
+  for (let n = 0; n < 6; n++) assert.equal(takeTurn(node.paths, ended.sessionId!, T0 - 50 * 60_000 + n * TURN_SPACING_MS * 2), "ok");
+  await pollCodexInbound(deps());
+  assert.equal(code(node, granted), "budget-exhausted");
+  node.tick(2 * 60 * 60_000);
 
-    // The resume cannot start a process: failed, and offered again later.
-    await pollCodexInbound(deps());
-    assert.equal(getMessageProgress(node.paths.inbox, granted)?.phase, "failed");
-    assert.equal(code(node, granted), "wake-failed");
-    assert.equal(getMessage(node.paths.inbox, granted)?.retry, true);
-  })();
+  // The resume cannot start a process: failed, and offered again later.
+  await pollCodexInbound(deps());
+  assert.equal(getMessageProgress(node.paths.inbox, granted)?.phase, "failed");
+  assert.equal(code(node, granted), "wake-failed");
+  assert.equal(getMessage(node.paths.inbox, granted)?.retry, true);
 });
 
 test("a resumed Codex task run reads as running until its turn confirms delivery", posix, async (t) => {

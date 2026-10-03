@@ -107,7 +107,7 @@ export function observeCodexTaskProgress(deps: RunnerDeps): void {
   const waiting = listInbox(deps.paths.inbox).filter((record) => record.state === "accepted" && record.closedTo === undefined);
   for (const task of held) {
     const records = waiting.filter((record) => record.toSession === task.sessionId || record.toSession === task.name);
-    if (task.operatorStoppedAt !== undefined) progressRecords(deps.paths, records, "waiting", "operator-stopped", now);
-    else progressRecords(deps.paths, records, "waiting", "target-busy", now);
+    const code = task.operatorStoppedAt !== undefined ? "operator-stopped" : "target-busy";
+    progressRecords(deps.paths, records, "waiting", code, now);
   }
 }

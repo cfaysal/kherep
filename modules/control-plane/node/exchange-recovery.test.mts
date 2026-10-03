@@ -48,7 +48,7 @@ async function daemon(paths: NodePaths) {
     return sent.map((frame) => { const parsed = parseEnvelope(frame); assert.ok(parsed.ok); return parsed.envelope; })
       .filter((envelope) => envelope.type === "message.send");
   };
-  return { client, poll, inflight };
+  return { client, poll };
 }
 
 function outbox(paths: NodePaths): void {
