@@ -93,6 +93,7 @@ describe("stateless remote MCP HTTP", () => {
     const { nodeId, credential } = await source();
     await registry().replaceSessions(nodeId, [{ sessionId: "thread-source", runtime: "codex", state: "running", kind: "codex" },
       { sessionId: "task-thread", runtime: "codex", state: "idle", kind: "codex-task" },
+      { sessionId: "intercom-thread", runtime: "codex", state: "running", kind: "codex-intercom" },
       { sessionId: "legacy-thread", runtime: "codex", state: "running" }]);
     const requestId = "20000000-0000-4000-8000-000000000012";
     const args = { limit: 100 };
@@ -106,6 +107,7 @@ describe("stateless remote MCP HTTP", () => {
     expect(own).toEqual(expect.arrayContaining([
       { nodeId, sessionId: "thread-source", runtime: "codex", state: "running", kind: "codex" },
       { nodeId, sessionId: "task-thread", runtime: "codex", state: "idle", kind: "codex-task" },
+      { nodeId, sessionId: "intercom-thread", runtime: "codex", state: "running", kind: "codex-intercom" },
       { nodeId, sessionId: "legacy-thread", runtime: "codex", state: "running" },
     ]));
     await instance.close();

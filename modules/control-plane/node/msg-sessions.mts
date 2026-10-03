@@ -29,11 +29,12 @@ export function directoryFor(io: Pick<Io, "paths" | "now" | "err">): DirectoryBo
 }
 
 // Issue #198: a task the node started runs in the background, without a chat
-// in a desktop app: a Codex task run, or a Claude Code session that
+// in a desktop app: a Codex task or intercom run, or a Claude Code session that
 // `claude agents` reports as background or, unless reported interactive,
 // that carries a task label (as attach.mts classifies it).
 function isBackgroundTask(session: DirectorySession): boolean {
-  return session.kind === "codex-task" || session.kind === "background" || (session.kind !== "interactive" && session.label !== undefined);
+  return session.kind === "codex-task" || session.kind === "codex-intercom" || session.kind === "background"
+    || (session.kind !== "interactive" && session.label !== undefined);
 }
 
 export function sessions(io: Io, from?: string): number {

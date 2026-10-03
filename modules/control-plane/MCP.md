@@ -200,11 +200,12 @@ Each node may hold at most 128 unexpired intents. Claimed intents continue to co
 | `reply` | Derives the recipient from stored message provenance and enforces the reply-depth limit |
 | `status` | Returns metadata-only state for a message visible to the caller's node |
 
-A `sessions` entry carries `kind` when the node reported one. `codex-task` marks a node-managed
-Codex task run, which includes Intercom background runs; `codex` marks a Codex session recorded by
-its hooks. Other runtimes' kinds pass through as their node reported them.
-The kind does not distinguish an Intercom run from an explicitly requested task, and it does not
-imply that the run appears in a desktop session list.
+A `sessions` entry carries `kind` when the node reported one. `codex-task` marks a Codex task run
+the node started on request, `codex-intercom` a Codex Intercom run the node started on its own for
+peer messages (issue #198), and `codex` a Codex session recorded by its hooks. Other runtimes' kinds
+pass through as their node reported them. A node older than `codex-intercom` reports its Intercom
+runs as `codex-task`. The kind is node-reported metadata; it does not imply that the run appears in
+a desktop session list.
 
 For a `replied` message, `status` also returns `replyMessageId`: the reply that marked the message
 replied, recorded by the Registry at that moment. A reply refused at send time never marks the
@@ -212,7 +213,7 @@ original and is never named; a marking reply that its recipient later refuses st
 marked replied before this column existed carry no `replyMessageId`. The sending session can read
 the reply with `status` and, while its node is online, with `inbox`.
 
-For an accepted message, `status` also returns validated `progress` metadata when available: a fixed `phase` and `code`, `observedAt`, and optional `retryAt`. These codes distinguish waiting for a user turn, waking, fallback activity and delivery failures. Accepted progress does not prove delivery. Invalid progress and stale progress on terminal states are omitted. Arbitrary persisted reasons and message bodies are never included in a status result. The tool returns the canonical state; the `running` and `stopped` sender states and the 5-minute silence reason of `msg status` are derived from the same `state` and `progress` fields by `senderState` and `silentlyAccepted` in `protocol-messages.mts`, and are not yet part of the MCP result.
+For an accepted message, `status` also returns validated `progress` metadata when available: a fixed `phase` and `code`, `observedAt`, and optional `retryAt`. These codes distinguish waiting for a user turn, waking, fallback activity and delivery failures. Accepted progress does not prove delivery. Invalid progress and stale progress on terminal states are omitted. Arbitrary persisted reasons and message bodies are never included in a status result. `state` stays the canonical state. `status` also returns `senderState` (issue #197), the state a sender reads, derived from `state` and the returned `progress` by `senderState` in `protocol-messages.mts`, the function `msg status` uses: `running` for `awaiting-turn-confirmation` and `fallback-running`, `stopped` for `operator-stopped`, otherwise the canonical state. `running` reports the last observation, not liveness. An `accepted` message without progress whose `updatedAt` is at least 5 minutes before the Worker's clock (`silentlyAccepted`, `ACCEPTED_SILENCE_MS`) also carries `hint`: a fixed text naming the possible causes (target session not running, target node offline or on an older version) and the `sessions` tool as the next check. `hint` never contains a persisted reason. Clients that read only `state` are unaffected.
 
 Inbox has three distinct results: items, a successful empty list, or a fixed offline/read error. The body transits from the expected authenticated node socket directly to the waiting HTTP request. It does not enter `SessionStore`, the command-result journal, Registry SQLite, an audit record or a log. The read uses the exact current session id. Alias ownership is not inferred from a reused display name.
 

@@ -151,15 +151,17 @@ export function listCodexSessions(paths: NodePaths, now: number = Date.now(), ac
 // Codex task sessions (issue #63), from the task records themselves: a
 // `codex exec` run may never fire a hook, and an ended run can still be
 // messaged (codex-wake.mts resumes it). Listed once the thread id is known,
-// while active or updated within activeMs, with the task's name.
+// while active or updated within activeMs, with the task's name. An intercom
+// run the node started on its own is kind codex-intercom (issue #198); every
+// Worker accepts it, since kind has always been any string of up to 32 chars.
 export function listCodexTaskSessions(paths: NodePaths, now: number = Date.now(), activeMs: number = CODEX_ACTIVE_MS): SessionInfo[] {
   return listTasks(paths).flatMap((task) => {
     if (task.runtime !== CODEX_RUNTIME || !task.sessionId) return [];
     const active = isActive(task);
     if (!active && !(now - Date.parse(task.updatedAt) <= activeMs)) return [];
     const session: SessionInfo = { sessionId: task.sessionId, runtime: CODEX_RUNTIME, state: active ? "running" : "idle",
-      startedAt: task.startedAt, name: task.name, ...(task.cwd.length <= 512 ? { cwd: task.cwd } : {}), kind: "codex-task",
-      ...(task.label ? { label: task.label } : {}) };
+      startedAt: task.startedAt, name: task.name, ...(task.cwd.length <= 512 ? { cwd: task.cwd } : {}),
+      kind: task.local === "intercom" ? "codex-intercom" : "codex-task", ...(task.label ? { label: task.label } : {}) };
     return isSessionInfo(session) ? [session] : [];
   });
 }

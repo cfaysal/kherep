@@ -4,7 +4,9 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { expect, it } from "vitest";
 
 import { REMOTE_MCP_CAPABILITY, digestMcpArguments } from "../../protocol-mcp.mts";
-import { MESSAGING_CAPABILITY, type MessageProgress } from "../../protocol-messages.mts";
+import {
+  ACCEPTED_SILENCE_MS, MESSAGING_CAPABILITY, type MessageProgress, type MessageProgressCode, type SenderState,
+} from "../../protocol-messages.mts";
 import { handleMcp } from "../src/mcp-http.mts";
 import { MessageStore } from "../src/message-store.mts";
 import type { Env } from "../src/env.mts";
@@ -73,6 +75,57 @@ it.each<MessageProgress>([
   expect(result.isError).not.toBe(true);
   expect(result.structuredContent).toMatchObject({ ok: true, messageId, state: "accepted" });
   expect(result.structuredContent).toHaveProperty("progress", progress);
+});
+
+it.each<[MessageProgress["phase"], MessageProgressCode, SenderState]>([
+  ["waiting", "awaiting-turn-confirmation", "running"],
+  ["fallback", "fallback-running", "running"],
+  ["waiting", "operator-stopped", "stopped"],
+  ["waiting", "awaiting-user-turn", "accepted"],
+  ["waking", "wake-pending", "accepted"],
+])("adds the sender state of accepted progress %s/%s and keeps the canonical state (issue #197)", async (phase, code, expected) => {
+  const { source, target, messageId } = await message();
+  await registry().reportMessageStatus(target, { messageId, state: "accepted", reason: SENTINEL,
+    progress: { phase, code, observedAt: OBSERVED } as MessageProgress });
+  const result = await status(source, SOURCE, messageId);
+  expect(result.structuredContent).toMatchObject({ ok: true, messageId, state: "accepted", senderState: expected });
+  expect(result.structuredContent).not.toHaveProperty("hint");
+});
+
+async function backdate(messageId: string, ms: number) {
+  await runInDurableObject(registry(), (_instance, state) => {
+    state.storage.sql.exec("UPDATE messages SET updated_at = ? WHERE id = ?", Date.now() - ms, messageId);
+  });
+}
+
+it("adds a fixed hint to an accepted message without progress for the silence bound (issue #197)", async () => {
+  const { source, target, messageId } = await message();
+  await registry().reportMessageStatus(target, { messageId, state: "accepted", reason: SENTINEL });
+  await backdate(messageId, ACCEPTED_SILENCE_MS - 60_000);
+  const recent = await status(source, SOURCE, messageId);
+  expect(recent.structuredContent).toMatchObject({ ok: true, state: "accepted", senderState: "accepted" });
+  expect(recent.structuredContent).not.toHaveProperty("hint");
+
+  await backdate(messageId, ACCEPTED_SILENCE_MS + 1_000);
+  const silent = await status(source, SOURCE, messageId);
+  expect(silent.structuredContent).toMatchObject({ ok: true, state: "accepted", senderState: "accepted",
+    hint: expect.stringMatching(/^no delivery progress from the target node for at least 5 minutes; .*older kherep-node; check the sessions tool$/) });
+  expect(silent.structuredContent).not.toHaveProperty("progress");
+});
+
+it("adds no silence hint to progress or to other states, however old", async () => {
+  const { source, target, messageId } = await message();
+  await backdate(messageId, 10 * ACCEPTED_SILENCE_MS);
+  const queued = await status(source, SOURCE, messageId);
+  expect(queued.structuredContent).toMatchObject({ ok: true, state: "queued", senderState: "queued" });
+  expect(queued.structuredContent).not.toHaveProperty("hint");
+
+  await registry().reportMessageStatus(target, { messageId, state: "accepted",
+    progress: { phase: "waiting", code: "awaiting-user-turn", observedAt: OBSERVED } });
+  await backdate(messageId, 10 * ACCEPTED_SILENCE_MS);
+  const waiting = await status(source, SOURCE, messageId);
+  expect(waiting.structuredContent).toMatchObject({ ok: true, state: "accepted", senderState: "accepted" });
+  expect(waiting.structuredContent).not.toHaveProperty("hint");
 });
 
 it.each([

@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import {
-  isMessageId, isMessageText, MAX_MESSAGE_TEXT, OPERATOR_NODE_ID, senderState, silentlyAccepted, type MessageAddress,
+  ACCEPTED_SILENCE_CAUSES, isMessageId, isMessageText, MAX_MESSAGE_TEXT, OPERATOR_NODE_ID, senderState, silentlyAccepted, type MessageAddress,
 } from "../protocol-messages.mts";
 import type { NodePaths } from "./config.mts";
 import { getOutbox, getSent, writeOutbox, type OutboxRecord, type SentRecord } from "./exchange.mts";
@@ -84,8 +84,7 @@ const PROGRESS_TEXT: Record<string, string> = {
 function stateText(record: SentRecord, now: number): string {
   const state = senderState(record.state, record.progress);
   if (silentlyAccepted(record.state, record.progress, Date.parse(record.updatedAt), now)) {
-    return `${state}: no delivery progress from the target node since ${record.updatedAt}; the target session may not be running`
-      + " (refused after 60 minutes), or the target node is offline or runs an older kherep-node; check `kherep-node msg sessions`";
+    return `${state}: no delivery progress from the target node since ${record.updatedAt}; ${ACCEPTED_SILENCE_CAUSES}; check \`kherep-node msg sessions\``;
   }
   return `${state}${progressText(record)}`;
 }
