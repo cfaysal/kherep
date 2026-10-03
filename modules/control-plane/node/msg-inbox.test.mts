@@ -173,3 +173,35 @@ test("invalid or unreadable non-Codex listings cannot establish alias ownership"
   assert.match(unreadable.out, /exact local reply/);
   assert.match(unreadable.err, /cannot verify local session names/);
 });
+
+test("Codex inbox needs a verified sender: a recent hook record and no other node-set session (issue #200)", async (t) => {
+  const paths = setup(t);
+  forwarded(paths, MESSAGE, SESSION, "for the Codex session");
+  const inbox = async (variables: NodeJS.ProcessEnv, now = NOW) => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await runMsg(["inbox", "--from", SESSION], { paths, env: variables, now: () => now,
+      out: line => out.push(line), err: line => err.push(line) });
+    return { code, out: out.join("\n"), err: err.join("\n") };
+  };
+  // Codex desktop: no session variable at all.
+  const desktop = await inbox({});
+  assert.equal(desktop.code, 0, desktop.err);
+  assert.match(desktop.out, /for the Codex session/);
+  // A Codex started from a Claude Code tool inherits that variable; the hook record still identifies it.
+  const inherited = await inbox({ CLAUDE_CODE_SESSION_ID: "claude-session" });
+  assert.equal(inherited.code, 0, inherited.err);
+  assert.match(inherited.out, /for the Codex session/);
+  for (const [variables, now] of [[{ KHEREP_SESSION_ID: "task-other" }, NOW],
+    [{}, NOW + 12 * 60 * 60_000 + 1]] as const) {
+    const refused = await inbox(variables, now);
+    assert.equal(refused.code, 1);
+    assert.match(refused.err, /is not a verified sender/);
+    assert.doesNotMatch(refused.out, /for the Codex session/);
+  }
+  // Without --from and without a session variable the error names both variables and the Codex way.
+  const out: string[] = [];
+  const err: string[] = [];
+  assert.equal(await runMsg(["inbox"], { paths, env: {}, now: () => NOW, out: line => out.push(line), err: line => err.push(line) }), 1);
+  assert.match(err.join("\n"), /neither CLAUDE_CODE_SESSION_ID \(Claude Code\) nor KHEREP_SESSION_ID .* passes --from <its full session id>/);
+});

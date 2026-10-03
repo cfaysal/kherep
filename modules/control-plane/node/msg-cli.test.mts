@@ -9,6 +9,7 @@ import { recordCodexSession } from "./codex-sessions.mts";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { getOutbox, recordSent, writeDirectory, writeLocalSessions } from "./exchange.mts";
 import { markDelivered, storeMessage } from "./inbox.mts";
+import { writeTask } from "./task-records.mts";
 import { runMsg } from "./msg-cli.mts";
 import { resolveTarget } from "./msg-resolve.mts";
 
@@ -108,12 +109,20 @@ test("msg send writes an outbox record from this session's name and prints the m
   assert.deepEqual(record, { messageId: sent.out, fromSession: "review", to: { nodeId: PEER, session: "s-b3" }, text: "please review",
     createdAt: new Date(NOW).toISOString(), depth: 0 });
 
-  // Without a name in sessions.json the id is the sender; --from overrides both.
+  // Without a name in sessions.json the id is the sender; --from may name this same session by id or name.
   assert.equal(getOutbox(paths, (await run(paths, ["send", "node-b/docs", "x"], { CLAUDE_CODE_SESSION_ID: "s-other" })).out)?.fromSession, "s-other");
-  assert.equal(getOutbox(paths, (await run(paths, ["send", "--from", "ops", "node-b/docs", "x"], {})).out)?.fromSession, "ops");
+  assert.equal(getOutbox(paths, (await run(paths, ["send", "--from", "s-self", "node-b/docs", "x"])).out)?.fromSession, "s-self");
+  assert.equal(getOutbox(paths, (await run(paths, ["send", "--from", "review", "node-b/docs", "x"])).out)?.fromSession, "review");
   const anonymous = await run(paths, ["send", "node-b/docs", "x"], {});
   assert.equal(anonymous.code, 1);
-  assert.match(anonymous.err, /CLAUDE_CODE_SESSION_ID is not set; pass --from/);
+  assert.match(anonymous.err, /neither CLAUDE_CODE_SESSION_ID \(Claude Code\) nor KHEREP_SESSION_ID \(the node's Codex runs\) is set; a Codex session passes --from/);
+  // Issue #200: --from is never taken as typed. Another name, with or without a session variable, is refused and nothing is written.
+  for (const variables of [{}, ENV, { KHEREP_SESSION_ID: "s-self" }]) {
+    const posed = await run(paths, ["send", "--from", "ops", "node-b/docs", "x"], variables);
+    assert.equal(posed.code, 1);
+    assert.match(posed.err, /--from "ops" is not a verified sender/);
+    assert.equal(posed.out, "");
+  }
 
   for (const [argv, pattern] of [
     [["send", "node-b/build", "x"], /ambiguous session/], [["send", "node-z/docs", "x"], /unknown node/], [["send", "node-b/docs"], /1 to 16384 characters/],
@@ -219,10 +228,81 @@ test("msg send --from preserves a recorded Codex session id", async (t) => {
   const implicit = await run(paths, ["send", "node-b/docs", "hello"], { KHEREP_SESSION_ID: codex });
   assert.equal(implicit.code, 0, implicit.err);
   assert.equal(getOutbox(paths, implicit.out)?.fromSession, codex);
-  const alias = await run(paths, ["send", "--from", "codex-89abcdef", "node-b/docs", "hello"], {});
-  assert.equal(alias.code, 0, alias.err);
-  assert.equal(getOutbox(paths, alias.out)?.fromSession, "codex-89abcdef");
-  // An id that no Codex hook recorded is sent as typed.
-  assert.equal(getOutbox(paths, (await run(paths, ["send", "--from", "019a2b3c-other", "node-b/docs", "x"], {})).out)?.fromSession,
-    "019a2b3c-other");
+});
+
+test("msg send --from refuses a Codex sender that no recent hook record verifies (issue #200)", async (t) => {
+  const paths = setup(t);
+  const codex = "019a2b3c-4d5e-7f60-8123-456789abcdef";
+  recordCodexSession(paths, codex, "/work/b", NOW);
+  const refused = async (from: string, variables: NodeJS.ProcessEnv = {}, now = NOW) => {
+    const sent = await run(paths, ["send", "--from", from, "node-b/docs", "hello"], variables, now);
+    assert.equal(sent.code, 1, `${from} was accepted`);
+    assert.match(sent.err, /is not a verified sender/);
+  };
+  // A short alias, an id no hook recorded, and a record older than 12 hours.
+  await refused("codex-89abcdef");
+  await refused("019a2b3c-0000-7000-8000-000000000000");
+  await refused(codex, {}, NOW + 12 * 60 * 60_000 + 1);
+  // Another node-set session cannot name it.
+  await refused(codex, { KHEREP_SESSION_ID: "task-other" });
+  // An inherited Claude Code variable (Codex started from a Claude Code tool) neither verifies nor vetoes the hook record.
+  for (const variables of [ENV, { CLAUDE_CODE_SESSION_ID: "" }]) {
+    const inherited = await run(paths, ["send", "--from", codex, "node-b/docs", "hello"], variables);
+    assert.equal(inherited.code, 0, inherited.err);
+    assert.equal(getOutbox(paths, inherited.out)?.fromSession, codex);
+  }
+  // A node-started Codex run whose task record carries that thread may name it.
+  writeTask(paths, { taskId: "00000000-0000-4000-8000-0000000000f1", runtime: "codex", name: "task-00000000", cwd: "/w", permissionMode: "auto",
+    state: "running", startedAt: new Date(NOW).toISOString(), deadline: new Date(NOW + 60_000).toISOString(),
+    updatedAt: new Date(NOW).toISOString(), sessionId: codex });
+  const taskRun = await run(paths, ["send", "--from", codex, "node-b/docs", "hello"], { KHEREP_SESSION_ID: "task-00000000" });
+  assert.equal(taskRun.code, 0, taskRun.err);
+  assert.equal(getOutbox(paths, taskRun.out)?.fromSession, codex);
+});
+
+test("msg sessions marks background tasks and the session --from names (issue #198)", async (t) => {
+  const codex = "019a2b3c-4d5e-7f60-8123-456789abcdef";
+  const paths = setup(t, { ...DIRECTORY, sessions: [...DIRECTORY.sessions,
+    { nodeId: SELF, sessionId: codex, name: "codex-89abcdef", state: "idle", runtime: "codex", kind: "codex" },
+    { nodeId: PEER, sessionId: "019a0000-0000-7000-8000-000000000002", name: "task-3f2a1b0c", label: "intercom: codex@node-a",
+      state: "running", runtime: "codex", kind: "codex-task" },
+    { nodeId: PEER, sessionId: "s-b4", name: "notes", state: "idle", runtime: "claude-code", kind: "interactive" }] });
+  recordCodexSession(paths, codex, "/work/b", NOW);
+  const listed = await run(paths, ["sessions", "--from", codex], {});
+  assert.equal(listed.code, 0, listed.err);
+  const lines = listed.out.split("\n");
+  assert.ok(lines.includes(`  * codex-89abcdef  ${codex}  idle  codex`), listed.out);
+  assert.ok(lines.includes("    intercom: codex@node-a  019a0000-0000-7000-8000-000000000002  running  codex  [background task]"), listed.out);
+  assert.ok(lines.includes("    notes  s-b4  idle  claude-code"), listed.out);
+  assert.ok(lines.includes("    review  s-self  busy  claude-code  /work/a"), listed.out);
+  assert.match(listed.out, /\[background task\] runs as a Control Plane task, not as a desktop app chat, and the desktop apps may not list it/);
+  assert.match(listed.out, /kherep-node attach <node>\/<session id>.*kherep-node task status <taskId>/);
+  const unverified = await run(paths, ["sessions", "--from", "codex-89abcdef"], {});
+  assert.equal(unverified.code, 1);
+  assert.match(unverified.err, /not a verified sender/);
+  const anonymous = await run(paths, ["sessions"], {});
+  assert.match(anonymous.out, /neither CLAUDE_CODE_SESSION_ID nor KHEREP_SESSION_ID is set and no --from was given, so none is marked/);});
+
+test("msg status shows the threaded replies that reached this node (issue #200)", async (t) => {
+  const paths = setup(t);
+  const sent = await run(paths, ["send", "node-b/docs", "question"]);
+  assert.equal(sent.code, 0, sent.err);
+  recordSent(paths, sent.out, "replied", undefined, NOW + 1);
+  const reply = "00000000-0000-4000-8000-0000000000e2";
+  const deliver = (messageId: string, nodeId: string, toSession: string, inReplyTo: string = sent.out) => storeMessage(paths.inbox,
+    { messageId, from: { nodeId, session: "s-b3" }, toSession, text: "answer", inReplyTo, createdAt: new Date(NOW).toISOString() }, NOW + 2);
+  deliver(reply, PEER, "review");
+  // Not replies to this message: another node, another sender session, another original.
+  deliver("00000000-0000-4000-8000-0000000000e3", TWIN, "review");
+  deliver("00000000-0000-4000-8000-0000000000e4", PEER, "s-other");
+  deliver("00000000-0000-4000-8000-0000000000e5", PEER, "review", INCOMING);
+  const status = await run(paths, ["status", sent.out]);
+  assert.equal(status.code, 0, status.err);
+  assert.deepEqual(status.out.split("\n"), [
+    `${sent.out} replied (updated ${new Date(NOW + 1).toISOString()})`,
+    `  reply ${reply} from node node-b (${PEER}), session s-b3 (accepted, received ${new Date(NOW + 2).toISOString()})`,
+  ]);
+  // The reply keeps the original id, and the sender's inbox shows its text.
+  const inbox = await run(paths, ["inbox"]);
+  assert.match(inbox.out, new RegExp(`${reply}  accepted .*\\n  from: node node-b \\(${PEER}\\), session s-b3\\n  in reply to: ${sent.out}\\n  \\| answer`));
 });

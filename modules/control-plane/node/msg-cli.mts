@@ -2,18 +2,22 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import {
-  isMessageId, isMessageText, MAX_MESSAGE_TEXT, OPERATOR_NODE_ID, senderState, silentlyAccepted, type DirectoryBody, type MessageAddress,
+  isMessageId, isMessageText, MAX_MESSAGE_TEXT, OPERATOR_NODE_ID, senderState, silentlyAccepted, type MessageAddress,
 } from "../protocol-messages.mts";
-import { readConfig, type NodePaths } from "./config.mts";
-import { getOutbox, getSent, readDirectory, requestDirectory, writeOutbox, type OutboxRecord, type SentRecord,
-} from "./exchange.mts";
+import type { NodePaths } from "./config.mts";
+import { getOutbox, getSent, writeOutbox, type OutboxRecord, type SentRecord } from "./exchange.mts";
 import { getMessage, markAnswered } from "./inbox.mts";
 import {
-  currentSession, DIRECTORY_STALE_MS, resolveSendTarget, senderSession, SESSION_ENV, sessionIdFromEnv,
+  KHEREP_SESSION_ENV, resolveSendTarget, senderSession, SESSION_ENV, sessionIdFromEnv,
 } from "./msg-resolve.mts";
-import { inbox } from "./msg-inbox.mts";
+import { inbox, replyLines } from "./msg-inbox.mts";
 import { sendNew } from "./msg-new.mts";
+import { directoryFor, sessions } from "./msg-sessions.mts";
+import { stopTask } from "./msg-stop.mts";
 import { taskForSession } from "./task-records.mts";
+
+// attach.mts reads the directory through msg-cli.
+export { directoryFor };
 
 // kherep-node msg: the session side of messaging (issue #31, step 3a). It only
 // reads and writes files in the node's config directory; the daemon does the
@@ -43,12 +47,15 @@ export function taskCliCommand(platform: NodeJS.Platform = process.platform, nod
 }
 
 export const MSG_USAGE = `usage:
-  kherep-node msg sessions
+  kherep-node msg sessions [--from <session>]
   kherep-node msg send <node>/<session> [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg send <node> --new claude|codex --directive <the operator's answer, verbatim> [--cwd <dir>] [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg send --reply-to <messageId> [--to <node>/<session>] [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg inbox [--from <codex-session-id>] [--all | --receive]
-  kherep-node msg status <messageId>`;
+  kherep-node msg status <messageId>
+  kherep-node msg stop <taskId | sent messageId | owned requestId> [--expected-run-version <run version>] [--wait <seconds>]
+A Codex session passes --from <its full session id>; Claude Code sessions and the node's Codex runs are named by
+${SESSION_ENV} or ${KHEREP_SESSION_ENV}.`;
 
 const FINAL_OK = ["accepted", "delivered", "replied"];
 const WAIT_POLL_MS = 250;
@@ -98,7 +105,7 @@ export interface MsgContext {
   sleep?: (ms: number) => Promise<void>;
 }
 
-type Io = Required<MsgContext>;
+export type Io = Required<MsgContext>;
 
 function fail(io: Io, message: string): number {
   io.err(`kherep-node msg: ${message}`);
@@ -107,14 +114,15 @@ function fail(io: Io, message: string): number {
 
 export interface MsgArgs {
   positionals: string[];
-  values: { from?: string; to?: string; "reply-to"?: string; wait?: string; all?: boolean; receive?: boolean; new?: string; cwd?: string; directive?: string };
+  values: { from?: string; to?: string; "reply-to"?: string; wait?: string; all?: boolean; receive?: boolean; new?: string; cwd?: string; directive?: string;
+    "expected-run-version"?: string };
 }
 
 export function parseMsgArgs(argv: string[]): MsgArgs {
   return parseArgs({
     args: argv, allowPositionals: true,
     options: { from: { type: "string" }, to: { type: "string" }, "reply-to": { type: "string" }, wait: { type: "string" }, all: { type: "boolean" }, receive: { type: "boolean" },
-      new: { type: "string" }, cwd: { type: "string" }, directive: { type: "string" } },
+      new: { type: "string" }, cwd: { type: "string" }, directive: { type: "string" }, "expected-run-version": { type: "string" } },
   });
 }
 
@@ -131,54 +139,13 @@ export async function runMsgArgs({ positionals, values }: MsgArgs, context: MsgC
     sleep: context.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
   };
   const [command, ...rest] = positionals;
-  if (command === "sessions") return sessions(io);
+  if (command === "sessions") return sessions(io, values.from);
   if (command === "send") return send(io, rest, values);
   if (command === "inbox") return inbox(io, values);
   if (command === "status" && rest.length === 1) return status(io, rest[0]);
+  if (command === "stop" && rest.length === 1) return stopTask(io, rest[0], values);
   io.err(MSG_USAGE);
   return 2;
-}
-
-// The directory, with a warning when it is old. A missing one is an error,
-// never an empty list. Every read also asks the daemon for a fresh copy.
-// attach.mts reads the directory the same way.
-export function directoryFor(io: Pick<Io, "paths" | "now" | "err">): DirectoryBody | null {
-  try {
-    requestDirectory(io.paths);
-  } catch {
-    // the read below still reports what is there
-  }
-  const directory = readDirectory(io.paths);
-  if (!directory) {
-    io.err("kherep-node msg: no session directory yet (directory.json is missing or unreadable). Is the daemon running? A refresh was requested.");
-    return null;
-  }
-  const age = io.now() - Date.parse(directory.fetchedAt);
-  if (age > DIRECTORY_STALE_MS) {
-    io.err(`warning: the session directory is ${Math.round(age / 60_000)} min old (fetched ${directory.fetchedAt}); is the daemon running?`);
-  }
-  if (directory.truncated) io.err("warning: the session directory was truncated by the control plane; some sessions are not listed");
-  return directory;
-}
-
-function sessions(io: Io): number {
-  const directory = directoryFor(io);
-  if (!directory) return 1;
-  const nodeId = readConfig(io.paths.config)?.nodeId;
-  const me = currentSession(io.paths, io.env);
-  for (const node of directory.nodes) {
-    io.out(`${node.name} (${node.nodeId}) ${node.status}${node.nodeId === nodeId ? " [this node]" : ""}`);
-    const list = directory.sessions.filter((s) => s.nodeId === node.nodeId);
-    if (list.length === 0) io.out("    no sessions reported");
-    for (const s of list) {
-      const mine = node.nodeId === nodeId && s.sessionId === me?.id;
-      // A Codex thread title (issue #88) is display only, quoted as a JSON string.
-      const title = s.title ? `  ${JSON.stringify(s.title)}` : "";
-      io.out(`  ${mine ? "*" : " "} ${s.label ?? s.name ?? "-"}${title}  ${s.sessionId}  ${s.state}  ${s.runtime}${s.cwd ? `  ${s.cwd}` : ""}`);
-    }
-  }
-  io.out(`(* marks this session${me ? "" : `; ${SESSION_ENV} is not set, so none is marked`})`);
-  return 0;
 }
 
 async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<number> {
@@ -221,7 +188,7 @@ async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<
   }
   const text = words.join(" ");
   if (!isMessageText(text)) return fail(io, `message text must be 1 to ${MAX_MESSAGE_TEXT} characters`);
-  const from = senderSession(io.paths, io.env, values.from);
+  const from = senderSession(io.paths, io.env, values.from, io.now());
   if (!from.ok) return fail(io, from.error);
   const wait = values.wait === undefined ? 0 : Number(values.wait);
   if (!Number.isFinite(wait) || wait < 0) return fail(io, `--wait needs a number of seconds, got "${values.wait}"`);
@@ -261,6 +228,7 @@ function status(io: Io, messageId: string): number {
   const sent = getSent(io.paths, messageId);
   if (sent) {
     io.out(`${messageId} ${stateText(sent, io.now())} (updated ${sent.updatedAt})`);
+    for (const line of replyLines(io.paths, sent)) io.out(line);
     return 0;
   }
   if (getOutbox(io.paths, messageId)) {

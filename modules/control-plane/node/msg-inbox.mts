@@ -1,10 +1,11 @@
 import { codexSessionRefs, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { CODEX_CONTEXT_BYTES, CODEX_ESCALATION_NOTE } from "./deliver-codex.mts";
 import { deliveryContext } from "./deliver-core.mts";
-import { readDirectory, type LocalSession } from "./exchange.mts";
+import type { NodePaths } from "./config.mts";
+import { readDirectory, type LocalSession, type SentRecord } from "./exchange.mts";
 import { listInbox, readJson } from "./inbox.mts";
 import type { MsgArgs, MsgContext } from "./msg-cli.mts";
-import { nodeLabel, SESSION_ENV, sessionIdFromEnv } from "./msg-resolve.mts";
+import { NO_SESSION, nodeLabel, senderSession, sessionIdFromEnv } from "./msg-resolve.mts";
 
 type InboxIo = Required<MsgContext>;
 
@@ -22,6 +23,8 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
       if (!session || session.sessionId !== values.from || session.runtime !== "codex") {
         return fail("--from needs a recorded Codex session id for inbox access");
       }
+      const verified = senderSession(io.paths, io.env, values.from, io.now());
+      if (!verified.ok) return fail(verified.error);
       // An unsuccessful listing cannot prove an alias is unambiguous.
       const live = listCodexSessions(io.paths, io.now()).map(s => s.sessionId);
       refs = codexSessionRefs(io.paths, values.from, io.now(), live).refs;
@@ -30,7 +33,7 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
     }
   } else {
     const id = sessionIdFromEnv(io.env);
-    if (!id) return fail("cannot tell which session this is: " + SESSION_ENV + " is not set; Codex uses --from <session-id>");
+    if (!id) return fail(NO_SESSION);
     refs = [id];
     try {
       const sessions = readJson<{ sessions?: LocalSession[] }>(io.paths.sessions)?.sessions;
@@ -75,4 +78,16 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
     for (const line of r.text.split("\n")) io.out("  | " + line);
   }
   return 0;
+}
+
+// Issue #200: the replies to a sent message that reached this node, by the
+// rule by which the Worker records replied: in reply to it, from its target
+// node, to its sender session (or to that address before a fallback handover).
+export function replyLines(paths: NodePaths, sent: SentRecord): string[] {
+  const replies = listInbox(paths.inbox).filter((r) => r.inReplyTo === sent.messageId && r.from.nodeId === sent.to?.nodeId
+    && (r.closedTo ?? r.toSession) === sent.fromSession);
+  if (replies.length === 0) return [];
+  const directory = readDirectory(paths);
+  return replies.map((r) => `  reply ${r.messageId} from node ${nodeLabel(directory, r.from.nodeId)}, session ${r.from.session}`
+    + ` (${r.state}, received ${r.receivedAt})`);
 }

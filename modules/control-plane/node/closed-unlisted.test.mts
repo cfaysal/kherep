@@ -37,7 +37,7 @@ test("an unlisted full session id reaches the target inbox and the closed-sessio
   const err: string[] = [];
   const out: string[] = [];
   const code = await runMsg(["send", "--from", PEER.session, `win/${SESSION}`, "--", "are the tests green?"],
-    { paths: sender, env: {}, now: () => T0 - 10_000, out: (l) => out.push(l), err: (l) => err.push(l), sleep: async () => {} });
+    { paths: sender, env: { CLAUDE_CODE_SESSION_ID: PEER.session }, now: () => T0 - 10_000, out: (l) => out.push(l), err: (l) => err.push(l), sleep: async () => {} });
   assert.equal(code, 0, err.join("\n"));
   assert.match(err.join("\n"), /note: session not listed on win; the node decides whether it can deliver/);
   const record = getOutbox(sender, out[0])!;
