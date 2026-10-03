@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import {
-  isMessageId, isMessageText, MAX_MESSAGE_TEXT, OPERATOR_NODE_ID, type DirectoryBody, type MessageAddress,
+  isMessageId, isMessageText, MAX_MESSAGE_TEXT, OPERATOR_NODE_ID, senderState, silentlyAccepted, type DirectoryBody, type MessageAddress,
 } from "../protocol-messages.mts";
 import { readConfig, type NodePaths } from "./config.mts";
 import { getOutbox, getSent, readDirectory, requestDirectory, writeOutbox, type OutboxRecord, type SentRecord,
@@ -72,6 +72,16 @@ const PROGRESS_TEXT: Record<string, string> = {
   "wake-failed": "the automatic wake failed; start the target turn to retry delivery",
   "fallback-failed": "the local delivery session failed; delivery is not confirmed",
 };
+
+// The sender state (accepted, running, stopped, ...) with its reason (issue #197).
+function stateText(record: SentRecord, now: number): string {
+  const state = senderState(record.state, record.progress);
+  if (silentlyAccepted(record.state, record.progress, Date.parse(record.updatedAt), now)) {
+    return `${state}: no delivery progress from the target node since ${record.updatedAt}; the target session may not be running`
+      + " (refused after 60 minutes), or the target node is offline or runs an older kherep-node; check `kherep-node msg sessions`";
+  }
+  return `${state}${progressText(record)}`;
+}
 
 function progressText(record: SentRecord): string {
   if (!record.progress) return record.reason ? `: ${record.reason}` : "";
@@ -235,7 +245,7 @@ async function waitForAnswer(io: Io, messageId: string, timeoutMs: number): Prom
   for (;;) {
     const sent = getSent(io.paths, messageId);
     if (sent && sent.state !== "queued") {
-      io.out(`${sent.state}${progressText(sent)}`);
+      io.out(stateText(sent, io.now()));
       return FINAL_OK.includes(sent.state) ? 0 : 1;
     }
     if (io.now() >= deadline) {
@@ -250,7 +260,7 @@ function status(io: Io, messageId: string): number {
   if (!isMessageId(messageId)) return fail(io, `not a message id: "${messageId}"`);
   const sent = getSent(io.paths, messageId);
   if (sent) {
-    io.out(`${messageId} ${sent.state}${progressText(sent)} (updated ${sent.updatedAt})`);
+    io.out(`${messageId} ${stateText(sent, io.now())} (updated ${sent.updatedAt})`);
     return 0;
   }
   if (getOutbox(io.paths, messageId)) {

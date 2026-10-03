@@ -7,7 +7,7 @@ import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { connectUrl, ensureDir, type NodeConfig, type NodePaths } from "./config.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
-import { observeClaudeDeliveryProgress } from "./delivery-progress.mts";
+import { observeClaudeDeliveryProgress, observeCodexTaskProgress } from "./delivery-progress.mts";
 import {
   DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions, replyDepth,
 } from "./exchange.mts";
@@ -131,8 +131,9 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     let exchange: NodeJS.Timeout | null = null;
     let directory: NodeJS.Timeout | null = null;
     let exchangePending = false;
-    // Outbox records sent on this connection; a reconnect sends them again.
-    const inflight = new Set<string>();
+    // Outbox records sent on this connection, with their send time; an
+    // unanswered one is sent again after SEND_RETRY_MS or a reconnect.
+    const inflight = new Map<string, number>();
     const requestsInflight = new Set<string>();
     taskControlInflight = new Set<string>();
     mcpInflight = new Set<string>();
@@ -177,6 +178,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           const current = loadPolicy(config.policyFile);
           publishRegistration(await client.refreshPolicy(current));
           observeClaudeDeliveryProgress({ ...runner, policy: current });
+          observeCodexTaskProgress(runner);
           pollExchange(client, paths, inflight, send);
           pollTasks(client, paths, policy, requestsInflight, send);
           const enabled = current.sessions?.enabled === true && current.sessions.ownTaskControl === true

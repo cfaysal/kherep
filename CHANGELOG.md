@@ -11,6 +11,12 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Control Plane: `msg status` and `msg send --wait` show the sender states
+  `running` and `stopped`, derived from the existing accepted progress codes
+  without a new wire state, and an accepted message without progress for 5
+  minutes gets a fixed actionable reason (issue #197). Messages for Codex task
+  sessions now carry a progress code while the task is busy, stopped by its
+  operator, held by a wake guard, failing to resume or running.
 - Control Plane: an idle Claude Code session wakes after a restart without any
   user input (issue #101). A `SessionStart` input without `permission_mode`
   and without a stored mode now takes the mode of the last user entry in the
@@ -280,6 +286,11 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: an outbox message the Worker did not answer is sent again on
+  the live connection after 30 seconds instead of waiting for a reconnect, and
+  inbox retention refuses a waiting message instead of deleting it unreported
+  (issue #195). Regression tests cover a lost answer, a repeated send and a
+  crash of either daemon in the middle of an exchange.
 - Control Plane: operator Codex tasks (start and continue) no longer open
   visible console windows on Windows and still survive a daemon restart
   (issue #124). The daemon starts them detached through a small wrapper,

@@ -52,7 +52,7 @@ async function startNode(name: string, paths: NodePaths, list: () => Promise<Ses
   });
   ws.accept();
   await vi.waitFor(() => expect(client.authenticated).toBe(true), WAIT);
-  const inflight = new Set<string>();
+  const inflight = new Map<string, number>();
   const exchange = async () => { chain = chain.then(() => pollExchange(client, paths, inflight, send)); await settle(); };
   return { nodeId, ws, exchange, idle: () => chain };
 }
