@@ -1,15 +1,18 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { MCP_TOOLS, digestMcpArguments, type McpRuntime, type McpTool } from "../protocol-mcp.mts";
-import { nodePaths, readConfig } from "./config.mts";
+import { nodePaths, readConfig, type NodePaths } from "./config.mts";
 import { consumeMcpIntentReceipt, enqueueMcpIntent } from "./mcp-local.mts";
 import { loadPolicy, mcpRuntimeEnabled } from "./policy.mts";
 
 const PREFIX = "mcp__kherep_messaging__";
 const MAX_INPUT_BYTES = 32 * 1024;
 const ACK_WAIT_MS = 8_000;
+const ACK_POLL_MS = 25;
+export const ACK_DIAGNOSTICS_MAX_BYTES = 64 * 1024;
 
 type Output = { hookSpecificOutput: { hookEventName: "PreToolUse"; updatedInput?: Record<string, unknown>;
   permissionDecision?: "allow" | "deny"; permissionDecisionReason?: string } };
@@ -33,6 +36,38 @@ function effectivePolicyFile(root: string): string | null {
   try { return readConfig(paths.config)?.policyFile ?? paths.policy; } catch { return null; }
 }
 
+type AckOutcome = "accepted" | "rejected" | "timeout" | "storage_error";
+interface AckTiming { runtime: McpRuntime; tool: McpTool; outcome: AckOutcome; end: number; hookStart: number;
+  enqueued: number | null }
+
+const round = (ms: number): number => Math.round(ms * 1000) / 1000;
+
+function hookSha256(): string | null {
+  try { return createHash("sha256").update(fs.readFileSync(fileURLToPath(import.meta.url))).digest("hex"); } catch { return null; }
+}
+
+// Opt-in ACK latency diagnostics (issue #191). The record exists only while the
+// operator-created directory control-plane/mcp/diagnostics exists. It holds
+// monotonic durations and fixed labels: no identifiers, arguments or bodies.
+// A diagnostics failure never changes the hook decision.
+function recordAckTiming(paths: NodePaths, timing: AckTiming): void {
+  const dir = path.join(paths.mcp, "diagnostics");
+  try {
+    if (!fs.lstatSync(dir).isDirectory()) return;
+    const file = path.join(dir, "ack-latency.jsonl");
+    try {
+      if (fs.lstatSync(file).size >= ACK_DIAGNOSTICS_MAX_BYTES) fs.renameSync(file, `${file}.1`);
+    } catch { /* absent or concurrently rotated */ }
+    const record = { at: new Date().toISOString(), method: "hook-intent-receipt", runtime: timing.runtime,
+      tool: timing.tool, outcome: timing.outcome, pollIntervalMs: ACK_POLL_MS,
+      ackWaitMs: timing.enqueued === null ? null : round(timing.end - timing.enqueued),
+      hookMs: round(timing.end - timing.hookStart), hookSha256: hookSha256() };
+    const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND
+      | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+    try { fs.writeSync(fd, `${JSON.stringify(record)}\n`); } finally { fs.closeSync(fd); }
+  } catch { /* diagnostics are optional */ }
+}
+
 export async function processMcpIntentHook(input: Record<string, unknown>, root: string, now = Date.now(),
   runtime: McpRuntime = "codex"): Promise<Output | null> {
   const tool = toolOf(input.tool_name);
@@ -44,23 +79,30 @@ export async function processMcpIntentHook(input: Record<string, unknown>, root:
     || typeof input.tool_use_id !== "string" || !record(input.tool_input)) return deny("remote_mcp_missing_native_identity");
   if (Object.hasOwn(input.tool_input, "requestId")) return deny("remote_mcp_request_id_must_be_native");
   const requestId = crypto.randomUUID();
+  const hookStart = performance.now();
+  let enqueued: number | null = null;
+  const timed = (outcome: AckOutcome, output: Output): Output => {
+    recordAckTiming(paths, { runtime, tool, outcome, end: performance.now(), hookStart, enqueued });
+    return output;
+  };
   try {
     enqueueMcpIntent(paths, { requestId, runtime, sessionId: input.session_id, callId: input.tool_use_id,
       tool, argumentsDigest: await digestMcpArguments(input.tool_input) });
+    enqueued = performance.now();
     const deadline = now + ACK_WAIT_MS;
     while (Date.now() < deadline) {
       const receipt = consumeMcpIntentReceipt(paths, requestId);
       if (receipt) {
-        if (!receipt.ok) return deny("remote_mcp_intent_rejected");
-        return { hookSpecificOutput: { hookEventName: "PreToolUse",
+        if (!receipt.ok) return timed("rejected", deny("remote_mcp_intent_rejected"));
+        return timed("accepted", { hookSpecificOutput: { hookEventName: "PreToolUse",
           ...(runtime === "codex" ? { permissionDecision: "allow" as const } : {}),
-          updatedInput: { ...input.tool_input, requestId } } };
+          updatedInput: { ...input.tool_input, requestId } } });
       }
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await new Promise((resolve) => setTimeout(resolve, ACK_POLL_MS));
     }
-    return deny("remote_mcp_intent_ack_timeout");
+    return timed("timeout", deny("remote_mcp_intent_ack_timeout"));
   } catch {
-    return deny("remote_mcp_intent_storage_error");
+    return timed("storage_error", deny("remote_mcp_intent_storage_error"));
   }
 }
 

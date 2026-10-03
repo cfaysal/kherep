@@ -221,10 +221,11 @@ export class Registry extends DurableObject<Env> {
     return this.ctx.storage.transactionSync(() => this.mcp.claim(intent, now));
   }
 
+  // A failed claim is an authorization denial; its fixed error is visible to the caller.
   async sendMcpMessage(intent: McpIntentClaim, to: { nodeId: string; session: string }, text: string, inReplyTo?: string) {
     const combined = this.ctx.storage.transactionSync(() => {
       const claim = this.mcp.claim(intent, Date.now());
-      if (!claim.ok) return claim;
+      if (!claim.ok) return { ...claim, denied: true as const };
       const sent = this.messages.send({ messageId: claim.effectId,
         from: { nodeId: intent.nodeId, session: claim.sessionId }, to, text, inReplyTo }, `mcp:${intent.nodeId}`, Date.now());
       this.mcp.recordOutcome(intent.nodeId, intent.requestId, sent.ok ? "succeeded" : "failed");
@@ -241,7 +242,7 @@ export class Registry extends DurableObject<Env> {
   async replyMcpMessage(intent: McpIntentClaim, inReplyTo: string, text: string) {
     const combined = this.ctx.storage.transactionSync(() => {
       const claim = this.mcp.claim(intent, Date.now());
-      if (!claim.ok) return claim;
+      if (!claim.ok) return { ...claim, denied: true as const };
       const target = this.messages.replyTarget(inReplyTo, intent.nodeId, claim.sessionId);
       if (!target || target.depth >= MAX_REPLY_DEPTH) return { ok: false as const, error: "reply relationship or depth is not allowed" };
       const sent = this.messages.send({ messageId: claim.effectId,
@@ -280,8 +281,14 @@ export class Registry extends DurableObject<Env> {
     return this.messages.list(nodeId, limit);
   }
 
-  mcpMessageStatus(nodeId: string, messageId: string): MessageRecord | null {
-    return this.messages.visibleTo(nodeId, messageId);
+  // A replied message also names its reply (issue #200): the earliest message
+  // that answers it under the same relationship MessageStore uses to mark it.
+  mcpMessageStatus(nodeId: string, messageId: string): (MessageRecord & { replyMessageId?: string }) | null {
+    const record = this.messages.visibleTo(nodeId, messageId);
+    if (record?.state !== "replied") return record;
+    const reply = this.sql.exec(`SELECT id FROM messages WHERE to_node = ? AND to_session = ? AND from_node = ?
+      AND in_reply_to = ? ORDER BY created_at, rowid LIMIT 1`, record.fromNode, record.fromSession, record.toNode, messageId).toArray()[0];
+    return reply ? { ...record, replyMessageId: String(reply.id) } : record;
   }
 
   // ---- Tasks (issue #31, item 5). The caller dispatches session.start. ----

@@ -167,6 +167,23 @@ supply its source through tool arguments, `clientInfo` or an MCP transport sessi
 paths recheck the live node's required capabilities, credential version and exact Registry session
 runtime. Removal or runtime replacement of the originating session invalidates first use and recovery.
 
+### Authorization denials
+
+Every denied call returns a fixed error and creates no message. Write tools return the same fixed
+claim error as read tools; only a routing failure after a successful claim stays generic.
+
+| Case | Caller-visible result |
+| --- | --- |
+| Wrong binding: another call, session, thread or node, or changed arguments | `native call identity does not match intent`, `intent not found` or `tool arguments do not match intent` |
+| Missing binding: no or partial native metadata, or no registered intent | `verified native call metadata is required` or `intent not found` |
+| Replayed request: a used `requestId` from another native call | `native call identity does not match intent` |
+| Expired binding | `intent expired; register a fresh native intent` |
+| Revoked node, superseded credential or removed opt-in | HTTP 401 `{"error":"unauthorized"}` before any tool runs |
+
+The trusted hook adds its own fixed denials before HTTP, such as `remote_mcp_request_id_must_be_native`
+and `remote_mcp_intent_rejected`. `worker/test/mcp-denials.test.mts` covers each case and asserts that
+no message exists for either node.
+
 `requestId` is the `messageId` for `send` and `reply`. A retry claims the same intent and calls the existing message router with the same immutable id. Router idempotency prevents a second message. Routing failures after the Registry write return an explicit uncertain result and require retrying the same native call.
 
 Intent rows contain identifiers, digests, timestamps and one fixed outcome value. They contain no message body, inbox result or arbitrary tool result. Unchanged registration retries do not write or extend the row.
@@ -177,11 +194,21 @@ Each node may hold at most 128 unexpired intents. Claimed intents continue to co
 
 | Tool | Behavior |
 | --- | --- |
-| `sessions` | Returns bounded address references from Registry metadata |
+| `sessions` | Returns bounded address references from Registry metadata, with the node-reported `kind` when present |
 | `send` | Sends through the existing message router from the verified originating session |
 | `inbox` | Reads the exact originating session inbox from its online node, without changing message state |
 | `reply` | Derives the recipient from stored message provenance and enforces the reply-depth limit |
 | `status` | Returns metadata-only state for a message visible to the caller's node |
+
+A `sessions` entry carries `kind` when the node reported one. `codex-task` marks a node-managed
+Codex task run, which includes Intercom background runs; `codex` marks a Codex session recorded by
+its hooks. Other runtimes' kinds pass through as their node reported them.
+The kind does not distinguish an Intercom run from an explicitly requested task, and it does not
+imply that the run appears in a desktop session list.
+
+For a `replied` message, `status` also returns `replyMessageId`: the earliest reply under the same
+sender and recipient relationship that marked the message replied. The sending session can read
+that reply with `status` and, while its node is online, with `inbox`.
 
 For an accepted message, `status` also returns validated `progress` metadata when available: a fixed `phase` and `code`, `observedAt`, and optional `retryAt`. These codes distinguish waiting for a user turn, waking, fallback activity and delivery failures. Accepted progress does not prove delivery. Invalid progress and stale progress on terminal states are omitted. Arbitrary persisted reasons and message bodies are never included in a status result.
 
@@ -192,6 +219,36 @@ Codex CLI replies preserve the full sender session id supplied by the delivery h
 An inbox read is read-only. Returning text over HTTP does not mark a message offered or delivered and does not prove that a chat saw or understood it. Existing delivery hooks and `message.receipt` remain the delivery confirmation path.
 
 The complete serialized inbox response must fit the existing 64 KiB transport limit, measured as UTF-8 bytes including JSON escaping and envelope metadata. If the requested messages do not fit, the tool returns a fixed error rather than truncating messages, omitting records or reporting a successful empty inbox. Retry with a smaller `limit` and a fresh native intent. If one message alone exceeds the serialized limit, use the local `msg inbox` CLI. Message bodies and delivery state remain unchanged.
+
+## Measuring native ACK latency
+
+The ACK of a native call is the trusted hook's durable intent receipt: the Registry's
+`mcp.intent.receipt` for the hook's exact intent, which the daemon writes locally and the hook
+consumes before it returns the rewritten arguments. The hook waits at most eight seconds for it.
+The later MCP HTTP tool result is the call's outcome, not its ACK.
+
+To measure, create the private directory `<config-root>/control-plane/mcp/diagnostics` on the
+calling node. While it exists, the hook appends one JSON line per receipt wait to
+`ack-latency.jsonl` there. A file reaching 64 KiB is rotated once to `ack-latency.jsonl.1`. Remove
+the directory to stop recording; without it the hook writes nothing and behaves unchanged.
+
+Each record has `method: "hook-intent-receipt"`, `runtime`, `tool`, `outcome` (`accepted`,
+`rejected`, `timeout` or `storage_error`), `ackWaitMs`, `hookMs`, `pollIntervalMs`, `at` and
+`hookSha256`. `ackWaitMs` is measured with the monotonic clock from the published local intent file
+to the observed receipt, so it covers daemon pickup, any first-caller session discovery, the
+WebSocket round trip and the Registry write. Receipt observation polls every 25 ms, so the value is
+an upper bound within that interval. For `timeout` it is the time waited, not an ACK. `hookMs`
+additionally includes argument digesting and the local write. The records contain no session,
+call or request identifiers, arguments or bodies.
+
+Not measured: model time before the call, client approval prompts, the MCP HTTP request after the
+hook, peer delivery and the whole fixture or script duration.
+
+Report a result per platform with the `ackWaitMs` of a real native `send` record whose `outcome`
+is `accepted`, the method above, the client version (`codex --version` or `claude --version`, plus
+the Desktop build where used), the Worker target, and the source commit. Identify the commit by
+matching `hookSha256` with `git show <commit>:modules/control-plane/node/mcp-intent-hook.mts`
+hashed with SHA-256.
 
 ## Activation gates
 

@@ -89,6 +89,28 @@ describe("stateless remote MCP HTTP", () => {
     await instance.close();
   });
 
+  it("marks node-managed background task sessions with their reported kind", async () => {
+    const { nodeId, credential } = await source();
+    await registry().replaceSessions(nodeId, [{ sessionId: "thread-source", runtime: "codex", state: "running", kind: "codex" },
+      { sessionId: "task-thread", runtime: "codex", state: "idle", kind: "codex-task" },
+      { sessionId: "legacy-thread", runtime: "codex", state: "running" }]);
+    const requestId = "20000000-0000-4000-8000-000000000012";
+    const args = { limit: 100 };
+    await registry().registerMcpIntent(nodeId, { requestId, runtime: "codex", sessionId: "thread-source",
+      threadId: "thread-source", callId: "call-kind", tool: "sessions", argumentsDigest: await digestMcpArguments(args) });
+    const instance = await client(credential.token);
+    const result = await instance.callTool({ name: "sessions", arguments: { requestId, ...args },
+      _meta: { sessionId: "thread-source", threadId: "thread-source", callId: "call-kind" } });
+    const own = (result.structuredContent as { sessions: Record<string, unknown>[] }).sessions
+      .filter((session) => session.nodeId === nodeId);
+    expect(own).toEqual(expect.arrayContaining([
+      { nodeId, sessionId: "thread-source", runtime: "codex", state: "running", kind: "codex" },
+      { nodeId, sessionId: "task-thread", runtime: "codex", state: "idle", kind: "codex-task" },
+      { nodeId, sessionId: "legacy-thread", runtime: "codex", state: "running" },
+    ]));
+    await instance.close();
+  });
+
   it("distinguishes an online empty inbox from offline and transits bodies only in the RPC", async () => {
     const online = await source();
     const socket = await authenticate(online.nodeId, online.key);
