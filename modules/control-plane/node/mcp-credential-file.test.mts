@@ -11,20 +11,13 @@ import {
   readPrivateMcpCredential, writePrivateWindowsMcpCredential,
 } from "./mcp-credential-file.mts";
 import { recordMcpCredential } from "./mcp-local.mts";
+import {
+  OWN_SID as OWN, REAL_POWERSHELL, fakePowerShell, success, type PowerShellCall,
+} from "./mcp-credential-fixture.mts";
 
 const REQUEST = "40000000-0000-4000-8000-000000000001";
 const TOKEN = `synthetic-${"s".repeat(43)}`;
 const BODY: Extract<McpCredentialBody, { ok: true }> = { requestId: REQUEST, ok: true, token: TOKEN, version: 1 };
-const OWN = "S-1-5-21-1000";
-
-interface PowerShellCall {
-  command: string;
-  args: string[];
-  options: { input?: string | Uint8Array; env?: NodeJS.ProcessEnv; encoding?: string; windowsHide?: boolean;
-    timeout?: number; maxBuffer?: number };
-}
-
-const success = (stdout = "") => ({ status: 0, signal: null, stdout, stderr: "", error: undefined });
 
 function temporary(t: test.TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-mcp-credential-"));
@@ -32,18 +25,6 @@ function temporary(t: test.TestContext) {
   const file = path.join(root, "mcp", "credential.json");
   fs.mkdirSync(path.dirname(file), { recursive: true });
   return { root, file };
-}
-
-function fakePowerShell(rules = [{ sid: OWN, allow: true, rights: 1 }]) {
-  const calls: PowerShellCall[] = [];
-  const spawn = (command: string, args: string[], options: PowerShellCall["options"]) => {
-    calls.push({ command, args, options });
-    const temp = options.env?.KHEREP_MCP_CREDENTIAL_TEMP;
-    if (temp) fs.writeFileSync(temp, options.input ?? "", { flag: "wx" });
-    const stdout = temp ? "" : JSON.stringify({ user: OWN, owner: OWN, rules });
-    return success(stdout);
-  };
-  return { calls, spawn };
 }
 
 const windowsEnv = (): NodeJS.ProcessEnv => ({
@@ -77,6 +58,13 @@ test("Windows writer sends bounded UTF-8 only on stdin and verifies the publishe
   ]);
   assert.equal(written?.options.env?.PSModulePath,
     "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules");
+});
+
+test("a caller's own limit replaces the 5 s helper limit (issue #219)", (t) => {
+  const { file } = temporary(t);
+  const fake = fakePowerShell();
+  writePrivateWindowsMcpCredential(file, BODY, { env: windowsEnv(), spawn: fake.spawn, timeoutMs: 30_000 });
+  assert.deepEqual(fake.calls.map((call) => call.options.timeout), [30_000, 30_000]);
 });
 
 test("Windows writer failures are fixed, clean temporary files and preserve an older credential", (t) => {
@@ -232,8 +220,8 @@ $rules = @(Get-Acl -LiteralPath $path | ForEach-Object { $_.GetAccessRules($true
     assert.equal(prepared.status, 0, prepared.stderr);
     assert.equal(prepared.stdout.trim().toLowerCase(), "true");
 
-    recordMcpCredential(paths, BODY);
-    assert.equal(readPrivateMcpCredential(paths.mcpCredential, "win32").ok, true);
+    recordMcpCredential(paths, BODY, REAL_POWERSHELL);
+    assert.equal(readPrivateMcpCredential(paths.mcpCredential, "win32", REAL_POWERSHELL).ok, true);
 
     const broaden = String.raw`
 $path = [Environment]::GetEnvironmentVariable('KHEREP_MCP_TEST_PATH', 'Process')
@@ -246,6 +234,6 @@ $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($users, [S
     const changed = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", broaden],
       { encoding: "utf8", windowsHide: true, env });
     assert.equal(changed.status, 0, changed.stderr);
-    assert.deepEqual(readPrivateMcpCredential(paths.mcpCredential, "win32"),
+    assert.deepEqual(readPrivateMcpCredential(paths.mcpCredential, "win32", REAL_POWERSHELL),
       { ok: false, code: "remote_mcp_credential_unsafe" });
   });

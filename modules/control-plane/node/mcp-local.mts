@@ -8,7 +8,7 @@ import {
 import type { NodeClient } from "./client.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { listInbox, writeJsonAtomic } from "./inbox.mts";
-import { writePrivateWindowsMcpCredential } from "./mcp-credential-file.mts";
+import { writePrivateWindowsMcpCredential, type CredentialPowerShellDeps } from "./mcp-credential-file.mts";
 import { publishSessionFrames } from "./session-publication.mts";
 
 const fileOf = (dir: string, requestId: string): string => path.join(dir, `${requestId}.json`);
@@ -55,10 +55,11 @@ export function hasMcpCredential(paths: NodePaths): boolean {
   }
 }
 
-export function recordMcpCredential(paths: NodePaths, body: McpCredentialBody): void {
+export function recordMcpCredential(paths: NodePaths, body: McpCredentialBody,
+  credential?: CredentialPowerShellDeps): void {
   if (!body.ok) return;
   ensureDir(paths.mcp);
-  if (process.platform === "win32") writePrivateWindowsMcpCredential(paths.mcpCredential, body);
+  if (process.platform === "win32") writePrivateWindowsMcpCredential(paths.mcpCredential, body, credential);
   else writeJsonAtomic(paths.mcpCredential, body);
 }
 

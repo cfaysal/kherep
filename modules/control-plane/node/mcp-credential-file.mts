@@ -18,9 +18,11 @@ interface PowerShellResult {
   status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; error?: Error;
 }
 type PowerShellSpawn = (command: string, args: string[], options: PowerShellOptions) => PowerShellResult;
-interface CredentialPowerShellDeps { env?: NodeJS.ProcessEnv; spawn?: PowerShellSpawn }
+// timeoutMs is for tests that must start the real helper on a slow runner (issue #219).
+export interface CredentialPowerShellDeps { env?: NodeJS.ProcessEnv; spawn?: PowerShellSpawn; timeoutMs?: number }
 
 const MAX_CREDENTIAL_BYTES = 4096;
+const POWERSHELL_TIMEOUT_MS = 5_000;
 const UNREADABLE = "remote_mcp_credential_unreadable";
 const UNSAFE = "remote_mcp_credential_unsafe";
 
@@ -131,7 +133,7 @@ function runPowerShell(script: string, extra: NodeJS.ProcessEnv, deps: Credentia
   const once = (): PowerShellResult | null => {
     try {
       return run(configured.command, ["-NoProfile", "-NonInteractive", "-Command", script], {
-        encoding: "utf8", windowsHide: true, timeout: 5_000, maxBuffer: 64 * 1024,
+        encoding: "utf8", windowsHide: true, timeout: deps.timeoutMs ?? POWERSHELL_TIMEOUT_MS, maxBuffer: 64 * 1024,
         env: configured.env, ...(input ? { input } : {}),
       });
     } catch { return null; }

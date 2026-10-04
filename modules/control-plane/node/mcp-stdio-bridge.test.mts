@@ -7,8 +7,9 @@ import test from "node:test";
 
 import { nodePaths, writeConfig } from "./config.mts";
 import { recordMcpCredential } from "./mcp-local.mts";
-import { isPrivateWindowsAcl, readPrivateMcpCredential } from "./mcp-credential-file.mts";
-import { McpBridgeError, forwardMcpLine } from "./mcp-stdio-bridge.mts";
+import { isPrivateWindowsAcl, readPrivateMcpCredential, type CredentialPowerShellDeps } from "./mcp-credential-file.mts";
+import { REAL_POWERSHELL, fakePowerShell } from "./mcp-credential-fixture.mts";
+import { McpBridgeError, forwardMcpLine, type BridgeOptions } from "./mcp-stdio-bridge.mts";
 
 const NODE = "00000000-0000-4000-8000-0000000000aa";
 const REQUEST = "40000000-0000-4000-8000-000000000001";
@@ -19,7 +20,13 @@ const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning:
   + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
   + "created\\)\\r?\\n", "gm");
 
-function fixture(t: test.TestContext, controlUrl = "wss://control.example.invalid/") {
+// Only the Windows verifier and the stdio test start the real helper (issue #219).
+const CREDENTIAL: CredentialPowerShellDeps = { spawn: fakePowerShell().spawn };
+const forward = (line: string, root: string, options: BridgeOptions = {}) =>
+  forwardMcpLine(line, root, { credential: CREDENTIAL, ...options });
+
+function fixture(t: test.TestContext, controlUrl = "wss://control.example.invalid/",
+  credential: CredentialPowerShellDeps = CREDENTIAL) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-mcp-bridge-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const paths = nodePaths(root);
@@ -28,7 +35,7 @@ function fixture(t: test.TestContext, controlUrl = "wss://control.example.invali
     publicKey: "synthetic", privateKeyFile: path.join(paths.dir, "synthetic-key"),
     policyFile: paths.policy, enrolledAt: new Date(0).toISOString() });
   fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [], remoteMcp: { enabled: true } }));
-  recordMcpCredential(paths, { requestId: REQUEST, ok: true, token: TOKEN_A, version: 1 });
+  recordMcpCredential(paths, { requestId: REQUEST, ok: true, token: TOKEN_A, version: 1 }, credential);
   return { root, paths };
 }
 
@@ -58,7 +65,7 @@ test("forwards native JSON-RPC metadata unchanged to the derived endpoint", asyn
     return jsonResponse({ jsonrpc: "2.0", id: 1, result: { ok: true } });
   };
 
-  const output = await forwardMcpLine(JSON.stringify(native), root, { fetch: fetchImpl });
+  const output = await forward(JSON.stringify(native), root, { fetch: fetchImpl });
 
   assert.equal(captured?.url, "https://control.example.invalid/mcp");
   assert.deepEqual(JSON.parse(String(captured?.init.body)), native);
@@ -72,7 +79,7 @@ test("does not synthesize missing native metadata", async (t) => {
   let request: Record<string, unknown> | undefined;
   const denial = { jsonrpc: "2.0", id: 1, result: { isError: true,
     content: [{ type: "text", text: "verified Codex native call metadata is required" }] } };
-  const output = await forwardMcpLine(rpc(1, null), root, { fetch: async (_input, init) => {
+  const output = await forward(rpc(1, null), root, { fetch: async (_input, init) => {
     request = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return jsonResponse(denial);
   } });
@@ -89,11 +96,11 @@ test("reloads the credential and policy for every HTTP call", async (t) => {
     authorizations.push((init?.headers as Record<string, string>).Authorization);
     return jsonResponse({ jsonrpc: "2.0", id: calls, result: {} });
   };
-  await forwardMcpLine(rpc(1), root, { fetch: fetchImpl });
-  recordMcpCredential(paths, { requestId: REQUEST, ok: true, token: TOKEN_B, version: 2 });
-  await forwardMcpLine(rpc(2), root, { fetch: fetchImpl });
+  await forward(rpc(1), root, { fetch: fetchImpl });
+  recordMcpCredential(paths, { requestId: REQUEST, ok: true, token: TOKEN_B, version: 2 }, CREDENTIAL);
+  await forward(rpc(2), root, { fetch: fetchImpl });
   fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [] }));
-  await assert.rejects(forwardMcpLine(rpc(3), root, { fetch: fetchImpl }),
+  await assert.rejects(forward(rpc(3), root, { fetch: fetchImpl }),
     (error) => code(error) === "remote_mcp_disabled");
   assert.deepEqual(authorizations, [`Bearer ${TOKEN_A}`, `Bearer ${TOKEN_B}`]);
   assert.equal(calls, 2);
@@ -102,18 +109,18 @@ test("reloads the credential and policy for every HTTP call", async (t) => {
 test("fails closed for missing, invalid and unsafe-mode credentials before HTTP", async (t) => {
   const { root, paths } = fixture(t);
   let calls = 0;
-  const invoke = () => forwardMcpLine(rpc(), root, { fetch: async () => {
+  const invoke = () => forward(rpc(), root, { fetch: async () => {
     calls += 1; return jsonResponse({});
   } });
 
   fs.rmSync(paths.mcpCredential);
   await assert.rejects(invoke(), (error) => code(error) === "remote_mcp_credential_unavailable");
-  recordMcpCredential(paths, { requestId: REQUEST, ok: true, token: TOKEN_A, version: 1 });
+  recordMcpCredential(paths, { requestId: REQUEST, ok: true, token: TOKEN_A, version: 1 }, CREDENTIAL);
   fs.writeFileSync(paths.mcpCredential, "not-json", { mode: 0o600 });
   await assert.rejects(invoke(), (error) => code(error) === "remote_mcp_credential_invalid");
   if (process.platform !== "win32") {
     fs.rmSync(paths.mcpCredential);
-    recordMcpCredential(paths, { requestId: REQUEST, ok: true, token: TOKEN_A, version: 1 });
+    recordMcpCredential(paths, { requestId: REQUEST, ok: true, token: TOKEN_A, version: 1 }, CREDENTIAL);
     fs.chmodSync(paths.mcpCredential, 0o644);
     await assert.rejects(invoke(), (error) => code(error) === "remote_mcp_credential_unsafe");
   }
@@ -130,7 +137,7 @@ test("rejects a credential symlink before HTTP", async (t) => {
       return t.skip("Windows fixture requires symbolic-link privilege");
     throw error;
   }
-  let calls = 0; const invoke = () => forwardMcpLine(rpc(), root, { fetch: async () => {
+  let calls = 0; const invoke = () => forward(rpc(), root, { fetch: async () => {
     calls += 1; return jsonResponse({});
   } });
   await assert.rejects(invoke(), (error) => code(error) === "remote_mcp_credential_unsafe");
@@ -140,15 +147,15 @@ test("rejects a credential symlink before HTTP", async (t) => {
 test("handles JSON, SSE and notification responses without transport metadata", async (t) => {
   const { root } = fixture(t, "https://control.example.invalid/");
   const sse = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n";
-  const event = await forwardMcpLine(rpc(), root, { fetch: async () => new Response(sse,
+  const event = await forward(rpc(), root, { fetch: async () => new Response(sse,
     { headers: { "content-type": "text/event-stream; charset=utf-8" } }) });
   assert.deepEqual(event.map((value) => JSON.parse(value)), [{ jsonrpc: "2.0", id: 1, result: { ok: true } }]);
 
-  const notification = await forwardMcpLine(rpc(null), root, {
+  const notification = await forward(rpc(null), root, {
     fetch: async () => new Response(null, { status: 202 }),
   });
   assert.deepEqual(notification, []);
-  await assert.rejects(forwardMcpLine(rpc(), root, {
+  await assert.rejects(forward(rpc(), root, {
     fetch: async () => new Response(null, { status: 202 }),
   }), (error) => code(error) === "remote_mcp_response_invalid");
 });
@@ -163,7 +170,7 @@ test("returns fixed transport errors without exposing credentials", async (t) =>
       "remote_mcp_response_too_large"],
   ];
   for (const [fetchCase, expected] of cases) {
-    await assert.rejects(forwardMcpLine(rpc(), root, { fetch: fetchCase }), (error) => {
+    await assert.rejects(forward(rpc(), root, { fetch: fetchCase }), (error) => {
       assert.equal(code(error), expected);
       assert.doesNotMatch(String((error as Error).message), new RegExp(TOKEN_A));
       return true;
@@ -173,9 +180,9 @@ test("returns fixed transport errors without exposing credentials", async (t) =>
 
 test("bounds input and deadline failures with fixed error codes", async (t) => {
   const { root } = fixture(t);
-  await assert.rejects(forwardMcpLine(`{"jsonrpc":"2.0","id":1,"padding":"${"x".repeat(256 * 1024)}"}`, root),
+  await assert.rejects(forward(`{"jsonrpc":"2.0","id":1,"padding":"${"x".repeat(256 * 1024)}"}`, root),
     (error) => code(error) === "remote_mcp_input_too_large");
-  await assert.rejects(forwardMcpLine(rpc(), root, { timeoutMs: 5, fetch: async (_input, init) => {
+  await assert.rejects(forward(rpc(), root, { timeoutMs: 5, fetch: async (_input, init) => {
     await new Promise((_resolve, reject) => init?.signal?.addEventListener("abort",
       () => reject(new DOMException("synthetic", "AbortError")), { once: true }));
     throw new Error("unreachable");
@@ -187,7 +194,7 @@ test("deadline cancels JSON and SSE bodies that never end after headers", async 
   for (const contentType of ["application/json", "text/event-stream"]) {
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({ cancel: () => { cancelled = true; } });
-    await assert.rejects(forwardMcpLine(rpc(), root, { timeoutMs: 5,
+    await assert.rejects(forward(rpc(), root, { timeoutMs: 5,
       fetch: async () => new Response(body, { headers: { "content-type": contentType } }) }),
     (error) => code(error) === "remote_mcp_transport_timeout");
     assert.equal(cancelled, true, contentType);
@@ -207,12 +214,12 @@ test("Windows ACL contract accepts only current-user, SYSTEM and administrators 
 
 test("Windows verifier reads a private credential and rejects a broad Users grant",
   { skip: process.platform !== "win32" }, (t) => {
-    const { paths } = fixture(t);
+    const { paths } = fixture(t, undefined, REAL_POWERSHELL);
     const windows = process.env.SystemRoot || process.env.WINDIR || "";
     const powershell = path.win32.join(windows, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     const env = { SystemRoot: windows, WINDIR: windows, KHEREP_MCP_TEST_FILE: paths.mcpCredential };
     // The real credential writer in fixture() already created the protected DACL.
-    assert.equal(readPrivateMcpCredential(paths.mcpCredential, "win32").ok, true);
+    assert.equal(readPrivateMcpCredential(paths.mcpCredential, "win32", REAL_POWERSHELL).ok, true);
 
     const broadAcl = String.raw`
 $file = [Environment]::GetEnvironmentVariable('KHEREP_MCP_TEST_FILE', 'Process')
@@ -224,12 +231,13 @@ $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($users, [S
     const broadened = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", broadAcl],
       { encoding: "utf8", windowsHide: true, env });
     assert.equal(broadened.status, 0, broadened.stderr);
-    assert.deepEqual(readPrivateMcpCredential(paths.mcpCredential, "win32"),
+    assert.deepEqual(readPrivateMcpCredential(paths.mcpCredential, "win32", REAL_POWERSHELL),
       { ok: false, code: "remote_mcp_credential_unsafe" });
   });
 
 test("stdio errors and arguments never expose credential material", (t) => {
-  const { root, paths } = fixture(t);
+  // The child's Windows ACL check runs the real helper under its production limit.
+  const { root, paths } = fixture(t, undefined, REAL_POWERSHELL);
   fs.writeFileSync(paths.mcpCredential, JSON.stringify({ token: TOKEN_A }), { mode: 0o600 });
   const args = [path.join(import.meta.dirname, "mcp-stdio-bridge.mts"), "--config-root", root];
   assert.equal(args.some((value) => value.includes(TOKEN_A)), false);
