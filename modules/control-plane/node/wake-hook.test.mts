@@ -4,7 +4,10 @@ import fs from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { getMessage, markOffered, MAX_REPLY_DEPTH, writeJsonAtomic } from "./inbox.mts";
+import { listenerScope } from "./autonomy.mts";
+import type { NodePaths } from "./config.mts";
+import { getMessage, markOffered, MAX_REPLY_DEPTH, readJson, writeJsonAtomic } from "./inbox.mts";
+import { writeTask } from "./task-records.mts";
 import {
   killSwitch, listenerDir, REARM_TEXT, runWake, WAKE_GRACE_MS, WAKE_MAX_WAIT_MS, WAKE_POLL_MS, WAKE_SETTLE_MS, WAKE_TIMEOUT_S,
   wakeAudit, wakeText,
@@ -115,6 +118,74 @@ test("a message at the reply limit does not wake the session; the audit says so 
   assert.deepEqual(await listen(mixed), { code: 2, text: wakeText(1) });
   assert.deepEqual(auditLines(mixed).map((l) => l.action), ["depth-limit", "wake"]);
   assert.deepEqual(auditLines(mixed)[1].messageIds, [shallow]);
+});
+
+// Issue #213: the listener reads the policy at every poll, so an allowlist
+// change reaches a listener that is already armed. The live case: a task
+// session the allowlist does not name listens on its task grant alone.
+const TASK = "3f2a1b0c-0000-4000-8000-000000000001";
+const writePolicy = (paths: NodePaths, wake?: unknown): void => fs.writeFileSync(paths.policy, JSON.stringify({ version: 1,
+  allowedCommands: [], ...(wake === undefined ? {} : { wake }), sessions: { enabled: true, workspaceRoots: [paths.dir] } }));
+function grantOnly(t: test.TestContext): NodePaths {
+  const { paths } = setup(t);
+  writePolicy(paths, { enabled: true, sessions: ["someone-else"] });
+  writeTask(paths, { taskId: TASK, name: "task-3f2a1b0c", cwd: paths.dir, permissionMode: "auto", state: "running", sessionId: SELF,
+    startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 7_200_000).toISOString(), updatedAt: new Date(T0).toISOString() });
+  return paths;
+}
+
+test("a listener armed while the session was not allowlisted wakes for its messages once the policy says \"*\"", async (t) => {
+  const paths = grantOnly(t);
+  let message = "";
+  const result = await listen(paths, { tick: (clock) => {
+    if (clock === T0 + 2 * WAKE_POLL_MS) writePolicy(paths, { enabled: true, sessions: ["*"] });
+    if (clock === T0 + 4 * WAKE_POLL_MS) message = arrive(paths, 1, clock);
+  } });
+  assert.deepEqual(result, { code: 2, text: wakeText(1) });
+  assert.deepEqual(auditLines(paths).map((l) => [l.action, l.messageIds]), [["wake", [message]]]);
+});
+
+test("a listener on its task grant alone does not wake for another message until the policy allows the session", async (t) => {
+  const paths = grantOnly(t);
+  const allowAt = T0 + 10 * WAKE_POLL_MS;
+  let message = "";
+  let scope: unknown;
+  const result = await listen(paths, { token: "listener-1", tick: (clock) => {
+    if (clock === T0 + 2 * WAKE_POLL_MS) message = arrive(paths, 1, clock);
+    if (clock !== allowAt) return;
+    assert.equal(getMessage(paths.inbox, message)?.state, "accepted");
+    scope = readJson(listenerScope(paths, SELF));
+    writePolicy(paths, { enabled: true, sessions: ["review"] });
+  } });
+  assert.deepEqual(result, { code: 2, text: wakeText(1) });
+  // What the daemon reads to report progress (delivery-progress.mts): the grant only, not the allowlist.
+  assert.deepEqual(scope, { token: "listener-1", listed: false, taskId: TASK });
+  assert.deepEqual(auditLines(paths).map((l) => [l.ts, l.action, l.messageIds]),
+    [[new Date(allowAt + WAKE_SETTLE_MS).toISOString(), "wake", [message]]]);
+});
+
+test("a withdrawn wake section or allowlist entry ends the listener: lock released, audit not-allowlisted", async (t) => {
+  for (const wake of [undefined, { enabled: true, sessions: ["someone-else"] }]) {
+    const { paths } = setup(t);
+    const result = await listen(paths, { tick: (clock) => {
+      if (clock === T0 + 2 * WAKE_POLL_MS) writePolicy(paths, wake);
+      if (clock === T0 + 3 * WAKE_POLL_MS) arrive(paths, 1, clock);
+    } });
+    assert.deepEqual(result, { code: 0 }, JSON.stringify({ wake }));
+    assert.equal(fs.existsSync(lockFile(paths)), false);
+    assert.deepEqual(auditLines(paths).map((l) => [l.ts, l.action]), [[new Date(T0 + 2 * WAKE_POLL_MS).toISOString(), "not-allowlisted"]]);
+  }
+});
+
+test("an unreadable policy file keeps the listener on its last good policy and is audited once", async (t) => {
+  const { paths } = setup(t);
+  let message = "";
+  const result = await listen(paths, { tick: (clock) => {
+    if (clock === T0 + 2 * WAKE_POLL_MS) fs.writeFileSync(paths.policy, "{ half written");
+    if (clock === T0 + 5 * WAKE_POLL_MS) message = arrive(paths, 1, clock);
+  } });
+  assert.deepEqual(result, { code: 2, text: wakeText(1) });
+  assert.deepEqual(auditLines(paths).map((l) => [l.action, l.messageIds]), [["policy-unreadable", []], ["wake", [message]]]);
 });
 
 test("runs as Claude Code starts it: exit 2 with the wake text on stderr, exit 0 without a node or with a bad --timeout", (t) => {

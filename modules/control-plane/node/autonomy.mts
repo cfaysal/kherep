@@ -23,7 +23,9 @@ export type AutonomyAction = "wake" | "stuck-offer" | "budget" | "depth-limit" |
   // codex-queue.mts: waking an interactive Codex session with `codex queue`.
   | "queue-failed" | "permission-mode-unknown" | "ambiguous-name" | "intercom" | "intercom-refused" | "intercom-failed" | "awaiting-user-turn"
   // wake-hook.mts at SessionStart: messages that arrived while no listener ran (issue #101).
-  | "backlog";
+  | "backlog"
+  // wake-hook.mts: the policy file turned unreadable; the listener keeps its last good policy (issue #213).
+  | "policy-unreadable";
 
 export const listenerDir = (paths: NodePaths): string => path.join(paths.dir, "listeners");
 export const wakeAudit = (paths: NodePaths): string => path.join(paths.dir, "wake.jsonl");
@@ -133,6 +135,16 @@ export function mayContinue(paths: NodePaths, sessionId: unknown, permissionMode
 // idleAt: set by StopFailure for a listener armed while a turn could run.
 export interface ListenerLock {
   token: string; pid: number; startedAt: number; event: "Stop" | "UserPromptSubmit" | "SessionStart"; source?: string; idleAt?: number;
+}
+
+// What the live listener wakes for (issue #213): every message for its session
+// (listed) or only those of its task grant (taskId). Kept beside the lock and
+// valid only while the lock carries the same token; delivery-progress.mts reads it.
+export interface ListenerScope { token: string; listed: boolean; taskId?: string }
+export const listenerScope = (paths: NodePaths, sessionId: string): string => path.join(listenerDir(paths), `${sessionId}.scope.json`);
+export function recordScope(paths: NodePaths, sessionId: string, scope: ListenerScope): void {
+  const file = listenerScope(paths, sessionId);
+  if (JSON.stringify(readJson(file)) !== JSON.stringify(scope)) writeJsonAtomic(file, scope);
 }
 
 // Whether the session was idle when the listener armed: after Stop, and at a

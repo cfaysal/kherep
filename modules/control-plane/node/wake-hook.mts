@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
-  armedIdle, audit, bypassesPermissions, isPlainSessionId, listenerDir, listenerLock, parentWatch, rememberedMode, rememberMode, takeTurn,
-  wakeAudit, type ListenerLock,
+  armedIdle, audit, bypassesPermissions, isPlainSessionId, listenerDir, listenerLock, parentWatch, recordScope, rememberedMode, rememberMode,
+  takeTurn, wakeAudit, type ListenerLock, type ListenerScope,
 } from "./autonomy.mts";
 import { ensureDir, nodePaths, readConfig, type NodePaths } from "./config.mts";
 import { REOFFER_AFTER_MS } from "./deliver-core.mts";
@@ -12,7 +12,7 @@ import { isMainModule } from "./deliver-hook.mts";
 import { localSessionName } from "./exchange.mts";
 import { getMessage, readJson, writeJsonAtomic } from "./inbox.mts";
 import { launchMode, type LaunchVerdict } from "./launch-mode.mts";
-import { explicitlyListed, loadPolicy, wakeAllowed } from "./policy.mts";
+import { explicitlyListed, loadPolicy, readPolicy, wakeAllowed } from "./policy.mts";
 import { mappingPending, taskForSession, type TaskRecord } from "./task-records.mts";
 import { transcriptMode } from "./transcript-mode.mts";
 import { atReplyLimit, pending, rememberWoken } from "./wake-pending.mts";
@@ -112,7 +112,8 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
   // task record in the same directory waits for its mapping, the listener
   // waits too and looks the grant up again at each poll. The grant itself
   // only ever comes from the session id the node recorded.
-  const policy = loadPolicy(readConfig(paths.config)?.policyFile ?? paths.policy);
+  const policyFile = readConfig(paths.config)?.policyFile ?? paths.policy;
+  let policy = loadPolicy(policyFile);
   const grantFor = (): TaskRecord | undefined => policy.sessions?.enabled ? taskForSession(paths, sessionId) ?? undefined : undefined;
   const mapping = (): boolean => policy.sessions?.enabled === true && mappingPending(paths, cwd, now());
   let grant = grantFor();
@@ -122,10 +123,12 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     return name === undefined ? [sessionId] : [sessionId, name];
   };
   let refs = refsOf();
-  const listed = wakeAllowed(policy, refs);
-  // Audited once, when the listener gives up; without a wake section quietly, as before.
+  let listed = wakeAllowed(policy, refs);
+  let wasListed = listed;
+  // Audited once, when the listener gives up; without a wake section quietly,
+  // as before, unless the section was withdrawn from a listed session (issue #213).
   const unlisted = (): WakeResult => {
-    if (policy.wake) audit(paths, now(), sessionId, [], "not-allowlisted");
+    if (policy.wake || wasListed) audit(paths, now(), sessionId, [], "not-allowlisted");
     return quiet;
   };
   if (!listed && !grant && !mapping()) return unlisted();
@@ -155,11 +158,15 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
   const mine: ListenerLock = { token: deps.token?.() ?? crypto.randomUUID(), pid: deps.pid ?? process.pid, startedAt: armedAt, event,
     ...(starting && typeof source === "string" ? { source } : {}) };
   ensureDir(listenerDir(paths));
+  const scope = (): ListenerScope => ({ token: mine.token, listed, ...(grant ? { taskId: grant.taskId } : {}) });
+  // Before the lock, so a lock with this token always has its scope.
+  recordScope(paths, sessionId, scope());
   writeJsonAtomic(lockFile, mine);
   const deadline = mine.startedAt + (deps.maxWaitMs ?? WAKE_MAX_WAIT_MS);
   const parentAlive = deps.parentAlive ?? parentWatch();
   const release = (): void => fs.rmSync(lockFile, { force: true });
   const limited = new Set<string>();
+  let unreadable = false;
   for (;;) {
     await sleep(WAKE_POLL_MS);
     const held = readJson<ListenerLock>(lockFile);
@@ -174,6 +181,16 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
       audit(paths, now(), sessionId, [], "parent-gone");
       return quiet;
     }
+    // Read at every poll, so a policy change reaches a running listener (issue
+    // #213). An unreadable file keeps the last good policy, audited once;
+    // SessionStart's explicit listing is checked only when arming.
+    const current = readPolicy(policyFile);
+    if (current === null && !unreadable) audit(paths, now(), sessionId, [], "policy-unreadable");
+    unreadable = current === null;
+    policy = current ?? policy;
+    if (policy.sessions?.enabled !== true) grant = undefined;
+    listed = wakeAllowed(policy, refs);
+    wasListed ||= listed;
     if (!listed && !grant) {
       grant = grantFor();
       if (!grant) {
@@ -185,6 +202,7 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
       }
       refs = refsOf();
     }
+    recordScope(paths, sessionId, scope());
     // Armed at UserPromptSubmit or compaction, the session is busy until
     // StopFailure marks the listener idle or the turn cannot still run; a turn
     // that ends with Stop replaces this listener.
