@@ -177,14 +177,18 @@ Access value is returned.
 `kherep-node doctor` is read-only and local to the host. It reads the node
 config directory, the daemon's `daemon.json` (pid and timestamps, written at
 daemon start, after each authenticated connection and when a connection
-closes), the wake listener locks and the hook command fields of Claude
+closes, and the last readiness verdict per runtime, written after each
+completed probe outside the frame lane), the wake listener locks and the hook command fields of Claude
 `settings.json` and Codex `config.toml`. It runs `claude --version` and
 `codex --version` the way the node launches them (`findClaude`/`claudeCall`,
 `codexCommand`), and sends one unauthenticated
 `GET /health` to the enrolled control URL. It copies only the known `/health`
 fields, never the body. Each check reports a failed read as a failure with a
-fixed reason, distinct from an absent file. Runtime readiness is reported as
-not available until a readiness probe exists.
+fixed reason, distinct from an absent file. Runtime readiness is the running
+daemon's recorded verdict with its probe time and the fixed cause code, or
+`unknown` without a record or when the recorded pid is not running; doctor
+never probes. A configured runtime whose last probe needs a sign-in fails the
+runtimes check, as it is the one cause that makes the node refuse a run.
 
 ## Compatibility and activation
 

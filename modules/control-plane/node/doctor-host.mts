@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 
 import { codexCommand, findCodex } from "./codex-binary.mts";
 import type { Check } from "./doctor-local.mts";
+import { aged } from "./runtime-readiness.mts";
 import { claudeCall, findClaude, type Invocation } from "./sessions.mts";
 
 // The checks of `kherep-node doctor` that look beyond the config directory
@@ -63,23 +64,40 @@ export const runtimeVersion: VersionOf = async (name, file) => {
   }
 };
 
-// configured: the runtimes the sessions policy names. Readiness needs the
-// runtime readiness probe, which this node does not have yet.
+const CAUSES: readonly unknown[] = ["sign-in", "timeout", "error"];
+
+// The running daemon's last probe of one runtime (issue #222); doctor never
+// probes. "unknown" without a valid record. aged: past the daemon's own TTL,
+// which keeps acting on and advertising the verdict until its next probe.
+function readinessOf(record: unknown, now: number): Record<string, unknown> {
+  const { ready, cause, probedAt } = (record ?? {}) as Record<string, unknown>;
+  const at = typeof probedAt === "string" ? Date.parse(probedAt) : Number.NaN;
+  if (typeof ready !== "boolean" || Number.isNaN(at) || (!ready && !CAUSES.includes(cause))) return { ready: "unknown" };
+  return { ready, ...(ready ? {} : { cause }), probedAt, aged: aged({ ready, at }, now) };
+}
+
+// configured: the runtimes the sessions policy names. readiness: daemon.json's
+// record of a running daemon, else null. Only a sign-in failure fails the
+// check, as only it makes the node refuse a run (runtime-readiness.mts).
 export async function checkRuntimes(configured: string[], find: (name: string) => string | null,
-  versionOf: VersionOf): Promise<Check> {
+  versionOf: VersionOf, readiness: Record<string, unknown> | null, now: number): Promise<Check> {
   const runtimes: Record<string, unknown> = {};
   let failed = false;
+  let signedOut = false;
   let installed = 0;
   for (const name of ["claude", "codex"]) {
     const file = find(name);
     const version = file ? await versionOf(name, file) : null;
     const isConfigured = configured.includes(name);
+    const probe = readinessOf(readiness?.[name], now);
     if (file) installed++;
     if (isConfigured && (!file || !version)) failed = true;
-    runtimes[name] = { installed: file !== null, version, configured: isConfigured, ready: "not available" };
+    if (isConfigured && probe.cause === "sign-in") signedOut = true;
+    runtimes[name] = { installed: file !== null, version, configured: isConfigured, ...probe };
   }
   let detail: string | undefined;
   if (installed === 0) detail = "neither claude nor codex is installed";
   else if (failed) detail = "a runtime the sessions policy names is missing or does not report a version";
-  return { ok: installed > 0 && !failed, ...runtimes, ...(detail ? { detail } : {}) };
+  else if (signedOut) detail = "a runtime the sessions policy names is not signed in";
+  return { ok: !detail, ...runtimes, ...(detail ? { detail } : {}) };
 }

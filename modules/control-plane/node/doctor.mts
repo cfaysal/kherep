@@ -6,7 +6,7 @@ import type { NodePaths } from "./config.mts";
 import { pidAlive } from "./daemon-state.mts";
 import { checkRuntimes, checkWorker, findRuntime, runtimeVersion, type VersionOf } from "./doctor-host.mts";
 import { checkHooks } from "./doctor-hooks.mts";
-import { checkDaemon, checkEnrollment, checkListeners, checkPolicy, type Check } from "./doctor-local.mts";
+import { checkDaemon, checkEnrollment, checkListeners, checkPolicy, daemonReadiness, type Check } from "./doctor-local.mts";
 import { defaultConfigDir } from "./launch-mode.mts";
 
 // `kherep-node doctor` (issue #215): whether this host can take part, as JSON.
@@ -47,18 +47,19 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   const repoRoot = deps.repoRoot ?? REPO_ROOT;
   const { check: enrollment, config } = checkEnrollment(deps.paths);
   const { check: policy, policy: parsed } = checkPolicy(config?.policyFile ?? deps.paths.policy);
+  const now = deps.now?.() ?? Date.now();
   const checks: Record<string, Check> = {
     enrollment,
     daemon: checkDaemon(deps.paths, alive),
     worker: config ? await checkWorker(config.controlUrl, deps.fetch ?? fetch) : notEnrolled,
     policy,
     runtimes: await checkRuntimes(parsed?.sessions?.enabled ? parsed.sessions.runtimes : [],
-      deps.find ?? findRuntime, deps.versionOf ?? runtimeVersion),
+      deps.find ?? findRuntime, deps.versionOf ?? runtimeVersion, daemonReadiness(deps.paths, alive), now),
     hooks: checkHooks({
       claude: path.join(deps.claudeConfigDir ?? defaultConfigDir(), "settings.json"),
       codex: path.join(deps.codexHome ?? codexHome(), "config.toml"),
     }, repoRoot),
-    listeners: checkListeners(deps.paths, alive, deps.now?.() ?? Date.now()),
+    listeners: checkListeners(deps.paths, alive, now),
   };
   return { ok: Object.values(checks).every((check) => check.ok), version: checkoutVersion(repoRoot), checks };
 }

@@ -52,6 +52,17 @@ export function checkDaemon(paths: NodePaths, pidAlive: (pid: unknown) => boolea
     connectedAt, disconnectedAt, ...(detail ? { detail } : {}) };
 }
 
+// The readiness record of a running daemon (issue #222). A dead daemon's
+// record describes no running node, so it and an unreadable file give null.
+export function daemonReadiness(paths: NodePaths, pidAlive: (pid: unknown) => boolean): Record<string, unknown> | null {
+  try {
+    const state = readDaemonState(paths);
+    return state && pidAlive(state.pid) ? state.readiness ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
 // A wake section the parser rejected disables waking (fail closed); doctor
 // reports it as a failure so the operator sees it.
 export function checkPolicy(file: string): { check: Check; policy: NodePolicy | null } {

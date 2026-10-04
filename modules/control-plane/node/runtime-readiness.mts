@@ -30,7 +30,12 @@ export interface Readiness {
   ready(): TaskRuntime[];
 }
 
-export interface ReadinessOptions { now?: () => number; log?: (line: string) => void }
+// onVerdict: each completed probe's verdict, for daemon.json (issue #222).
+export interface ReadinessOptions { now?: () => number; log?: (line: string) => void; onVerdict?: (runtime: TaskRuntime, verdict: Verdict) => void }
+
+// Whether a verdict is due for a new probe; doctor applies the same TTLs.
+export const aged = (verdict: { ready: boolean; at: number }, now: number): boolean =>
+  now - verdict.at >= (verdict.ready ? READY_TTL_MS : NOT_READY_TTL_MS);
 
 // The fixed reason a message or task gets; never a CLI's own text.
 const CAUSES: Readonly<Record<ProbeCause, string>> = { "sign-in": "sign-in required", timeout: "probe timed out", error: "probe failed" };
@@ -40,7 +45,6 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
   const now = options.now ?? Date.now;
   const verdicts = new Map<TaskRuntime, Verdict>();
   const inflight = new Map<TaskRuntime, Promise<Verdict>>();
-  const aged = (verdict: Verdict): boolean => now() - verdict.at >= (verdict.ready ? READY_TTL_MS : NOT_READY_TTL_MS);
   const run = (runtime: TaskRuntime): Promise<Verdict> => {
     const pending = inflight.get(runtime);
     if (pending) return pending;
@@ -49,6 +53,7 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
         const verdict: Verdict = result.ok ? { ready: true, at: now() } : { ready: false, at: now(), cause: result.cause };
         const before = verdicts.get(runtime);
         verdicts.set(runtime, verdict);
+        options.onVerdict?.(runtime, verdict);
         if (before?.ready !== verdict.ready || (!verdict.ready && !before.ready && before.cause !== verdict.cause)) {
           if (verdict.ready) {
             options.log?.(`kherep-node: runtime ${runtime} is ready`);
@@ -66,7 +71,7 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
   // The last verdict, revalidated in the background once aged; null when there is none.
   const peek = (runtime: TaskRuntime): Verdict | null => {
     const verdict = verdicts.get(runtime) ?? null;
-    if (!verdict || aged(verdict)) void run(runtime);
+    if (!verdict || aged(verdict, now())) void run(runtime);
     return verdict;
   };
   return {
@@ -74,7 +79,7 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
     peek,
     revalidate: (runtime) => {
       const verdict = verdicts.get(runtime);
-      if (verdict && !verdict.ready && aged(verdict)) void run(runtime);
+      if (verdict && !verdict.ready && aged(verdict, now())) void run(runtime);
     },
     invalidate: (runtime) => {
       const verdict = verdicts.get(runtime);

@@ -8,7 +8,7 @@ import { generateIdentity } from "./identity.mts";
 import { advertisedCapabilities, type NodePolicy } from "./policy.mts";
 import type { ProbeResult } from "./runtime-probe.mts";
 import {
-  createReadiness, NOT_READY_TTL_MS, notReady, notReadyNow, notReadyReason, READY_TTL_MS,
+  aged, createReadiness, NOT_READY_TTL_MS, notReady, notReadyNow, notReadyReason, READY_TTL_MS,
 } from "./runtime-readiness.mts";
 
 // Issue #197: a verdict is used stale while it revalidates in the background
@@ -139,4 +139,27 @@ test("a changed verdict re-registers the node once with the new capability", asy
   assert.ok((again[0].body as { capabilities: string[] }).capabilities.includes(RUNTIME_READY_CAPABILITIES.claude));
   client.registrationSent();
   assert.deepEqual(await client.refreshPolicy(SESSIONS), [], "once");
+});
+
+// Issue #222: every completed probe is reported with its fixed cause, never the
+// probe's own text, so the daemon can record it for doctor.
+test("each completed probe is reported with its verdict and probe time", async () => {
+  let clock = 1_000;
+  const seen: unknown[] = [];
+  const p = counted([SIGN_IN, { ok: false, cause: "timeout", detail: "synthetic output" }]);
+  const readiness = createReadiness(p.probe, { now: () => clock, onVerdict: (runtime, verdict) => seen.push([runtime, verdict]) });
+  await readiness.check("claude");
+  clock += NOT_READY_TTL_MS;
+  readiness.revalidate("claude");
+  await settle();
+  assert.deepEqual(seen, [["claude", { ready: false, at: 1_000, cause: "sign-in" }],
+    ["claude", { ready: false, at: 1_000 + NOT_READY_TTL_MS, cause: "timeout" }]]);
+  assert.equal(JSON.stringify(seen).includes("synthetic output"), false);
+});
+
+test("aged applies the readiness TTLs: ready after 10 minutes, not ready after 2", () => {
+  assert.equal(aged({ ready: true, at: 0 }, READY_TTL_MS - 1), false);
+  assert.equal(aged({ ready: true, at: 0 }, READY_TTL_MS), true);
+  assert.equal(aged({ ready: false, at: 0 }, NOT_READY_TTL_MS - 1), false);
+  assert.equal(aged({ ready: false, at: 0 }, NOT_READY_TTL_MS), true);
 });

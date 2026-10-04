@@ -21,6 +21,15 @@ increments the minor version; every other release increments the patch version.
   and live wake listeners, and exits 1 when a check fails. The daemon now
   writes `daemon.json` (pid, start, last authenticated connection and lost
   connection time) for it (issue #215).
+- Control Plane: `kherep-node doctor` reports each runtime's `ready` from the
+  daemon's last readiness probe instead of `"not available"`: `true`, or
+  `false` with the fixed `cause` (`sign-in`, `timeout`, `error`), each with
+  `probedAt` and `aged` (older than the daemon's 10 or 2 minute revalidation
+  bound), or `"unknown"` when the daemon is not running or has not probed that
+  runtime. Doctor never probes. A runtime the sessions policy names whose last
+  probe needs a sign-in fails the `runtimes` check. The daemon records each
+  completed probe in `daemon.json` as `readiness.<runtime>`, without the
+  probe's output (issue #222).
 - Control Plane: a runtime readiness probe (issue #197). `claude auth status`
   reported `loggedIn: true` for an expired login, so the node checks each
   enabled runtime with a real minimal call: `claude -p --safe-mode
