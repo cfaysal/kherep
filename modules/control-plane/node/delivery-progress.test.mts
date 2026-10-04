@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { listenerDir, listenerLock } from "./autonomy.mts";
+import { listenerDir, listenerLock, listenerScope } from "./autonomy.mts";
 import { codexNode } from "./codex-fixture.mts";
 import { pollCodexQueue } from "./codex-queue.mts";
 import { codexSessionName, recordCodexSession } from "./codex-sessions.mts";
@@ -64,8 +64,33 @@ test("only a live bounded Claude listener is reported as wake-pending", (t) => {
   observeClaudeDeliveryProgress(node.deps());
   assert.equal(code(node, messageId), "awaiting-user-turn", "a stale lock is not a live wake");
   writeJsonAtomic(listenerLock(node.paths, SESSION), { token: "live", pid: process.pid, startedAt: T0, event: "Stop" });
+  writeJsonAtomic(listenerScope(node.paths, SESSION), { token: "live", listed: true });
   observeClaudeDeliveryProgress(node.deps());
   assert.equal(code(node, messageId), "wake-pending");
+});
+
+// Issue #213: wake-pending only for what the live listener wakes for, as its
+// scope file says (wake-hook.mts). An older listener writes none.
+test("a live listener on its task grant alone is not reported as waking for a message outside the grant", (t) => {
+  const node = taskNode(t, {}, { wake: { enabled: true, sessions: ["*"] } });
+  writeTask(node.paths, { taskId: TASK, runtime: "claude", name: "task-3f2a1b0c", cwd: node.workspace,
+    permissionMode: "auto", state: "running", startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60_000).toISOString(),
+    updatedAt: new Date(T0).toISOString(), sessionId: SESSION }, T0);
+  const other = deliver(node);
+  const granted = deliver(node, "idle", TASK);
+  ensureDir(listenerDir(node.paths));
+  writeJsonAtomic(listenerLock(node.paths, SESSION), { token: "live", pid: process.pid, startedAt: T0, event: "Stop" });
+  const observe = (scope: unknown): string[] => {
+    writeJsonAtomic(listenerScope(node.paths, SESSION), scope);
+    observeClaudeDeliveryProgress(node.deps());
+    return [code(node, other), code(node, granted)].map(String);
+  };
+  assert.deepEqual(observe({ token: "live", listed: false, taskId: TASK }), ["awaiting-user-turn", "wake-pending"]);
+  assert.deepEqual(observe({ token: "live", listed: false }), ["awaiting-user-turn", "awaiting-user-turn"],
+    "a listener still waiting for its grant covers neither");
+  assert.deepEqual(observe({ token: "replaced", listed: true }), ["awaiting-user-turn", "wake-pending"],
+    "a scope of another listener, or none, says nothing beyond the task grant");
+  assert.deepEqual(observe({ token: "live", listed: true }), ["wake-pending", "wake-pending"]);
 });
 
 test("a task association grants no wake while sessions are disabled", (t) => {

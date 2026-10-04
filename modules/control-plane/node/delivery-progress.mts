@@ -1,6 +1,8 @@
 import fs from "node:fs";
 
-import { bypassesPermissions, isPlainSessionId, listenerLock, rememberedMode, type ListenerLock } from "./autonomy.mts";
+import {
+  bypassesPermissions, isPlainSessionId, listenerLock, listenerScope, rememberedMode, type ListenerLock, type ListenerScope,
+} from "./autonomy.mts";
 import type { NodePaths } from "./config.mts";
 import { readLocalSessions, type LocalSession } from "./exchange.mts";
 import { listInbox, readJson, setMessageProgress, type InboxRecord } from "./inbox.mts";
@@ -45,8 +47,16 @@ function observeAccepted(deps: RunnerDeps, session: LocalSession, accepted: Inbo
   if (listener && lock) {
     try { process.kill(lock.pid, 0); } catch (error) { listener = (error as NodeJS.ErrnoException).code === "EPERM"; }
   }
-  progressRecords(deps.paths, authorized, listener ? "waking" : "waiting",
-    listener ? "wake-pending" : "awaiting-user-turn", now);
+  // Waking only for what the live listener's scope covers (issue #213). Without
+  // its scope (an older listener) only the task grant, which every listener
+  // looks up. Otherwise awaiting-user-turn: a new code would make an older
+  // Worker refuse the whole status (isNodeMessageStatusBody).
+  const scope = readJson<ListenerScope>(listenerScope(deps.paths, session.sessionId));
+  const own = scope !== null && scope.token === lock?.token ? scope : null;
+  const covered = (record: InboxRecord): boolean => listener
+    && (own?.listed === true || (granted.includes(record) && (own === null || own.taskId === task?.taskId)));
+  progressRecords(deps.paths, authorized.filter(covered), "waking", "wake-pending", now);
+  progressRecords(deps.paths, authorized.filter((record) => !covered(record)), "waiting", "awaiting-user-turn", now);
 }
 
 // A successful session snapshot is the node's current evidence for Claude.

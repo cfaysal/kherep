@@ -38,17 +38,23 @@ function denyAll(): NodePolicy {
 // A missing file means the default policy. An unreadable or malformed file
 // fails closed: nothing is allowed until the operator fixes it.
 export function loadPolicy(file: string): NodePolicy {
+  return readPolicy(file) ?? denyAll();
+}
+
+// The policy, or null for an unreadable or malformed file; a running wake
+// listener keeps its last good policy then (wake-hook.mts, issue #213).
+export function readPolicy(file: string): NodePolicy | null {
   let text: string;
   try {
     text = fs.readFileSync(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_POLICY;
-    return denyAll();
+    return null;
   }
   try {
     const value = JSON.parse(text) as { version?: unknown; allowedCommands?: unknown; messaging?: unknown; wake?: unknown;
       sessions?: unknown; remoteMcp?: unknown };
-    if (value.version !== 1 || !Array.isArray(value.allowedCommands)) return denyAll();
+    if (value.version !== 1 || !Array.isArray(value.allowedCommands)) return null;
     const accept = parseAcceptRules(value.messaging);
     const wake = parseWake(value.wake);
     const sessions = parseSessionsPolicy(value.sessions);
@@ -60,7 +66,7 @@ export function loadPolicy(file: string): NodePolicy {
       ...(accept ? { messaging: { accept, ...(resumeClosed ? { resumeClosed: true as const } : {}) } } : {}),
       ...(wake ? { wake } : {}), ...(sessions ? { sessions } : {}), ...(remoteMcp ? { remoteMcp } : {}) };
   } catch {
-    return denyAll();
+    return null;
   }
 }
 
