@@ -20,11 +20,12 @@ import { claudeCall, findClaude } from "./sessions.mts";
 //   "stops locally ... before it reaches the API" with `Failed to authenticate:
 //   OAuth session expired`, at no cost.
 // - Codex (`codex exec --help`, CLI 0.160.0): the user's config.toml as a real
-//   run loads it (model, provider, hooks), with its MCP servers disabled by the
-//   overrides intercom runs use (codex-mcp.mts); `--ephemeral` persists no
-//   session files; read-only sandbox, prompt on stdin, ready only after
-//   `turn.completed`. A delivery hook in that config records the probe's
-//   thread as a Codex session; forgetSession removes that record afterwards.
+//   run loads it (model, provider, auth), without hooks (CODEX_PROBE_CONFIG)
+//   and with its MCP servers disabled by the overrides intercom runs use
+//   (codex-mcp.mts); `--ephemeral` persists no session files; read-only
+//   sandbox, prompt on stdin, ready only after `turn.completed`. Should a
+//   delivery hook still record the probe's thread as a Codex session,
+//   forgetSession removes that record afterwards, also after a timeout.
 // Claude's account default model answers. The probe prints nothing a CLI wrote
 // except a redacted last line (codex-output.mts lastLine).
 
@@ -32,8 +33,14 @@ export const PROBE_TIMEOUT_MS = 45_000;
 const PROMPT = "Reply with OK.";
 export const CLAUDE_PROBE_ARGS: readonly string[] = ["-p", "--safe-mode", "--no-session-persistence", "--strict-mcp-config",
   "--tools", "", "--output-format", "json", "--system-prompt", PROMPT, "OK"];
+// No hooks for the probe: an installed node's Stop, SessionStart and
+// UserPromptSubmit hooks would dispatch observation work, write memory and
+// outlast the timeout. `codex features list` (CLI 0.160.0, measured 2026-10-04)
+// shows `hooks stable true`, and `-c features.hooks=false` turns it false;
+// `features.codex_hooks` is accepted there without effect and kept for older CLIs.
+export const CODEX_PROBE_CONFIG: readonly string[] = ["-c", "features.hooks=false", "-c", "features.codex_hooks=false"];
 export const codexProbeArgs = (cwd: string, overrides: string[] = []): string[] =>
-  [...overrides, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-C", cwd, "-"];
+  [...CODEX_PROBE_CONFIG, ...overrides, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-C", cwd, "-"];
 
 export type ProbeCause = "sign-in" | "timeout" | "error";
 export type ProbeResult = { ok: true } | { ok: false; cause: ProbeCause; detail: string };
@@ -134,7 +141,6 @@ async function probeCodex(deps: ProbeDeps, run: ProbeSpawn, timeoutMs: number, c
     return { ok: false, cause: "error", detail: String((error as Error).message) };
   }
   const out = await run(command.file, command.args, { cwd, timeoutMs, input: PROMPT });
-  if (out.timedOut) return { ok: false, cause: "timeout", detail: "" };
   const events = out.stdout.split(/\r?\n/).flatMap((line) => {
     try {
       const value: unknown = JSON.parse(line);
@@ -143,8 +149,10 @@ async function probeCodex(deps: ProbeDeps, run: ProbeSpawn, timeoutMs: number, c
       return [];
     }
   });
+  // Also after a timeout or an error: a session record left behind would be listed for 12 hours.
   const thread = events.find((e) => e.type === "thread.started")?.thread_id;
   if (typeof thread === "string") deps.forgetSession?.(thread);
+  if (out.timedOut) return { ok: false, cause: "timeout", detail: "" };
   if (out.code === 0 && events.some((e) => e.type === "turn.completed")) return { ok: true };
   const error = events.flatMap((e) => {
     if (e.type === "error" && typeof e.message === "string") return [e.message];

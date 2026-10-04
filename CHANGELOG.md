@@ -25,8 +25,8 @@ increments the minor version; every other release increments the patch version.
   reported `loggedIn: true` for an expired login, so the node checks each
   enabled runtime with a real minimal call: `claude -p --safe-mode
   --no-session-persistence --tools ""` with a one-line system prompt, and
-  `codex exec --ephemeral --sandbox read-only` with the user's config and its
-  MCP servers disabled as for intercom runs. It probes once at daemon start;
+  `codex -c features.hooks=false exec --ephemeral --sandbox read-only` with the
+  user's config, no hooks and its MCP servers disabled as for intercom runs. It probes once at daemon start;
   afterwards a verdict is used stale while it revalidates in the background
   (ready after 10 minutes, not ready after 2, also from the session round; 45
   second timeout), and no probe runs on the daemon's frame lane. A ready
