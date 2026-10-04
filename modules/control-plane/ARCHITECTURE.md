@@ -156,6 +156,26 @@ Fresh measurement and cached results are explicit; connectivity or missing data 
 never evidence that a process stopped. Claude process state remains unknown and its
 remote stop is unsupported until an equivalent live identity check exists.
 
+## Health and doctor
+
+`GET /health` is the one unauthenticated Worker route besides the node
+endpoints. It returns `ok`, `service`, the product `version` bundled from the
+root `package.json`, an optional `commit` defined at deploy time
+(`KHEREP_BUILD_COMMIT`, accepted only as a hex id) and `remoteMcp`, the exact
+`REMOTE_MCP_ENABLED === "true"` test the `/mcp` route uses. Fields are added
+only; older clients that read `ok` are unaffected. No account id, route or
+Access value is returned.
+
+`kherep-node doctor` is read-only and local to the host. It reads the node
+config directory, the daemon's `daemon.json` (pid and timestamps, written at
+daemon start and after each authenticated connection), the wake listener locks,
+Claude `settings.json` and Codex `config.toml`, runs `claude --version` and
+`codex --version` without a shell, and sends one unauthenticated
+`GET /health` to the enrolled control URL. It copies only the known `/health`
+fields, never the body. Each check reports a failed read as a failure with a
+fixed reason, distinct from an absent file. Runtime readiness is reported as
+not available until a readiness probe exists.
+
 ## Compatibility and activation
 
 Ship the Worker and node source together, then explicitly activate node policy.

@@ -6,6 +6,7 @@ import { codexHome } from "./codex-app.mts";
 import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { connectUrl, ensureDir, type NodeConfig, type NodePaths } from "./config.mts";
+import { recordDaemonState, type DaemonState } from "./daemon-state.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
 import { observeClaudeDeliveryProgress, observeCodexTaskProgress } from "./delivery-progress.mts";
 import {
@@ -64,6 +65,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // Issue #72. For nodes enrolled before onboard created it: a sandboxed
   // `msg send` can write into the outbox but not create it.
   ensureDir(paths.outbox);
+  const state: DaemonState = { pid: process.pid, startedAt: new Date().toISOString() };
+  recordDaemonState(paths, state, log);
   try {
     const purged = purgeInbox(paths.inbox);
     if (purged > 0) log(`kherep-node: removed ${purged} inbox message(s) older than 7 days`);
@@ -211,6 +214,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         if (!wasAuthed && client.authenticated && sent) client.registrationSent();
         if (!wasAuthed && client.authenticated) {
           attempt = 0;
+          recordDaemonState(paths, { ...state, connectedAt: new Date().toISOString() }, log);
           log(`kherep-node: connected as ${config.nodeId}`);
         }
       }).catch((error: unknown) => log(`kherep-node: frame handling failed: ${String(error)}`));

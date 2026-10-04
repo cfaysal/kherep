@@ -25,12 +25,13 @@ new native caller --> node sessions.snapshot --> Registry --> subsequent native 
 | Part | Path | Role |
 | --- | --- | --- |
 | Protocol | `protocol.mts` | Message envelope, message types, the read-only command set and the signed challenge bytes. Used by both sides |
-| Worker | `worker/src/index.mts` | Routing and authentication only: `/health`, `/node/connect`, `/node/enroll`, `/api/*` |
+| Worker | `worker/src/index.mts` | Routing and authentication only: `/health` (`worker/src/health.mts`), `/node/connect`, `/node/enroll`, `/api/*` |
 | `NodeSession` | `worker/src/node-session.mts` | The node's hibernatable WebSocket, challenge handshake, pending-command log with seq/ack, offline alarm |
 | Messaging protocol | `protocol-messages.mts` | `message.*` bodies, message states, the `messaging.v1` capability and their validators. Used by both sides |
 | `Registry` | `worker/src/registry.mts` | SQLite tables `nodes`, `runtimes`, `sessions`, `enrollments`, `audit`; one-time codes; key binding; revocation |
 | Message queue | `worker/src/message-store.mts`, `worker/src/message-routing.mts` | The Registry's `messages` table, state changes and expiry; pushing the resulting frames to connected nodes |
-| Node | `node/cli.mts` | `kherep-node node onboard|status|unenroll`, `kherep-node daemon` and `kherep-node msg ...` |
+| Node | `node/cli.mts` | `kherep-node node onboard|status|unenroll`, `kherep-node daemon`, `kherep-node doctor` and `kherep-node msg ...` |
+| Doctor | `node/doctor.mts`, `node/doctor-local.mts`, `node/doctor-host.mts`, `node/daemon-state.mts` | `kherep-node doctor`: whether this host can take part, see [Doctor](#doctor) |
 | Node sessions | `node/sessions.mts` | Claude Code session discovery for `session.list` and `sessions.snapshot` |
 | Node inbox | `node/inbox.mts`, `node/policy.mts` | Messaging policy, the inbox of accepted messages and its retention |
 | Directory | `worker/src/directory.mts` | The `directory` frame: non-revoked nodes and their sessions |
@@ -501,6 +502,13 @@ npm ci
 npx wrangler deploy --config /path/outside/the/repository/kherep-control.jsonc
 ```
 
+`GET /health` answers without authentication with `ok`, `service`, `version` (the Kherep product version from the root `package.json`, bundled at deploy time), `commit` and `remoteMcp` (whether `REMOTE_MCP_ENABLED` is exactly `true`). It carries no account id, route or Access value. `commit` is `null` unless the deploy defines it as a hex source commit id:
+
+```sh
+npx wrangler deploy --config /path/outside/the/repository/kherep-control.jsonc \
+  --define KHEREP_BUILD_COMMIT:"\"$(git rev-parse --short HEAD)\""
+```
+
 Then put a Cloudflare Access application with an allow policy for the operators in front of `control.example.com/api/*`. Leave `/node/*` outside Access. Deploying and creating these resources is an operator action; the repository never does it.
 
 Durable Object classes are declared with the `exports` map, which replaces the legacy `migrations` array. A Worker deployed earlier with `migrations` (tag `v1`, `new_sqlite_classes`) moves to `exports` without data migration; the move is one-way, so do not return to `migrations` afterwards.
@@ -514,6 +522,7 @@ Node.js 22.18 or later on the 22 line, or 23.6 or later, no dependencies:
 KHEREP_ENROLL_CODE=<code> node modules/control-plane/node/cli.mts node onboard --url https://control.example.com --name build-01
 node modules/control-plane/node/cli.mts node status
 node modules/control-plane/node/cli.mts daemon
+node modules/control-plane/node/cli.mts doctor
 ```
 
 The Worker keeps one authenticated connection per node identity. A daemon whose
@@ -528,6 +537,7 @@ The config directory is `KHEREP_CONFIG_DIR` when set, otherwise `%APPDATA%\khere
 | --- | --- |
 | `node.json` | Non-secret config: control URL, `nodeId`, name, public key, key and policy paths |
 | `node-ed25519.pem` | The private key, mode `0600` |
+| `daemon.json` | The daemon's `pid`, `startedAt` and, after its last authenticated connection, `connectedAt`. Written by the daemon for [Doctor](#doctor) |
 | `policy.json` | Local command allowlist and messaging policy, see below |
 | `inbox/` | Accepted messages, one `<messageId>.json` per message; daemon progress sidecars under `progress/` and persistence receipts under `receipts/`; directory mode `0700`, files `0600` |
 | `outbox/` | Messages written by `msg send`, one `<messageId>.json` each, until the daemon has an answer from the Worker. Created by `node onboard` and at daemon start, because a sandboxed session may write into it but not create it |
@@ -541,6 +551,22 @@ The config directory is `KHEREP_CONFIG_DIR` when set, otherwise `%APPDATA%\khere
 | `task-reports/` | `task.report` bodies waiting for the daemon (from the runner, the watch round and `task done`) |
 | `task-requests/` | `task new` requests with the Worker's answer |
 | `attach.json` | Optional, written by the operator and only read by the node: SSH targets for `attach`, see [Attach](#attach) |
+
+### Doctor
+
+`kherep-node doctor` prints one JSON report and exits 1 when any check fails (issue #215). It changes nothing. The report has `ok`, `version` (the product version of this checkout) and these checks, each with `ok` and, when it fails, a fixed `detail`:
+
+| Check | Passes when | Reports |
+| --- | --- | --- |
+| `enrollment` | `node.json` is valid and the private key is readable and matches the enrolled public key | `nodeId`, `keyReadable` |
+| `daemon` | `daemon.json` names a running process that has authenticated since it started | `pid`, `alive`, `startedAt`, `connectedAt` |
+| `worker` | the control URL answers `GET /health` with status 200 and `ok: true` | `status`, `version`, `commit`, `remoteMcp` (`null` from a Worker that predates them) |
+| `policy` | `policy.json` parses (a missing file is the default policy) and a present `wake` section was accepted | `source`, counts of commands and messaging rules, `wake` (`enabled`, `sessions`, `codexApp`, or `rejected`), `sessions`, `remoteMcp` |
+| `runtimes` | `claude` or `codex` is installed, and every runtime the sessions policy names is installed and reports a version | per runtime `installed`, `version` (first line of `--version`), `configured`, `ready` |
+| `hooks` | at least one delivery or wake hook is installed, and every one names this checkout | `checkout`, per runtime (Claude `settings.json`, Codex `config.toml`) the hooks of this checkout and the paths of `foreign` ones |
+| `listeners` | always; the listener directory is unreadable otherwise | `live` and `stale` wake listener locks |
+
+`ready` is `"not available"`: this node has no runtime readiness probe yet. The daemon check needs a daemon of this version, since older daemons do not write `daemon.json`. No check prints key material, tokens, response bodies or message text; the listener check gives counts, not session ids.
 
 ### Node messaging
 

@@ -4,6 +4,8 @@ import { exportJWK, generateKeyPair, SignJWT, type CryptoKey as JoseKey, type JW
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index.mts";
+import { buildCommit } from "../src/health.mts";
+import rootPackage from "../../../../package.json" with { type: "json" };
 import { makeEnvelope } from "../../protocol.mts";
 import { authenticate, BASE, enroll, FACTS, newKey, nextMessageStatus, registry, workerFetch } from "./helpers.mts";
 
@@ -47,6 +49,20 @@ async function api(path: string, init: RequestInit = {}, jwt?: string): Promise<
 describe("health", () => {
   it("answers without authentication", async () => {
     expect((await workerFetch("/health")).status).toBe(200);
+  });
+
+  // Issue #215: the build it runs and whether remote MCP is on, nothing else.
+  it("reports the bundled product version and the remote MCP switch", async () => {
+    const body = await (await workerFetch("/health")).json();
+    expect(body).toEqual({ ok: true, service: "kherep-control", version: rootPackage.version, commit: null, remoteMcp: false });
+    const enabled = await worker.fetch(new Request(`${BASE}/health`), { ...env, REMOTE_MCP_ENABLED: "true" });
+    expect(await enabled.json()).toMatchObject({ ok: true, remoteMcp: true });
+  });
+
+  it("reports a source commit only when one was defined in a valid form", () => {
+    expect(buildCommit("0123abc")).toBe("0123abc");
+    expect(buildCommit(undefined)).toBeNull();
+    expect(buildCommit("not a commit")).toBeNull();
   });
 });
 

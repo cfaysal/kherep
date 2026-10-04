@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 import { ATTACH_USAGE, runAttach } from "./attach.mts";
 import { nodePaths, readConfig } from "./config.mts";
 import { startDaemon } from "./daemon.mts";
+import { runDoctor } from "./doctor.mts";
 import { MSG_USAGE, runMsg } from "./msg-cli.mts";
 import { nodeStatus, onboard, unenroll } from "./onboard.mts";
 import { parseTaskArgs, runTaskArgs, TASK_USAGE } from "./task-cli.mts";
@@ -18,6 +19,7 @@ import { runTaskControlArgs, TASK_CONTROL_USAGE } from "./task-control-cli.mts";
 //   node cli.mts node status
 //   node cli.mts node unenroll
 //   node cli.mts daemon
+//   node cli.mts doctor                               (see doctor.mts)
 //   node cli.mts msg sessions|send|inbox|status ...   (see msg-cli.mts)
 //   node cli.mts task done|show|new ...               (see task-cli.mts)
 //   node cli.mts attach <node>/<session>              (see attach.mts)
@@ -29,6 +31,7 @@ const USAGE = `usage:
   kherep-node node status
   kherep-node node unenroll
   kherep-node daemon
+  kherep-node doctor
 ${MSG_USAGE.replace("usage:\n", "")}
 ${TASK_USAGE.replace("usage:\n", "")}
 ${TASK_CONTROL_USAGE.replace("usage:\n", "")}
@@ -59,6 +62,11 @@ export async function main(argv: string[]): Promise<number> {
     process.once("SIGTERM", stop);
     await daemon.done;
     return 0;
+  }
+  if (group === "doctor") {
+    const report = await runDoctor({ paths });
+    console.log(JSON.stringify(report, null, 2));
+    return report.ok ? 0 : 1;
   }
   if (group !== "node") {
     console.error(USAGE);
