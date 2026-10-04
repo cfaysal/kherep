@@ -6,6 +6,7 @@ import type { CodexDeps } from "./codex-process.mts";
 import type { NodePaths } from "./config.mts";
 import { taskCliCommand } from "./msg-cli.mts";
 import type { NodePolicy } from "./policy.mts";
+import { notReady, type Readiness } from "./runtime-readiness.mts";
 import { claudeCall, findClaude, LIST_TIMEOUT_MS, type Exec } from "./sessions.mts";
 import { admitStart, overLimit, refuse, trim } from "./task-admission.mts";
 import { withNodeOnPath } from "./task-env.mts";
@@ -47,6 +48,9 @@ export interface RunnerDeps {
   local?: "intercom";
   // The daemon log, for what a run could not apply (codex-mcp.mts).
   log?: (line: string) => void;
+  // Issue #197: whether each runtime can run a turn (runtime-readiness.mts).
+  // The daemon always sets it; without it every runtime counts as ready.
+  readiness?: Readiness;
 }
 
 // Rejects with the CLI's own stderr (or stdout), never with the command line,
@@ -95,7 +99,8 @@ export function mapIds(record: TaskRecord, row: Record<string, unknown> | undefi
 // before its id is known waits for it (issue #109).
 async function background(deps: RunnerDeps, launched: TaskRecord, args: string[]): Promise<TaskRecord> {
   const now = deps.now?.() ?? Date.now();
-  const record = writeTask(deps.paths, { ...launched, shortId: undefined, mappingPendingSince: new Date(now).toISOString() }, now);
+  const record = writeTask(deps.paths, { ...launched, shortId: undefined, mappingPendingSince: new Date(now).toISOString(),
+    awaitingProgressSince: new Date(now).toISOString() }, now);
   let output: string;
   try {
     output = await runClaude(deps, args, record.cwd);
@@ -124,6 +129,9 @@ export async function startTask(args: SessionStartArgs, deps: RunnerDeps): Promi
   const existing = readTask(deps.paths, args.taskId);
   if (existing) return { taskId: existing.taskId, state: existing.state }; // a resent command
   const { record, prompt } = admitStart(args, deps);
+  // Issue #197: a runtime that cannot run a turn starts nothing (no record, no start counted).
+  const blocked = await notReady(deps.readiness, args.runtime);
+  if (blocked) refuse(deps, args.taskId, blocked);
   if (args.runtime === "codex") return startCodex(deps, record, prompt);
   const saved = await background(deps, record, ["--bg", "--name", args.name, "--permission-mode", record.permissionMode, prompt]);
   return { taskId: saved.taskId, state: saved.state, ...(saved.sessionId ? { sessionId: saved.sessionId } : {}) };
@@ -140,6 +148,8 @@ export async function continueTask(args: SessionContinueArgs, deps: RunnerDeps):
   const now = deps.now?.() ?? Date.now();
   const limit = overLimit(deps, now, args.taskId);
   if (limit) throw new Error(limit);
+  const blocked = await notReady(deps.readiness, "claude");
+  if (blocked) throw new Error(blocked);
   const restarted: TaskRecord = { ...record, state: "started", reason: undefined,
     deadline: new Date(now + deps.policy.sessions.maxRuntimeMinutes * 60_000).toISOString() };
   const saved = await background(deps, restarted, ["--resume", record.sessionId, "--bg", "--permission-mode", record.permissionMode,

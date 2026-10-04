@@ -6,7 +6,7 @@ import test from "node:test";
 import { rememberMode, takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
 import { startIntercom } from "./closed-resume.mts";
-import { ACCEPT_ALL, audits, closedNode, deliver, endedIntercom, PEER, SESSION, type Node } from "./closed-fixture.mts";
+import { ACCEPT_ALL, audits, closedNode, deliver, endedIntercom, PEER, SESSION, turnProgress, type Node } from "./closed-fixture.mts";
 import { fakeCodexBin } from "./codex-fixture.mts";
 import { recordingSessions, writeDirectory } from "./exchange.mts";
 import { getMessage, getMessageProgress } from "./inbox.mts";
@@ -79,6 +79,9 @@ test("a new intercom session gets the messages framed with their reply commands,
   assert.deepEqual(getMessage(node.paths.inbox, second)?.delivery,
     { taskId: task.taskId, runtime: "claude", sessionId: task.sessionId });
   assert.equal(runs[0].options.cwd, repo(node));
+  // Issue #197: delivered only once the watch round sees the turn's progress.
+  for (const id of [first, second]) assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted", id);
+  await turnProgress(node);
   assert.equal(getMessage(node.paths.inbox, first)?.state, "delivered");
   assert.equal(getMessage(node.paths.inbox, second)?.state, "delivered");
   assert.deepEqual(node.reports(), [], "the Worker does not know the run");

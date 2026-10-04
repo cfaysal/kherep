@@ -9,6 +9,7 @@ import {
 } from "../protocol-task-control.mts";
 import {
   isCommandArgs, isTaskRequestResult, TASK_REQUEST_RESULT, type TaskReportBody, type TaskRequestBody, type TaskRequestResult,
+  type TaskRuntime,
 } from "../protocol-tasks.mts";
 import {
   isDirectoryBody, isMessageDeliverBody, isMessageId, isMessageReceiptBody, isMessageStatusBody, type DirectoryBody,
@@ -59,6 +60,8 @@ export interface ClientOptions {
   mcpIntentReceipt?: (body: McpIntentReceiptBody) => void;
   mcpDisabled?: () => void;
   readMcpInbox?: (sessionId: string, limit: number) => McpInboxItem[] | Promise<McpInboxItem[]>;
+  // Issue #197: the runtimes whose last readiness probe passed; a change re-registers.
+  readyRuntimes?: () => readonly TaskRuntime[];
   log?: (line: string) => void;
   now?: () => number;
 }
@@ -74,6 +77,8 @@ export class NodeClient {
   private registrationFrames: string[] | null = null;
   private credentialRotationPending = false;
   private credentialRequestPending: string | null = null;
+  // The ready runtimes the last register frame carried, as JSON.
+  private advertisedReady: string | undefined;
   private seq = 0;
   // Highest command seq processed. Survives reconnects within this process so
   // the auth message tells the server what not to resend.
@@ -245,7 +250,8 @@ export class NodeClient {
       this.credentialRotationPending = false;
       this.callback("remote MCP state", () => this.options.mcpDisabled?.());
     }
-    if (JSON.stringify(previous) !== JSON.stringify(capabilities)) {
+    const readyChanged = this.advertisedReady !== undefined && this.advertisedReady !== JSON.stringify(this.readyRuntimes());
+    if (JSON.stringify(previous) !== JSON.stringify(capabilities) || readyChanged) {
       this.registrationDirty = true;
       this.registrationFrames = null;
       this.credentialRotationPending ||= !wasMcpEnabled && mcpEnabled;
@@ -390,9 +396,15 @@ export class NodeClient {
     return JSON.stringify(makeEnvelope(type, body, sequenced ? ++this.seq : 0, this.processedSeq));
   }
 
+  private readyRuntimes(): readonly TaskRuntime[] {
+    return this.options.readyRuntimes?.() ?? [];
+  }
+
   private registrationFrame(): string {
+    const ready = this.readyRuntimes();
+    this.advertisedReady = JSON.stringify(ready);
     return this.frame("register", {
-      facts: this.options.facts(), runtimes: this.lastRuntimes, capabilities: advertisedCapabilities(this.policy),
+      facts: this.options.facts(), runtimes: this.lastRuntimes, capabilities: advertisedCapabilities(this.policy, ready),
     });
   }
 

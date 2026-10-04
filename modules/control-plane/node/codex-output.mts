@@ -6,7 +6,9 @@ import { readJson } from "./inbox.mts";
 // What a Codex task run left in its files (issue #63): the `--json` events,
 // how the process ended, the last agent message and the last stderr line.
 
-export interface CodexEvents { threadId?: string; completed: boolean; error?: string }
+// progressed: the model answered in this run's turn (an item.* event or
+// turn.completed); thread.started and turn.started come before it (issue #197).
+export interface CodexEvents { threadId?: string; completed: boolean; error?: string; progressed?: boolean }
 
 // Reads the events file; a line that is not JSON (a partial last line) is skipped.
 export function readEvents(files: CodexFiles): CodexEvents {
@@ -26,6 +28,7 @@ export function readEvents(files: CodexFiles): CodexEvents {
     }
     if (event.type === "thread.started" && typeof event.thread_id === "string" && !result.threadId) result.threadId = event.thread_id;
     if (event.type === "turn.completed") result.completed = true;
+    if (event.type === "turn.completed" || (typeof event.type === "string" && event.type.startsWith("item."))) result.progressed = true;
     const failure = failureOf(event);
     if (typeof failure === "string") result.error = failure;
   }

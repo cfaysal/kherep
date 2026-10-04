@@ -21,6 +21,24 @@ increments the minor version; every other release increments the patch version.
   and live wake listeners, and exits 1 when a check fails. The daemon now
   writes `daemon.json` (pid, start, last authenticated connection and lost
   connection time) for it (issue #215).
+- Control Plane: a runtime readiness probe (issue #197). `claude auth status`
+  reported `loggedIn: true` for an expired login, so the node checks each
+  enabled runtime with a real minimal call: `claude -p --safe-mode
+  --no-session-persistence --tools ""` with a one-line system prompt, and
+  `codex exec --ephemeral --ignore-user-config --sandbox read-only`. It probes
+  once at daemon start and afterwards only when a run needs a runtime whose
+  verdict aged out (ready 10 minutes, not ready 2 minutes, 45 second timeout).
+  A ready runtime is advertised as `runtime.claude.ready.v1` or
+  `runtime.codex.ready.v1`. A task start or continue for a runtime that is not
+  ready fails with `target runtime <runtime> not ready (sign-in required)`
+  (or `probe timed out`, `probe failed`) and starts nothing; a message that a
+  closed-session delivery or a Codex message resume would carry is `refused`
+  with that reason instead of `delivered`.
+- Control Plane: a task or intercom run without first turn progress 10
+  minutes after its start is stopped and reported `failed` with `no progress
+  after start` (issue #197). The messages a Claude intercom run carried are
+  refused with `target run made no progress after start`; those of a Codex run
+  get the `wake-failed` progress and are offered again within the offer limit.
 - Control Plane: `msg status` and `msg send --wait` show the sender states
   `running` and `stopped`, derived from the existing accepted progress codes
   without a new wire state, and an accepted message without progress for 5
@@ -238,6 +256,10 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- Control Plane: a message that a new Claude intercom session carries in its
+  task text is `delivered` once the watch round sees that session's turn
+  progress, no longer when `claude --bg` returns; until then it stays
+  `accepted` with `fallback-running` (issue #197).
 - **BREAKING** Control Plane: `msg send`, `msg send --new`, `msg inbox --from`
   and `msg sessions --from` no longer take `--from` as typed (issue #200).
   `--from` must name the session of `CLAUDE_CODE_SESSION_ID` or

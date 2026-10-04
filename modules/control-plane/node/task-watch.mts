@@ -3,7 +3,8 @@ import { MAX_RUNTIME_REASON, watchCodexTasks } from "./codex-runner.mts";
 import { retireCopies } from "./copy-retire.mts";
 import { resolveDelivery, updateDeliverySession } from "./delivery-identity.mts";
 import { readdress } from "./inbox.mts";
-import { agentRows, findRow, mapIds, stopTask, type RunnerDeps } from "./session-runner.mts";
+import { claudeProgressed, confirmCarried, failStalledClaude, progressOverdue, refuseCarried } from "./run-progress.mts";
+import { agentRows, findRow, mapIds, runClaude, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { isActive, listTasks, mappingPendingAt, queueReport, writeTask } from "./task-records.mts";
 
 // The watch round for started task sessions (issue #31, item 5), run with the
@@ -33,7 +34,7 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
     // A launch in flight (session-runner.mts background, closed-resume.mts): its run maps it.
     if (!record.shortId && mappingPendingAt(record, now)) continue;
     const row = rows ? findRow(rows, record) : undefined;
-    const mapped = mapIds(record, row);
+    let mapped = mapIds(record, row);
     if (now >= Date.parse(record.deadline)) {
       if (!mapped.shortId) {
         log(`kherep-node: task ${record.taskId} passed its max runtime, but its session id is not known`);
@@ -47,6 +48,19 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
       }
       continue;
     }
+    // Issue #197: the first progress of the run's turn confirms the messages it
+    // carried; none within NO_PROGRESS_MS fails it (run-progress.mts). A failed
+    // listing decides nothing; a state outside AGENT_STATES (idle) is no progress.
+    if (rows && mapped.awaitingProgressSince !== undefined && !record.running) {
+      if (claudeProgressed(mapped, row, now)) mapped = confirmCarried(deps, mapped);
+      else if (row && (row.state === "failed" || row.state === "stopped")) {
+        refuseCarried(deps, mapped);
+        mapped = { ...mapped, awaitingProgressSince: undefined, carried: undefined };
+      } else if (progressOverdue(mapped, now)) {
+        await failStalledClaude(deps, mapped, (shortId) => runClaude(deps, ["stop", shortId]), log, now);
+        continue;
+      }
+    }
     const agentState = row ? AGENT_STATES[String(row.state)] : undefined;
     if (record.running) {
       // Reported done by the session: released once its process has ended.
@@ -57,7 +71,8 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
     }
     const next = agentState ?? record.state;
     const reported = next !== record.state || mapped.sessionId !== record.sessionId;
-    if (!reported && mapped.shortId === record.shortId && mapped.mappingPendingSince === record.mappingPendingSince) continue;
+    if (!reported && mapped.shortId === record.shortId && mapped.mappingPendingSince === record.mappingPendingSince
+      && mapped.awaitingProgressSince === record.awaitingProgressSince) continue;
     // An intercom session resumed as a copy under a new id (issue #109) takes over its waiting messages.
     if (record.local === "intercom" && record.sessionId && mapped.sessionId && mapped.sessionId !== record.sessionId) {
       const moved = readdress(deps.paths.inbox, record.sessionId, mapped.sessionId);

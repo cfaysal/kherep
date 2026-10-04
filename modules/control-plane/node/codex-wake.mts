@@ -10,6 +10,7 @@ import { progressRecords } from "./delivery-progress.mts";
 import { exhaustedOfferReason, permanentFallbackFailure } from "./delivery-failure.mts";
 import { listInbox, markRefused, markRetry, MAX_REPLY_DEPTH, messageIds, type InboxRecord } from "./inbox.mts";
 import { wakeAllowed } from "./policy.mts";
+import { notReadyNow } from "./runtime-readiness.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit } from "./task-admission.mts";
 import { isActive, listTasks, taskGrants, type TaskRecord } from "./task-records.mts";
@@ -132,6 +133,14 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
     explain(waiting, "wake-failed");
     log(`kherep-node: not resuming task ${record.taskId} for messages: ${cwd.reason}`);
     return;
+  }
+  // Issue #197: a Codex that cannot run a turn gets no resume; the messages are
+  // refused with a fixed reason. A pending probe keeps them waiting.
+  const blocked = notReadyNow(deps.readiness, "codex");
+  if (blocked === "pending") return explain(waiting, "retry-pending");
+  if (blocked) {
+    for (const r of waiting) markRefused(paths.inbox, r.messageId, blocked);
+    return note(paths, now, sessionId, due, "runtime-not-ready");
   }
   const budget = takeTurn(paths, sessionId, now);
   if (budget === "spacing" || budget === "locked") return explain(waiting, "retry-pending");

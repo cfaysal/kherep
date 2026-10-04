@@ -8,7 +8,7 @@ import { retireCopies } from "./copy-retire.mts";
 import { deliveryContext, frameRecords, sessionInbox } from "./deliver-core.mts";
 import { attachDelivery, updateDeliverySession } from "./delivery-identity.mts";
 import { addLocalSession, readDirectory } from "./exchange.mts";
-import { getMessage, markClosedAttempt, markDelivered, markOffered, markRetry, readdress, setMessageProgress, type InboxRecord } from "./inbox.mts";
+import { getMessage, markClosedAttempt, markOffered, markRetry, readdress, setMessageProgress, type InboxRecord } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
 import { agentRows, BACKGROUNDED, mapIds, runClaude, startTask, type RunnerDeps } from "./session-runner.mts";
 import { CLAUDE_RUNTIME } from "./sessions.mts";
@@ -57,7 +57,7 @@ export async function resumeClaude(deps: RunnerDeps, task: TaskRecord, cwd: stri
   // The session held so far is stopped once a copy is adopted and it is idle (issue #111).
   const retire = [...(task.retire ?? []), ...(task.shortId ? [{ shortId: task.shortId, sessionId }] : [])];
   const pending: TaskRecord = { ...rerunRecord(deps, task, cwd, now), state: "started", mappingPendingSince: new Date(now).toISOString(),
-    ...(retire.length > 0 ? { retire } : {}) };
+    awaitingProgressSince: new Date(now).toISOString(), ...(retire.length > 0 ? { retire } : {}) };
   writeTask(deps.paths, { ...pending, shortId: undefined }, now);
   const failed = (reason: string): string => {
     writeTask(deps.paths, task, now);
@@ -135,8 +135,9 @@ function senderLabel(deps: RunnerDeps, from: InboxRecord["from"]): string | unde
 
 // A new intercom session with the messages of one sender as its task text,
 // framed as the delivery hook frames them (each with its --reply-to command),
-// as far as they fit; the messages it carries are delivered (for Codex once
-// its run completes the turn, see handOver).
+// as far as they fit; the messages it carries are delivered once its turn
+// shows progress (Claude: the watch round, run-progress.mts; Codex: once its
+// run completes the turn, see handOver).
 export async function startIntercom(deps: RunnerDeps, target: ClosedTarget, records: InboxRecord[],
   mode: PermissionMode, directive = fallbackDirective(target.sessionId), taskId: string = crypto.randomUUID()): Promise<string | null> {
   const from = records[0].from;
@@ -162,11 +163,13 @@ export async function startIntercom(deps: RunnerDeps, target: ClosedTarget, reco
   if (!["started", "running"].includes(result.state) || !["started", "running"].includes(started.state)) {
     return started.reason ?? "the local delivery task did not start";
   }
-  const linked = attachDelivery(deps.paths, started, carried.map((record) => record.messageId));
-  if (linked !== started) writeTask(deps.paths, linked, deps.now?.());
+  const ids = carried.map((record) => record.messageId);
+  const linked = attachDelivery(deps.paths, started, ids);
+  // Claude: delivered once the watch round sees the turn's progress (issue #197, run-progress.mts).
+  const tracked = target.runtime === "codex" ? linked : { ...linked, carried: ids };
+  if (tracked !== started) writeTask(deps.paths, tracked, deps.now?.());
   for (const record of carried) setMessageProgress(deps.paths.inbox, record.messageId, "fallback", "fallback-running", deps.now?.());
   if (target.runtime === "codex") handOver(deps, taskId, args.name, carried);
-  else for (const record of carried) markDelivered(deps.paths.inbox, record.messageId);
   return null;
 }
 
