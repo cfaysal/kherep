@@ -31,7 +31,7 @@ new native caller --> node sessions.snapshot --> Registry --> subsequent native 
 | `Registry` | `worker/src/registry.mts` | SQLite tables `nodes`, `runtimes`, `sessions`, `enrollments`, `audit`; one-time codes; key binding; revocation |
 | Message queue | `worker/src/message-store.mts`, `worker/src/message-routing.mts` | The Registry's `messages` table, state changes and expiry; pushing the resulting frames to connected nodes |
 | Node | `node/cli.mts` | `kherep-node node onboard|status|unenroll`, `kherep-node daemon`, `kherep-node doctor` and `kherep-node msg ...` |
-| Doctor | `node/doctor.mts`, `node/doctor-local.mts`, `node/doctor-host.mts`, `node/daemon-state.mts` | `kherep-node doctor`: whether this host can take part, see [Doctor](#doctor) |
+| Doctor | `node/doctor.mts`, `node/doctor-local.mts`, `node/doctor-host.mts`, `node/doctor-hooks.mts`, `node/daemon-state.mts` | `kherep-node doctor`: whether this host can take part, see [Doctor](#doctor) |
 | Node sessions | `node/sessions.mts` | Claude Code session discovery for `session.list` and `sessions.snapshot` |
 | Node inbox | `node/inbox.mts`, `node/policy.mts` | Messaging policy, the inbox of accepted messages and its retention |
 | Directory | `worker/src/directory.mts` | The `directory` frame: non-revoked nodes and their sessions |
@@ -537,7 +537,7 @@ The config directory is `KHEREP_CONFIG_DIR` when set, otherwise `%APPDATA%\khere
 | --- | --- |
 | `node.json` | Non-secret config: control URL, `nodeId`, name, public key, key and policy paths |
 | `node-ed25519.pem` | The private key, mode `0600` |
-| `daemon.json` | The daemon's `pid`, `startedAt` and, after its last authenticated connection, `connectedAt`. Written by the daemon for [Doctor](#doctor) |
+| `daemon.json` | The daemon's `pid`, `startedAt`, the time of its last authenticated connection `connectedAt` and, while that connection is lost, `disconnectedAt`. Written by the daemon for [Doctor](#doctor) |
 | `policy.json` | Local command allowlist and messaging policy, see below |
 | `inbox/` | Accepted messages, one `<messageId>.json` per message; daemon progress sidecars under `progress/` and persistence receipts under `receipts/`; directory mode `0700`, files `0600` |
 | `outbox/` | Messages written by `msg send`, one `<messageId>.json` each, until the daemon has an answer from the Worker. Created by `node onboard` and at daemon start, because a sandboxed session may write into it but not create it |
@@ -559,11 +559,11 @@ The config directory is `KHEREP_CONFIG_DIR` when set, otherwise `%APPDATA%\khere
 | Check | Passes when | Reports |
 | --- | --- | --- |
 | `enrollment` | `node.json` is valid and the private key is readable and matches the enrolled public key | `nodeId`, `keyReadable` |
-| `daemon` | `daemon.json` names a running process that has authenticated since it started | `pid`, `alive`, `startedAt`, `connectedAt` |
+| `daemon` | `daemon.json` names a running process whose last connection authenticated and has not been lost | `pid`, `alive`, `startedAt`, `connectedAt`, `disconnectedAt` |
 | `worker` | the control URL answers `GET /health` with status 200 and `ok: true` | `status`, `version`, `commit`, `remoteMcp` (`null` from a Worker that predates them) |
 | `policy` | `policy.json` parses (a missing file is the default policy) and a present `wake` section was accepted | `source`, counts of commands and messaging rules, `wake` (`enabled`, `sessions`, `codexApp`, or `rejected`), `sessions`, `remoteMcp` |
-| `runtimes` | `claude` or `codex` is installed, and every runtime the sessions policy names is installed and reports a version | per runtime `installed`, `version` (first line of `--version`), `configured`, `ready` |
-| `hooks` | at least one delivery or wake hook is installed, and every one names this checkout | `checkout`, per runtime (Claude `settings.json`, Codex `config.toml`) the hooks of this checkout and the paths of `foreign` ones |
+| `runtimes` | `claude` or `codex` is installed, and every runtime the sessions policy names is installed and reports a version | per runtime `installed`, `version` (first line of `--version`, run as the node launches the runtime: on Windows the native `claude.exe` beside an npm shim, else the shim through `cmd.exe`, and codex's npm launcher), `configured`, `ready` |
+| `hooks` | at least one delivery or wake hook is installed, and every one names this checkout | `checkout`, per runtime (the hook `command` fields of Claude `settings.json`, the `command` and `commandWindows` keys of Codex `[hooks.*]` tables) the hooks of this checkout and the script paths of `foreign` ones, without the rest of the command |
 | `listeners` | always; the listener directory is unreadable otherwise | `live` and `stale` wake listener locks |
 
 `ready` is `"not available"`: this node has no runtime readiness probe yet. The daemon check needs a daemon of this version, since older daemons do not write `daemon.json`. No check prints key material, tokens, response bodies or message text; the listener check gives counts, not session ids.

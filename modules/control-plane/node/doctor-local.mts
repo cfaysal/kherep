@@ -32,7 +32,7 @@ export function checkEnrollment(paths: NodePaths): { check: Check; config: NodeC
     ...(matches ? {} : { detail: "private key does not match the enrolled public key" }) }, config };
 }
 
-// ok: the recorded process runs and has authenticated at least once.
+// ok: the recorded process runs and its last connection is authenticated.
 export function checkDaemon(paths: NodePaths, pidAlive: (pid: unknown) => boolean): Check {
   let state;
   try {
@@ -43,11 +43,13 @@ export function checkDaemon(paths: NodePaths, pidAlive: (pid: unknown) => boolea
   if (!state) return { ok: false, alive: false, detail: "no daemon state; the daemon has not run since this version" };
   const alive = pidAlive(state.pid);
   const connectedAt = typeof state.connectedAt === "string" ? state.connectedAt : null;
+  const disconnectedAt = typeof state.disconnectedAt === "string" ? state.disconnectedAt : null;
   let detail: string | undefined;
   if (!alive) detail = "the recorded daemon process is not running";
   else if (!connectedAt) detail = "the daemon has not authenticated since it started";
-  return { ok: alive && connectedAt !== null, pid: state.pid, alive, startedAt: state.startedAt, connectedAt,
-    ...(detail ? { detail } : {}) };
+  else if (disconnectedAt) detail = "the daemon lost its connection and has not authenticated again";
+  return { ok: alive && connectedAt !== null && disconnectedAt === null, pid: state.pid, alive, startedAt: state.startedAt,
+    connectedAt, disconnectedAt, ...(detail ? { detail } : {}) };
 }
 
 // A wake section the parser rejected disables waking (fail closed); doctor

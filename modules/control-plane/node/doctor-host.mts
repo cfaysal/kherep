@@ -1,14 +1,13 @@
 import { execFile } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
 import { promisify } from "node:util";
 
-import { codexCommand } from "./codex-binary.mts";
+import { codexCommand, findCodex } from "./codex-binary.mts";
 import type { Check } from "./doctor-local.mts";
+import { claudeCall, findClaude, type Invocation } from "./sessions.mts";
 
 // The checks of `kherep-node doctor` that look beyond the config directory
-// (issue #215): the Worker's /health, the runtimes on this host and the hook
-// commands the installers wrote. All reads; nothing is changed.
+// (issue #215): the Worker's /health and the runtimes on this host. Nothing
+// is changed.
 
 const pick = (value: unknown, type: "string" | "boolean"): unknown => (typeof value === type ? value : null);
 
@@ -30,20 +29,34 @@ export async function checkWorker(controlUrl: string, fetcher: typeof fetch, tim
 
 export type VersionOf = (name: string, file: string) => Promise<string | null>;
 
-const run = promisify(execFile);
+// Where the node itself starts each runtime: claude.exe beside an npm
+// claude.cmd shim (findClaude), codex as found on PATH.
+export const findRuntime = (name: string): string | null => (name === "claude" ? findClaude() : findCodex());
 
-// The first line of `<runtime> --version`. A Windows .cmd shim other than
-// codex's npm launcher is not run, since that would need cmd.exe.
-export const runtimeVersion: VersionOf = async (name, file) => {
-  let command: { file: string; args: string[] };
+const VERSION_TIMEOUT_MS = 10_000;
+
+// `<runtime> --version` as the node launches that runtime: a remaining claude
+// .cmd shim through cmd.exe with fixed arguments (claudeCall), codex's npm
+// shim through its launcher with this Node (codexCommand). Null: not runnable.
+export function versionInvocation(name: string, file: string, platform: NodeJS.Platform = process.platform,
+  exists?: (file: string) => boolean, comSpec?: string): Invocation | null {
   try {
-    command = name === "codex" ? codexCommand(file, ["--version"]) : { file, args: ["--version"] };
+    if (name === "claude") return claudeCall(file, ["--version"], VERSION_TIMEOUT_MS, platform, comSpec);
+    const command = codexCommand(file, ["--version"], platform, exists);
+    return { ...command, options: { timeout: VERSION_TIMEOUT_MS } };
   } catch {
     return null;
   }
-  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command.file)) return null;
+}
+
+const run = promisify(execFile);
+
+// The first line of the runtime's version output.
+export const runtimeVersion: VersionOf = async (name, file) => {
+  const call = versionInvocation(name, file);
+  if (!call) return null;
   try {
-    const { stdout } = await run(command.file, command.args, { timeout: 10_000, windowsHide: true });
+    const { stdout } = await run(call.file, call.args, { ...call.options, windowsHide: true, encoding: "utf8" });
     return stdout.trim().split(/\r?\n/)[0].slice(0, 120) || null;
   } catch {
     return null;
@@ -69,54 +82,4 @@ export async function checkRuntimes(configured: string[], find: (name: string) =
   if (installed === 0) detail = "neither claude nor codex is installed";
   else if (failed) detail = "a runtime the sessions policy names is missing or does not report a version";
   return { ok: installed > 0 && !failed, ...runtimes, ...(detail ? { detail } : {}) };
-}
-
-// Hook commands name the script by path and a quote ends it. Claude settings
-// are parsed, since JSON may also escape "/"; a TOML basic string escapes a
-// backslash as two.
-const HOOK_PATH = /[^"'\n]*?modules[\\/]+control-plane[\\/]+node[\\/]+(deliver|wake)-hook\.mts/g;
-
-function realOrResolved(file: string): string {
-  try { return fs.realpathSync.native(file); } catch { return path.resolve(file); }
-}
-
-function strings(value: unknown): string[] {
-  if (typeof value === "string") return [value];
-  if (typeof value !== "object" || value === null) return [];
-  return Object.values(value).flatMap(strings);
-}
-
-type HookScan = { present: boolean; deliver: number; wake: number; foreign: string[] };
-
-function scanHooks(file: string, repoRoot: string): HookScan | null {
-  let texts: string[];
-  try {
-    const text = fs.readFileSync(file, "utf8");
-    texts = file.endsWith(".json") ? strings(JSON.parse(text)) : [text.replace(/\\\\/g, "\\")];
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { present: false, deliver: 0, wake: 0, foreign: [] };
-    return null;
-  }
-  const counts = { deliver: 0, wake: 0 };
-  const foreign = new Set<string>();
-  for (const match of texts.flatMap((text) => [...text.matchAll(HOOK_PATH)])) {
-    const kind = match[1] as "deliver" | "wake";
-    const expected = path.join(repoRoot, "modules", "control-plane", "node", `${kind}-hook.mts`);
-    if (realOrResolved(match[0]) === realOrResolved(expected)) counts[kind]++;
-    else foreign.add(match[0]);
-  }
-  return { present: true, ...counts, foreign: [...foreign] };
-}
-
-// ok: at least one hook is installed and every hook command names this checkout.
-export function checkHooks(files: { claude: string; codex: string }, repoRoot: string): Check {
-  const claude = scanHooks(files.claude, repoRoot);
-  const codex = scanHooks(files.codex, repoRoot);
-  if (!claude || !codex) return { ok: false, detail: "a runtime configuration file is unreadable" };
-  const foreign = claude.foreign.length + codex.foreign.length;
-  const total = claude.deliver + claude.wake + codex.deliver + codex.wake + foreign;
-  let detail: string | undefined;
-  if (foreign > 0) detail = "a hook command names another checkout";
-  else if (total === 0) detail = "no delivery or wake hook is installed";
-  return { ok: foreign === 0 && total > 0, checkout: repoRoot, claude, codex, ...(detail ? { detail } : {}) };
 }

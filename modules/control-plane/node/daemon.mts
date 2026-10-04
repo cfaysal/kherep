@@ -65,7 +65,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // Issue #72. For nodes enrolled before onboard created it: a sandboxed
   // `msg send` can write into the outbox but not create it.
   ensureDir(paths.outbox);
-  const state: DaemonState = { pid: process.pid, startedAt: new Date().toISOString() };
+  let state: DaemonState = { pid: process.pid, startedAt: new Date().toISOString() };
   recordDaemonState(paths, state, log);
   try {
     const purged = purgeInbox(paths.inbox);
@@ -214,7 +214,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         if (!wasAuthed && client.authenticated && sent) client.registrationSent();
         if (!wasAuthed && client.authenticated) {
           attempt = 0;
-          recordDaemonState(paths, { ...state, connectedAt: new Date().toISOString() }, log);
+          state = { pid: state.pid, startedAt: state.startedAt, connectedAt: new Date().toISOString() };
+          recordDaemonState(paths, state, log);
           log(`kherep-node: connected as ${config.nodeId}`);
         }
       }).catch((error: unknown) => log(`kherep-node: frame handling failed: ${String(error)}`));
@@ -224,6 +225,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
       periodicDiscovery?.abort();
       periodicDiscovery = null;
       client.connectionClosed();
+      state = { ...state, disconnectedAt: new Date().toISOString() };
+      recordDaemonState(paths, state, log);
       if (stopped) return finish();
       // Revoked keys and a connection superseded by the same node identity
       // cannot succeed by reconnecting this daemon; stop instead of hammering.

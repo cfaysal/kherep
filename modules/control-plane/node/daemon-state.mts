@@ -5,8 +5,9 @@ import { readJson, writeJsonAtomic } from "./inbox.mts";
 
 // Liveness evidence for `kherep-node doctor` (issue #215): daemon.json beside
 // node.json, written when the daemon starts and again after each
-// authenticated connection. It holds a process id and timestamps only.
-export interface DaemonState { pid: number; startedAt: string; connectedAt?: string }
+// authenticated connection, and with disconnectedAt when a connection closes
+// (cleared by the next authentication). It holds a process id and timestamps only.
+export interface DaemonState { pid: number; startedAt: string; connectedAt?: string; disconnectedAt?: string }
 
 export const daemonStateFile = (paths: NodePaths): string => path.join(paths.dir, "daemon.json");
 

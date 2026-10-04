@@ -168,9 +168,11 @@ Access value is returned.
 
 `kherep-node doctor` is read-only and local to the host. It reads the node
 config directory, the daemon's `daemon.json` (pid and timestamps, written at
-daemon start and after each authenticated connection), the wake listener locks,
-Claude `settings.json` and Codex `config.toml`, runs `claude --version` and
-`codex --version` without a shell, and sends one unauthenticated
+daemon start, after each authenticated connection and when a connection
+closes), the wake listener locks and the hook command fields of Claude
+`settings.json` and Codex `config.toml`. It runs `claude --version` and
+`codex --version` the way the node launches them (`findClaude`/`claudeCall`,
+`codexCommand`), and sends one unauthenticated
 `GET /health` to the enrolled control URL. It copies only the known `/health`
 fields, never the body. Each check reports a failed read as a failure with a
 fixed reason, distinct from an absent file. Runtime readiness is reported as
