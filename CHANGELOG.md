@@ -348,6 +348,14 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: on Windows a credential write or ACL check whose
+  `powershell.exe` run hits its 5 s limit runs once more instead of failing
+  with `remote_mcp_credential_unreadable` (issue #219). On loaded
+  `windows-latest` runners the first start in a test exceeded the limit in
+  three runs on 2026-10-04, while the write, its check and one bridge check
+  took 0.9 to 3.3 s together in 14 passing runs. The writer removes the
+  timed-out attempt's temporary file first; any other failure and a second
+  timeout still fail closed.
 - Control Plane: an outbox message the Worker did not answer is sent again on
   the live connection after 30 seconds instead of waiting for a reconnect, and
   inbox retention refuses a waiting message instead of deleting it unreported

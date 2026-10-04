@@ -59,7 +59,10 @@ that user, SYSTEM and local administrators. On Windows the daemon creates a rand
 with a protected current-user `FullControl` DACL in the `FileStream` constructor, before it writes
 the credential bytes. The fixed Windows PowerShell 5.1 helper receives those bounded UTF-8 bytes
 only on stdin, runs by absolute `SystemRoot` path with an allowlisted environment and the built-in
-module path, and never receives the bearer in arguments or environment. Node atomically publishes
+module path, and never receives the bearer in arguments or environment. Each helper run, the write
+and every ACL check, is limited to 5 s. Only a run that hit this limit runs once more, after the
+writer removes the temporary file of the timed-out attempt; any other failure, and a second timeout,
+fail closed (issue #219). Node atomically publishes
 the file, then the strict reader verifies its ACL and content digest at the published path. The
 Windows reader calls .NET [`File.GetAccessControl`](https://learn.microsoft.com/en-us/dotnet/api/system.io.file.getaccesscontrol?view=netframework-4.8.1)
 for access and owner data, requests the owner through
