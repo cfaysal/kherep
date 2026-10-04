@@ -134,16 +134,18 @@ export function mayContinue(paths: NodePaths, sessionId: unknown, permissionMode
 
 // The listener lock: newest wins; a listener recognises its own by token.
 // event: the hook that armed it, with the SessionStart input's source;
-// idleAt: set by StopFailure for a listener armed while a turn could run.
+// idleAt: set by StopFailure for a listener armed while a turn could run;
+// order: when it armed relative to the session's other listeners (listener-order.mts).
 export interface ListenerLock {
   token: string; pid: number; startedAt: number; event: "Stop" | "UserPromptSubmit" | "SessionStart"; source?: string; idleAt?: number;
+  order?: number;
 }
 
 // What the live listener wakes for (issue #213): every message for its session
 // (listed) or only those of its task grant (taskId). Kept beside the lock and
 // valid only while the lock carries the same token; delivery-progress.mts reads it.
-// startedAt: its lock's, so a listener can tell an older one's scope (issue #225).
-export interface ListenerScope { token: string; listed: boolean; taskId?: string; startedAt?: number }
+// order: its lock's, so a listener can tell an older one's scope (issue #225).
+export interface ListenerScope { token: string; listed: boolean; taskId?: string; order?: number }
 export const listenerScope = (paths: NodePaths, sessionId: string): string => path.join(listenerDir(paths), `${sessionId}.scope.json`);
 export function recordScope(paths: NodePaths, sessionId: string, scope: ListenerScope): void {
   const file = listenerScope(paths, sessionId);

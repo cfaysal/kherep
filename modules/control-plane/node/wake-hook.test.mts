@@ -160,7 +160,7 @@ test("a listener on its task grant alone does not wake for another message until
   } });
   assert.deepEqual(result, { code: 2, text: wakeText(1) });
   // What the daemon reads to report progress (delivery-progress.mts): the grant only, not the allowlist.
-  assert.deepEqual(scope, { token: "listener-1", listed: false, taskId: TASK, startedAt: T0 });
+  assert.deepEqual(scope, { token: "listener-1", listed: false, taskId: TASK, order: T0 });
   assert.deepEqual(auditLines(paths).map((l) => [l.ts, l.action, l.messageIds]),
     [[new Date(allowAt + WAKE_SETTLE_MS).toISOString(), "wake", [message]]]);
 });

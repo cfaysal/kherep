@@ -19,19 +19,22 @@ const alive = (pid: unknown): boolean => pid === LIVE;
 const read = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
 const tombs = (paths: NodePaths) => fs.readdirSync(listenerDir(paths)).filter((name) => name.endsWith(".tomb"));
 const at = (token: string, startedAt: number, pid = LIVE) => ({ token, pid, startedAt, event: "Stop" });
+// afterTake also runs after the restore's own renames; most cases write into the gap once.
+const once = (paths: NodePaths, write: () => void) => {
+  let done = false;
+  return (file: string): void => { if (file === lockFile(paths) && !done) { done = true; write(); } };
+};
 
 function arm(paths: NodePaths, lock: ReturnType<typeof at>): void {
   fs.mkdirSync(listenerDir(paths), { recursive: true });
-  writeJsonAtomic(listenerScope(paths, SELF), { token: lock.token, listed: true, startedAt: lock.startedAt });
+  writeJsonAtomic(listenerScope(paths, SELF), { token: lock.token, listed: true, order: lock.startedAt });
   writeJsonAtomic(lockFile(paths), lock);
 }
 
 test("a newer lock written while the sweep holds the dead one aside survives; the tomb goes", (t) => {
   const { paths } = setup(t);
   arm(paths, at("t-dead", T0, 1001));
-  const result = sweepListeners(paths, { pidAlive: alive, now: T0, afterTake: (file) => {
-    if (file === lockFile(paths)) arm(paths, at("t-new", T0 + 1000));
-  } });
+  const result = sweepListeners(paths, { pidAlive: alive, now: T0, afterTake: once(paths, () => arm(paths, at("t-new", T0 + 1000))) });
   assert.deepEqual(result, { removed: 1, kept: 0, failed: [] });
   assert.equal(read(lockFile(paths)).token, "t-new");
   assert.equal(read(listenerScope(paths, SELF)).token, "t-new");
@@ -45,7 +48,7 @@ test("an older listener writing into the gap never replaces the newer lock the s
   arm(paths, at("t-dead", T0, 1001));
   const result = sweepListeners(paths, { pidAlive: alive, now: T0 + 5000,
     beforeTake: (file) => { if (file === lockFile(paths)) arm(paths, at("t-p", T0 + 2000)); },
-    afterTake: (file) => { if (file === lockFile(paths)) arm(paths, at("t-n", T0 + 1000)); } });
+    afterTake: once(paths, () => arm(paths, at("t-n", T0 + 1000))) });
   assert.deepEqual(result, { removed: 0, kept: 1, failed: [] });
   assert.equal(read(lockFile(paths)).token, "t-p");
   assert.deepEqual(tombs(paths), []);
@@ -63,9 +66,7 @@ test("two sweeps at once: the other's tomb recovery cannot put an older lock ove
       fs.writeFileSync(old, JSON.stringify(at("t-old", T0 - 5000)));
     },
     // The second sweep runs while the first holds P's lock aside, and its recovery links the old tomb into the gap.
-    afterTake: (file) => {
-      if (file === lockFile(paths)) assert.deepEqual(sweepListeners(paths, { pidAlive: alive, now }), { removed: 0, kept: 1, failed: [] });
-    } });
+    afterTake: once(paths, () => assert.deepEqual(sweepListeners(paths, { pidAlive: alive, now }), { removed: 0, kept: 1, failed: [] })) });
   assert.deepEqual(result, { removed: 0, kept: 1, failed: [] });
   assert.equal(read(lockFile(paths)).token, "t-p");
   assert.deepEqual(tombs(paths), []);
@@ -98,6 +99,8 @@ test("a listener never stands down for an older one that wrote into a gap", asyn
   const older = (clock: number): void => {
     polls++;
     if (polls === 1) arm(paths, at("t-older", T0 - 1000));
+    // Lock and scope are taken back together, so the daemon's progress sees one listener.
+    if (polls === 2) assert.equal(read(listenerScope(paths, SELF)).token, "mine");
     if (polls === 2) arrive(paths, 1, clock);
   };
   assert.equal((await listen(paths, { token: "mine", tick: older })).code, 2);
@@ -110,10 +113,30 @@ test("a listener never stands down for an older one that wrote into a gap", asyn
     polls++;
     if (polls === 1) {
       fs.rmSync(lockFile(gap));
-      writeJsonAtomic(listenerScope(gap, SELF), { token: "t-older", listed: true, startedAt: T0 - 1000 });
+      writeJsonAtomic(listenerScope(gap, SELF), { token: "t-older", listed: true, order: T0 - 1000 });
     }
     if (polls === 2) arrive(gap, 1, clock);
   };
   assert.equal((await listen(gap, { token: "mine", tick: scoped })).code, 2);
   assert.deepEqual(auditLines(gap).map((l) => l.action), ["wake"]);
+});
+
+test("a gap refilled at every attempt leaves the newer lock a tombstone, and recovery puts it back", (t) => {
+  const { paths } = setup(t);
+  arm(paths, at("t-dead", T0, 1001));
+  let older = 0;
+  const result = sweepListeners(paths, { pidAlive: alive, now: T0 + 5000,
+    beforeTake: (file) => { if (file === lockFile(paths)) arm(paths, at("t-p", T0 + 2000)); },
+    // Every rename that empties the path is followed by another older listener's lock.
+    afterTake: (file) => { if (file === lockFile(paths)) writeJsonAtomic(file, at(`t-older-${++older}`, T0 + 1000)); } });
+  assert.deepEqual(result, { removed: 0, kept: 1, failed: [] });
+  assert.ok(older > 2, "the gap was refilled after each attempt");
+  assert.match(read(lockFile(paths)).token, /^t-older-/);
+  const left = tombs(paths);
+  assert.equal(left.length, 1);
+  assert.equal(read(path.join(listenerDir(paths), left[0])).token, "t-p");
+
+  sweepListeners(paths, { pidAlive: alive, now: T0 + 5000 + TOMB_RECOVER_AFTER_MS + 1 });
+  assert.equal(read(lockFile(paths)).token, "t-p");
+  assert.deepEqual(tombs(paths), []);
 });
