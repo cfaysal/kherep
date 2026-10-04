@@ -7,7 +7,9 @@ export interface ProcessRelation { pid: number; ppid: number }
 
 // The descendants that belong to root at the stop boundary. Start identities
 // make a later reused pid a different process, never another kill target.
-export function processTree(deps: CodexDeps, root: number): ProcessIdentity[] {
+// known (issue #233): start identities read earlier for descendant pids, kept
+// instead of read again; the root's start is always read.
+export function processTree(deps: CodexDeps, root: number, known: readonly ProcessIdentity[] = []): ProcessIdentity[] {
   if (deps.processTree) return deps.processTree(root);
   const platform = deps.platform ?? process.platform;
   const rootStart = startTimeOf(deps, root);
@@ -23,9 +25,11 @@ export function processTree(deps: CodexDeps, root: number): ProcessIdentity[] {
       changed = true;
     }
   }
+  const starts = new Map(known.map((entry) => [entry.pid, entry.start]));
+  starts.delete(root);
   const identities: ProcessIdentity[] = [];
   for (const pid of descendants) {
-    const start = startTimeOf(deps, pid);
+    const start = starts.get(pid) ?? startTimeOf(deps, pid);
     if (start !== null) identities.push({ pid, start });
   }
   return identities;
@@ -148,8 +152,9 @@ function sender(deps: CodexDeps): Send {
 // is still the captured process, and then, by pid, each captured descendant
 // that still has its captured start time; a reused pid is never signalled.
 // Returns why something got no signal or a send failed; the wait that follows
-// decides whether the tree stopped.
-function signalPhase(deps: CodexDeps, root: ProcessIdentity, identities: ProcessIdentity[], signal: NodeJS.Signals): string[] {
+// decides whether the tree stopped. Without a root (issue #233) only the
+// verified identities are signalled, each by its pid.
+function signalPhase(deps: CodexDeps, root: ProcessIdentity | null, identities: ProcessIdentity[], signal: NodeJS.Signals): string[] {
   const send = sender(deps);
   const notes: string[] = [];
   const attempt = (pid: number, scope: SignalScope): void => {
@@ -160,13 +165,25 @@ function signalPhase(deps: CodexDeps, root: ProcessIdentity, identities: Process
         + String((error as Error).message ?? error));
     }
   };
-  const current = startTimeOf(deps, root.pid);
-  if (current === root.start) attempt(root.pid, "group");
-  else notes.push("root process " + (current === null ? "ended" : "was reused") + " before " + signal);
+  if (root) {
+    const current = startTimeOf(deps, root.pid);
+    if (current === root.start) attempt(root.pid, "group");
+    else notes.push("root process " + (current === null ? "ended" : "was reused") + " before " + signal);
+  }
   for (const { pid, start } of identities) {
-    if (pid !== root.pid && startTimeOf(deps, pid) === start) attempt(pid, "process");
+    if (pid !== root?.pid && startTimeOf(deps, pid) === start) attempt(pid, "process");
   }
   return notes;
+}
+
+// SIGTERM, up to graceMs for every identity to end, then SIGKILL and the same
+// wait; rejects when one still has its start identity after SIGKILL.
+export async function stopIdentities(deps: CodexDeps, root: ProcessIdentity | null, identities: ProcessIdentity[]): Promise<void> {
+  const grace = deps.graceMs ?? 5_000;
+  signalPhase(deps, root, identities, "SIGTERM");
+  if (await waitStopped(deps, identities, grace)) return;
+  const notes = signalPhase(deps, root, identities, "SIGKILL");
+  if (!await waitStopped(deps, identities, grace)) throw new Error(["process tree did not stop after SIGKILL", ...notes].join("; "));
 }
 
 // Capture the exact process tree and each pid's start identity, signal its OS
@@ -206,9 +223,5 @@ async function terminateTree(deps: CodexDeps, pid: number, pidStart: string | un
     if (allStopped(deps, identities)) return;
     throw new Error("root process identity changed during capture while captured processes still run");
   }
-  const grace = deps.graceMs ?? 5_000;
-  signalPhase(deps, root, identities, "SIGTERM");
-  if (await waitStopped(deps, identities, grace)) return;
-  const notes = signalPhase(deps, root, identities, "SIGKILL");
-  if (!await waitStopped(deps, identities, grace)) throw new Error(["process tree did not stop after SIGKILL", ...notes].join("; "));
+  await stopIdentities(deps, root, identities);
 }

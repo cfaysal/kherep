@@ -357,6 +357,18 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: a Codex run whose `codex exec` process dies abruptly no
+  longer leaves its shell commands running (issue #233). On macOS a
+  `sleep 901` outlived a SIGKILLed Codex intercom run in its own process
+  group, re-parented to init; the run settled `failed` and `msg stop` found no
+  running process. The watch round now records a live run's descendant
+  processes with their start identities in the task record (at most 32, a
+  start read only for a pid not recorded yet), and when the run settles
+  `failed` after its root ended, or a stop finds the root already ended, it
+  ends each recorded descendant that still has its recorded start identity by
+  its own pid, SIGTERM and then SIGKILL, off the frame lane, and logs the pids.
+  A reused pid is never signalled; a run that settles `done` keeps what it
+  started.
 - Control Plane: a task stop no longer leaves a Codex shell command running
   when it is outside the root's process group (issue #231). On macOS a
   `sleep 900` started by Codex missed the SIGTERM to the root's group, Codex

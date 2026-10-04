@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   isTaskId, type PermissionMode, type TaskReportBody, type TaskRequestBody, type TaskRuntime, type TaskState,
 } from "../protocol-tasks.mts";
+import type { ProcessIdentity } from "./codex-stop.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { localSessionName } from "./exchange.mts";
 import { messageIds, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
@@ -28,6 +29,10 @@ export interface TaskRecord {
   // instead of the name; the name stays task-<8>.
   label?: string;
   pid?: number; pidStart?: string;
+  // Codex, issue #233: the run's descendant processes (pid and start time),
+  // refreshed by the watch round while the run lives, so that a run whose
+  // root ended abruptly can still end them (codex-reap.mts).
+  descendants?: ProcessIdentity[];
   // A confirmed operator request blocks autonomous message resumes until an explicit continue.
   operatorStoppedAt?: string;
   // Exact run whose remote stop may require recovery; blocks automatic retry.
