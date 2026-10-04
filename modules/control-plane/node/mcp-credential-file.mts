@@ -115,17 +115,31 @@ function powerShell(extra: NodeJS.ProcessEnv, source: NodeJS.ProcessEnv): { comm
     env: { ...env, ...extra } };
 }
 
+// Issue #219: on loaded CI runners the first powershell.exe start of a test
+// sometimes exceeded 5 s, while the write, its ACL check and the bridge's ACL
+// check usually take 1 to 3 s together. A timeout alone runs once more (spawnSync returns only after the
+// killed child exited); every other failure still fails closed at once.
+function timedOut(result: PowerShellResult | null): boolean {
+  return (result?.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
+}
+
 function runPowerShell(script: string, extra: NodeJS.ProcessEnv, deps: CredentialPowerShellDeps,
-  input?: Uint8Array): PowerShellResult | null {
+  input?: Uint8Array, beforeRetry?: () => void): PowerShellResult | null {
   const configured = powerShell(extra, deps.env ?? process.env);
   if (!configured) return null;
   const run = deps.spawn ?? ((command, args, options) => spawnSync(command, args, options));
-  try {
-    return run(configured.command, ["-NoProfile", "-NonInteractive", "-Command", script], {
-      encoding: "utf8", windowsHide: true, timeout: 5_000, maxBuffer: 64 * 1024,
-      env: configured.env, ...(input ? { input } : {}),
-    });
-  } catch { return null; }
+  const once = (): PowerShellResult | null => {
+    try {
+      return run(configured.command, ["-NoProfile", "-NonInteractive", "-Command", script], {
+        encoding: "utf8", windowsHide: true, timeout: 5_000, maxBuffer: 64 * 1024,
+        env: configured.env, ...(input ? { input } : {}),
+      });
+    } catch { return null; }
+  };
+  const first = once();
+  if (!timedOut(first)) return first;
+  beforeRetry?.();
+  return once();
 }
 
 function privateWindowsAcl(file: string, deps: CredentialPowerShellDeps): "private" | "unsafe" | "unreadable" {
@@ -202,7 +216,9 @@ export function writePrivateWindowsMcpCredential(file: string, body: Credential,
   const temp = path.join(path.dirname(file), `.${path.basename(file)}.${crypto.randomUUID()}.tmp`);
   let published = false;
   try {
-    const result = runPowerShell(WRITE_SCRIPT, { KHEREP_MCP_CREDENTIAL_TEMP: temp }, deps, bytes);
+    // The helper creates the temporary file CreateNew, so a timed-out attempt's file goes first.
+    const result = runPowerShell(WRITE_SCRIPT, { KHEREP_MCP_CREDENTIAL_TEMP: temp }, deps, bytes,
+      () => removeQuietly(temp));
     if (!result || result.status !== 0 || result.error || result.signal) throw new Error(UNREADABLE);
     const created = fs.lstatSync(temp);
     if (!created.isFile() || created.isSymbolicLink() || created.size !== bytes.length) throw new Error(UNSAFE);

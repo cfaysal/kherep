@@ -159,6 +159,52 @@ test("Windows ACL reader uses bounded native APIs without account translation or
   assert.doesNotMatch(script, /NTAccount|\.Translate\(/);
 });
 
+// spawnSync's result when its timeout ended the child.
+const timedOutResult = () => ({ status: null, signal: "SIGTERM" as const, stdout: "", stderr: "",
+  error: Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" }) });
+
+test("a timed-out PowerShell start runs once more, after the writer clears its partial temporary file (issue #219)", (t) => {
+  const { file } = temporary(t);
+  const fake = fakePowerShell();
+  let calls = 0;
+  const spawn = (command: string, args: string[], options: PowerShellCall["options"]) => {
+    calls += 1;
+    if (calls > 1) return fake.spawn(command, args, options);
+    fs.writeFileSync(options.env?.KHEREP_MCP_CREDENTIAL_TEMP ?? "", "partial", { flag: "wx" });
+    return timedOutResult();
+  };
+  writePrivateWindowsMcpCredential(file, BODY, { env: windowsEnv(), spawn });
+  assert.equal(calls, 3); // write timed out, write again, ACL check
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), BODY);
+  assert.deepEqual(fs.readdirSync(path.dirname(file)), ["credential.json"]);
+
+  let reads = 0;
+  const slowAcl = (command: string, args: string[], options: PowerShellCall["options"]) =>
+    (reads += 1) === 1 ? timedOutResult() : fake.spawn(command, args, options);
+  assert.equal(readPrivateMcpCredential(file, "win32", { env: windowsEnv(), spawn: slowAcl }).ok, true);
+  assert.equal(reads, 2);
+});
+
+test("only a timeout runs again: a failed or twice timed-out PowerShell still fails closed (issue #219)", (t) => {
+  const { file } = temporary(t);
+  const failed = { status: 1, signal: null, stdout: "", stderr: TOKEN, error: undefined };
+  for (const [result, expected] of [[failed, 1], [timedOutResult(), 2]] as const) {
+    let calls = 0;
+    assert.throws(() => writePrivateWindowsMcpCredential(file, BODY, {
+      env: windowsEnv(), spawn: () => { calls += 1; return result; },
+    }), (error) => (error as Error).message === "remote_mcp_credential_unreadable");
+    assert.equal(calls, expected);
+  }
+  assert.deepEqual(fs.readdirSync(path.dirname(file)), []);
+
+  fs.writeFileSync(file, `${JSON.stringify(BODY)}\n`);
+  let reads = 0;
+  const killed = () => { reads += 1; return { status: null, signal: "SIGKILL" as const, stdout: "", stderr: "" }; };
+  assert.deepEqual(readPrivateMcpCredential(file, "win32", { env: windowsEnv(), spawn: killed }),
+    { ok: false, code: "remote_mcp_credential_unreadable" });
+  assert.equal(reads, 1);
+});
+
 test("Windows writer creates a private credential under a broad parent and rejects later broadening",
   { skip: process.platform !== "win32" }, (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-mcp-windows-writer-"));
