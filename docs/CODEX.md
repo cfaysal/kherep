@@ -118,6 +118,8 @@ Earlier installers could select a separate Central Brain MCP server with native 
 
 The installer manages routing, hooks, plugin registration and an installation receipt. It preserves unrelated settings and uses recoverable transactions.
 
+The top-level `model_reasoning_effort` in `config.toml` belongs to you. If it is set, the installer keeps that line byte for byte. Only when it is absent does the installer write the default `model_reasoning_effort = "xhigh"`, which matches the Maestro's default root tier. A value inside a table such as `[profiles.<name>]` does not count as top-level and is never changed. The receipt records the outcome as `reasoningEffort`, with `status` `preserved-existing` or `configured` and the `value` kept or written.
+
 After installation, restart Codex in the selected workspace. Check rule and plugin discovery, a harmless tool call and each configured MCP connection. A plugin entry alone does not establish a working connection.
 
 Review and trust the exact hook definitions using the host's supported hook controls. Feature and administrator policies can prevent execution; installation does not override them. Inspect discovery and execution at the actual Desktop host, then verify a quiet observation turn as described above. Desktop hook support is UNKNOWN until this measurement. CLI discovery or a prepared output receipt alone does not prove delivery. See the [official Codex hook contract](https://developers.openai.com/codex/hooks).

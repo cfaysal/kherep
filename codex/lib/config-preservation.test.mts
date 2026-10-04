@@ -293,3 +293,25 @@ test("upgrades the exact pre-observation projection with and without retired nat
     );
   }
 });
+
+// Issue #212. The installer used to force model_reasoning_effort to "xhigh".
+test("keeps an existing top-level reasoning effort byte for byte", () => {
+  const line = "model_reasoning_effort  =  'low'  # operator choice";
+  const config = `model = "fixture"\n${line}\n`;
+  const result = prepareManagedConfig(config, MANAGED_OPTIONS);
+  assert.ok(result.config.startsWith(config));
+  assert.equal((result.config.match(/model_reasoning_effort/g) || []).length, 1);
+  assert.deepEqual(result.reasoningEffort, { status: "preserved-existing", value: "low" });
+  assert.equal(prepareManagedConfig(result.config, MANAGED_OPTIONS).config, result.config);
+});
+
+test("writes the xhigh default only when the top-level reasoning effort is absent", () => {
+  const profile = '[profiles.fast]\nmodel_reasoning_effort = "medium"\n';
+  const result = prepareManagedConfig(`model = "fixture"\n\n${profile}`, MANAGED_OPTIONS);
+  assert.ok(result.config.startsWith('model_reasoning_effort = "xhigh"\nmodel = "fixture"\n'));
+  assert.ok(result.config.includes(profile));
+  assert.deepEqual(result.reasoningEffort, { status: "configured", value: "xhigh" });
+  const repeated = prepareManagedConfig(result.config, MANAGED_OPTIONS);
+  assert.equal(repeated.config, result.config);
+  assert.deepEqual(repeated.reasoningEffort, { status: "preserved-existing", value: "xhigh" });
+});

@@ -496,6 +496,8 @@ export function install(options: InstallOptions = {}) {
       // Issue #72: where the outbox writable root landed, or why it did not.
       controlPlaneOutbox: { status: preparedConfig.outboxWritableRoot },
       messagingClient: { status: messagingClient.enabled ? "configured" : "disabled" },
+      // Issue #212: the top-level model_reasoning_effort the installer kept or set.
+      reasoningEffort: preparedConfig.reasoningEffort,
       nativePlugins: installAtlassianTools
         ? [{ id: ROVO_PLUGIN_ID, status: "installed-restart-required" }]
         : [],
