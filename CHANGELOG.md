@@ -369,7 +369,8 @@ increments the minor version; every other release increments the patch version.
   names it or an older listener (the scope now records `order`), and
   writes it back over an older listener's lock. The scope file goes with its
   lock only while it carries that lock's token; the session's mode, budget,
-  woken and queued files stay. Sweep failures are logged with their error codes.
+  woken and queued files stay. Sweep failures are logged with their error codes,
+  and a lock or scope read that fails is never taken for a missing file.
 - Control Plane: a task stop no longer leaves the process tree running when a
   helper times out (issue #221). On a `windows-latest` runner the Toolhelp32
   process-tree query (`powershell.exe` with an `Add-Type` compile) hit its

@@ -16,28 +16,52 @@ import { readJson } from "./inbox.mts";
 // orders by its startedAt.
 
 const code = (error: unknown): string | undefined => (error as NodeJS.ErrnoException).code;
-const read = <T,>(file: string): T | null => {
+const RETRY_MS = 25;
+const pause = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+type Entry = { token?: unknown; order?: unknown; startedAt?: unknown };
+
+// A lock or scope; undefined for a missing file and for content that is no
+// JSON. Any other failure is retried once after a short pause (a scanner can
+// hold a file for a moment on Windows) and then thrown: a failed read is
+// never taken for a missing file.
+function entry(file: string): Entry | undefined {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return readJson<Entry>(file) ?? undefined;
+    } catch (error) {
+      if (error instanceof SyntaxError) return undefined;
+      if (attempt > 0) throw error;
+      pause(RETRY_MS);
+    }
+  }
+}
+const tokenOf = (value: Entry | undefined): string | undefined => typeof value?.token === "string" ? value.token : undefined;
+
+export const orderOf = (value: Entry | null | undefined): number =>
+  typeof value?.order === "number" ? value.order : typeof value?.startedAt === "number" ? value.startedAt : -Infinity;
+
+// Throws when lock or scope cannot be read: an arming order taken without them could invert the session's listeners.
+export const nextOrder = (paths: NodePaths, sessionId: string, now: number): number => Math.max(now,
+  orderOf(entry(listenerLock(paths, sessionId))) + 1, orderOf(entry(listenerScope(paths, sessionId))) + 1);
+
+// The lock's and scope's tokens a SessionStart listener saw before its launch
+// check, or null when they could not be read.
+export type ArmingMark = (string | undefined)[] | null;
+export function armingMark(paths: NodePaths, sessionId: string): ArmingMark {
   try {
-    return readJson<T>(file);
+    return [tokenOf(entry(listenerLock(paths, sessionId))), tokenOf(entry(listenerScope(paths, sessionId)))];
   } catch {
     return null;
   }
-};
-
-export const orderOf = (entry: { order?: unknown; startedAt?: unknown } | null): number =>
-  typeof entry?.order === "number" ? entry.order : typeof entry?.startedAt === "number" ? entry.startedAt : -Infinity;
-
-export const nextOrder = (paths: NodePaths, sessionId: string, now: number): number => Math.max(now,
-  orderOf(read<ListenerLock>(listenerLock(paths, sessionId))) + 1, orderOf(read<ListenerScope>(listenerScope(paths, sessionId))) + 1);
-
-// What a SessionStart listener saw before its launch check. A token that
-// changed since means a prompt or Stop armed meanwhile, also when a sweep
-// holds that lock aside: the newer listener writes its scope first.
-export type ArmingMark = (string | undefined)[];
-export const armingMark = (paths: NodePaths, sessionId: string): ArmingMark =>
-  [read<ListenerLock>(listenerLock(paths, sessionId))?.token, read<ListenerScope>(listenerScope(paths, sessionId))?.token];
-export const armedSince = (paths: NodePaths, sessionId: string, mark: ArmingMark): boolean =>
-  armingMark(paths, sessionId).some((token, i) => token !== undefined && token !== mark[i]);
+}
+// A token in lock or scope that was in neither before means a prompt or Stop
+// armed meanwhile, also while a sweep holds that lock aside: the newer
+// listener writes its scope first. A read that failed, then or now, proves no
+// arming, so it never makes the listener stand down.
+export function armedSince(paths: NodePaths, sessionId: string, mark: ArmingMark): boolean {
+  const now = armingMark(paths, sessionId);
+  return mark !== null && now !== null && now.some((token) => token !== undefined && !mark.includes(token));
+}
 
 // Creates file with content unless something is there; atomic, as a link.
 function placeIfAbsent(file: string, content: string): boolean {

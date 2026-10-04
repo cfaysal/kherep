@@ -90,3 +90,27 @@ test("a SessionStart listener whose check overlapped a newer arming stands down,
   assert.deepEqual(auditLines(paths).map((l) => l.action), ["superseded"]);
   assert.equal(read(listenerScope(paths, SELF)).token, "prompt");
 });
+
+test("a read error while marking the SessionStart arming never makes it stand down; corrupt content is no entry", async (t) => {
+  const { paths } = setup(t);
+  rememberMode(paths, SELF, "default");
+  writeJsonAtomic(listenerScope(paths, SELF), { token: "x", listed: true, order: T0 - 1000 });
+  // The lock cannot be read when the listener marks it (a directory stands in for a scanner's hold).
+  fs.mkdirSync(lockFile(paths));
+  const launch = async () => {
+    fs.rmSync(lockFile(paths), { recursive: true });
+    writeJsonAtomic(lockFile(paths), at("x", T0 - 1000, T0 - 1000));
+    return "ok" as const;
+  };
+  let polls = 0;
+  const result = await listen(paths, { event: "SessionStart", source: "resume", mode: null, launch,
+    tick: (clock) => { if (++polls === 2) arrive(paths, 1, clock); } });
+  assert.equal(result.code, 2);
+  assert.deepEqual(auditLines(paths).map((l) => l.action), ["wake"]);
+
+  const corrupt = setup(t).paths;
+  fs.mkdirSync(listenerDir(corrupt), { recursive: true });
+  fs.writeFileSync(lockFile(corrupt), "{");
+  polls = 0;
+  assert.equal((await listen(corrupt, { tick: (clock) => { if (++polls === 2) arrive(corrupt, 1, clock); } })).code, 2);
+});
