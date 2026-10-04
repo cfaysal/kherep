@@ -7,7 +7,7 @@ import test from "node:test";
 import { makeEnvelope, parseEnvelope } from "../protocol.mts";
 import { NodeClient } from "./client.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
-import { audits, closedNode, PEER, SESSION } from "./closed-fixture.mts";
+import { audits, closedNode, PEER, SESSION, turnProgress } from "./closed-fixture.mts";
 import { nodePaths, readConfig, writeConfig } from "./config.mts";
 import { getOutbox, readLocalSessions, writeDirectory } from "./exchange.mts";
 import { generateIdentity } from "./identity.mts";
@@ -61,6 +61,7 @@ test("an unlisted full session id reaches the target inbox and the closed-sessio
   assert.equal(runs.length, 1);
   assert.ok(!runs[0].args.includes("--resume"), "the closed session itself is not resumed");
   assert.match(runs[0].args.at(-1)!, /are the tests green\?/);
+  await turnProgress(node);
   assert.equal(getMessage(node.paths.inbox, record.messageId)?.state, "delivered");
   assert.deepEqual(audits(node).map((a) => [a.action, a.outcome, a.sessionId, a.messageIds]),
     [["closed-session", "new", SESSION, [record.messageId]]]);

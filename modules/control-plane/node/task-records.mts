@@ -48,6 +48,12 @@ export interface TaskRecord {
   // Set while Claude Code has been asked to start or resume the session and
   // its session id is not confirmed by `claude agents --json` yet (issue #109).
   mappingPendingSince?: string;
+  // Issue #197: when the current run was launched, until the watch round sees
+  // its turn progress (run-progress.mts); a run without progress is failed.
+  awaitingProgressSince?: string;
+  // Claude intercom start: the messages its task text carries, delivered once
+  // its turn shows progress, refused when it shows none.
+  carried?: string[];
   // Exact inbox records waiting for this local delivery task's session id.
   // Resolved only when this task gains an id, avoiding inbox-wide scans.
   deliveryPending?: string[];

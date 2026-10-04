@@ -25,7 +25,9 @@ export type AutonomyAction = "wake" | "stuck-offer" | "budget" | "depth-limit" |
   // wake-hook.mts at SessionStart: messages that arrived while no listener ran (issue #101).
   | "backlog"
   // wake-hook.mts: the policy file turned unreadable; the listener keeps its last good policy (issue #213).
-  | "policy-unreadable";
+  | "policy-unreadable"
+  // codex-wake.mts: the runtime's readiness probe failed; the messages were refused (issue #197).
+  | "runtime-not-ready";
 
 export const listenerDir = (paths: NodePaths): string => path.join(paths.dir, "listeners");
 export const wakeAudit = (paths: NodePaths): string => path.join(paths.dir, "wake.jsonl");

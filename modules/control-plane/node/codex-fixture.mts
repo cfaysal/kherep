@@ -11,7 +11,8 @@ import { taskNode } from "./task-fixture.mts";
 // that never runs a model. It reads its prompt from stdin to the end (so a
 // stdin left open hangs it), logs argv, working directory and that prompt,
 // then prints `codex exec --json` events. The prompt
-// picks the behavior: [sleep] runs until stopped, [ignore-term] also ignores
+// picks the behavior: [sleep] runs until stopped after its first item,
+// [stall] runs until stopped without any item (issue #197), [ignore-term] also ignores
 // SIGTERM, [fail] ends with turn.failed and exit 1, [silent] exits 2 without
 // events (`codex queue` only logs, or fails for a thread starting with fa11), [stderr] exits 1 after two stderr lines, [tree] also starts a
 // child that runs until killed (as codex does behind the npm launcher); otherwise the turn completes, -o gets the last message, exit 0.
@@ -68,7 +69,8 @@ if (peer && !prompt.includes("[fail]") && !prompt.includes("[no-reply]")) requir
 emit({ type: "thread.started", thread_id: thread });
 emit({ type: "turn.started" });
 if (prompt.includes("[ignore-term]")) process.on("SIGTERM", () => {});
-if (prompt.includes("[sleep]") || prompt.includes("[ignore-term]")) setInterval(() => {}, 1000);
+if (prompt.includes("[sleep]") || prompt.includes("[ignore-term]")) { emit({ type: "item.started", item: { id: "item_0", type: "reasoning" } }); setInterval(() => {}, 1000); }
+else if (prompt.includes("[stall]")) setInterval(() => {}, 1000);
 else if (prompt.includes("[fail]")) { emit({ type: "turn.failed", error: { message: "model refused" } }); process.exit(1); }
 else { fs.writeFileSync(out, ${JSON.stringify(LAST_MESSAGE)}); emit({ type: "turn.completed", usage: {} }); process.exit(0); }
 `;

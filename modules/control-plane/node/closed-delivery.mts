@@ -10,9 +10,10 @@ import { ensureDir, type NodePaths } from "./config.mts";
 import { attachDelivery } from "./delivery-identity.mts";
 import { progressRecords } from "./delivery-progress.mts";
 import { readLocalSessions } from "./exchange.mts";
-import { listInbox, markClosedAttempt, MAX_REPLY_DEPTH, readJson, type InboxRecord } from "./inbox.mts";
+import { listInbox, markClosedAttempt, markRefused, MAX_REPLY_DEPTH, readJson, type InboxRecord } from "./inbox.mts";
 import { findKnown } from "./known-sessions.mts";
 import { acceptsMessage } from "./policy.mts";
+import { notReadyNow } from "./runtime-readiness.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { CLAUDE_RUNTIME } from "./sessions.mts";
 import { overLimit } from "./task-admission.mts";
@@ -169,6 +170,18 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   }
   // A new intercom session instead is checked by startTask (admitStart), runtime included.
   const reusable = intercom?.sessionId !== undefined && delegated(deps, intercom.permissionMode) ? intercom : undefined;
+  // Issue #197: a runtime that cannot run a turn gets no attempt; its messages
+  // are refused with a fixed reason. A pending probe keeps them waiting.
+  const blocked = notReadyNow(deps.readiness, reusable ? runtime : found.runtime);
+  if (blocked === "pending") {
+    progressRecords(paths, records, "waiting", "retry-pending", now);
+    return false;
+  }
+  if (blocked) {
+    for (const r of records) markRefused(paths.inbox, r.messageId, blocked);
+    audit(paths, now, sessionId, records, "refused", blocked);
+    return false;
+  }
   const limit = overLimit(deps, now, reusable?.taskId);
   if (limit) return refuse(limit);
   const cwd = resolveCwd(sessions, reusable?.cwd ?? found.cwd, deps.realpath);

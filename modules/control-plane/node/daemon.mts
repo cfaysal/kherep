@@ -1,4 +1,5 @@
 import { PING_FRAME, type SessionInfo } from "../protocol.mts";
+import { isTaskRuntime, type TaskRuntime } from "../protocol-tasks.mts";
 import { reconnectDelay } from "./backoff.mts";
 import { NodeClient, type CommandHandlers } from "./client.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
@@ -15,6 +16,8 @@ import {
 import { readPrivateKey } from "./identity.mts";
 import { purgeInbox, storeMessage } from "./inbox.mts";
 import { loadPolicy } from "./policy.mts";
+import { probeRuntime, type ProbeResult } from "./runtime-probe.mts";
+import { createReadiness } from "./runtime-readiness.mts";
 import { continueTask, startTask, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { listSessions } from "./sessions.mts";
 import { recordAndPublishSessions } from "./periodic-session-publication.mts";
@@ -57,8 +60,10 @@ export function commandHandlers(config: NodeConfig, startedAt: number,
   };
 }
 
+// probe: the runtime readiness probe (issue #197); tests replace it.
 export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: string) => void = (line) => console.error(line),
-  sessionSource?: (signal?: AbortSignal) => Promise<SessionInfo[]>): DaemonHandle {
+  sessionSource?: (signal?: AbortSignal) => Promise<SessionInfo[]>,
+  probe: (runtime: TaskRuntime) => Promise<ProbeResult> = (runtime) => probeRuntime(runtime)): DaemonHandle {
   const identity = readPrivateKey(config.privateKeyFile);
   if (identity.publicKey !== config.publicKey) throw new Error("private key does not match the enrolled public key");
   const policy = loadPolicy(config.policyFile);
@@ -80,7 +85,11 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     periodicDiscovery?.abort();
     return source(signal);
   }, log);
-  const runner: RunnerDeps = { paths, policy, log };
+  // Issue #197: one readiness probe per enabled runtime at the start, then only
+  // when a run needs a runtime whose verdict aged out (runtime-readiness.mts).
+  const readiness = createReadiness(probe, { log });
+  for (const runtime of (policy.sessions?.enabled ? policy.sessions.runtimes : []).filter(isTaskRuntime)) void readiness.check(runtime);
+  const runner: RunnerDeps = { paths, policy, log, readiness };
   recoverOperations(paths);
   let taskControlInflight = new Set<string>();
   let mcpInflight = new Set<string>();
@@ -89,7 +98,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   }
   const client = new NodeClient({
     nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions, runner),
-    facts: detectFacts, runtimes: () => discoverRuntimes(),
+    facts: detectFacts, runtimes: () => discoverRuntimes(), readyRuntimes: () => readiness.ready(),
     sessions,
     storeMessage: (body) => { storeMessage(paths.inbox, body, Date.now(), replyDepth(paths, body.inReplyTo)); },
     taskRequestResult: (result) => recordRequestResult(paths, result),

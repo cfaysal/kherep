@@ -4,7 +4,9 @@ import { isNodeId, isPhase1Command, isSessionCommand, PHASE1_COMMANDS, type Node
 import { CLAUDE_MCP_CAPABILITY, REMOTE_MCP_CAPABILITY, type McpRuntime } from "../protocol-mcp.mts";
 import { isSessionRef, MESSAGING_CAPABILITY, OPERATOR_NODE_ID } from "../protocol-messages.mts";
 import { TASK_CONTROL_CAPABILITY } from "../protocol-task-control.mts";
-import { DELEGATE_ACCEPT_CAPABILITY, DELEGATE_REQUEST_CAPABILITY, SESSIONS_CAPABILITY } from "../protocol-tasks.mts";
+import {
+  DELEGATE_ACCEPT_CAPABILITY, DELEGATE_REQUEST_CAPABILITY, RUNTIME_READY_CAPABILITIES, SESSIONS_CAPABILITY, type TaskRuntime,
+} from "../protocol-tasks.mts";
 import { parseSessionsPolicy, type SessionsPolicy } from "./session-policy.mts";
 
 // Local allowlist (issue #5, design section 4). The node refuses any command
@@ -105,14 +107,16 @@ export function mcpRuntimeEnabled(policy: NodePolicy, runtime: unknown): runtime
 
 // What this node advertises in register: its allowed commands, plus
 // messaging.v1 only when at least one accept rule exists, and the session
-// capabilities its sessions section enables.
-export function advertisedCapabilities(policy: NodePolicy): string[] {
+// capabilities its sessions section enables. ready: the runtimes whose last
+// readiness probe passed (issue #197), advertised only while enabled.
+export function advertisedCapabilities(policy: NodePolicy, ready: readonly TaskRuntime[] = []): string[] {
   const s = policy.sessions;
   return [...policy.allowedCommands, ...(messagingEnabled(policy) ? [MESSAGING_CAPABILITY] : []),
     ...(s?.enabled ? [SESSIONS_CAPABILITY] : []), ...(s?.delegate.accept ? [DELEGATE_ACCEPT_CAPABILITY] : []),
     ...(s?.delegate.request ? [DELEGATE_REQUEST_CAPABILITY] : []), ...(s?.ownTaskControl && s.runtimes.length > 0 ? [TASK_CONTROL_CAPABILITY] : []),
     ...(mcpRuntimeEnabled(policy, "codex") ? [REMOTE_MCP_CAPABILITY] : []),
-    ...(mcpRuntimeEnabled(policy, "claude-code") ? [CLAUDE_MCP_CAPABILITY] : [])];
+    ...(mcpRuntimeEnabled(policy, "claude-code") ? [CLAUDE_MCP_CAPABILITY] : []),
+    ...(s?.enabled ? ready.filter((r) => s.runtimes.includes(r)).map((r) => RUNTIME_READY_CAPABILITIES[r]) : [])];
 }
 
 // session "*" matches any local session, from "*" any sender. Otherwise both

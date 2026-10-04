@@ -7,9 +7,11 @@ import { deliverToClosed } from "./closed-delivery.mts";
 import { writeLocalSessions } from "./exchange.mts";
 import { storeMessage } from "./inbox.mts";
 import { rememberSessions } from "./known-sessions.mts";
+import { WORKING_SETTLE_MS } from "./run-progress.mts";
 import type { ExecOptions } from "./sessions.mts";
 import { T0, taskNode } from "./task-fixture.mts";
 import { listTasks, writeTask, type TaskRecord } from "./task-records.mts";
+import { watchTasks } from "./task-watch.mts";
 
 // Shared fixture of the closed-session tests (issues #102, #105): a task node whose
 // policy accepts every sender and enables resumeClosed, with one Claude
@@ -43,6 +45,13 @@ export const audits = (node: Node): Record<string, unknown>[] => {
   return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>) : [];
 };
 
+// Issue #197: a watch round once the intercom turn still works after the
+// settle time, which confirms the messages its start carried.
+export async function turnProgress(node: Node): Promise<void> {
+  node.tick(WORKING_SETTLE_MS);
+  await watchTasks(node.deps());
+}
+
 // Issue #109: a resumed intercom session continued as a copy under a new id.
 export const COPY = "c0ffee00-0000-4000-8000-000000000109";
 
@@ -50,6 +59,9 @@ export const COPY = "c0ffee00-0000-4000-8000-000000000109";
 export async function endedIntercom(node: Node): Promise<{ task: TaskRecord; id: string }> {
   deliver(node);
   await deliverToClosed(node.deps());
+  // Its turn finished: the watch round confirms the message it carried (issue #197).
+  for (const row of node.rows) row.state = "done";
+  await watchTasks(node.deps());
   const [task] = listTasks(node.paths);
   writeTask(node.paths, { ...task, state: "done" });
   node.tick(TURN_SPACING_MS * 2);

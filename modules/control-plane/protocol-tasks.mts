@@ -22,6 +22,12 @@ export type PermissionMode = (typeof PERMISSION_MODES)[number];
 export const DEFAULT_PERMISSION_MODE: PermissionMode = "auto";
 // A delegated task runs in auto or a stricter mode.
 export const DELEGATED_PERMISSION_MODES: readonly PermissionMode[] = ["auto", "default"];
+// Issue #197: advertised while the node's last readiness probe of that runtime
+// completed a real minimal turn. A Worker stores capabilities as opaque short
+// strings, so an older Worker accepts them; requirements.capabilities may name one.
+export const RUNTIME_READY_CAPABILITIES: Readonly<Record<TaskRuntime, string>> = {
+  claude: "runtime.claude.ready.v1", codex: "runtime.codex.ready.v1",
+};
 
 export const TASK_STATES = ["started", "running", "needs-input", "done", "failed", "stopped"] as const;
 export type TaskState = (typeof TASK_STATES)[number];

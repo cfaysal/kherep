@@ -11,6 +11,8 @@ import { resolveDelivery } from "./delivery-identity.mts";
 import { permanentFallbackFailure } from "./delivery-failure.mts";
 import { getMessage, markDelivered, markRefused, markRetry } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
+import { failStalledCodex, NO_PROGRESS_REASON, progressOverdue } from "./run-progress.mts";
+import { notReady } from "./runtime-readiness.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit, refuse, trim } from "./task-admission.mts";
 import { isActive, listTasks, queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
@@ -52,7 +54,8 @@ export async function spawnRun(deps: RunnerDeps, record: TaskRecord, args: RunAr
   } catch {
     // the watch reads it again while this daemon holds the child
   }
-  return writeTask(deps.paths, { ...record, pid, pidStart }, deps.now?.());
+  const now = deps.now?.() ?? Date.now();
+  return writeTask(deps.paths, { ...record, pid, pidStart, awaitingProgressSince: new Date(now).toISOString() }, now);
 }
 
 // Issue #119: an intercom run keeps the user's Codex config but not its MCP
@@ -112,6 +115,8 @@ export async function continueCodex(args: SessionContinueArgs, deps: RunnerDeps)
   // Again: the directory may have been swapped for a link out of the roots since the start.
   const cwd = resolveCwd(deps.policy.sessions, record.cwd, deps.realpath);
   if (!cwd.ok) throw new Error(cwd.reason);
+  const blocked = await notReady(deps.readiness, "codex");
+  if (blocked) throw new Error(blocked);
   const prompt = frameFollowUp(args.taskId, args.prompt, deps.cli ?? taskCliCommand(deps.platform), "codex");
   const { operatorStoppedAt: _operatorStoppedAt, taskControlRecoveryRunVersion: _taskControlRecoveryRunVersion, ...resumable } = record;
   const restarted: TaskRecord = { ...resumable, cwd: cwd.cwd, state: "started", reason: undefined, pid: undefined, pidStart: undefined,
@@ -123,8 +128,9 @@ export async function continueCodex(args: SessionContinueArgs, deps: RunnerDeps)
 // Ends the process after the identity check (terminate). A task that already
 // reported done, or whose run was one for peer messages (running), keeps its
 // reported state and sends no report; only the process ends.
+// ended: the reported state, failed for a run without progress (issue #197).
 export async function stopCodex(args: SessionStopArgs, deps: RunnerDeps, reason: string,
-  operatorStop = reason === "stopped by the operator"): Promise<{ taskId: string; state: string }> {
+  operatorStop = reason === "stopped by the operator", ended: "stopped" | "failed" = "stopped"): Promise<{ taskId: string; state: string }> {
   let record = readTask(deps.paths, args.taskId)!;
   const now = deps.now?.() ?? Date.now();
   if (operatorStop && record.operatorStoppedAt === undefined) {
@@ -148,9 +154,9 @@ export async function stopCodex(args: SessionStopArgs, deps: RunnerDeps, reason:
   settleOffered(deps, fresh, false);
   const keep = fresh.state === "done" || fresh.running === true;
   const marker = operatorStop && fresh.operatorStoppedAt === undefined ? { operatorStoppedAt: record.operatorStoppedAt } : {};
-  const saved = writeTask(deps.paths, { ...fresh, ...marker, ...(keep ? {} : { state: "stopped", reason }),
-    running: undefined, offered: undefined }, now);
-  if (!keep) queueReport(deps.paths, { taskId: saved.taskId, state: "stopped", reason, ...sessionOf(saved) });
+  const saved = writeTask(deps.paths, { ...fresh, ...marker, ...(keep ? {} : { state: ended, reason }),
+    running: undefined, offered: undefined, awaitingProgressSince: undefined }, now);
+  if (!keep) queueReport(deps.paths, { taskId: saved.taskId, state: ended, reason, ...sessionOf(saved) });
   return { taskId: saved.taskId, state: saved.state };
 }
 
@@ -230,7 +236,7 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
       continue;
     }
     const threadId = record.sessionId ?? readEvents(files).threadId;
-    const mapped: TaskRecord = resolveDelivery(deps.paths, { ...record, ...(threadId ? { sessionId: threadId } : {}) });
+    let mapped: TaskRecord = resolveDelivery(deps.paths, { ...record, ...(threadId ? { sessionId: threadId } : {}) });
     // Issue #121: exit.json exists only for a run this daemon started and saw
     // end (spawnCodex removes it before each run), so such a run has ended,
     // even past its deadline or when its start time cannot be read.
@@ -259,6 +265,17 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
     } catch (error) {
       log(`kherep-node: task ${record.taskId}: ${String((error as Error).message ?? error)}`);
       continue; // a failed read decides nothing
+    }
+    // Issue #197: a live run whose turn shows no progress (run-progress.mts) is
+    // stopped and failed; its messages are offered again, the runtime probed again.
+    if (running && record.awaitingProgressSince !== undefined) {
+      if (readEvents(files).progressed) {
+        record = writeTask(deps.paths, { ...record, awaitingProgressSince: undefined }, now);
+        mapped = { ...mapped, awaitingProgressSince: undefined };
+      } else if (progressOverdue(record, now)) {
+        await failStalledCodex(deps, record, () => stopCodex({ taskId: record.taskId }, deps, NO_PROGRESS_REASON, false, "failed"), log, now);
+        continue;
+      }
     }
     if (running) {
       if (mapped.sessionId !== record.sessionId) {
