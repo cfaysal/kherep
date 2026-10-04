@@ -148,7 +148,9 @@ test("the staged hook performs a Claude rewrite without automatic approval", asy
   const intents = path.join(state, "mcp", "intents");
   let intentFile = "";
   for (let count = 0; count < 100 && !intentFile; count += 1) {
-    intentFile = fs.existsSync(intents) ? fs.readdirSync(intents)[0] ?? "" : "";
+    // Only a published intent; the hook's atomic write first creates a ".<id>.json.<uuid>.tmp" (issue #226).
+    intentFile = fs.existsSync(intents)
+      ? fs.readdirSync(intents).find((name) => !name.startsWith(".") && name.endsWith(".json")) ?? "" : "";
     if (!intentFile) await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.ok(intentFile, "hook did not publish its synthetic intent");
