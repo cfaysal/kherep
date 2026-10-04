@@ -8,7 +8,7 @@ import { forgetCodexSession } from "./codex-sessions.mts";
 import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { connectUrl, ensureDir, type NodeConfig, type NodePaths } from "./config.mts";
-import { recordDaemonState, type DaemonState } from "./daemon-state.mts";
+import { recordDaemonState, withVerdict, type DaemonState } from "./daemon-state.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
 import { observeClaudeDeliveryProgress, observeCodexTaskProgress } from "./delivery-progress.mts";
 import {
@@ -93,7 +93,11 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   }, log);
   // Issue #197: one readiness probe per enabled runtime at the start, then only
   // when a run needs a runtime whose verdict aged out (runtime-readiness.mts).
-  const readiness = createReadiness(probe, { log });
+  // Each completed probe goes to daemon.json for doctor (issue #222), off the frame lane.
+  const readiness = createReadiness(probe, { log, onVerdict: (runtime, verdict) => {
+    state = withVerdict(state, runtime, verdict);
+    recordDaemonState(paths, state, log);
+  } });
   for (const runtime of enabledRuntimes(policy)) void readiness.check(runtime);
   const runner: RunnerDeps = { paths, policy, log, readiness };
   recoverOperations(paths);
@@ -249,7 +253,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         if (!wasAuthed && client.authenticated && sent) client.registrationSent();
         if (!wasAuthed && client.authenticated) {
           attempt = 0;
-          state = { pid: state.pid, startedAt: state.startedAt, connectedAt: new Date().toISOString() };
+          state = { ...state, connectedAt: new Date().toISOString(), disconnectedAt: undefined };
           recordDaemonState(paths, state, log);
           log(`kherep-node: connected as ${config.nodeId}`);
         }

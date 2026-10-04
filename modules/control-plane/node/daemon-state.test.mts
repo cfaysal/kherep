@@ -36,7 +36,11 @@ test("the daemon records its pid at start, each authenticated connection and eac
   globalThis.setInterval = (() => ({})) as unknown as typeof setInterval;
   NodeClient.prototype.refreshPolicy = async () => [];
   NodeClient.prototype.onFrame = async function (this: NodeClient) { this.authenticated = true; return []; };
-  const handle = startDaemon(config, paths, () => {});
+  // Issue #222: each completed readiness probe is recorded with its fixed cause, never the probe's output.
+  fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [],
+    sessions: { enabled: true, workspaceRoots: [root], runtimes: ["claude", "codex"] } }));
+  const handle = startDaemon(config, paths, () => {}, undefined, async (runtime) => (runtime === "claude"
+    ? { ok: true } : { ok: false, cause: "sign-in", detail: "SYNTHETIC_PROBE_OUTPUT" }));
   t.after(() => {
     handle.stop();
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: original.socket });
@@ -51,18 +55,33 @@ test("the daemon records its pid at start, each authenticated connection and eac
   assert.ok(started && !Number.isNaN(Date.parse(started.startedAt)));
   assert.equal(started?.connectedAt, undefined);
 
+  await flush();
+  const probed = readDaemonState(paths)?.readiness;
+  assert.deepEqual([probed?.claude?.ready, probed?.codex?.ready, probed?.codex?.cause], [true, false, "sign-in"]);
+  for (const record of [probed?.claude, probed?.codex]) assert.ok(record && !Number.isNaN(Date.parse(record.probedAt)));
+  assert.equal(fs.readFileSync(daemonStateFile(paths), "utf8").includes("SYNTHETIC_PROBE_OUTPUT"), false);
+
   listeners.get("message")?.({ data: "synthetic-auth-ok" });
   await flush();
   await flush();
   const connected = readDaemonState(paths);
   assert.equal(connected?.startedAt, started?.startedAt);
   assert.ok(connected?.connectedAt && !Number.isNaN(Date.parse(connected.connectedAt)));
-  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(daemonStateFile(paths), "utf8"))).sort(), ["connectedAt", "pid", "startedAt"]);
+  assert.deepEqual(connected?.readiness, probed, "a connection keeps the readiness record");
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(daemonStateFile(paths), "utf8"))).sort(),
+    ["connectedAt", "pid", "readiness", "startedAt"]);
 
   listeners.get("close")?.({ code: 1012 });
   const lost = readDaemonState(paths);
   assert.equal(lost?.connectedAt, connected?.connectedAt);
   assert.ok(lost?.disconnectedAt && !Number.isNaN(Date.parse(lost.disconnectedAt)));
+
+  listeners.get("message")?.({ data: "synthetic-auth-ok-again" });
+  await flush();
+  await flush();
+  const again = readDaemonState(paths);
+  assert.equal(again?.disconnectedAt, undefined, "the next authentication clears the lost connection");
+  assert.deepEqual(again?.readiness, probed);
 });
 
 test("pidAlive accepts only a running process id", () => {

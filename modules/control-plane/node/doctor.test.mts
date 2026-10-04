@@ -71,7 +71,7 @@ test("a healthy host passes every check and reports versions without secrets", a
   assert.deepEqual(report.checks.enrollment, { ok: true, enrolled: true, nodeId: NODE_ID, keyReadable: true });
   assert.deepEqual(report.checks.worker, { ok: true, reachable: true, status: 200, version: "9.8.7", commit: "0123abc", remoteMcp: true });
   assert.deepEqual(report.checks.policy.wake, { enabled: true, sessions: ["build"], codexApp: false });
-  assert.deepEqual(report.checks.runtimes.claude, { installed: true, version: "2.1.300 (Claude Code)", configured: true, ready: "not available" });
+  assert.deepEqual(report.checks.runtimes.claude, { installed: true, version: "2.1.300 (Claude Code)", configured: true, ready: "unknown" });
   assert.deepEqual(report.checks.hooks.claude, { present: true, deliver: 1, wake: 1, foreign: [] });
   assert.deepEqual(report.checks.hooks.codex, { present: true, deliver: 1, wake: 0, foreign: [] });
   assert.deepEqual(report.checks.listeners, { ok: true, live: 0, stale: 0 });
@@ -147,9 +147,24 @@ test("the runtime check fails without any runtime and when a configured runtime 
   assert.equal((await runtimes({ versionOf: async () => null })).ok, false);
   fs.writeFileSync(h.paths.policy, JSON.stringify({ version: 1, allowedCommands: [], sessions: { enabled: true, workspaceRoots: ["/synthetic/work"], runtimes: ["claude", "codex"] } }));
   const missing = await runtimes({});
-  assert.deepEqual([missing.ok, missing.codex], [false, { installed: false, version: null, configured: true, ready: "not available" }]);
+  assert.deepEqual([missing.ok, missing.codex], [false, { installed: false, version: null, configured: true, ready: "unknown" }]);
   fs.writeFileSync(h.paths.policy, JSON.stringify({ version: 1, allowedCommands: [] }));
   assert.equal((await runtimes({ versionOf: async () => null })).ok, true);
+});
+
+// Issue #222: readiness comes from the running daemon's daemon.json only.
+test("the runtime check reports the running daemon's readiness record and ignores a dead daemon's", async (t) => {
+  const h = host(t);
+  const probedAt = "2026-10-04T11:55:00.000Z";
+  const write = (pid: number) => fs.writeFileSync(daemonStateFile(h.paths), JSON.stringify({ pid, startedAt: "2026-10-04T10:00:00.000Z",
+    connectedAt: "2026-10-04T10:00:01.000Z", readiness: { claude: { ready: false, cause: "sign-in", probedAt } } }));
+  write(LIVE_PID);
+  const live = (await runDoctor(h.deps)).checks.runtimes;
+  assert.deepEqual([live.ok, live.claude], [false, { installed: true, version: "2.1.300 (Claude Code)", configured: true,
+    ready: false, cause: "sign-in", probedAt, aged: true }]);
+  write(99);
+  const dead = (await runDoctor(h.deps)).checks.runtimes;
+  assert.deepEqual([dead.ok, (dead.claude as { ready: unknown }).ready], [true, "unknown"]);
 });
 
 test("the hook check fails for another checkout, for no hooks and for an unreadable file", async (t) => {
