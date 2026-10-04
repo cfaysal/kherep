@@ -25,15 +25,18 @@ increments the minor version; every other release increments the patch version.
   reported `loggedIn: true` for an expired login, so the node checks each
   enabled runtime with a real minimal call: `claude -p --safe-mode
   --no-session-persistence --tools ""` with a one-line system prompt, and
-  `codex exec --ephemeral --ignore-user-config --sandbox read-only`. It probes
-  once at daemon start and afterwards only when a run needs a runtime whose
-  verdict aged out (ready 10 minutes, not ready 2 minutes, 45 second timeout).
-  A ready runtime is advertised as `runtime.claude.ready.v1` or
-  `runtime.codex.ready.v1`. A task start or continue for a runtime that is not
-  ready fails with `target runtime <runtime> not ready (sign-in required)`
-  (or `probe timed out`, `probe failed`) and starts nothing; a message that a
-  closed-session delivery or a Codex message resume would carry is `refused`
-  with that reason instead of `delivered`.
+  `codex exec --ephemeral --sandbox read-only` with the user's config and its
+  MCP servers disabled as for intercom runs. It probes once at daemon start;
+  afterwards a verdict is used stale while it revalidates in the background
+  (ready after 10 minutes, not ready after 2, also from the session round; 45
+  second timeout), and no probe runs on the daemon's frame lane. A ready
+  runtime is advertised as `runtime.claude.ready.v1` or
+  `runtime.codex.ready.v1`. For a runtime that is not signed in, a task start
+  or continue fails with `target runtime <runtime> not ready (sign-in
+  required)` and starts nothing, and a message that a closed-session delivery
+  or a Codex message resume would carry is `refused` with that reason instead
+  of `delivered`. A probe that timed out or failed otherwise blocks no task;
+  messages wait with `retry-pending`.
 - Control Plane: a task or intercom run without first turn progress 10
   minutes after its start is stopped and reported `failed` with `no progress
   after start` (issue #197). The messages a Claude intercom run carried are

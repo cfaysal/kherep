@@ -3,6 +3,7 @@ import os from "node:os";
 
 import type { TaskRuntime } from "../protocol-tasks.mts";
 import { codexCommand, findCodex } from "./codex-binary.mts";
+import { intercomMcpOverrides } from "./codex-mcp.mts";
 import { lastLine } from "./codex-output.mts";
 import { signalGroup } from "./codex-process.mts";
 import { claudeCall, findClaude } from "./sessions.mts";
@@ -18,19 +19,21 @@ import { claudeCall, findClaude } from "./sessions.mts";
 //   `--no-session-persistence` leaves no session behind. An expired login
 //   "stops locally ... before it reaches the API" with `Failed to authenticate:
 //   OAuth session expired`, at no cost.
-// - Codex (`codex exec --help`, CLI 0.160.0): `--ephemeral` persists no session
-//   files and `--ignore-user-config` skips config.toml (its hooks and MCP
-//   servers) while "auth still uses CODEX_HOME"; read-only sandbox, prompt on
-//   stdin, ready only after `turn.completed`.
-// The account's default model answers; nothing else is configured. The probe
-// prints nothing a CLI wrote except a redacted last line (codex-output.mts lastLine).
+// - Codex (`codex exec --help`, CLI 0.160.0): the user's config.toml as a real
+//   run loads it (model, provider, hooks), with its MCP servers disabled by the
+//   overrides intercom runs use (codex-mcp.mts); `--ephemeral` persists no
+//   session files; read-only sandbox, prompt on stdin, ready only after
+//   `turn.completed`. A delivery hook in that config records the probe's
+//   thread as a Codex session; forgetSession removes that record afterwards.
+// Claude's account default model answers. The probe prints nothing a CLI wrote
+// except a redacted last line (codex-output.mts lastLine).
 
 export const PROBE_TIMEOUT_MS = 45_000;
 const PROMPT = "Reply with OK.";
 export const CLAUDE_PROBE_ARGS: readonly string[] = ["-p", "--safe-mode", "--no-session-persistence", "--strict-mcp-config",
   "--tools", "", "--output-format", "json", "--system-prompt", PROMPT, "OK"];
-export const codexProbeArgs = (cwd: string): string[] =>
-  ["exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "-C", cwd, "-"];
+export const codexProbeArgs = (cwd: string, overrides: string[] = []): string[] =>
+  [...overrides, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-C", cwd, "-"];
 
 export type ProbeCause = "sign-in" | "timeout" | "error";
 export type ProbeResult = { ok: true } | { ok: false; cause: ProbeCause; detail: string };
@@ -40,6 +43,17 @@ export type ProbeSpawn = (file: string, args: string[], options: ProbeSpawnOptio
 export interface ProbeDeps {
   findClaude?: () => string | null; findCodex?: () => string | null; platform?: NodeJS.Platform; comSpec?: string;
   run?: ProbeSpawn; timeoutMs?: number; cwd?: string;
+  // Codex: the `-c mcp_servers.<name>.enabled=false` overrides (intercomMcpOverrides by default).
+  mcpOverrides?: () => Promise<string[]>;
+  // Codex: removes the session record a delivery hook wrote for the probe's thread.
+  forgetSession?: (threadId: string) => void;
+}
+
+async function codexOverrides(deps: ProbeDeps): Promise<string[]> {
+  if (deps.mcpOverrides) return deps.mcpOverrides();
+  const found = await intercomMcpOverrides({ ...(deps.findCodex ? { findCodex: deps.findCodex } : {}),
+    ...(deps.platform ? { platform: deps.platform } : {}) });
+  return "args" in found ? found.args : [];
 }
 
 // The documented sign-in failures: "Not logged in · Please run /login", "Login
@@ -115,7 +129,7 @@ async function probeCodex(deps: ProbeDeps, run: ProbeSpawn, timeoutMs: number, c
   if (!codex) return { ok: false, cause: "error", detail: "codex is not installed on this node" };
   let command: ReturnType<typeof codexCommand>;
   try {
-    command = codexCommand(codex, codexProbeArgs(cwd), deps.platform);
+    command = codexCommand(codex, codexProbeArgs(cwd, await codexOverrides(deps)), deps.platform);
   } catch (error) {
     return { ok: false, cause: "error", detail: String((error as Error).message) };
   }
@@ -129,6 +143,8 @@ async function probeCodex(deps: ProbeDeps, run: ProbeSpawn, timeoutMs: number, c
       return [];
     }
   });
+  const thread = events.find((e) => e.type === "thread.started")?.thread_id;
+  if (typeof thread === "string") deps.forgetSession?.(thread);
   if (out.code === 0 && events.some((e) => e.type === "turn.completed")) return { ok: true };
   const error = events.flatMap((e) => {
     if (e.type === "error" && typeof e.message === "string") return [e.message];

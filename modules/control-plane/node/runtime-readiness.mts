@@ -3,11 +3,13 @@ import type { ProbeCause, ProbeResult } from "./runtime-probe.mts";
 
 // Issue #197: the node's verdict whether each runtime can run a turn, from a
 // real minimal call (runtime-probe.mts). The daemon probes the enabled runtimes
-// once at its start; afterwards only a run that needs a runtime asks, and only
-// when the last verdict has aged out. There is no periodic probe: a ready
-// verdict holds READY_TTL_MS, a failed one NOT_READY_TTL_MS, so a node that was
-// signed in again recovers within minutes while a burst of messages costs one
-// probe. One probe per runtime runs at a time; callers share it.
+// once at its start. Afterwards a verdict is used stale while it revalidates: a
+// caller gets the last verdict at once and an aged one (READY_TTL_MS ready,
+// NOT_READY_TTL_MS otherwise) starts a probe in the background. Only a runtime
+// without any verdict yet makes check() wait, which the daemon does outside its
+// frame lane (readiness-lane.mts). Besides runs, only the watch round asks, and
+// only for a runtime that is not ready (revalidate), so a node that was signed
+// in again recovers within minutes. One probe per runtime runs at a time.
 
 export const READY_TTL_MS = 10 * 60_000;
 export const NOT_READY_TTL_MS = 2 * 60_000;
@@ -15,13 +17,14 @@ export const NOT_READY_TTL_MS = 2 * 60_000;
 export type Verdict = { ready: true; at: number } | { ready: false; at: number; cause: ProbeCause };
 
 export interface Readiness {
-  // The current verdict, probing first when there is none or it aged out.
+  // The last verdict; waits for a probe only when there is none yet.
   check(runtime: TaskRuntime): Promise<Verdict>;
-  // The current verdict without waiting: null while none is current, after
-  // starting a probe in the background (a daemon round must not wait 45 s).
+  // The last verdict without waiting, null when there is none yet.
   peek(runtime: TaskRuntime): Verdict | null;
+  // A background probe for a runtime whose aged verdict is not ready.
+  revalidate(runtime: TaskRuntime): void;
   // Ages the verdict out, for example after a run made no progress; the next
-  // run probes again. What is advertised changes only with that probe.
+  // caller starts a probe. What is advertised changes only with its result.
   invalidate(runtime: TaskRuntime): void;
   // The runtimes whose last verdict, current or not, is ready (advertised).
   ready(): TaskRuntime[];
@@ -37,11 +40,7 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
   const now = options.now ?? Date.now;
   const verdicts = new Map<TaskRuntime, Verdict>();
   const inflight = new Map<TaskRuntime, Promise<Verdict>>();
-  const current = (runtime: TaskRuntime): Verdict | null => {
-    const verdict = verdicts.get(runtime);
-    if (!verdict) return null;
-    return now() - verdict.at < (verdict.ready ? READY_TTL_MS : NOT_READY_TTL_MS) ? verdict : null;
-  };
+  const aged = (verdict: Verdict): boolean => now() - verdict.at >= (verdict.ready ? READY_TTL_MS : NOT_READY_TTL_MS);
   const run = (runtime: TaskRuntime): Promise<Verdict> => {
     const pending = inflight.get(runtime);
     if (pending) return pending;
@@ -64,12 +63,18 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
     inflight.set(runtime, started);
     return started;
   };
+  // The last verdict, revalidated in the background once aged; null when there is none.
+  const peek = (runtime: TaskRuntime): Verdict | null => {
+    const verdict = verdicts.get(runtime) ?? null;
+    if (!verdict || aged(verdict)) void run(runtime);
+    return verdict;
+  };
   return {
-    check: (runtime) => Promise.resolve(current(runtime) ?? run(runtime)),
-    peek: (runtime) => {
-      const verdict = current(runtime);
-      if (!verdict) void run(runtime);
-      return verdict;
+    check: (runtime) => Promise.resolve(peek(runtime) ?? run(runtime)),
+    peek,
+    revalidate: (runtime) => {
+      const verdict = verdicts.get(runtime);
+      if (verdict && !verdict.ready && aged(verdict)) void run(runtime);
     },
     invalidate: (runtime) => {
       const verdict = verdicts.get(runtime);
@@ -79,18 +84,26 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
   };
 }
 
-// The reason a run of runtime must not start, or null; waits for a probe when
-// no verdict is current. Without a readiness (tests, tools) every runtime counts as ready.
+// Only a sign-in failure proves that a run cannot authenticate. A probe that
+// timed out or failed otherwise (a network blip, a CLI too old for a probe
+// flag) proves nothing about the run, so it blocks nothing for good.
+
+// The reason a task start or continue must not run, or null: a run is refused
+// only for sign-in; it proceeds otherwise, and the CLI's own error and the
+// inactivity bound (run-progress.mts) still apply. Waits only when the runtime
+// has no verdict yet. Without a readiness (tests, tools) every runtime counts as ready.
 export async function notReady(readiness: Readiness | undefined, runtime: TaskRuntime): Promise<string | null> {
   if (!readiness) return null;
   const verdict = await readiness.check(runtime);
-  return verdict.ready ? null : notReadyReason(runtime, verdict.cause);
+  return !verdict.ready && verdict.cause === "sign-in" ? notReadyReason(runtime, verdict.cause) : null;
 }
 
-// The same for a daemon round, without waiting: "pending" while a probe runs.
+// The same for a daemon round, without waiting: the refusal reason for
+// sign-in, null when ready, and "pending" (messages wait with retry-pending)
+// without a verdict or after a probe that timed out or failed.
 export function notReadyNow(readiness: Readiness | undefined, runtime: TaskRuntime): string | null | "pending" {
   if (!readiness) return null;
   const verdict = readiness.peek(runtime);
-  if (!verdict) return "pending";
-  return verdict.ready ? null : notReadyReason(runtime, verdict.cause);
+  if (verdict?.ready) return null;
+  return verdict?.cause === "sign-in" ? notReadyReason(runtime, verdict.cause) : "pending";
 }

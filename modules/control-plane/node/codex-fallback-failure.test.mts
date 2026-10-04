@@ -3,7 +3,8 @@ import fs from "node:fs";
 import test from "node:test";
 
 import { codexFiles } from "./codex-process.mts";
-import { adoptOffered, watchCodexTasks } from "./codex-runner.mts";
+import { adoptOffered } from "./codex-runner.mts";
+import { watchCodexTasks } from "./codex-watch.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { getMessage, markClosedAttempt, markOffered, markRetry, setDeliveryTask, storeMessage } from "./inbox.mts";
 import { T0, TASK, taskNode } from "./task-fixture.mts";

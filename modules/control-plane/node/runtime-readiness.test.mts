@@ -11,8 +11,9 @@ import {
   createReadiness, NOT_READY_TTL_MS, notReady, notReadyNow, notReadyReason, READY_TTL_MS,
 } from "./runtime-readiness.mts";
 
-// Issue #197: the readiness verdict is cached (ready 10 min, not ready 2 min),
-// one probe per runtime runs at a time, and nothing probes on its own.
+// Issue #197: a verdict is used stale while it revalidates in the background
+// (ready after 10 min, not ready after 2), only a runtime without any verdict
+// waits, one probe per runtime runs at a time, and only sign-in blocks a run.
 
 function counted(results: ProbeResult[]) {
   const probes: TaskRuntime[] = [];
@@ -26,26 +27,37 @@ function counted(results: ProbeResult[]) {
   return { probes, probe, holdNext: () => { hold = true; }, release: () => { hold = false; release?.(); } };
 }
 const SIGN_IN: ProbeResult = { ok: false, cause: "sign-in", detail: "Login expired" };
+const settle = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve); });
 
-test("a ready verdict is reused for 10 minutes, a failed one for 2; then the next run probes again", async () => {
+test("an aged verdict is still used at once and revalidated in the background: ready after 10 minutes, not ready after 2", async () => {
   let clock = 0;
   const p = counted([{ ok: true }, SIGN_IN, { ok: true }]);
   const readiness = createReadiness(p.probe, { now: () => clock });
-  assert.equal(await notReady(readiness, "claude"), null);
+  assert.equal(await notReady(readiness, "claude"), null, "the first verdict is awaited");
   clock += READY_TTL_MS - 1;
   assert.equal(await notReady(readiness, "claude"), null);
   assert.equal(p.probes.length, 1, "cached");
   clock += 1;
+  assert.equal(await notReady(readiness, "claude"), null, "aged: the old verdict answers without waiting");
+  await settle();
+  assert.equal(p.probes.length, 2, "and a probe ran in the background");
   assert.equal(await notReady(readiness, "claude"), "target runtime claude not ready (sign-in required)");
   clock += NOT_READY_TTL_MS - 1;
-  assert.equal(await notReady(readiness, "claude"), "target runtime claude not ready (sign-in required)");
-  assert.equal(p.probes.length, 2);
+  readiness.revalidate("claude");
+  assert.equal(notReadyNow(readiness, "claude"), "target runtime claude not ready (sign-in required)");
+  assert.equal(p.probes.length, 2, "not aged: no probe");
   clock += 1;
-  assert.equal(await notReady(readiness, "claude"), null, "signed in again: recovered after 2 minutes");
-  assert.deepEqual(p.probes, ["claude", "claude", "claude"]);
+  readiness.revalidate("claude");
+  await settle();
+  assert.equal(p.probes.length, 3, "the watch round revalidates an aged not-ready verdict");
+  assert.equal(notReadyNow(readiness, "claude"), null, "signed in again: recovered");
+  clock += READY_TTL_MS;
+  readiness.revalidate("claude");
+  await settle();
+  assert.equal(p.probes.length, 3, "revalidate never probes a ready runtime");
 });
 
-test("concurrent runs share one probe; a round does not wait for it", async () => {
+test("only a runtime without any verdict waits; concurrent callers share one probe; a round never waits", async () => {
   const p = counted([{ ok: true }]);
   p.holdNext();
   const readiness = createReadiness(p.probe);
@@ -58,22 +70,37 @@ test("concurrent runs share one probe; a round does not wait for it", async () =
   assert.equal(p.probes.length, 1);
 });
 
+test("only sign-in blocks: after a timeout or another probe failure a task proceeds and messages wait", async () => {
+  for (const cause of ["timeout", "error"] as const) {
+    const readiness = createReadiness(async () => ({ ok: false, cause, detail: "" }));
+    assert.equal(await notReady(readiness, "codex"), null, `${cause}: the task runs; its CLI error and the inactivity bound still apply`);
+    assert.equal(notReadyNow(readiness, "codex"), "pending", `${cause}: messages wait with retry-pending`);
+    assert.deepEqual(readiness.ready(), [], `${cause}: not advertised`);
+  }
+  const signIn = createReadiness(async () => SIGN_IN);
+  assert.equal(await notReady(signIn, "codex"), "target runtime codex not ready (sign-in required)");
+  assert.equal(notReadyNow(signIn, "codex"), "target runtime codex not ready (sign-in required)");
+});
+
 test("a throwing probe is not ready; invalidate probes again but keeps what is advertised until then", async () => {
   let fail = true;
   const readiness = createReadiness(async () => {
     if (fail) throw new Error("spawn EACCES");
     return { ok: true };
   });
-  assert.equal(await notReady(readiness, "claude"), notReadyReason("claude", "error"));
+  const verdict = await readiness.check("claude");
+  assert.equal(!verdict.ready && verdict.cause, "error");
   assert.deepEqual(readiness.ready(), []);
   fail = false;
   readiness.invalidate("claude");
-  assert.equal(await notReady(readiness, "claude"), null);
+  readiness.peek("claude");
+  await settle();
   assert.deepEqual(readiness.ready(), ["claude"]);
   fail = true;
   readiness.invalidate("claude");
   assert.deepEqual(readiness.ready(), ["claude"], "still advertised until the next probe");
-  assert.equal(await notReady(readiness, "claude"), "target runtime claude not ready (probe failed)");
+  readiness.peek("claude");
+  await settle();
   assert.deepEqual(readiness.ready(), []);
   assert.equal(await notReady(undefined, "claude"), null, "without a readiness every runtime counts as ready");
   assert.equal(notReadyReason("codex", "timeout"), "target runtime codex not ready (probe timed out)");

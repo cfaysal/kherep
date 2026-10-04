@@ -1,5 +1,6 @@
 import type { TaskState } from "../protocol-tasks.mts";
-import { MAX_RUNTIME_REASON, watchCodexTasks } from "./codex-runner.mts";
+import { MAX_RUNTIME_REASON } from "./codex-runner.mts";
+import { watchCodexTasks } from "./codex-watch.mts";
 import { retireCopies } from "./copy-retire.mts";
 import { resolveDelivery, updateDeliverySession } from "./delivery-identity.mts";
 import { readdress } from "./inbox.mts";
