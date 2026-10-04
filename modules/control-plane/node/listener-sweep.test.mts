@@ -37,7 +37,7 @@ test("a dead listener's lock and scope go; live locks and the session's state st
   const now = T0 + 60_000;
   assert.deepEqual(checkListeners(paths, alive, now), { ok: true, live: 1, stale: 2 });
 
-  assert.deepEqual(sweepListeners(paths, { pidAlive: alive, now }), { removed: 2, kept: 1, failed: 0 });
+  assert.deepEqual(sweepListeners(paths, { pidAlive: alive, now }), { removed: 2, kept: 1, failed: [] });
   assert.deepEqual(checkListeners(paths, alive, now), { ok: true, live: 1, stale: 0 });
   assert.equal(fs.existsSync(listenerScope(paths, "dead")), false);
   assert.deepEqual(read(lockOf(paths, "live")), lock("t-live", LIVE));
@@ -52,7 +52,7 @@ test("a listener that arms between the sweep's read and its removal keeps its lo
   const result = sweepListeners(paths, { pidAlive: alive, now: T0, beforeTake: (file) => {
     if (file === lockOf(paths, SELF)) listener(paths, SELF, "t-new", LIVE);
   } });
-  assert.deepEqual(result, { removed: 0, kept: 1, failed: 0 });
+  assert.deepEqual(result, { removed: 0, kept: 1, failed: [] });
   assert.deepEqual(read(lockOf(paths, SELF)), lock("t-new", LIVE));
   assert.equal(read(listenerScope(paths, SELF)).token, "t-new");
   assert.deepEqual(tombs(paths), []);
@@ -63,7 +63,7 @@ test("a scope written between its scope and lock writes, or during the scope's r
   const { paths } = setup(t);
   listener(paths, SELF, "t-dead", 1001);
   writeJsonAtomic(listenerScope(paths, SELF), { token: "t-new", listed: true });
-  assert.deepEqual(sweepListeners(paths, { pidAlive: alive, now: T0 }), { removed: 1, kept: 0, failed: 0 });
+  assert.deepEqual(sweepListeners(paths, { pidAlive: alive, now: T0 }), { removed: 1, kept: 0, failed: [] });
   assert.equal(fs.existsSync(lockOf(paths, SELF)), false);
   assert.equal(read(listenerScope(paths, SELF)).token, "t-new");
 
@@ -73,20 +73,20 @@ test("a scope written between its scope and lock writes, or during the scope's r
   const result = sweepListeners(other, { pidAlive: alive, now: T0, beforeTake: (file) => {
     if (file === listenerScope(other, SELF)) writeJsonAtomic(file, { token: "t-new", listed: true });
   } });
-  assert.deepEqual(result, { removed: 1, kept: 0, failed: 0 });
+  assert.deepEqual(result, { removed: 1, kept: 0, failed: [] });
   assert.equal(read(listenerScope(other, SELF)).token, "t-new");
   assert.deepEqual(tombs(other), []);
 });
 
 test("a failed read is reported, never taken for an empty directory or a dead lock", (t) => {
   const { paths } = setup(t);
-  assert.deepEqual(sweepListeners(paths, { pidAlive: alive, now: T0 }), { removed: 0, kept: 0, failed: 0 }, "no directory yet");
+  assert.deepEqual(sweepListeners(paths, { pidAlive: alive, now: T0 }), { removed: 0, kept: 0, failed: [] }, "no directory yet");
   fs.writeFileSync(listenerDir(paths), "not a directory");
   assert.ok("error" in sweepListeners(paths, { pidAlive: alive, now: T0 }));
 
   const other = setup(t).paths;
   fs.mkdirSync(lockOf(other, "odd"), { recursive: true });
-  assert.deepEqual(sweepListeners(other, { pidAlive: alive, now: T0 }), { removed: 0, kept: 0, failed: 1 });
+  assert.deepEqual(sweepListeners(other, { pidAlive: alive, now: T0 }), { removed: 0, kept: 0, failed: ["EISDIR"] });
   assert.ok(fs.statSync(lockOf(other, "odd")).isDirectory());
 });
 
