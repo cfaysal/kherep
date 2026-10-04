@@ -62,7 +62,10 @@ only on stdin, runs by absolute `SystemRoot` path with an allowlisted environmen
 module path, and never receives the bearer in arguments or environment. Each helper run, the write
 and every ACL check, is limited to 5 s. Only a run that hit this limit runs once more, after the
 writer removes the temporary file of the timed-out attempt; any other failure, and a second timeout,
-fail closed (issue #219). Node atomically publishes
+fail closed (issue #219). The limit stays at 5 s because an operator host with Defender on started
+the helper in 147 to 241 ms; a hosted `windows-latest` runner took 1.8 to 2.8 s idle and more than
+5 s under test load, so the tests inject the helper and only those that must start the real one pass
+a longer, test-only limit. Node atomically publishes
 the file, then the strict reader verifies its ACL and content digest at the published path. The
 Windows reader calls .NET [`File.GetAccessControl`](https://learn.microsoft.com/en-us/dotnet/api/system.io.file.getaccesscontrol?view=netframework-4.8.1)
 for access and owner data, requests the owner through

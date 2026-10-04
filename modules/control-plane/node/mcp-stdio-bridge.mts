@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { nodePaths, readConfig, type NodeConfig } from "./config.mts";
-import { readPrivateMcpCredential } from "./mcp-credential-file.mts";
+import { readPrivateMcpCredential, type CredentialPowerShellDeps } from "./mcp-credential-file.mts";
 import { loadPolicy } from "./policy.mts";
 
 const MAX_INPUT_BYTES = 256 * 1024;
@@ -11,7 +11,9 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
 
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-export interface BridgeOptions { fetch?: Fetch; timeoutMs?: number; maxResponseBytes?: number }
+export interface BridgeOptions {
+  fetch?: Fetch; timeoutMs?: number; maxResponseBytes?: number; credential?: CredentialPowerShellDeps;
+}
 
 export class McpBridgeError extends Error {
   readonly code: string;
@@ -52,11 +54,11 @@ function mcpUrl(controlUrl: string): string {
   return url.toString();
 }
 
-function localState(root: string): { endpoint: string; token: string } {
+function localState(root: string, credentialDeps?: CredentialPowerShellDeps): { endpoint: string; token: string } {
   const paths = nodePaths(root);
   const { config, policyFile } = readNodeConfig(root);
   if (loadPolicy(policyFile).remoteMcp?.enabled !== true) return failure("remote_mcp_disabled");
-  const credential = readPrivateMcpCredential(paths.mcpCredential);
+  const credential = readPrivateMcpCredential(paths.mcpCredential, process.platform, credentialDeps);
   if (!credential.ok) return failure(credential.code);
   return { endpoint: mcpUrl(config.controlUrl), token: credential.credential.token };
 }
@@ -123,7 +125,7 @@ export async function forwardMcpLine(line: string, root: string, options: Bridge
   try { request = JSON.parse(line); } catch { return failure("remote_mcp_input_invalid"); }
   if (!record(request) && !Array.isArray(request)) return failure("remote_mcp_input_invalid");
   const notification = isNotification(request);
-  const { endpoint, token } = localState(root);
+  const { endpoint, token } = localState(root, options.credential);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? REQUEST_TIMEOUT_MS);
   let phase: "fetch" | "response" = "fetch";

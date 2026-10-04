@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 import {
   CLAUDE_CLIENT_GRAPH, CLAUDE_TOOL_MATCHER, renderClaudeClient, stageClaudeClient, verifyClaudeClient,
 } from "./claude-mcp-client.mts";
+import { fakePowerShell } from "./mcp-credential-fixture.mts";
 
 const NODE_ID = "00000000-0000-4000-8000-0000000000aa";
 const REQUEST_ID = "40000000-0000-4000-8000-000000000001";
@@ -181,16 +182,21 @@ test("the staged bridge forwards actual Claude metadata unchanged", async (t) =>
     policyFile: paths.policy, enrolledAt: new Date(0).toISOString() });
   fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [],
     remoteMcp: { enabled: true, claudeCode: true } }));
+  // Metadata forwarding is under test here, not the Windows helper (issue #219).
+  const powerShell = fakePowerShell();
   local.recordMcpCredential(paths, { requestId: REQUEST_ID,
-    ok: true, token: `synthetic-${"a".repeat(40)}`, version: 1 });
+    ok: true, token: `synthetic-${"a".repeat(40)}`, version: 1 }, { spawn: powerShell.spawn });
   const bridge = await import(pathToFileURL(path.join(outputRoot, "control-plane/node/mcp-stdio-bridge.mts")).href);
   const native = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "sessions", arguments: {},
     _meta: { "claudecode/toolUseId": "actual-call" } } };
   let forwarded: unknown;
-  await bridge.forwardMcpLine(JSON.stringify(native), configRoot, { fetch: async (_url: unknown, init: RequestInit) => {
-    forwarded = JSON.parse(String(init.body));
-    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
-      { headers: { "content-type": "application/json" } });
-  } });
+  await bridge.forwardMcpLine(JSON.stringify(native), configRoot, { credential: { spawn: powerShell.spawn },
+    fetch: async (_url: unknown, init: RequestInit) => {
+      forwarded = JSON.parse(String(init.body));
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+        { headers: { "content-type": "application/json" } });
+    } });
   assert.deepEqual(forwarded, native);
+  // Write, its ACL check and the bridge's ACL check; POSIX starts no helper.
+  assert.equal(powerShell.calls.length, process.platform === "win32" ? 3 : 0);
 });

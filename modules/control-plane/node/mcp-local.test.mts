@@ -9,6 +9,7 @@ import test from "node:test";
 import { digestMcpArguments } from "../protocol-mcp.mts";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { getMessage, storeMessage } from "./inbox.mts";
+import { fakePowerShell } from "./mcp-credential-fixture.mts";
 import { processMcpIntentHook } from "./mcp-intent-hook.mts";
 import {
   disableMcp, enqueueMcpIntent, hasMcpCredential, readMcpInbox, recordMcpCredential, recordMcpIntentReceipt,
@@ -16,6 +17,8 @@ import {
 
 const NODE = "00000000-0000-4000-8000-0000000000aa";
 const MESSAGE = "40000000-0000-4000-8000-000000000001";
+// The Windows helper has its own tests; these start no powershell.exe (issue #219).
+const CREDENTIAL = { spawn: fakePowerShell().spawn };
 
 function temporary(t: test.TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-mcp-local-"));
@@ -68,7 +71,7 @@ test("queued intent polling waits for the published UUID file and ignores atomic
 test("credential is stored privately and inbox reads do not alter delivery state", (t) => {
   const { paths } = temporary(t);
   assert.equal(hasMcpCredential(paths), false);
-  recordMcpCredential(paths, { requestId: MESSAGE, ok: true, token: "s".repeat(43), version: 1 });
+  recordMcpCredential(paths, { requestId: MESSAGE, ok: true, token: "s".repeat(43), version: 1 }, CREDENTIAL);
   assert.equal(hasMcpCredential(paths), true);
   const mode = fs.statSync(paths.mcpCredential).mode & 0o777;
   if (process.platform !== "win32") assert.equal(mode, 0o600);
@@ -83,7 +86,7 @@ test("credential is stored privately and inbox reads do not alter delivery state
 test("disabling remote MCP removes private credentials and pending local exchange state", (t) => {
   const { paths } = temporary(t);
   const pending = "40000000-0000-4000-8000-000000000002";
-  recordMcpCredential(paths, { requestId: MESSAGE, ok: true, token: "s".repeat(43), version: 1 });
+  recordMcpCredential(paths, { requestId: MESSAGE, ok: true, token: "s".repeat(43), version: 1 }, CREDENTIAL);
   const credentialTemp = path.join(paths.mcp, `.credential.json.${crypto.randomUUID()}.tmp`);
   fs.writeFileSync(credentialTemp, "synthetic-stale-credential");
   recordMcpIntentReceipt(paths, new Set(), { requestId: MESSAGE, ok: true, expiresAt: Date.now() + 120_000, version: 1 });
