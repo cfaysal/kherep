@@ -35,14 +35,16 @@ export const CODEX_SANDBOX: Readonly<Record<PermissionMode, string>> = {
 // Flags that lift the sandbox or approvals; the runner never passes them.
 export const FORBIDDEN_CODEX_FLAGS = ["--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "--approve-for-me"];
 
+export type SignalScope = "group" | "process";
+
 export interface CodexDeps {
   findCodex?: () => string | null;
   platform?: NodeJS.Platform;
   // The start time of a running process, null when there is none; throws
   // when it cannot tell.
   processStart?: (pid: number) => string | null;
-  // Signals the process group of pid.
-  signal?: (pid: number, signal: NodeJS.Signals) => void;
+  // Signals the process group of pid, or with scope "process" only pid.
+  signal?: (pid: number, signal: NodeJS.Signals, scope?: SignalScope) => void;
   processTree?: (root: number) => ProcessIdentity[];
   processRelations?: () => ProcessRelation[];
   graceMs?: number;
@@ -201,11 +203,14 @@ export function processStart(pid: number, platform: NodeJS.Platform = process.pl
   }
 }
 
+type Run = (file: string, args: string[]) => unknown;
+const runHidden: Run = (file, args) => execFileSync(file, args, { windowsHide: true, timeout: 10_000 });
+
 // SIGTERM or SIGKILL to the process group (the negative pid) or, on Windows,
 // taskkill for the process tree (/T; /F for SIGKILL). Either way it reaches
 // codex behind the npm launcher too. A process that is gone is no error.
 export function signalGroup(pid: number, signal: NodeJS.Signals, platform: NodeJS.Platform = process.platform,
-  run: (file: string, args: string[]) => unknown = (file, args) => execFileSync(file, args, { windowsHide: true, timeout: 10_000 })): boolean {
+  run: Run = runHidden): boolean {
   try {
     if (platform === "win32") {
       run("taskkill", ["/PID", String(pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])]);
@@ -216,6 +221,16 @@ export function signalGroup(pid: number, signal: NodeJS.Signals, platform: NodeJ
   } catch {
     return false;
   }
+}
+
+// The same signal to the single process pid; throws when it fails. Issue #231:
+// a descendant in its own process group misses the group signal, and on Windows
+// taskkill /T walks the tree from a root that must still run, so a descendant
+// whose root ended is reached only by its own pid.
+export function signalProcess(pid: number, signal: NodeJS.Signals, platform: NodeJS.Platform = process.platform,
+  run: Run = runHidden): void {
+  if (platform === "win32") run("taskkill", ["/PID", String(pid), ...(signal === "SIGKILL" ? ["/F"] : [])]);
+  else process.kill(pid, signal);
 }
 
 // True while the process that pid names is still the one this node started;

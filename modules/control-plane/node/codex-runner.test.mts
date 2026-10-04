@@ -200,7 +200,8 @@ test("the watch retries a durable operator stop after a transient signal failure
   let attempts = 0;
   const deps = node.deps({ processTree: () => running ? [{ pid: 4_000_000, start: "recorded" }] : [],
     processStart: () => running ? "recorded" : null, graceMs: 1, signal: () => {
-      if (attempts++ === 0) throw new Error("transient signal failure");
+      // A failed SIGTERM falls through to SIGKILL (issue #231), so both fail once.
+      if (attempts++ < 2) throw new Error("transient signal failure");
       running = false;
     } });
   await assert.rejects(stopTask({ taskId: TASK }, deps), /transient signal failure/);

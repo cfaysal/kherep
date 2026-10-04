@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 
-import { holdsChild, signalGroup, startTimeOf, type CodexDeps } from "./codex-process.mts";
+import { holdsChild, signalGroup, signalProcess, startTimeOf, type CodexDeps, type SignalScope } from "./codex-process.mts";
 
 export interface ProcessIdentity { pid: number; start: string }
 export interface ProcessRelation { pid: number; ppid: number }
@@ -128,16 +128,11 @@ async function waitStopped(deps: CodexDeps, identities: ProcessIdentity[], timeo
   return allStopped(deps, identities);
 }
 
-function rootCanBeSignalled(deps: CodexDeps, root: ProcessIdentity, identities: ProcessIdentity[], signal: NodeJS.Signals): boolean {
-  const current = startTimeOf(deps, root.pid);
-  if (current === root.start) return true;
-  if (allStopped(deps, identities)) return false;
-  const reason = current === null ? "ended" : "was reused";
-  throw new Error("root process " + reason + " before " + signal + " while captured descendants still run");
-}
+type Send = (pid: number, signal: NodeJS.Signals, scope: SignalScope) => void;
 
-function sender(deps: CodexDeps): (pid: number, signal: NodeJS.Signals) => void {
-  return deps.signal ?? ((target, signal) => {
+function sender(deps: CodexDeps): Send {
+  return deps.signal ?? ((target, signal, scope) => {
+    if (scope === "process") return signalProcess(target, signal, deps.platform);
     const sent = signalGroup(target, signal, deps.platform);
     // Windows taskkill /T reports failure when descendants require /F; that is
     // the expected first phase, followed by the bounded forced phase below.
@@ -147,9 +142,37 @@ function sender(deps: CodexDeps): (pid: number, signal: NodeJS.Signals) => void 
   });
 }
 
+// One stop phase. Issue #231: Codex runs shell commands in their own process
+// group, which the signal to the root's group misses, and the root can end
+// before them. So the group (the tree on Windows) is signalled while the root
+// is still the captured process, and then, by pid, each captured descendant
+// that still has its captured start time; a reused pid is never signalled.
+// Returns why something got no signal or a send failed; the wait that follows
+// decides whether the tree stopped.
+function signalPhase(deps: CodexDeps, root: ProcessIdentity, identities: ProcessIdentity[], signal: NodeJS.Signals): string[] {
+  const send = sender(deps);
+  const notes: string[] = [];
+  const attempt = (pid: number, scope: SignalScope): void => {
+    try {
+      send(pid, signal, scope);
+    } catch (error) {
+      notes.push(signal + (scope === "group" ? " to the group of pid " : " to pid ") + pid + " failed: "
+        + String((error as Error).message ?? error));
+    }
+  };
+  const current = startTimeOf(deps, root.pid);
+  if (current === root.start) attempt(root.pid, "group");
+  else notes.push("root process " + (current === null ? "ended" : "was reused") + " before " + signal);
+  for (const { pid, start } of identities) {
+    if (pid !== root.pid && startTimeOf(deps, pid) === start) attempt(pid, "process");
+  }
+  return notes;
+}
+
 // Capture the exact process tree and each pid's start identity, signal its OS
-// group/tree, and return only after every captured identity ended. A failed
-// read or signal remains an error, so callers cannot report a guessed stop.
+// group/tree and each verified descendant, SIGTERM and then SIGKILL, and
+// return only after every captured identity ended. A failed read, or a tree
+// that outlives SIGKILL, remains an error, so callers cannot report a guessed stop.
 // Issue #221: a ps or PowerShell helper that hit its time limit must not leave
 // the tree running. If the root is still the recorded process, its tree is
 // forced (SIGKILL; taskkill /T /F on Windows), and the stop still fails, since
@@ -163,7 +186,7 @@ export async function terminate(deps: CodexDeps, pid: number, pidStart: string |
     try {
       const recorded = pidStart === undefined ? holdsChild(pid) : startTimeOf(deps, pid) === pidStart;
       if (recorded) {
-        sender(deps)(pid, "SIGKILL");
+        sender(deps)(pid, "SIGKILL", "group");
         outcome = "its process tree was forced to stop, the stop is not confirmed";
       } else {
         outcome = "the root is no longer the recorded process, so nothing was forced";
@@ -183,22 +206,9 @@ async function terminateTree(deps: CodexDeps, pid: number, pidStart: string | un
     if (allStopped(deps, identities)) return;
     throw new Error("root process identity changed during capture while captured processes still run");
   }
-  const send = sender(deps);
   const grace = deps.graceMs ?? 5_000;
-  if (!rootCanBeSignalled(deps, root, identities, "SIGTERM")) return;
-  try {
-    send(pid, "SIGTERM");
-  } catch (error) {
-    if (allStopped(deps, identities)) return;
-    throw error;
-  }
+  signalPhase(deps, root, identities, "SIGTERM");
   if (await waitStopped(deps, identities, grace)) return;
-  if (!rootCanBeSignalled(deps, root, identities, "SIGKILL")) return;
-  try {
-    send(pid, "SIGKILL");
-  } catch (error) {
-    if (allStopped(deps, identities)) return;
-    throw error;
-  }
-  if (!await waitStopped(deps, identities, grace)) throw new Error("process tree did not stop after SIGKILL");
+  const notes = signalPhase(deps, root, identities, "SIGKILL");
+  if (!await waitStopped(deps, identities, grace)) throw new Error(["process tree did not stop after SIGKILL", ...notes].join("; "));
 }

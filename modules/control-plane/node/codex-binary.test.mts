@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { codexCommand, codexLauncher } from "./codex-binary.mts";
-import { signalGroup } from "./codex-process.mts";
+import { signalGroup, signalProcess } from "./codex-process.mts";
 
 // Codex behind a Windows npm shim (issue #63): the shim only runs the package's
 // launcher, so the node runs that launcher with its own Node, without a shell.
@@ -32,4 +32,12 @@ test("on Windows a stop ends the whole process tree: taskkill /T, then /T /F", (
   signalGroup(4242, "SIGTERM", "win32", (file, args) => calls.push([file, args]));
   signalGroup(4242, "SIGKILL", "win32", (file, args) => calls.push([file, args]));
   assert.deepEqual(calls, [["taskkill", ["/PID", "4242", "/T"]], ["taskkill", ["/PID", "4242", "/T", "/F"]]]);
+});
+
+test("on Windows a single descendant is signalled by its own pid, without /T (issue #231)", () => {
+  const calls: unknown[] = [];
+  signalProcess(4243, "SIGTERM", "win32", (file, args) => calls.push([file, args]));
+  signalProcess(4243, "SIGKILL", "win32", (file, args) => calls.push([file, args]));
+  assert.deepEqual(calls, [["taskkill", ["/PID", "4243"]], ["taskkill", ["/PID", "4243", "/F"]]]);
+  assert.throws(() => signalProcess(4243, "SIGKILL", "win32", () => { throw new Error("Access is denied."); }), /Access is denied/);
 });

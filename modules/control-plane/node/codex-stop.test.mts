@@ -1,21 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { SignalScope } from "./codex-process.mts";
 import { processTree, terminate, windowsRelations, type ProcessIdentity } from "./codex-stop.mts";
 
 const ROOT = 40_001;
 const CHILD = 40_002;
 const TREE: ProcessIdentity[] = [{ pid: ROOT, start: "root-start" }, { pid: CHILD, start: "child-start" }];
+type Sent = [number, NodeJS.Signals, SignalScope | undefined];
 
 test("termination confirms every captured pid start identity before returning", async () => {
   const starts = new Map(TREE.map((entry) => [entry.pid, entry.start]));
-  const signals: NodeJS.Signals[] = [];
+  const signals: Sent[] = [];
   await terminate({ processTree: () => TREE, processStart: (pid) => starts.get(pid) ?? null, graceMs: 1,
-    signal: (_pid, signal) => {
-      signals.push(signal);
+    signal: (pid, signal, scope) => {
+      signals.push([pid, signal, scope]);
       if (signal === "SIGKILL") starts.clear();
     } }, ROOT, "root-start");
-  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  assert.deepEqual(signals, [[ROOT, "SIGTERM", "group"], [CHILD, "SIGTERM", "process"], [ROOT, "SIGKILL", "group"]]);
   assert.deepEqual([...starts], []);
 });
 
@@ -28,29 +30,70 @@ test("Windows process discovery captures the root and every descendant identity"
     processRelations: () => [] }, ROOT), [TREE[0]]);
 });
 
-test("a reused root pid during grace is not signalled again", async () => {
+test("a reused root pid during grace is not signalled again; its verified child is, by pid", async () => {
   const starts = new Map(TREE.map((entry) => [entry.pid, entry.start]));
-  const signals: NodeJS.Signals[] = [];
+  const signals: Sent[] = [];
   await assert.rejects(terminate({ processTree: () => TREE, processStart: (pid) => starts.get(pid) ?? null, graceMs: 1,
-    signal: (_pid, signal) => {
-      signals.push(signal);
+    signal: (pid, signal, scope) => {
+      signals.push([pid, signal, scope]);
       starts.set(ROOT, "reused-root");
-    } }, ROOT, "root-start"), /root process was reused before SIGKILL/);
-  assert.deepEqual(signals, ["SIGTERM"]);
+    } }, ROOT, "root-start"), /did not stop after SIGKILL; root process was reused before SIGKILL/);
+  assert.deepEqual(signals, [[ROOT, "SIGTERM", "group"], [CHILD, "SIGTERM", "process"], [CHILD, "SIGKILL", "process"]]);
   assert.equal(starts.get(CHILD), "child-start");
 });
 
-test("an orphaned captured child prevents false stop confirmation", async () => {
+test("an orphaned captured child that cannot be stopped prevents false stop confirmation", async () => {
   const starts = new Map(TREE.map((entry) => [entry.pid, entry.start]));
-  const signals: NodeJS.Signals[] = [];
+  const signals: Sent[] = [];
   await assert.rejects(terminate({ platform: "win32", processTree: () => TREE,
     processStart: (pid) => starts.get(pid) ?? null, graceMs: 1,
-    signal: (_pid, signal) => {
-      signals.push(signal);
+    signal: (pid, signal, scope) => {
+      signals.push([pid, signal, scope]);
       starts.delete(ROOT);
-    } }, ROOT, "root-start"), /root process ended before SIGKILL/);
-  assert.deepEqual(signals, ["SIGTERM"]);
+      if (pid === CHILD && signal === "SIGKILL") throw new Error("Access is denied.");
+    } }, ROOT, "root-start"),
+  /did not stop after SIGKILL; root process ended before SIGKILL; SIGKILL to pid 40002 failed: Access is denied\./);
+  assert.deepEqual(signals, [[ROOT, "SIGTERM", "group"], [CHILD, "SIGTERM", "process"], [CHILD, "SIGKILL", "process"]]);
   assert.equal(starts.get(CHILD), "child-start");
+});
+
+// Issue #231: Codex runs shell commands in their own process group, so the
+// signal to the root's group misses them, and the root can end first.
+test("a descendant outside the root's group is stopped by pid after the group signal (issue #231)", async () => {
+  const starts = new Map(TREE.map((entry) => [entry.pid, entry.start]));
+  const signals: Sent[] = [];
+  await terminate({ processTree: () => TREE, processStart: (pid) => starts.get(pid) ?? null, graceMs: 1,
+    signal: (pid, signal, scope) => {
+      signals.push([pid, signal, scope]);
+      starts.delete(pid); // the group signal reaches the root only
+    } }, ROOT, "root-start");
+  assert.deepEqual(signals, [[ROOT, "SIGTERM", "group"], [CHILD, "SIGTERM", "process"]]);
+  assert.equal(starts.size, 0);
+});
+
+test("a root that ended before SIGKILL leaves its verified descendant to SIGKILL by pid (issue #231)", async () => {
+  const starts = new Map(TREE.map((entry) => [entry.pid, entry.start]));
+  const signals: Sent[] = [];
+  await terminate({ processTree: () => TREE, processStart: (pid) => starts.get(pid) ?? null, graceMs: 1,
+    signal: (pid, signal, scope) => {
+      signals.push([pid, signal, scope]);
+      if (pid === ROOT || signal === "SIGKILL") starts.delete(pid); // the child ignores SIGTERM
+    } }, ROOT, "root-start");
+  assert.deepEqual(signals, [[ROOT, "SIGTERM", "group"], [CHILD, "SIGTERM", "process"], [CHILD, "SIGKILL", "process"]]);
+  assert.equal(starts.size, 0);
+});
+
+test("a captured descendant pid that was reused is never signalled (issue #231)", async () => {
+  const starts = new Map(TREE.map((entry) => [entry.pid, entry.start]));
+  const signals: Sent[] = [];
+  await terminate({ processTree: () => TREE, processStart: (pid) => starts.get(pid) ?? null, graceMs: 1,
+    signal: (pid, signal, scope) => {
+      signals.push([pid, signal, scope]);
+      starts.delete(ROOT);
+      starts.set(CHILD, "reused-child"); // the child ended and its pid now names another process
+    } }, ROOT, "root-start");
+  assert.deepEqual(signals, [[ROOT, "SIGTERM", "group"]]);
+  assert.equal(starts.get(CHILD), "reused-child");
 });
 
 test("a tree that survives SIGKILL rejects instead of confirming a stop", async () => {
