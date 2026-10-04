@@ -14,7 +14,7 @@ const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve
 
 // Issue #215: the daemon leaves its pid at start and the time of its last
 // authenticated connection, the evidence `kherep-node doctor` reads.
-test("the daemon records its pid at start and the time of each authenticated connection", async (t) => {
+test("the daemon records its pid at start, each authenticated connection and each lost connection", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-daemon-state-"));
   const paths = nodePaths(root);
   fs.mkdirSync(paths.dir, { recursive: true });
@@ -58,6 +58,11 @@ test("the daemon records its pid at start and the time of each authenticated con
   assert.equal(connected?.startedAt, started?.startedAt);
   assert.ok(connected?.connectedAt && !Number.isNaN(Date.parse(connected.connectedAt)));
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(daemonStateFile(paths), "utf8"))).sort(), ["connectedAt", "pid", "startedAt"]);
+
+  listeners.get("close")?.({ code: 1012 });
+  const lost = readDaemonState(paths);
+  assert.equal(lost?.connectedAt, connected?.connectedAt);
+  assert.ok(lost?.disconnectedAt && !Number.isNaN(Date.parse(lost.disconnectedAt)));
 });
 
 test("pidAlive accepts only a running process id", () => {

@@ -97,7 +97,7 @@ test("enrollment fails without a node, without a readable key, with a foreign ke
   assert.equal(report.checks.worker.detail, "needs an enrolled node");
 });
 
-test("the daemon check needs a recorded, running process that has authenticated", async (t) => {
+test("the daemon check needs a recorded, running process whose last connection is authenticated", async (t) => {
   const h = host(t);
   const state = daemonStateFile(h.paths);
   fs.writeFileSync(state, JSON.stringify({ pid: 99, startedAt: "2026-10-04T10:00:00.000Z", connectedAt: "2026-10-04T10:00:01.000Z" }));
@@ -105,6 +105,10 @@ test("the daemon check needs a recorded, running process that has authenticated"
   fs.writeFileSync(state, JSON.stringify({ pid: LIVE_PID, startedAt: "2026-10-04T10:00:00.000Z" }));
   const unconnected = (await runDoctor(h.deps)).checks.daemon;
   assert.deepEqual([unconnected.ok, unconnected.alive, unconnected.connectedAt], [false, true, null]);
+  fs.writeFileSync(state, JSON.stringify({ pid: LIVE_PID, startedAt: "2026-10-04T10:00:00.000Z",
+    connectedAt: "2026-10-04T10:00:01.000Z", disconnectedAt: "2026-10-04T11:00:00.000Z" }));
+  const reconnecting = (await runDoctor(h.deps)).checks.daemon;
+  assert.deepEqual([reconnecting.ok, reconnecting.disconnectedAt], [false, "2026-10-04T11:00:00.000Z"]);
   fs.writeFileSync(state, "{");
   assert.equal((await runDoctor(h.deps)).checks.daemon.detail, "daemon.json is unreadable");
   fs.rmSync(state);

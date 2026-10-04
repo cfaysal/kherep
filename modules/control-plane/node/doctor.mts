@@ -4,8 +4,8 @@ import path from "node:path";
 import { codexHome } from "./codex-app.mts";
 import type { NodePaths } from "./config.mts";
 import { pidAlive } from "./daemon-state.mts";
-import { findOnPath } from "./discovery.mts";
-import { checkHooks, checkRuntimes, checkWorker, runtimeVersion, type VersionOf } from "./doctor-host.mts";
+import { checkRuntimes, checkWorker, findRuntime, runtimeVersion, type VersionOf } from "./doctor-host.mts";
+import { checkHooks } from "./doctor-hooks.mts";
 import { checkDaemon, checkEnrollment, checkListeners, checkPolicy, type Check } from "./doctor-local.mts";
 import { defaultConfigDir } from "./launch-mode.mts";
 
@@ -53,7 +53,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     worker: config ? await checkWorker(config.controlUrl, deps.fetch ?? fetch) : notEnrolled,
     policy,
     runtimes: await checkRuntimes(parsed?.sessions?.enabled ? parsed.sessions.runtimes : [],
-      deps.find ?? ((name) => findOnPath(name)), deps.versionOf ?? runtimeVersion),
+      deps.find ?? findRuntime, deps.versionOf ?? runtimeVersion),
     hooks: checkHooks({
       claude: path.join(deps.claudeConfigDir ?? defaultConfigDir(), "settings.json"),
       codex: path.join(deps.codexHome ?? codexHome(), "config.toml"),

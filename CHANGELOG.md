@@ -19,8 +19,8 @@ increments the minor version; every other release increments the patch version.
   key, daemon liveness, Worker reachability and version, policy and wake
   summary, installed runtimes and versions, hook paths against this checkout
   and live wake listeners, and exits 1 when a check fails. The daemon now
-  writes `daemon.json` (pid, start and last authenticated connection time) for
-  it (issue #215).
+  writes `daemon.json` (pid, start, last authenticated connection and lost
+  connection time) for it (issue #215).
 - Control Plane: `msg status` and `msg send --wait` show the sender states
   `running` and `stopped`, derived from the existing accepted progress codes
   without a new wire state, and an accepted message without progress for 5
