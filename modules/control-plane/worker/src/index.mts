@@ -2,6 +2,7 @@ import { isNodeId } from "../../protocol.mts";
 import { verifyAccess } from "./access.mts";
 import { handleApi } from "./api.mts";
 import { handleEnroll } from "./enroll.mts";
+import { health } from "./health.mts";
 import { sessionStub, type Env } from "./env.mts";
 import { fail, json } from "./http.mts";
 import { handleMcp } from "./mcp-http.mts";
@@ -17,7 +18,7 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    if (path === "/health") return json({ ok: true, service: "kherep-control" });
+    if (path === "/health") return json(health(env));
 
     if (path === "/node/connect") {
       if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") return fail(426, "expected websocket upgrade");
