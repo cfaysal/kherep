@@ -357,6 +357,20 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: a task stop no longer leaves a Codex shell command running
+  when it is outside the root's process group (issue #231). On macOS a
+  `sleep 900` started by Codex missed the SIGTERM to the root's group, Codex
+  exited, and the stop failed with "root process ended before SIGKILL while
+  captured descendants still run" without ever signalling the child, which
+  then ran on as an orphan. After each group signal, SIGTERM and then SIGKILL,
+  the stop now signals every captured descendant that still has its captured
+  start identity by its own pid (`taskkill /PID <pid>`, `/F` for SIGKILL, on
+  Windows, where `taskkill /T` cannot reach a descendant whose root ended),
+  also when the root has already ended. A reused pid is never signalled, the
+  group is signalled only while the root is the captured process, and the
+  stop is still confirmed only after every captured identity ended; otherwise
+  it fails and names the ended or reused root and any failed SIGKILL send. A
+  failed SIGTERM send no longer ends the stop before SIGKILL.
 - Control Plane: the daemon removes the locks of wake listeners whose process
   is gone, at its start and then hourly, so doctor's `stale` listener count
   falls (issue #225). It never deletes by path: it renames a lock to a

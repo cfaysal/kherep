@@ -138,7 +138,8 @@ test("an owner stop during an active run confirms only after the run and every c
   const status = await executeTaskControl(operation("status"), context);
   assert.equal(status.processState, "running");
   const stopped = await executeTaskControl(operation("stop", runVersionOf(task)!), context);
-  assert.deepEqual(signals, [[4_000_000, "SIGTERM"], [4_000_000, "SIGKILL"]]);
+  // The child that still runs after the group SIGTERM also gets it by pid (issue #231).
+  assert.deepEqual(signals, [[4_000_000, "SIGTERM"], [CHILD, "SIGTERM"], [4_000_000, "SIGKILL"]]);
   assert.equal(alive.size, 0);
   assert.deepEqual([stopped.state, stopped.stopConfirmed, stopped.processState, stopped.runVersion, stopped.taskState],
     ["succeeded", true, "closed", runVersionOf(task), "stopped"]);
