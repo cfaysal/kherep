@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { processTree, terminate, type ProcessIdentity } from "./codex-stop.mts";
+import { processTree, terminate, windowsRelations, type ProcessIdentity } from "./codex-stop.mts";
 
 const ROOT = 40_001;
 const CHILD = 40_002;
@@ -79,4 +79,47 @@ test("a reused root seen during capture is not accepted as a stopped tree", asyn
 test("a missing root with ended captured descendants needs no signal", async () => {
   await terminate({ processTree: () => [TREE[1]], processStart: () => null,
     signal: () => { assert.fail("an ended tree must not be signalled"); } }, ROOT, "root-start");
+});
+
+// execFileSync's error when its timeout ended the child (issue #221).
+const timeout = () => Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" });
+const timesOut = (): never => { throw timeout(); };
+
+test("a timed-out Windows process-tree query runs once more; any other failure and a second timeout throw (issue #221)", () => {
+  let calls = 0;
+  assert.deepEqual(windowsRelations(() => {
+    calls += 1;
+    return calls === 1 ? timesOut() : `${CHILD} ${ROOT}\r\n`;
+  }), [{ pid: CHILD, ppid: ROOT }]);
+  assert.equal(calls, 2);
+  for (const [error, expected] of [[timeout(), 2], [new Error("Add-Type failed"), 1]] as const) {
+    calls = 0;
+    assert.throws(() => windowsRelations(() => { calls += 1; throw error; }), error);
+    assert.equal(calls, expected);
+  }
+});
+
+test("a capture that timed out forces the verified root's tree and still fails the stop (issue #221)", async () => {
+  const starts = new Map(TREE.map((entry) => [entry.pid, entry.start]));
+  const signals: NodeJS.Signals[] = [];
+  await assert.rejects(terminate({ processRelations: timesOut, processStart: (pid) => starts.get(pid) ?? null,
+    signal: (_pid, signal) => {
+      signals.push(signal);
+      starts.clear();
+    } }, ROOT, "root-start"), /ETIMEDOUT; its process tree was forced to stop, the stop is not confirmed/);
+  assert.deepEqual(signals, ["SIGKILL"]);
+  assert.equal(starts.size, 0);
+});
+
+test("after a timeout only the recorded root is forced, and a failed force is reported (issue #221)", async () => {
+  const signals: NodeJS.Signals[] = [];
+  const signal = (_pid: number, sent: NodeJS.Signals) => { signals.push(sent); };
+  await assert.rejects(terminate({ processRelations: timesOut, processStart: () => "reused-root", signal }, ROOT, "root-start"),
+    /ETIMEDOUT; the root is no longer the recorded process, so nothing was forced/);
+  await assert.rejects(terminate({ processRelations: () => { throw new Error("Add-Type failed"); },
+    processStart: () => "root-start", signal }, ROOT, "root-start"), /^Error: Add-Type failed$/);
+  assert.deepEqual(signals, []);
+  await assert.rejects(terminate({ processRelations: timesOut, processStart: () => "root-start",
+    signal: () => { throw new Error("could not send SIGKILL to process tree"); } }, ROOT, "root-start"),
+  /ETIMEDOUT; forcing its process tree failed: could not send SIGKILL to process tree/);
 });
