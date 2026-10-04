@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { listenerDir } from "./autonomy.mts";
 import { NodeClient } from "./client.mts";
 import { nodePaths, type NodeConfig } from "./config.mts";
 import { startDaemon } from "./daemon.mts";
@@ -39,6 +41,11 @@ test("the daemon records its pid at start, each authenticated connection and eac
   // Issue #222: each completed readiness probe is recorded with its fixed cause, never the probe's output.
   fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [],
     sessions: { enabled: true, workspaceRoots: [root], runtimes: ["claude", "codex"] } }));
+  // Issue #225: the start also removes the lock of a listener whose process has exited.
+  const gone = spawnSync(process.execPath, ["-e", ""]).pid;
+  const stale = path.join(listenerDir(paths), "s-gone.json");
+  fs.mkdirSync(listenerDir(paths));
+  fs.writeFileSync(stale, JSON.stringify({ token: "t", pid: gone, startedAt: Date.now(), event: "Stop" }));
   const handle = startDaemon(config, paths, () => {}, undefined, async (runtime) => (runtime === "claude"
     ? { ok: true } : { ok: false, cause: "sign-in", detail: "SYNTHETIC_PROBE_OUTPUT" }));
   t.after(() => {
@@ -50,6 +57,7 @@ test("the daemon records its pid at start, each authenticated connection and eac
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  assert.equal(fs.existsSync(stale), false);
   const started = readDaemonState(paths);
   assert.equal(started?.pid, process.pid);
   assert.ok(started && !Number.isNaN(Date.parse(started.startedAt)));

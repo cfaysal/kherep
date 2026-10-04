@@ -16,6 +16,7 @@ import {
 } from "./exchange.mts";
 import { readPrivateKey } from "./identity.mts";
 import { purgeInbox, storeMessage } from "./inbox.mts";
+import { scheduleListenerSweep } from "./listener-sweep.mts";
 import { loadPolicy, type NodePolicy } from "./policy.mts";
 import { routeFrame } from "./readiness-lane.mts";
 import { probeRuntime, type ProbeResult } from "./runtime-probe.mts";
@@ -84,6 +85,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   } catch (error) {
     log(`kherep-node: inbox purge failed: ${String(error)}`);
   }
+  // Issue #225: locks of wake listeners whose process is gone, now and hourly.
+  const stopSweep = scheduleListenerSweep(paths, log);
   // Successful listings update sessions.json and include hook-recorded Codex sessions.
   let periodicDiscovery: AbortController | null = null;
   const source = sessionSource ?? ((signal?: AbortSignal) => listSessions({ paths, codexHome: codexHome(), signal }));
@@ -289,6 +292,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   return {
     stop() {
       stopped = true;
+      stopSweep();
       if (retry) clearTimeout(retry);
       if (socket && socket.readyState <= WebSocket.OPEN) socket.close(1000, "node stopping");
       else finish();

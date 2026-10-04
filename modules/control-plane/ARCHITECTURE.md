@@ -190,6 +190,14 @@ daemon's recorded verdict with its probe time and the fixed cause code, or
 never probes. A configured runtime whose last probe needs a sign-in fails the
 runtimes check, as it is the one cause that makes the node refuse a run.
 
+Besides a listener releasing its own lock, the daemon removes wake listener
+locks (`node/listener-sweep.mts`, issue #225): at its start and hourly, the
+lock of a listener whose pid is not running, and that lock's scope file while
+it carries the same token. Each file is renamed to a tombstone and deleted
+only when its bytes are unchanged, otherwise linked back without overwriting;
+a listener that finds its lock gone while its scope still names it puts it
+back the same way. The session's mode, budget, woken and queued files stay.
+
 ## Compatibility and activation
 
 Ship the Worker and node source together, then explicitly activate node policy.
