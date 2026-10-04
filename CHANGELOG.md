@@ -357,6 +357,14 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: the daemon removes the locks of wake listeners whose process
+  is gone, at its start and then hourly, so doctor's `stale` listener count
+  falls (issue #225). It never deletes by path: it renames a lock to a
+  tombstone, deletes it only when its bytes still equal what it judged, and
+  otherwise links it back without overwriting a newer file; a listener whose
+  lock is gone while its scope file still names it puts it back. The scope
+  file goes with its lock only while it carries that lock's token; the
+  session's mode, budget, woken and queued files stay.
 - Control Plane: a task stop no longer leaves the process tree running when a
   helper times out (issue #221). On a `windows-latest` runner the Toolhelp32
   process-tree query (`powershell.exe` with an `Add-Type` compile) hit its

@@ -12,6 +12,7 @@ import { isMainModule } from "./deliver-hook.mts";
 import { localSessionName } from "./exchange.mts";
 import { getMessage, readJson, writeJsonAtomic } from "./inbox.mts";
 import { launchMode, type LaunchVerdict } from "./launch-mode.mts";
+import { reclaimLock } from "./listener-sweep.mts";
 import { explicitlyListed, loadPolicy, readPolicy, wakeAllowed } from "./policy.mts";
 import { mappingPending, taskForSession, type TaskRecord } from "./task-records.mts";
 import { transcriptMode } from "./transcript-mode.mts";
@@ -167,15 +168,18 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
   const release = (): void => fs.rmSync(lockFile, { force: true });
   const limited = new Set<string>();
   let unreadable = false;
+  let last = mine;
   for (;;) {
     await sleep(WAKE_POLL_MS);
-    const held = readJson<ListenerLock>(lockFile);
+    // The daemon's sweep may hold the lock aside for a moment (issue #225).
+    const held = readJson<ListenerLock>(lockFile) ?? reclaimLock(paths, sessionId, last);
     if (!held) return quiet;
     // Identity is the token, never the pid, and a replaced listener only ends itself.
     if (held.token !== mine.token) {
       audit(paths, now(), sessionId, [], "superseded");
       return quiet;
     }
+    last = held;
     if (!parentAlive()) {
       release();
       audit(paths, now(), sessionId, [], "parent-gone");
