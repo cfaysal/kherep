@@ -159,7 +159,7 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
   const mine: ListenerLock = { token: deps.token?.() ?? crypto.randomUUID(), pid: deps.pid ?? process.pid, startedAt: armedAt, event,
     ...(starting && typeof source === "string" ? { source } : {}) };
   ensureDir(listenerDir(paths));
-  const scope = (): ListenerScope => ({ token: mine.token, listed, ...(grant ? { taskId: grant.taskId } : {}) });
+  const scope = (): ListenerScope => ({ token: mine.token, listed, ...(grant ? { taskId: grant.taskId } : {}), startedAt: mine.startedAt });
   // Before the lock, so a lock with this token always has its scope.
   recordScope(paths, sessionId, scope());
   writeJsonAtomic(lockFile, mine);
@@ -176,6 +176,13 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     if (!held) return quiet;
     // Identity is the token, never the pid, and a replaced listener only ends itself.
     if (held.token !== mine.token) {
+      // An older listener wrote into a gap (a sweep held this lock aside, a slow
+      // SessionStart check): the newer one takes the lock back. Should that
+      // overwrite a newer lock, the newer listener does the same at its poll.
+      if (held.startedAt < mine.startedAt) {
+        writeJsonAtomic(lockFile, last);
+        continue;
+      }
       audit(paths, now(), sessionId, [], "superseded");
       return quiet;
     }

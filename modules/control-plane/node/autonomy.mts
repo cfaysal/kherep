@@ -142,7 +142,8 @@ export interface ListenerLock {
 // What the live listener wakes for (issue #213): every message for its session
 // (listed) or only those of its task grant (taskId). Kept beside the lock and
 // valid only while the lock carries the same token; delivery-progress.mts reads it.
-export interface ListenerScope { token: string; listed: boolean; taskId?: string }
+// startedAt: its lock's, so a listener can tell an older one's scope (issue #225).
+export interface ListenerScope { token: string; listed: boolean; taskId?: string; startedAt?: number }
 export const listenerScope = (paths: NodePaths, sessionId: string): string => path.join(listenerDir(paths), `${sessionId}.scope.json`);
 export function recordScope(paths: NodePaths, sessionId: string, scope: ListenerScope): void {
   const file = listenerScope(paths, sessionId);
