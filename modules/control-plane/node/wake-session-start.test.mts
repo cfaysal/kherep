@@ -40,7 +40,7 @@ test("armed at SessionStart, an idle session wakes on a message after startup, r
       if (clock === T0 + WAKE_POLL_MS) armed = JSON.parse(fs.readFileSync(lockFile(paths), "utf8"));
     } }));
     assert.deepEqual(result, { code: 2, text: wakeText(1) }, source);
-    assert.deepEqual(armed, { token: (armed as { token: string }).token, pid: 4242, startedAt: T0, event: "SessionStart", source });
+    assert.deepEqual(armed, { token: (armed as { token: string }).token, pid: 4242, startedAt: T0, order: T0, event: "SessionStart", source });
     assert.deepEqual(auditLines(paths).map((l) => [l.action, Date.parse(l.ts)]), [["wake", LATER + WAKE_SETTLE_MS]], source);
     assert.equal(fs.existsSync(lockFile(paths)), false, source);
   }

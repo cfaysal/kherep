@@ -195,7 +195,9 @@ locks (`node/listener-sweep.mts`, issue #225): at its start and hourly, the
 lock of a listener whose pid is not running, and that lock's scope file while
 it carries the same token. Each file is renamed to a tombstone and deleted
 only when its bytes are unchanged, otherwise linked back without overwriting;
-if a file took the place meanwhile, the newer lock by `startedAt` keeps it.
+if a file took the place meanwhile, the later-armed lock keeps it, by its
+`order` (`node/listener-order.mts`): never below one more than the lock and
+scope in place, so a clock that stepped back cannot invert it.
 Listeners never yield to an older one: a listener that finds its lock gone
 while its scope names it or an older listener puts it back, and one that
 finds an older listener's lock writes its own back. The session's mode,

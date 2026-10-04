@@ -5,7 +5,7 @@ import path from "node:path";
 import { listenerDir, listenerLock, listenerScope, type ListenerLock, type ListenerScope } from "./autonomy.mts";
 import type { NodePaths } from "./config.mts";
 import { pidAlive as processAlive } from "./daemon-state.mts";
-import { readJson } from "./inbox.mts";
+import { orderOf } from "./listener-order.mts";
 
 // Removes the locks of wake listeners whose process is gone (issue #225):
 // nothing else does, and doctor counts them as stale. The daemon sweeps at its
@@ -17,9 +17,9 @@ import { readJson } from "./inbox.mts";
 // listener may write its scope and lock at any moment (wake-hook.mts writes the
 // scope first). So the sweep renames the file to a tombstone, compares the
 // tombstone byte for byte with what it judged, deletes it only when equal and
-// otherwise puts it back by link, never over a newer lock (restore). A live
-// lock moved aside for that moment is put back by its listener too
-// (reclaimLock), and a listener never yields to an older one (wake-hook.mts).
+// otherwise puts it back by link, never over a later-armed lock (restore). A
+// live lock moved aside for that moment is put back by its listener too, and a
+// listener never yields to an older one (listener-order.mts, wake-hook.mts).
 // With the lock goes its scope, but only while the scope carries that lock's
 // token, by the same rename and compare. The session's other files stay: the
 // remembered permission mode (.mode.json) arms a resumed session, the turn
@@ -43,21 +43,6 @@ export type SweepResult = { removed: number; kept: number; failed: string[] } | 
 
 const code = (error: unknown): string | undefined => (error as NodeJS.ErrnoException).code;
 
-// Creates file with content unless something is there; atomic, as a link.
-function placeIfAbsent(file: string, content: string): boolean {
-  const temp = path.join(path.dirname(file), `.${path.basename(file)}.${crypto.randomUUID()}.tmp`);
-  fs.writeFileSync(temp, content, { mode: 0o600, flag: "wx" });
-  try {
-    fs.linkSync(temp, file);
-    return true;
-  } catch (error) {
-    if (code(error) === "EEXIST") return false;
-    throw error;
-  } finally {
-    fs.rmSync(temp, { force: true });
-  }
-}
-
 const parse = <T,>(raw: Buffer): T | null => {
   try {
     return JSON.parse(raw.toString("utf8")) as T;
@@ -68,15 +53,16 @@ const parse = <T,>(raw: Buffer): T | null => {
 
 const tombOf = (file: string, now: number): string =>
   path.join(path.dirname(file), `.${path.basename(file)}.${now}-${crypto.randomUUID()}.tomb`);
-// A lock's start; content that is no lock counts as oldest. ENOENT throws.
-const startedAt = (file: string): number => {
-  const value = parse<Partial<ListenerLock>>(fs.readFileSync(file))?.startedAt;
-  return typeof value === "number" ? value : -Infinity;
+// A lock's arming order (listener-order.mts); a dead listener's lock and content
+// that is no lock count as oldest, so they never displace a live lock. ENOENT throws.
+const rank = (file: string, alive: (pid: unknown) => boolean): number => {
+  const lock = parse<Partial<ListenerLock>>(fs.readFileSync(file));
+  return lock?.pid !== undefined && !alive(lock.pid) ? -Infinity : orderOf(lock);
 };
 const missing = (error: unknown): boolean => code(error) === "ENOENT";
 
-// Puts a tombstone back. If a file took the place meanwhile, the newer lock by
-// startedAt keeps it, the one in place on a tie (it was written later): an
+// Puts a tombstone back. If a file took the place meanwhile, the later-armed
+// lock keeps it, the one in place on a tie (it was written later): an
 // older listener that wrote into the gap (a SessionStart check that saw no
 // lock) or another sweep's recovery never displaces a newer lock. An older one
 // in place is taken aside by rename and judged again, since a newer one may
@@ -84,7 +70,8 @@ const missing = (error: unknown): boolean => code(error) === "ENOENT";
 // the newer listener's arming overwrites anyway and which makes it stand down
 // at its next poll. With the gap refilled RESTORE_ATTEMPTS times, the newest
 // stays a tombstone for a later recovery, and its listener reasserts itself.
-function restore(tomb: string, file: string, now: number): void {
+function restore(tomb: string, file: string, now: number, deps: SweepDeps): void {
+  const alive = deps.pidAlive ?? processAlive;
   let keep = tomb;
   const losers: string[] = [];
   try {
@@ -99,13 +86,14 @@ function restore(tomb: string, file: string, now: number): void {
         if (code(error) !== "EEXIST") throw error;
       }
       try {
-        if (startedAt(file) >= startedAt(keep)) {
+        if (rank(file, alive) >= rank(keep, alive)) {
           losers.push(keep);
           return;
         }
         const aside = tombOf(file, now);
         fs.renameSync(file, aside);
-        const newer = startedAt(aside) >= startedAt(keep);
+        deps.afterTake?.(file);
+        const newer = rank(aside, alive) >= rank(keep, alive);
         losers.push(newer ? keep : aside);
         if (newer) keep = aside;
       } catch (error) {
@@ -132,7 +120,7 @@ function takeIfUnchanged(file: string, seen: Buffer, now: number, deps: SweepDep
     same = fs.readFileSync(tomb).equals(seen);
   } finally {
     if (same) fs.rmSync(tomb, { force: true });
-    else restore(tomb, file, now);
+    else restore(tomb, file, now, deps);
   }
   return same;
 }
@@ -177,7 +165,7 @@ export function sweepListeners(paths: NodePaths, deps: SweepDeps = {}): SweepRes
     for (const name of names) {
       const tomb = TOMB_NAME.exec(name);
       if (!tomb || now - Number(tomb[2]) <= TOMB_RECOVER_AFTER_MS) continue;
-      try { restore(path.join(dir, name), path.join(dir, tomb[1]), now); } catch (error) { failed(error); }
+      try { restore(path.join(dir, name), path.join(dir, tomb[1]), now, deps); } catch (error) { failed(error); }
     }
     // Read again, so a dead lock just linked back is swept now, not in an hour.
     names = list();
@@ -212,17 +200,4 @@ export function scheduleListenerSweep(paths: NodePaths, log: (line: string) => v
   const timer = setInterval(run, SWEEP_INTERVAL_MS);
   timer.unref?.();
   return () => clearInterval(timer);
-}
-
-// A listener whose lock is gone puts it back, never over another file, while
-// its scope names it or a listener older than it: a newer listener writes its
-// scope before its lock, so a newer one's scope, or one without startedAt from
-// an older version, means this one was replaced and ends.
-export function reclaimLock(paths: NodePaths, sessionId: string, last: ListenerLock): ListenerLock | null {
-  const scope = readJson<ListenerScope>(listenerScope(paths, sessionId));
-  const older = typeof scope?.startedAt === "number" && scope.startedAt < last.startedAt;
-  if (scope?.token !== last.token && !older) return null;
-  const file = listenerLock(paths, sessionId);
-  placeIfAbsent(file, `${JSON.stringify(last, null, 2)}\n`);
-  return readJson<ListenerLock>(file);
 }

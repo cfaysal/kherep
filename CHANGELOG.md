@@ -362,9 +362,11 @@ increments the minor version; every other release increments the patch version.
   falls (issue #225). It never deletes by path: it renames a lock to a
   tombstone, deletes it only when its bytes still equal what it judged, and
   otherwise links it back without overwriting; if a file took the place
-  meanwhile, the newer lock by `startedAt` keeps it. A listener never yields
+  meanwhile, the later-armed lock keeps it, by a clock-independent arming
+  `order` (one more than the lock and scope in place at least; `startedAt`
+  stays real time). A listener never yields
   to an older one: it puts its lock back when it is gone and the scope file
-  names it or an older listener (the scope now records `startedAt`), and
+  names it or an older listener (the scope now records `order`), and
   writes it back over an older listener's lock. The scope file goes with its
   lock only while it carries that lock's token; the session's mode, budget,
   woken and queued files stay. Sweep failures are logged with their error codes.

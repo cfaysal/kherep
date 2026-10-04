@@ -12,7 +12,7 @@ import { isMainModule } from "./deliver-hook.mts";
 import { localSessionName } from "./exchange.mts";
 import { getMessage, readJson, writeJsonAtomic } from "./inbox.mts";
 import { launchMode, type LaunchVerdict } from "./launch-mode.mts";
-import { reclaimLock } from "./listener-sweep.mts";
+import { armedSince, armingMark, nextOrder, orderOf, reclaimLock } from "./listener-order.mts";
 import { explicitlyListed, loadPolicy, readPolicy, wakeAllowed } from "./policy.mts";
 import { mappingPending, taskForSession, type TaskRecord } from "./task-records.mts";
 import { transcriptMode } from "./transcript-mode.mts";
@@ -143,6 +143,7 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
   }
   const lockFile = listenerLock(paths, sessionId);
   const armedAt = now();
+  const mark = armingMark(paths, sessionId);
   if (starting && given === undefined) {
     // No permission_mode in the input: every source must rule bypass out.
     const launch = mode !== undefined && explicitlyListed(policy, refs) ? await (deps.launchMode ?? launchMode)(cwd) : "unknown";
@@ -151,15 +152,15 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
       return quiet;
     }
     // A prompt or Stop armed during the check: its listener is the newer one.
-    if ((readJson<ListenerLock>(lockFile)?.startedAt ?? -Infinity) >= armedAt) {
+    if (armedSince(paths, sessionId, mark)) {
       audit(paths, now(), sessionId, [], "superseded");
       return quiet;
     }
   }
-  const mine: ListenerLock = { token: deps.token?.() ?? crypto.randomUUID(), pid: deps.pid ?? process.pid, startedAt: armedAt, event,
-    ...(starting && typeof source === "string" ? { source } : {}) };
+  const mine: ListenerLock = { token: deps.token?.() ?? crypto.randomUUID(), pid: deps.pid ?? process.pid, startedAt: armedAt,
+    order: nextOrder(paths, sessionId, armedAt), event, ...(starting && typeof source === "string" ? { source } : {}) };
   ensureDir(listenerDir(paths));
-  const scope = (): ListenerScope => ({ token: mine.token, listed, ...(grant ? { taskId: grant.taskId } : {}), startedAt: mine.startedAt });
+  const scope = (): ListenerScope => ({ token: mine.token, listed, ...(grant ? { taskId: grant.taskId } : {}), order: mine.order });
   // Before the lock, so a lock with this token always has its scope.
   recordScope(paths, sessionId, scope());
   writeJsonAtomic(lockFile, mine);
@@ -176,10 +177,9 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     if (!held) return quiet;
     // Identity is the token, never the pid, and a replaced listener only ends itself.
     if (held.token !== mine.token) {
-      // An older listener wrote into a gap (a sweep held this lock aside, a slow
-      // SessionStart check): the newer one takes the lock back. Should that
-      // overwrite a newer lock, the newer listener does the same at its poll.
-      if (held.startedAt < mine.startedAt) {
+      // An older listener filled a gap (a sweep held this lock aside): take lock and scope back (listener-order.mts).
+      if (orderOf(held) < orderOf(mine)) {
+        recordScope(paths, sessionId, scope());
         writeJsonAtomic(lockFile, last);
         continue;
       }
