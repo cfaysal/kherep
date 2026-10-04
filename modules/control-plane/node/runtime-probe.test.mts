@@ -58,19 +58,32 @@ test("a probe that times out is not ready with cause timeout; a missing CLI is a
     { ok: false, cause: "error", detail: "claude is not installed on this node" });
 });
 
-test("a Codex probe is an ephemeral read-only exec with the user config but no MCP servers, its prompt on stdin, ready after turn.completed", async () => {
+test("a Codex probe is an ephemeral read-only exec with the user config but no hooks or MCP servers, its prompt on stdin, ready after turn.completed", async () => {
   const thread = "0199a000-0000-7000-8000-0000000000f1";
   const events = [{ type: "thread.started", thread_id: thread }, { type: "turn.started" }, { type: "item.completed" }, { type: "turn.completed" }];
   const f = fake({ stdout: events.map((e) => JSON.stringify(e)).join("\n") });
   const forgotten: string[] = [];
   assert.deepEqual(await probeRuntime("codex", codexDeps(f.run, forgotten)), { ok: true });
-  assert.deepEqual(f.calls[0].args, ["-c", "mcp_servers.docs.enabled=false",
+  assert.deepEqual(f.calls[0].args, ["-c", "features.hooks=false", "-c", "features.codex_hooks=false", "-c", "mcp_servers.docs.enabled=false",
     "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-C", "/tmp/probe", "-"]);
   assert.ok(!f.calls[0].args.includes("--ignore-user-config"), "the same config as a real run");
   assert.deepEqual(forgotten, [thread], "the session record a delivery hook wrote for the probe is removed");
   assert.equal(f.calls[0].options.input, "Reply with OK.");
   const exit0 = fake({ stdout: JSON.stringify({ type: "turn.started" }) });
   assert.equal((await probeRuntime("codex", codexDeps(exit0.run))).ok, false, "exit 0 without turn.completed is not ready");
+});
+
+test("a Codex probe that times out still forgets the session a hook recorded for its thread", async () => {
+  const thread = "0199a000-0000-7000-8000-0000000000f3";
+  const started = JSON.stringify({ type: "thread.started", thread_id: thread });
+  const f = fake({ code: null, timedOut: true, stdout: `${started}\n{"type":"turn.st` });
+  const forgotten: string[] = [];
+  assert.deepEqual(await probeRuntime("codex", codexDeps(f.run, forgotten)), { ok: false, cause: "timeout", detail: "" });
+  assert.deepEqual(forgotten, [thread]);
+  const failed = fake({ code: 1, stdout: `${started}\n${JSON.stringify({ type: "error", message: "boom" })}` });
+  const again: string[] = [];
+  assert.equal((await probeRuntime("codex", codexDeps(failed.run, again))).ok, false);
+  assert.deepEqual(again, [thread], "also after an error");
 });
 
 test("a Codex 401 is sign-in; the detail is one redacted line, never a token", async () => {
