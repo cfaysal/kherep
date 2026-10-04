@@ -348,6 +348,17 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: a task stop no longer leaves the process tree running when a
+  helper times out (issue #221). On a `windows-latest` runner the Toolhelp32
+  process-tree query (`powershell.exe` with an `Add-Type` compile) hit its
+  10 s limit, the stop threw before any signal, and the deadline test waited
+  in vain for the tree to end. A query that timed out now runs once more.
+  When a `ps` or PowerShell helper of the stop still times out, the stop
+  forces the tree of the root if the root still has its recorded start
+  identity (SIGKILL, `taskkill /T /F` on Windows) and still fails with the
+  timeout, so the failure is logged and no unconfirmed stop is reported; a
+  later watch round settles the task as an ended run. Any other failure is
+  unchanged.
 - Control Plane: on Windows a credential write or ACL check whose
   `powershell.exe` run hits its 5 s limit runs once more instead of failing
   with `remote_mcp_credential_unreadable` (issue #219). On loaded

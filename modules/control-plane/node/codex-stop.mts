@@ -36,8 +36,25 @@ function posixRelations(): ProcessRelation[] {
   return parseRelations(text);
 }
 
+const timedOut = (error: unknown): boolean => (error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
+
 // Toolhelp32 takes one process snapshot without WMI/CIM administrator access.
-function windowsRelations(): ProcessRelation[] {
+// Issue #221: on a loaded windows-latest runner the cold powershell.exe start
+// with its Add-Type compile hit the 10 s limit, so a timeout alone runs once
+// more (execFileSync returns only after the killed child exited); any other
+// failure throws at once.
+export function windowsRelations(run: () => string = queryWindowsRelations): ProcessRelation[] {
+  let text: string;
+  try {
+    text = run();
+  } catch (error) {
+    if (!timedOut(error)) throw error;
+    text = run();
+  }
+  return parseRelations(text);
+}
+
+function queryWindowsRelations(): string {
   const command = String.raw`
 $source = @"
 using System;
@@ -85,9 +102,8 @@ public static class KherepProcessTree {
 Add-Type -TypeDefinition $source
 [KherepProcessTree]::Rows()
 `;
-  const text = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command],
+  return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command],
     { encoding: "utf8", windowsHide: true, timeout: 10_000 });
-  return parseRelations(text);
 }
 
 function parseRelations(text: string): ProcessRelation[] {
@@ -120,18 +136,8 @@ function rootCanBeSignalled(deps: CodexDeps, root: ProcessIdentity, identities: 
   throw new Error("root process " + reason + " before " + signal + " while captured descendants still run");
 }
 
-// Capture the exact process tree and each pid's start identity, signal its OS
-// group/tree, and return only after every captured identity ended. A failed
-// read or signal remains an error, so callers cannot report a guessed stop.
-export async function terminate(deps: CodexDeps, pid: number, pidStart: string | undefined): Promise<void> {
-  if (pidStart === undefined && !holdsChild(pid)) throw new Error("process identity unknown");
-  const identities = processTree(deps, pid);
-  const root = identities.find((entry) => entry.pid === pid);
-  if (!root || (pidStart !== undefined && root.start !== pidStart)) {
-    if (allStopped(deps, identities)) return;
-    throw new Error("root process identity changed during capture while captured processes still run");
-  }
-  const send = deps.signal ?? ((target, signal) => {
+function sender(deps: CodexDeps): (pid: number, signal: NodeJS.Signals) => void {
+  return deps.signal ?? ((target, signal) => {
     const sent = signalGroup(target, signal, deps.platform);
     // Windows taskkill /T reports failure when descendants require /F; that is
     // the expected first phase, followed by the bounded forced phase below.
@@ -139,6 +145,45 @@ export async function terminate(deps: CodexDeps, pid: number, pidStart: string |
       throw new Error("could not send " + signal + " to process tree");
     }
   });
+}
+
+// Capture the exact process tree and each pid's start identity, signal its OS
+// group/tree, and return only after every captured identity ended. A failed
+// read or signal remains an error, so callers cannot report a guessed stop.
+// Issue #221: a ps or PowerShell helper that hit its time limit must not leave
+// the tree running. If the root is still the recorded process, its tree is
+// forced (SIGKILL; taskkill /T /F on Windows), and the stop still fails, since
+// no captured identity was confirmed ended; a later watch round settles the run.
+export async function terminate(deps: CodexDeps, pid: number, pidStart: string | undefined): Promise<void> {
+  try {
+    await terminateTree(deps, pid, pidStart);
+  } catch (error) {
+    if (!timedOut(error)) throw error;
+    let outcome: string;
+    try {
+      const recorded = pidStart === undefined ? holdsChild(pid) : startTimeOf(deps, pid) === pidStart;
+      if (recorded) {
+        sender(deps)(pid, "SIGKILL");
+        outcome = "its process tree was forced to stop, the stop is not confirmed";
+      } else {
+        outcome = "the root is no longer the recorded process, so nothing was forced";
+      }
+    } catch (forceError) {
+      outcome = "forcing its process tree failed: " + String((forceError as Error).message ?? forceError);
+    }
+    throw new Error(String((error as Error).message ?? error) + "; " + outcome, { cause: error });
+  }
+}
+
+async function terminateTree(deps: CodexDeps, pid: number, pidStart: string | undefined): Promise<void> {
+  if (pidStart === undefined && !holdsChild(pid)) throw new Error("process identity unknown");
+  const identities = processTree(deps, pid);
+  const root = identities.find((entry) => entry.pid === pid);
+  if (!root || (pidStart !== undefined && root.start !== pidStart)) {
+    if (allStopped(deps, identities)) return;
+    throw new Error("root process identity changed during capture while captured processes still run");
+  }
+  const send = sender(deps);
   const grace = deps.graceMs ?? 5_000;
   if (!rootCanBeSignalled(deps, root, identities, "SIGTERM")) return;
   try {
