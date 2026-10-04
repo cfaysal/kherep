@@ -10,7 +10,7 @@ import { ACCEPT_ALL, audits, deliver, PEER } from "./closed-fixture.mts";
 import { SCRIPT, THREAD, waitFor, type FakeRun } from "./codex-fixture.mts";
 import { readExit } from "./codex-output.mts";
 import { codexFiles, type CodexDeps } from "./codex-process.mts";
-import { watchCodexTasks } from "./codex-runner.mts";
+import { watchCodexTasks } from "./codex-watch.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
 import { writeLocalSessions } from "./exchange.mts";
 import { getMessage, messageIds } from "./inbox.mts";

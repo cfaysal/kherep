@@ -1,25 +1,24 @@
-import { MAX_SUMMARY, type SessionContinueArgs, type SessionStopArgs } from "../protocol-tasks.mts";
+import type { SessionContinueArgs, SessionStopArgs } from "../protocol-tasks.mts";
 import {
-  codexEnv, codexFiles, detachCodex, holdsChild, resumeArgs, spawnCodex, startArgs, startTimeOf, stillRuns, type CodexFiles,
+  codexEnv, codexFiles, detachCodex, resumeArgs, spawnCodex, startArgs, startTimeOf, stillRuns, type CodexFiles,
 } from "./codex-process.mts";
-import { lastStderrLine, readEvents, readExit, readLastMessage, type CodexExit } from "./codex-output.mts";
+import { readEvents, readExit } from "./codex-output.mts";
 import { findCodex } from "./codex-binary.mts";
 import { intercomMcpOverrides } from "./codex-mcp.mts";
 import { terminate } from "./codex-stop.mts";
 import { ensureDir } from "./config.mts";
-import { resolveDelivery } from "./delivery-identity.mts";
 import { permanentFallbackFailure } from "./delivery-failure.mts";
 import { getMessage, markDelivered, markRefused, markRetry } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
-import { failStalledCodex, NO_PROGRESS_REASON, progressOverdue } from "./run-progress.mts";
 import { notReady } from "./runtime-readiness.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit, refuse, trim } from "./task-admission.mts";
-import { isActive, listTasks, queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
+import { isActive, queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
 import { frameFollowUp, resolveCwd } from "./task-prompt.mts";
 
-// Starts, continues, stops and watches Codex tasks (issue #63) with the same
-// admission, limits and framing as Claude tasks (session-runner.mts). The
+// Starts, continues and stops Codex tasks (issue #63; the watch round is
+// codex-watch.mts) with the same admission, limits and framing as Claude tasks
+// (session-runner.mts). The
 // task's session id is the Codex thread_id; its process is known by pid and
 // start time. States: started once the process runs, done when it ended after
 // turn.completed (exit 0 when this daemon saw the exit), failed otherwise,
@@ -31,7 +30,7 @@ export const IDENTITY_UNKNOWN = "process identity unknown";
 const POLL_MS = 100;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); });
-const sessionOf = (record: TaskRecord) => (record.sessionId ? { sessionId: record.sessionId } : {});
+export const sessionOf = (record: TaskRecord) => (record.sessionId ? { sessionId: record.sessionId } : {});
 
 export type RunArgs = (files: CodexFiles, outbox: string) => string[];
 
@@ -162,7 +161,7 @@ export async function stopCodex(args: SessionStopArgs, deps: RunnerDeps, reason:
 
 // The messages a run carried: delivered when it completed its turn, otherwise
 // offered again later within the offer limits (deliver-core.mts).
-function settleOffered(deps: RunnerDeps, record: TaskRecord, completed: boolean, reason?: string): void {
+export function settleOffered(deps: RunnerDeps, record: TaskRecord, completed: boolean, reason?: string): void {
   for (const id of record.offered ?? []) {
     const message = getMessage(deps.paths.inbox, id);
     if (message?.state !== "offered") continue;
@@ -181,119 +180,4 @@ export function adoptOffered(deps: RunnerDeps, taskId: string, ids: string[]): v
   if (!record || ids.length === 0) return;
   if (isActive(record)) writeTask(deps.paths, { ...record, offered: [...(record.offered ?? []), ...ids] }, deps.now?.());
   else settleOffered(deps, { ...record, offered: ids }, record.state === "done", record.reason);
-}
-
-// How an ended run finished: done after turn.completed and exit 0 (or an exit
-// this daemon did not see), failed otherwise.
-function outcome(files: CodexFiles): { state: "done"; summary?: string } | { state: "failed"; reason: string } {
-  const events = readEvents(files);
-  const exit = readExit(files);
-  if (events.completed && (exit === null || exit.code === 0)) {
-    const summary = readLastMessage(files).slice(0, MAX_SUMMARY);
-    return { state: "done", ...(summary ? { summary } : {}) };
-  }
-  return { state: "failed", reason: trim(events.error ?? exitReason(exit, lastStderrLine(files))) };
-}
-
-// With codex's own last stderr line, for example its refusal to run outside a
-// trusted directory.
-function exitReason(exit: CodexExit | null, detail: string): string {
-  const reason = exit?.signal ? `codex ended by ${exit.signal}` : exit ? `codex exited with ${String(exit.code)}`
-    : "codex ended without completing the turn";
-  return detail ? `${reason}: ${detail}` : reason;
-}
-
-// The Codex part of the watch round: maps a late thread_id, stops a task past
-// its deadline and reports how an ended process finished, once.
-export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => void = () => {}): Promise<void> {
-  const now = deps.now?.() ?? Date.now();
-  const codex = deps.codex ?? {};
-  for (let record of listTasks(deps.paths).filter((t) => t.runtime === "codex" && isActive(t))) {
-    const files = codexFiles(deps.paths, record.taskId);
-    // A start time the spawn could not read is read again while this daemon
-    // holds the child; its pid cannot be reused before that.
-    if (record.pidStart === undefined && holdsChild(record.pid)) {
-      try {
-        const pidStart = startTimeOf(codex, record.pid!);
-        if (pidStart) record = writeTask(deps.paths, { ...record, pidStart }, now);
-      } catch {
-        // the next round tries again; the held child can be stopped meanwhile
-      }
-    }
-    // Without start time, held child or seen exit (a daemon restart), the
-    // process can be neither identified nor stopped: the run counts as failed
-    // instead of holding a slot for ever. A run for peer messages keeps the
-    // task's reported state.
-    if (record.pidStart === undefined && !holdsChild(record.pid) && readExit(files) === null) {
-      log(`kherep-node: task ${record.taskId}: ${IDENTITY_UNKNOWN}; its process, if any, was not stopped`);
-      settleOffered(deps, record, false);
-      if (record.running) {
-        writeTask(deps.paths, { ...record, running: undefined, offered: undefined }, now);
-        continue;
-      }
-      const saved = writeTask(deps.paths, { ...record, state: "failed", reason: IDENTITY_UNKNOWN, offered: undefined }, now);
-      queueReport(deps.paths, { taskId: saved.taskId, state: "failed", reason: IDENTITY_UNKNOWN, ...sessionOf(saved) });
-      continue;
-    }
-    const threadId = record.sessionId ?? readEvents(files).threadId;
-    let mapped: TaskRecord = resolveDelivery(deps.paths, { ...record, ...(threadId ? { sessionId: threadId } : {}) });
-    // Issue #121: exit.json exists only for a run this daemon started and saw
-    // end (spawnCodex removes it before each run), so such a run has ended,
-    // even past its deadline or when its start time cannot be read.
-    const ended = readExit(files) !== null;
-    if (!ended && record.operatorStoppedAt !== undefined) {
-      if (record.taskControlRecoveryRunVersion !== undefined) continue;
-      try {
-        await stopCodex({ taskId: record.taskId }, deps, "stopped by the operator");
-      } catch (error) {
-        log(`kherep-node: could not confirm stop of task ${record.taskId}: ${String((error as Error).message ?? error)}`);
-      }
-      continue;
-    }
-    if (!ended && now >= Date.parse(record.deadline)) {
-      if (mapped.sessionId !== record.sessionId) writeTask(deps.paths, mapped, now);
-      try {
-        await stopCodex({ taskId: record.taskId }, deps, MAX_RUNTIME_REASON);
-      } catch (error) {
-        log(`kherep-node: could not stop task ${record.taskId}: ${String((error as Error).message ?? error)}`);
-      }
-      continue;
-    }
-    let running: boolean;
-    try {
-      running = !ended && stillRuns(codex, record.pid, record.pidStart);
-    } catch (error) {
-      log(`kherep-node: task ${record.taskId}: ${String((error as Error).message ?? error)}`);
-      continue; // a failed read decides nothing
-    }
-    // Issue #197: a live run whose turn shows no progress (run-progress.mts) is
-    // stopped and failed; its messages are offered again, the runtime probed again.
-    if (running && record.awaitingProgressSince !== undefined) {
-      if (readEvents(files).progressed) {
-        record = writeTask(deps.paths, { ...record, awaitingProgressSince: undefined }, now);
-        mapped = { ...mapped, awaitingProgressSince: undefined };
-      } else if (progressOverdue(record, now)) {
-        await failStalledCodex(deps, record, () => stopCodex({ taskId: record.taskId }, deps, NO_PROGRESS_REASON, false, "failed"), log, now);
-        continue;
-      }
-    }
-    if (running) {
-      if (mapped.sessionId !== record.sessionId) {
-        const saved = writeTask(deps.paths, mapped, now);
-        if (!record.running) queueReport(deps.paths, { taskId: saved.taskId, state: saved.state, ...sessionOf(saved) });
-      }
-      continue;
-    }
-    // Reported done by the session (task done), or a run for peer messages:
-    // released without a new report.
-    const result = outcome(files);
-    settleOffered(deps, record, result.state === "done", result.state === "failed" ? result.reason : undefined);
-    if (record.running) {
-      writeTask(deps.paths, { ...mapped, running: undefined, offered: undefined }, now);
-      continue;
-    }
-    const saved = writeTask(deps.paths, { ...mapped, state: result.state, ...(result.state === "failed" ? { reason: result.reason } : {}),
-      offered: undefined }, now);
-    queueReport(deps.paths, { taskId: saved.taskId, ...result, ...sessionOf(saved) });
-  }
 }

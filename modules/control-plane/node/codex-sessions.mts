@@ -107,6 +107,12 @@ export function recordCodexSession(paths: NodePaths, sessionId: string, cwd: unk
   writeJsonAtomic(fileOf(paths, sessionId), record);
 }
 
+// Issue #197: the readiness probe's own run loads the user's config, whose
+// delivery hook records its thread; the probe forgets it again.
+export function forgetCodexSession(paths: NodePaths, sessionId: string): void {
+  if (isCodexSessionId(sessionId)) fs.rmSync(fileOf(paths, sessionId), { force: true });
+}
+
 export function readCodexSession(paths: NodePaths, sessionId: string): CodexSessionRecord | null {
   return isCodexSessionId(sessionId) ? readJson<CodexSessionRecord>(fileOf(paths, sessionId)) : null;
 }

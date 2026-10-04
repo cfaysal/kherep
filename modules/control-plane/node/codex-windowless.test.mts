@@ -8,7 +8,8 @@ import test from "node:test";
 import { fakeCodexBin, LAST_MESSAGE, THREAD, waitFor } from "./codex-fixture.mts";
 import { readExit } from "./codex-output.mts";
 import { codexFiles, launchCommand, processStart, startArgs, WINDOWLESS, type CodexDeps } from "./codex-process.mts";
-import { spawnRun, watchCodexTasks } from "./codex-runner.mts";
+import { spawnRun } from "./codex-runner.mts";
+import { watchCodexTasks } from "./codex-watch.mts";
 import { T0, taskId, taskNode } from "./task-fixture.mts";
 import { readTask, type TaskRecord } from "./task-records.mts";
 

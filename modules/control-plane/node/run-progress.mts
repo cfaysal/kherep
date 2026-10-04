@@ -64,7 +64,7 @@ async function stopStalled(record: TaskRecord, stop: () => Promise<unknown>, log
 
 // A Claude run that made no progress: its session is stopped (best effort, the
 // short id may be unknown), the task reported failed and its messages refused.
-// The runtime's readiness verdict ages out, so the next run probes again.
+// The runtime's readiness verdict ages out, so the next caller starts a probe.
 export async function failStalledClaude(deps: RunnerDeps, record: TaskRecord, stop: (shortId: string) => Promise<unknown>,
   log: (line: string) => void, now: number): Promise<void> {
   deps.readiness?.invalidate("claude");

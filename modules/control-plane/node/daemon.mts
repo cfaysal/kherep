@@ -4,6 +4,7 @@ import { reconnectDelay } from "./backoff.mts";
 import { NodeClient, type CommandHandlers } from "./client.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
 import { codexHome } from "./codex-app.mts";
+import { forgetCodexSession } from "./codex-sessions.mts";
 import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { connectUrl, ensureDir, type NodeConfig, type NodePaths } from "./config.mts";
@@ -15,7 +16,8 @@ import {
 } from "./exchange.mts";
 import { readPrivateKey } from "./identity.mts";
 import { purgeInbox, storeMessage } from "./inbox.mts";
-import { loadPolicy } from "./policy.mts";
+import { loadPolicy, type NodePolicy } from "./policy.mts";
+import { routeFrame } from "./readiness-lane.mts";
 import { probeRuntime, type ProbeResult } from "./runtime-probe.mts";
 import { createReadiness } from "./runtime-readiness.mts";
 import { continueTask, startTask, stopTask, type RunnerDeps } from "./session-runner.mts";
@@ -41,6 +43,9 @@ export const SESSIONS_INTERVAL_MS = 60_000;
 
 export interface DaemonHandle { stop(): void; done: Promise<void> }
 
+const enabledRuntimes = (policy: NodePolicy): TaskRuntime[] =>
+  (policy.sessions?.enabled ? policy.sessions.runtimes : []).filter(isTaskRuntime);
+
 // runner: with it, the session commands of item 5 (the client runs them only
 // when the policy enables sessions).
 export function commandHandlers(config: NodeConfig, startedAt: number,
@@ -63,7 +68,8 @@ export function commandHandlers(config: NodeConfig, startedAt: number,
 // probe: the runtime readiness probe (issue #197); tests replace it.
 export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: string) => void = (line) => console.error(line),
   sessionSource?: (signal?: AbortSignal) => Promise<SessionInfo[]>,
-  probe: (runtime: TaskRuntime) => Promise<ProbeResult> = (runtime) => probeRuntime(runtime)): DaemonHandle {
+  probe: (runtime: TaskRuntime) => Promise<ProbeResult> = (runtime) =>
+    probeRuntime(runtime, { forgetSession: (threadId) => forgetCodexSession(paths, threadId) })): DaemonHandle {
   const identity = readPrivateKey(config.privateKeyFile);
   if (identity.publicKey !== config.publicKey) throw new Error("private key does not match the enrolled public key");
   const policy = loadPolicy(config.policyFile);
@@ -88,7 +94,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // Issue #197: one readiness probe per enabled runtime at the start, then only
   // when a run needs a runtime whose verdict aged out (runtime-readiness.mts).
   const readiness = createReadiness(probe, { log });
-  for (const runtime of (policy.sessions?.enabled ? policy.sessions.runtimes : []).filter(isTaskRuntime)) void readiness.check(runtime);
+  for (const runtime of enabledRuntimes(policy)) void readiness.check(runtime);
   const runner: RunnerDeps = { paths, policy, log, readiness };
   recoverOperations(paths);
   let taskControlInflight = new Set<string>();
@@ -133,6 +139,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // One lane spans reconnects so an old socket cannot finish a state mutation
   // concurrently with the replacement connection.
   let chain = Promise.resolve();
+  // Inbound commands that wait for a first readiness verdict (issue #197).
+  let commands = Promise.resolve();
 
   const connect = (): void => {
     if (stopped) return;
@@ -165,6 +173,10 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     ws.addEventListener("open", () => {
       ping = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send(PING_FRAME); }, PING_INTERVAL_MS);
       snapshots = setInterval(() => {
+        // Issue #197: a runtime that is not ready is probed again in the
+        // background, at most every NOT_READY_TTL_MS, so a re-login is noticed
+        // and advertised without a run asking for it.
+        for (const runtime of enabledRuntimes(loadPolicy(config.policyFile))) readiness.revalidate(runtime);
         if (periodicDiscovery) return;
         const controller = new AbortController();
         periodicDiscovery = controller;
@@ -214,6 +226,20 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     ws.addEventListener("message", (event) => {
       if (typeof event.data !== "string") return;
       const data = event.data;
+      const route = routeFrame(data, paths);
+      if (!route.command) handleFrame(data);
+      else {
+        // Issue #197: a session command for a runtime without any readiness
+        // verdict waits for its first probe here, outside the frame lane;
+        // commands keep their order (readiness-lane.mts).
+        const runtime = route.runtime;
+        commands = commands.then(async () => {
+          if (runtime) await readiness.check(runtime);
+          if (socket === ws) handleFrame(data);
+        }).catch((error: unknown) => log(`kherep-node: command handling failed: ${String(error)}`));
+      }
+    });
+    const handleFrame = (data: string): void => {
       chain = chain.then(async () => {
         publishRegistration(await client.refreshPolicy(loadPolicy(config.policyFile)));
         const wasAuthed = client.authenticated;
@@ -228,7 +254,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           log(`kherep-node: connected as ${config.nodeId}`);
         }
       }).catch((error: unknown) => log(`kherep-node: frame handling failed: ${String(error)}`));
-    });
+    };
     ws.addEventListener("close", (event) => {
       for (const timer of [ping, snapshots, exchange, directory]) if (timer) clearInterval(timer);
       periodicDiscovery?.abort();

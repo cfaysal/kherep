@@ -55,6 +55,18 @@ test("a message for a closed session is refused, not delivered, when the runtime
   assert.equal(listTasks(node.paths).length, 0);
 });
 
+test("after a probe that timed out the message waits as retry-pending with no attempt; it is never refused for that", async (t) => {
+  const node = closedNode(t);
+  const id = deliver(node);
+  const { readiness } = verdicts({ ok: false, cause: "timeout", detail: "" });
+  await readiness.check("claude");
+  await deliverToClosed({ ...node.deps(), readiness });
+  const record = getMessage(node.paths.inbox, id)!;
+  assert.deepEqual([record.state, record.closedAttempt], ["accepted", undefined]);
+  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "retry-pending");
+  assert.equal(node.calls.length, 0, "no intercom start");
+});
+
 test("while the probe runs the message waits as retry-pending; a ready verdict then starts the intercom", async (t) => {
   const node = closedNode(t);
   const id = deliver(node);

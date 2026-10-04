@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
+import { forgetCodexSession, isCodexSession, recordCodexSession } from "./codex-sessions.mts";
+import { nodePaths } from "./config.mts";
 import { CLAUDE_PROBE_ARGS, probeRuntime, spawnProbe, type ProbeRun, type ProbeSpawnOptions } from "./runtime-probe.mts";
 
 // Issue #197: the readiness probe is a real minimal call. These tests replace
@@ -18,7 +23,9 @@ function fake(result: Partial<ProbeRun>) {
   return { calls, run };
 }
 const claudeDeps = (run: ReturnType<typeof fake>["run"]) => ({ findClaude: () => "/opt/bin/claude", platform: "linux" as const, run, cwd: "/tmp/probe" });
-const codexDeps = (run: ReturnType<typeof fake>["run"]) => ({ findCodex: () => "/opt/bin/codex", platform: "linux" as const, run, cwd: "/tmp/probe" });
+const codexDeps = (run: ReturnType<typeof fake>["run"], forgotten: string[] = []) => ({ findCodex: () => "/opt/bin/codex",
+  platform: "linux" as const, run, cwd: "/tmp/probe", mcpOverrides: async () => ["-c", "mcp_servers.docs.enabled=false"],
+  forgetSession: (thread: string) => { forgotten.push(thread); } });
 const result = (isError: boolean, text: string): string =>
   `${JSON.stringify({ type: "result", subtype: isError ? "error" : "success", is_error: isError, result: text })}\n`;
 
@@ -51,12 +58,16 @@ test("a probe that times out is not ready with cause timeout; a missing CLI is a
     { ok: false, cause: "error", detail: "claude is not installed on this node" });
 });
 
-test("a Codex probe is an ephemeral read-only exec without the user config, its prompt on stdin, ready after turn.completed", async () => {
-  const events = [{ type: "thread.started", thread_id: "t" }, { type: "turn.started" }, { type: "item.completed" }, { type: "turn.completed" }];
+test("a Codex probe is an ephemeral read-only exec with the user config but no MCP servers, its prompt on stdin, ready after turn.completed", async () => {
+  const thread = "0199a000-0000-7000-8000-0000000000f1";
+  const events = [{ type: "thread.started", thread_id: thread }, { type: "turn.started" }, { type: "item.completed" }, { type: "turn.completed" }];
   const f = fake({ stdout: events.map((e) => JSON.stringify(e)).join("\n") });
-  assert.deepEqual(await probeRuntime("codex", codexDeps(f.run)), { ok: true });
-  assert.deepEqual(f.calls[0].args,
-    ["exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "-C", "/tmp/probe", "-"]);
+  const forgotten: string[] = [];
+  assert.deepEqual(await probeRuntime("codex", codexDeps(f.run, forgotten)), { ok: true });
+  assert.deepEqual(f.calls[0].args, ["-c", "mcp_servers.docs.enabled=false",
+    "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-C", "/tmp/probe", "-"]);
+  assert.ok(!f.calls[0].args.includes("--ignore-user-config"), "the same config as a real run");
+  assert.deepEqual(forgotten, [thread], "the session record a delivery hook wrote for the probe is removed");
   assert.equal(f.calls[0].options.input, "Reply with OK.");
   const exit0 = fake({ stdout: JSON.stringify({ type: "turn.started" }) });
   assert.equal((await probeRuntime("codex", codexDeps(exit0.run))).ok, false, "exit 0 without turn.completed is not ready");
@@ -80,4 +91,16 @@ test("spawnProbe kills a process that outlives the timeout and reports timedOut"
   assert.ok(Date.now() - started < 10_000, "killed, not waited for");
   const ok = await spawnProbe()(process.execPath, ["-e", "process.stdin.pipe(process.stdout)"], { cwd: process.cwd(), timeoutMs: 10_000, input: "hi" });
   assert.deepEqual(ok, { code: 0, stdout: "hi", stderr: "", timedOut: false });
+});
+
+test("forgetCodexSession removes exactly the probe's recorded session", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-probe-forget-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = nodePaths(root);
+  const probe = "0199a000-0000-7000-8000-0000000000f1";
+  const other = "0199a000-0000-7000-8000-0000000000f2";
+  for (const id of [probe, other]) recordCodexSession(paths, id, "/tmp");
+  forgetCodexSession(paths, probe);
+  forgetCodexSession(paths, "../not-a-session");
+  assert.deepEqual([isCodexSession(paths, probe), isCodexSession(paths, other)], [false, true]);
 });
