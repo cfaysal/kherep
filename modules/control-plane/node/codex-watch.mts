@@ -1,6 +1,7 @@
 import { MAX_SUMMARY } from "../protocol-tasks.mts";
 import { lastStderrLine, readEvents, readExit, readLastMessage, type CodexExit } from "./codex-output.mts";
 import { codexFiles, holdsChild, startTimeOf, stillRuns, type CodexFiles } from "./codex-process.mts";
+import { reapDescendants, refreshDescendants } from "./codex-reap.mts";
 import { IDENTITY_UNKNOWN, MAX_RUNTIME_REASON, sessionOf, settleOffered, stopCodex } from "./codex-runner.mts";
 import { resolveDelivery } from "./delivery-identity.mts";
 import { failStalledCodex, NO_PROGRESS_REASON, progressOverdue } from "./run-progress.mts";
@@ -107,6 +108,17 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
       }
     }
     if (running) {
+      // Issue #233: the run's descendants, for a settle after its root crashed.
+      try {
+        const found = refreshDescendants(codex, record);
+        if (found) {
+          const descendants = found.length > 0 ? found : undefined;
+          record = writeTask(deps.paths, { ...record, descendants }, now);
+          mapped = { ...mapped, descendants };
+        }
+      } catch (error) {
+        log(`kherep-node: task ${record.taskId}: could not record its processes: ${String((error as Error).message ?? error)}`);
+      }
       if (mapped.sessionId !== record.sessionId) {
         const saved = writeTask(deps.paths, mapped, now);
         if (!record.running) queueReport(deps.paths, { taskId: saved.taskId, state: saved.state, ...sessionOf(saved) });
@@ -117,12 +129,14 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
     // released without a new report.
     const result = outcome(files);
     settleOffered(deps, record, result.state === "done", result.state === "failed" ? result.reason : undefined);
+    // Issue #233: a failed run's root may have crashed and left its children.
+    if (result.state === "failed") reapDescendants(codex, record, log);
     if (record.running) {
-      writeTask(deps.paths, { ...mapped, running: undefined, offered: undefined }, now);
+      writeTask(deps.paths, { ...mapped, running: undefined, offered: undefined, descendants: undefined }, now);
       continue;
     }
     const saved = writeTask(deps.paths, { ...mapped, state: result.state, ...(result.state === "failed" ? { reason: result.reason } : {}),
-      offered: undefined }, now);
+      offered: undefined, descendants: undefined }, now);
     queueReport(deps.paths, { taskId: saved.taskId, ...result, ...sessionOf(saved) });
   }
 }

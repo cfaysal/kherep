@@ -5,6 +5,7 @@ import {
 import { readEvents, readExit } from "./codex-output.mts";
 import { findCodex } from "./codex-binary.mts";
 import { intercomMcpOverrides } from "./codex-mcp.mts";
+import { reapDescendants } from "./codex-reap.mts";
 import { terminate } from "./codex-stop.mts";
 import { ensureDir } from "./config.mts";
 import { permanentFallbackFailure } from "./delivery-failure.mts";
@@ -54,7 +55,7 @@ export async function spawnRun(deps: RunnerDeps, record: TaskRecord, args: RunAr
     // the watch reads it again while this daemon holds the child
   }
   const now = deps.now?.() ?? Date.now();
-  return writeTask(deps.paths, { ...record, pid, pidStart, awaitingProgressSince: new Date(now).toISOString() }, now);
+  return writeTask(deps.paths, { ...record, pid, pidStart, descendants: undefined, awaitingProgressSince: new Date(now).toISOString() }, now);
 }
 
 // Issue #119: an intercom run keeps the user's Codex config but not its MCP
@@ -149,12 +150,15 @@ export async function stopCodex(args: SessionStopArgs, deps: RunnerDeps, reason:
       throw new Error("task run changed while stop was in progress");
     }
     fresh = current;
+  } else {
+    // Issue #233: the root ended on its own; its recorded descendants may not.
+    reapDescendants(deps.codex ?? {}, record, deps.log ?? (() => {}));
   }
   settleOffered(deps, fresh, false);
   const keep = fresh.state === "done" || fresh.running === true;
   const marker = operatorStop && fresh.operatorStoppedAt === undefined ? { operatorStoppedAt: record.operatorStoppedAt } : {};
   const saved = writeTask(deps.paths, { ...fresh, ...marker, ...(keep ? {} : { state: ended, reason }),
-    running: undefined, offered: undefined, awaitingProgressSince: undefined }, now);
+    running: undefined, offered: undefined, awaitingProgressSince: undefined, descendants: undefined }, now);
   if (!keep) queueReport(deps.paths, { taskId: saved.taskId, state: ended, reason, ...sessionOf(saved) });
   return { taskId: saved.taskId, state: saved.state };
 }
