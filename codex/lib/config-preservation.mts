@@ -12,7 +12,7 @@ import { managedNodePaths, withManagedNodePaths } from "./node-path.mts";
 import { managedOutboxRoots, projectOutboxWritableRoot } from "./outbox-writable-root.mts";
 import { managedFragmentFamily, retiredCentralBrainFragments, retireUnmanagedCentralBrainTable } from "./retired-central-brain.mts";
 import type { RetiredCentralBrainRender } from "./retired-central-brain.mts";
-import { enableHooks, setMarkedBlock, setTopLevelSetting } from "./text-merge.mts";
+import { enableHooks, setMarkedBlock, setTopLevelSetting, topLevelSetting } from "./text-merge.mts";
 import { hasTomlStringReference, rewriteExactTomlStringArgs } from "./toml-args.mts";
 
 export interface ConfigUpgradeOptions {
@@ -179,6 +179,20 @@ export function preserveConfigUpgrade(
   };
 }
 
+// Issue #212. Written only when config.toml has no top-level value of its own.
+export const DEFAULT_REASONING_EFFORT = "xhigh";
+
+export interface ReasoningEffortReport {
+  status: "configured" | "preserved-existing";
+  value: string;
+}
+
+// The receipt shows a plain TOML string unquoted and anything else as written.
+function reportedValue(raw: string): string {
+  const quoted = /^(?:"([^"\\]*)"|'([^']*)')\s*(?:#.*)?$/.exec(raw);
+  return quoted ? quoted[1] ?? quoted[2] : raw;
+}
+
 export function prepareManagedConfig(config: string, options: ManagedConfigOptions) {
   const retiredMcpServers = options.retiredMcpServerNames.map((name) => ({
     name,
@@ -208,7 +222,15 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
     .filter(([name]) => !managedConfig.hasUnmanagedMcp(
       config, name, options.startMarker, options.endMarker,
     )));
-  let next = setTopLevelSetting(migrated, "model_reasoning_effort", '"xhigh"');
+  const operatorEffort = topLevelSetting(migrated, "model_reasoning_effort");
+  let reasoningEffort: ReasoningEffortReport;
+  let next = migrated;
+  if (operatorEffort === undefined) {
+    reasoningEffort = { status: "configured", value: DEFAULT_REASONING_EFFORT };
+    next = setTopLevelSetting(next, "model_reasoning_effort", JSON.stringify(DEFAULT_REASONING_EFFORT));
+  } else {
+    reasoningEffort = { status: "preserved-existing", value: reportedValue(operatorEffort) };
+  }
   const previousNodes = managedNodePaths(config, options.startMarker, options.endMarker, options.node);
   next = configureMemoryNotify(next, options.node, options.memoryNotifyHook, previousNodes);
   next = enableHooks(next);
@@ -296,5 +318,6 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
     pluginMcpServers,
     retiredMcpServers: [...retiredMcpServers, ...retiredTable.tables],
     outboxWritableRoot: outboxRoot?.status,
+    reasoningEffort,
   };
 }

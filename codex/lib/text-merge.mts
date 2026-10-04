@@ -30,6 +30,17 @@ export function setMarkedBlock(existing: string, startMarker: string, endMarker:
   return existing.replace(pattern, block);
 }
 
+// The raw text after "=" of a key before the first table, or undefined.
+export function topLevelSetting(config: string, key: string): string | undefined {
+  const setting = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=(.*)$`);
+  for (const line of config.split(/\r?\n/)) {
+    if (/^\s*\[/.test(line)) return undefined;
+    const match = setting.exec(line);
+    if (match) return match[1].trim();
+  }
+  return undefined;
+}
+
 export function setTopLevelSetting(config: string, key: string, tomlValue: string): string {
   const newline = newlineFor(config);
   const lines = config.split(/\r?\n/);

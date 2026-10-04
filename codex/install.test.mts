@@ -402,6 +402,7 @@ test("installs the Mac-compatible projection without replacing user state", asyn
   assert.ok(config.includes(`KHEREP_MCP_REGISTRY_FILE = ${JSON.stringify(installOptions.claudeRegistryFile)}`));
   assert.equal(occurrences(config, CONFIG_START), 1);
   assert.equal(result.receipt.memoryProvider, "unconfigured");
+  assert.deepEqual(result.receipt.reasoningEffort, { status: "configured", value: "xhigh" });
   assert.deepEqual(codexCalls.map(({ args }) => args), [["plugin", "marketplace", "list", "--json"], ["plugin", "marketplace", "add", "./marketplace", "--json"], ["plugin", "add", LOCAL_PLUGIN_ID], ["plugin", "add", ROVO_PLUGIN_ID]]);
   assert.ok(config.includes(process.execPath.replace(/\\/g, "\\\\")));
   assert.ok(config.includes("kherep-maestro-context.mts"));
@@ -504,6 +505,19 @@ test("installs the Mac-compatible projection without replacing user state", asyn
   assert.equal(result.receipt.canonicalTargetPolicy.mode, "replace-with-backup");
 });
 
+// Issue #212. An upgrade used to replace the operator's value with "xhigh".
+test("install keeps the operator's reasoning effort and reports it", async (t) => {
+  const { root, codexHome, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configTarget = path.join(codexHome, "config.toml");
+  const operator = "model_reasoning_effort = \"low\"  # operator choice";
+  fs.writeFileSync(configTarget, `model = "fixture"\n${operator}\n`, "utf8");
+  const result = install({ ...installOptions, platform: "darwin" });
+  const config = fs.readFileSync(configTarget, "utf8");
+  assert.ok(config.includes(`\n${operator}\n`));
+  assert.equal(occurrences(config, "model_reasoning_effort"), 1);
+  assert.deepEqual(result.receipt.reasoningEffort, { status: "preserved-existing", value: "low" });
+});
 test("default install projects observation delivery without optional Jira tooling", async (t) => {
   const { root, codexCalls, codexHome, installOptions, workspace } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
