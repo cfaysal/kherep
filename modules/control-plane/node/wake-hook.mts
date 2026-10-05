@@ -3,16 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
-  armedIdle, audit, bypassesPermissions, isPlainSessionId, listenerDir, listenerLock, parentWatch, recordScope, rememberedMode, rememberMode,
-  takeTurn, wakeAudit, type ListenerLock, type ListenerScope,
+  armedIdle, audit, bypassesPermissions, isPlainSessionId, listenerDir, listenerLock, modeFile, parentWatch, recordScope, rememberedMode,
+  rememberMode, takeTurn, wakeAudit, type ListenerLock, type ListenerScope,
 } from "./autonomy.mts";
 import { ensureDir, nodePaths, readConfig, type NodePaths } from "./config.mts";
 import { REOFFER_AFTER_MS } from "./deliver-core.mts";
 import { isMainModule } from "./deliver-hook.mts";
 import { localSessionName } from "./exchange.mts";
+import { headlessMode, type RunMode } from "./headless-mode.mts";
 import { getMessage, readJson, writeJsonAtomic } from "./inbox.mts";
 import { launchMode, type LaunchVerdict } from "./launch-mode.mts";
 import { armedSince, armingMark, nextOrder, orderOf, reclaimLock } from "./listener-order.mts";
+import { releaseOwn } from "./listener-sweep.mts";
 import { explicitlyListed, loadPolicy, readPolicy, wakeAllowed } from "./policy.mts";
 import { mappingPending, taskForSession, type TaskRecord } from "./task-records.mts";
 import { transcriptMode } from "./transcript-mode.mts";
@@ -53,6 +55,13 @@ import { atReplyLimit, pending, rememberWoken } from "./wake-pending.mts";
 // while no listener ran (wake-pending.mts). Waking is opt-in
 // (policy.mts wake section) and budgeted with Stop continuations
 // (autonomy.mts). The texts are fixed and carry no peer content.
+// "In non-interactive mode with the -p flag, Claude Code kills any async hook
+// still running at teardown" ("Run hooks in the background", fetched
+// 2026-10-05), yet on Claude Code 2.1.289 (Windows, 2026-10-05) a claude -p run
+// hung until the listener's timeout. A headless session can never be woken: its
+// listener arms as any other, so the arming order holds (listener-order.mts),
+// learns the run mode before its first poll (headless-mode.mts, about 1 to 2 s)
+// and then removes its own files and exits 0 (issue #235).
 
 export { listenerDir, wakeAudit };
 export { WAKE_BACKLOG_AFTER_MS, WAKE_GRACE_MS } from "./wake-pending.mts";
@@ -73,7 +82,7 @@ export const REARM_TEXT = "Kherep: message listener re-armed.";
 export interface WakeDeps {
   paths: NodePaths; now?: () => number; sleep?: (ms: number) => Promise<void>; pid?: number; maxWaitMs?: number;
   parentAlive?: () => boolean; token?: () => string; launchMode?: (cwd: unknown) => Promise<LaunchVerdict>;
-  transcriptMode?: (transcriptPath: unknown) => string | undefined;
+  transcriptMode?: (transcriptPath: unknown) => string | undefined; runMode?: () => Promise<RunMode>;
 }
 
 export const killSwitch = (paths: NodePaths): string => path.join(paths.dir, "wake.disabled");
@@ -136,6 +145,7 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
   const starting = event === "SessionStart";
   let mode = given ?? (starting ? rememberedMode(paths, sessionId) : undefined);
   if (starting && mode === undefined) mode = (deps.transcriptMode ?? transcriptMode)(transcript);
+  const hadMode = fs.existsSync(modeFile(paths, sessionId));
   rememberMode(paths, sessionId, mode);
   if (bypassesPermissions(mode)) {
     audit(paths, now(), sessionId, [], "permission-mode");
@@ -164,6 +174,12 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
   // Before the lock, so a lock with this token always has its scope.
   recordScope(paths, sessionId, scope());
   writeJsonAtomic(lockFile, mine);
+  // A check that fails decides nothing. A newer listener keeps its files and the mode.
+  if (await (deps.runMode ?? headlessMode)().catch(() => "unknown") === "headless") {
+    if (releaseOwn(paths, sessionId, mine.token, now()) && !hadMode) fs.rmSync(modeFile(paths, sessionId), { force: true });
+    audit(paths, now(), sessionId, [], "headless");
+    return quiet;
+  }
   const deadline = mine.startedAt + (deps.maxWaitMs ?? WAKE_MAX_WAIT_MS);
   const parentAlive = deps.parentAlive ?? parentWatch();
   const release = (): void => fs.rmSync(lockFile, { force: true });

@@ -5,6 +5,7 @@ import type test from "node:test";
 
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { writeLocalSessions } from "./exchange.mts";
+import type { RunMode } from "./headless-mode.mts";
 import { storeMessage } from "./inbox.mts";
 import type { LaunchVerdict } from "./launch-mode.mts";
 import { listenerDir, runWake, wakeAudit, type WakeDeps } from "./wake-hook.mts";
@@ -43,20 +44,22 @@ export function arrive(paths: NodePaths, n: number, at: number, toSession = "rev
 export interface ListenOptions {
   start?: number; tick?: (clock: number) => void; maxWaitMs?: number; event?: string; mode?: string | null; token?: string;
   parentAlive?: () => boolean; source?: string; launch?: (cwd: unknown) => Promise<LaunchVerdict>;
-  transcript?: string; readTranscript?: (transcriptPath: unknown) => string | undefined;
+  transcript?: string; readTranscript?: (transcriptPath: unknown) => string | undefined; runMode?: () => Promise<RunMode>;
 }
 
 // A listener on a fake clock; tick(clock) runs after each sleep, before the poll.
 // The Stop input carries stop_hook_active true in a turn a Stop hook continued,
 // the woken turn included; the listener arms all the same. mode null leaves
 // permission_mode out, as a SessionStart input does. The settings and launch
-// flags check (launch-mode.mts) finds no bypass unless launch says otherwise.
+// flags check (launch-mode.mts) finds no bypass unless launch says otherwise,
+// and the session runs interactive (headless-mode.mts) unless runMode says so.
 export function listen(paths: NodePaths, options: ListenOptions = {}) {
   let clock = options.start ?? T0;
   const deps: WakeDeps = {
     paths, pid: 4242, maxWaitMs: options.maxWaitMs ?? 60_000, now: () => clock, parentAlive: options.parentAlive ?? (() => true),
     sleep: async (ms) => { clock += ms; options.tick?.(clock); }, ...(options.token ? { token: () => options.token as string } : {}),
-    launchMode: options.launch ?? (async () => "ok"), ...(options.readTranscript ? { transcriptMode: options.readTranscript } : {}),
+    launchMode: options.launch ?? (async () => "ok"), runMode: options.runMode ?? (async () => "interactive"),
+    ...(options.readTranscript ? { transcriptMode: options.readTranscript } : {}),
   };
   return runWake({ session_id: SELF, hook_event_name: options.event ?? "Stop", stop_hook_active: true, cwd: paths.dir,
     ...(options.mode === null ? {} : { permission_mode: options.mode ?? "default" }),

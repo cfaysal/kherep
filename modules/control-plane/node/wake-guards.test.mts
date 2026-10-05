@@ -2,15 +2,17 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-import { markListenerIdle, TURN_SPACING_MS, TURNS_PER_HOUR } from "./autonomy.mts";
+import { listenerScope, markListenerIdle, rememberMode, TURN_SPACING_MS, TURNS_PER_HOUR } from "./autonomy.mts";
 import { REOFFER_AFTER_MS } from "./deliver-core.mts";
-import { getMessage, markOffered } from "./inbox.mts";
+import type { RunMode } from "./headless-mode.mts";
+import { getMessage, markOffered, readJson } from "./inbox.mts";
 import { listenerDir, REARM_TEXT, STUCK_TEXT, WAKE_GRACE_MS, WAKE_POLL_MS, wakeMaxWaitMs, WAKE_MAX_WAIT_MS, wakeText } from "./wake-hook.mts";
 import { arrive, auditLines, id, listen, lockFile, SECRET, SELF, setup, T0, type ListenOptions } from "./wake-fixture.mts";
 
 // Guards of the wake listener (issue #31, operator decisions of 2026-09-25):
 // opt-in policy, per-session allowlist, budget, permission mode, arming at
-// UserPromptSubmit, stuck offers, parent death and the --timeout argument.
+// UserPromptSubmit, stuck offers, parent death and the --timeout argument;
+// headless runs (issue #235).
 
 const LATER = T0 + 2 * WAKE_POLL_MS;
 // Listens until a message arriving at the second poll wakes it, or 60 s pass.
@@ -57,6 +59,80 @@ test("a session in bypassPermissions is never woken; the other permission modes 
     const { paths } = setup(t);
     assert.deepEqual(await listenFor(paths, 1, { mode }), { code: 2, text: wakeText(1) }, mode);
   }
+});
+
+// Armed first, decided after (issue #235): the arming order stays the order
+// the hooks armed in (#225), and a headless verdict ends the listener before
+// its first poll.
+test("a headless run (claude -p) ends its listener before it polls, audited headless, and leaves no files", async (t) => {
+  for (const event of ["Stop", "UserPromptSubmit", "SessionStart"]) {
+    const { paths } = setup(t);
+    const starting = event === "SessionStart";
+    if (starting) rememberMode(paths, SELF, "default");
+    arrive(paths, 1, T0 + 10_000);
+    const runMode = async (): Promise<RunMode> => {
+      assert.equal(readJson<{ token: string }>(lockFile(paths))?.token, "h", `armed before the check at ${event}`);
+      return "headless";
+    };
+    assert.deepEqual(await listen(paths, { event, token: "h", ...(starting ? { mode: null } : {}), runMode,
+      tick: () => assert.fail(`no poll at ${event}`) }), { code: 0 });
+    assert.deepEqual(auditLines(paths).map((l) => [l.action, l.messageIds]), [["headless", []]], event);
+    // No lock, mode or scope: only the mode a SessionStart found stored is left.
+    assert.deepEqual(fs.readdirSync(listenerDir(paths)), starting ? [`${SELF}.mode.json`] : [], event);
+  }
+  // A check that fails decides nothing: the listener stays.
+  const { paths } = setup(t);
+  assert.deepEqual(await listenFor(paths, 1, { runMode: async () => { throw new Error("no listing"); } }), { code: 2, text: wakeText(1) });
+});
+
+test("a headless release never touches a newer listener's lock, scope or the mode it relies on", async (t) => {
+  const { paths } = setup(t);
+  let decide = (): void => {};
+  const verdict = new Promise<RunMode>((resolve) => { decide = () => resolve("headless"); });
+  const stop = listen(paths, { token: "stop", runMode: () => verdict });
+  let seen: unknown[] = [];
+  const prompt = listen(paths, { event: "UserPromptSubmit", token: "prompt", start: T0 + 1_000, maxWaitMs: 10_000, tick: (clock) => {
+    if (clock === T0 + 1_000 + WAKE_POLL_MS) decide();
+    if (clock === T0 + 1_000 + 2 * WAKE_POLL_MS) {
+      seen = [readJson<{ token: string }>(lockFile(paths))?.token, readJson<{ token: string }>(listenerScope(paths, SELF))?.token,
+        fs.readdirSync(listenerDir(paths)).includes(`${SELF}.mode.json`)];
+    }
+  } });
+  assert.deepEqual(await stop, { code: 0 });
+  assert.deepEqual(seen, ["prompt", "prompt", true]);
+  assert.deepEqual(await prompt, { code: 2, text: REARM_TEXT });
+  assert.deepEqual(auditLines(paths).map((l) => l.action), ["headless", "rearm"]);
+});
+
+// The run-mode check may take a process listing of seconds. It runs after
+// arming, so the hook that armed later keeps the session, whichever check ends first.
+test("a Stop whose run-mode check ends after the next prompt armed stands down; the prompt's listener stays", async (t) => {
+  const { paths } = setup(t);
+  let release = (): void => {};
+  const gate = new Promise<RunMode>((resolve) => { release = () => resolve("interactive"); });
+  const stop = listen(paths, { token: "stop", runMode: () => gate });
+  const prompt = listen(paths, { event: "UserPromptSubmit", token: "prompt", start: T0 + 1_000, maxWaitMs: 10_000, tick: (clock) => {
+    if (clock !== T0 + 1_000 + WAKE_POLL_MS) return;
+    arrive(paths, 1, clock);
+    release();
+  } });
+  assert.deepEqual(await stop, { code: 0 }, "no idle listener that could wake the running turn");
+  assert.deepEqual(await prompt, { code: 2, text: REARM_TEXT });
+  assert.deepEqual(auditLines(paths).map((l) => l.action), ["superseded", "rearm"]);
+
+  // The other way round, the prompt's listener replaces the Stop's as before.
+  const other = setup(t).paths;
+  let armed = (): void => {};
+  const late = new Promise<RunMode>((resolve) => { armed = () => resolve("interactive"); });
+  const first = listen(other, { token: "stop", maxWaitMs: 10_000, tick: () => armed() });
+  const second = listen(other, { event: "UserPromptSubmit", token: "prompt", start: T0 + 1_000, maxWaitMs: 10_000, runMode: () => late });
+  assert.deepEqual([await first, await second], [{ code: 0 }, { code: 2, text: REARM_TEXT }]);
+  assert.deepEqual(auditLines(other).map((l) => l.action), ["superseded", "rearm"]);
+});
+
+test("a run whose mode is undecided arms as before (fail open)", async (t) => {
+  const { paths } = setup(t);
+  assert.deepEqual(await listenFor(paths, 1, { runMode: async () => "unknown" }), { code: 2, text: wakeText(1) });
 });
 
 test(`wakes at most ${TURNS_PER_HOUR} times per rolling hour and waits out the spacing`, async (t) => {

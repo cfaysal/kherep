@@ -16,3 +16,10 @@ export function withNodeOnPath(base: NodeJS.ProcessEnv, execPath: string = proce
   if (win ? first.toLowerCase() === dir.toLowerCase() : first === dir) return { ...base };
   return { ...base, [key]: current ? `${dir}${sep}${current}` : dir };
 }
+
+// Markers of the Claude Code session the daemon itself may run under: a task
+// session started with claude --bg must not inherit them (issue #235;
+// headless-mode.mts reads CLAUDE_CODE_ENTRYPOINT). Any key casing.
+const SESSION_MARKERS = new Set(["CLAUDE_CODE_ENTRYPOINT", "CLAUDECODE"]);
+export const withoutSessionMarkers = (base: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
+  Object.fromEntries(Object.entries(base).filter(([key]) => !SESSION_MARKERS.has(key.toUpperCase())));

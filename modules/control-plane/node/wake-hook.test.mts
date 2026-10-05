@@ -23,6 +23,14 @@ const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning:
   + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
   + "created\\)\\r?\\n", "gm");
 const withoutTypeStrippingWarning = (stderr: string | Buffer): string => String(stderr).replace(TYPE_STRIPPING_WARNING, "");
+// Preloaded into the spawned hook: the process listing fails, so the run mode
+// (headless-mode.mts) comes from CLAUDE_CODE_ENTRYPOINT alone, whatever started
+// the test (a claude -p or a --bg session included). The hook keeps its real
+// parent, so the parent check runs as in a session.
+const NO_LISTING = `data:text/javascript,${encodeURIComponent("import cp from 'node:child_process';"
+  + "import { syncBuiltinESMExports } from 'node:module';"
+  + "cp.execFile = (...args) => { setImmediate(() => args.at(-1)(new Error('no listing'))); return {}; };"
+  + "syncBuiltinESMExports();")}`;
 
 test("wakes with the fixed text for a message that arrives after the grace period, by name or id", async (t) => {
   const { paths } = setup(t);
@@ -194,11 +202,16 @@ test("runs as Claude Code starts it: exit 2 with the wake text on stderr, exit 0
   // Arrived well after the grace period, so the first poll wakes.
   arrive(paths, 1, Date.now() + 60_000, SELF);
   const input = JSON.stringify({ session_id: SELF, hook_event_name: "Stop", stop_hook_active: false, permission_mode: "default" });
-  const run = (args: string[], dir: string, stdin = input) => spawnSync(process.execPath, [HOOK, ...args],
-    { input: stdin, env: { ...process.env, KHEREP_CONFIG_DIR: dir }, encoding: "utf8", timeout: 30_000 });
+  const run = (args: string[], dir: string, stdin = input, entrypoint = "cli") => spawnSync(process.execPath,
+    ["--import", NO_LISTING, HOOK, ...args],
+    { input: stdin, env: { ...process.env, KHEREP_CONFIG_DIR: dir, CLAUDE_CODE_ENTRYPOINT: entrypoint }, encoding: "utf8", timeout: 30_000 });
   // A --timeout too short for the re-arm margin ends it before it listens.
   const short = run(["--timeout", "90"], root);
   assert.deepEqual([short.status, short.stdout, withoutTypeStrippingWarning(short.stderr)], [0, "", ""]);
+  // A headless run (claude -p, issue #235) gets no listener: exit 0 at once, the message still waits.
+  const headless = run(["--timeout", String(WAKE_TIMEOUT_S)], root, input, "sdk-cli");
+  assert.deepEqual([headless.status, headless.stdout, withoutTypeStrippingWarning(headless.stderr)], [0, "", ""]);
+  assert.deepEqual(auditLines(paths).map((l) => l.action), ["headless"]);
   const woken = run(["--timeout", String(WAKE_TIMEOUT_S)], root);
   assert.deepEqual([woken.status, woken.stdout, withoutTypeStrippingWarning(woken.stderr)], [2, "", `${wakeText(1)}\n`]);
 
