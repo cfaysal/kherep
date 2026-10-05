@@ -370,6 +370,20 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Bootstrap: an upgrade now unwires every `settings.json` hook command that
+  runs a script listed in `bootstrap/manifest/retired.txt` (issue #252). A host
+  could carry a second, legacy wiring such as `node ~/.claude/hooks/<name>.js`
+  in groups of its own; the installer parked the file but left the command,
+  which then failed with `Cannot find module` on every event. The settings
+  render removes such a command from any event and group, whatever the spelling
+  of the Claude home (`~/.claude`, `$HOME/.claude`, `${HOME}/.claude`, or the
+  absolute path in drive or Git Bash form, quoted or not), drops a group left
+  without hooks, and prints one `retire: unwire <event> <command>` line per
+  removal. Commands for scripts that are not retired, and commands that only
+  name a retired file as an argument, stay. The new settings are written inside
+  the install transaction, so a rollback restores the previous file.
+  `drift-check.sh` now reports `DANGLING-HOOK <event> <command>` as drift for a
+  wired command whose Claude-home script is missing or retired.
 - Control Plane: `kherep-node msg stop <messageId>` for a message delivered
   into an existing session no longer ends at the bare `not stopped: fresh
   status does not identify a stoppable run (denied, source_not_found)` (issue

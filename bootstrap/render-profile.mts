@@ -11,6 +11,7 @@ import { pathToFileURL } from "node:url";
 import { retireCentralBrainHooks } from "./central-brain-retirement.mts";
 import { substituteTemplatePaths, toBashPath, workspaceEnvPath } from "./render-profile-paths.mts";
 import { filterMacPermissions, filterManagedDisallowedPermissions, mergeSettings, unique, type Settings } from "./render-profile-settings.mts";
+import { readRetiredHomeEntries, retireHookCommands } from "./retired-hooks.mts";
 import { errorMessage } from "./shape.mts";
 
 interface LocalInferenceConfig {
@@ -58,9 +59,17 @@ export function renderSettings(args: string[], platform: string = process.platfo
   let sourceUser = readJson<Settings>(sourceUserFile);
   let sourceProject = readJson<Settings>(sourceProjectFile);
   const retired = retireCentralBrainHooks(readJson<Settings>(existingUserFile, true));
-  const existingUser = retired.settings;
   if (retired.removed) console.error(`central-brain: removed ${retired.removed} retired hook command(s) from settings.json`);
-  let existingProject = readJson<Settings>(existingProjectFile, true);
+  // Issue #252. Legacy wiring of a script retired.txt parks. The lines go to
+  // stdout, which install.sh shows and drift-check.sh discards.
+  const retiredScripts = readRetiredHomeEntries();
+  const unwire = (settings: Settings): Settings => {
+    const result = retireHookCommands(settings, retiredScripts, claudeHome);
+    for (const item of result.removed) console.log(`retire: unwire ${item.event} ${item.command}`);
+    return result.settings;
+  };
+  const existingUser = unwire(retired.settings);
+  const existingProject = unwire(readJson<Settings>(existingProjectFile, true));
   sourceUser = substituteTemplatePaths(sourceUser, profile, workspace, credentialsRoot, claudeHome);
   sourceProject = substituteTemplatePaths(sourceProject, profile, workspace, credentialsRoot, claudeHome);
   const user = mergeSettings(sourceUser, existingUser);

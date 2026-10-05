@@ -582,6 +582,86 @@ test_upgrade_retires_js_hooks() {
     { cat "$ROOT/drift.log"; fail "a retired .js hook is still live after the upgrade"; }
 }
 
+# Issue #252. A host can carry a second, legacy wiring of its hooks in groups of
+# their own (`node ~/.claude/hooks/<name>.js`). The upgrade unwires every one
+# that runs a retired script, drops the groups that held nothing else, reports
+# each removal, and keeps the rest: a legacy command for a script that is not
+# retired, a user hook, and a command that only names a retired file as an
+# argument. A rollback restores the previous settings byte for byte. drift-check
+# then fails on any wired command whose Claude-home script is missing or retired.
+test_upgrade_unwires_legacy_hooks() {
+  local rc name userprofile
+  fixture legacyhooks
+  for name in clq-accept-gate live-hook-integrity orchestra-default; do printf 'old-js-hook\n' > "$C/hooks/$name.js"; done
+  cat > "$C/settings.json" <<'JSON'
+{"hooks":{
+ "SessionStart":[{"matcher":"startup|clear|compact|resume","hooks":[
+   {"type":"command","command":"node ~/.claude/hooks/live-hook-integrity.js"},
+   {"type":"command","command":"node \"$HOME/.claude/hooks/orchestra-default.js\""}]}],
+ "Stop":[{"matcher":"","hooks":[{"type":"command","command":"node ~/.claude/hooks/clq-accept-gate.js"}]}],
+ "PreToolUse":[
+   {"matcher":"Read|Grep|Glob|Edit|Write|MultiEdit|Bash","hooks":[{"type":"command","command":"node ~/.claude/hooks/privacy-boundary-guard.js"}]},
+   {"matcher":"Write","hooks":[{"type":"command","command":"node ~/own/check.js ~/.claude/hooks/clq-accept-gate.js"}]}]}}
+JSON
+  cp "$C/settings.json" "$ROOT/settings.before"
+  userprofile="$H"; ! command -v cygpath >/dev/null 2>&1 || userprofile="$(cygpath -w "$H")"
+  legacy_install() {
+    HOME="$H" USERPROFILE="$userprofile" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" \
+      KHEREP_CREDENTIALS_ROOT="$R" KHEREP_INSTALL_SKIP_GITCONFIG=1 KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE=1 \
+      KHEREP_INSTALL_SKIP_ATL_CREDENTIAL=1 SKIP_SECRETS=1 SKIP_DEPS=1 \
+      KHEREP_BOOTSTRAP_TEST_FAIL_AFTER_LABEL="${1:-}" bash "$HERE/install.sh"
+  }
+  legacy_drift() {
+    HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
+      bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1
+  }
+  set +e; legacy_install settings.json > "$ROOT/log" 2>&1; rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "an install failing after settings.json returned success"
+  same "$C/settings.json" "$ROOT/settings.before"
+  set +e; legacy_install > "$ROOT/log" 2>&1; rc=$?; set -e
+  [ "$rc" -eq 0 ] || { cat "$ROOT/log"; fail "upgrade install over legacy hook groups failed (rc=$rc)"; }
+  [ "$(grep -c '^retire: unwire ' "$ROOT/log")" -eq 3 ] &&
+    grep -qxF 'retire: unwire SessionStart node ~/.claude/hooks/live-hook-integrity.js' "$ROOT/log" &&
+    grep -qxF 'retire: unwire SessionStart node "$HOME/.claude/hooks/orchestra-default.js"' "$ROOT/log" &&
+    grep -qxF 'retire: unwire Stop node ~/.claude/hooks/clq-accept-gate.js' "$ROOT/log" ||
+    { cat "$ROOT/log"; fail "the install did not report exactly the three unwired commands"; }
+  node -e '
+    const fs = require("fs"), s = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const groups = Object.values(s.hooks || {}).flat();
+    const commands = groups.flatMap((g) => g.hooks || []).map((h) => String(h.command));
+    const fail = (message) => { console.error(message); process.exit(1); };
+    for (const name of ["clq-accept-gate", "live-hook-integrity", "orchestra-default"]) {
+      if (commands.some((c) => c.includes(`hooks/${name}.js`) && !c.includes("own/check.js"))) fail(`${name}.js still wired`);
+      if (commands.filter((c) => c.includes(`hooks/${name}.mts`)).length !== 1) fail(`${name}.mts not wired once`);
+    }
+    if (groups.some((g) => !(g.hooks || []).length)) fail("an emptied group stayed");
+    if (groups.some((g) => g.matcher === "startup|clear|compact|resume")) fail("the emptied legacy SessionStart group stayed");
+    const legacy = groups.filter((g) => g.matcher === "Read|Grep|Glob|Edit|Write|MultiEdit|Bash");
+    if (legacy.length !== 1 || legacy[0].hooks.length !== 1 ||
+      legacy[0].hooks[0].command !== "node ~/.claude/hooks/privacy-boundary-guard.js") fail("the non-retired legacy entry changed");
+    if (commands.filter((c) => c === "node ~/own/check.js ~/.claude/hooks/clq-accept-gate.js").length !== 1) fail("user hook lost");
+  ' "$C/settings.json" || { cat "$C/settings.json"; fail "the upgraded settings do not match the legacy-unwire contract"; }
+  legacy_drift || { cat "$ROOT/drift.log"; fail "drift-check failed over clean upgraded settings"; }
+  ! grep -q '^DANGLING-HOOK' "$ROOT/drift.log" || { cat "$ROOT/drift.log"; fail "clean settings reported a dangling hook"; }
+  node -e '
+    const fs = require("fs"), file = process.argv[1], s = JSON.parse(fs.readFileSync(file, "utf8"));
+    s.hooks.UserPromptSubmit = [...(s.hooks.UserPromptSubmit || []),
+      { matcher: "issue252", hooks: [{ type: "command", command: "node ~/.claude/hooks/no-such-hook.mts" }] }];
+    fs.writeFileSync(file, JSON.stringify(s, null, 2) + "\n");
+  ' "$C/settings.json"
+  set +e; legacy_drift; rc=$?; set -e
+  [ "$rc" -eq 1 ] && grep -qxF 'DANGLING-HOOK UserPromptSubmit node ~/.claude/hooks/no-such-hook.mts' "$ROOT/drift.log" &&
+    grep -qxF 'DRIFT-CHECK FOUND DRIFT (see above)' "$ROOT/drift.log" && ! grep -q '^DRIFT  ' "$ROOT/drift.log" ||
+    { cat "$ROOT/drift.log"; fail "drift-check did not fail on a wired hook whose script is missing (rc=$rc)"; }
+  cp "$ROOT/settings.before" "$C/settings.json"
+  set +e; legacy_drift; rc=$?; set -e
+  [ "$rc" -eq 1 ] && grep -qxF 'DANGLING-HOOK Stop node ~/.claude/hooks/clq-accept-gate.js' "$ROOT/drift.log" &&
+    grep -qxF 'DANGLING-HOOK SessionStart node ~/.claude/hooks/live-hook-integrity.js' "$ROOT/drift.log" &&
+    ! grep -q '^DANGLING-HOOK .*privacy-boundary-guard' "$ROOT/drift.log" &&
+    ! grep -q '^DANGLING-HOOK .*own/check' "$ROOT/drift.log" ||
+    { cat "$ROOT/drift.log"; fail "drift-check did not report exactly the retired legacy commands (rc=$rc)"; }
+}
+
 # OP-1085: the deps phase runs AFTER the commit and must not be able to undo an
 # install. The fake npm answers every install with the Mac EEXIST; the plugin
 # step fails too, via an unreachable claude binary. The install is forced through
@@ -655,6 +735,7 @@ JS
 
 test_library; test_retire; test_retire_declared; test_lock; test_preflights; test_path_guards; test_partial; test_term; test_commit_signal; test_secrets
 test_deps_failure; test_default_confluence_brokers; test_upgrade_retires_mpac; test_upgrade_retires_js_hooks
+test_upgrade_unwires_legacy_hooks
 host_hooks_paths > "$TMP/host-hooks-path.after"
 cmp -s "$TMP/host-hooks-path.before" "$TMP/host-hooks-path.after" ||
   fail "the host's system or global core.hooksPath changed during the run"
