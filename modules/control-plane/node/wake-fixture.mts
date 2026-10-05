@@ -4,7 +4,7 @@ import path from "node:path";
 import type test from "node:test";
 
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
-import { writeLocalSessions } from "./exchange.mts";
+import { recordSent, writeLocalSessions, writeOutbox, type OutboxRecord } from "./exchange.mts";
 import type { RunMode } from "./headless-mode.mts";
 import { storeMessage } from "./inbox.mts";
 import type { LaunchVerdict } from "./launch-mode.mts";
@@ -13,7 +13,7 @@ import { listenerDir, runWake, wakeAudit, type WakeDeps } from "./wake-hook.mts"
 // Shared fixture of the wake listener tests (wake-hook.test.mts,
 // wake-guards.test.mts): a throwaway node directory, a fake clock and sleep.
 
-const PEER = "00000000-0000-4000-8000-0000000000cc";
+export const PEER = "00000000-0000-4000-8000-0000000000cc";
 export const SELF = "s-self";
 export const SECRET = "peer text that must never reach the audit";
 export const T0 = Date.UTC(2026, 8, 25, 12);
@@ -38,6 +38,22 @@ export function setup(t: test.TestContext, options: { wake?: unknown; enrolled?:
 export function arrive(paths: NodePaths, n: number, at: number, toSession = "review", depth = 0): string {
   storeMessage(paths.inbox, { messageId: id(n), from: { nodeId: PEER, session: "build" }, toSession, text: `${SECRET} ${n}`,
     createdAt: new Date(at).toISOString() }, at, depth);
+  return id(n);
+}
+
+// Reply grant (issue #253): a message this node sent from SELF ("review") to
+// PEER an hour before T0, in sent/ with the given state, and a reply to it.
+export const ORIGINAL = id(0x500);
+export function sentOriginal(paths: NodePaths, overrides: Partial<OutboxRecord> = {},
+  state: Parameters<typeof recordSent>[2] = "accepted", messageId = ORIGINAL): string {
+  writeOutbox(paths, { messageId, fromSession: "review", fromSessionId: SELF, to: { nodeId: PEER, session: "build" }, text: "question",
+    createdAt: new Date(T0 - 3_600_000).toISOString(), depth: 0, ...overrides });
+  recordSent(paths, messageId, state, undefined, T0);
+  return messageId;
+}
+export function arriveReply(paths: NodePaths, n: number, at: number, options: { from?: string; depth?: number; toSession?: string } = {}): string {
+  storeMessage(paths.inbox, { messageId: id(n), from: { nodeId: options.from ?? PEER, session: "build" }, toSession: options.toSession ?? "review",
+    text: `${SECRET} ${n}`, inReplyTo: ORIGINAL, createdAt: new Date(at).toISOString() }, at, options.depth ?? 1);
   return id(n);
 }
 

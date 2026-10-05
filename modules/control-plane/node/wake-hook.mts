@@ -19,6 +19,7 @@ import { explicitlyListed, loadPolicy, readPolicy, wakeAllowed } from "./policy.
 import { mappingPending, taskForSession, type TaskRecord } from "./task-records.mts";
 import { transcriptMode } from "./transcript-mode.mts";
 import { atReplyLimit, pending, rememberWoken } from "./wake-pending.mts";
+import { auditGranted, unlistedGrants } from "./wake-reply.mts";
 
 // Wakes an idle Claude Code session when a peer message arrives (issue #31).
 // Installed with "asyncRewake": true on SessionStart, UserPromptSubmit and
@@ -122,7 +123,8 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
   // mapped its id (a copy after a resume gets a new one, issue #109): while a
   // task record in the same directory waits for its mapping, the listener
   // waits too and looks the grant up again at each poll. The grant itself
-  // only ever comes from the session id the node recorded.
+  // only ever comes from the session id the node recorded. With wake.replies an
+  // unlisted session stays armed for replies to its own messages (wake-reply.mts).
   const policyFile = readConfig(paths.config)?.policyFile ?? paths.policy;
   let policy = loadPolicy(policyFile);
   const grantFor = (): TaskRecord | undefined => policy.sessions?.enabled ? taskForSession(paths, sessionId) ?? undefined : undefined;
@@ -134,15 +136,16 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     return name === undefined ? [sessionId] : [sessionId, name];
   };
   let refs = refsOf();
+  const replies = (): boolean => policy.wake?.replies === true;
   let listed = wakeAllowed(policy, refs);
-  let wasListed = listed;
+  let wasListed = listed || replies();
   // Audited once, when the listener gives up; without a wake section quietly,
-  // as before, unless the section was withdrawn from a listed session (issue #213).
+  // as before, unless the section was withdrawn from a listed or reply-scoped session (issue #213).
   const unlisted = (): WakeResult => {
     if (policy.wake || wasListed) audit(paths, now(), sessionId, [], "not-allowlisted");
     return quiet;
   };
-  if (!listed && !grant && !mapping()) return unlisted();
+  if (!listed && !grant && !replies() && !mapping()) return unlisted();
   const starting = event === "SessionStart";
   let mode = given ?? (starting ? rememberedMode(paths, sessionId) : undefined);
   if (starting && mode === undefined) mode = (deps.transcriptMode ?? transcriptMode)(transcript);
@@ -171,7 +174,8 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
   const mine: ListenerLock = { token: deps.token?.() ?? crypto.randomUUID(), pid: deps.pid ?? process.pid, startedAt: armedAt,
     order: nextOrder(paths, sessionId, armedAt), event, ...(starting && typeof source === "string" ? { source } : {}) };
   ensureDir(listenerDir(paths));
-  const scope = (): ListenerScope => ({ token: mine.token, listed, ...(grant ? { taskId: grant.taskId } : {}), order: mine.order });
+  const scope = (): ListenerScope => ({ token: mine.token, listed, ...(grant ? { taskId: grant.taskId } : {}),
+    ...(replies() ? { replies: true as const } : {}), order: mine.order });
   // Before the lock, so a lock with this token always has its scope.
   recordScope(paths, sessionId, scope());
   writeJsonAtomic(lockFile, mine);
@@ -219,24 +223,25 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     policy = current ?? policy;
     if (policy.sessions?.enabled !== true) grant = undefined;
     listed = wakeAllowed(policy, refs);
-    wasListed ||= listed;
+    wasListed ||= listed || replies();
     if (!listed && !grant) {
       grant = grantFor();
-      if (!grant) {
+      if (grant) refs = refsOf();
+      else if (!replies()) {
         if (now() >= deadline || !mapping()) {
           release();
           return unlisted();
         }
         continue;
       }
-      refs = refsOf();
     }
     recordScope(paths, sessionId, scope());
     // Armed at UserPromptSubmit or compaction, the session is busy until
     // StopFailure marks the listener idle or the turn cannot still run; a turn
     // that ends with Stop replaces this listener.
     const idle = armedIdle(held) || held.idleAt !== undefined || now() >= mine.startedAt + REOFFER_AFTER_MS;
-    const found = idle ? pending(paths, refs, sessionId, mine, now(), listed ? undefined : grant) : { fresh: [], backlog: [], stuck: [] };
+    const granted = listed ? undefined : unlistedGrants(paths, policy, refs, grant, now());
+    const found = idle ? pending(paths, refs, sessionId, mine, now(), granted?.grants) : { fresh: [], backlog: [], stuck: [] };
     const deep = [...found.fresh, ...found.backlog].filter((r) => atReplyLimit(r) && !limited.has(r.messageId));
     if (deep.length > 0) {
       audit(paths, now(), sessionId, deep.map((r) => r.messageId), "depth-limit");
@@ -272,9 +277,10 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
       return { code: 2, text: REARM_TEXT };
     }
     if (backlog.length + stuck.length > 0) rememberWoken(paths, sessionId, [...backlog, ...stuck]);
-    if (stuck.length > 0) audit(paths, now(), sessionId, stuck, "stuck-offer");
-    if (backlog.length > 0) audit(paths, now(), sessionId, backlog, "backlog");
-    if (fresh.length > 0) audit(paths, now(), sessionId, fresh, "wake");
+    const reply = granted?.reply ?? new Set<string>();
+    auditGranted(paths, now(), sessionId, stuck, "stuck-offer", reply);
+    auditGranted(paths, now(), sessionId, backlog, "backlog", reply);
+    auditGranted(paths, now(), sessionId, fresh, "wake", reply);
     return { code: 2, text: messages > 0 ? wakeText(messages) : STUCK_TEXT };
   }
 }

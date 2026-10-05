@@ -51,7 +51,8 @@ test("a second message from the same sender goes to its running intercom session
   assert.ok(record.closedAttempt);
   assert.equal(taskGrants(task, record), true, "the wake's task grant covers the sender's messages");
   const armed = { startedAt: T0 - 60_000, event: "Stop" as const };
-  assert.deepEqual(pending(node.paths, [task.sessionId!, task.name], task.sessionId!, armed, T0, task).fresh.map((r) => r.messageId), [id],
+  assert.deepEqual(pending(node.paths, [task.sessionId!, task.name], task.sessionId!, armed, T0, (r) => taskGrants(task, r))
+    .fresh.map((r) => r.messageId), [id],
     "a listener of the intercom session wakes it for the message");
   const last = audits(node).at(-1)!;
   assert.deepEqual([last.outcome, last.reason, last.taskId, last.messageIds], ["reused", "intercom session running", task.taskId, [id]]);
@@ -73,7 +74,8 @@ test("a listener armed after the message arrived but before it was readdressed s
   const record = getMessage(node.paths.inbox, id)!;
   assert.equal(record.toSession, task.sessionId);
   assert.ok(Date.parse(record.closedAttempt!) > armed.startedAt + 3_000, "the handover comes after the listener's grace period");
-  assert.deepEqual(pending(node.paths, [task.sessionId!, task.name], task.sessionId!, armed, Date.parse(record.closedAttempt!), task)
+  assert.deepEqual(pending(node.paths, [task.sessionId!, task.name], task.sessionId!, armed, Date.parse(record.closedAttempt!),
+    (r) => taskGrants(task, r))
     .fresh.map((r) => r.messageId), [id], "judged by the handover, not by the arrival");
 });
 

@@ -73,6 +73,15 @@ export function senderSession(paths: NodePaths, env: NodeJS.ProcessEnv, from?: s
     + `with no other ${KHEREP_SESSION_ENV} set` };
 }
 
+// The id of the sender senderSession resolved (issue #253): this session's id
+// when the sender is this session by id or name, otherwise the sender as is, a
+// verified Codex session id, which is never bound to the session of an
+// inherited CLAUDE_CODE_SESSION_ID.
+export function senderSessionId(paths: NodePaths, env: NodeJS.ProcessEnv, sender: string): string {
+  const session = currentSession(paths, env);
+  return session && (sender === session.id || sender === session.name) ? session.id : sender;
+}
+
 function pick<T>(what: string, ref: string, matches: T[], all: T[], label: (item: T) => string): Resolved<T> {
   if (matches.length === 1) return { ok: true, value: matches[0] };
   const candidates = (matches.length > 1 ? matches : all).map(label).join(", ") || "none";

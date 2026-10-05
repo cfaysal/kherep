@@ -106,13 +106,18 @@ test("msg send writes an outbox record from this session's name and prints the m
   const sent = await run(paths, ["send", "node-b/docs", "please", "review"]);
   assert.equal(sent.code, 0, sent.err);
   const record = getOutbox(paths, sent.out);
-  assert.deepEqual(record, { messageId: sent.out, fromSession: "review", to: { nodeId: PEER, session: "s-b3" }, text: "please review",
-    createdAt: new Date(NOW).toISOString(), depth: 0 });
+  // fromSessionId (issue #253): the session's id beside its name, kept locally for the reply grant.
+  assert.deepEqual(record, { messageId: sent.out, fromSession: "review", fromSessionId: "s-self", to: { nodeId: PEER, session: "s-b3" },
+    text: "please review", createdAt: new Date(NOW).toISOString(), depth: 0 });
 
   // Without a name in sessions.json the id is the sender; --from may name this same session by id or name.
-  assert.equal(getOutbox(paths, (await run(paths, ["send", "node-b/docs", "x"], { CLAUDE_CODE_SESSION_ID: "s-other" })).out)?.fromSession, "s-other");
-  assert.equal(getOutbox(paths, (await run(paths, ["send", "--from", "s-self", "node-b/docs", "x"])).out)?.fromSession, "s-self");
-  assert.equal(getOutbox(paths, (await run(paths, ["send", "--from", "review", "node-b/docs", "x"])).out)?.fromSession, "review");
+  const sender = async (argv: string[], env?: NodeJS.ProcessEnv) => {
+    const record = getOutbox(paths, (await run(paths, ["send", ...argv, "node-b/docs", "x"], env)).out);
+    return [record?.fromSession, record?.fromSessionId];
+  };
+  assert.deepEqual(await sender([], { CLAUDE_CODE_SESSION_ID: "s-other" }), ["s-other", "s-other"]);
+  assert.deepEqual(await sender(["--from", "s-self"]), ["s-self", "s-self"]);
+  assert.deepEqual(await sender(["--from", "review"]), ["review", "s-self"]);
   const anonymous = await run(paths, ["send", "node-b/docs", "x"], {});
   assert.equal(anonymous.code, 1);
   assert.match(anonymous.err, /neither CLAUDE_CODE_SESSION_ID \(Claude Code\) nor KHEREP_SESSION_ID \(the node's Codex runs\) is set; a Codex session passes --from/);
@@ -166,8 +171,8 @@ test("msg send --reply-to answers the sender of an inbox message and --wait repo
   fs.rmSync(paths.directory); // a reply to the sender needs no directory
   const reply = await run(paths, ["send", "--reply-to", INCOMING, "yes"]);
   assert.equal(reply.code, 0, reply.err);
-  assert.deepEqual(getOutbox(paths, reply.out), { messageId: reply.out, fromSession: "review", to: { nodeId: PEER, session: "build" },
-    text: "yes", inReplyTo: INCOMING, createdAt: new Date(NOW).toISOString(), depth: 3 });
+  assert.deepEqual(getOutbox(paths, reply.out), { messageId: reply.out, fromSession: "review", fromSessionId: "s-self",
+    to: { nodeId: PEER, session: "build" }, text: "yes", inReplyTo: INCOMING, createdAt: new Date(NOW).toISOString(), depth: 3 });
   writeDirectory(paths, DIRECTORY);
   const redirected = await run(paths, ["send", "--reply-to", INCOMING, "--to", "node-b/docs", "cc"]);
   assert.deepEqual(getOutbox(paths, redirected.out)?.to, { nodeId: PEER, session: "s-b3" });
@@ -228,6 +233,7 @@ test("msg send --from preserves a recorded Codex session id", async (t) => {
   const implicit = await run(paths, ["send", "node-b/docs", "hello"], { KHEREP_SESSION_ID: codex });
   assert.equal(implicit.code, 0, implicit.err);
   assert.equal(getOutbox(paths, implicit.out)?.fromSession, codex);
+  assert.deepEqual([getOutbox(paths, sent.out)?.fromSessionId, getOutbox(paths, implicit.out)?.fromSessionId], [codex, codex]);
 });
 
 test("msg send --from refuses a Codex sender that no recent hook record verifies (issue #200)", async (t) => {
@@ -250,6 +256,8 @@ test("msg send --from refuses a Codex sender that no recent hook record verifies
     const inherited = await run(paths, ["send", "--from", codex, "node-b/docs", "hello"], variables);
     assert.equal(inherited.code, 0, inherited.err);
     assert.equal(getOutbox(paths, inherited.out)?.fromSession, codex);
+    // Never bound to the Claude Code session whose variable it inherited (issue #253).
+    assert.equal(getOutbox(paths, inherited.out)?.fromSessionId, codex);
   }
   // A node-started Codex run whose task record carries that thread may name it.
   writeTask(paths, { taskId: "00000000-0000-4000-8000-0000000000f1", runtime: "codex", name: "task-00000000", cwd: "/w", permissionMode: "auto",
@@ -258,6 +266,7 @@ test("msg send --from refuses a Codex sender that no recent hook record verifies
   const taskRun = await run(paths, ["send", "--from", codex, "node-b/docs", "hello"], { KHEREP_SESSION_ID: "task-00000000" });
   assert.equal(taskRun.code, 0, taskRun.err);
   assert.equal(getOutbox(paths, taskRun.out)?.fromSession, codex);
+  assert.equal(getOutbox(paths, taskRun.out)?.fromSessionId, codex, "the thread id, not the task's name");
 });
 
 test("msg sessions marks background tasks and the session --from names (issue #198)", async (t) => {

@@ -18,7 +18,8 @@ import { parseSessionsPolicy, type SessionsPolicy } from "./session-policy.mts";
 // message for which local session. Without a rule nothing is accepted.
 export interface AcceptRule { session: string; from: string[] }
 // codexApp (issue #82): also wake the current Codex desktop app session (codex-app.mts).
-export interface WakePolicy { sessions: string[]; codexApp?: boolean }
+// replies (issue #253): a reply to a message a session sent may wake it (wake-reply.mts).
+export interface WakePolicy { sessions: string[]; codexApp?: boolean; replies?: boolean }
 // resumeClosed (issue #102): a message for a known session of this node that
 // is no longer running resumes it, or starts an intercom session instead
 // (closed-delivery.mts). Only the boolean true enables it.
@@ -135,15 +136,17 @@ export function acceptsMessage(policy: NodePolicy, toSession: string, fromNodeId
 // The optional wake section (issue #31, operator decision 2026-09-25): waking
 // idle sessions is opt-in per node and per session. Anything but enabled true
 // with a non-empty list of session ids or names disables it (fail closed);
-// "*" matches every session, but only where it is written. codexApp must be a
-// boolean when present; with codexApp true the list may be empty or absent.
+// "*" matches every session, but only where it is written. codexApp and
+// replies must be booleans when present; with either true the list may be
+// empty or absent.
 function parseWake(section: unknown): WakePolicy | null {
   if (typeof section !== "object" || section === null) return null;
-  const { enabled, sessions, codexApp } = section as { enabled?: unknown; sessions?: unknown; codexApp?: unknown };
-  if (enabled !== true || (codexApp !== undefined && typeof codexApp !== "boolean")) return null;
-  const list = sessions === undefined && codexApp === true ? [] : sessions;
-  if (!Array.isArray(list) || !list.every(isSessionRef) || (list.length === 0 && codexApp !== true)) return null;
-  return { sessions: [...list] as string[], ...(codexApp ? { codexApp: true } : {}) };
+  const { enabled, sessions, codexApp, replies } = section as { enabled?: unknown; sessions?: unknown; codexApp?: unknown; replies?: unknown };
+  if (enabled !== true || [codexApp, replies].some((flag) => flag !== undefined && typeof flag !== "boolean")) return null;
+  const granted = codexApp === true || replies === true;
+  const list = sessions === undefined && granted ? [] : sessions;
+  if (!Array.isArray(list) || !list.every(isSessionRef) || (list.length === 0 && !granted)) return null;
+  return { sessions: [...list] as string[], ...(codexApp ? { codexApp: true } : {}), ...(replies ? { replies: true } : {}) };
 }
 
 // refs: the session id and its current name, if any.

@@ -6,7 +6,7 @@ import { codexNode } from "./codex-fixture.mts";
 import { pollCodexQueue } from "./codex-queue.mts";
 import { codexSessionName, recordCodexSession } from "./codex-sessions.mts";
 import { observeClaudeDeliveryProgress } from "./delivery-progress.mts";
-import { writeLocalSessions } from "./exchange.mts";
+import { recordSent, writeLocalSessions, writeOutbox } from "./exchange.mts";
 import { getMessageProgress, markOffered, markReported, storeMessage, unreportedStatuses, writeJsonAtomic } from "./inbox.mts";
 import { T0, taskNode, TASK } from "./task-fixture.mts";
 import { ensureDir } from "./config.mts";
@@ -91,6 +91,39 @@ test("a live listener on its task grant alone is not reported as waking for a me
   assert.deepEqual(observe({ token: "replaced", listed: true }), ["awaiting-user-turn", "wake-pending"],
     "a scope of another listener, or none, says nothing beyond the task grant");
   assert.deepEqual(observe({ token: "live", listed: true }), ["wake-pending", "wake-pending"]);
+});
+
+// Issue #253: with wake.replies a reply to the idle session's own recent
+// message is authorized without a listing; wake-pending only while a live
+// listener's scope says it wakes for replies. Other messages stay unauthorized.
+test("a reply-granted message reports wake-pending with a reply-scoped listener, else the next user turn", (t) => {
+  const node = taskNode(t, {}, { wake: { enabled: true, replies: true } });
+  const original = id();
+  writeOutbox(node.paths, { messageId: original, fromSession: "review", fromSessionId: SESSION, to: PEER, text: "question",
+    createdAt: new Date(T0 - 60_000).toISOString(), depth: 0 });
+  recordSent(node.paths, original, "accepted", undefined, T0);
+  const unrelated = deliver(node);
+  const reply = (from: typeof PEER): string => {
+    const messageId = id();
+    storeMessage(node.paths.inbox, { messageId, from, toSession: "review", text: "private", inReplyTo: original,
+      createdAt: new Date(T0).toISOString() }, T0, 1);
+    return messageId;
+  };
+  const granted = reply(PEER);
+  const foreign = reply({ ...PEER, nodeId: "00000000-0000-4000-8000-0000000000dd" });
+  const observe = (scope?: unknown): string[] => {
+    if (scope !== undefined) {
+      ensureDir(listenerDir(node.paths));
+      writeJsonAtomic(listenerLock(node.paths, SESSION), { token: "live", pid: process.pid, startedAt: T0, event: "Stop" });
+      writeJsonAtomic(listenerScope(node.paths, SESSION), scope);
+    }
+    observeClaudeDeliveryProgress(node.deps());
+    return [code(node, unrelated), code(node, foreign), code(node, granted)].map(String);
+  };
+  assert.deepEqual(observe(), ["wake-not-authorized", "wake-not-authorized", "awaiting-user-turn"], "no listener");
+  assert.deepEqual(observe({ token: "live", listed: false }), ["wake-not-authorized", "wake-not-authorized", "awaiting-user-turn"],
+    "a listener without the reply scope");
+  assert.deepEqual(observe({ token: "live", listed: false, replies: true }), ["wake-not-authorized", "wake-not-authorized", "wake-pending"]);
 });
 
 test("a task association grants no wake while sessions are disabled", (t) => {

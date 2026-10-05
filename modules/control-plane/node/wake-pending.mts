@@ -4,7 +4,6 @@ import { listenerDir, type ListenerLock } from "./autonomy.mts";
 import type { NodePaths } from "./config.mts";
 import { MAX_OFFERS, offerEnded, sessionInbox } from "./deliver-core.mts";
 import { getMessage, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
-import { taskGrants, type TaskRecord } from "./task-records.mts";
 
 // Which inbox records a wake listener (wake-hook.mts) wakes its session for.
 
@@ -32,10 +31,12 @@ export function rememberWoken(paths: NodePaths, sessionId: string, ids: string[]
 // SessionStart, accepted records received before it ended; no delivery hook
 // runs at a Claude Code SessionStart, so nothing else offers them before the
 // next prompt. stuck: records left offered by a turn that ended without Stop.
-// With a task (a task grant) only the records it grants count (taskGrants).
+// With grants (a listener its listing does not cover: wake-reply.mts
+// unlistedGrants) only the records it grants count; only waiting records are
+// judged, so a reply grant reads no sent record for a final one.
 export function pending(paths: NodePaths, refs: string[], sessionId: string, lock: Pick<ListenerLock, "startedAt" | "event">,
-  now: number, task?: TaskRecord) {
-  const mine = sessionInbox(paths, refs).filter((r) => task === undefined || taskGrants(task, r));
+  now: number, grants?: (record: InboxRecord) => boolean) {
+  const mine = sessionInbox(paths, refs).filter((r) => (r.state === "accepted" || r.state === "offered") && (grants?.(r) ?? true));
   const woken = wokenFor(paths, sessionId);
   // A readdressed record reached this session at its handover, not at its arrival (#113).
   const late = (r: InboxRecord): boolean => Date.parse((r.closedTo && r.closedAttempt) || r.receivedAt) > lock.startedAt + WAKE_GRACE_MS;

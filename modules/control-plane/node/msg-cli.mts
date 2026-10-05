@@ -8,7 +8,7 @@ import type { NodePaths } from "./config.mts";
 import { getOutbox, getSent, writeOutbox, type OutboxRecord, type SentRecord } from "./exchange.mts";
 import { getMessage, markAnswered } from "./inbox.mts";
 import {
-  KHEREP_SESSION_ENV, resolveSendTarget, senderSession, SESSION_ENV, sessionIdFromEnv,
+  KHEREP_SESSION_ENV, resolveSendTarget, senderSession, senderSessionId, SESSION_ENV, sessionIdFromEnv,
 } from "./msg-resolve.mts";
 import { inbox, replyLines } from "./msg-inbox.mts";
 import { sendNew } from "./msg-new.mts";
@@ -196,7 +196,8 @@ async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<
   // A task the Worker does not know (issue #102) tags nothing.
   const own = taskForSession(io.paths, sessionIdFromEnv(io.env));
   taskId = (own && !own.local ? own.taskId : undefined) ?? taskId;
-  const record: OutboxRecord = { messageId: crypto.randomUUID(), fromSession: from.value, to, text,
+  const record: OutboxRecord = { messageId: crypto.randomUUID(), fromSession: from.value,
+    fromSessionId: senderSessionId(io.paths, io.env, from.value), to, text,
     ...(replyTo ? { inReplyTo: replyTo } : {}), ...(taskId ? { taskId } : {}), createdAt: new Date(io.now()).toISOString(), depth };
   writeOutbox(io.paths, record);
   if (replyTo) markAnswered(io.paths.inbox, replyTo);

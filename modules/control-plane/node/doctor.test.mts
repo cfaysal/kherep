@@ -70,7 +70,7 @@ test("a healthy host passes every check and reports versions without secrets", a
   assert.equal(report.version, "9.8.7");
   assert.deepEqual(report.checks.enrollment, { ok: true, enrolled: true, nodeId: NODE_ID, keyReadable: true });
   assert.deepEqual(report.checks.worker, { ok: true, reachable: true, status: 200, version: "9.8.7", commit: "0123abc", remoteMcp: true });
-  assert.deepEqual(report.checks.policy.wake, { enabled: true, sessions: ["build"], codexApp: false });
+  assert.deepEqual(report.checks.policy.wake, { enabled: true, sessions: ["build"], codexApp: false, replies: false });
   assert.deepEqual(report.checks.runtimes.claude, { installed: true, version: "2.1.300 (Claude Code)", configured: true, ready: "unknown" });
   assert.deepEqual(report.checks.hooks.claude, { present: true, deliver: 1, wake: 1, foreign: [] });
   assert.deepEqual(report.checks.hooks.codex, { present: true, deliver: 1, wake: 0, foreign: [] });

@@ -10,6 +10,7 @@ import { wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { isActive, listTasks, taskForSession, taskGrants } from "./task-records.mts";
 import { killSwitch, WAKE_MAX_WAIT_MS } from "./wake-hook.mts";
+import { replyGrants } from "./wake-reply.mts";
 
 const refsOf = (session: { sessionId: string; name?: string }): string[] =>
   session.name ? [session.sessionId, session.name] : [session.sessionId];
@@ -28,14 +29,17 @@ function observeAccepted(deps: RunnerDeps, session: LocalSession, accepted: Inbo
   const refs = refsOf(session);
   const task = deps.policy.sessions?.enabled === true ? taskForSession(deps.paths, session.sessionId) : null;
   const granted = task ? accepted.filter((record) => taskGrants(task, record)) : [];
-  const ordinary = accepted.filter((record) => !granted.includes(record));
+  // Reply grant (issue #253): for an unlisted session only, as in its listener.
+  const replies = deps.policy.wake?.replies === true && !wakeAllowed(deps.policy, refs)
+    ? accepted.filter((record) => !granted.includes(record) && replyGrants(deps.paths, refs, record, now)) : [];
+  const ordinary = accepted.filter((record) => !granted.includes(record) && !replies.includes(record));
   if (fs.existsSync(killSwitch(deps.paths))) {
     progressRecords(deps.paths, accepted, "waiting", "wake-disabled", now);
     return;
   }
   if (!deps.policy.wake) progressRecords(deps.paths, ordinary, "waiting", "wake-disabled", now);
   else if (!wakeAllowed(deps.policy, refs)) progressRecords(deps.paths, ordinary, "waiting", "wake-not-authorized", now);
-  const authorized = [...granted, ...(wakeAllowed(deps.policy, refs) ? ordinary : [])];
+  const authorized = [...granted, ...replies, ...(wakeAllowed(deps.policy, refs) ? ordinary : [])];
   if (authorized.length === 0) return;
   const mode = task?.permissionMode ?? rememberedMode(deps.paths, session.sessionId);
   if (bypassesPermissions(mode)) {
@@ -49,12 +53,14 @@ function observeAccepted(deps: RunnerDeps, session: LocalSession, accepted: Inbo
   }
   // Waking only for what the live listener's scope covers (issue #213). Without
   // its scope (an older listener) only the task grant, which every listener
-  // looks up. Otherwise awaiting-user-turn: a new code would make an older
-  // Worker refuse the whole status (isNodeMessageStatusBody).
+  // looks up; a reply only with a scope that says replies. Otherwise
+  // awaiting-user-turn: a new code would make an older Worker refuse the whole
+  // status (isNodeMessageStatusBody).
   const scope = readJson<ListenerScope>(listenerScope(deps.paths, session.sessionId));
   const own = scope !== null && scope.token === lock?.token ? scope : null;
   const covered = (record: InboxRecord): boolean => listener
-    && (own?.listed === true || (granted.includes(record) && (own === null || own.taskId === task?.taskId)));
+    && (own?.listed === true || (granted.includes(record) && (own === null || own.taskId === task?.taskId))
+      || (replies.includes(record) && own?.replies === true));
   progressRecords(deps.paths, authorized.filter(covered), "waking", "wake-pending", now);
   progressRecords(deps.paths, authorized.filter((record) => !covered(record)), "waiting", "awaiting-user-turn", now);
 }

@@ -25,9 +25,10 @@ export const DIRECTORY_INTERVAL_MS = 60_000;
 // heals without a reconnect (issue #195). The Worker deduplicates by messageId.
 export const SEND_RETRY_MS = 30_000;
 
-// depth: the reply depth (inbox.mts InboxRecord.depth); stays local, the
-// Worker never sees it.
-export interface OutboxRecord extends MessageSendBody { createdAt: string; depth?: number }
+// depth: the reply depth (inbox.mts InboxRecord.depth); fromSessionId: the
+// sender session's id where fromSession is its name (the reply grant,
+// wake-reply.mts). Both stay local: toSendBody builds the frame without them.
+export interface OutboxRecord extends MessageSendBody { createdAt: string; depth?: number; fromSessionId?: string }
 // A malformed outbox file leaves a sent record with only messageId and state error.
 // noticedAt: when the delivery hook told the sending session it failed.
 export type SentRecord = Partial<OutboxRecord> & {
