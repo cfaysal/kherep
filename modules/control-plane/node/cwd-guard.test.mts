@@ -41,6 +41,9 @@ test("an MSYS-rewritten path is refused for any target, a foreign path style for
     }
   }
   assert.match(cwdProblem("C:/Users/a/probe", "mac", "posix") ?? "", /Windows path, but mac uses POSIX paths/);
+  // A UNC share in forward-slash form is a Windows path, not a POSIX one.
+  assert.equal(cwdProblem("//server/share/repo", "win", "windows"), null);
+  assert.match(cwdProblem("//server/share/repo", "mac", "posix") ?? "", /Windows path, but mac uses POSIX paths/);
   assert.match(cwdProblem("D:\\work", "mac", "posix") ?? "", new RegExp(MSYS_HINT));
   assert.match(cwdProblem("/Users/a/probe", "win", "windows") ?? "", /POSIX path, but win uses Windows paths/);
   for (const [cwd, style] of [["/Users/a/probe", "posix"], ["C:\\Users\\a\\repo", "windows"], ["C:/Users/a/probe", null],

@@ -397,7 +397,7 @@ export class NodeClient {
   private failedResult(commandId: string, command: string, args: unknown, error: string): string {
     const taskId = (args as { taskId?: unknown } | undefined)?.taskId;
     const line = error.replace(/\s+/g, " ").trim().slice(0, 256);
-    this.options.log?.(`kherep-node: command ${command} ${commandId}${isTaskId(taskId) ? ` for task ${taskId}` : ""} failed: ${line}`);
+    this.options.log?.(`kherep-node: command ${JSON.stringify(String(command).slice(0, 64))} ${commandId}${isTaskId(taskId) ? ` for task ${taskId}` : ""} failed: ${line}`);
     return this.frame("command.result", { commandId, ok: false, error });
   }
 
