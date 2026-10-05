@@ -1,13 +1,1 @@
 # Maintained JavaScript inventory for existing adapters. New executable Kherep source uses TypeScript.
-claude/hooks/commit-guard.js
-claude/hooks/commit-guard.test.js
-claude/hooks/deploy-guard.js
-claude/hooks/deploy-guard.test.js
-claude/hooks/dispatch-contract-guard.js
-claude/hooks/dispatch-contract-guard.test.js
-claude/hooks/playwright-file-guard.js
-claude/hooks/portable-scope-hooks.test.js
-claude/hooks/privacy-boundary-guard.js
-claude/hooks/privacy-boundary-guard.test.js
-claude/hooks/secret-output-guard.js
-claude/hooks/secret-output-guard.test.js

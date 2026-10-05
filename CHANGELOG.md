@@ -279,6 +279,24 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- Claude hooks: the six blocking guards move from JavaScript to TypeScript
+  (`.mts`, ESM, Node type stripping), with their tests and
+  `portable-scope-hooks.test`: `commit-guard`, `deploy-guard`,
+  `dispatch-contract-guard`, `playwright-file-guard`, `privacy-boundary-guard`
+  and `secret-output-guard`. Behaviour is unchanged; every existing guard test
+  passes with the same count. `claude/hooks` holds no `.js` file any more and
+  `legacy-javascript.txt` is empty. The settings template wires the `.mts`
+  files, and `retired.txt` lists every old `.js`, so an install parks them in
+  `hooks/_deprecated` and unwires every command that still runs one, including
+  the legacy groups hosts carry under their own matchers. The Codex installer
+  copies and wires the `.mts` names of `commit-guard`, `deploy-guard` and
+  `playwright-file-guard`, removes their old `.js` copies (kept in the install
+  backup) and recognises the block an earlier installer wrote with the `.js`
+  names, so an upgrade replaces it instead of refusing. New tests run each of
+  the six guards through its wired Claude command, and the three shared ones
+  through their wired Codex command after an install, show that a 0-byte or
+  missing guard fails those checks, and prove that each template matcher covers
+  every tool a legacy matcher covered. Closes issue #237.
 - Claude hooks: nine hooks move from JavaScript to TypeScript (`.mts`, ESM,
   run by Node's type stripping like the other `.mts` hooks), with their tests
   and `lib/semver-compare`: `clq-accept-gate`, `critical-file-integrity`,

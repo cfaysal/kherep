@@ -1,9 +1,25 @@
 #!/usr/bin/env node
 /** Claude Agent/Task adapter for the provider-neutral dispatch policy. */
-const fs = require("fs");
-const { evaluateDispatch } = require("./lib/dispatch-policy.mts");
+import fs from "node:fs";
+import { evaluateDispatch, type DispatchMetadata } from "./lib/dispatch-policy.mts";
 
-function emitDeny(ruleId, reason, metadata = {}) {
+// The fields this hook reads from a PreToolUse payload.
+interface DispatchPayload {
+  tool_name?: unknown;
+  tool_input?: unknown;
+  cwd?: unknown;
+}
+
+// The Agent/Task tool input fields the dispatch event is built from.
+interface DispatchInput {
+  subagent_type?: unknown;
+  agent_type?: unknown;
+  model?: unknown;
+  description?: unknown;
+  prompt?: unknown;
+}
+
+function emitDeny(ruleId: string | undefined, reason: string | undefined, metadata: Partial<DispatchMetadata> = {}): void {
   const safeMeta = `agent=${metadata.agent || "unknown"}, model=${metadata.model || "missing"}, privacy=${Boolean(metadata.privacy)}`;
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
@@ -14,17 +30,17 @@ function emitDeny(ruleId, reason, metadata = {}) {
   }));
 }
 
-function main() {
-  let payload;
+function main(): void {
+  let payload: DispatchPayload | null;
   try {
-    payload = JSON.parse(fs.readFileSync(0, "utf8"));
+    payload = JSON.parse(fs.readFileSync(0, "utf8")) as DispatchPayload | null;
   } catch {
     emitDeny("HOOK_INPUT_INVALID", "Dispatch hook received malformed JSON; refusing an unclassifiable dispatch.");
     return;
   }
 
-  if (!payload || !["Agent", "Task"].includes(payload.tool_name)) return;
-  const input = payload.tool_input;
+  if (!payload || !["Agent", "Task"].includes(payload.tool_name as string)) return;
+  const input = payload.tool_input as DispatchInput | null;
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     emitDeny("HOOK_SCHEMA_UNKNOWN", "Dispatch payload has no recognized tool_input object.");
     return;

@@ -11,7 +11,7 @@
  * repeatedly replaced by a 0-byte version (OP-664, writer still UNKNOWN).
  *
  * A 0-byte commit-msg is fail-open in exactly the same way a 0-byte
- * commit-guard.js is: sh runs it, it does nothing, it exits 0, and git reads
+ * commit-guard.mts is: sh runs it, it does nothing, it exits 0, and git reads
  * exit 0 as "message accepted". Nothing in the chain can tell that apart from
  * a real pass.
  *

@@ -12,9 +12,16 @@
 //   - destructive helm verbs: uninstall, delete, rollback (upgrade/install stay allowed)
 // Rationale: CLAUDE.md (project-level) requires dev-deploy-first + explicit user OK for prod.
 
-const fs = require('fs');
+import fs from 'node:fs';
 
-function read(stream) {
+// The fields this hook reads from a PreToolUse payload.
+interface ToolPayload {
+  tool_name?: unknown;
+  tool_input?: { command?: unknown } | null;
+  transcript_path?: unknown;
+}
+
+function read(stream: NodeJS.ReadableStream): Promise<string> {
   return new Promise((resolve) => {
     let data = '';
     stream.on('data', (c) => (data += c));
@@ -22,21 +29,21 @@ function read(stream) {
   });
 }
 
-function lastUserText(transcriptPath) {
+function lastUserText(transcriptPath: unknown): string {
   if (!transcriptPath) return '';
-  let lines;
-  try { lines = fs.readFileSync(transcriptPath, 'utf8').split(/\r?\n/).filter(Boolean); }
+  let lines: string[];
+  try { lines = fs.readFileSync(transcriptPath as string, 'utf8').split(/\r?\n/).filter(Boolean); }
   catch { return ''; }
   for (let i = lines.length - 1; i >= 0; i--) {
-    let row;
+    let row: { message?: { role?: unknown; content?: unknown } } | null;
     try { row = JSON.parse(lines[i]); } catch { continue; }
     const message = row && row.message;
     if (!message || message.role !== 'user') continue;
     if (typeof message.content === 'string') return message.content;
     if (Array.isArray(message.content)) {
       const text = message.content
-        .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
-        .map((block) => block.text)
+        .filter((block: { type?: unknown; text?: unknown } | null) => block && block.type === 'text' && typeof block.text === 'string')
+        .map((block: { text: string }) => block.text)
         .join('\n');
       if (text) return text;
     }
@@ -58,11 +65,11 @@ function lastUserText(transcriptPath) {
 const KUBECTL_HEAD = /\bkubectl(?:\.exe)?\b(?:\s+(?:-{1,2}[\w-]+(?:[=\s](?:"[^"]*"|'[^']*'|\S+))?))*\s+/;
 const HELM_HEAD = /\bhelm(?:\.exe)?\b(?:\s+(?:-{1,2}[\w-]+(?:[=\s](?:"[^"]*"|'[^']*'|\S+))?))*\s+/;
 const WORD_END = /\b/;
-function subcommand(cmd, head, verbPattern) {
+function subcommand(cmd: string, head: RegExp, verbPattern: string): boolean {
   return new RegExp(`${head.source}(?:${verbPattern})${WORD_END.source}`).test(cmd);
 }
 
-function explicitlyApprovesProductionDeploy(text) {
+function explicitlyApprovesProductionDeploy(text: string): boolean {
   if (!text) return false;
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (/\b(?:nicht|kein(?:e[nsr]?)?|never|do not|don't|stop|abbrechen)\b.{0,80}\b(?:deploy|production|prod)\b/i.test(normalized)) return false;
@@ -73,16 +80,16 @@ function explicitlyApprovesProductionDeploy(text) {
 
 (async () => {
   const raw = await read(process.stdin);
-  let payload;
+  let payload: ToolPayload | null = null;
   try {
-    payload = JSON.parse(raw);
+    payload = JSON.parse(raw) as ToolPayload | null;
   } catch {
     process.exit(0);
   }
 
   if (!payload || payload.tool_name !== 'Bash') process.exit(0);
-  const cmd = (payload.tool_input && payload.tool_input.command) || '';
-  const violations = [];
+  const cmd = ((payload.tool_input && payload.tool_input.command) || '') as string;
+  const violations: string[] = [];
 
   // Per-command authorization token. User explicitly authorized
   // self-bypass on 2026-05-06. Token visible in command (not opaque env)

@@ -9,17 +9,22 @@
 // Wired in ~/.claude/settings.json unter hooks.PreToolUse mit matcher
 // "mcp__plugin_playwright_playwright__browser_navigate".
 
+// The field this hook reads from a PreToolUse payload.
+interface NavigatePayload {
+  tool_input?: { url?: unknown } | null;
+}
+
 let raw = "";
 process.stdin.on("data", (c) => (raw += c));
 process.stdin.on("end", () => {
-  let d = {};
+  let d: NavigatePayload = {};
   try {
-    d = JSON.parse(raw || "{}");
+    d = JSON.parse(raw || "{}") as NavigatePayload;
   } catch {
     process.exit(0);
   }
   const url = (d.tool_input && d.tool_input.url) || "";
-  if (/^file:\/\//i.test(url)) {
+  if (/^file:\/\//i.test(url as string)) {
     process.stdout.write(
       JSON.stringify({
         hookSpecificOutput: {

@@ -86,7 +86,7 @@ test("a managed live path names its versioned source", () => {
   const pairs: [string, string][] = [
     [path.join(WS, "CLAUDE.md"), "claude/CLAUDE.project.md"],
     [path.join(HOME, "CLAUDE.md"), "claude/CLAUDE.user.md"],
-    [path.join(HOME, "hooks", "commit-guard.js"), "claude/hooks/commit-guard.js"],
+    [path.join(HOME, "hooks", "commit-guard.mts"), "claude/hooks/commit-guard.mts"],
     // A nested manifest entry keeps its full relative path.
     [path.join(HOME, "hooks", "lib", "workspace-scope.mts"), "claude/hooks/lib/workspace-scope.mts"],
     // skills/codebase-memory is a directory entry: drift-check.sh walks it with
@@ -123,9 +123,9 @@ test("a workspace rule file says that only its block is managed", () => {
 });
 
 test("backslashes, upper case and a . segment still match", () => {
-  const shouted = path.join(HOME, "HOOKS", "Commit-Guard.js").replace(/\//g, "\\").toUpperCase();
+  const shouted = path.join(HOME, "HOOKS", "Commit-Guard.mts").replace(/\//g, "\\").toUpperCase();
   assert.ok(names(shouted, "claude/hooks/"), "a shouted Windows path is not recognised");
-  assert.ok(names(path.join(HOME, "hooks", ".", "commit-guard.js"), "claude/hooks/commit-guard.js"));
+  assert.ok(names(path.join(HOME, "hooks", ".", "commit-guard.mts"), "claude/hooks/commit-guard.mts"));
 });
 
 test("an unmanaged path stays silent", () => {
@@ -222,5 +222,5 @@ test("a workspace without a checkout keeps the non-manifest pairs and drops the 
   const bare = path.join(TMP, "bare", "workspace");
   fs.mkdirSync(bare, { recursive: true });
   assert.ok(fires(path.join(HOME, "CLAUDE.md"), { cwd: bare, workspace: bare }), "the fixed pairs need no checkout");
-  assert.equal(contextOf(run(path.join(HOME, "hooks", "commit-guard.js"), { cwd: bare, workspace: bare })), null);
+  assert.equal(contextOf(run(path.join(HOME, "hooks", "commit-guard.mts"), { cwd: bare, workspace: bare })), null);
 });

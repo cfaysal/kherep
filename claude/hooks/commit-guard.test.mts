@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-const assert = require("node:assert/strict");
-const path = require("node:path");
-const { spawnSync } = require("node:child_process");
-const hook = path.join(__dirname, "commit-guard.js");
-function run(command, env = {}, cwd = "/work/repo") {
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+const hook = path.join(import.meta.dirname, "commit-guard.mts");
+function run(command: string, env: Record<string, string> = {}, cwd = "/work/repo"): number | null {
   return spawnSync(process.execPath, [hook], {
     input: JSON.stringify({ tool_name: "Bash", cwd, tool_input: { command } }),
     encoding: "utf8",
@@ -23,8 +25,6 @@ assert.equal(run('git commit -m "em — dash"'), 2);
 // source is KHEREP_WORK_ITEM_REQUIRED in its environment, and a non-empty value
 // wins over the repository value in the commit-msg hook too, so the guard's
 // verdict matches the hook in an opted-out repository without reading it.
-const fs = require("node:fs");
-const os = require("node:os");
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kherep-guard-optout-")));
 const repo = path.join(root, "repo");
 fs.mkdirSync(repo);

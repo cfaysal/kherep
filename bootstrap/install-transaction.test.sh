@@ -55,7 +55,7 @@ fixture() {
   mkdir -p "$C/hooks" "$W/.claude" "$R"
   printf '{}\n' > "$C/settings.json"; printf '{}\n' > "$W/.claude/settings.local.json"
   printf old-statusline > "$C/statusline-command.sh"; cp "$C/statusline-command.sh" "$ROOT/status.before"
-  printf old-guard > "$C/hooks/commit-guard.js"; cp "$C/hooks/commit-guard.js" "$ROOT/guard.before"
+  printf old-guard > "$C/hooks/commit-guard.mts"; cp "$C/hooks/commit-guard.mts" "$ROOT/guard.before"
 }
 install_files() {
   HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
@@ -382,10 +382,10 @@ test_path_guards() {
 test_partial() {
   local rc b
   fixture partial
-  set +e; KHEREP_BOOTSTRAP_TEST_FAIL_AFTER_LABEL='hooks/deploy-guard.js' install_files > "$ROOT/log" 2>&1; rc=$?; set -e
+  set +e; KHEREP_BOOTSTRAP_TEST_FAIL_AFTER_LABEL='hooks/deploy-guard.mts' install_files > "$ROOT/log" 2>&1; rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "partial failure returned success"
-  same "$C/statusline-command.sh" "$ROOT/status.before"; same "$C/hooks/commit-guard.js" "$ROOT/guard.before"
-  [ ! -e "$C/hooks/deploy-guard.js" ] || fail "new target survived partial rollback"
+  same "$C/statusline-command.sh" "$ROOT/status.before"; same "$C/hooks/commit-guard.mts" "$ROOT/guard.before"
+  [ ! -e "$C/hooks/deploy-guard.mts" ] || fail "new target survived partial rollback"
   b="$(latest "$H")"; [ -f "$b/ROLLED-BACK" ] || fail "partial rollback marker missing"
 }
 
@@ -393,13 +393,13 @@ test_term() {
   local pid rc b marker
   fixture term; marker="$ROOT/paused"
   HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
-    SKIP_SECRETS=1 SKIP_DEPS=1 KHEREP_BOOTSTRAP_TEST_PAUSE_AFTER_LABEL='hooks/commit-guard.js' \
+    SKIP_SECRETS=1 SKIP_DEPS=1 KHEREP_BOOTSTRAP_TEST_PAUSE_AFTER_LABEL='hooks/commit-guard.mts' \
     KHEREP_BOOTSTRAP_TEST_MARKER="$marker" bash "$HERE/install.sh" > "$ROOT/log" 2>&1 & pid=$!
   for ((i=0; i<200; i++)); do [ ! -e "$marker" ] || break; sleep 0.1; done
   [ -e "$marker" ] || { kill -TERM "$pid" 2>/dev/null || true; fail "TERM checkpoint missing"; }
   kill -TERM "$pid"; set +e; wait "$pid"; rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "TERM returned success"
-  same "$C/statusline-command.sh" "$ROOT/status.before"; same "$C/hooks/commit-guard.js" "$ROOT/guard.before"
+  same "$C/statusline-command.sh" "$ROOT/status.before"; same "$C/hooks/commit-guard.mts" "$ROOT/guard.before"
   b="$(latest "$H")"; [ -f "$b/ROLLED-BACK" ] && grep -q SIGTERM "$b/ROLLBACK-REASON" || fail "TERM not journaled"
 }
 
@@ -593,6 +593,9 @@ test_upgrade_unwires_legacy_hooks() {
   local rc name userprofile
   fixture legacyhooks
   for name in clq-accept-gate live-hook-integrity orchestra-default; do printf 'old-js-hook\n' > "$C/hooks/$name.js"; done
+  # A host-owned legacy-form hook whose script is not retired (#237 batch 2
+  # retires every managed .js guard, so the example can no longer be one).
+  printf 'host-hook\n' > "$C/hooks/host-guard.js"
   cat > "$C/settings.json" <<'JSON'
 {"hooks":{
  "SessionStart":[{"matcher":"startup|clear|compact|resume","hooks":[
@@ -600,7 +603,7 @@ test_upgrade_unwires_legacy_hooks() {
    {"type":"command","command":"node \"$HOME/.claude/hooks/orchestra-default.js\""}]}],
  "Stop":[{"matcher":"","hooks":[{"type":"command","command":"node ~/.claude/hooks/clq-accept-gate.js"}]}],
  "PreToolUse":[
-   {"matcher":"Read|Grep|Glob|Edit|Write|MultiEdit|Bash","hooks":[{"type":"command","command":"node ~/.claude/hooks/privacy-boundary-guard.js"}]},
+   {"matcher":"Read|Grep|Glob|Edit|Write|MultiEdit|Bash","hooks":[{"type":"command","command":"node ~/.claude/hooks/host-guard.js"}]},
    {"matcher":"Write","hooks":[{"type":"command","command":"node ~/own/check.js ~/.claude/hooks/clq-accept-gate.js"}]}]}}
 JSON
   cp "$C/settings.json" "$ROOT/settings.before"
@@ -638,7 +641,7 @@ JSON
     if (groups.some((g) => g.matcher === "startup|clear|compact|resume")) fail("the emptied legacy SessionStart group stayed");
     const legacy = groups.filter((g) => g.matcher === "Read|Grep|Glob|Edit|Write|MultiEdit|Bash");
     if (legacy.length !== 1 || legacy[0].hooks.length !== 1 ||
-      legacy[0].hooks[0].command !== "node ~/.claude/hooks/privacy-boundary-guard.js") fail("the non-retired legacy entry changed");
+      legacy[0].hooks[0].command !== "node ~/.claude/hooks/host-guard.js") fail("the non-retired legacy entry changed");
     if (commands.filter((c) => c === "node ~/own/check.js ~/.claude/hooks/clq-accept-gate.js").length !== 1) fail("user hook lost");
   ' "$C/settings.json" || { cat "$C/settings.json"; fail "the upgraded settings do not match the legacy-unwire contract"; }
   legacy_drift || { cat "$ROOT/drift.log"; fail "drift-check failed over clean upgraded settings"; }
@@ -664,7 +667,7 @@ JSON
   set +e; legacy_drift; rc=$?; set -e
   [ "$rc" -eq 1 ] && grep -qxF 'DANGLING-HOOK Stop node ~/.claude/hooks/clq-accept-gate.js' "$ROOT/drift.log" &&
     grep -qxF 'DANGLING-HOOK SessionStart node ~/.claude/hooks/live-hook-integrity.js' "$ROOT/drift.log" &&
-    ! grep -q '^DANGLING-HOOK .*privacy-boundary-guard' "$ROOT/drift.log" &&
+    ! grep -q '^DANGLING-HOOK .*host-guard' "$ROOT/drift.log" &&
     ! grep -q '^DANGLING-HOOK .*own/check' "$ROOT/drift.log" ||
     { cat "$ROOT/drift.log"; fail "drift-check did not report exactly the retired legacy commands (rc=$rc)"; }
 }
@@ -706,6 +709,80 @@ test_upgrade_moves_clq_to_stop() {
   HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
     bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
     { cat "$ROOT/drift.log"; fail "drift-check failed after moving clq-accept-gate to Stop"; }
+}
+
+# Issue #237 batch 2. A host runs the six guards as .js: in the managed form the
+# previous installer wrote (absolute Claude home) and, for three of them, in
+# legacy groups of their own (~ form). The upgrade parks every .js through the
+# transaction, unwires every .js command and wires each .mts exactly once at the
+# template's matcher; the legacy groups are gone. drift-check passes.
+test_upgrade_retires_guard_js_hooks() {
+  local rc b home userprofile name
+  local guards="commit-guard deploy-guard dispatch-contract-guard playwright-file-guard privacy-boundary-guard secret-output-guard"
+  fixture guardjs
+  home="$C"; userprofile="$H"
+  ! command -v cygpath >/dev/null 2>&1 || { home="$(cygpath -w "$C")"; userprofile="$(cygpath -w "$H")"; }
+  for name in $guards; do printf 'old-js-guard\n' > "$C/hooks/$name.js"; done
+  rm -f "$C/hooks/commit-guard.mts"
+  node -e '
+    const [file, home] = process.argv.slice(1);
+    const managed = (name) => ({ type: "command", command: `node "${home}/hooks/${name}.js"` });
+    const legacy = (name) => ({ type: "command", command: `node ~/.claude/hooks/${name}.js` });
+    require("fs").writeFileSync(file, JSON.stringify({ hooks: { PreToolUse: [
+      { matcher: "", hooks: [managed("privacy-boundary-guard"), managed("secret-output-guard"), managed("playwright-file-guard")] },
+      { matcher: "Agent|Task", hooks: [managed("dispatch-contract-guard")] },
+      { matcher: "Bash", hooks: [managed("commit-guard"), managed("deploy-guard")] },
+      { matcher: "Read|Grep|Glob|Edit|Write|MultiEdit|Bash", hooks: [legacy("privacy-boundary-guard")] },
+      { matcher: "Agent|Task|Workflow|WebSearch|WebFetch|mcp__.*", hooks: [legacy("privacy-boundary-guard")] },
+      { matcher: "Bash|PowerShell", hooks: [legacy("secret-output-guard")] },
+      { matcher: "mcp__plugin_playwright_playwright__browser_navigate", hooks: [legacy("playwright-file-guard")] },
+    ] } }, null, 2));
+  ' "$C/settings.json" "$home"
+  set +e
+  HOME="$H" USERPROFILE="$userprofile" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" \
+    KHEREP_CREDENTIALS_ROOT="$R" KHEREP_INSTALL_SKIP_GITCONFIG=1 KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE=1 \
+    KHEREP_INSTALL_SKIP_ATL_CREDENTIAL=1 SKIP_SECRETS=1 SKIP_DEPS=1 bash "$HERE/install.sh" > "$ROOT/log" 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { cat "$ROOT/log"; fail "upgrade install over the .js guards failed (rc=$rc)"; }
+  # Six managed and four legacy commands, one line each (two legacy groups ran privacy-boundary-guard.js).
+  [ "$(grep -c '^retire: unwire PreToolUse ' "$ROOT/log")" -eq 10 ] &&
+    [ "$(grep -c '^retire: unwire PreToolUse node ".*/hooks/[a-z-]*-guard\.js"$' "$ROOT/log")" -eq 6 ] &&
+    [ "$(grep -cxF 'retire: unwire PreToolUse node ~/.claude/hooks/privacy-boundary-guard.js' "$ROOT/log")" -eq 2 ] &&
+    grep -qxF 'retire: unwire PreToolUse node ~/.claude/hooks/secret-output-guard.js' "$ROOT/log" &&
+    grep -qxF 'retire: unwire PreToolUse node ~/.claude/hooks/playwright-file-guard.js' "$ROOT/log" ||
+    { cat "$ROOT/log"; fail "the install did not report exactly the ten unwired guard commands"; }
+  b="$(latest "$H")"
+  for name in $guards; do
+    [ ! -e "$C/hooks/$name.js" ] || fail "the retired $name.js stayed at its live path"
+    [ "$(cat "$C/hooks/_deprecated/$name.js")" = old-js-guard ] || fail "$name.js was not parked in hooks/_deprecated"
+    [ "$(cat "$b/retired/hooks/$name.js")" = old-js-guard ] || fail "$name.js was not backed up by the transaction"
+    same "$HERE/../claude/hooks/$name.mts" "$C/hooks/$name.mts"
+  done
+  node -e '
+    const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const fail = (message) => { console.error(message); process.exit(1); };
+    const wired = Object.entries(s.hooks).flatMap(([event, groups]) => groups.flatMap((g) =>
+      (g.hooks || []).map((h) => ({ event, matcher: g.matcher ?? "", command: String(h.command) }))));
+    const expected = { "commit-guard": "Bash", "deploy-guard": "Bash", "dispatch-contract-guard": "Agent|Task",
+      "playwright-file-guard": "", "privacy-boundary-guard": "", "secret-output-guard": "" };
+    for (const [name, matcher] of Object.entries(expected)) {
+      if (wired.some((h) => h.command.includes(`hooks/${name}.js`))) fail(`${name}.js still wired`);
+      const mts = wired.filter((h) => h.command.includes(`hooks/${name}.mts`));
+      if (mts.length !== 1 || mts[0].event !== "PreToolUse" || mts[0].matcher !== matcher) {
+        fail(`${name}.mts not wired once under PreToolUse "${matcher}": ${JSON.stringify(mts)}`);
+      }
+    }
+    const legacyMatchers = ["Read|Grep|Glob|Edit|Write|MultiEdit|Bash", "Agent|Task|Workflow|WebSearch|WebFetch|mcp__.*",
+      "Bash|PowerShell", "mcp__plugin_playwright_playwright__browser_navigate"];
+    const left = (s.hooks.PreToolUse || []).filter((g) => legacyMatchers.includes(g.matcher));
+    if (left.length) fail(`legacy groups stayed: ${JSON.stringify(left)}`);
+  ' "$C/settings.json" || { cat "$C/settings.json"; fail "the upgraded settings do not wire exactly the .mts guards"; }
+  HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
+    bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
+    { cat "$ROOT/drift.log"; fail "drift-check failed after retiring the .js guards"; }
+  ! grep -q -E '^(RETIRED-LIVE  hooks/|DANGLING-HOOK)' "$ROOT/drift.log" ||
+    { cat "$ROOT/drift.log"; fail "a retired .js guard is still live or wired after the upgrade"; }
 }
 
 # OP-1085: the deps phase runs AFTER the commit and must not be able to undo an
@@ -781,7 +858,7 @@ JS
 
 test_library; test_retire; test_retire_declared; test_lock; test_preflights; test_path_guards; test_partial; test_term; test_commit_signal; test_secrets
 test_deps_failure; test_default_confluence_brokers; test_upgrade_retires_mpac; test_upgrade_retires_js_hooks
-test_upgrade_unwires_legacy_hooks; test_upgrade_moves_clq_to_stop
+test_upgrade_unwires_legacy_hooks; test_upgrade_moves_clq_to_stop; test_upgrade_retires_guard_js_hooks
 host_hooks_paths > "$TMP/host-hooks-path.after"
 cmp -s "$TMP/host-hooks-path.before" "$TMP/host-hooks-path.after" ||
   fail "the host's system or global core.hooksPath changed during the run"

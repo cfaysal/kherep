@@ -1,13 +1,17 @@
 #!/usr/bin/env node
-const path = require("path");
-const { spawnSync } = require("child_process");
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 
-const HOOK = path.join(__dirname, "dispatch-contract-guard.js");
+const HOOK = path.join(import.meta.dirname, "dispatch-contract-guard.mts");
 let pass = 0;
 let fail = 0;
 
-function run(payload, envExtra = {}) {
-  const env = {
+type Payload = string | Record<string, unknown>;
+// A null value removes the variable from the hook's environment.
+type EnvExtra = Record<string, string | null>;
+
+function run(payload: Payload, envExtra: EnvExtra = {}): { denied: boolean; reason: string; status: number | null } {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     KHEREP_ALLOWED_MODELS: "opus,sonnet,haiku,fable",
     KHEREP_AGENT_MODEL_POLICY: JSON.stringify({
@@ -30,7 +34,7 @@ function run(payload, envExtra = {}) {
     encoding: "utf8",
     env,
   });
-  let output = {};
+  let output: { hookSpecificOutput?: { permissionDecision?: unknown; permissionDecisionReason?: string } } = {};
   try {
     output = JSON.parse(result.stdout || "{}");
   } catch {}
@@ -47,7 +51,7 @@ function run(payload, envExtra = {}) {
   };
 }
 
-function check(name, payload, expectedDenied, reasonNeedle, envExtra = {}) {
+function check(name: string, payload: Payload, expectedDenied: boolean, reasonNeedle?: string, envExtra: EnvExtra = {}): void {
   const actual = run(payload, envExtra);
   const ok =
     actual.status === 0 &&
@@ -61,7 +65,7 @@ function check(name, payload, expectedDenied, reasonNeedle, envExtra = {}) {
   );
 }
 
-const call = (agent, model, toolName = "Agent", field = "subagent_type") => ({
+const call = (agent: string, model?: string, toolName = "Agent", field = "subagent_type") => ({
   tool_name: toolName,
   tool_input: { [field]: agent, ...(model === undefined ? {} : { model }) },
 });
@@ -111,7 +115,7 @@ check("other direct codex agent denied", call("codex:other", "opus"), true, "COD
 check("non-dispatch tool ignored", { tool_name: "Bash", tool_input: { command: "echo ok" } }, false);
 check("malformed dispatch input fails closed", "not-json", true, "HOOK_INPUT_INVALID");
 check("missing tool_input fails closed", { tool_name: "Agent" }, true, "HOOK_SCHEMA_UNKNOWN");
-const defaultOwnedPins = [
+const defaultOwnedPins: [string, string[], string][] = [
   ["kherep-builder", ["opus", "fable"], "sonnet"],
   ["forge-deploy-validator", ["sonnet"], "fable"],
   ["n8n-workflow-deploy-runner", ["sonnet"], "haiku"],

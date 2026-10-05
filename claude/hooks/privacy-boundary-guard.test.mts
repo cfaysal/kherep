@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-"use strict";
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { spawnSync } = require("child_process");
-const hook = path.join(__dirname, "privacy-boundary-guard.js");
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+const hook = path.join(import.meta.dirname, "privacy-boundary-guard.mts");
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-boundary-"));
 const claudeHome = path.join(fixture, ".claude");
 fs.mkdirSync(path.join(claudeHome, "kherep", "local-inference"), { recursive: true });
@@ -14,7 +13,9 @@ fs.writeFileSync(path.join(claudeHome, "kherep", "local-inference", "config.json
 
 let pass = 0;
 let fail = 0;
-function run(payload, envExtra = {}) {
+type Payload = string | Record<string, unknown> | null;
+
+function run(payload: Payload, envExtra: Record<string, string> = {}): { denied: boolean; status: number | null } {
   const cwd = payload && typeof payload === "object" ? String(payload.cwd || "") : "";
   const configuredWorkspace = cwd.startsWith("D:") ? "D:\\Work" :
     cwd.startsWith("/Users/") ? "/Users/example/Work" : "";
@@ -32,14 +33,14 @@ function run(payload, envExtra = {}) {
       ...envExtra,
     },
   });
-  let out = {};
+  let out: { hookSpecificOutput?: { permissionDecision?: unknown } } = {};
   try { out = JSON.parse(result.stdout || "{}"); } catch {}
   return {
     denied: Boolean(out.hookSpecificOutput && out.hookSpecificOutput.permissionDecision === "deny"),
     status: result.status,
   };
 }
-function check(name, payload, expected, envExtra = {}) {
+function check(name: string, payload: Payload, expected: boolean, envExtra: Record<string, string> = {}): void {
   const result = run(payload, envExtra);
   const ok = result.denied === expected && result.status === 0;
   ok ? pass++ : fail++;
@@ -120,16 +121,19 @@ check("custom Windows credentials Bash", {
   tool_name: "Bash",
   tool_input: { command: "Get-Content E:/vault-17/plain-file" },
 }, true, customWinCredentials);
+// This and the next case, and the artifact-root case below, named the same
+// environment key twice in the .js test. Only the later value was ever in
+// effect, so it is the one kept; TypeScript rejects the duplicate key.
 check("canonical and legacy credential roots stay protected together", {
   ...macScope,
   tool_name: "Bash",
   tool_input: { command: "cat $KHEREP_CREDENTIALS_ROOT/plain-file" },
-}, true, { KHEREP_CREDENTIALS_ROOT: "/Volumes/new-vault", KHEREP_CREDENTIALS_ROOT: "/Volumes/old-vault" });
+}, true, { KHEREP_CREDENTIALS_ROOT: "/Volumes/old-vault" });
 check("empty canonical credential root does not unprotect legacy shell expansion", {
   ...macScope,
   tool_name: "Bash",
   tool_input: { command: "cat $KHEREP_CREDENTIALS_ROOT/plain-file" },
-}, true, { KHEREP_CREDENTIALS_ROOT: "", KHEREP_CREDENTIALS_ROOT: "/Volumes/old-vault" });
+}, true, { KHEREP_CREDENTIALS_ROOT: "/Volumes/old-vault" });
 check("neutral credentials default is protected", {
   ...macScope,
   tool_name: "Read",
@@ -210,7 +214,7 @@ check("canonical and legacy artifact roots stay protected together", {
   ...winScope,
   tool_name: "Read",
   tool_input: { file_path: "C:/secure/legacy-output/a.json" },
-}, true, { KHEREP_LOCAL_OUTPUT_ROOT: "C:\\secure\\canonical-output", KHEREP_LOCAL_OUTPUT_ROOT: "C:\\secure\\legacy-output" });
+}, true, { KHEREP_LOCAL_OUTPUT_ROOT: "C:\\secure\\legacy-output" });
 
 check("approved Windows local runner", {
   ...winScope,

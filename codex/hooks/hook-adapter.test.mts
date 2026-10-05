@@ -35,7 +35,7 @@ test("expands apply_patch into Codex file operations", () => {
 
 test("blocks violating commits from shell_command and functions.exec payloads", () => {
   const adapter = path.join(here, "hook-adapter.mts");
-  const guard = path.resolve(here, "..", "..", "claude", "hooks", "commit-guard.js");
+  const guard = path.resolve(here, "..", "..", "claude", "hooks", "commit-guard.mts");
   for (const payload of [
     { tool_name: "shell_command", tool_input: { command: "git commit -m 'bad — message'" } },
     { tool_name: "functions.exec", tool_input: "tools.shell_command({command: \"git commit -m 'bad — message'\"})" },
@@ -49,7 +49,7 @@ test("blocks violating commits from shell_command and functions.exec payloads", 
 
 test("requires the visible Codex deploy marker without parsing transcripts", () => {
   const adapter = path.join(here, "hook-adapter.mts");
-  const guard = path.resolve(here, "..", "..", "claude", "hooks", "deploy-guard.js");
+  const guard = path.resolve(here, "..", "..", "claude", "hooks", "deploy-guard.mts");
   const run = (command: string) => spawnSync(process.execPath, [adapter, guard, "pre-no-transcript"], {
     encoding: "utf8",
     input: JSON.stringify({ tool_name: "shell_command", transcript_path: "unstable.jsonl", tool_input: { command } }),

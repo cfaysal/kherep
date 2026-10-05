@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 /**
- * Test harness for secret-output-guard.js
- * Node-native, kein Framework (Stil wie deploy-guard.test.js).
+ * Test harness for secret-output-guard.mts
+ * Node-native, kein Framework (Stil wie deploy-guard.test.mts).
  * exit 2 = block, exit 0 = allow.
- * Run: node secret-output-guard.test.js
+ * Run: node secret-output-guard.test.mts
  */
-const path = require("path");
-const { spawnSync } = require("child_process");
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 
-const HOOK = path.join(__dirname, "secret-output-guard.js");
+const HOOK = path.join(import.meta.dirname, "secret-output-guard.mts");
 let pass = 0;
 let fail = 0;
 
-function runHook(command, toolName) {
+function runHook(command: string, toolName?: string): { blocked: boolean; stderr: string } {
   const res = spawnSync("node", [HOOK], {
     input: JSON.stringify({ tool_name: toolName || "Bash", tool_input: { command } }),
     encoding: "utf8",
@@ -20,7 +20,7 @@ function runHook(command, toolName) {
   return { blocked: res.status === 2, stderr: res.stderr || "" };
 }
 
-function expectBlocked(label, command, ruleId, toolName) {
+function expectBlocked(label: string, command: string, ruleId?: string, toolName?: string): void {
   const { blocked, stderr } = runHook(command, toolName);
   if (blocked && (!ruleId || stderr.includes(`(${ruleId})`))) {
     pass++;
@@ -31,7 +31,7 @@ function expectBlocked(label, command, ruleId, toolName) {
   }
 }
 
-function expectAllowed(label, command, toolName) {
+function expectAllowed(label: string, command: string, toolName?: string): void {
   const { blocked, stderr } = runHook(command, toolName);
   if (!blocked) {
     pass++;

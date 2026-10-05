@@ -294,7 +294,7 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
         const previousStop = { ...current, observationStopHook: false };
         return [...managedFragmentFamily(current, previousStop),
           ...retiredCentralBrainFragments(current, previousStop, options.retiredCentralBrain)];
-      }),
+      }).flatMap((fragment) => [fragment, parityConfig.withLegacySharedGuards(fragment)]),
       parityConfig.render(currentLegacyOptions),
       parityConfig.render(legacyRenderOptions),
       parityConfig.renderPreviousNudges({ ...predecessorRenderOptions, registryBridge: options.registryBridge }),

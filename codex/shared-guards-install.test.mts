@@ -1,0 +1,175 @@
+// Issue #237, batch 2. The Codex installer copies three Claude guards by name
+// (commit-guard, deploy-guard, playwright-file-guard) into
+// hooks/kherep-maestro and wires them in config.toml. After their move from .js
+// to .mts each one has to still block, run exactly the way Codex runs it: the
+// command string from the installed config.toml (through codex-hook-adapter.mts
+// where the projection wires it so), under its wired event and matcher. A wiring
+// that points at a missing or empty file exits without a block; that is
+// fail-open, and these tests fail on it. An upgrade over a block the previous
+// installer wrote (.js names) must replace that block and remove the old copies.
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { test, type TestContext } from "node:test";
+
+import { install } from "./install.mts";
+
+const GUARDS = ["commit-guard", "deploy-guard", "playwright-file-guard"] as const;
+
+function fixture(t: TestContext) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-codex-guards-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const codexHome = path.join(root, "home with spaces", ".codex");
+  const claudeRegistryFile = path.join(root, "home with spaces", ".claude.json");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(claudeRegistryFile, JSON.stringify({ mcpServers: {} }), { mode: 0o600 });
+  const options = {
+    codexHome, claudeRegistryFile,
+    claudeConfigDir: path.join(root, "home with spaces", ".claude"),
+    workspace: path.join(root, "workspace", "Kherep"),
+    nodePath: process.execPath,
+    log: (): void => {},
+    resolveRegistryRuntime: () => "fixture",
+    runCodex: (args: string[]): string => {
+      if (args[0] === "--version") return "codex-cli 0.144.6";
+      if (args.join(" ") === "plugin marketplace list --json") return '{"marketplaces":[]}';
+      return "ok";
+    },
+    controlPlaneOutbox: path.join(root, "kherep config", "control-plane", "outbox"),
+  };
+  return { hookDir: path.join(codexHome, "hooks", "kherep-maestro"), options };
+}
+
+interface WiredHook { event: string; matcher: string; command: string }
+
+// Every hook in the installed config.toml with the event and matcher of its group.
+function wiredHooks(config: string): WiredHook[] {
+  const found: WiredHook[] = [];
+  for (const group of config.split(/^(?=\[\[hooks\.[A-Za-z]+\]\]$)/m).slice(1)) {
+    const event = /^\[\[hooks\.([A-Za-z]+)\]\]$/m.exec(group)![1]!;
+    const [header, ...blocks] = group.split(/^\[\[hooks\.[A-Za-z]+\.hooks\]\]$/m);
+    const matcherLine = /^matcher = (".*")$/m.exec(header!);
+    const matcher = matcherLine ? JSON.parse(matcherLine[1]!) as string : "";
+    for (const block of blocks) {
+      const line = /^command = (".*")$/m.exec(block);
+      if (line) found.push({ event, matcher, command: JSON.parse(line[1]!) as string });
+    }
+  }
+  return found;
+}
+
+// The one wired hook whose command runs <guard>.mts from the hook dir.
+function wiredGuard(config: string, hookDir: string, guard: string): WiredHook {
+  const script = `"${path.join(hookDir, `${guard}.mts`)}"`;
+  const hits = wiredHooks(config).filter((hook) => hook.command.includes(script));
+  assert.equal(hits.length, 1, `config.toml wires ${guard}.mts exactly once`);
+  return hits[0]!;
+}
+
+// Runs the wired `command` through the shell, as Codex does on macOS and Linux.
+// Not the Windows `commandWindows` form: `pwsh -NoProfile -Command` reports a
+// native exit 2 as 1 (measured with pwsh 7.6.6), which is a property of that
+// wrapper and the same for the .js and .mts guards, not of the guard itself.
+function runWired(hook: WiredHook, payload: Record<string, unknown>) {
+  const input = JSON.stringify({ hook_event_name: hook.event, ...payload });
+  const result = spawnSync(hook.command, { shell: true, input, encoding: "utf8", windowsHide: true });
+  let decision: unknown = null;
+  try {
+    decision = (JSON.parse(result.stdout) as { hookSpecificOutput?: { permissionDecision?: unknown } })
+      .hookSpecificOutput?.permissionDecision ?? null;
+  } catch { /* no JSON on stdout */ }
+  return { status: result.status, decision, stderr: result.stderr };
+}
+
+// Each guard, its wired matcher, a tool the matcher names, and a blocking and a
+// benign input. commit-guard and deploy-guard block with exit 2 through the
+// adapter; playwright-file-guard denies through a JSON decision on exit 0.
+const CASES = [
+  {
+    guard: "commit-guard", matcher: "Bash|shell_command|exec_command|functions\\.exec", tool: "shell_command",
+    blocking: 'git commit -m "x Co-Authored-By: bot"', benign: 'git commit -m "plain subject"',
+  },
+  {
+    guard: "deploy-guard", matcher: "Bash|shell_command|exec_command|functions\\.exec", tool: "shell_command",
+    blocking: "git push --force", benign: "git push origin main",
+  },
+] as const;
+
+function assertGuardsBlock(config: string, hookDir: string): void {
+  for (const item of CASES) {
+    const hook = wiredGuard(config, hookDir, item.guard);
+    assert.equal(hook.event, "PreToolUse", item.guard);
+    assert.equal(hook.matcher, item.matcher, item.guard);
+    assert.ok(new RegExp(hook.matcher).test(item.tool), `${item.guard} matcher covers ${item.tool}`);
+    assert.match(hook.command, /codex-hook-adapter\.mts"/, `${item.guard} runs through the adapter`);
+    const blocked = runWired(hook, { tool_name: item.tool, tool_input: { command: item.blocking }, cwd: hookDir });
+    assert.equal(blocked.status, 2, `${item.guard} must block ${item.blocking}; stderr: ${blocked.stderr}`);
+    assert.match(blocked.stderr, new RegExp(`${item.guard} blocked`));
+    const allowed = runWired(hook, { tool_name: item.tool, tool_input: { command: item.benign }, cwd: hookDir });
+    assert.equal(allowed.status, 0, `${item.guard} must allow ${item.benign}; stderr: ${allowed.stderr}`);
+  }
+  const playwright = wiredGuard(config, hookDir, "playwright-file-guard");
+  assert.equal(playwright.event, "PreToolUse");
+  assert.equal(playwright.matcher, "mcp__playwright__browser_navigate");
+  const tool = "mcp__playwright__browser_navigate";
+  const denied = runWired(playwright, { tool_name: tool, tool_input: { url: "file:///C:/report/index.html" } });
+  assert.equal(denied.status, 0, denied.stderr);
+  assert.equal(denied.decision, "deny", `playwright-file-guard must deny file://; stderr: ${denied.stderr}`);
+  const served = runWired(playwright, { tool_name: tool, tool_input: { url: "http://localhost:8080/index.html" } });
+  assert.equal(served.status, 0, served.stderr);
+  assert.equal(served.decision, null);
+}
+
+test("each shared guard still blocks through its wired Codex command after an install", (t) => {
+  const { hookDir, options } = fixture(t);
+  const result = install(options);
+  const config = fs.readFileSync(result.targets.config, "utf8");
+  for (const guard of GUARDS) {
+    assert.equal(fs.readFileSync(path.join(hookDir, `${guard}.mts`), "utf8"),
+      fs.readFileSync(path.join(import.meta.dirname, "..", "claude", "hooks", `${guard}.mts`), "utf8"), guard);
+    assert.equal(fs.existsSync(path.join(hookDir, `${guard}.js`)), false, `${guard}.js is not projected`);
+    assert.doesNotMatch(config, new RegExp(`${guard}\\.js`), `config.toml does not wire ${guard}.js`);
+  }
+  assertGuardsBlock(config, hookDir);
+});
+
+test("an upgrade over the .js projection replaces its block and removes the old copies", (t) => {
+  const { hookDir, options } = fixture(t);
+  const first = install(options);
+  // The block and the files the installer wrote before batch 2: identical except
+  // that the three shared guards are .js.
+  let previous = fs.readFileSync(first.targets.config, "utf8");
+  for (const guard of GUARDS) {
+    previous = previous.replaceAll(`${guard}.mts`, `${guard}.js`);
+    fs.rmSync(path.join(hookDir, `${guard}.mts`));
+    fs.writeFileSync(path.join(hookDir, `${guard}.js`), `// stale ${guard}\n`);
+  }
+  fs.writeFileSync(first.targets.config, previous);
+
+  const result = install(options);
+  const config = fs.readFileSync(result.targets.config, "utf8");
+  for (const guard of GUARDS) {
+    assert.equal(fs.existsSync(path.join(hookDir, `${guard}.js`)), false, `the old ${guard}.js copy is gone`);
+    assert.equal(fs.readFileSync(path.join(result.backupRoot, "hooks", "kherep-maestro", `${guard}.js`), "utf8"),
+      `// stale ${guard}\n`, `${guard}.js is kept in the install backup`);
+    assert.doesNotMatch(config, new RegExp(`${guard}\\.js`), `config.toml no longer wires ${guard}.js`);
+  }
+  assertGuardsBlock(config, hookDir);
+});
+
+test("a wired guard whose file is missing or empty fails these checks", (t) => {
+  const { hookDir, options } = fixture(t);
+  const config = fs.readFileSync(install(options).targets.config, "utf8");
+  for (const broken of ["missing", "empty"] as const) {
+    for (const guard of GUARDS) {
+      const file = path.join(hookDir, `${guard}.mts`);
+      const original = fs.readFileSync(file);
+      if (broken === "missing") fs.rmSync(file); else fs.writeFileSync(file, "");
+      assert.throws(() => assertGuardsBlock(config, hookDir), assert.AssertionError, `${broken} ${guard}`);
+      fs.writeFileSync(file, original);
+    }
+  }
+  assertGuardsBlock(config, hookDir);
+});

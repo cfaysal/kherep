@@ -18,15 +18,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/privacy-boundary-guard.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/privacy-boundary-guard.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/secret-output-guard.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/secret-output-guard.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/playwright-file-guard.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/playwright-file-guard.mts\""
           }
         ]
       },
@@ -35,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/dispatch-contract-guard.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/dispatch-contract-guard.mts\""
           }
         ]
       },
@@ -44,11 +44,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/commit-guard.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/commit-guard.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/deploy-guard.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/deploy-guard.mts\""
           }
         ]
       }

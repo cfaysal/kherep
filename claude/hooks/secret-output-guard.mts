@@ -22,25 +22,30 @@
  * Ergebnis anschliessend in Privacy-Tags gefuehrt wird (CLAUDE.md, Capture-Privacy).
  *
  * Wired in ~/.claude/settings.json unter hooks.PreToolUse, matcher "Bash|PowerShell".
- * Run tests: node secret-output-guard.test.js
+ * Run tests: node secret-output-guard.test.mts
  */
+
+// The field this hook reads from a PreToolUse payload.
+interface ToolPayload {
+  tool_input?: { command?: unknown } | null;
+}
 
 const PRIV_TAG = "<" + "private>...</" + "private>";
 
 let raw = "";
 process.stdin.on("data", (c) => (raw += c));
 process.stdin.on("end", () => {
-  let d = {};
+  let d: ToolPayload = {};
   try {
-    d = JSON.parse(raw || "{}");
+    d = JSON.parse(raw || "{}") as ToolPayload;
   } catch {
     process.exit(0);
   }
 
-  const cmd = (d.tool_input && d.tool_input.command) || "";
+  const cmd = ((d.tool_input && d.tool_input.command) || "") as string;
   if (!cmd) process.exit(0);
 
-  function hasAmbiguousCompound(command) {
+  function hasAmbiguousCompound(command: string): boolean {
     return /[\r\n;&`()<>]|\$\(|\|\|/.test(command);
   }
 
@@ -51,7 +56,7 @@ process.stdin.on("end", () => {
   // Nur das VOLLSTAENDIGE Kommando darf eine Existenz-/Zaehlpruefung sein.
   // Ambige Compound-Syntax bleibt fail-closed. Ein abschliessendes Status-echo
   // ist erlaubt, solange es ausschliesslich statischen Text ausgibt.
-  function isExistenceOnly(command) {
+  function isExistenceOnly(command: string): boolean {
     let body = command.trim();
     const statusEcho = /\s*&&\s*echo\s+["']?[A-Za-z0-9_.:@/+ -]+["']?\s*$/i;
     body = body.replace(statusEcho, "").trim();

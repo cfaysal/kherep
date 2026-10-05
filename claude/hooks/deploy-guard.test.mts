@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 /**
- * Test harness for deploy-guard.js
+ * Test harness for deploy-guard.mts
  * Spawns the hook with a crafted stdin JSON payload, asserts exit code
  * (2 = block, 0 = allow) and, on block, the stderr content.
- * Node-native, no external framework (matches clq-accept-gate.test.js style).
- * Run: node deploy-guard.test.js
+ * Node-native, no external framework (matches clq-accept-gate.test.mts style).
+ * Run: node deploy-guard.test.mts
  */
-const path = require("path");
-const fs = require("fs");
-const os = require("os");
-const { spawnSync } = require("child_process");
+import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
+import { spawnSync } from "node:child_process";
 
-const HOOK = path.join(__dirname, "deploy-guard.js");
+const HOOK = path.join(import.meta.dirname, "deploy-guard.mts");
 
 let pass = 0;
 let fail = 0;
@@ -21,8 +21,8 @@ let fail = 0;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-guard-test-"));
 let transcriptCounter = 0;
 
-function runHook(command, toolName, userText) {
-  const payload = {
+function runHook(command: string, toolName?: string, userText?: string): { blocked: boolean; stderr: string } {
+  const payload: { tool_name: string; tool_input: { command: string }; transcript_path?: string } = {
     tool_name: toolName || "Bash",
     tool_input: { command },
   };
@@ -39,7 +39,7 @@ function runHook(command, toolName, userText) {
 }
 
 // expectBlock: true => exit 2. stderrNeedle: optional substring required on block.
-function check(name, command, expectBlock, stderrNeedle, userText) {
+function check(name: string, command: string, expectBlock: boolean, stderrNeedle?: string, userText?: string): void {
   const { blocked, stderr } = runHook(command, undefined, userText);
   let ok = blocked === expectBlock;
   if (ok && expectBlock && stderrNeedle) ok = stderr.includes(stderrNeedle);

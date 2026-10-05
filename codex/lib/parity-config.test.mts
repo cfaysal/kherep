@@ -23,6 +23,7 @@ import {
 } from "./parity-config.mts";
 
 const SHARED_NUDGES = ["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"];
+const SHARED_GUARDS = ["commit-guard", "deploy-guard", "playwright-file-guard"];
 
 test('literal native upgrade replaces only the exact previous native block', () => {
   const previous = Reflect.get(parityConfigApi, 'renderPreviousNativeHooks');
@@ -194,7 +195,9 @@ test("renders the exact JavaScript predecessor hook prefix and full MCP projecti
   assert.match(full, /args = \["\/codex\/orchestra\/registry-http-bridge\.js"\]/);
 });
 
-test("renders the previous Kherep projection with only the four nudges as JavaScript", () => {
+// Issue #237: the three shared guards were .js in every projection before batch
+// 2, so the previous projection names them .js as well.
+test("renders the previous Kherep projection with only the four nudges and three shared guards as JavaScript", () => {
   const options = {
     contextHook: "/codex/hooks/kherep-maestro-context.mts",
     hookDir: "/codex/hooks/kherep-maestro",
@@ -209,14 +212,14 @@ test("renders the previous Kherep projection with only the four nudges as JavaSc
   const prefix = renderPreviousNudgesPrefix(options);
 
   let restored = previous;
-  for (const name of SHARED_NUDGES) {
+  for (const name of [...SHARED_NUDGES, ...SHARED_GUARDS]) {
     assert.match(prefix, new RegExp(`${name}\\.js`));
     assert.doesNotMatch(previous, new RegExp(`${name}\\.mts`));
     restored = restored.replaceAll(`${name}.js`, `${name}.mts`);
   }
   assert.notEqual(previous, current);
   assert.equal(restored, renderBeforePostLegacyHooks({ ...options, windowsHookCommands: false }),
-    "the previous projection differs from the exact pre-hook projection in those four hook names only");
+    "the previous projection differs from the exact pre-hook projection in those seven hook names only");
   assert.match(prefix, /^# Managed Kherep Codex Maestro parity projection\./);
   assert.match(prefix, /statusMessage = "Loading Kherep Maestro"/);
   assert.match(prefix, /codex-acceptance-gate\.mts/);
