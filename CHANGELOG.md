@@ -420,6 +420,15 @@ increments the minor version; every other release increments the patch version.
   same check since issue #230, and the next round tries again. `wake-failed`
   remains for a resume that did not start. No new progress code: older
   Workers accept every frame.
+- Control Plane: a message for an ended Codex task no longer stays
+  `accepted` without a progress code while the node's policy has sessions not
+  enabled or `codex` missing from `sessions.runtimes` (issue #244). The
+  exchange round now labels it `waiting/wake-disabled` and audits `disabled`
+  once per message, as under the kill switch; nothing starts. A refused
+  working directory keeps `waiting/wake-not-authorized`, audits the new
+  action `cwd-refused`, and logs `not resuming task <taskId> for messages:
+  <reason>` once per message instead of on every 2-second round. No new
+  progress code: older Workers accept every frame.
 - Control Plane: a Codex run whose `codex exec` process dies abruptly no
   longer leaves its shell commands running (issue #233). On macOS a
   `sleep 901` outlived a SIGKILLed Codex intercom run in its own process
