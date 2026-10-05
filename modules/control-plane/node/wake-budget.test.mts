@@ -44,6 +44,8 @@ test("a configured budget is read, missing fields fall back to the defaults", (t
   assert.deepEqual(full.wake?.budget, { perHour: 20, perDay: 100, spacingSeconds: 5 });
   assert.deepEqual(wakeBudget(full), { perHour: 20, perDay: 100, spacingMs: 5_000 });
   assert.deepEqual(wakeBudget(parsed(t, { ...WAKE, budget: { perHour: 10 } }).policy), { perHour: 10, perDay: 20, spacingMs: 30_000 });
+  assert.deepEqual(wakeBudget(parsed(t, { ...WAKE, budget: { perHour: 30 } }).policy), { perHour: 30, perDay: 30, spacingMs: 30_000 },
+    "perHour alone raises the default day to at least one hour");
   assert.deepEqual(wakeBudget(parsed(t, { ...WAKE, budget: { spacingSeconds: 3600 } }).policy), { perHour: 6, perDay: 20, spacingMs: 3_600_000 });
   assert.deepEqual(wakeBudget(parsed(t, { ...WAKE, budget: { perHour: 60, perDay: 500 } }).policy), { perHour: 60, perDay: 500, spacingMs: 30_000 });
   assert.deepEqual(wakeBudget(parsed(t, { ...WAKE, budget: { perHour: 1, perDay: 1, spacingSeconds: 5 } }).policy),
@@ -54,7 +56,7 @@ test("an out-of-range, non-integer, inverted or unknown budget rejects the whole
   const rejected: unknown[] = [
     { perHour: 0 }, { perHour: 61, perDay: 100 }, { perDay: 0 }, { perHour: 1, perDay: 501 }, { spacingSeconds: 4 }, { spacingSeconds: 3601 },
     { perHour: 7.5 }, { perHour: "8" }, { perDay: null }, { spacingSeconds: true }, { perHour: Number.NaN },
-    { perHour: 10, perDay: 5 }, { perHour: 30 },
+    { perHour: 10, perDay: 5 }, { perDay: 3 },
     { perHour: 8, extra: 1 }, { perhour: 8 }, { toString: 1 },
     null, [], 8, "fast",
   ];
