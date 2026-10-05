@@ -25,6 +25,9 @@
  * Run tests: node secret-output-guard.test.mts
  */
 
+// The import also marks this file as ESM for `node --check` (live-hook-integrity).
+import process from "node:process";
+
 // The field this hook reads from a PreToolUse payload.
 interface ToolPayload {
   tool_input?: { command?: unknown } | null;

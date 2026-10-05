@@ -9,6 +9,9 @@
 // Wired in ~/.claude/settings.json unter hooks.PreToolUse mit matcher
 // "mcp__plugin_playwright_playwright__browser_navigate".
 
+// The import also marks this file as ESM for `node --check` (live-hook-integrity).
+import process from "node:process";
+
 // The field this hook reads from a PreToolUse payload.
 interface NavigatePayload {
   tool_input?: { url?: unknown } | null;
