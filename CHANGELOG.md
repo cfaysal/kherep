@@ -385,7 +385,16 @@ increments the minor version; every other release increments the patch version.
   name a retired file as an argument, stay. The new settings are written inside
   the install transaction, so a rollback restores the previous file.
   `drift-check.sh` now reports `DANGLING-HOOK <event> <command>` as drift for a
-  wired command whose Claude-home script is missing or retired.
+  wired command whose Claude-home script is missing or retired, under every
+  `DRIFT_SCOPE`.
+- Claude hooks: `clq-accept-gate.mts` is wired under `Stop` instead of
+  `PreToolUse` `Bash`. It reads the Stop payload, and the only Stop wiring on
+  existing hosts was the legacy `clq-accept-gate.js` entry that the upgrade
+  above unwires. The settings render now also removes an entry the installer
+  wrote for a managed hook (the hook under the absolute Claude home) at an event
+  the template no longer wires that hook at, and prints
+  `hooks: unwire <event> <command> (managed under <events>)`. Hand-written
+  `~/.claude` entries and hooks the template does not manage stay.
 - Control Plane: `kherep-node msg stop <messageId>` for a message delivered
   into an existing session no longer ends at the bare `not stopped: fresh
   status does not identify a stoppable run (denied, source_not_found)` (issue

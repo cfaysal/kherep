@@ -653,6 +653,13 @@ JSON
   [ "$rc" -eq 1 ] && grep -qxF 'DANGLING-HOOK UserPromptSubmit node ~/.claude/hooks/no-such-hook.mts' "$ROOT/drift.log" &&
     grep -qxF 'DRIFT-CHECK FOUND DRIFT (see above)' "$ROOT/drift.log" && ! grep -q '^DRIFT  ' "$ROOT/drift.log" ||
     { cat "$ROOT/drift.log"; fail "drift-check did not fail on a wired hook whose script is missing (rc=$rc)"; }
+  # Review of #254: the user settings are checked under every DRIFT_SCOPE.
+  set +e
+  DRIFT_SCOPE=project HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
+    bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1; rc=$?
+  set -e
+  [ "$rc" -eq 1 ] && grep -qxF 'DANGLING-HOOK UserPromptSubmit node ~/.claude/hooks/no-such-hook.mts' "$ROOT/drift.log" ||
+    { cat "$ROOT/drift.log"; fail "project-scope drift-check missed a dangling user-settings hook (rc=$rc)"; }
   cp "$ROOT/settings.before" "$C/settings.json"
   set +e; legacy_drift; rc=$?; set -e
   [ "$rc" -eq 1 ] && grep -qxF 'DANGLING-HOOK Stop node ~/.claude/hooks/clq-accept-gate.js' "$ROOT/drift.log" &&
@@ -660,6 +667,45 @@ JSON
     ! grep -q '^DANGLING-HOOK .*privacy-boundary-guard' "$ROOT/drift.log" &&
     ! grep -q '^DANGLING-HOOK .*own/check' "$ROOT/drift.log" ||
     { cat "$ROOT/drift.log"; fail "drift-check did not report exactly the retired legacy commands (rc=$rc)"; }
+}
+
+# Review of #254. clq-accept-gate is a Stop hook; the template wired it under
+# PreToolUse "Bash" until now. A host carries that managed entry in the form the
+# installer wrote (absolute Claude home) and, on one host, a hand-added Stop
+# entry. The upgrade converges to the template: one clq entry, under Stop.
+test_upgrade_moves_clq_to_stop() {
+  local rc home userprofile
+  fixture clqstop
+  home="$C"; userprofile="$H"
+  ! command -v cygpath >/dev/null 2>&1 || { home="$(cygpath -w "$C")"; userprofile="$(cygpath -w "$H")"; }
+  node -e '
+    const [file, home] = process.argv.slice(1);
+    const run = (name) => ({ type: "command", command: `node "${home}/hooks/${name}"` });
+    require("fs").writeFileSync(file, JSON.stringify({ hooks: {
+      PreToolUse: [{ matcher: "Bash", hooks: [run("commit-guard.js"), run("deploy-guard.js"), run("clq-accept-gate.mts")] }],
+      Stop: [{ matcher: "", hooks: [run("maestro-banner-gate.mts"), run("clq-accept-gate.mts")] }],
+    } }, null, 2));
+  ' "$C/settings.json" "$home"
+  set +e
+  HOME="$H" USERPROFILE="$userprofile" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" \
+    KHEREP_CREDENTIALS_ROOT="$R" KHEREP_INSTALL_SKIP_GITCONFIG=1 KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE=1 \
+    KHEREP_INSTALL_SKIP_ATL_CREDENTIAL=1 SKIP_SECRETS=1 SKIP_DEPS=1 bash "$HERE/install.sh" > "$ROOT/log" 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { cat "$ROOT/log"; fail "upgrade install over a PreToolUse clq entry failed (rc=$rc)"; }
+  grep -q '^hooks: unwire PreToolUse node ".*hooks/clq-accept-gate\.mts" (managed under Stop)$' "$ROOT/log" ||
+    { cat "$ROOT/log"; fail "the install did not report moving clq-accept-gate off PreToolUse"; }
+  node -e '
+    const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const where = Object.entries(s.hooks).flatMap(([event, groups]) => groups.flatMap((g) =>
+      (g.hooks || []).filter((h) => String(h.command).includes("clq-accept-gate")).map(() => `${event}[${g.matcher}]`)));
+    if (where.join(",") !== "Stop[]") { console.error(`clq wired at: ${where.join(",") || "nowhere"}`); process.exit(1); }
+    const bash = (s.hooks.PreToolUse || []).find((g) => g.matcher === "Bash");
+    if (!bash || bash.hooks.length !== 2) { console.error("commit-guard/deploy-guard group changed"); process.exit(1); }
+  ' "$C/settings.json" || { cat "$C/settings.json"; fail "the upgrade did not converge clq-accept-gate to one Stop entry"; }
+  HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
+    bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
+    { cat "$ROOT/drift.log"; fail "drift-check failed after moving clq-accept-gate to Stop"; }
 }
 
 # OP-1085: the deps phase runs AFTER the commit and must not be able to undo an
@@ -735,7 +781,7 @@ JS
 
 test_library; test_retire; test_retire_declared; test_lock; test_preflights; test_path_guards; test_partial; test_term; test_commit_signal; test_secrets
 test_deps_failure; test_default_confluence_brokers; test_upgrade_retires_mpac; test_upgrade_retires_js_hooks
-test_upgrade_unwires_legacy_hooks
+test_upgrade_unwires_legacy_hooks; test_upgrade_moves_clq_to_stop
 host_hooks_paths > "$TMP/host-hooks-path.after"
 cmp -s "$TMP/host-hooks-path.before" "$TMP/host-hooks-path.after" ||
   fail "the host's system or global core.hooksPath changed during the run"

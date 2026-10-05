@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url";
 import { retireCentralBrainHooks } from "./central-brain-retirement.mts";
 import { substituteTemplatePaths, toBashPath, workspaceEnvPath } from "./render-profile-paths.mts";
 import { filterMacPermissions, filterManagedDisallowedPermissions, mergeSettings, unique, type Settings } from "./render-profile-settings.mts";
-import { readRetiredHomeEntries, retireHookCommands } from "./retired-hooks.mts";
+import { readRetiredHomeEntries, retireHookCommands, unwireMovedHooks } from "./retired-hooks.mts";
 import { errorMessage } from "./shape.mts";
 
 interface LocalInferenceConfig {
@@ -56,22 +56,25 @@ export function renderSettings(args: string[], platform: string = process.platfo
   if (!["win", "mac"].includes(profile) || !outputProjectFile) {
     throw new Error("settings usage: <win|mac> <workspace> <credentials> <claude-home> <source-user> <source-project> <existing-user|-> <existing-project|-> <output-user> <output-project>");
   }
-  let sourceUser = readJson<Settings>(sourceUserFile);
-  let sourceProject = readJson<Settings>(sourceProjectFile);
+  const sourceUser = substituteTemplatePaths(readJson<Settings>(sourceUserFile), profile, workspace, credentialsRoot, claudeHome);
+  const sourceProject = substituteTemplatePaths(readJson<Settings>(sourceProjectFile), profile, workspace, credentialsRoot, claudeHome);
   const retired = retireCentralBrainHooks(readJson<Settings>(existingUserFile, true));
   if (retired.removed) console.error(`central-brain: removed ${retired.removed} retired hook command(s) from settings.json`);
-  // Issue #252. Legacy wiring of a script retired.txt parks. The lines go to
+  // Issue #252. Legacy wiring of a script retired.txt parks, and a managed hook
+  // wired at an event the template no longer uses (#254). The lines go to
   // stdout, which install.sh shows and drift-check.sh discards.
   const retiredScripts = readRetiredHomeEntries();
-  const unwire = (settings: Settings): Settings => {
+  const unwire = (settings: Settings, source: Settings): Settings => {
     const result = retireHookCommands(settings, retiredScripts, claudeHome);
     for (const item of result.removed) console.log(`retire: unwire ${item.event} ${item.command}`);
-    return result.settings;
+    const moved = unwireMovedHooks(result.settings, source, claudeHome);
+    for (const item of moved.removed) {
+      console.log(`hooks: unwire ${item.event} ${item.command} (managed under ${item.managedAt.join(", ")})`);
+    }
+    return moved.settings;
   };
-  const existingUser = unwire(retired.settings);
-  const existingProject = unwire(readJson<Settings>(existingProjectFile, true));
-  sourceUser = substituteTemplatePaths(sourceUser, profile, workspace, credentialsRoot, claudeHome);
-  sourceProject = substituteTemplatePaths(sourceProject, profile, workspace, credentialsRoot, claudeHome);
+  const existingUser = unwire(retired.settings, sourceUser);
+  const existingProject = unwire(readJson<Settings>(existingProjectFile, true), sourceProject);
   const user = mergeSettings(sourceUser, existingUser);
   const project = mergeSettings(sourceProject, existingProject);
   filterManagedDisallowedPermissions(user);

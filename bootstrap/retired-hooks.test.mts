@@ -10,7 +10,7 @@ import { test, type TestContext } from "node:test";
 import { renderSettings } from "./render-profile.mts";
 import type { Settings } from "./render-profile-settings.mts";
 import {
-  claudeHomeScript, danglingHookCommands, readRetiredHomeEntries, retireHookCommands,
+  claudeHomeScript, danglingHookCommands, readRetiredHomeEntries, retireHookCommands, unwireMovedHooks,
 } from "./retired-hooks.mts";
 
 const repo = path.resolve(import.meta.dirname, "..");
@@ -154,6 +154,36 @@ test("a dangling command is one that runs a retired or missing script in the Cla
   const retiredButPresent = (file: string) => file.endsWith("live-hook-integrity.js");
   assert.equal(danglingHookCommands({ hooks: { Stop: [{ hooks: [run("node ~/.claude/hooks/live-hook-integrity.js")] }] } },
     retired, winHome, winUser, retiredButPresent).length, 1, "a retired script counts even while its file is still live");
+});
+
+// Review of #254: clq-accept-gate moves from PreToolUse "Bash" to Stop.
+test("a managed hook the template no longer wires at an event leaves that event only", () => {
+  const managed = (name: string) => run(`node "C:\\Users\\Example\\.claude/hooks/${name}"`);
+  const source: Settings = { hooks: {
+    PreToolUse: [{ matcher: "Bash", hooks: [managed("commit-guard.js")] }],
+    Stop: [{ matcher: "", hooks: [managed("maestro-banner-gate.mts"), managed("clq-accept-gate.mts")] }],
+  } };
+  const existing: Settings = { hooks: {
+    PreToolUse: [
+      { matcher: "Bash", hooks: [managed("commit-guard.js"), managed("clq-accept-gate.mts")] },
+      { matcher: "Write", hooks: [managed("clq-accept-gate.mts")] },
+      { matcher: "Edit", hooks: [run("node ~/.claude/hooks/clq-accept-gate.mts"), managed("own-hook.mts")] },
+    ],
+    Stop: [{ matcher: "", hooks: [run(`node "${winHome}/hooks/clq-accept-gate.js"`)] }],
+  } };
+  const { settings, removed } = unwireMovedHooks(existing, source, winHome);
+  assert.deepEqual(removed.map((item) => `${item.event} ${item.managedAt.join(",")} ${item.command}`), [
+    'PreToolUse Stop node "C:\\Users\\Example\\.claude/hooks/clq-accept-gate.mts"',
+    'PreToolUse Stop node "C:\\Users\\Example\\.claude/hooks/clq-accept-gate.mts"',
+  ]);
+  assert.deepEqual(settings.hooks, {
+    PreToolUse: [
+      { matcher: "Bash", hooks: [managed("commit-guard.js")] },
+      { matcher: "Edit", hooks: [run("node ~/.claude/hooks/clq-accept-gate.mts"), managed("own-hook.mts")] },
+    ],
+    Stop: [{ matcher: "", hooks: [run(`node "${winHome}/hooks/clq-accept-gate.js"`)] }],
+  }, "a hand-written ~ form, an unmanaged hook and the template event stay");
+  assert.equal(unwireMovedHooks(settings, source, winHome).settings, settings);
 });
 
 function root(t: TestContext): string {
