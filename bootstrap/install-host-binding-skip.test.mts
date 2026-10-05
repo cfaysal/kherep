@@ -49,7 +49,8 @@ function runBindings(extraEnv: Record<string, string>, { credentialOk = false } 
     // of a throwaway home: nothing configured and nothing to prompt on.
     `node() { printf 'CALL %s\\n' "$*"; case "$*" in *atl-credential.mts*) return ${credentialOk ? 0 : 1};; esac; return 1; }`,
     "REPO_ROOT=/fixture/repo",
-    "CLAUDE_HOME=/fixture/home",
+    // The default home, so only the switches decide (issue #256 covers the others).
+    "CLAUDE_HOME=/fixture/home-root/.claude",
     "WS=/fixture/workspace",
     "post_rc=0",
     postCommitBindings(),
@@ -70,9 +71,9 @@ function runBindings(extraEnv: Record<string, string>, { credentialOk = false } 
 
 const callsStep = (run: Run, script: string): boolean => run.calls.some((call) => call.includes(`bootstrap/${script}`));
 
-test("install.sh reads both switches through kherep_env with default 0", () => {
-  assert.match(read("install.sh"), /^SKIP_KNOWLEDGE_SPACE="\$\(kherep_env INSTALL_SKIP_KNOWLEDGE_SPACE 0\)"$/m);
-  assert.match(read("install.sh"), /^SKIP_ATL_CREDENTIAL="\$\(kherep_env INSTALL_SKIP_ATL_CREDENTIAL 0\)"$/m);
+test("install.sh reads both switches through kherep_install_skip_reason", () => {
+  assert.match(read("install.sh"), /^SKIP_KNOWLEDGE_SPACE="\$\(kherep_install_skip_reason KNOWLEDGE_SPACE\)"$/m);
+  assert.match(read("install.sh"), /^SKIP_ATL_CREDENTIAL="\$\(kherep_install_skip_reason ATL_CREDENTIAL\)"$/m);
 });
 
 test("without switches a verified credential leads to the space step, and a missing space fails the install", () => {
@@ -209,13 +210,12 @@ test("the transaction test's post-commit install sets both switches", () => {
 
 // OP-1428. The documented preview in INSTALLATION.md section 2 runs in the
 // operator's own shell, which may export KHEREP_ATL_CRED_FILE_CLAUDE. Without
-// both switches it would read that real file and check it live against Atlassian.
-test("the documented installation preview sets both switches", () => {
+// both skips it would read that real file and check it live against Atlassian.
+// Issue #256: the preview sets KHEREP_INSTALL_PREVIEW=1, which implies both.
+test("the documented installation preview sets the preview switch", () => {
   const doc = fs.readFileSync(path.join(HERE, "..", "docs", "INSTALLATION.md"), "utf8");
   const section = doc.slice(doc.indexOf("## 2. Review an isolated installation"), doc.indexOf("## 3."));
   const installs = statements(section).filter((row) => row.includes("bootstrap/install.sh"));
   assert.equal(installs.length, 1, "expected exactly one install.sh call in the preview section");
-  for (const name of [SPACE_SWITCH, CREDENTIAL_SWITCH]) {
-    assert.match(installs[0], new RegExp(`(?:^|\\s)${name}=1\\s`), `documented preview without ${name}=1`);
-  }
+  assert.match(installs[0], /(?:^|\s)KHEREP_INSTALL_PREVIEW=1\s/, "documented preview without KHEREP_INSTALL_PREVIEW=1");
 });
