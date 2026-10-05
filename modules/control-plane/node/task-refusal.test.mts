@@ -114,8 +114,8 @@ test("every failed command result is logged with its task id and reason, never t
   const rejected = crypto.randomUUID();
   await client.onFrame(JSON.stringify(makeEnvelope("command", { commandId: rejected, command: "shell.exec" }, 2, 0)));
   assert.deepEqual(lines, [
-    `kherep-node: command session.start ${commandId} for task ${TASK} failed: cwd does not exist on this node`,
-    `kherep-node: command shell.exec ${rejected} failed: rejected by local policy`,
+    `kherep-node: command "session.start" ${commandId} for task ${TASK} failed: cwd does not exist on this node`,
+    `kherep-node: command "shell.exec" ${rejected} failed: rejected by local policy`,
   ]);
   assert.ok(lines.every((line) => !line.includes(PROMPT)));
 });

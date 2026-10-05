@@ -15,7 +15,7 @@ const MSYS_PREFIX =
 export const MSYS_HINT = "run the command from PowerShell, or set MSYS_NO_PATHCONV=1 in Git Bash";
 
 function styleOf(p: string): PathStyle | null {
-  if (/^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\")) return "windows";
+  if (/^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\") || p.startsWith("//")) return "windows";
   return p.startsWith("/") ? "posix" : null;
 }
 
