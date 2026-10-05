@@ -36,7 +36,7 @@ export function replyGrants(paths: NodePaths, refs: string[], record: InboxRecor
   if (sent.to.nodeId !== record.from.nodeId) return false;
   if (!refs.includes(sent.fromSessionId ?? sent.fromSession)) return false;
   const age = now - Date.parse(sent.createdAt);
-  return age <= REPLY_GRANT_MAX_AGE_MS && !ENDED.includes(sent.state);
+  return age >= 0 && age <= REPLY_GRANT_MAX_AGE_MS && !ENDED.includes(sent.state);
 }
 
 // What a listener its listing does not cover wakes for (wake-hook.mts): the
