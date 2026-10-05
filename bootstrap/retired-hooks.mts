@@ -49,23 +49,22 @@ function comparable(value: string): string {
   return /^\/[A-Za-z](?:\/|$)/.test(bash) ? bash.toLowerCase() : bash;
 }
 
+const absoluteHome = (claudeHome: string): string => `${comparable(claudeHome).replace(/\/+$/, "")}/`;
+
 function homePrefixes(claudeHome: string, userHome: string): string[] {
-  const home = `${comparable(claudeHome).replace(/\/+$/, "")}/`;
+  const home = absoluteHome(claudeHome);
   const isDefault = home === `${comparable(userHome).replace(/\/+$/, "")}/.claude/`;
   return isDefault ? [home, ...HOME_TOKENS] : [home];
 }
 
-// The script a `node <script>` command runs, relative to the Claude home, or
-// undefined when the command runs something else or a script outside it. An
-// unquoted script ends at whitespace or a shell operator.
-export function claudeHomeScript(
-  command: unknown, claudeHome: string, userHome: string = userHomeNow(),
-): string | undefined {
+// The script a `node <script>` command runs relative to the first matching
+// prefix, or undefined. An unquoted script ends at whitespace or a shell operator.
+function scriptUnder(command: unknown, prefixes: string[]): string | undefined {
   if (typeof command !== "string") return undefined;
   const match = /^\s*node\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|<>]+))/.exec(command);
   const script = (match?.[1] ?? match?.[2] ?? match?.[3])?.replace(/\\/g, "/");
   if (!script) return undefined;
-  for (const prefix of homePrefixes(claudeHome, userHome)) {
+  for (const prefix of prefixes) {
     if (comparable(script.slice(0, prefix.length)) !== prefix) continue;
     const rel = path.posix.normalize(script.slice(prefix.length));
     return rel === "." || rel === ".." || rel.startsWith("../") ? undefined : rel;
@@ -73,24 +72,28 @@ export function claudeHomeScript(
   return undefined;
 }
 
-// Removes every command that runs a retired script, from any event and group.
+// The script a `node <script>` command runs, relative to the Claude home, or
+// undefined when the command runs something else or a script outside it.
+export function claudeHomeScript(
+  command: unknown, claudeHome: string, userHome: string = userHomeNow(),
+): string | undefined {
+  return scriptUnder(command, homePrefixes(claudeHome, userHome));
+}
+
+// Removes every hook command the predicate selects, from any event and group.
 // A group left without hooks goes with them; everything else stays as written.
-export function retireHookCommands(
-  existing: Settings, retired: ReadonlySet<string>, claudeHome: string, userHome: string = userHomeNow(),
+function removeHooks(
+  existing: Settings, select: (event: string, command: unknown) => boolean,
 ): { settings: Settings; removed: HookFinding[] } {
   const removed: HookFinding[] = [];
   if (!existing.hooks || typeof existing.hooks !== "object") return { settings: existing, removed };
-  const isRetired = (command: unknown) => {
-    const rel = claudeHomeScript(command, claudeHome, userHome);
-    return rel !== undefined && retired.has(rel);
-  };
   const hooks: Record<string, HookEntry[]> = {};
   for (const [event, entries] of Object.entries(existing.hooks)) {
     if (!Array.isArray(entries)) { hooks[event] = entries; continue; }
     hooks[event] = entries.flatMap((entry) => {
       if (!entry || !Array.isArray(entry.hooks)) return [entry];
       const remaining = entry.hooks.filter((hook) => {
-        if (!isRetired(hook?.command)) return true;
+        if (!select(event, hook?.command)) return true;
         removed.push({ event, command: String(hook.command) });
         return false;
       });
@@ -99,6 +102,48 @@ export function retireHookCommands(
     });
   }
   return removed.length ? { settings: { ...existing, hooks }, removed } : { settings: existing, removed };
+}
+
+// Removes every command that runs a retired script.
+export function retireHookCommands(
+  existing: Settings, retired: ReadonlySet<string>, claudeHome: string, userHome: string = userHomeNow(),
+): { settings: Settings; removed: HookFinding[] } {
+  return removeHooks(existing, (_event, command) => {
+    const rel = claudeHomeScript(command, claudeHome, userHome);
+    return rel !== undefined && retired.has(rel);
+  });
+}
+
+const scriptStem = (rel: string): string => rel.replace(/\.(?:js|mjs|cjs|mts)$/, "");
+
+// Review of #254. The template decides at which events a managed hook runs, but
+// mergeHooks keeps every existing hook, so an entry the installer wrote at an
+// event the template has since dropped would run on. Such an entry (the hook
+// under the absolute Claude home, .js and .mts folded) is removed; a hand-written
+// ~/.claude form and every hook the template does not manage stay.
+export function unwireMovedHooks(
+  existing: Settings, source: Settings, claudeHome: string,
+): { settings: Settings; removed: Array<HookFinding & { managedAt: string[] }> } {
+  const prefixes = [absoluteHome(claudeHome)];
+  const managed = new Map<string, Set<string>>();
+  for (const [event, entries] of Object.entries(source.hooks || {})) {
+    for (const hook of (Array.isArray(entries) ? entries : []).flatMap((entry) => entry?.hooks || [])) {
+      const rel = scriptUnder(hook?.command, prefixes);
+      if (rel !== undefined) managed.set(scriptStem(rel), (managed.get(scriptStem(rel)) || new Set()).add(event));
+    }
+  }
+  const eventsOf = (command: unknown): Set<string> | undefined => {
+    const rel = scriptUnder(command, prefixes);
+    return rel === undefined ? undefined : managed.get(scriptStem(rel));
+  };
+  const result = removeHooks(existing, (event, command) => {
+    const events = eventsOf(command);
+    return events !== undefined && !events.has(event);
+  });
+  return {
+    settings: result.settings,
+    removed: result.removed.map((item) => ({ ...item, managedAt: [...(eventsOf(item.command) || [])] })),
+  };
 }
 
 // Wired commands whose Claude-home script is retired or does not exist.

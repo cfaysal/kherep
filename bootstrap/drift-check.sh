@@ -236,7 +236,8 @@ fi
 
 # Issue #252. The comparison above sees files, not what settings.json runs. A
 # wired hook command whose Claude-home script is missing or retired fails on
-# every event, so it is drift, reported per command.
+# every event, so it is drift, reported per command. Both settings files are
+# checked under every DRIFT_SCOPE: what runs at each event is never out of scope.
 check_hook_commands() {
   local file="$1" rc
   node "$HERE/retired-hooks.mts" dangling "$file" "$CLAUDE_HOME"; rc=$?
@@ -246,7 +247,7 @@ check_hook_commands() {
     *) printf 'HOOK-CHECK-FAIL %q\n' "$file"; drift=1 ;;
   esac
 }
-[ "$DRIFT_SCOPE" != "all" ] || check_hook_commands "$CLAUDE_HOME/settings.json"
+check_hook_commands "$CLAUDE_HOME/settings.json"
 check_hook_commands "$WS/.claude/settings.local.json"
 
 # #33. A path in retired.txt is one the installer parks. If it is still live,

@@ -71,9 +71,13 @@ function runWired({ event, command }: Wired, payload: Record<string, unknown>): 
   return { status: result.status, decision, stderr: result.stderr };
 }
 
+// Both guards read the Stop payload (stop_hook_active, the finished turn), so
+// Stop is the only event they may be wired to (#254): under PreToolUse the
+// CLQ gate would judge a turn that is still running and block a tool call.
 const GUARDS = [
   {
     hook: "clq-accept-gate.mts",
+    event: "Stop",
     blocking: () => transcript("clq", [
       user("baue das"),
       assistant("Dispatched: 1 agents\nOutcomes: kherep-builder[opus] -> added retry\nEvidence: npm test 3/3\nNext: ship"),
@@ -81,13 +85,15 @@ const GUARDS = [
   },
   {
     hook: "maestro-banner-gate.mts",
+    event: "Stop",
     blocking: () => transcript("banner", [user("wo stehen wir"), assistant("x".repeat(500))]),
   },
 ];
 
 for (const guard of GUARDS) {
-  test(`${guard.hook} is wired as an .mts file that exists`, () => {
-    const { command } = wiredCommand(guard.hook);
+  test(`${guard.hook} is wired under ${guard.event} as an .mts file that exists`, () => {
+    const { event, command } = wiredCommand(guard.hook);
+    assert.equal(event, guard.event, `${guard.hook} is wired under ${event}`);
     assert.match(command, new RegExp(`^node "__KHEREP_CLAUDE_HOME__/hooks/${guard.hook.replace(".", "\\.")}"$`));
     assert.ok(fs.existsSync(path.join(repo, "claude", "hooks", guard.hook)), `claude/hooks/${guard.hook} exists`);
   });

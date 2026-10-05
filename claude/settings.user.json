@@ -49,10 +49,6 @@
           {
             "type": "command",
             "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/deploy-guard.js\""
-          },
-          {
-            "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/clq-accept-gate.mts\""
           }
         ]
       }
@@ -153,6 +149,10 @@
           {
             "type": "command",
             "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/maestro-banner-gate.mts\""
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/clq-accept-gate.mts\""
           },
           {
             "type": "command",
