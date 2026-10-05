@@ -65,8 +65,11 @@ kherep_install_skip_reason() {
   # lib.sh builds the default as $HOME/.claude, so HOME=/u/ gives /u//.claude:
   # repeated and trailing slashes do not make another home. Git Bash paths are
   # case-insensitive: /c/Users/Me and /c/users/me are one home.
-  default="$(printf '%s/.claude' "${HOME-}" | tr -s /)"; home="$default"
-  claude="$(printf '%s' "${CLAUDE_HOME-}" | tr -s /)"; claude="${claude%/}"
+  default="$(printf '%s/.claude' "${HOME-}" | tr -s /)"
+  # A Windows CLAUDE_HOME or HOME in drive form (C:/x, C:\x) passes through
+  # Git Bash unconverted; compare the Git Bash form (/c/x).
+  home="$(printf '%s/.claude' "$(kherep_shell_path "${HOME-}")" | tr -s /)"
+  claude="$(kherep_shell_path "${CLAUDE_HOME-}" | tr -s /)"; claude="${claude%/}"
   if [ "$KHEREP_PROFILE" = win ]; then
     home="$(printf '%s' "$home" | tr 'A-Z' 'a-z')"; claude="$(printf '%s' "$claude" | tr 'A-Z' 'a-z')"
   fi

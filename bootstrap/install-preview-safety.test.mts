@@ -184,6 +184,12 @@ test("the default home is recognised with a trailing slash, and on the win profi
   assert.equal(skipReason({ ...base, HOME: "/", CLAUDE_HOME: "//.claude" }, "GITCONFIG"), "");
   assert.notEqual(skipReason({ ...base, CLAUDE_HOME: "/h/User/.claude" }, "GITCONFIG"), "");
   assert.equal(skipReason({ HOME: "/c/Users/Me", KHEREP_PROFILE: "win", CLAUDE_HOME: "/c/users/me/.claude" }, "GITCONFIG"), "");
+  // Git Bash passes a Windows-set CLAUDE_HOME through in drive form (measured on a Windows node).
+  for (const drive of ["C:/Users/Me/.claude", "C:\\Users\\Me\\.claude", "c:/users/me/.claude/"]) {
+    assert.equal(skipReason({ HOME: "/c/Users/Me", KHEREP_PROFILE: "win", CLAUDE_HOME: drive }, "GITCONFIG"), "", drive);
+    assert.equal(skipReason({ HOME: "/c/Users/Me", KHEREP_PROFILE: "win", CLAUDE_HOME: drive }, "ATL_CREDENTIAL"), "", drive);
+  }
+  assert.notEqual(skipReason({ HOME: "/c/Users/Me", KHEREP_PROFILE: "win", CLAUDE_HOME: "D:/other/.claude" }, "GITCONFIG"), "");
   assert.notEqual(skipReason({ ...base, CLAUDE_HOME: "/tmp/candidate" }, "ATL_CREDENTIAL"), "");
   // The home never skips the space step; only the exact value 1 counts for every switch.
   assert.equal(skipReason({ ...base, CLAUDE_HOME: "/tmp/candidate" }, "KNOWLEDGE_SPACE"), "");
