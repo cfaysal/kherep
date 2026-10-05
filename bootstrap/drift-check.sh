@@ -51,11 +51,13 @@ cleanup() {
   [ -z "$REPORT_TMP" ] || rm -f "$REPORT_TMP"
 }
 trap cleanup EXIT
+# The render reports the commands an install would unwire on stdout (#252);
+# this check changes nothing, so those lines are not part of its report.
 node "$HERE/render-profile.mts" settings \
   "$KHEREP_PROFILE" "$WS" "$CREDENTIALS_ROOT" "$CLAUDE_HOME" \
   "$CLAUDE_SRC/settings.user.json" "$CLAUDE_SRC/settings.project.json" \
   "$CLAUDE_HOME/settings.json" "$WS/.claude/settings.local.json" \
-  "$EXPECTED_DIR/settings.json" "$EXPECTED_DIR/settings.local.json"
+  "$EXPECTED_DIR/settings.json" "$EXPECTED_DIR/settings.local.json" >/dev/null
 node "$HERE/render-profile.mts" local-inference "$KHEREP_PROFILE" \
   "$HERE/manifest/local-inference.json" "$CLAUDE_HOME/kherep/local-inference/config.json" \
   "$EXPECTED_DIR/local-inference.json"
@@ -231,6 +233,21 @@ cmp_file "project/tools/jira-download.mts" \
 cmp_file "project/tools/jira-discovery.mts" \
   "$HERE/../modules/atl-jira-brokers/jira-discovery.mts" "$WS/tools/jira-discovery.mts"
 fi
+
+# Issue #252. The comparison above sees files, not what settings.json runs. A
+# wired hook command whose Claude-home script is missing or retired fails on
+# every event, so it is drift, reported per command.
+check_hook_commands() {
+  local file="$1" rc
+  node "$HERE/retired-hooks.mts" dangling "$file" "$CLAUDE_HOME"; rc=$?
+  case "$rc" in
+    0) ;;
+    3) drift=1 ;;
+    *) printf 'HOOK-CHECK-FAIL %q\n' "$file"; drift=1 ;;
+  esac
+}
+[ "$DRIFT_SCOPE" != "all" ] || check_hook_commands "$CLAUDE_HOME/settings.json"
+check_hook_commands "$WS/.claude/settings.local.json"
 
 # #33. A path in retired.txt is one the installer parks. If it is still live,
 # the retirement never ran on this host, the file came back, or the installer
