@@ -376,8 +376,10 @@ increments the minor version; every other release increments the patch version.
   in groups of its own; the installer parked the file but left the command,
   which then failed with `Cannot find module` on every event. The settings
   render removes such a command from any event and group, whatever the spelling
-  of the Claude home (`~/.claude`, `$HOME/.claude`, `${HOME}/.claude`, or the
-  absolute path in drive or Git Bash form, quoted or not), drops a group left
+  of the Claude home (the absolute path in drive or Git Bash form, quoted or
+  not, and `~/.claude`, `$HOME/.claude` or `${HOME}/.claude` while
+  `CLAUDE_HOME` is the default one; only `node <script>` commands are
+  recognised), drops a group left
   without hooks, and prints one `retire: unwire <event> <command>` line per
   removal. Commands for scripts that are not retired, and commands that only
   name a retired file as an argument, stay. The new settings are written inside
