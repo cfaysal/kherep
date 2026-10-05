@@ -194,9 +194,7 @@ for (const [what, arrange, sessions, reason] of refusals) {
     assert.match(String(lines[0].reason), reason);
     assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted");
     assert.equal(getMessage(node.paths.inbox, id)?.closedAttempt, undefined);
-    if (what === "a cwd outside the workspace roots") {
-      assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "fallback-failed");
-    }
+    // Its progress code: closed-delivery-codes.test.mts (issue #230).
   });
 }
 

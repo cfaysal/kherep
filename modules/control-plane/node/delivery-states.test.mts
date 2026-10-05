@@ -102,6 +102,19 @@ test("msg status shows stopped with its action, and a refusal with its reason", 
   assert.match((await msg(paths, ["status", refused])).out, new RegExp(`^${refused} refused: target session not running`));
 });
 
+test("msg status tells a policy refusal of automatic delivery from a failed delivery session (issue #230)", async (t) => {
+  const paths = setup(t);
+  const id = (await msg(paths, ["send", "node-b/docs", "hello"])).out;
+  recordSent(paths, id, "accepted", undefined, NOW, progress("waiting", "wake-not-authorized"));
+  const refused = (await msg(paths, ["status", id])).out;
+  assert.match(refused, new RegExp(`^${id} accepted: the target node's policy did not authorize automatic delivery; `
+    + "start the target turn to retry delivery \\[waiting/wake-not-authorized;"));
+  assert.doesNotMatch(refused, /failed/);
+  recordSent(paths, id, "accepted", undefined, NOW + 1, progress("failed", "fallback-failed", NOW + 1));
+  assert.match((await msg(paths, ["status", id])).out,
+    new RegExp(`^${id} accepted: the local delivery session failed; delivery is not confirmed \\[failed/fallback-failed;`));
+});
+
 test("a silent accepted message gets an actionable reason after the bound; progress replaces it", async (t) => {
   const paths = setup(t);
   const id = (await msg(paths, ["send", "node-b/docs", "hello"])).out;

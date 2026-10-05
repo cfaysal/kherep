@@ -357,6 +357,21 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: `msg status` no longer calls a policy refusal of
+  closed-session delivery a failed delivery session (issue #230). A message
+  for a closed session whose working directory lay outside the node's
+  workspace roots read `the local delivery session failed; delivery is not
+  confirmed [failed/fallback-failed]`, because the node guessed the progress
+  code from the refusal text and fell back to `fallback-failed`. Each refusal
+  now names its code: the working-directory checks, `delegate.accept` and an
+  operator sender wait with `wake-not-authorized`, `maxConcurrent` and
+  `maxStartsPerDay` before an attempt with `retry-pending`, and the start
+  checks a new intercom session needs (its runtime, permission mode and, after
+  a failed resume, the daily start limit) are made before the start with their
+  own codes. `fallback-failed` remains for a start or resume that failed. The
+  `wake-not-authorized` text now reads `the target node's policy did not
+  authorize automatic delivery`. No new progress code: older Workers accept
+  every frame.
 - Control Plane: a Codex run whose `codex exec` process dies abruptly no
   longer leaves its shell commands running (issue #233). On macOS a
   `sleep 901` outlived a SIGKILLed Codex intercom run in its own process
