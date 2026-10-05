@@ -163,7 +163,9 @@ function main(): void {
   for (const item of normalizePayloads(payload, phase)) {
     const normalized = phase === "pre-no-transcript"
       ? normalizeDeployApproval({ ...item, transcript_path: null }) : item;
-    const result = spawnSync(process.execPath, [target], {
+    // Node 22/24 print a type-stripping ExperimentalWarning for an .mts guard on
+    // stderr; it would lead the deny reason and the passed-through stderr.
+    const result = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", target], {
       encoding: "utf8",
       input: JSON.stringify(normalized),
       windowsHide: true,
