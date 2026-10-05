@@ -13,8 +13,11 @@ const DAY_MS = 24 * 60 * 60_000;
 
 export const trim = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 256) || "no reason given";
 
-// Queues task.report failed and rejects, so the command result fails too.
+// Logs the refusal (issue #240), queues task.report failed and rejects, so the
+// command result fails too. The reason is a fixed text or the CLI's own error,
+// never the prompt.
 export function refuse(deps: RunnerDeps, taskId: string, reason: string): never {
+  deps.log?.(`kherep-node: task ${taskId} refused: ${trim(reason)}`);
   if (!deps.local) queueReport(deps.paths, { taskId, state: "failed", reason: trim(reason) });
   throw new Error(reason);
 }

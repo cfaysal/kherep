@@ -4,6 +4,7 @@ import {
 import type { DirectoryBody } from "../protocol-messages.mts";
 import { isCodexSession } from "./codex-sessions.mts";
 import { readConfig, type NodePaths } from "./config.mts";
+import { cwdProblem, nodePathStyle } from "./cwd-guard.mts";
 import { KHEREP_SESSION_ENV, NO_SESSION, resolveNode, senderSession, SESSION_ENV } from "./msg-resolve.mts";
 import { delegationBlocked } from "./task-cli.mts";
 import { readRequest, writeRequest } from "./task-records.mts";
@@ -47,6 +48,9 @@ export async function sendNew(io: NewIo, directory: DirectoryBody, target: strin
   if (blocked) return fail(blocked);
   const node = resolveNode(directory, target);
   if (!node.ok) return fail(node.error);
+  const badCwd = values.cwd === undefined ? null
+    : cwdProblem(values.cwd, node.value.name, nodePathStyle(directory, node.value.nodeId));
+  if (badCwd) return fail(badCwd);
   const config = readConfig(io.paths.config);
   const selfName = directory.nodes.find((n) => n.nodeId === config?.nodeId)?.name ?? config?.name;
   // A sender that cannot be verified starts nothing (issue #200).

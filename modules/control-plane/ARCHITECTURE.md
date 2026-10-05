@@ -84,7 +84,10 @@ sequenceDiagram
   runtime and expected run. Pending operations can be retried by their exact id.
 - `worker/src/task-control-registry.mts` checks ownership, capabilities and
   revocation before resolving, dispatching or returning a request. Routing and
-  frames modules connect that store to authenticated node sockets.
+  frames modules connect that store to authenticated node sockets. For an owner
+  that advertises `sessions.own-task-control.report.v1` and holds a usable grant,
+  it adds the task state and reason the target last reported with `task.report`
+  (`reportedState`, `reportedReason`) to a query result (issue #240).
 - `node/task-control-registration.mts` retains successful grant receipts and
   registration history for local intercom delivery associations.
 - `node/task-control-store.mts` journals execution before any effect and saves
@@ -93,6 +96,9 @@ sequenceDiagram
 - `node/task-control-local.mts` checks current policy and local provenance, measures
   process identity and calls the awaited Codex stop path. A run hash binds task,
   runtime, process id and process creation time; these process details stay local.
+  A start the node refused before writing a task record leaves a record in
+  `task-refusals/` (`node/task-refusals.mts`); status then measures the task as
+  `failed` with process state `closed` instead of `task_unknown` (issue #240).
 - `node/task-control-cli.mts` queues requests and distinguishes a status timeout
   before stop submission from a pending submitted stop. Its `stopRun` binds the
   stop to the task and run version that a fresh status measured.
@@ -159,7 +165,10 @@ not a security boundary between Desktop chats.
 
 Task-control storage contains identifiers, state, observation time and fixed error
 codes. It does not transport prompts, message bodies, transcripts, local paths or
-process ids. Existing message delivery and its body-retention rules are unchanged.
+process ids. The one free-text field is `reportedReason`: the reason of the target's
+last `task.report`, at most 256 characters, which the Worker already stores for
+the operator API. It is a fixed refusal text or a runtime CLI's own error, never
+the prompt, and only an owner that advertises the report capability receives it. Existing message delivery and its body-retention rules are unchanged.
 Fresh measurement and cached results are explicit; connectivity or missing data is
 never evidence that a process stopped. Claude process state remains unknown and its
 remote stop is unsupported until an equivalent live identity check exists.

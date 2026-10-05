@@ -3,9 +3,14 @@
 
 import { isNodeId } from "./protocol.mts";
 import { isMessageId } from "./protocol-messages.mts";
-import { isTaskId, isTaskRuntime, type TaskRuntime } from "./protocol-tasks.mts";
+import { isTaskId, isTaskRuntime, MAX_REASON, type TaskRuntime } from "./protocol-tasks.mts";
 
 export const TASK_CONTROL_CAPABILITY = "sessions.own-task-control.v1";
+// Issue #240: an owner node advertising it accepts reportedState and
+// reportedReason in task.control.query.result: the task state (and reason)
+// the target last reported to the Worker. A Worker sends them to no other node,
+// so an older owner never sees a field its validator would reject.
+export const TASK_CONTROL_REPORT_CAPABILITY = "sessions.own-task-control.report.v1";
 export const TASK_CONTROL_EVENT_NAMES = [
   "task.control.register", "task.control.registration.receipt", "task.control.submit", "task.control.execute",
   "task.control.result", "task.control.result.receipt", "task.control.query", "task.control.query.result",
@@ -66,6 +71,7 @@ export interface TaskControlQueryResultBody {
   operationId?: string; taskId?: string; targetNodeId?: string; action?: TaskControlAction; runtime?: TaskRuntime;
   taskState?: TaskControlTaskState; processState?: TaskControlProcessState; runVersion?: string; observedAt?: string;
   stopSupported?: boolean; stopConfirmed?: boolean; errorCode?: TaskControlErrorCode;
+  reportedState?: TaskControlTaskState; reportedReason?: string;
 }
 export type TaskControlEventBody = TaskControlRegisterBody | TaskControlRegistrationReceiptBody | TaskControlSubmitBody
   | TaskControlExecuteBody | TaskControlResultBody | TaskControlResultReceiptBody | TaskControlQueryBody
@@ -162,14 +168,17 @@ export function isTaskControlQueryBody(value: unknown): value is TaskControlQuer
 export function isTaskControlQueryResultBody(value: unknown): value is TaskControlQueryResultBody {
   if (!object(value) || value.name !== "task.control.query.result" || !uuid(value.requestId)
     || !member(TASK_CONTROL_OPERATION_STATES, value.state)) return false;
-  const operationKeys = ["name", "requestId", "operationId", "state", "taskId", "targetNodeId", "action", "freshness", "errorCode"];
+  const operationKeys = ["name", "requestId", "operationId", "state", "taskId", "targetNodeId", "action", "freshness", "errorCode",
+    "reportedState", "reportedReason"];
   const measuredKeys = [...operationKeys, "runtime", "taskState", "processState", "runVersion", "observedAt", "stopSupported", "stopConfirmed"];
   if (value.operationId === undefined) {
     return only(value, ["name", "requestId", "state", "freshness", "errorCode"]) && value.freshness === "unavailable"
       && (value.state === "denied" || value.state === "unknown") && isTaskControlErrorCode(value.errorCode);
   }
   const base = uuid(value.operationId) && isTaskId(value.taskId) && isNodeId(value.targetNodeId)
-    && member(TASK_CONTROL_ACTIONS, value.action);
+    && member(TASK_CONTROL_ACTIONS, value.action) && optional(value.reportedState, (state) => member(TASK_CONTROL_TASK_STATES, state))
+    && optional(value.reportedReason, (reason) => value.reportedState !== undefined && typeof reason === "string"
+      && reason.length > 0 && reason.length <= MAX_REASON);
   if (!base) return false;
   if (value.runtime === undefined) {
     return only(value, operationKeys) && value.freshness === "unavailable"

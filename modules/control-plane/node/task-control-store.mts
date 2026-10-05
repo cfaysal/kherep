@@ -165,3 +165,19 @@ export function pendingControlQueries(paths: NodePaths): TaskControlQueryBody[] 
     }
   });
 }
+
+// Issue #240: the newest settled status answer this node holds for a task, so
+// `task show` can say what the target last answered instead of only the
+// dispatch state. Unreadable request files are skipped.
+export function latestStatus(paths: NodePaths, taskId: string): TaskControlQueryResultBody | null {
+  return messageIds(requestsDir(paths)).flatMap((requestId) => {
+    try {
+      const record = readControlRequest(paths, requestId);
+      const result = record?.result;
+      return record?.submit.action === "status" && result?.taskId === taskId && result.state !== "pending"
+        ? [{ result, at: record.updatedAt }] : [];
+    } catch {
+      return [];
+    }
+  }).sort((a, b) => b.at.localeCompare(a.at))[0]?.result ?? null;
+}

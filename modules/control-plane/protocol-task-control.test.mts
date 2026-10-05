@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  TASK_CONTROL_CAPABILITY, TASK_CONTROL_ERROR_CODES, TASK_CONTROL_EVENT_NAMES,
+  TASK_CONTROL_CAPABILITY, TASK_CONTROL_ERROR_CODES, TASK_CONTROL_EVENT_NAMES, TASK_CONTROL_REPORT_CAPABILITY,
   isTaskControlEventBody, isTaskControlExecuteBody, isTaskControlQueryResultBody,
   isTaskControlRegisterBody, isTaskControlRegistrationReceiptBody, isTaskControlResultBody,
   isTaskControlSubmitBody,
@@ -105,6 +105,31 @@ test("target results are measured and query results distinguish cached from unav
   assert.equal(isTaskControlQueryResultBody({ ...cached, stopConfirmed: true, processState: "running" }), false);
   assert.equal(isTaskControlQueryResultBody({ ...confirmedStop, name: "task.control.query.result",
     requestId: REQUEST, targetNodeId: TARGET, action: "stop", freshness: "cached" }), true);
+});
+
+test("query results carry the reported task state and reason only with an operation (issue #240)", () => {
+  assert.equal(TASK_CONTROL_REPORT_CAPABILITY, "sessions.own-task-control.report.v1");
+  const cached = {
+    name: "task.control.query.result", requestId: REQUEST, operationId: OPERATION, state: "succeeded", taskId: TASK,
+    targetNodeId: TARGET, action: "status", freshness: "cached", runtime: "claude", taskState: "failed", processState: "closed",
+    observedAt: "2026-09-29T10:00:00.000Z", stopSupported: false, stopConfirmed: false,
+  };
+  const reported = { ...cached, reportedState: "failed", reportedReason: "cwd does not exist on this node" };
+  assert.equal(isTaskControlQueryResultBody(reported), true);
+  assert.equal(isTaskControlEventBody(reported), true);
+  assert.equal(isTaskControlQueryResultBody({ ...cached, reportedState: "dispatched" }), true);
+  const pending = { name: "task.control.query.result", requestId: REQUEST, operationId: OPERATION, state: "pending", taskId: TASK,
+    targetNodeId: TARGET, action: "status", freshness: "unavailable" };
+  assert.equal(isTaskControlQueryResultBody({ ...pending, reportedState: "failed", reportedReason: "r" }), true);
+  for (const bad of [{ reportedReason: "r" }, { reportedState: "lost" }, { reportedState: "failed", reportedReason: "" },
+    { reportedState: "failed", reportedReason: "r".repeat(257) }, { reportedState: "failed", reportedReason: 7 }]) {
+    assert.equal(isTaskControlQueryResultBody({ ...cached, ...bad }), false, JSON.stringify(bad));
+  }
+  assert.equal(isTaskControlQueryResultBody({ name: "task.control.query.result", requestId: REQUEST, state: "denied",
+    freshness: "unavailable", errorCode: "task_unknown", reportedState: "failed" }), false, "no operation, no report");
+  assert.equal(isTaskControlResultBody({ name: "task.control.result", operationId: OPERATION, taskId: TASK, state: "succeeded",
+    runtime: "claude", taskState: "failed", processState: "closed", observedAt: "2026-09-29T10:00:00.000Z", freshness: "fresh",
+    stopSupported: false, stopConfirmed: false, reportedReason: "r" }), false, "a target result stays unchanged");
 });
 
 test("all fixed node and Worker error codes are accepted without raw error text", () => {

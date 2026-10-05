@@ -14,6 +14,9 @@ import { generateIdentity } from "../../node/identity.mts";
 import { DEFAULT_POLICY, type NodePolicy } from "../../node/policy.mts";
 import { continueTask, startTask, stopTask, type RunnerDeps } from "../../node/session-runner.mts";
 import { parseSessionsPolicy } from "../../node/session-policy.mts";
+import { handleTaskControlExecute, pollTaskControl } from "../../node/task-control-exchange.mts";
+import { executeTaskControl } from "../../node/task-control-local.mts";
+import { applyQueryResult, receiptResult } from "../../node/task-control-store.mts";
 import { pollTasks, recordRequestResult } from "../../node/task-exchange.mts";
 import { watchTasks } from "../../node/task-watch.mts";
 import { enroll, FACTS, registry, workerFetch } from "./helpers.mts";
@@ -48,8 +51,14 @@ export async function startTaskNode(name: string, options: TaskNodeOptions = {})
   const paths: NodePaths = nodePaths(root);
   const workspace = path.join(root, "workspace");
   fs.mkdirSync(workspace, { recursive: true });
-  const sessions = options.sessions === undefined ? undefined : parseSessionsPolicy({ workspaceRoots: [workspace], ...options.sessions as object });
+  const section = { workspaceRoots: [workspace], ...options.sessions as object };
+  const sessions = options.sessions === undefined ? undefined : parseSessionsPolicy(section);
   const policy: NodePolicy = { ...DEFAULT_POLICY, ...(sessions ? { sessions } : {}) };
+  // Owner task control and its CLI read the policy file, as on a real node.
+  fs.mkdirSync(paths.dir, { recursive: true });
+  fs.writeFileSync(paths.policy, JSON.stringify({ ...DEFAULT_POLICY, ...(sessions ? { sessions: section } : {}) }));
+  const logs: string[] = [];
+  const log = (line: string): void => { logs.push(line); };
   const calls: string[][] = [];
   let agentState = "working";
   const exec = async (_file: string, args: string[]): Promise<string> => {
@@ -58,7 +67,8 @@ export async function startTaskNode(name: string, options: TaskNodeOptions = {})
     if (args[0] === "stop") return "";
     return `backgrounded · b0000001 · ${args[args.indexOf("--name") + 1] ?? ""}\n`;
   };
-  const runner: RunnerDeps = { paths, policy, exec, findClaude: () => "/opt/bin/claude", platform: "linux", realpath: (p) => path.resolve(p), cli: "kherep-node" };
+  const runner: RunnerDeps = { paths, policy, exec, findClaude: () => "/opt/bin/claude", platform: "linux", realpath: (p) => path.resolve(p),
+    cli: "kherep-node", log };
   const identity = generateIdentity();
   const nodeId = await enroll({ publicKey: identity.publicKey, privateKey: undefined as unknown as CryptoKey }, name);
   const client = new NodeClient({
@@ -68,6 +78,9 @@ export async function startTaskNode(name: string, options: TaskNodeOptions = {})
       "session.continue": (args) => continueTask(args, runner) },
     facts: () => ({ ...FACTS, os: options.os ?? FACTS.os }), runtimes: async () => (options.runtimes ?? ["claude"]).map((r) => ({ name: r, kind: "cli" as const })),
     sessions: async () => [], storeMessage: () => {}, taskRequestResult: (result) => recordRequestResult(paths, result),
+    taskControlExecute: (body) => handleTaskControlExecute(paths, body, (execute) => executeTaskControl(execute, { nodeId, paths, runner })),
+    taskControlResultReceipt: (body) => receiptResult(paths, body.operationId),
+    taskControlQueryResult: (body) => applyQueryResult(paths, body), log,
   });
   const response = await workerFetch(`/node/connect?nodeId=${nodeId}`, { headers: { upgrade: "websocket" } });
   const ws = response.webSocket!;
@@ -86,6 +99,8 @@ export async function startTaskNode(name: string, options: TaskNodeOptions = {})
   const inflight = new Set<string>();
   // One exchange round of the daemon: queued task reports and task requests.
   const exchange = async (): Promise<void> => { chain = chain.then(() => pollTasks(client, paths, policy, inflight, send)); await chain; };
+  // Its owner task-control round; a fresh in-flight set resends, which the Worker answers idempotently.
+  const control = async (): Promise<void> => { chain = chain.then(() => pollTaskControl(client, paths, new Set(), send)); await chain; };
   const close = async (): Promise<void> => {
     await chain;
     ws.close(1000, "done");
@@ -95,5 +110,5 @@ export async function startTaskNode(name: string, options: TaskNodeOptions = {})
   const raw = (frames: string[]): void => { frames.forEach(send); };
   // The daemon's watch round, with the state the fake `claude agents` shows.
   const watch = async (state: string): Promise<void> => { agentState = state; await watchTasks(runner); };
-  return { nodeId, client, paths, workspace, calls, exchange, raw, watch, close, idle: () => chain };
+  return { nodeId, client, paths, workspace, calls, logs, exchange, control, raw, watch, close, idle: () => chain };
 }
