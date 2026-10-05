@@ -16,7 +16,7 @@ increments the minor version; every other release increments the patch version.
   autonomous turns, which stays 6 per rolling hour, 20 per rolling day and
   30 s apart without it or for a missing field. Values must be integers within
   hard bounds (`perHour` 1 to 60, `perDay` 1 to 500, `spacingSeconds` 5 to
-  3600) with `perDay` at least `perHour`; anything else, or an unknown key,
+  3600), an explicit `perDay` at least `perHour` (without it the day allows at least `perHour` turns); anything else, or an unknown key,
   rejects the whole `wake` section. The Claude Code wake listener, the Claude
   and Codex `Stop` continuations, the Codex task resume, `codex queue` and
   closed-session delivery use the same effective budget, and `doctor` shows it

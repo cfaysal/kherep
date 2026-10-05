@@ -164,8 +164,9 @@ function parseWake(section: unknown): WakePolicy | null {
 // Hard bounds (issue #259), so that a policy can loosen the budget but never remove it.
 const BUDGET_BOUNDS: Record<keyof WakeBudget, [number, number]> = { perHour: [1, 60], perDay: [1, 500], spacingSeconds: [5, 3600] };
 
-// Only the known keys, each an integer within its bounds, and perDay, its
-// default included, at least perHour; anything else is null.
+// Only the known keys, each an integer within its bounds, and an explicit
+// perDay at least perHour; anything else is null. Without perDay the day
+// allows at least perHour turns, so perHour alone never disables waking.
 function parseBudget(value: unknown): WakeBudget | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const budget: WakeBudget = {};
@@ -175,13 +176,12 @@ function parseBudget(value: unknown): WakeBudget | null {
     if (!bounds || !Number.isInteger(field) || field < bounds[0] || field > bounds[1]) return null;
     budget[name] = field;
   }
-  const effective = turnBudget(budget);
-  return effective.perDay >= effective.perHour ? budget : null;
+  return budget.perDay === undefined || budget.perDay >= (budget.perHour ?? DEFAULT_TURN_BUDGET.perHour) ? budget : null;
 }
 
 const turnBudget = (budget: WakeBudget): TurnBudget => ({
   perHour: budget.perHour ?? DEFAULT_TURN_BUDGET.perHour,
-  perDay: budget.perDay ?? DEFAULT_TURN_BUDGET.perDay,
+  perDay: budget.perDay ?? Math.max(DEFAULT_TURN_BUDGET.perDay, budget.perHour ?? 0),
   spacingMs: budget.spacingSeconds === undefined ? DEFAULT_TURN_BUDGET.spacingMs : budget.spacingSeconds * 1000,
 });
 
