@@ -76,17 +76,17 @@ for (const [what, code, reason, arrange, sessions = {}, messaging = {}, message 
 }
 
 // A limit before the attempt clears: the next round starts the intercom session.
-const limits: [string, Record<string, unknown>, (node: Node) => void][] = [
-  ["maxConcurrent", { maxConcurrent: 1 }, (node) => writeTask(node.paths, { ...listTasks(node.paths)[0], state: "done" })],
-  ["maxStartsPerDay", { maxStartsPerDay: 1 }, (node) => {
+const limits: [string, Record<string, unknown>, TaskRecord["state"], (node: Node) => void][] = [
+  ["maxConcurrent", { maxConcurrent: 1 }, "running", (node) => writeTask(node.paths, { ...listTasks(node.paths)[0], state: "done" })],
+  ["maxStartsPerDay", { maxStartsPerDay: 1 }, "done", (node) => {
     node.tick(24 * 3_600_000);
     writeLocalSessions(node.paths, [], T0 + 24 * 3_600_000);
   }],
 ];
-for (const [what, sessions, clear] of limits) {
+for (const [what, sessions, state, clear] of limits) {
   test(`a message held by ${what} starts its intercom session once the limit clears`, async (t) => {
     const node = closedNode(t, sessions);
-    writeTask(node.paths, task(node, 9, { state: what === "maxConcurrent" ? "running" : "done" }));
+    writeTask(node.paths, task(node, 9, { state }));
     const id = deliver(node);
     await deliverToClosed(node.deps());
     assert.deepEqual(progress(node, id), ["waiting", "retry-pending"]);
