@@ -359,11 +359,12 @@ fi
 # is set, and then it reads the host's real file outside the throwaway home. It
 # therefore sits behind its own skip switch. Only the exact value 1 skips; a real
 # install without the switch still runs the step and still fails on a missing or
-# unverified credential.
-SKIP_ATL_CREDENTIAL="$(kherep_env INSTALL_SKIP_ATL_CREDENTIAL 0)"
+# unverified credential. A CLAUDE_HOME other than the default one skips the
+# step too, unless KHEREP_INSTALL_ALLOW_ATL_CREDENTIAL=1 (issue #256, profile.sh).
+SKIP_ATL_CREDENTIAL="$(kherep_install_skip_reason ATL_CREDENTIAL)"
 atl_credential_ok=0
-if [ "$SKIP_ATL_CREDENTIAL" = "1" ]; then
-  echo "install: SKIP_ATL_CREDENTIAL=1 (Atlassian service-account credential not read or verified, no broker selftest; $CLAUDE_HOME/kherep/atl-credential-claude.txt untouched)"
+if [ -n "$SKIP_ATL_CREDENTIAL" ]; then
+  echo "install: SKIP_ATL_CREDENTIAL=1 (by $SKIP_ATL_CREDENTIAL; Atlassian service-account credential not read or verified, no broker selftest; $CLAUDE_HOME/kherep/atl-credential-claude.txt untouched)"
 elif node "$REPO_ROOT/bootstrap/atl-credential.mts" --runtime claude --out "$CLAUDE_HOME/kherep/atl-credential-claude.txt"; then
   atl_credential_ok=1
 else
@@ -388,15 +389,15 @@ fi
 # on every install by the preflight broker-only step (issue #13). This step
 # passes the same profile and workspace, so it writes the same value, and it
 # merges: every key it does not own survives.
-SKIP_KNOWLEDGE_SPACE="$(kherep_env INSTALL_SKIP_KNOWLEDGE_SPACE 0)"
-if [ "$SKIP_KNOWLEDGE_SPACE" = "1" ]; then
-  echo "install: SKIP_KNOWLEDGE_SPACE=1 (Confluence knowledge space not resolved; the space keys in $CLAUDE_HOME/kherep/confluence.json stay as they were)"
+SKIP_KNOWLEDGE_SPACE="$(kherep_install_skip_reason KNOWLEDGE_SPACE)"
+if [ -n "$SKIP_KNOWLEDGE_SPACE" ]; then
+  echo "install: SKIP_KNOWLEDGE_SPACE=1 (by $SKIP_KNOWLEDGE_SPACE; Confluence knowledge space not resolved; the space keys in $CLAUDE_HOME/kherep/confluence.json stay as they were)"
 elif [ "$atl_credential_ok" = "1" ]; then
   KHEREP_ATL_CRED_FILE_CLAUDE="${KHEREP_ATL_CRED_FILE_CLAUDE:-$CLAUDE_HOME/kherep/atl-credential-claude.txt}" \
     node "$REPO_ROOT/bootstrap/confluence-space.mts" --out "$CLAUDE_HOME/kherep/confluence.json" \
       --runtime claude --profile "$KHEREP_PROFILE" --workspace "$WS" \
     || { post_rc=1; echo "install: WARNING no Confluence knowledge space configured - observation agents will not write"; }
-elif [ "$SKIP_ATL_CREDENTIAL" = "1" ]; then
+elif [ -n "$SKIP_ATL_CREDENTIAL" ]; then
   post_rc=1
   echo "install: WARNING Confluence knowledge space was not checked because the credential step was skipped"
 else
@@ -416,12 +417,15 @@ fi
 # core.hooksPath is real, machine-wide git state, NOT a managed file under
 # CLAUDE_HOME. The smoke test runs this installer against a throwaway profile
 # and must not rewrite the developer's actual git config, so the write sits
-# behind a skip switch in the same style as SKIP_SECRETS / SKIP_DEPS.
-SKIP_GITCONFIG="$(kherep_env INSTALL_SKIP_GITCONFIG 0)"
+# behind a skip switch in the same style as SKIP_SECRETS / SKIP_DEPS. A
+# CLAUDE_HOME other than the default one skips it too, unless
+# KHEREP_INSTALL_ALLOW_GITCONFIG=1: a candidate home bound globally leaves every
+# repository of the account on a hook directory that is deleted later (#256).
+SKIP_GITCONFIG="$(kherep_install_skip_reason GITCONFIG)"
 GITHOOKS_DIR="$CLAUDE_HOME/kherep/githooks"
-if [ "$SKIP_GITCONFIG" = "1" ]; then
+if [ -n "$SKIP_GITCONFIG" ]; then
   chmod +x "$GITHOOKS_DIR/commit-msg" 2>/dev/null || true
-  echo "install: SKIP_GITCONFIG=1 (core.hooksPath untouched; hook file still placed)"
+  echo "install: SKIP_GITCONFIG=1 (by $SKIP_GITCONFIG; global, system and repo-local core.hooksPath untouched; hook file still placed)"
 elif [ -f "$GITHOOKS_DIR/commit-msg" ]; then
   # Windows checkouts routinely drop the mode bit; without +x git skips the hook
   # silently and the rule would bind on one host but not the other.

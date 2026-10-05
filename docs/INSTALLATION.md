@@ -18,7 +18,7 @@ The workspace path must be a single shell word: no whitespace and none of ``| & 
 
 ## 2. Review an isolated installation
 
-This preview writes managed files to a new candidate directory, leaves workspace Git configuration unchanged and does not install dependencies or start a memory agent. It also skips the Atlassian credential and Confluence knowledge-space steps, so it never reads a real credential file named by an inherited `KHEREP_ATL_CRED_FILE_*` variable and makes no live call.
+This preview writes managed files to a new candidate directory, leaves global, system and workspace Git configuration unchanged and does not install dependencies or start a memory agent. `KHEREP_INSTALL_PREVIEW=1` implies `KHEREP_INSTALL_SKIP_GITCONFIG`, `KHEREP_INSTALL_SKIP_RUNTIME_AGENT`, `KHEREP_INSTALL_SKIP_ATL_CREDENTIAL` and `KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE`, so the preview never reads a real credential file named by an inherited `KHEREP_ATL_CRED_FILE_*` variable and makes no live call. The Git, credential and knowledge-space steps each print one `install: SKIP_<STEP>=1 (by <reason>; ...)` line when skipped.
 
 ```sh
 candidate_root="$(mktemp -d)"
@@ -27,12 +27,11 @@ mkdir -p "$candidate_root/claude" "$candidate_root/workspace"
 CLAUDE_HOME="$candidate_root/claude" \
 KHEREP_WORKSPACE="$candidate_root/workspace" \
 KHEREP_CREDENTIALS_ROOT="$candidate_root/integration-config" \
-KHEREP_INSTALL_SKIP_GITCONFIG=1 \
-KHEREP_INSTALL_SKIP_RUNTIME_AGENT=1 \
-KHEREP_INSTALL_SKIP_ATL_CREDENTIAL=1 \
-KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE=1 \
+KHEREP_INSTALL_PREVIEW=1 \
 SKIP_SECRETS=1 SKIP_DEPS=1 bash bootstrap/install.sh
 ```
+
+A `CLAUDE_HOME` other than `<HOME>/.claude` is treated as a candidate even without the switch: the installer then leaves global and system `core.hooksPath` unchanged and skips the credential step, so a forgotten switch cannot point the account's Git hooks at a temporary directory. The knowledge-space step is not skipped by the home, so such a run without `KHEREP_INSTALL_PREVIEW=1` ends with `DONE WITH ERRORS` because the space was not checked. If a non-default `CLAUDE_HOME` is your real Claude home, opt in per step with `KHEREP_INSTALL_ALLOW_GITCONFIG=1` and `KHEREP_INSTALL_ALLOW_ATL_CREDENTIAL=1` (see [section 5](#5-configure-integrations)).
 
 Inspect the candidate's rules, settings, hook commands and installation receipt. Keep its backup until you have checked recovery. A files-only preview does not establish that connected services work.
 
@@ -104,7 +103,10 @@ Connection profiles ship unconfigured. Kherep does not provision a Confluence sp
 | `KHEREP_PROFILE` | Explicit `win` or `mac` host profile |
 | `KHEREP_CREDENTIALS_ROOT` | External integration-configuration root |
 | `KHEREP_LOCAL_CONFIG` | Local-inference configuration |
+| `KHEREP_INSTALL_PREVIEW` | Candidate preview: implies `KHEREP_INSTALL_SKIP_GITCONFIG`, `_SKIP_RUNTIME_AGENT`, `_SKIP_ATL_CREDENTIAL` and `_SKIP_KNOWLEDGE_SPACE` for any `CLAUDE_HOME` and wins over the `ALLOW` switches; only `1` counts |
 | `KHEREP_INSTALL_SKIP_GITCONFIG` | Skip Git configuration during a preview |
+| `KHEREP_INSTALL_ALLOW_GITCONFIG` | With a `CLAUDE_HOME` other than `<HOME>/.claude`, set global (and opted-in system) and repo-local `core.hooksPath` anyway; without it that step is skipped. Only `1` allows; the default home needs no switch |
+| `KHEREP_INSTALL_ALLOW_ATL_CREDENTIAL` | With a `CLAUDE_HOME` other than `<HOME>/.claude`, run the credential step anyway, which reads the file named by `KHEREP_ATL_CRED_FILE_CLAUDE` and checks it live; without it that step is skipped. Only `1` allows; the default home needs no switch |
 | `KHEREP_INSTALL_SYSTEM_HOOKSPATH` | Opt into setting the system-wide `core.hooksPath`, which binds every account on the host; only `1` opts in. Without it a differing system value is reported and left unchanged |
 | `KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE` | Skip resolving the Confluence knowledge space (throwaway installs such as the smoke test); only `1` skips |
 | `KHEREP_INSTALL_SKIP_ATL_CREDENTIAL` | Skip reading and live-verifying the Atlassian service-account credential (throwaway installs such as the smoke test); only `1` skips |
