@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * live-hook-integrity.js  -  SessionStart hook
+ * live-hook-integrity.mts  -  SessionStart hook
  *
  * Proves that every hook file wired in the LIVE settings can enforce anything at
  * all, and repairs it from the versioned source when it cannot.
@@ -27,28 +27,33 @@
  * Fail-safe: any unexpected error is caught, reported, exit 0. Silent when
  * everything is OK. No network, no child process beyond that `node --check`.
  */
-const crypto = require("crypto");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const vm = require("vm");
-const { execFileSync } = require("child_process");
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import vm from "node:vm";
+import { execFileSync } from "node:child_process";
 
-const { isWithinPath, joinPathLike, normalizePathLike } = require("./lib/workspace-scope.mts");
-const { checkoutFor } = require("./lib/orchestra-checkout.mts");
+import { isWithinPath, joinPathLike, normalizePathLike, type ScopePayload } from "./lib/workspace-scope.mts";
+import { checkoutFor } from "./lib/orchestra-checkout.mts";
+
+type Before = { size?: number; mtime?: string; ino?: number };
+type Verdict = { state: "OK" | "DEFEKT" | "UNGEPRUEFT"; reason?: string; before?: Before };
+type Restored = { proven: boolean; sha?: string; why?: string };
 
 const SETTINGS_FILES = ["settings.json", "settings.user.json"];
-const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
+const sha256 = (buf: Buffer): string => crypto.createHash("sha256").update(buf).digest("hex");
+const errorCode = (error: unknown): string | undefined => (error ? (error as NodeJS.ErrnoException).code : undefined);
 
 // Every hook event, not just SessionStart: a dead PreToolUse guard is the whole
-// reason this exists.
-function commandsIn(settings) {
-  const out = [];
+// reason this exists. The settings are parsed JSON of any shape, read defensively.
+function commandsIn(settings: { hooks?: unknown } | null): string[] {
+  const out: string[] = [];
   const events = (settings && typeof settings.hooks === "object" && settings.hooks) || {};
   for (const groups of Object.values(events)) {
     if (!Array.isArray(groups)) continue;
-    for (const group of groups) {
-      for (const entry of (group && Array.isArray(group.hooks) && group.hooks) || []) {
+    for (const group of groups as ({ hooks?: unknown } | null)[]) {
+      for (const entry of ((group && Array.isArray(group.hooks) && group.hooks) || []) as ({ command?: unknown } | null)[]) {
         if (entry && typeof entry.command === "string") out.push(entry.command);
       }
     }
@@ -56,7 +61,7 @@ function commandsIn(settings) {
   return out;
 }
 
-function expandToken(token, home) {
+function expandToken(token: string, home: string): string {
   let raw = String(token).replace(/^['"]+|['"]+$/g, "").replace(/\$\{?CLAUDE_HOME\}?/g, home);
   if (raw === "~" || raw.startsWith("~/") || raw.startsWith("~\\")) raw = os.homedir() + raw.slice(1);
   return normalizePathLike(raw);
@@ -64,18 +69,18 @@ function expandToken(token, home) {
 
 // Only .js and .mts under <CLAUDE_HOME>/hooks/ are in scope: an extension-less
 // wrapper carries no syntax contract, files elsewhere are not this hook's business.
-function wiredFiles(home) {
+function wiredFiles(home: string): { files: { file: string; rel: string }[]; notes: string[]; readAny: boolean } {
   const hooksDir = `${home}/hooks`;
-  const found = new Map();
-  const notes = [];
+  const found = new Map<string, { file: string; rel: string }>();
+  const notes: string[] = [];
   let readAny = false;
   for (const name of SETTINGS_FILES) {
-    let parsed;
+    let parsed: { hooks?: unknown } | null;
     try {
       parsed = JSON.parse(fs.readFileSync(path.join(home, name), "utf8"));
     } catch (error) {
       if (error instanceof SyntaxError) notes.push(`${name}: not valid JSON, its wiring is UNKNOWN from here`);
-      else if (error && error.code !== "ENOENT") notes.push(`${name}: unreadable (${error.code})`);
+      else if (error && errorCode(error) !== "ENOENT") notes.push(`${name}: unreadable (${errorCode(error)})`);
       continue;
     }
     readAny = true;
@@ -92,7 +97,7 @@ function wiredFiles(home) {
   return { files: [...found.values()], notes, readAny };
 }
 
-function parsesInProcess(source, filename) {
+function parsesInProcess(source: string, filename: string): boolean {
   try {
     new vm.Script(source, { filename });
     return true;
@@ -102,22 +107,22 @@ function parsesInProcess(source, filename) {
 }
 
 // The verdict, not the fast path. Returns "" when node itself accepts the file.
-function nodeCheckDetail(file) {
+function nodeCheckDetail(file: string): string {
   try {
     execFileSync(process.execPath, ["--check", file], { stdio: ["ignore", "ignore", "pipe"], timeout: 15_000 });
     return "";
   } catch (error) {
-    const lines = String((error && error.stderr) || "").split(/\r?\n/).map((l) => l.trim());
+    const lines = String((error && (error as { stderr?: unknown }).stderr) || "").split(/\r?\n/).map((l) => l.trim());
     return lines.find((l) => /Error|error:/.test(l)) || "rejected by node --check";
   }
 }
 
-function classify(file) {
-  let stat;
+function classify(file: string): Verdict {
+  let stat: fs.Stats;
   try {
     stat = fs.statSync(file);
   } catch (error) {
-    const code = (error && error.code) || "unknown";
+    const code = errorCode(error) || "unknown";
     if (code === "ENOENT") return { state: "DEFEKT", reason: "wired but not present on disk" };
     return { state: "UNGEPRUEFT", reason: `stat failed (${code})` };
   }
@@ -128,11 +133,11 @@ function classify(file) {
   if (stat.size === 0) {
     return { state: "DEFEKT", reason: "0 bytes - it runs, enforces nothing and exits 0 (fail-open)", before };
   }
-  let source;
+  let source: string;
   try {
     source = fs.readFileSync(file, "utf8");
   } catch (error) {
-    return { state: "UNGEPRUEFT", reason: `unreadable (${(error && error.code) || "unknown"})`, before };
+    return { state: "UNGEPRUEFT", reason: `unreadable (${errorCode(error) || "unknown"})`, before };
   }
   if (parsesInProcess(source, file)) return { state: "OK", before };
   // node accepting what the in-process parse rejected (top-level return in CJS,
@@ -141,28 +146,28 @@ function classify(file) {
   return detail ? { state: "DEFEKT", reason: `rejected by node --check: ${detail}`, before } : { state: "OK", before };
 }
 
-function restore(file, rel, repoRoot) {
+function restore(file: string, rel: string, repoRoot: string): Restored {
   if (!repoRoot) return { proven: false, why: "no checkout resolved via workspace, KHEREP_WORKSPACE or install note" };
   const source = joinPathLike(repoRoot, `claude/hooks/${rel}`);
-  let wanted;
+  let wanted: Buffer;
   try {
     wanted = fs.readFileSync(source);
   } catch (error) {
-    return { proven: false, why: `versioned source ${source} unreadable (${(error && error.code) || "unknown"})` };
+    return { proven: false, why: `versioned source ${source} unreadable (${errorCode(error) || "unknown"})` };
   }
   if (!wanted.length) return { proven: false, why: `versioned source ${source} is itself 0 bytes` };
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.copyFileSync(source, file);
   } catch (error) {
-    return { proven: false, why: `copy failed (${(error && error.code) || "unknown"})` };
+    return { proven: false, why: `copy failed (${errorCode(error) || "unknown"})` };
   }
   // Measured at the target. The copy call reporting success is not a measurement.
-  let landed;
+  let landed: Buffer;
   try {
     landed = fs.readFileSync(file);
   } catch (error) {
-    return { proven: false, why: `target unreadable after the copy (${(error && error.code) || "unknown"})` };
+    return { proven: false, why: `target unreadable after the copy (${errorCode(error) || "unknown"})` };
   }
   const sha = sha256(landed);
   if (!landed.length || sha !== sha256(wanted)) {
@@ -171,7 +176,7 @@ function restore(file, rel, repoRoot) {
   return { proven: true, sha };
 }
 
-function journal(home, entry) {
+function journal(home: string, entry: Record<string, unknown>): void {
   try {
     const dir = path.join(home, ".cache", "hook-integrity");
     fs.mkdirSync(dir, { recursive: true });
@@ -181,7 +186,7 @@ function journal(home, entry) {
   }
 }
 
-function emit(lines) {
+function emit(lines: string[]): void {
   if (!lines.length) return;
   process.stdout.write(
     JSON.stringify({
@@ -193,10 +198,10 @@ function emit(lines) {
   );
 }
 
-function main() {
-  let payload = {};
+function main(): void {
+  let payload: ScopePayload | null = {};
   try {
-    payload = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+    payload = JSON.parse(fs.readFileSync(0, "utf8") || "{}") as ScopePayload | null;
   } catch {
     payload = {};
   }
@@ -211,7 +216,7 @@ function main() {
   for (const { file, rel } of files) {
     const { state, reason, before = {} } = classify(file);
     if (state === "OK") continue;
-    const entry = {
+    const entry: Record<string, unknown> = {
       ts: new Date().toISOString(), file: rel, path: file, state, reason,
       sizeBefore: before.size === undefined ? null : before.size,
       mtimeBefore: before.mtime || null,
@@ -230,7 +235,7 @@ function main() {
     journal(home, entry);
     lines.push(
       result.proven
-        ? `${rel}: ${reason} -> RESTORED from the repo, verified at the target (sha256 ${result.sha.slice(0, 12)})`
+        ? `${rel}: ${reason} -> RESTORED from the repo, verified at the target (sha256 ${result.sha!.slice(0, 12)})`
         : `${rel}: ${reason} -> NOT restored (${result.why}). ENFORCEMENT IS OFF for this hook.`
     );
   }
@@ -242,7 +247,7 @@ try {
   main();
 } catch (error) {
   try {
-    emit([`the integrity check itself failed (${(error && error.message) || "unknown"}); nothing was verified`]);
+    emit([`the integrity check itself failed (${(error && (error as Error).message) || "unknown"}); nothing was verified`]);
   } catch {
     /* never break session start */
   }

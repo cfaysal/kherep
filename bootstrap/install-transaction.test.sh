@@ -541,6 +541,47 @@ test_upgrade_retires_mpac() {
     { cat "$ROOT/drift.log"; fail "project-scope drift-check did not limit RETIRED-LIVE to workspace entries"; }
 }
 
+# Issue #237. An upgrade over a host that still runs the .js hooks retires them
+# through the install transaction: each old file is parked in hooks/_deprecated
+# with its exact bytes in the install backup, its .mts replacement is installed,
+# and the live settings wire only the .mts. The old wiring uses the ~ form older
+# installs wrote; the home is pinned for node too (USERPROFILE on Windows), so
+# the managed entry folds onto it the way it does on a real host.
+test_upgrade_retires_js_hooks() {
+  local rc b name userprofile
+  fixture jshooks
+  for name in clq-accept-gate live-hook-integrity; do printf 'old-js-hook\n' > "$C/hooks/$name.js"; done
+  printf '%s\n' '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"node \"~/.claude/hooks/clq-accept-gate.js\""}]}],"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"node \"~/.claude/hooks/live-hook-integrity.js\""}]}]}}' > "$C/settings.json"
+  userprofile="$H"; ! command -v cygpath >/dev/null 2>&1 || userprofile="$(cygpath -w "$H")"
+  set +e
+  HOME="$H" USERPROFILE="$userprofile" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" \
+    KHEREP_CREDENTIALS_ROOT="$R" KHEREP_INSTALL_SKIP_GITCONFIG=1 KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE=1 \
+    KHEREP_INSTALL_SKIP_ATL_CREDENTIAL=1 SKIP_SECRETS=1 SKIP_DEPS=1 bash "$HERE/install.sh" > "$ROOT/log" 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { cat "$ROOT/log"; fail "upgrade install over .js hooks failed (rc=$rc)"; }
+  b="$(latest "$H")"
+  for name in clq-accept-gate live-hook-integrity; do
+    [ ! -e "$C/hooks/$name.js" ] || fail "the retired $name.js stayed at its live path"
+    [ "$(cat "$C/hooks/_deprecated/$name.js")" = old-js-hook ] || fail "$name.js was not parked in hooks/_deprecated"
+    [ "$(cat "$b/retired/hooks/$name.js")" = old-js-hook ] || fail "$name.js was not backed up by the transaction"
+    same "$HERE/../claude/hooks/$name.mts" "$C/hooks/$name.mts"
+  done
+  node -e '
+    const fs = require("fs"), s = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const commands = Object.values(s.hooks || {}).flat().flatMap((g) => g.hooks || []).map((h) => String(h.command));
+    for (const name of ["clq-accept-gate", "live-hook-integrity"]) {
+      if (commands.some((c) => c.includes(`hooks/${name}.js`))) { console.error(`${name}.js still wired`); process.exit(1); }
+      if (commands.filter((c) => c.includes(`hooks/${name}.mts`)).length !== 1) { console.error(`${name}.mts not wired once`); process.exit(2); }
+    }
+  ' "$C/settings.json" || { cat "$C/settings.json"; fail "the upgraded settings do not wire exactly the .mts hooks"; }
+  HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
+    bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
+    { cat "$ROOT/drift.log"; fail "drift-check failed after retiring the .js hooks"; }
+  ! grep -q 'RETIRED-LIVE  hooks/' "$ROOT/drift.log" ||
+    { cat "$ROOT/drift.log"; fail "a retired .js hook is still live after the upgrade"; }
+}
+
 # OP-1085: the deps phase runs AFTER the commit and must not be able to undo an
 # install. The fake npm answers every install with the Mac EEXIST; the plugin
 # step fails too, via an unreachable claude binary. The install is forced through
@@ -613,7 +654,7 @@ JS
 }
 
 test_library; test_retire; test_retire_declared; test_lock; test_preflights; test_path_guards; test_partial; test_term; test_commit_signal; test_secrets
-test_deps_failure; test_default_confluence_brokers; test_upgrade_retires_mpac
+test_deps_failure; test_default_confluence_brokers; test_upgrade_retires_mpac; test_upgrade_retires_js_hooks
 host_hooks_paths > "$TMP/host-hooks-path.after"
 cmp -s "$TMP/host-hooks-path.before" "$TMP/host-hooks-path.after" ||
   fail "the host's system or global core.hooksPath changed during the run"

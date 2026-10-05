@@ -300,7 +300,7 @@ install_entry "mcp-auth-bridge" "$REPO_ROOT/modules" "$CLAUDE_HOME/kherep" "$INS
 bootstrap_retire_declared "$REPO_ROOT/bootstrap/manifest/retired.txt" "$CLAUDE_HOME" "$WS" "$INSTALL_BACKUP"
 echo "install: files placed -> $CLAUDE_HOME"
 echo "install: previous managed state parked -> $INSTALL_BACKUP"
-# Where this install came from, so claude/hooks/live-hook-integrity.js can reach
+# Where this install came from, so claude/hooks/live-hook-integrity.mts can reach
 # the versioned source from ANY session. The hooks are global and a wiped guard
 # is broken everywhere, while resolving through the session cwd gives up outside
 # the workspace. Advisory: the reader re-validates the path, so this must never

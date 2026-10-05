@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * maestro-discipline.js  -  UserPromptSubmit hook
+ * maestro-discipline.mts  -  UserPromptSubmit hook
  *
  * Re-injects compact Maestro discipline checklist into the model context on
  * every user prompt within the configured Kherep workspace. SessionStart fires
@@ -10,19 +10,19 @@
  *
  * Fail-safe: any error exits 0 silently, never blocks the prompt.
  */
-const fs = require("fs");
-const { isKherepScope } = require("./lib/workspace-scope.mts");
+import fs from "node:fs";
+import { isKherepScope, type ScopePayload } from "./lib/workspace-scope.mts";
 
-function main() {
+function main(): void {
   let input = "";
   try {
     input = fs.readFileSync(0, "utf8");
   } catch {
     return;
   }
-  let data = {};
+  let data: ScopePayload | null = {};
   try {
-    data = JSON.parse(input || "{}");
+    data = JSON.parse(input || "{}") as ScopePayload | null;
   } catch {
     return;
   }

@@ -268,6 +268,19 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- Claude hooks: nine hooks move from JavaScript to TypeScript (`.mts`, ESM,
+  run by Node's type stripping like the other `.mts` hooks), with their tests
+  and `lib/semver-compare`: `clq-accept-gate`, `critical-file-integrity`,
+  `drift-check-nudge`, `live-hook-integrity`, `maestro-banner-gate`,
+  `maestro-discipline`, `orchestra-default`, `runtime-capability-snapshot` and
+  `smoke-test-nudge`. Behaviour is unchanged. The settings template wires the
+  `.mts` files; an install over an existing installation parks the old `.js`
+  files in `hooks/_deprecated` through the install transaction
+  (`retired.txt`), and the rendered settings keep only the `.mts` wiring. New
+  tests run the two converted hooks that block, `clq-accept-gate` and
+  `maestro-banner-gate`, through their wired settings command, and cover
+  `critical-file-integrity`, which had no test. Part of issue #237; the
+  remaining guards follow in a second batch.
 - Control Plane: a message that a new Claude intercom session carries in its
   task text is `delivered` once the watch round sees that session's turn
   progress, no longer when `claude --bg` returns; until then it stays

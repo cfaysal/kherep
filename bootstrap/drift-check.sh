@@ -28,7 +28,7 @@ if [ -x /usr/bin/find ]; then FIND_BIN=/usr/bin/find; else FIND_BIN="$(command -
 [ -n "$FIND_BIN" ] || { echo "FATAL: POSIX find required"; exit 2; }
 command -v node >/dev/null || { echo "FATAL: node required"; exit 2; }
 
-# Leave the result behind for claude/hooks/drift-check-nudge.js. The body writes
+# Leave the result behind for claude/hooks/drift-check-nudge.mts. The body writes
 # a sibling temp file and atomically renames it only after the terminal marker,
 # so readers keep seeing the previous complete report during a run. The report
 # is replayed to real stdout, preserving interactive output and exit semantics.

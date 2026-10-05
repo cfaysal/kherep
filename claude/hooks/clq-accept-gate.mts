@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * clq-accept-gate.js  -  Stop hook (Closed-Loop Quality enforcement)
+ * clq-accept-gate.mts  -  Stop hook (Closed-Loop Quality enforcement)
  *
  * Section 8.8 Required Companion-Deliverable. Pure-regex, NO model call.
  *
@@ -17,10 +17,16 @@
  * Pure conversation and turns without a dispatch receipt are never blocked.
  * Any hook error or missing input data fails open.
  */
-const fs = require("fs");
-const { isKherepScope } = require("./lib/workspace-scope.mts");
+import fs from "node:fs";
+import { isKherepScope, type ScopePayload } from "./lib/workspace-scope.mts";
 
-function readStdin() {
+// The fields this hook reads from a Stop payload.
+interface StopPayload extends ScopePayload {
+  stop_hook_active?: unknown;
+  transcript_path?: unknown;
+}
+
+function readStdin(): string {
   try {
     return fs.readFileSync(0, "utf8");
   } catch {
@@ -29,16 +35,16 @@ function readStdin() {
 }
 
 // Pull the text of the last assistant message out of a transcript JSONL file.
-function lastAssistantText(transcriptPath) {
-  let raw;
+function lastAssistantText(transcriptPath: unknown): string {
+  let raw: string;
   try {
-    raw = fs.readFileSync(transcriptPath, "utf8");
+    raw = fs.readFileSync(transcriptPath as string, "utf8");
   } catch {
     return "";
   }
   const lines = raw.split(/\r?\n/).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
-    let obj;
+    let obj: { message?: { role?: unknown; content?: unknown } } | null;
     try {
       obj = JSON.parse(lines[i]);
     } catch {
@@ -50,7 +56,7 @@ function lastAssistantText(transcriptPath) {
     if (typeof content === "string") return content;
     if (Array.isArray(content)) {
       return content
-        .map((b) => (b && typeof b.text === "string" ? b.text : ""))
+        .map((b: { text?: unknown } | null) => (b && typeof b.text === "string" ? b.text : ""))
         .join("\n");
     }
     return "";
@@ -59,7 +65,7 @@ function lastAssistantText(transcriptPath) {
 }
 
 // Returns the missing contract field, or an empty string when the receipt is valid.
-function missingField(text) {
+function missingField(text: string): string {
   if (!text) return "";
   // 3. receipt present
   if (!/^\s*Dispatched:/m.test(text) && !/\bDispatched:\s*\d/.test(text)) {
@@ -83,11 +89,11 @@ function missingField(text) {
   return hasAccept ? "" : "Accept";
 }
 
-function main() {
+function main(): void {
   const input = readStdin();
-  let data = {};
+  let data: StopPayload = {};
   try {
-    data = JSON.parse(input || "{}");
+    data = JSON.parse(input || "{}") as StopPayload;
   } catch {
     return; // exit 0
   }

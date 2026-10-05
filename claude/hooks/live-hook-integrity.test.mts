@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Contract test for live-hook-integrity.js. Drives the hook exactly as Claude
+// Contract test for live-hook-integrity.mts. Drives the hook exactly as Claude
 // Code does: JSON on stdin, JSON-or-nothing on stdout, always exit 0.
 //
 // EVERYTHING happens inside one throwaway directory (mkdtemp = mktemp -d), with
@@ -9,20 +9,38 @@
 // payload cwd. GRUND: OP-679, where a contract test with the REAL cwd launched
 // four real full installs per invocation. A test that triggers a process or a
 // file write gets read for WHERE it triggers it.
-const { execFileSync, spawnSync } = require("node:child_process");
-const crypto = require("node:crypto");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
+import { execFileSync, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-const HOOK = path.join(__dirname, "live-hook-integrity.js");
+const HOOK = path.join(import.meta.dirname, "live-hook-integrity.mts");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "live-hook-integrity-"));
+
+// One line of the incident journal, as far as the assertions read it.
+interface JournalEntry {
+  ts?: unknown;
+  state?: unknown;
+  sizeBefore?: unknown;
+  mtimeBefore?: unknown;
+  sha256After?: unknown;
+  restoreProven?: unknown;
+}
+
+interface Box {
+  home: string;
+  claude: string;
+  hooks: string;
+  repoHooks: string;
+  cwd: string;
+}
 
 let pass = 0;
 let fail = 0;
 let seq = 0;
 
-function check(label, actual, expected) {
+function check(label: string, actual: unknown, expected: unknown): void {
   if (actual === expected) {
     pass++;
     console.log(`PASS | ${label}`);
@@ -34,12 +52,12 @@ function check(label, actual, expected) {
 
 const GOOD = "#!/usr/bin/env node\nmodule.exports = { enforces: true };\n";
 const BROKEN = "#!/usr/bin/env node\nfunction guard( { return;\n";
-const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
+const sha256 = (buf: Buffer): string => crypto.createHash("sha256").update(buf).digest("hex");
 
 // One sandbox per case: a throwaway home plus a fixture kherep checkout
 // under a directory literally named Work, which is how the hook's workspace
 // resolver finds a repo root at all.
-function sandbox() {
+function sandbox(): Box {
   const root = path.join(TMP, `case-${++seq}`);
   const home = path.join(root, "home");
   const claude = path.join(home, ".claude");
@@ -52,13 +70,13 @@ function sandbox() {
 }
 
 // live = what sits in the throwaway ~/.claude/hooks, repo = the versioned source.
-function place(box, name, { live, repo } = {}) {
+function place(box: Box, name: string, { live, repo }: { live?: string | null; repo?: string | null } = {}): void {
   if (live !== undefined && live !== null) fs.writeFileSync(path.join(box.hooks, name), live, "utf8");
   if (repo !== undefined && repo !== null) fs.writeFileSync(path.join(box.repoHooks, name), repo, "utf8");
 }
 
-function wire(box, events, file = "settings.user.json") {
-  const hooks = {};
+function wire(box: Box, events: Record<string, string[]>, file: string = "settings.user.json"): void {
+  const hooks: Record<string, unknown> = {};
   for (const [event, commands] of Object.entries(events)) {
     hooks[event] = [{ matcher: "", hooks: commands.map((command) => ({ type: "command", command })) }];
   }
@@ -69,7 +87,7 @@ function wire(box, events, file = "settings.user.json") {
 // correctly stayed silent, so it is a test failure, not an empty string.
 // `payload` and `extraEnv` exist for the checkout-resolution cases, which are
 // precisely about a session that does NOT sit in the workspace.
-function run(box, payload, extraEnv = {}) {
+function run(box: Box, payload?: Record<string, unknown>, extraEnv: Record<string, string> = {}): string {
   try {
     return execFileSync("node", [HOOK], {
       input: JSON.stringify(
@@ -87,7 +105,8 @@ function run(box, payload, extraEnv = {}) {
         ...extraEnv,
       },
     });
-  } catch (e) {
+  } catch (caught) {
+    const e = caught as { status?: number | null; stderr?: unknown };
     throw new Error(
       `hook exited non-zero (${e.status === undefined ? "no status" : e.status}); it must always exit 0. ` +
         `stderr: ${String(e.stderr || "").slice(0, 400)}`
@@ -95,7 +114,7 @@ function run(box, payload, extraEnv = {}) {
   }
 }
 
-function contextOf(out) {
+function contextOf(out: string): string | null {
   if (!out.trim()) return null;
   try {
     return JSON.parse(out).hookSpecificOutput.additionalContext;
@@ -104,20 +123,23 @@ function contextOf(out) {
   }
 }
 
-function journalOf(box) {
+function journalOf(box: Box): JournalEntry[] {
   const file = path.join(box.claude, ".cache", "hook-integrity", "incidents.jsonl");
   if (!fs.existsSync(file)) return [];
   return fs
     .readFileSync(file, "utf8")
     .split(/\r?\n/)
     .filter(Boolean)
-    .map((line) => JSON.parse(line));
+    .map((line) => JSON.parse(line) as JournalEntry);
 }
+
+// The first journal line, or an empty entry when there is none.
+const NO_ENTRY: JournalEntry = {};
 
 // Returns null for an absent file instead of throwing: a broken hook under test
 // must produce a counted FAIL, not an exception that aborts the run and leaves
 // the remaining assertions unreported.
-function liveText(box, name) {
+function liveText(box: Box, name: string): string | null {
   try {
     return fs.readFileSync(path.join(box.hooks, name), "utf8");
   } catch {
@@ -161,11 +183,11 @@ function liveText(box, name) {
   check("the incident is journalled", Boolean(entry), true);
   check("the journal records the state", entry && entry.state, "DEFEKT");
   check("the journal records the size before", entry && entry.sizeBefore, 0);
-  check("the journal records an mtime before", Boolean(entry && /^\d{4}-\d\d-\d\dT/.test(entry.mtimeBefore)), true);
+  check("the journal records an mtime before", Boolean(entry && /^\d{4}-\d\d-\d\dT/.test(entry.mtimeBefore as string)), true);
   check("the journal records the inode before", Boolean(entry && "inoBefore" in entry), true);
   check("the journal records the sha after the restore", entry && entry.sha256After, sha256(Buffer.from(GOOD)));
   check("the journal records that the restore is proven", entry && entry.restoreProven, true);
-  check("the journal timestamp is ISO", Boolean(entry && !Number.isNaN(Date.parse(entry.ts))), true);
+  check("the journal timestamp is ISO", Boolean(entry && !Number.isNaN(Date.parse(entry.ts as string))), true);
 }
 
 // --- syntactically broken ---------------------------------------------------
@@ -176,8 +198,8 @@ function liveText(box, name) {
   const seen = contextOf(run(box));
   check("a broken hook is reported as rejected by node --check", Boolean(seen && seen.includes("node --check")), true);
   check("a broken hook is restored", liveText(box, "deploy-guard.js"), GOOD);
-  check("a broken hook is journalled as DEFEKT", (journalOf(box)[0] || {}).state, "DEFEKT");
-  check("a broken hook's restore is proven", (journalOf(box)[0] || {}).restoreProven, true);
+  check("a broken hook is journalled as DEFEKT", (journalOf(box)[0] || NO_ENTRY).state, "DEFEKT");
+  check("a broken hook's restore is proven", (journalOf(box)[0] || NO_ENTRY).restoreProven, true);
 }
 
 // --- wired but absent -------------------------------------------------------
@@ -221,7 +243,7 @@ function liveText(box, name) {
   check("an unreadable hook is not silently treated as OK", Boolean(seen && seen.includes("commit-guard.js")), true);
   check("an unreadable hook is not treated as DEFEKT either", Boolean(seen && !seen.includes("RESTORED")), true);
   check("an unreadable hook is not overwritten", fs.statSync(path.join(box.hooks, "commit-guard.js")).isDirectory(), true);
-  check("an unreadable hook is journalled as UNGEPRUEFT", (journalOf(box)[0] || {}).state, "UNGEPRUEFT");
+  check("an unreadable hook is journalled as UNGEPRUEFT", (journalOf(box)[0] || NO_ENTRY).state, "UNGEPRUEFT");
 }
 
 // --- extraction covers every hook event, and only hooks/*.js ----------------
@@ -262,7 +284,7 @@ function liveText(box, name) {
   const seen = contextOf(run(box)) || "";
   check("a wired .mts hook is measured", seen.includes("commit-guard.mts"), true);
   check("a 0-byte .mts hook is restored", liveText(box, "commit-guard.mts"), GOOD);
-  check("a .mts incident is journalled as DEFEKT", (journalOf(box)[0] || {}).state, "DEFEKT");
+  check("a .mts incident is journalled as DEFEKT", (journalOf(box)[0] || NO_ENTRY).state, "DEFEKT");
 }
 
 // --- both live settings files are read --------------------------------------
@@ -282,27 +304,27 @@ function liveText(box, name) {
 // "" for a payload without cwd, and KHEREP_WORKSPACE is set in neither settings
 // file. The hooks are global, so a wiped guard is broken in every session and
 // the repair must not hang on where the session started.
-const RECORDER = path.join(__dirname, "..", "..", "bootstrap", "record-install-source.mts");
+const RECORDER = path.join(import.meta.dirname, "..", "..", "bootstrap", "record-install-source.mts");
 const OUTSIDE = { hook_event_name: "SessionStart", cwd: path.join(TMP, "elsewhere").replace(/\\/g, "/") };
 const NO_CWD = { hook_event_name: "SessionStart" };
 
 // The note is written by the real installer helper, so writer and reader are
 // held to ONE format instead of two hand-made ones that agree by accident.
-function recordNote(box, repoRoot) {
+function recordNote(box: Box, repoRoot: string) {
   return spawnSync("node", [RECORDER, box.claude, repoRoot], { encoding: "utf8" });
 }
 
 // For notes that must point somewhere useless: the helper refuses to write those
 // (see below), and this is the real-world shape - a note recorded while the
 // checkout existed, read back after it moved away.
-function noteRaw(box, repoRoot) {
+function noteRaw(box: Box, repoRoot: string): void {
   const dir = path.join(box.claude, ".cache", "hook-integrity");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "source.json"), JSON.stringify({ repoRoot }), "utf8");
 }
 
 // A broken hook plus its versioned counterpart, wired, in a fresh sandbox.
-function brokenBox() {
+function brokenBox(): Box {
   const box = sandbox();
   place(box, "commit-guard.js", { live: "", repo: GOOD });
   wire(box, { PreToolUse: ["node ~/.claude/hooks/commit-guard.js"] });
@@ -322,7 +344,7 @@ check(`bootstrap/record-install-source.mts is reachable (looked at ${RECORDER})`
     Boolean(seen && seen.includes("verified at the target") && seen.includes(sha256(Buffer.from(GOOD)).slice(0, 12))),
     true
   );
-  check("the note's restore is journalled as proven", (journalOf(box)[0] || {}).restoreProven, true);
+  check("the note's restore is journalled as proven", (journalOf(box)[0] || NO_ENTRY).restoreProven, true);
 }
 
 {
@@ -339,7 +361,7 @@ check(`bootstrap/record-install-source.mts is reachable (looked at ${RECORDER})`
   check("a note pointing nowhere claims no repair", Boolean(seen && !seen.includes("RESTORED")), true);
   check("and says enforcement is off", Boolean(seen && seen.includes("ENFORCEMENT IS OFF")), true);
   check("and leaves the file as found", liveText(box, "commit-guard.js"), "");
-  check("and journals restoreProven false", (journalOf(box)[0] || {}).restoreProven, false);
+  check("and journals restoreProven false", (journalOf(box)[0] || NO_ENTRY).restoreProven, false);
 }
 
 {

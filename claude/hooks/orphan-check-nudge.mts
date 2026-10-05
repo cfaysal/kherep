@@ -9,7 +9,7 @@
  * Report (written by bootstrap/orphan-check.sh):
  *   <CLAUDE_HOME>/.cache/orphan-check/last-report.txt
  *
- * Like drift-check-nudge.js this never waits for the check: the scan reads every
+ * Like drift-check-nudge.mts this never waits for the check: the scan reads every
  * page body in the space and takes minutes. It reads the previous report and,
  * when that report is missing or stale, spawns the check DETACHED for the next
  * session.

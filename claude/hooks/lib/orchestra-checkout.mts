@@ -5,8 +5,8 @@
  * 0-byte commit-guard.js is broken everywhere, not just inside the Kherep
  * workspace, so self-healing must not hang on where a session happens to start.
  *
- * Resolving through the payload cwd alone is what drift-check-nudge.js and
- * smoke-test-nudge.js do, and it was measured to give up completely outside the
+ * Resolving through the payload cwd alone is what drift-check-nudge.mts and
+ * smoke-test-nudge.mts do, and it was measured to give up completely outside the
  * workspace: cwd elsewhere -> "", no cwd -> "", product workspace unset in both
  * live settings files. That is fine for those two (they only skip an optional
  * background refresh) and not fine for a repair.

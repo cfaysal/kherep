@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// Contract test for drift-check-nudge.js. Drives the hook exactly as Claude Code
+// Contract test for drift-check-nudge.mts. Drives the hook exactly as Claude Code
 // does: JSON on stdin, JSON-or-nothing on stdout, always exit 0.
-const { execFileSync, spawnSync } = require("node:child_process");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
+import { execFileSync, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-const HOOK = path.join(__dirname, "drift-check-nudge.js");
+const HOOK = path.join(import.meta.dirname, "drift-check-nudge.mts");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "drift-nudge-"));
 const IN_SCOPE = "d:/Work";
 const OUT_OF_SCOPE = "C:/Users/ExampleUser/Documents";
@@ -16,7 +16,7 @@ let fail = 0;
 let seq = 0;
 
 // Each case gets its own CLAUDE_HOME so the report fixture is isolated.
-function claudeHomeWith(report, ageHours) {
+function claudeHomeWith(report: string | null, ageHours?: number): string {
   const home = path.join(TMP, `home-${++seq}`);
   const dir = path.join(home, ".cache", "drift-check");
   fs.mkdirSync(dir, { recursive: true });
@@ -31,7 +31,7 @@ function claudeHomeWith(report, ageHours) {
   return home;
 }
 
-function run(stdinObj, home, env = {}) {
+function run(stdinObj: Record<string, unknown>, home: string, env: Record<string, string> = {}): string {
   try {
     return execFileSync("node", [HOOK], {
       input: JSON.stringify(stdinObj),
@@ -43,7 +43,7 @@ function run(stdinObj, home, env = {}) {
   }
 }
 
-function contextOf(out) {
+function contextOf(out: string): string | null {
   if (!out.trim()) return null;
   try {
     return JSON.parse(out).hookSpecificOutput.additionalContext;
@@ -52,7 +52,7 @@ function contextOf(out) {
   }
 }
 
-function check(label, actual, expected) {
+function check(label: string, actual: unknown, expected: unknown): void {
   if (actual === expected) {
     pass++;
     console.log(`PASS | ${label}`);
@@ -203,9 +203,9 @@ const observedReport = path.join(TMP, "observed-report.txt");
 fs.mkdirSync(path.join(atomicWorkspace, ".claude"), { recursive: true });
 fs.mkdirSync(atomicCredentials, { recursive: true });
 fs.mkdirSync(atomicBin, { recursive: true });
-const bashPath = (value) =>
+const bashPath = (value: string): string =>
   process.platform === "win32"
-    ? value.replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`).replace(/\\/g, "/")
+    ? value.replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`).replace(/\\/g, "/")
     : value;
 const nodeShim = path.join(atomicBin, "node");
 fs.writeFileSync(
@@ -214,7 +214,7 @@ fs.writeFileSync(
   "utf8"
 );
 fs.chmodSync(nodeShim, 0o755);
-const driftScript = path.join(__dirname, "..", "..", "bootstrap", "drift-check.sh");
+const driftScript = path.join(import.meta.dirname, "..", "..", "bootstrap", "drift-check.sh");
 const atomicRun = spawnSync("bash", [bashPath(driftScript)], {
   encoding: "utf8",
   env: {
@@ -276,7 +276,7 @@ fs.writeFileSync(
 );
 
 // The spawn is detached, so the marker may appear a tick after the hook exits.
-function waitForMarker(timeoutMs = 4000) {
+function waitForMarker(timeoutMs: number = 4000): boolean {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (fs.existsSync(marker)) return true;
@@ -285,7 +285,7 @@ function waitForMarker(timeoutMs = 4000) {
   return fs.existsSync(marker);
 }
 
-function refreshRun(home, extraEnv = {}, workspace = refreshWorkspace) {
+function refreshRun(home: string, extraEnv: Record<string, string> = {}, workspace: string = refreshWorkspace): boolean {
   fs.rmSync(marker, { force: true });
   run({ hook_event_name: "SessionStart", cwd: workspace }, home, {
     ...SHIM_ENV,

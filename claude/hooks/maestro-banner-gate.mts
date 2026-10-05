@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * maestro-banner-gate.js  -  Stop hook (Orchestra visibility enforcement)
+ * maestro-banner-gate.mts  -  Stop hook (Orchestra visibility enforcement)
  *
  * ROUTING.md Section 1: "On the first substantial orchestra turn, emit once:
  * [Maestro on | routing loaded | evidence-first]". Without enforcement the
@@ -19,23 +19,30 @@
  * in the session the gate is permanently silent - it enforces "once", not
  * "every reply". Any hook error or missing input data fails open.
  */
-const fs = require("fs");
-const { isKherepScope } = require("./lib/workspace-scope.mts");
+import fs from "node:fs";
+import { isKherepScope, type ScopePayload } from "./lib/workspace-scope.mts";
 // The turn boundary and the "substantial" predicate are shared with
 // observation-stop.mts, so both Stop hooks judge the same turns.
-const {
+import {
   endingTurn,
   isUserPrompt,
   readTranscript,
   textOf,
   turnIsSubstantial,
-} = require("./lib/turn-substance.mts");
+  type TranscriptEntry,
+} from "./lib/turn-substance.mts";
+
+// The fields this hook reads from a Stop payload.
+interface StopPayload extends ScopePayload {
+  stop_hook_active?: unknown;
+  transcript_path?: unknown;
+}
 
 // The complete routing contract, with harmless spacing/casing tolerance.
 const BANNER =
   /\[\s*maestro\s+on\s*\|\s*routing\s+loaded\s*\|\s*evidence-first\s*\]/i;
 
-function readStdin() {
+function readStdin(): string {
   try {
     return fs.readFileSync(0, "utf8");
   } catch {
@@ -43,18 +50,18 @@ function readStdin() {
   }
 }
 
-function bannerSeen(entries) {
+function bannerSeen(entries: TranscriptEntry[]): boolean {
   return entries.some((e) => {
     const msg = e && e.message;
-    return Boolean(msg) && msg.role === "assistant" && BANNER.test(textOf(msg));
+    return Boolean(msg) && msg!.role === "assistant" && BANNER.test(textOf(msg));
   });
 }
 
-function main() {
+function main(): void {
   const input = readStdin();
-  let data = {};
+  let data: StopPayload = {};
   try {
-    data = JSON.parse(input || "{}");
+    data = JSON.parse(input || "{}") as StopPayload;
   } catch {
     return; // exit 0
   }
@@ -65,7 +72,7 @@ function main() {
   // 1. Scope by normalized cwd/config, never by a host-specific transcript slug.
   if (!isKherepScope(data)) return;
 
-  const entries = readTranscript(data.transcript_path);
+  const entries = readTranscript(data.transcript_path as string);
   if (!entries || !entries.length) return; // 3./4. undecidable -> fail open
 
   if (bannerSeen(entries)) return;

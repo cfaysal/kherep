@@ -3,7 +3,7 @@
  * record-install-source.mts  -  called by bootstrap/install.sh
  *
  * Leaves a note under CLAUDE_HOME saying which checkout this install came from,
- * so claude/hooks/live-hook-integrity.js can restore a wiped hook from the
+ * so claude/hooks/live-hook-integrity.mts can restore a wiped hook from the
  * versioned source in ANY session, not only in one started inside the workspace.
  * The hooks are global; a 0-byte guard is broken everywhere.
  *

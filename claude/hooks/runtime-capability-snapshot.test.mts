@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { spawnSync } = require("child_process");
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 
-const hook = path.join(__dirname, "runtime-capability-snapshot.js");
+const hook = path.join(import.meta.dirname, "runtime-capability-snapshot.mts");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "capability-snapshot-"));
 const claudeHome = path.join(root, ".claude");
 fs.mkdirSync(path.join(claudeHome, "plugins"), { recursive: true });
@@ -30,7 +30,7 @@ fs.writeFileSync(path.join(claudeHome, "kherep", "local-inference", "config.json
   },
 }));
 
-function run(payload, envExtra = {}) {
+function run(payload: Record<string, unknown>, envExtra: Record<string, string> = {}) {
   return spawnSync("node", [hook], {
     input: JSON.stringify(payload),
     encoding: "utf8",
@@ -48,7 +48,7 @@ function run(payload, envExtra = {}) {
 
 let pass = 0;
 let fail = 0;
-function check(name, condition) {
+function check(name: string, condition: boolean): void {
   condition ? pass++ : fail++;
   console.log(`${condition ? "PASS" : "FAIL"} | ${name}`);
 }

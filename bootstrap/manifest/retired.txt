@@ -4,6 +4,11 @@
 # hashed with CRLF folded to LF: `project/<path> sha256:<hex>[,<hex>...]` (lowercase hex). Only
 # matching content is parked; anything else is kept and reported as KEEP. Claude-home entries take no hashes.
 # An entry that is absent on the host is skipped. drift-check.sh reports one that is still live, as information.
+hooks/clq-accept-gate.js
+hooks/clq-accept-gate.test.js
+hooks/critical-file-integrity.js
+hooks/drift-check-nudge.js
+hooks/drift-check-nudge.test.js
 hooks/drift-managed-path-watch.js
 hooks/drift-managed-path-watch.test.js
 hooks/em-dash-watch.js
@@ -11,12 +16,24 @@ hooks/lib/dispatch-policy.js
 hooks/lib/orchestra-checkout.js
 hooks/lib/private-path-policy.js
 hooks/lib/real-path-policy.js
+hooks/lib/semver-compare.js
+hooks/lib/semver-compare.test.js
 hooks/lib/workspace-scope.js
 hooks/lib/workspace-scope.test.js
+hooks/live-hook-integrity.js
+hooks/live-hook-integrity.test.js
 hooks/loc-watch.js
+hooks/maestro-banner-gate.js
+hooks/maestro-banner-gate.test.js
+hooks/maestro-discipline.js
 hooks/manifest-watch.js
 hooks/memo-retro-reminder.js
+hooks/orchestra-default.js
+hooks/runtime-capability-snapshot.js
+hooks/runtime-capability-snapshot.test.js
 hooks/simplify-nudge.js
+hooks/smoke-test-nudge.js
+hooks/smoke-test-nudge.test.js
 hooks/umlaut-translit-watch.js
 kherep/central-brain/selection.json
 project/tools/atl-jira-ccoder.mjs sha256:245eea2ac4ca31c1ded206b115b5f68392265fa166557f84e4e835f2091b9ff8,4571011340209682e3f4d07cc7fc32ba23adf6e8902a30835941226cc8735aa5,4af97fa37f8a7336e0cf303dc06b80e6c839ee033471f7b4e9195f5934821973,5cc670f5f099a8576d503ead816dd9970558d583a063745566e492d028678ca5,71aeed35ce49854cc47eefe563a35985d12c8a74dcf73c02e1f5d296bf29b152,782098e91bfe3a7e70d542d2adc27c4ae194edcc67981c8472d7d3228f2c2c54,79c03784d166e775d3f545c24da147844a7ae03e03e0234446075b54f9ae9d23,b0db33957e85ecf7c168ff18a2148d6ab7b40b6611cab335b6f56327c6ef8c1d,bf27adbc4193e05e66174df44b8b91045711108ebc168dd6dd03d8650b1ec925,df41b4ca7daf8ca14954450d537faa81cfc81afca71d13cca6ffe98c76abcfac,e7101b34303f42fffe6bc5a07d5658ec199231636d834252daf9de96106aae8e,f88b829bfedb6ce8982861548c6f29d573b8f2faa5c516160b4f7677fadb4ddc
