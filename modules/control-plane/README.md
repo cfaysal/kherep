@@ -440,15 +440,15 @@ The progress code a sender reads for a refused message (issue #230) names the gu
 
 | Refusal (reason in `wake.jsonl`) | Progress |
 | --- | --- |
-| kill switch; sessions not enabled; runtime not enabled (target or intercom, or the new session's runtime) | `waiting/wake-disabled` |
+| kill switch; sessions not enabled; runtime not enabled (target or intercom, or, before the attempt, the new session's runtime) | `waiting/wake-disabled` |
 | `delegate.accept` off; no accept rule for the sender; an operator sender; working directory not absolute, missing or outside the workspace roots | `waiting/wake-not-authorized` |
 | reply depth limit | `waiting/reply-limit` |
-| recorded mode `bypassPermissions`; the new session's permission mode not allowed | `waiting/permission-restricted` |
+| recorded mode `bypassPermissions`; before the attempt, the new session's permission mode not allowed | `waiting/permission-restricted` |
 | session or intercom session stopped by its operator | `waiting/operator-stopped` |
 | `maxConcurrent` or `maxStartsPerDay` before the attempt; a pending readiness probe; turn spacing | `waiting/retry-pending` |
-| turn budget exhausted; `maxStartsPerDay` for the new session after a failed resume | `waiting/budget-exhausted` |
+| turn budget exhausted | `waiting/budget-exhausted` |
 | runtime not signed in | state `refused`, reason `target runtime <runtime> not ready (sign-in required)` |
-| the intercom start, or a resume and then the start, failed | `failed/fallback-failed` |
+| the intercom start, or a resume and then the start, failed; after a failed resume, a new start the policy refuses (runtime, permission mode, `maxStartsPerDay`): the attempt is marked and the message is not tried again, so it is a failed delivery, with reason `intercom session not resumed: <reason>; new start refused: <policy reason>` | `failed/fallback-failed` |
 
 ## Security model
 
