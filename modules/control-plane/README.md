@@ -436,6 +436,20 @@ Issues #102 and #105, operator decisions of 2026-09-27: a message must reach its
 - **No loops.** A message causes at most one attempt (`closedAttempt` in its inbox record), a closed session gets one run per round, and none while a run for it is active. These sessions do not use the regular Worker task reporting path: their task records carry `local` `intercom` (`resume` in records written before issue #105), send no `task.report`, and their messages carry no task id. When owner task control is enabled, a separate metadata-only registration associates their local task with the authenticated source message. While such a session is active it counts against `maxConcurrent`, and the node sends no task requests, as for any active task.
 - Every outcome is a line in `wake.jsonl` with the action `closed-session` and the outcome `reused` (reason `intercom session running` or `intercom session resumed`, with the intercom session's `taskId`), `new` or `refused`, plus the reason; a stopped previous copy has the outcome `retired-copy` and one kept after 30 busy rounds `copy-kept`, each with its `sessionId`, `shortId` and `taskId`; message text is never written.
 
+The progress code a sender reads for a refused message (issue #230) names the guard that refused it; only a start or resume that failed is a failure. A refusal before the attempt leaves the message for the next round. All codes exist since issue #197, so `isNodeMessageStatusBody` on an older Worker accepts them.
+
+| Refusal (reason in `wake.jsonl`) | Progress |
+| --- | --- |
+| kill switch; sessions not enabled; runtime not enabled (target or intercom, or the new session's runtime) | `waiting/wake-disabled` |
+| `delegate.accept` off; no accept rule for the sender; an operator sender; working directory not absolute, missing or outside the workspace roots | `waiting/wake-not-authorized` |
+| reply depth limit | `waiting/reply-limit` |
+| recorded mode `bypassPermissions`; the new session's permission mode not allowed | `waiting/permission-restricted` |
+| session or intercom session stopped by its operator | `waiting/operator-stopped` |
+| `maxConcurrent` or `maxStartsPerDay` before the attempt; a pending readiness probe; turn spacing | `waiting/retry-pending` |
+| turn budget exhausted; `maxStartsPerDay` for the new session after a failed resume | `waiting/budget-exhausted` |
+| runtime not signed in | state `refused`, reason `target runtime <runtime> not ready (sign-in required)` |
+| the intercom start, or a resume and then the start, failed | `failed/fallback-failed` |
+
 ## Security model
 
 - **Node identity.** `kherep-node node onboard` generates an Ed25519 key pair locally. The private key is written as PKCS#8 PEM to `node-ed25519.pem` in the node's config directory with mode `0600` on POSIX systems; on Windows it inherits the ACL of the per-user config directory. It never leaves the host.

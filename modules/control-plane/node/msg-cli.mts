@@ -67,7 +67,7 @@ const PROGRESS_TEXT: Record<string, string> = {
   "wake-unconfirmed": "the automatic wake was not confirmed; start the target turn to retry delivery",
   "retry-pending": "delivery will retry after the current local limit clears",
   "wake-disabled": "automatic wake is disabled on the target node; start the target turn to retry delivery",
-  "wake-not-authorized": "the target node did not authorize automatic wake; start the target turn to retry delivery",
+  "wake-not-authorized": "the target node's policy did not authorize automatic delivery; start the target turn to retry delivery",
   "permission-restricted": "the target permission mode blocks automatic wake; start the target turn to retry delivery",
   "operator-stopped": "the target session was stopped by its operator and requires an explicit continue",
   "reply-limit": "the automatic reply depth limit was reached",

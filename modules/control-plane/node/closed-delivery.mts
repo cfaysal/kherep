@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import { OPERATOR_NODE_ID } from "../protocol-messages.mts";
+import { OPERATOR_NODE_ID, type MessageProgressCode } from "../protocol-messages.mts";
 import { DELEGATED_PERMISSION_MODES, type PermissionMode, type TaskRuntime } from "../protocol-tasks.mts";
 import { bypassesPermissions, rememberedMode, takeTurn, wakeAudit } from "./autonomy.mts";
 import { stillRuns } from "./codex-process.mts";
@@ -116,36 +116,28 @@ const runs = (deps: RunnerDeps, task: TaskRecord): boolean => isActive(task) || 
 async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now: number): Promise<boolean> {
   const { paths, policy } = deps;
   const sessionId = found.sessionId;
-  const refusalCode = (reason: string): Parameters<typeof progressRecords>[3] => {
-    if (reason.includes("budget")) return "budget-exhausted";
-    if (reason.includes("depth")) return "reply-limit";
-    if (reason.includes("permission")) return "permission-restricted";
-    if (reason.includes("stopped by operator")) return "operator-stopped";
-    if (reason.includes("policy")) return "wake-not-authorized";
-    if (reason.includes("disabled") || reason.includes("not enabled")) return "wake-disabled";
-    if (reason.includes("cannot be resumed") || reason.includes("no intercom")) return "fallback-failed";
-    return "fallback-failed";
-  };
-  const refuse = (reason: string, records: InboxRecord[] = all): false => {
-    progressRecords(paths, records, refusalCode(reason) === "fallback-failed" ? "failed" : "waiting", refusalCode(reason), now);
+  // Issue #230: each refusal names its code. A policy refusal waits with the
+  // code of its guard; only a launch that failed is fallback-failed.
+  const refuse = (reason: string, code: MessageProgressCode, records: InboxRecord[] = all): false => {
+    progressRecords(paths, records, code === "fallback-failed" ? "failed" : "waiting", code, now);
     audit(paths, now, sessionId, records, "refused", reason);
     return false;
   };
   const sessions = policy.sessions;
-  if (fs.existsSync(killSwitch(paths))) return refuse("wake disabled by the kill switch");
-  if (!sessions?.enabled) return refuse("sessions are not enabled on this node");
-  if (!sessions.delegate.accept) return refuse("this node does not accept delegated tasks");
+  if (fs.existsSync(killSwitch(paths))) return refuse("wake disabled by the kill switch", "wake-disabled");
+  if (!sessions?.enabled) return refuse("sessions are not enabled on this node", "wake-disabled");
+  if (!sessions.delegate.accept) return refuse("this node does not accept delegated tasks", "wake-not-authorized");
   const local = readLocalSessions(paths);
   const accepted = all.filter((r) => acceptsMessage(policy, r.toSession, r.from.nodeId, local));
-  if (accepted.length < all.length) refuse("not accepted by node policy", all.filter((r) => !accepted.includes(r)));
+  if (accepted.length < all.length) refuse("not accepted by node policy", "wake-not-authorized", all.filter((r) => !accepted.includes(r)));
   const deep = accepted.filter((r) => (r.depth ?? 0) >= MAX_REPLY_DEPTH);
-  if (deep.length > 0) refuse("reply depth limit", deep);
+  if (deep.length > 0) refuse("reply depth limit", "reply-limit", deep);
   const records = accepted.filter((r) => !deep.includes(r));
   if (records.length === 0) return false;
-  if (bypassesPermissions(found.mode)) return refuse("permission mode bypassPermissions");
+  if (bypassesPermissions(found.mode)) return refuse("permission mode bypassPermissions", "permission-restricted");
   // An intercom session answers with msg send, which cannot reach the operator API.
-  if (records[0].from.nodeId === OPERATOR_NODE_ID) return refuse("an operator message goes to no intercom session");
-  if (found.task?.operatorStoppedAt !== undefined) return refuse("session stopped by operator");
+  if (records[0].from.nodeId === OPERATOR_NODE_ID) return refuse("an operator message goes to no intercom session", "wake-not-authorized");
+  if (found.task?.operatorStoppedAt !== undefined) return refuse("session stopped by operator", "operator-stopped");
   // Running already: its hook takes the messages.
   if (listTasks(paths).some((t) => t.sessionId === sessionId && isActive(t))) {
     progressRecords(paths, records, "waiting", "target-busy", now);
@@ -156,9 +148,9 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
     return false;
   }
   const intercom = intercomFor(paths, records[0]);
-  if (intercom?.operatorStoppedAt !== undefined) return refuse("intercom session stopped by operator");
+  if (intercom?.operatorStoppedAt !== undefined) return refuse("intercom session stopped by operator", "operator-stopped");
   const runtime = intercom ? intercom.runtime ?? "claude" : found.runtime;
-  if (!sessions.runtimes.includes(runtime)) return refuse(`runtime ${runtime} is not enabled on this node`);
+  if (!sessions.runtimes.includes(runtime)) return refuse(`runtime ${runtime} is not enabled on this node`, "wake-disabled");
   if (intercom && runs(deps, intercom)) {
     // Its delivery hook, or the wake through its task grant, offers them.
     const linked = attachDelivery(paths, intercom, records.map((r) => r.messageId));
@@ -182,16 +174,28 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
     audit(paths, now, sessionId, records, "refused", blocked);
     return false;
   }
+  // Refused before the attempt, a message is tried again next round, once the limit clears.
   const limit = overLimit(deps, now, reusable?.taskId);
-  if (limit) return refuse(limit);
+  if (limit) return refuse(limit, "retry-pending");
   const cwd = resolveCwd(sessions, reusable?.cwd ?? found.cwd, deps.realpath);
-  if (!cwd.ok) return refuse(cwd.reason);
+  if (!cwd.ok) return refuse(cwd.reason, "wake-not-authorized");
+  // What admitStart would refuse for a new intercom session, checked here so it reads as policy.
+  const mode: PermissionMode = delegated(deps, sessions.defaultPermissionMode) ? sessions.defaultPermissionMode : "default";
+  const startRefusal = (afterResume: boolean): [string, MessageProgressCode] | null => {
+    if (!sessions.runtimes.includes(found.runtime)) return [`runtime ${found.runtime} is not enabled on this node`, "wake-disabled"];
+    if (!sessions.permissionModes.includes(mode)) return [`permission mode ${mode} is not allowed on this node`, "permission-restricted"];
+    // maxStartsPerDay, which a resume does not count (maxConcurrent passed above).
+    const daily = afterResume ? overLimit(deps, now) : null;
+    return daily ? [daily, "budget-exhausted"] : null;
+  };
+  const before = reusable ? null : startRefusal(false);
+  if (before) return refuse(...before);
   const budget = takeTurn(paths, reusable?.sessionId ?? sessionId, now);
   if (budget === "spacing" || budget === "locked") {
     progressRecords(paths, records, "waiting", "retry-pending", now);
     return false;
   }
-  if (budget === "exhausted") return refuse("budget of autonomous turns exhausted");
+  if (budget === "exhausted") return refuse("budget of autonomous turns exhausted", "budget-exhausted");
   progressRecords(paths, records, "fallback", "fallback-starting", now);
   for (const r of records) markClosedAttempt(paths.inbox, r.messageId, now, reusable?.sessionId);
   let why = intercom ? "its intercom session cannot be resumed" : undefined;
@@ -207,11 +211,15 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
       return true;
     }
     why = `intercom session not resumed: ${failed}`;
+    const after = startRefusal(true);
+    if (after) {
+      refuse(`${why}; ${after[0]}`, after[1]);
+      return true;
+    }
   }
-  const mode: PermissionMode = delegated(deps, sessions.defaultPermissionMode) ? sessions.defaultPermissionMode : "default";
   const started = await startIntercom(deps, { sessionId, runtime: found.runtime, cwd: cwd.cwd }, records, mode);
   if (started === null) {
     audit(paths, now, sessionId, records, "new", why);
-  } else refuse(`${why ? `${why}; ` : ""}no intercom session: ${started}`);
+  } else refuse(`${why ? `${why}; ` : ""}no intercom session: ${started}`, "fallback-failed");
   return true;
 }
