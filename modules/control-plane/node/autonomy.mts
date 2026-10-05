@@ -28,6 +28,8 @@ export type AutonomyAction = "wake" | "stuck-offer" | "budget" | "depth-limit" |
   | "policy-unreadable"
   // codex-wake.mts: the runtime's readiness probe failed; the messages were refused (issue #197).
   | "runtime-not-ready"
+  // codex-wake.mts: the policy refused the task's working directory; the messages wait (issue #244).
+  | "cwd-refused"
   // wake-hook.mts: a headless run (claude -p) ended its listener before the first poll (issue #235).
   | "headless";
 

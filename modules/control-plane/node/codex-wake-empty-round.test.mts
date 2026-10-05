@@ -159,15 +159,15 @@ test("wakeTask rereads a pending message changed after the routing snapshot", as
 });
 
 for (const sessions of [{ enabled: false }, { runtimes: ["claude"] }]) {
-  test(`disabled Codex sessions read no inbox: ${JSON.stringify(sessions)}`, async (t) => {
+  // Issue #244: the waiting message is read to label it wake-disabled, but nothing starts.
+  test(`disabled Codex sessions start no resume: ${JSON.stringify(sessions)}`, async (t) => {
     const node = endedTasks(t);
     const deps = node.deps();
     Object.assign(deps.policy.sessions!, sessions);
-    message(node, node.tasks[0].name, "accepted", node.tasks[0]);
-    const reads = countInboxReads(t, node);
+    const record = message(node, node.tasks[0].name, "accepted", node.tasks[0]);
     await pollCodexInbound(deps);
-    assert.equal(reads(), 0);
     assert.equal(node.attempts.length, 0);
+    assert.equal(getMessage(node.paths.inbox, record.messageId)?.state, "accepted");
   });
 }
 

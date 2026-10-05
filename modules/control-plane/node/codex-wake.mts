@@ -52,8 +52,6 @@ export function note(paths: NodePaths, now: number, sessionId: string, messageId
 }
 
 export async function pollCodexInbound(deps: RunnerDeps, log: (line: string) => void = () => {}): Promise<void> {
-  const sessions = deps.policy.sessions;
-  if (!sessions?.enabled || !sessions.runtimes.includes("codex")) return;
   const tasks = listTasks(deps.paths).filter((record) => record.runtime === "codex" && isPlainSessionId(record.sessionId)
     && !isActive(record) && record.operatorStoppedAt === undefined);
   if (tasks.length === 0) return;
@@ -112,7 +110,9 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   const waiting = [...fresh, ...stuck];
   const due = ids(waiting);
   if (due.length === 0) return;
-  if (fs.existsSync(killSwitch(paths))) {
+  // Sessions not enabled or codex not listed hold the resume as the kill switch does (issue #244).
+  const sessions = policy.sessions;
+  if (!sessions?.enabled || !sessions.runtimes.includes("codex") || fs.existsSync(killSwitch(paths))) {
     explain(waiting, "wake-disabled");
     return note(paths, now, sessionId, due, "disabled");
   }
@@ -132,8 +132,9 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   const cwd = resolveCwd(deps.policy.sessions!, record.cwd, deps.realpath);
   if (!cwd.ok) {
     explain(waiting, "wake-not-authorized");
-    log(`kherep-node: not resuming task ${record.taskId} for messages: ${cwd.reason}`);
-    return;
+    // Logged once per message, not at every round (issue #244).
+    if (due.some((id) => noted.get(id) !== "cwd-refused")) log(`kherep-node: not resuming task ${record.taskId} for messages: ${cwd.reason}`);
+    return note(paths, now, sessionId, due, "cwd-refused");
   }
   // Issue #197: a Codex that cannot run a turn gets no resume; the messages are
   // refused with a fixed reason. A pending probe keeps them waiting.

@@ -471,9 +471,9 @@ The exchange round's resume of an ended [Codex task](#codex-tasks) for its messa
 
 | Codex task resume held by (audit action in `wake.jsonl`, or daemon log line) | Progress |
 | --- | --- |
-| neither the `wake` allowlist nor the task grant (`not-allowlisted`); working directory not absolute, missing or outside the workspace roots (log `not resuming task <taskId> for messages: <reason>`) | `waiting/wake-not-authorized` |
+| neither the `wake` allowlist nor the task grant (`not-allowlisted`); working directory not absolute, missing or outside the workspace roots (`cwd-refused`, and the log line `not resuming task <taskId> for messages: <reason>`, both once per message) | `waiting/wake-not-authorized` |
 | reply depth (`depth-limit`) | `waiting/reply-limit` |
-| kill switch (`disabled`) | `waiting/wake-disabled` |
+| kill switch; sessions not enabled, or codex not in `sessions.runtimes` (`disabled`) | `waiting/wake-disabled` |
 | recorded mode `bypassPermissions` (`permission-mode`) | `waiting/permission-restricted` |
 | task stopped by its operator | `waiting/operator-stopped` |
 | a run of the task still active or still ending | `waiting/target-busy` |
