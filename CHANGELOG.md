@@ -357,6 +357,23 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: a headless `claude -p` run no longer hangs until the wake
+  hook's 24-hour timeout (issue #235). On Windows with Claude Code 2.1.289 the
+  run waited for the wake listener, its only child process, and sent no API
+  request. The listener still arms as before, so the arming order of a
+  session's listeners is unchanged, but before its first poll it decides the
+  run mode from one process listing. For a headless run it removes its own
+  lock and scope (and the mode file this arming created), audits `headless`
+  and exits 0. A process of the `--bg` machinery (`--bg-pty-host`, or the
+  `daemon`, `bg-pty-host` and `bg-spare` subcommands on macOS) or its child,
+  which includes the daemon's task and intercom sessions, is interactive; otherwise
+  a run is headless when `CLAUDE_CODE_ENTRYPOINT` is `sdk-cli` or when the
+  first Claude Code process above the hook has the option `-p` or `--print`.
+  Windows command lines are split with their quoting, so a `-p` in a quoted
+  prompt does not count. Anything undecided keeps listening. Task sessions no
+  longer inherit the daemon's `CLAUDE_CODE_ENTRYPOINT` and `CLAUDECODE`. On
+  macOS and Linux, where `ps` loses the quoting, a session outside the `--bg`
+  machinery whose prompt holds a separate `-p` is taken for headless.
 - Control Plane: `msg status` no longer calls a policy refusal of
   closed-session delivery a failed delivery session (issue #230). A message
   for a closed session whose working directory lay outside the node's

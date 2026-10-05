@@ -186,6 +186,19 @@ export function sweepListeners(paths: NodePaths, deps: SweepDeps = {}): SweepRes
   return result;
 }
 
+// A listener's own lock and then its scope, each removed only while it still
+// carries the listener's token, by the same rename and compare: a listener
+// that armed meanwhile keeps both (a headless run, wake-hook.mts, issue #235).
+// True when both were its own.
+export function releaseOwn(paths: NodePaths, session: string, token: string, now: number): boolean {
+  let own = true;
+  for (const file of [listenerLock(paths, session), listenerScope(paths, session)]) {
+    const raw = readIfPresent(file);
+    own = raw !== null && parse<{ token?: unknown }>(raw)?.token === token && takeIfUnchanged(file, raw, now, {}) && own;
+  }
+  return own;
+}
+
 // The daemon's sweep: at once, then every SWEEP_INTERVAL_MS. Returns the stop.
 export function scheduleListenerSweep(paths: NodePaths, log: (line: string) => void): () => void {
   const run = (): void => {

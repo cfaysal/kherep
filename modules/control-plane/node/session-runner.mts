@@ -9,7 +9,7 @@ import type { NodePolicy } from "./policy.mts";
 import { notReady, type Readiness } from "./runtime-readiness.mts";
 import { claudeCall, findClaude, LIST_TIMEOUT_MS, type Exec } from "./sessions.mts";
 import { admitStart, overLimit, refuse, trim } from "./task-admission.mts";
-import { withNodeOnPath } from "./task-env.mts";
+import { withNodeOnPath, withoutSessionMarkers } from "./task-env.mts";
 import { queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
 import { frameFollowUp } from "./task-prompt.mts";
 
@@ -63,12 +63,13 @@ const execClaude: Exec = (file, args, options) => new Promise((resolve, reject) 
   });
 });
 
-// A task session (cwd given) gets the node directory first on PATH (task-env.mts).
+// A task session (cwd given) gets the node directory first on PATH and none of
+// the daemon's own Claude Code session markers (task-env.mts).
 export async function runClaude(deps: RunnerDeps, args: string[], cwd?: string): Promise<string> {
   const claude = (deps.findClaude ?? findClaude)();
   if (!claude) throw new Error("claude is not installed on this node");
   const run = claudeCall(claude, args, args[0] === "agents" ? LIST_TIMEOUT_MS : RUN_TIMEOUT_MS, deps.platform, deps.comSpec);
-  return (deps.exec ?? execClaude)(run.file, run.args, { ...run.options, ...(cwd ? { cwd, env: withNodeOnPath(process.env) } : {}) });
+  return (deps.exec ?? execClaude)(run.file, run.args, { ...run.options, ...(cwd ? { cwd, env: withoutSessionMarkers(withNodeOnPath(process.env)) } : {}) });
 }
 
 // The rows of `claude agents --json --all`; rejects when the listing fails.

@@ -27,7 +27,9 @@ export type AutonomyAction = "wake" | "stuck-offer" | "budget" | "depth-limit" |
   // wake-hook.mts: the policy file turned unreadable; the listener keeps its last good policy (issue #213).
   | "policy-unreadable"
   // codex-wake.mts: the runtime's readiness probe failed; the messages were refused (issue #197).
-  | "runtime-not-ready";
+  | "runtime-not-ready"
+  // wake-hook.mts: a headless run (claude -p) ended its listener before the first poll (issue #235).
+  | "headless";
 
 export const listenerDir = (paths: NodePaths): string => path.join(paths.dir, "listeners");
 export const wakeAudit = (paths: NodePaths): string => path.join(paths.dir, "wake.jsonl");
@@ -43,7 +45,7 @@ export const bypassesPermissions = (permissionMode: unknown): boolean => permiss
 // The permission mode the session's last UserPromptSubmit or Stop input
 // reported. A SessionStart input carries none (measured on Claude Code
 // 2.1.258), so the listener armed there falls back to it (issue #97).
-const modeFile = (paths: NodePaths, sessionId: string): string => path.join(listenerDir(paths), `${sessionId}.mode.json`);
+export const modeFile = (paths: NodePaths, sessionId: string): string => path.join(listenerDir(paths), `${sessionId}.mode.json`);
 export function rememberMode(paths: NodePaths, sessionId: string, permissionMode: unknown): void {
   if (typeof permissionMode !== "string" || !/^[A-Za-z-]{1,32}$/.test(permissionMode)) return;
   ensureDir(listenerDir(paths));
