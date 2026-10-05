@@ -77,7 +77,7 @@ test("msg stop for a message delivered into the sender's own task stops that tas
     { name: "task.control.submit", action: "stop", taskId: TASK, expectedRunVersion: RUN },
   ]);
   assert.ok(run.out.includes(`message ${MESSAGE} was delivered into the existing session winbox/${SESSION} of your own task ${TASK}; `
-    + "stopping that task"), run.out.join("\n"));
+    + "stopping that task (later messages to it wait until an explicit continue of that task)"), run.out.join("\n"));
   assert.equal(run.out.at(-1), `stopped: task ${TASK}; its process and child processes ended at the target (task stopped)`);
 });
 

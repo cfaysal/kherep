@@ -53,7 +53,7 @@ async function stopDelivered(io: StopIo, messageId: string, denied: StopRun, con
     return fail(io, `not stopped: message ${messageId} was delivered into ${where} (progress ${sent.progress?.code ?? sent.state}), `
       + "which matches no task you own; it cannot be stopped by message id");
   }
-  io.out(`message ${messageId} was delivered into ${where} of your own task ${taskId}; stopping that task`);
+  io.out(`message ${messageId} was delivered into ${where} of your own task ${taskId}; stopping that task (later messages to it wait until an explicit continue of that task)`);
   return report(io, await stopRun({ name: "task.control.submit", requestId: crypto.randomUUID(), action: "status", taskId }, context,
     expected, "msg stop"));
 }
