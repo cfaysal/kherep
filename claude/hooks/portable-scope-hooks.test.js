@@ -4,8 +4,8 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 
 const hooks = [
-  { file: "maestro-discipline.js", marker: "MAESTRO TURN CHECK" },
-  { file: "orchestra-default.js", marker: "KHEREP ORCHESTRA ACTIVE" },
+  { file: "maestro-discipline.mts", marker: "MAESTRO TURN CHECK" },
+  { file: "orchestra-default.mts", marker: "KHEREP ORCHESTRA ACTIVE" },
 ];
 let pass = 0;
 let fail = 0;

@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// Contract test for smoke-test-nudge.js. Drives the hook exactly as Claude Code
+// Contract test for smoke-test-nudge.mts. Drives the hook exactly as Claude Code
 // does: JSON on stdin, JSON-or-nothing on stdout, always exit 0. The last block
 // drives bootstrap/smoke-test.sh itself, because the nudge is only worth
 // anything if the report it reads is really written the way it assumes.
-const { execFileSync, spawnSync } = require("node:child_process");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
+import { execFileSync, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-const HOOK = path.join(__dirname, "smoke-test-nudge.js");
+const HOOK = path.join(import.meta.dirname, "smoke-test-nudge.mts");
 
 // The repo layout puts the script two levels up. The INSTALLED copy sits at
 // <CLAUDE_HOME>/hooks/, where that path resolves to <home>/bootstrap - which
@@ -16,11 +16,11 @@ const HOOK = path.join(__dirname, "smoke-test-nudge.js");
 // that had nothing to do with the nudge (OP-672). Resolve the checkout the same
 // way the hook itself does when it spawns a refresh, then fall back to naming
 // the problem instead of producing a fan of unrelated failures.
-function resolveSmoke() {
-  const repoRelative = path.join(__dirname, "..", "..", "bootstrap", "smoke-test.sh");
+async function resolveSmoke(): Promise<string> {
+  const repoRelative = path.join(import.meta.dirname, "..", "..", "bootstrap", "smoke-test.sh");
   if (fs.existsSync(repoRelative)) return repoRelative;
   try {
-    const { workspaceForPayload, joinPathLike } = require("./lib/workspace-scope.mts");
+    const { workspaceForPayload, joinPathLike } = await import("./lib/workspace-scope.mts");
     const workspace = workspaceForPayload({ cwd: process.cwd() });
     if (workspace) {
       const viaWorkspace = joinPathLike(workspace, "kherep/bootstrap/smoke-test.sh");
@@ -32,7 +32,7 @@ function resolveSmoke() {
   return repoRelative;
 }
 
-const SMOKE = resolveSmoke();
+const SMOKE = await resolveSmoke();
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "smoke-nudge-"));
 const IN_SCOPE = "d:/Work";
 const OUT_OF_SCOPE = "C:/Users/ExampleUser/Documents";
@@ -42,7 +42,7 @@ let fail = 0;
 let seq = 0;
 
 // Each case gets its own CLAUDE_HOME so the report fixture is isolated.
-function claudeHomeWith(report, ageHours) {
+function claudeHomeWith(report: string | null, ageHours?: number): string {
   const home = path.join(TMP, `home-${++seq}`);
   const dir = path.join(home, ".cache", "smoke-test");
   fs.mkdirSync(dir, { recursive: true });
@@ -61,7 +61,7 @@ function claudeHomeWith(report, ageHours) {
 // from one that correctly stayed silent, and every silent-case assertion below
 // would still pass. The hook's contract is "never break session start", so a
 // throw is a test failure, not an empty string.
-function run(stdinObj, home, env = {}) {
+function run(stdinObj: Record<string, unknown>, home: string, env: Record<string, string> = {}): string {
   try {
     return execFileSync("node", [HOOK], {
       input: JSON.stringify(stdinObj),
@@ -81,7 +81,8 @@ function run(stdinObj, home, env = {}) {
         ...env,
       },
     });
-  } catch (e) {
+  } catch (caught) {
+    const e = caught as { status?: number | null; stderr?: unknown };
     throw new Error(
       "hook exited non-zero (" + (e.status === undefined ? "no status" : e.status) +
       "); it must always exit 0. stderr: " + String(e.stderr || "").slice(0, 400)
@@ -89,7 +90,7 @@ function run(stdinObj, home, env = {}) {
   }
 }
 
-function contextOf(out) {
+function contextOf(out: string): string | null {
   if (!out.trim()) return null;
   try {
     return JSON.parse(out).hookSpecificOutput.additionalContext;
@@ -98,7 +99,7 @@ function contextOf(out) {
   }
 }
 
-function check(label, actual, expected) {
+function check(label: string, actual: unknown, expected: unknown): void {
   if (actual === expected) {
     pass++;
     console.log(`PASS | ${label}`);
@@ -180,7 +181,7 @@ fs.mkdirSync(path.join(refreshWorkspace, "kherep", "claude", "hooks"), { recursi
 fs.writeFileSync(refreshScript, `require("node:fs").appendFileSync(${JSON.stringify(marker)}, "ran\\n");\n`, "utf8");
 
 // The spawn is detached, so the marker may appear a tick after the hook exits.
-function waitForMarker(timeoutMs = 4000) {
+function waitForMarker(timeoutMs: number = 4000): boolean {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (fs.existsSync(marker)) return true;
@@ -189,7 +190,7 @@ function waitForMarker(timeoutMs = 4000) {
   return fs.existsSync(marker);
 }
 
-function refreshRun(home, extraEnv = {}, workspace = refreshWorkspace) {
+function refreshRun(home: string, extraEnv: Record<string, string> = {}, workspace: string = refreshWorkspace): boolean {
   fs.rmSync(marker, { force: true });
   // These cases are ABOUT the spawn, so they switch it back on - safely, because
   // the workspace is a fixture and KHEREP_BASH points the interpreter at node.
@@ -226,7 +227,7 @@ check(
 
 // The in-flight guard asks the OS whether the recorded process exists, instead
 // of inferring it from a staging file the run is allowed to skip (OP-679).
-function writeLock(home, pid) {
+function writeLock(home: string, pid: number | string | undefined): string {
   const dir = path.join(home, ".cache", "smoke-test");
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, "refresh.pid");
@@ -295,12 +296,12 @@ check(
 // SMOKE_PROFILES=" " selects no profile, so only the workspace-wide git hook
 // coverage assertion runs. That keeps the contract test at seconds instead of
 // the minutes a full two-profile install takes.
-const bashPath = (value) =>
+const bashPath = (value: string): string =>
   process.platform === "win32"
-    ? value.replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`).replace(/\\/g, "/")
+    ? value.replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`).replace(/\\/g, "/")
     : value;
 
-function smokeCoverageRun(label, hooksDirFor) {
+function smokeCoverageRun(label: string, hooksDirFor: (root: string) => string) {
   const root = path.join(TMP, `cov-${label}`, "Work");
   const repo = path.join(root, "probe-repo");
   const home = path.join(TMP, `cov-${label}`, "home", ".claude");
@@ -328,7 +329,7 @@ function smokeCoverageRun(label, hooksDirFor) {
   };
 }
 
-const goodHooks = (root) => {
+const goodHooks = (root: string): string => {
   const dir = path.join(root, "githooks");
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, "commit-msg");
@@ -337,7 +338,7 @@ const goodHooks = (root) => {
   fs.chmodSync(file, 0o755);
   return dir;
 };
-const emptyHooks = (root) => {
+const emptyHooks = (root: string): string => {
   const dir = path.join(root, "empty-hooks");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
@@ -415,7 +416,7 @@ check(
 // The real 2026-08-06 report, byte for byte. It predates the contract, so it
 // exercises the legacy fallback - and it is the exact input that produced the
 // bogus "19 failing assertion(s)".
-const LEGACY_REAL = fs.readFileSync(path.join(__dirname, "fixtures", "smoke-report-legacy.txt"), "utf8");
+const LEGACY_REAL = fs.readFileSync(path.join(import.meta.dirname, "fixtures", "smoke-report-legacy.txt"), "utf8");
 const legacySeen = contextOf(run({ cwd: IN_SCOPE }, claudeHomeWith(LEGACY_REAL, 1)));
 check(
   "the real pre-contract report reports 4, not 19",

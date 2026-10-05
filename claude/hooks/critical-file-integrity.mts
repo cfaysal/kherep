@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * critical-file-integrity.js  -  SessionStart hook
+ * critical-file-integrity.mts  -  SessionStart hook
  *
- * live-hook-integrity.js proves that every hook file WIRED IN SETTINGS can
- * still enforce something. Its scope is deliberately narrow: `.js` under
- * <CLAUDE_HOME>/hooks/. That leaves the one file that actually binds every
+ * live-hook-integrity.mts proves that every hook file WIRED IN SETTINGS can
+ * still enforce something. Its scope is deliberately narrow: `.js` and `.mts`
+ * under <CLAUDE_HOME>/hooks/. That leaves the one file that actually binds every
  * runtime completely unguarded - ~/.claude/kherep/githooks/commit-msg, the
  * git hook behind the work-item rule. It is not wired in settings, it is not
- * a .js, and it sits in the same tree where a file was repeatedly replaced by
- * a 0-byte version (OP-664, writer still UNKNOWN).
+ * a script under hooks/, and it sits in the same tree where a file was
+ * repeatedly replaced by a 0-byte version (OP-664, writer still UNKNOWN).
  *
  * A 0-byte commit-msg is fail-open in exactly the same way a 0-byte
  * commit-guard.js is: sh runs it, it does nothing, it exits 0, and git reads
@@ -16,30 +16,55 @@
  * a real pass.
  *
  * Deliberately a SEPARATE file rather than an extension of
- * live-hook-integrity.js: that one sits at exactly 250 LOC, the CLAUDE.md
- * ceiling (goldene Regel 6), and it currently works. Adding a second concern
+ * live-hook-integrity.mts: that one already reaches the 250 LOC ceiling of
+ * the CLAUDE.md (goldene Regel 6), and it currently works. Adding a second concern
  * to it would force a split of a load-bearing file for no gain. This hook is
- * itself a wired .js under hooks/, so live-hook-integrity covers IT - the two
+ * itself a wired .mts under hooks/, so live-hook-integrity covers IT - the two
  * guard each other.
  *
  * Same three states as its sibling, never merged (goldene Regel 12): OK,
  * DEFEKT, UNGEPRUEFT. A restore counts only when MEASURED at the target
  * (goldene Regel 13). Silent when everything is OK. Any error exits 0.
  */
-"use strict";
-const crypto = require("crypto");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-const { joinPathLike, normalizePathLike } = require("./lib/workspace-scope.mts");
-const { checkoutFor } = require("./lib/orchestra-checkout.mts");
+import { joinPathLike, normalizePathLike, type ScopePayload } from "./lib/workspace-scope.mts";
+import { checkoutFor } from "./lib/orchestra-checkout.mts";
 
-const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
+interface CriticalFile {
+  rel: string;
+  source: string;
+  executable: boolean;
+  why: string;
+}
+
+interface Before {
+  size: number;
+  mtime: string;
+  ino: number;
+}
+
+interface Verdict {
+  state: "OK" | "DEFEKT" | "UNGEPRUEFT";
+  reason?: string;
+  before?: Partial<Before>;
+}
+
+interface Restored {
+  proven: boolean;
+  sha?: string;
+  why?: string;
+}
+
+const sha256 = (buf: Buffer): string => crypto.createHash("sha256").update(buf).digest("hex");
+const errorCode = (error: unknown): string => (error ? (error as NodeJS.ErrnoException).code : undefined) || "unknown";
 
 // Live path relative to CLAUDE_HOME -> source path relative to the checkout.
 // Non-.js, security-bearing files that no other integrity layer looks at.
-const CRITICAL = [
+const CRITICAL: CriticalFile[] = [
   {
     rel: "kherep/githooks/commit-msg",
     source: "claude/kherep/githooks/commit-msg",
@@ -49,16 +74,16 @@ const CRITICAL = [
     why: "git commit-msg hook: the only work-item enforcement that binds every runtime",
   },
   // OP-734, 2026-08-10. Both run or are trusted at SessionStart and no other
-  // layer looks at them: live-hook-integrity.js covers only .js under hooks/,
-  // and drift-check.sh only reports when a human runs it.
+  // layer looks at them: live-hook-integrity.mts covers only .js and .mts under
+  // hooks/, and drift-check.sh only reports when a human runs it.
 ];
 
-function classify(file) {
-  let stat;
+function classify(file: string): Verdict {
+  let stat: fs.Stats;
   try {
     stat = fs.statSync(file);
   } catch (error) {
-    const code = (error && error.code) || "unknown";
+    const code = errorCode(error);
     if (code === "ENOENT") return { state: "DEFEKT", reason: "wired but not present on disk" };
     return { state: "UNGEPRUEFT", reason: `stat failed (${code})` };
   }
@@ -80,11 +105,11 @@ function classify(file) {
 // assertion drift-check.sh makes, just self-triggered here.
 // Returns null when the comparison itself could not be made; the caller must
 // not turn that into a verdict (goldene Regel 12).
-function contentMismatch(file, entry, repoRoot) {
+function contentMismatch(file: string, entry: CriticalFile, repoRoot: string): { liveSha: string; wantSha: string } | false | null {
   if (!repoRoot) return null;
   const source = joinPathLike(repoRoot, entry.source);
-  let live;
-  let want;
+  let live: Buffer;
+  let want: Buffer;
   try {
     live = fs.readFileSync(file);
     want = fs.readFileSync(source);
@@ -98,14 +123,14 @@ function contentMismatch(file, entry, repoRoot) {
   };
 }
 
-function restore(file, entry, repoRoot) {
+function restore(file: string, entry: CriticalFile, repoRoot: string): Restored {
   if (!repoRoot) return { proven: false, why: "no kherep checkout resolved" };
   const source = joinPathLike(repoRoot, entry.source);
-  let wanted;
+  let wanted: Buffer;
   try {
     wanted = fs.readFileSync(source);
   } catch (error) {
-    return { proven: false, why: `versioned source ${source} unreadable (${(error && error.code) || "unknown"})` };
+    return { proven: false, why: `versioned source ${source} unreadable (${errorCode(error)})` };
   }
   if (!wanted.length) return { proven: false, why: `versioned source ${source} is itself 0 bytes` };
   try {
@@ -113,14 +138,14 @@ function restore(file, entry, repoRoot) {
     fs.copyFileSync(source, file);
     if (entry.executable) fs.chmodSync(file, 0o755);
   } catch (error) {
-    return { proven: false, why: `copy failed (${(error && error.code) || "unknown"})` };
+    return { proven: false, why: `copy failed (${errorCode(error)})` };
   }
   // Measured at the target. Reporting one's own copy call is not a measurement.
-  let landed;
+  let landed: Buffer;
   try {
     landed = fs.readFileSync(file);
   } catch (error) {
-    return { proven: false, why: `target unreadable after the copy (${(error && error.code) || "unknown"})` };
+    return { proven: false, why: `target unreadable after the copy (${errorCode(error)})` };
   }
   const sha = sha256(landed);
   if (!landed.length || sha !== sha256(wanted)) {
@@ -129,7 +154,7 @@ function restore(file, entry, repoRoot) {
   return { proven: true, sha };
 }
 
-function journal(home, entry) {
+function journal(home: string, entry: Record<string, unknown>): void {
   try {
     const dir = path.join(home, ".cache", "hook-integrity");
     fs.mkdirSync(dir, { recursive: true });
@@ -139,7 +164,7 @@ function journal(home, entry) {
   }
 }
 
-function emit(lines) {
+function emit(lines: string[]): void {
   if (!lines.length) return;
   process.stdout.write(
     JSON.stringify({
@@ -151,16 +176,16 @@ function emit(lines) {
   );
 }
 
-function main() {
-  let payload = {};
+function main(): void {
+  let payload: ScopePayload | null = {};
   try {
-    payload = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+    payload = JSON.parse(fs.readFileSync(0, "utf8") || "{}") as ScopePayload | null;
   } catch {
     payload = {};
   }
   const home = normalizePathLike(process.env.CLAUDE_HOME || path.join(os.homedir(), ".claude"));
   const repoRoot = checkoutFor(payload, home);
-  const lines = [];
+  const lines: string[] = [];
 
   for (const entry of CRITICAL) {
     const file = joinPathLike(home, entry.rel);
@@ -172,7 +197,7 @@ function main() {
       state = "DEFEKT";
       reason = `content differs from source (live ${swapped.liveSha}..., source ${swapped.wantSha}...)`;
     }
-    const record = {
+    const record: Record<string, unknown> = {
       ts: new Date().toISOString(), file: entry.rel, path: file, state, reason,
       sizeBefore: before.size === undefined ? null : before.size,
       mtimeBefore: before.mtime || null,
@@ -191,7 +216,7 @@ function main() {
     journal(home, record);
     lines.push(
       result.proven
-        ? `${entry.rel}: ${reason} -> RESTORED from the repo, verified at the target (sha256 ${result.sha.slice(0, 12)})`
+        ? `${entry.rel}: ${reason} -> RESTORED from the repo, verified at the target (sha256 ${result.sha!.slice(0, 12)})`
         : `${entry.rel}: ${reason} -> NOT restored (${result.why}). ${entry.why} IS OFF.`
     );
   }
@@ -203,7 +228,7 @@ try {
   main();
 } catch (error) {
   try {
-    emit([`the critical-file check itself failed (${(error && error.message) || "unknown"}); nothing was verified`]);
+    emit([`the critical-file check itself failed (${(error && (error as Error).message) || "unknown"}); nothing was verified`]);
   } catch {
     /* never break session start */
   }

@@ -1,28 +1,28 @@
 #!/usr/bin/env node
 /**
- * Test harness for clq-accept-gate.js
+ * Test harness for clq-accept-gate.mts
  * Spawns the hook with crafted stdin + a temp transcript, asserts block/allow.
- * Run: node clq-accept-gate.test.js
+ * Run: node clq-accept-gate.test.mts
  */
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { execFileSync } = require("child_process");
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 
-const HOOK = path.join(__dirname, "clq-accept-gate.js");
+const HOOK = path.join(import.meta.dirname, "clq-accept-gate.mts");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "clq-test-"));
 
 let pass = 0;
 let fail = 0;
 
-function hash(s) {
+function hash(s: string): number {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   return h;
 }
 
 // Returns true if the hook BLOCKED (emitted decision:block).
-function runHook(stdinObj, envExtra = {}) {
+function runHook(stdinObj: Record<string, unknown>, envExtra: Record<string, string> = {}): boolean {
   let out = "";
   try {
     out = execFileSync("node", [HOOK], {
@@ -43,7 +43,7 @@ function runHook(stdinObj, envExtra = {}) {
 
 // Transcript location is only where the Stop hook reads the final message;
 // workspace scope comes from cwd/KHEREP_WORKSPACE.
-function scopedTranscript(text) {
+function scopedTranscript(text: string): string {
   const dir = path.join(TMP, "d--work");
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `t-${Math.abs(hash(text))}.jsonl`);
@@ -55,7 +55,7 @@ function scopedTranscript(text) {
   return file;
 }
 
-function caseRun(name, text, extra, expectBlock) {
+function caseRun(name: string, text: string, extra: { cwd?: string; stop_hook_active?: boolean }, expectBlock: boolean): void {
   const tp = scopedTranscript(text);
   const cwd = extra.cwd || "D:\\Work\\kherep";
   const workspace = cwd.startsWith("/Users/example/Work") ? "/Users/example/Work" : "D:\\Work";

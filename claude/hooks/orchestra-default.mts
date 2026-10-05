@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * orchestra-default.js  -  SessionStart hook
+ * orchestra-default.mts  -  SessionStart hook
  *
  * Defaults every session that operates in the configured Kherep workspace into
  * Kherep Maestro
@@ -9,20 +9,20 @@
  *
  * Fail-safe: any error exits 0 silently, never blocks session start.
  */
-const fs = require("fs");
-const path = require("path");
-const { isKherepScope } = require("./lib/workspace-scope.mts");
+import fs from "node:fs";
+import path from "node:path";
+import { isKherepScope, type ScopePayload } from "./lib/workspace-scope.mts";
 
-function main() {
+function main(): void {
   let input = "";
   try {
     input = fs.readFileSync(0, "utf8");
   } catch {
     return;
   }
-  let data = {};
+  let data: ScopePayload | null = {};
   try {
-    data = JSON.parse(input || "{}");
+    data = JSON.parse(input || "{}") as ScopePayload | null;
   } catch {
     return;
   }

@@ -1,5 +1,5 @@
 // One definition of "substantial", shared by the Stop hooks that judge a turn:
-// maestro-banner-gate.js, observation-stop.mts and research-stop.mts. Two copies would drift, and
+// maestro-banner-gate.mts, observation-stop.mts and research-stop.mts. Two copies would drift, and
 // the banner and the observation dispatch would then start firing on different
 // turns for no reason anyone decided.
 //

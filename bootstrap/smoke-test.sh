@@ -2,14 +2,14 @@
 # Installs both host profiles into throwaway homes and asserts layout, merge,
 # identity, profile rendering, and drift behavior. NEVER touches real ~/.claude,
 # with one deliberate exception: the run report under ~/.claude/.cache/smoke-test
-# (nothing managed, and the only way smoke-test-nudge.js can see this ran).
+# (nothing managed, and the only way smoke-test-nudge.mts can see this ran).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 . "$HERE/profile.sh"
 TMP="$(mktemp -d)"
 
-# Leave the result behind for claude/hooks/smoke-test-nudge.js, with the same
+# Leave the result behind for claude/hooks/smoke-test-nudge.mts, with the same
 # staged rename bootstrap/drift-check.sh uses: readers keep seeing the previous
 # complete report while a run is in flight. CLAUDE_HOME is resolved HERE because
 # check_profile rebinds it to a throwaway home. An unwritable cache means no
@@ -46,7 +46,7 @@ fail=0
 
 # The single place a failing assertion is allowed to leave the script. Every
 # finding therefore carries exactly one machine-readable marker, so
-# claude/hooks/smoke-test-nudge.js can match a contract instead of guessing at
+# claude/hooks/smoke-test-nudge.mts can match a contract instead of guessing at
 # line shapes. Context output (a drift dump, a sub-test's own log) stays
 # unmarked on purpose - it explains a finding, it is not one.
 # GRUND: the old ALL-CAPS heuristic counted the 13 `PASS ...` lines from the
@@ -80,12 +80,12 @@ check_profile() {
   # A malformed live settings file must fail during preflight, before any
   # managed target is replaced.
   mkdir -p "$CLAUDE_HOME/hooks"
-  printf '%s\n' 'preflight-mutation-sentinel' > "$CLAUDE_HOME/hooks/maestro-discipline.js"
+  printf '%s\n' 'preflight-mutation-sentinel' > "$CLAUDE_HOME/hooks/maestro-discipline.mts"
   printf '%s\n' '{malformed-json' > "$CLAUDE_HOME/settings.json"
   if bash "$TMP/repo/bootstrap/install.sh" >/dev/null 2>&1; then
     note_fail "INSTALL [$profile]: malformed settings passed preflight"; return
   fi
-  grep -q '^preflight-mutation-sentinel$' "$CLAUDE_HOME/hooks/maestro-discipline.js" || {
+  grep -q '^preflight-mutation-sentinel$' "$CLAUDE_HOME/hooks/maestro-discipline.mts" || {
     note_fail "INSTALL [$profile]: preflight failure mutated managed state"; return;
   }
 
@@ -129,8 +129,8 @@ check_profile() {
   fi
 
   local must_exist=(
-    hooks/maestro-discipline.js hooks/clq-accept-gate.js
-    hooks/privacy-boundary-guard.js hooks/runtime-capability-snapshot.js
+    hooks/maestro-discipline.mts hooks/clq-accept-gate.mts
+    hooks/privacy-boundary-guard.js hooks/runtime-capability-snapshot.mts
     hooks/portable-scope-hooks.test.js
     hooks/lib/private-path-policy.mts hooks/lib/private-path-rules.mts
     hooks/lib/workspace-scope.mts hooks/lib/workspace-scope.test.mts
@@ -414,7 +414,7 @@ if [ "${SMOKE_SKIP_BOOTSTRAP_TESTS:-0}" != 1 ]; then
   bash "$TMP/repo/bootstrap/install-transaction.test.sh" || note_fail "SUBTEST install-transaction.test.sh failed"
 fi
 # Terminal marker first, then publish: an unmarked report is an incomplete run
-# and claude/hooks/smoke-test-nudge.js must be able to tell the two apart.
+# and claude/hooks/smoke-test-nudge.mts must be able to tell the two apart.
 if [ "$fail" = 0 ]; then echo "SMOKE PASS (${SMOKE_PROFILES:-win mac})"; else echo "SMOKE FAIL"; fi
 publish_report
 [ "$fail" = 0 ] || exit 1

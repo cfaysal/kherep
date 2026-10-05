@@ -1,9 +1,7 @@
-"use strict";
+import assert from "node:assert/strict";
+import test from "node:test";
 
-const assert = require("node:assert/strict");
-const test = require("node:test");
-
-const { compareSemver } = require("./semver-compare");
+import { compareSemver } from "./semver-compare.mts";
 
 test("reports a newer running worker above the installed pin", () => {
   assert.ok(compareSemver("13.12.4", "13.11.2") > 0);

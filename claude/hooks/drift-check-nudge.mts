@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * drift-check-nudge.js  -  SessionStart hook
+ * drift-check-nudge.mts  -  SessionStart hook
  *
  * Makes repo-vs-live drift visible without paying for it at session start.
  * bootstrap/drift-check.sh needs ~2 minutes on Windows, so this hook never
@@ -34,13 +34,13 @@
  * repo kept the superseded version. drift-check.sh would have caught it on day
  * one - nothing ever ran it.
  */
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { spawn } = require("child_process");
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawn } from "node:child_process";
 
-const { isKherepScope, joinPathLike, productEnv, workspaceForPayload } = require("./lib/workspace-scope.mts");
-const { checkoutFor } = require("./lib/orchestra-checkout.mts");
+import { isKherepScope, joinPathLike, productEnv, type ScopePayload } from "./lib/workspace-scope.mts";
+import { checkoutFor } from "./lib/orchestra-checkout.mts";
 
 // A day is short enough that a fix cannot quietly live only in ~/.claude across
 // a weekend, and long enough that a normal working day nudges at most once.
@@ -51,16 +51,16 @@ const MAX_AGE_HOURS = Number(productEnv(process.env, "DRIFT_MAX_AGE_HOURS") ?? 2
 // flight. Older leftovers are treated as crash debris, not as a live run.
 const IN_FLIGHT_MINUTES = 30;
 
-function cacheDir() {
+function cacheDir(): string {
   const home = process.env.CLAUDE_HOME || path.join(os.homedir(), ".claude");
   return path.join(home, ".cache", "drift-check");
 }
 
-function reportPath() {
+function reportPath(): string {
   return path.join(cacheDir(), "last-report.txt");
 }
 
-function refreshInFlight() {
+function refreshInFlight(): boolean {
   try {
     const cutoff = Date.now() - IN_FLIGHT_MINUTES * 60_000;
     return fs
@@ -78,7 +78,7 @@ function refreshInFlight() {
   }
 }
 
-function driftScriptFor(payload) {
+function driftScriptFor(payload: ScopePayload | null): string {
   const root = checkoutFor(payload, process.env.CLAUDE_HOME || path.join(os.homedir(), ".claude"));
   if (!root) return "";
   const script = joinPathLike(root, "bootstrap/drift-check.sh");
@@ -93,7 +93,7 @@ const GIT_BASH_CANDIDATES = [
   "C:/Program Files (x86)/Git/bin/bash.exe",
 ];
 
-function resolveBash() {
+function resolveBash(): string {
   const configured = productEnv(process.env, "BASH");
   if (configured) return configured;
   if (process.platform !== "win32") return "bash";
@@ -112,7 +112,7 @@ function resolveBash() {
 
 // Detached: the caller must not wait ~2 minutes, and the run must survive this
 // process exiting. Output goes to the report file, so stdio is discarded.
-function spawnRefresh(payload) {
+function spawnRefresh(payload: ScopePayload | null): boolean {
   if (productEnv(process.env, "DRIFT_AUTOREFRESH") === "0") return false;
   if (refreshInFlight()) return false;
   const script = driftScriptFor(payload);
@@ -134,7 +134,7 @@ function spawnRefresh(payload) {
 // and RETIRED-LIVE, which is information and never changes the verdict (#45).
 // The trailing \s is load-bearing: it keeps the closing "DRIFT-CHECK FOUND
 // DRIFT" summary out of the count.
-function findingsOf(report) {
+function findingsOf(report: string): string[] {
   return report
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -143,11 +143,11 @@ function findingsOf(report) {
     );
 }
 
-function hasTerminalMarker(report) {
+function hasTerminalMarker(report: string): boolean {
   return /(?:^|\r?\n)DRIFT-CHECK (?:PASS \(repo == live\)|FOUND DRIFT \(see above\))\s*$/.test(report);
 }
 
-function emit(message) {
+function emit(message: string): void {
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
@@ -168,17 +168,17 @@ const REFRESH_STARTED =
   "A refresh was started in the background just now (~2 min, read-only); its result lands in the " +
   `report for the next session start. ${RECONCILE_HINT}`;
 
-function main() {
-  let data = {};
+function main(): void {
+  let data: ScopePayload | null = {};
   try {
-    data = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+    data = JSON.parse(fs.readFileSync(0, "utf8") || "{}") as ScopePayload | null;
   } catch {
     return;
   }
   if (!isKherepScope(data)) return;
 
   const file = reportPath();
-  let stat;
+  let stat: fs.Stats;
   try {
     stat = fs.statSync(file);
   } catch {

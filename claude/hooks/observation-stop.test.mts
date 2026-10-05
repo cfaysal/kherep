@@ -32,7 +32,7 @@ interface Entry {
   isMeta?: boolean;
 }
 
-// Shapes mirror a real Claude Code transcript JSONL, as in maestro-banner-gate.test.js.
+// Shapes mirror a real Claude Code transcript JSONL, as in maestro-banner-gate.test.mts.
 const userPrompt = (text: string): Entry => ({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
 const userString = (text: string): Entry => ({ type: "user", message: { role: "user", content: text } });
 const toolResult = (id = "t1"): Entry => ({

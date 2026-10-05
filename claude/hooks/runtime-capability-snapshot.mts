@@ -4,12 +4,29 @@
  * plugins and configured MCP server names. This prevents version/tool-state
  * claims from being reconstructed from memory at the start of a fresh session.
  */
-const fs = require("fs");
-const path = require("path");
-const { spawnSync } = require("child_process");
-const { isKherepScope, workspaceForPayload } = require("./lib/workspace-scope.mts");
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { isKherepScope, workspaceForPayload, type ScopePayload } from "./lib/workspace-scope.mts";
 
-function readJson(file) {
+// The parts of the live JSON files this hook reads. Everything else, the
+// secret-bearing MCP server definitions above all, stays untyped and unread.
+interface PluginInstall {
+  version?: unknown;
+  lastUpdated?: unknown;
+  installedAt?: unknown;
+}
+interface Settings {
+  enabledPlugins?: Record<string, unknown>;
+}
+interface Registry {
+  plugins?: Record<string, unknown>;
+}
+interface LocalInferenceConfig {
+  backends?: Record<string, { engine?: unknown; endpoint?: unknown; model?: unknown }>;
+}
+
+function readJson(file: string): unknown {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
   } catch {
@@ -17,25 +34,26 @@ function readJson(file) {
   }
 }
 
-function collectMcpNames(value, names, seen = new Set()) {
+function collectMcpNames(value: unknown, names: Set<string>, seen: Set<object> = new Set()): void {
   if (!value || typeof value !== "object" || seen.has(value)) return;
   seen.add(value);
-  if (value.mcpServers && typeof value.mcpServers === "object") {
-    Object.keys(value.mcpServers).forEach((name) => names.add(name));
+  const record = value as Record<string, unknown>;
+  if (record.mcpServers && typeof record.mcpServers === "object") {
+    Object.keys(record.mcpServers).forEach((name) => names.add(name));
   }
-  for (const child of Object.values(value)) collectMcpNames(child, names, seen);
+  for (const child of Object.values(record)) collectMcpNames(child, names, seen);
 }
 
-function newestInstall(entries) {
+function newestInstall(entries: unknown): PluginInstall | null {
   if (!Array.isArray(entries) || entries.length === 0) return null;
-  return [...entries].sort((a, b) =>
+  return [...(entries as PluginInstall[])].sort((a, b) =>
     String(b.lastUpdated || b.installedAt || "").localeCompare(
       String(a.lastUpdated || a.installedAt || "")
     )
   )[0];
 }
 
-function gitValue(cwd, args) {
+function gitValue(cwd: string, args: string[]): string {
   try {
     const result = spawnSync("git", args, { cwd, encoding: "utf8", timeout: 2_000, windowsHide: true });
     return result.status === 0 ? String(result.stdout || "").trim() : "UNKNOWN";
@@ -44,10 +62,10 @@ function gitValue(cwd, args) {
   }
 }
 
-function main() {
-  let payload = {};
+function main(): void {
+  let payload: ScopePayload = {};
   try {
-    payload = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+    payload = JSON.parse(fs.readFileSync(0, "utf8") || "{}") as ScopePayload;
   } catch {
     return;
   }
@@ -55,10 +73,10 @@ function main() {
 
   const userHome = process.env.USERPROFILE || process.env.HOME || "";
   const claudeHome = process.env.CLAUDE_HOME || path.join(userHome, ".claude");
-  const settings = readJson(path.join(claudeHome, "settings.json")) || {};
-  const registry = readJson(path.join(claudeHome, "plugins", "installed_plugins.json")) || {};
-  const localConfig = readJson(path.join(claudeHome, "kherep", "local-inference", "config.json"));
-  const cwd = payload.cwd || workspaceForPayload(payload) || process.cwd();
+  const settings = (readJson(path.join(claudeHome, "settings.json")) || {}) as Settings;
+  const registry = (readJson(path.join(claudeHome, "plugins", "installed_plugins.json")) || {}) as Registry;
+  const localConfig = readJson(path.join(claudeHome, "kherep", "local-inference", "config.json")) as LocalInferenceConfig | null;
+  const cwd = (payload.cwd || workspaceForPayload(payload) || process.cwd()) as string;
 
   const enabled = Object.entries(settings.enabledPlugins || {})
     .filter(([, on]) => on === true)
@@ -75,7 +93,7 @@ function main() {
   const enabledMissing = enabled.filter((name) => !installedMap[name]);
   const installedDisabled = installed.filter((name) => !enabled.includes(name));
 
-  const mcpNames = new Set();
+  const mcpNames = new Set<string>();
   [
     path.join(userHome, ".claude.json"),
     path.join(claudeHome, ".mcp.json"),

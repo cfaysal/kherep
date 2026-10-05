@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * smoke-test-nudge.js  -  SessionStart hook
+ * smoke-test-nudge.mts  -  SessionStart hook
  *
  * Makes the state of the install/guard assertions visible without paying for
  * them at session start. bootstrap/smoke-test.sh installs both host profiles
@@ -12,7 +12,7 @@
  *   <CLAUDE_HOME>/.cache/smoke-test/last-report.txt
  *
  * When the report is missing or stale the hook also spawns smoke-test.sh
- * DETACHED and returns immediately - same self-refresh as drift-check-nudge.js.
+ * DETACHED and returns immediately - same self-refresh as drift-check-nudge.mts.
  * A failing report is NOT rerun: it needs a human, not another run.
  *
  * Fail-safe: any error exits 0 silently. Never blocks a session start.
@@ -21,13 +21,13 @@
  * commit-guard.js sitting at 0 bytes for 19 hours, because nothing ever ran it.
  * An assertion that only runs when a human remembers is not an assertion.
  */
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { spawn } = require("child_process");
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawn } from "node:child_process";
 
-const { isKherepScope, joinPathLike, productEnv, workspaceForPayload } = require("./lib/workspace-scope.mts");
-const { checkoutFor } = require("./lib/orchestra-checkout.mts");
+import { isKherepScope, joinPathLike, productEnv, type ScopePayload } from "./lib/workspace-scope.mts";
+import { checkoutFor } from "./lib/orchestra-checkout.mts";
 
 // A full run costs minutes, so a daily limit is the ceiling that still keeps a
 // dead guard from surviving a working day unnoticed (the incident lasted 19h).
@@ -37,20 +37,20 @@ const MAX_AGE_HOURS = Number(productEnv(process.env, "SMOKE_MAX_AGE_HOURS") ?? 2
 // run is treated as stale even if some process now answers to its number.
 const STALE_LOCK_MINUTES = 180;
 
-function cacheDir() {
+function cacheDir(): string {
   const home = process.env.CLAUDE_HOME || path.join(os.homedir(), ".claude");
   return path.join(home, ".cache", "smoke-test");
 }
 
-function reportPath() {
+function reportPath(): string {
   return path.join(cacheDir(), "last-report.txt");
 }
 
-function lockPath() {
+function lockPath(): string {
   return path.join(cacheDir(), "refresh.pid");
 }
 
-function clearLock() {
+function clearLock(): false {
   try {
     fs.rmSync(lockPath(), { force: true });
   } catch {
@@ -71,8 +71,8 @@ function clearLock() {
  * A PID plus an existence probe is a measurement. A side effect of the thing
  * being measured is not (goldene Regel 12).
  */
-function refreshInFlight() {
-  let raw;
+function refreshInFlight(): boolean {
+  let raw: string;
   try {
     raw = fs.readFileSync(lockPath(), "utf8").trim();
   } catch {
@@ -92,12 +92,12 @@ function refreshInFlight() {
     return true;
   } catch (error) {
     // EPERM means the process exists and belongs to someone else.
-    if (error && error.code === "EPERM") return true;
+    if (error && (error as NodeJS.ErrnoException).code === "EPERM") return true;
     return clearLock();
   }
 }
 
-function smokeScriptFor(payload) {
+function smokeScriptFor(payload: ScopePayload | null): string {
   const root = checkoutFor(payload, process.env.CLAUDE_HOME || path.join(os.homedir(), ".claude"));
   if (!root) return "";
   const script = joinPathLike(root, "bootstrap/smoke-test.sh");
@@ -112,7 +112,7 @@ const GIT_BASH_CANDIDATES = [
   "C:/Program Files (x86)/Git/bin/bash.exe",
 ];
 
-function resolveBash() {
+function resolveBash(): string {
   const configured = productEnv(process.env, "BASH");
   if (configured) return configured;
   if (process.platform !== "win32") return "bash";
@@ -131,7 +131,7 @@ function resolveBash() {
 
 // Detached: the caller must not wait minutes, and the run must survive this
 // process exiting. Output goes to the report file, so stdio is discarded.
-function spawnRefresh(payload) {
+function spawnRefresh(payload: ScopePayload | null): boolean {
   if (productEnv(process.env, "SMOKE_AUTOREFRESH") === "0") return false;
   if (refreshInFlight()) return false;
   const script = smokeScriptFor(payload);
@@ -160,7 +160,7 @@ function spawnRefresh(payload) {
 
 // Only the closing summary decides the verdict. Everything above it is free-form
 // output from install.sh and node --test and must never flip a result.
-function verdictOf(report) {
+function verdictOf(report: string): "pass" | "fail" | null {
   const match = report.match(/(?:^|\r?\n)SMOKE (PASS \([^)]*\)|FAIL)\s*$/);
   if (!match) return null;
   return match[1].startsWith("PASS") ? "pass" : "fail";
@@ -177,7 +177,7 @@ const FINDING_MARKER = /^SMOKE-FINDING /;
 // keeps such a report readable instead of claiming zero findings, but PASS
 // lines are excluded: counting them is the whole of OP-669 (13 sub-test PASS
 // lines plus 2 TEST PASS lines turned 4 real failures into 19).
-function legacyFindingsOf(lines) {
+function legacyFindingsOf(lines: string[]): string[] {
   return lines
     .filter((l) => !/^TAP\b/.test(l) && !/^SMOKE (?:PASS \(|FAIL$)/.test(l))
     .filter((l) => !/\bPASS\b/.test(l))
@@ -185,13 +185,13 @@ function legacyFindingsOf(lines) {
 }
 
 // Used only to decorate an already-established FAIL, never to derive one.
-function findingsOf(report) {
+function findingsOf(report: string): string[] {
   const lines = report.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const marked = lines.filter((l) => FINDING_MARKER.test(l)).map((l) => l.replace(FINDING_MARKER, ""));
   return marked.length ? marked : legacyFindingsOf(lines);
 }
 
-function emit(message) {
+function emit(message: string): void {
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
@@ -211,17 +211,17 @@ const RUN_STARTED =
   "A run was started in the background just now (minutes, throwaway homes only); its result lands " +
   "in the report for the next session start.";
 
-function main() {
-  let data = {};
+function main(): void {
+  let data: ScopePayload | null = {};
   try {
-    data = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+    data = JSON.parse(fs.readFileSync(0, "utf8") || "{}") as ScopePayload | null;
   } catch {
     return;
   }
   if (!isKherepScope(data)) return;
 
   const file = reportPath();
-  let stat;
+  let stat: fs.Stats;
   try {
     stat = fs.statSync(file);
   } catch {

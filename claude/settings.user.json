@@ -52,7 +52,7 @@
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/clq-accept-gate.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/clq-accept-gate.mts\""
           }
         ]
       }
@@ -86,23 +86,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/live-hook-integrity.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/live-hook-integrity.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/orchestra-default.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/orchestra-default.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/runtime-capability-snapshot.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/runtime-capability-snapshot.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/drift-check-nudge.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/drift-check-nudge.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/smoke-test-nudge.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/smoke-test-nudge.mts\""
           },
           {
             "type": "command",
@@ -110,7 +110,7 @@
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/critical-file-integrity.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/critical-file-integrity.mts\""
           },
           {
             "type": "command",
@@ -127,7 +127,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/maestro-discipline.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/maestro-discipline.mts\""
           },
           {
             "type": "command",
@@ -152,7 +152,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/maestro-banner-gate.js\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/maestro-banner-gate.mts\""
           },
           {
             "type": "command",

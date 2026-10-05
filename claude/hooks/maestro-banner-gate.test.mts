@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * Test harness for maestro-banner-gate.js
+ * Test harness for maestro-banner-gate.mts
  * Spawns the hook with crafted stdin + a temp transcript, asserts block/allow.
- * Run: node maestro-banner-gate.test.js
+ * Run: node maestro-banner-gate.test.mts
  */
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { execFileSync } = require("child_process");
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 
-const HOOK = path.join(__dirname, "maestro-banner-gate.js");
+const HOOK = path.join(import.meta.dirname, "maestro-banner-gate.mts");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "banner-gate-test-"));
 const IN_SCOPE = "/Users/tester/Work/ForgeApps/whatever";
 const OUT_OF_SCOPE = "/Users/tester/other-project";
@@ -21,7 +21,7 @@ let fail = 0;
 let seq = 0;
 
 // Returns true if the hook BLOCKED (emitted decision:block).
-function runHook(stdinObj) {
+function runHook(stdinObj: Record<string, unknown>): boolean {
   let out = "";
   try {
     out = execFileSync("node", [HOOK], {
@@ -41,21 +41,21 @@ function runHook(stdinObj) {
 }
 
 // entry helpers - shapes mirror a real Claude Code transcript JSONL.
-const userPrompt = (text) => ({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
-const toolResult = (id) => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } });
-const assistantText = (text) => ({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
-const assistantTool = (name, input = {}) => ({
+const userPrompt = (text: string) => ({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
+const toolResult = (id: string) => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } });
+const assistantText = (text: string) => ({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
+const assistantTool = (name: string, input: Record<string, unknown> = {}) => ({
   type: "assistant",
   message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name, input }] },
 });
 
-function transcript(entries) {
+function transcript(entries: unknown[]): string {
   const file = path.join(TMP, `t-${++seq}.jsonl`);
   fs.writeFileSync(file, entries.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
   return file;
 }
 
-function caseRun(name, entries, extra, expectBlock) {
+function caseRun(name: string, entries: unknown[], extra: Record<string, unknown>, expectBlock: boolean): void {
   const blocked = runHook({
     cwd: IN_SCOPE,
     transcript_path: transcript(entries),

@@ -5,7 +5,7 @@
  * Says at WRITE TIME that the file just written is one that
  * bootstrap/drift-check.sh manages, and names its versioned source in the repo.
  *
- * The gap this closes: drift-check-nudge.js is a SessionStart hook that replays
+ * The gap this closes: drift-check-nudge.mts is a SessionStart hook that replays
  * the PREVIOUS run's report and only nags at 24h staleness. Between the edit and
  * the next session start nothing says a word. On 2026-08-06 an edit to
  * D:\workspace\CLAUDE.md produced no hint at all that claude/CLAUDE.project.md is
@@ -98,7 +98,7 @@ function message(match: Match): string {
 function finding(payload: WatchPayload | null): Match | null {
   if (!payload || !["Edit", "Write", "MultiEdit"].includes(String(payload.tool_name))) return null;
 
-  // Same scope gate as drift-check-nudge.js. The workspace is also what resolves
+  // Same scope gate as drift-check-nudge.mts. The workspace is also what resolves
   // the project pairs and the manifest, so there is nothing to say without one.
   if (!isKherepScope(payload)) return null;
   const workspace = workspaceForPayload(payload);

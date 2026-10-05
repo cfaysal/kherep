@@ -1,6 +1,4 @@
-"use strict";
-
-function compareSemver(a, b) {
+export function compareSemver(a: unknown, b: unknown): number {
   const left = String(a).split(".").map((part) => parseInt(part, 10) || 0);
   const right = String(b).split(".").map((part) => parseInt(part, 10) || 0);
   for (let index = 0; index < 3; index++) {
@@ -9,5 +7,3 @@ function compareSemver(a, b) {
   }
   return 0;
 }
-
-module.exports = { compareSemver };
