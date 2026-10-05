@@ -367,6 +367,20 @@ increments the minor version; every other release increments the patch version.
   so; otherwise it names the target `<node>/<session>` and the message's
   progress and says the session matches no task the sender owns. No Worker or
   protocol change.
+- Control Plane: the wake hook keeps its run mode per Claude Code process
+  (issue #245), in `run-modes/<session_id>.<parent pid>.json` of the node
+  directory for at most one hour and only for the same
+  `CLAUDE_CODE_ENTRYPOINT`, so only the first hook of a process lists
+  processes; read or write errors fall back to the full check. On macOS a kept
+  decision took 0.02 to 0.03 ms instead of a median of 38 to 43 ms. Where a
+  shell stays between Claude Code and the hook (Git Bash on Windows), every
+  hook still checks in full. On macOS and Linux a `claude "daemon foo" -p`
+  run, or a `claude -p` started by a session whose prompt begins with
+  `daemon` but not `daemon run`, is no longer taken for the `--bg` daemon: its subcommands count
+  only without `-p` or `--print` among the process's own options, and
+  `daemon` only as `daemon run`. A `claude -p --resume` of an idle interactive
+  session stays headless; the interactive session listens again from its next
+  own prompt.
 - Control Plane: a delegated task start the target refuses is no longer lost
   silently (issue #240). A Git Bash `msg send <mac> --new codex --cwd
   /Users/...` stored `C:/Program Files/Git/Users/...`; the Mac refused the
