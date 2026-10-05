@@ -11,6 +11,17 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Control Plane: the opt-in node policy switch `wake.replies: true` lets a
+  reply wake the idle Claude Code session that sent the original message,
+  without listing the session; `sessions` may then be empty. The grant needs
+  the reply to come from the node the original was sent to, the original to
+  be at most 24 hours old and not refused, expired or error, and the sending
+  session's id, which `msg send` now keeps locally as `fromSessionId` and never
+  sends to the Worker, to match (a sent record without it matches by name).
+  Every other wake guard still applies; audit lines name `"grant": "reply"`,
+  delivery progress reports such replies, and `doctor` shows the switch. A
+  non-boolean value turns waking off. Codex wake paths are unchanged
+  (issue #253).
 - Control Plane: `GET /health` also returns the bundled product `version`,
   an optional deploy-time source `commit` (`--define KHEREP_BUILD_COMMIT`) and
   `remoteMcp`, still without authentication or configuration values. Existing

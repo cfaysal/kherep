@@ -42,8 +42,9 @@ async function connected(paths: NodePaths, now: () => number = Date.now) {
 }
 
 function outbox(paths: NodePaths, messageId = ID_A): OutboxRecord {
-  const record: OutboxRecord = { messageId, fromSession: "review", to: { nodeId: PEER, session: "build" }, text: "hello",
-    createdAt: new Date(0).toISOString() };
+  // fromSessionId stays local (issue #253): the message.send frame below must not carry it, sent/ keeps it.
+  const record: OutboxRecord = { messageId, fromSession: "review", fromSessionId: "s-review", to: { nodeId: PEER, session: "build" },
+    text: "hello", createdAt: new Date(0).toISOString() };
   writeOutbox(paths, record);
   return record;
 }

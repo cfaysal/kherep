@@ -76,7 +76,7 @@ export function checkPolicy(file: string): { check: Check; policy: NodePolicy | 
   }
   const wakeRejected = raw?.wake !== undefined && !policy.wake;
   const wake = policy.wake
-    ? { enabled: true, sessions: policy.wake.sessions, codexApp: policy.wake.codexApp === true }
+    ? { enabled: true, sessions: policy.wake.sessions, codexApp: policy.wake.codexApp === true, replies: policy.wake.replies === true }
     : { enabled: false, ...(wakeRejected ? { rejected: true } : {}) };
   return { check: { ok: !wakeRejected, source: raw ? "file" : "default", allowedCommands: policy.allowedCommands.length,
     messagingRules: policy.messaging?.accept.length ?? 0, wake,
