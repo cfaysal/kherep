@@ -8,12 +8,18 @@
 // these commands out of the existing settings before the merge; drift-check.sh
 // reports any wired command whose Claude-home script is retired or missing.
 //
-// Only the script `node` runs counts: a command that names a retired file as an
-// argument runs another script and stays. `~/.claude`, `$HOME/.claude`,
-// `${HOME}/.claude` and `%USERPROFILE%/.claude` are read as the Claude home,
-// as is its absolute path in drive (C:\ or C:/) or Git Bash (/c/) form.
+// Only commands whose first token is `node` followed directly by the script are
+// recognised, and only that script counts: a command that names a retired file
+// as an argument runs another script and stays. `node <flags> script`,
+// `ENV=x node script`, `node.exe`, a quoted node path and `$CLAUDE_CONFIG_DIR`
+// forms are not matched, so they are neither unwired nor reported.
+// The Claude home is its absolute path in drive (C:\ or C:/) or Git Bash (/c/)
+// form. `~/.claude`, `$HOME/.claude`, `${HOME}/.claude` and
+// `%USERPROFILE%/.claude` count only while the Claude home is the default
+// `<HOME>/.claude`; with another CLAUDE_HOME they name a different directory.
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -23,7 +29,8 @@ import { errorMessage } from "./shape.mts";
 
 const RETIRED_MANIFEST = path.join(import.meta.dirname, "manifest", "retired.txt");
 const HOME_TOKENS = ["~/.claude/", "$HOME/.claude/", "${HOME}/.claude/", "%USERPROFILE%/.claude/"];
-const DRIVE_FORM = /^(?:[A-Za-z]:\/|\/[A-Za-z]\/)/;
+// The home `~` and `$HOME` expand to in the shell that runs the hook.
+const userHomeNow = (): string => process.env.HOME || os.homedir();
 
 export interface HookFinding { event: string; command: string; }
 
@@ -35,46 +42,48 @@ export function readRetiredHomeEntries(file: string = RETIRED_MANIFEST): Set<str
     .filter((entry) => entry && !entry.startsWith("#") && !entry.startsWith("project/")));
 }
 
-function homePrefixes(claudeHome: string): string[] {
-  const native = claudeHome.replace(/\\/g, "/").replace(/\/+$/, "");
-  const bash = toBashPath(native);
-  const drive = /^\/([A-Za-z])(\/.*)$/.exec(bash);
-  const absolute = [native, bash, drive ? `${drive[1]}:${drive[2]}` : ""].filter(Boolean).map((value) => `${value}/`);
-  return [...HOME_TOKENS, ...absolute];
+// One comparable form of a path: forward slashes and the Git Bash drive form
+// (C:/x and /c/x have the same length), lowercased when it is a drive path.
+function comparable(value: string): string {
+  const bash = toBashPath(value);
+  return /^\/[A-Za-z](?:\/|$)/.test(bash) ? bash.toLowerCase() : bash;
+}
+
+function homePrefixes(claudeHome: string, userHome: string): string[] {
+  const home = `${comparable(claudeHome).replace(/\/+$/, "")}/`;
+  const isDefault = home === `${comparable(userHome).replace(/\/+$/, "")}/.claude/`;
+  return isDefault ? [home, ...HOME_TOKENS] : [home];
 }
 
 // The script a `node <script>` command runs, relative to the Claude home, or
-// undefined when the command runs something else or a script outside it.
-export function claudeHomeScript(command: unknown, claudeHome: string): string | undefined {
+// undefined when the command runs something else or a script outside it. An
+// unquoted script ends at whitespace or a shell operator.
+export function claudeHomeScript(
+  command: unknown, claudeHome: string, userHome: string = userHomeNow(),
+): string | undefined {
   if (typeof command !== "string") return undefined;
-  const match = /^\s*node\s+(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(command);
+  const match = /^\s*node\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|<>]+))/.exec(command);
   const script = (match?.[1] ?? match?.[2] ?? match?.[3])?.replace(/\\/g, "/");
   if (!script) return undefined;
-  for (const prefix of homePrefixes(claudeHome)) {
-    const head = script.slice(0, prefix.length);
-    const same = DRIVE_FORM.test(prefix) ? head.toLowerCase() === prefix.toLowerCase() : head === prefix;
-    if (!same) continue;
+  for (const prefix of homePrefixes(claudeHome, userHome)) {
+    if (comparable(script.slice(0, prefix.length)) !== prefix) continue;
     const rel = path.posix.normalize(script.slice(prefix.length));
     return rel === "." || rel === ".." || rel.startsWith("../") ? undefined : rel;
   }
   return undefined;
 }
 
-function eachHook(settings: Settings, visit: (event: string, command: unknown) => void): void {
-  for (const [event, entries] of Object.entries(settings.hooks || {})) {
-    if (!Array.isArray(entries)) continue;
-    for (const entry of entries) for (const hook of (Array.isArray(entry?.hooks) ? entry.hooks : [])) visit(event, hook?.command);
-  }
-}
-
 // Removes every command that runs a retired script, from any event and group.
 // A group left without hooks goes with them; everything else stays as written.
 export function retireHookCommands(
-  existing: Settings, retired: ReadonlySet<string>, claudeHome: string,
+  existing: Settings, retired: ReadonlySet<string>, claudeHome: string, userHome: string = userHomeNow(),
 ): { settings: Settings; removed: HookFinding[] } {
   const removed: HookFinding[] = [];
   if (!existing.hooks || typeof existing.hooks !== "object") return { settings: existing, removed };
-  const isRetired = (command: unknown) => retired.has(claudeHomeScript(command, claudeHome) ?? "");
+  const isRetired = (command: unknown) => {
+    const rel = claudeHomeScript(command, claudeHome, userHome);
+    return rel !== undefined && retired.has(rel);
+  };
   const hooks: Record<string, HookEntry[]> = {};
   for (const [event, entries] of Object.entries(existing.hooks)) {
     if (!Array.isArray(entries)) { hooks[event] = entries; continue; }
@@ -94,14 +103,20 @@ export function retireHookCommands(
 
 // Wired commands whose Claude-home script is retired or does not exist.
 export function danglingHookCommands(
-  settings: Settings, retired: ReadonlySet<string>, claudeHome: string,
+  settings: Settings, retired: ReadonlySet<string>, claudeHome: string, userHome: string = userHomeNow(),
   exists: (file: string) => boolean = fs.existsSync,
 ): HookFinding[] {
   const found: HookFinding[] = [];
-  eachHook(settings, (event, command) => {
-    const rel = claudeHomeScript(command, claudeHome);
-    if (rel && (retired.has(rel) || !exists(path.join(claudeHome, rel)))) found.push({ event, command: String(command) });
-  });
+  for (const [event, entries] of Object.entries(settings.hooks || {})) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      for (const hook of (Array.isArray(entry?.hooks) ? entry.hooks : [])) {
+        const rel = claudeHomeScript(hook?.command, claudeHome, userHome);
+        if (rel === undefined) continue;
+        if (retired.has(rel) || !exists(path.join(claudeHome, rel))) found.push({ event, command: String(hook.command) });
+      }
+    }
+  }
   return found;
 }
 

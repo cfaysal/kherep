@@ -14,7 +14,8 @@ import {
 } from "./retired-hooks.mts";
 
 const repo = path.resolve(import.meta.dirname, "..");
-const winHome = "C:/Users/Example/.claude";
+const winUser = "C:/Users/Example";
+const winHome = `${winUser}/.claude`;
 const run = (command: string) => ({ type: "command", command });
 const retired = new Set(["hooks/live-hook-integrity.js", "hooks/clq-accept-gate.js", "hooks/lib/semver-compare.js"]);
 
@@ -34,10 +35,10 @@ test("every spelling of the Claude home names the same script", () => {
     "node /c/Users/Example/.claude/hooks/live-hook-integrity.js --flag",
   ];
   for (const command of spellings) {
-    assert.equal(claudeHomeScript(command, winHome), "hooks/live-hook-integrity.js", command);
+    assert.equal(claudeHomeScript(command, winHome, winUser), "hooks/live-hook-integrity.js", command);
   }
-  assert.equal(claudeHomeScript('node "/Users/example/.claude/hooks/lib/semver-compare.js"', "/Users/example/.claude"),
-    "hooks/lib/semver-compare.js");
+  assert.equal(claudeHomeScript('node "/Users/example/.claude/hooks/lib/semver-compare.js"', "/Users/example/.claude",
+    "/Users/example"), "hooks/lib/semver-compare.js");
 });
 
 test("only the script node runs counts, and only inside the Claude home", () => {
@@ -49,10 +50,39 @@ test("only the script node runs counts, and only inside the Claude home", () => 
     "node ~/.claude/../elsewhere/live-hook-integrity.js",
     "echo node ~/.claude/hooks/live-hook-integrity.js",
   ]) {
-    assert.notEqual(claudeHomeScript(command, winHome), "hooks/live-hook-integrity.js", command);
+    assert.notEqual(claudeHomeScript(command, winHome, winUser), "hooks/live-hook-integrity.js", command);
   }
-  assert.equal(claudeHomeScript("node /opt/tools/x.js", winHome), undefined);
-  assert.equal(claudeHomeScript(undefined, winHome), undefined);
+  assert.equal(claudeHomeScript("node /opt/tools/x.js", winHome, winUser), undefined);
+  assert.equal(claudeHomeScript(undefined, winHome, winUser), undefined);
+});
+
+// Review of #254: an unquoted script token ended only at whitespace, so a shell
+// operator glued to it became part of the path.
+test("a shell operator glued to an unquoted script ends it", () => {
+  assert.equal(claudeHomeScript("node ~/.claude/hooks/em-dash-watch.js; echo", winHome, winUser), "hooks/em-dash-watch.js");
+  assert.equal(claudeHomeScript("node ~/.claude/hooks/live.js&&echo ok", winHome, winUser), "hooks/live.js");
+  assert.equal(claudeHomeScript("node ~/.claude/hooks/a.js|tee x", winHome, winUser), "hooks/a.js");
+  assert.equal(claudeHomeScript("node ~/.claude/hooks/a.js>out", winHome, winUser), "hooks/a.js");
+  const glued = { hooks: { Stop: [{ hooks: [run("node ~/.claude/hooks/em-dash-watch.js; echo")] }] } };
+  assert.equal(retireHookCommands(glued, new Set(["hooks/em-dash-watch.js"]), winHome, winUser).removed.length, 1,
+    "the retired script is matched");
+  const live = (file: string) => file.replace(/\\/g, "/").endsWith("/hooks/live.js");
+  assert.deepEqual(danglingHookCommands({ hooks: { Stop: [{ hooks: [run("node ~/.claude/hooks/live.js&&echo ok")] }] } },
+    new Set(), winHome, winUser, live), [], "the live script is not dangling");
+});
+
+// Review of #254: ~/.claude names the Claude home only when CLAUDE_HOME is the
+// default one. Otherwise such a command names another directory and is left alone.
+test("home tokens count only when the Claude home is the default one", () => {
+  for (const command of ["node ~/.claude/hooks/a.js", 'node "$HOME/.claude/hooks/a.js"', "node ${HOME}/.claude/hooks/a.js"]) {
+    assert.equal(claudeHomeScript(command, "/opt/custom-claude", "/Users/example"), undefined, command);
+    assert.equal(claudeHomeScript(command, "/Users/example/.claude", "/Users/example"), "hooks/a.js", command);
+    assert.equal(claudeHomeScript(command, "c:/users/example/.claude/", "C:\\Users\\Example"), "hooks/a.js", command);
+  }
+  assert.equal(claudeHomeScript("node /opt/custom-claude/hooks/a.js", "/opt/custom-claude", "/Users/example"), "hooks/a.js");
+  const custom = { hooks: { Stop: [{ hooks: [run("node ~/.claude/hooks/live-hook-integrity.js")] }] } };
+  assert.equal(retireHookCommands(custom, retired, "/opt/custom-claude", "/Users/example").removed.length, 0);
+  assert.deepEqual(danglingHookCommands(custom, retired, "/opt/custom-claude", "/Users/example", () => false), []);
 });
 
 test("the retired list is read from the manifest, Claude-home entries only", () => {
@@ -86,7 +116,7 @@ function legacyHost(): Settings {
 }
 
 test("retirement removes each retired command, drops emptied groups and nothing else", () => {
-  const { settings, removed } = retireHookCommands(legacyHost(), retired, winHome);
+  const { settings, removed } = retireHookCommands(legacyHost(), retired, winHome, winUser);
   assert.deepEqual(removed.map((item) => `${item.event} ${item.command}`), [
     "SessionStart node ~/.claude/hooks/live-hook-integrity.js",
     'SessionStart node "$HOME/.claude/hooks/lib/semver-compare.js"',
@@ -104,7 +134,7 @@ test("retirement removes each retired command, drops emptied groups and nothing 
   });
   assert.deepEqual(settings.env, { OPERATOR: "kept" });
   const clean = { hooks: settings.hooks };
-  assert.equal(retireHookCommands(clean, retired, winHome).settings, clean);
+  assert.equal(retireHookCommands(clean, retired, winHome, winUser).settings, clean);
 });
 
 test("a dangling command is one that runs a retired or missing script in the Claude home", () => {
@@ -113,7 +143,7 @@ test("a dangling command is one that runs a retired or missing script in the Cla
   const found = danglingHookCommands({ hooks: {
     ...legacyHost().hooks,
     UserPromptSubmit: [{ matcher: "", hooks: [run("node ~/.claude/hooks/gone.mts"), run("node /opt/x.js")] }],
-  } }, retired, winHome, exists);
+  } }, retired, winHome, winUser, exists);
   assert.deepEqual(found.map((item) => `${item.event} ${item.command}`), [
     "SessionStart node ~/.claude/hooks/live-hook-integrity.js",
     'SessionStart node "$HOME/.claude/hooks/lib/semver-compare.js"',
@@ -123,7 +153,7 @@ test("a dangling command is one that runs a retired or missing script in the Cla
   ]);
   const retiredButPresent = (file: string) => file.endsWith("live-hook-integrity.js");
   assert.equal(danglingHookCommands({ hooks: { Stop: [{ hooks: [run("node ~/.claude/hooks/live-hook-integrity.js")] }] } },
-    retired, winHome, retiredButPresent).length, 1, "a retired script counts even while its file is still live");
+    retired, winHome, winUser, retiredButPresent).length, 1, "a retired script counts even while its file is still live");
 });
 
 function root(t: TestContext): string {
@@ -134,7 +164,10 @@ function root(t: TestContext): string {
 
 test("the settings render unwires retired commands and reports one line each", (t) => {
   const dir = root(t);
-  const home = path.join(dir, "claude");
+  const home = path.join(dir, ".claude");
+  const savedHome = process.env.HOME;
+  process.env.HOME = dir;
+  t.after(() => { if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome; });
   const existing = path.join(dir, "settings.json");
   fs.writeFileSync(existing, JSON.stringify(legacyHost()));
   const existingProject = path.join(dir, "settings.local.json");
