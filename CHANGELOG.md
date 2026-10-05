@@ -399,6 +399,18 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Codex hooks: `commit-guard` and `deploy-guard` now block under Codex on
+  Windows (issue #258). Codex runs the Windows hook form under pwsh, which
+  reports the guard's exit 2 as 1, and Codex treats that as a failed,
+  non-blocking hook, so the tool call went ahead. `codex-hook-adapter.mts` now
+  answers a guard's exit 2 in the PreToolUse phases with the documented JSON
+  deny on stdout (`hookSpecificOutput.permissionDecision: "deny"`, the guard's
+  stderr as `permissionDecisionReason`, or a fixed reason naming the guard when
+  stderr is empty) and exits 0, on every platform. In a multi-command payload
+  the first block answers alone and nothing after it runs. A guard's own JSON
+  decision, a silent exit 0, any other exit code and the PostToolUse phase
+  behave as before. The Claude Code wiring, which runs the guards directly, is
+  unchanged.
 - Bootstrap: an upgrade now unwires every `settings.json` hook command that
   runs a script listed in `bootstrap/manifest/retired.txt` (issue #252). A host
   could carry a second, legacy wiring such as `node ~/.claude/hooks/<name>.js`
