@@ -1,3 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
+
+import { ensureDir } from "./config.mts";
+import { readJson, writeJsonAtomic } from "./inbox.mts";
 import { MAX_ANCESTORS, readProcessTable, type ProcessTable } from "./launch-mode.mts";
 
 // Whether a Claude Code session runs headless (claude -p), so that it can
@@ -24,22 +29,43 @@ import { MAX_ANCESTORS, readProcessTable, type ProcessTable } from "./launch-mod
 // inside a quoted prompt is no option. ps on macOS and Linux loses the
 // quoting: there a session outside the --bg machinery whose prompt holds a
 // separate -p or --print is taken for headless (known false positive).
+// Kept per Claude Code process (issue #245), so only its first hook lists
+// processes: <cache dir>/<session id>.<hook's parent pid>.json holds the mode,
+// CLAUDE_CODE_ENTRYPOINT and the time, written atomically, and decides only for
+// the same three within RUN_MODE_MAX_AGE_MS. A claude -p --resume of an
+// interactive session runs in another process, so it gets its own full check.
+// Only a full check that found the Claude Code process and read its parent's
+// command line is kept; any read or write error means a full check. Where a
+// shell stays between Claude Code and the hook (Git Bash on Windows), every
+// hook has its own parent pid: no hit, the cost stays as before.
 
 export type RunMode = "interactive" | "headless" | "unknown";
 
+export const RUN_MODE_MAX_AGE_MS = 60 * 60_000;
 const CLAUDE_PROGRAM = /^claude(\.exe|\.cmd)?$/i;
 const NODE_PROGRAM = /^node(\.exe)?$/i;
 const CLAUDE_SCRIPT = /@anthropic-ai[\\/]claude-code[\\/](cli\.js|bin[\\/]claude)/;
+const PLAIN_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const isPrint = (token: string): boolean => token === "-p" || token === "--print" || token.startsWith("--print=");
 // The --bg machinery: a --bg-pty-host option (Windows), or the subcommand of
 // the daemon, the PTY host and the spare session it runs (macOS, measured
 // 2026-10-05: claude.exe daemon run, claude bg-pty-host, claude bg-spare).
+// As ps loses the quoting, claude "daemon foo" -p reads like a subcommand
+// (issue #245): never with -p or --print among the own options, the daemon
+// only as daemon run, and its --spawned-by JSON, split by ps too, is no option.
 const BG_HOST = "--bg-pty-host";
-const BG_COMMANDS = new Set(["daemon", "bg-pty-host", "bg-spare"]);
-const backgroundOf = (options: string[] | null): boolean => options !== null && (options.includes(BG_HOST) || BG_COMMANDS.has(options[0]));
+const BG_COMMANDS = new Set(["daemon run", "bg-pty-host", "bg-spare"]);
+function backgroundOf(options: string[] | null): boolean {
+  if (options === null) return false;
+  const end = options.indexOf("--spawned-by");
+  const own = end < 0 ? options : options.slice(0, end);
+  const command = options.slice(0, options[0] === "daemon" ? 2 : 1).join(" ");
+  return !own.some(isPrint) && (own.includes(BG_HOST) || BG_COMMANDS.has(command));
+}
 
 export interface HeadlessDeps {
   env?: Record<string, string | undefined>; processTable?: () => Promise<ProcessTable | null>; ppid?: number;
-  platform?: NodeJS.Platform;
+  platform?: NodeJS.Platform; cache?: { dir: string; sessionId: string }; now?: () => number;
 }
 
 export const entrypointMode = (env: Record<string, string | undefined>): RunMode =>
@@ -119,7 +145,7 @@ function claudeOptions(argv: string[]): string[] | null {
   return end < 0 ? rest : rest.slice(0, end);
 }
 
-interface ClaudeProcess { background: boolean; print: boolean }
+interface ClaudeProcess { background: boolean; print: boolean; parentRead: boolean }
 
 // The first Claude Code process up from ppid: background when it or its
 // parent belongs to the --bg machinery, else print when it has the option;
@@ -133,8 +159,9 @@ function claudeProcess(ppid: number, table: ProcessTable, platform: NodeJS.Platf
     const options = claudeOptions(split(entry.args));
     if (options) {
       const parent = table.get(entry.ppid)?.args;
-      const background = backgroundOf(options) || (parent !== undefined && parent !== null && backgroundOf(claudeOptions(split(parent))));
-      return { background, print: !background && options.some((token) => token === "-p" || token === "--print" || token.startsWith("--print=")) };
+      const parentRead = typeof parent === "string";
+      const background = backgroundOf(options) || (parentRead && backgroundOf(claudeOptions(split(parent))));
+      return { background, print: !background && options.some(isPrint), parentRead };
     }
     pid = entry.ppid;
   }
@@ -152,10 +179,54 @@ export function ancestryMode(ppid: number, table: ProcessTable, platform: NodeJS
   return optionsMode(claudeProcess(ppid, table, platform));
 }
 
+interface KeptMode { mode: RunMode; entrypoint: string; at: number }
+
+function readKept(file: string, entrypoint: string, now: number): RunMode | null {
+  try {
+    const kept = readJson<KeptMode>(file);
+    if (kept === null || kept.entrypoint !== entrypoint) return null;
+    if (kept.mode !== "interactive" && kept.mode !== "headless") return null;
+    const age = now - (kept.at ?? Number.NaN);
+    return age >= 0 && age < RUN_MODE_MAX_AGE_MS ? kept.mode : null;
+  } catch {
+    return null;
+  }
+}
+
+// Writes the entry after pruning entries (and stray temporary files) older than the bound.
+function keep(file: string, kept: KeptMode): void {
+  try {
+    const dir = path.dirname(file);
+    ensureDir(dir);
+    for (const name of fs.readdirSync(dir)) {
+      const entry = path.join(dir, name);
+      try {
+        if (kept.at - fs.statSync(entry).mtimeMs >= RUN_MODE_MAX_AGE_MS) fs.rmSync(entry, { force: true });
+      } catch {
+        // removed meanwhile
+      }
+    }
+    writeJsonAtomic(file, kept);
+  } catch {
+    // not kept: the next hook checks in full
+  }
+}
+
 export async function headlessMode(deps: HeadlessDeps = {}): Promise<RunMode> {
+  const env = deps.env ?? process.env;
+  const ppid = deps.ppid ?? process.ppid;
+  const now = deps.now ?? Date.now;
+  const entrypoint = env.CLAUDE_CODE_ENTRYPOINT ?? "";
+  const { cache } = deps;
+  const file = cache && ppid > 1 && PLAIN_ID.test(cache.sessionId) ? path.join(cache.dir, `${cache.sessionId}.${ppid}.json`) : null;
+  const kept = file === null ? null : readKept(file, entrypoint, now());
+  if (kept !== null) return kept;
   const table = await (deps.processTable ?? (() => readProcessTable(deps.platform)))();
-  const found = table ? claudeProcess(deps.ppid ?? process.ppid, table, deps.platform ?? process.platform) : null;
-  if (found?.background) return "interactive";
-  if (entrypointMode(deps.env ?? process.env) === "headless") return "headless";
-  return optionsMode(found);
+  const found = table ? claudeProcess(ppid, table, deps.platform ?? process.platform) : null;
+  let mode: RunMode;
+  if (found?.background) mode = "interactive";
+  else if (entrypointMode(env) === "headless") mode = "headless";
+  else mode = optionsMode(found);
+  if (file !== null && found?.parentRead) keep(file, { mode, entrypoint, at: now() });
+  return mode;
 }

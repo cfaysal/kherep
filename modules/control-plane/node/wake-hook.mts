@@ -60,8 +60,9 @@ import { atReplyLimit, pending, rememberWoken } from "./wake-pending.mts";
 // 2026-10-05), yet on Claude Code 2.1.289 (Windows, 2026-10-05) a claude -p run
 // hung until the listener's timeout. A headless session can never be woken: its
 // listener arms as any other, so the arming order holds (listener-order.mts),
-// learns the run mode before its first poll (headless-mode.mts, about 1 to 2 s)
-// and then removes its own files and exits 0 (issue #235).
+// learns the run mode before its first poll (headless-mode.mts, kept per Claude
+// Code process in run-modes/, issue #245) and then removes its own files and
+// exits 0 (issue #235).
 
 export { listenerDir, wakeAudit };
 export { WAKE_BACKLOG_AFTER_MS, WAKE_GRACE_MS } from "./wake-pending.mts";
@@ -175,7 +176,8 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
   recordScope(paths, sessionId, scope());
   writeJsonAtomic(lockFile, mine);
   // A check that fails decides nothing. A newer listener keeps its files and the mode.
-  if (await (deps.runMode ?? headlessMode)().catch(() => "unknown") === "headless") {
+  const runMode = deps.runMode ?? (() => headlessMode({ cache: { dir: path.join(paths.dir, "run-modes"), sessionId } }));
+  if (await runMode().catch(() => "unknown") === "headless") {
     if (releaseOwn(paths, sessionId, mine.token, now()) && !hadMode) fs.rmSync(modeFile(paths, sessionId), { force: true });
     audit(paths, now(), sessionId, [], "headless");
     return quiet;
