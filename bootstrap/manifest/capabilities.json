@@ -66,10 +66,10 @@
     "memo-retro.md"
   ],
   "requiredHooks": [
-    "commit-guard.js",
-    "deploy-guard.js",
-    "dispatch-contract-guard.js",
-    "privacy-boundary-guard.js",
+    "commit-guard.mts",
+    "deploy-guard.mts",
+    "dispatch-contract-guard.mts",
+    "privacy-boundary-guard.mts",
     "clq-accept-gate.mts",
     "runtime-capability-snapshot.mts",
     "maestro-discipline.mts",

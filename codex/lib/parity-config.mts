@@ -122,9 +122,9 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
   const groups = [
     group("PreToolUse", "Read|Grep|Glob|Edit|Write|MultiEdit|apply_patch|Bash|shell_command|exec_command|functions\\.exec", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
     group("PreToolUse", "Agent|spawn_agent|Task|Workflow|WebSearch|WebFetch|mcp__.*", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
-    group("PreToolUse", "Bash|shell_command|exec_command|functions\\.exec", [adapted("commit-guard.js", "pre"), adapted("deploy-guard.js", "pre-no-transcript")]),
+    group("PreToolUse", "Bash|shell_command|exec_command|functions\\.exec", [adapted("commit-guard.mts", "pre"), adapted("deploy-guard.mts", "pre-no-transcript")]),
     group("PreToolUse", "Agent|spawn_agent", [hook("codex-dispatch-contract-guard.mts")]),
-    group("PreToolUse", "mcp__playwright__browser_navigate", [hook("playwright-file-guard.js")]),
+    group("PreToolUse", "mcp__playwright__browser_navigate", [hook("playwright-file-guard.mts")]),
     ...(options.messagingClient?.enabled
       ? [group("PreToolUse", "^mcp__kherep_messaging__(sessions|send|inbox|reply|status)$",
         [{ command: command(node, options.messagingClient.intentHook, "--config-root", options.messagingClient.configRoot) }])]
@@ -335,10 +335,23 @@ const LEGACY_JAVASCRIPT_HOOKS = [
 // stops being recognised as managed and survives the upgrade unreplaced.
 const LEGACY_SHARED_NUDGES = ["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"];
 
-function withLegacySharedNudges(config: string): string {
+function toLegacyJs(config: string, names: readonly string[]): string {
   let text = config;
-  for (const name of LEGACY_SHARED_NUDGES) text = text.replaceAll(`${name}.mts`, `${name}.js`);
+  for (const name of names) text = text.replaceAll(`${name}.mts`, `${name}.js`);
   return text;
+}
+
+// Issue #237. The three shared Claude guards became .mts after the nudges, so
+// every block written before that names them .js: the predecessor renders above
+// and every render of the current family as an earlier installer wrote it.
+const LEGACY_SHARED_GUARDS = ["commit-guard", "deploy-guard", "playwright-file-guard"];
+
+function withLegacySharedNudges(config: string): string {
+  return toLegacyJs(config, [...LEGACY_SHARED_GUARDS, ...LEGACY_SHARED_NUDGES]);
+}
+
+export function withLegacySharedGuards(config: string): string {
+  return toLegacyJs(config, LEGACY_SHARED_GUARDS);
 }
 
 // Recognize the previous Kherep projection whose shared nudges still used .js.

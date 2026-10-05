@@ -45,7 +45,7 @@ const OBSERVATION_WORKSPACE_SENTINEL =
   'const SELECTED_WORKSPACE = "__KHEREP_SELECTED_WORKSPACE__";';
 const RETIRED_MCP_SERVERS = ["claude-baton"];
 const SHARED_HOOKS = [
-  "commit-guard.js", "deploy-guard.js", "playwright-file-guard.js",
+  "commit-guard.mts", "deploy-guard.mts", "playwright-file-guard.mts",
   "manifest-watch.mts", "loc-watch.mts", "umlaut-translit-watch.mts", "simplify-nudge.mts",
 ];
 
@@ -58,7 +58,9 @@ const RETIRED_TARGETS = [
     .map((name) => path.join("hooks", "kherep-maestro", `codex-${name}.js`)),
   // OP-1138. The four PostToolUse nudges became .mts. The projection copies by
   // name, so their old .js copies would survive under hooks/kherep-maestro.
-  ...["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"]
+  // Issue #237: the three shared Claude guards became .mts the same way.
+  ...["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge",
+    "commit-guard", "deploy-guard", "playwright-file-guard"]
     .map((name) => path.join("hooks", "kherep-maestro", `${name}.js`)),
   path.join("orchestra", "registry-http-bridge.js"),
   path.join("orchestra", "supergateway-secret-wrapper.js"),

@@ -90,7 +90,13 @@ test("the retired list is read from the manifest, Claude-home entries only", () 
   assert.ok(entries.has("hooks/live-hook-integrity.js"));
   assert.ok(entries.has("hooks/lib/semver-compare.js"));
   assert.ok(![...entries].some((entry) => entry.startsWith("project/") || entry.startsWith("#")));
-  assert.ok(!entries.has("hooks/privacy-boundary-guard.js"), "batch-2 guards are not retired yet");
+  // Issue #237 batch 2: every old .js guard and its test is retired.
+  for (const name of ["commit-guard", "deploy-guard", "dispatch-contract-guard", "privacy-boundary-guard", "secret-output-guard"]) {
+    assert.ok(entries.has(`hooks/${name}.js`), `hooks/${name}.js is retired`);
+    assert.ok(entries.has(`hooks/${name}.test.js`), `hooks/${name}.test.js is retired`);
+  }
+  assert.ok(entries.has("hooks/playwright-file-guard.js"));
+  assert.ok(entries.has("hooks/portable-scope-hooks.test.js"));
 });
 
 function legacyHost(): Settings {
@@ -199,7 +205,12 @@ test("the settings render unwires retired commands and reports one line each", (
   process.env.HOME = dir;
   t.after(() => { if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome; });
   const existing = path.join(dir, "settings.json");
-  fs.writeFileSync(existing, JSON.stringify(legacyHost()));
+  // The manifest retires the batch-2 guards too (#237), so the legacy
+  // privacy-boundary-guard.js line goes; a host-owned legacy-form hook whose
+  // script is not retired stays.
+  const host = legacyHost();
+  host.hooks!.PreToolUse!.push({ matcher: "Write", hooks: [run("node ~/.claude/hooks/host-guard.js")] });
+  fs.writeFileSync(existing, JSON.stringify(host));
   const existingProject = path.join(dir, "settings.local.json");
   fs.writeFileSync(existingProject, JSON.stringify({ hooks: { Stop: [{ matcher: "", hooks: [run("node ~/.claude/hooks/em-dash-watch.js")] }] } }));
   const lines: string[] = [];
@@ -211,12 +222,14 @@ test("the settings render unwires retired commands and reports one line each", (
     "retire: unwire SessionStart node ~/.claude/hooks/live-hook-integrity.js",
     'retire: unwire SessionStart node "$HOME/.claude/hooks/lib/semver-compare.js"',
     "retire: unwire Stop node ~/.claude/hooks/clq-accept-gate.js",
+    "retire: unwire PreToolUse node ~/.claude/hooks/privacy-boundary-guard.js",
     "retire: unwire Stop node ~/.claude/hooks/em-dash-watch.js",
   ], "the Windows-absolute command names a different home here and stays");
   assert.doesNotMatch(fs.readFileSync(path.join(dir, "project.json"), "utf8"), /em-dash-watch/);
   const text = fs.readFileSync(path.join(dir, "out.json"), "utf8");
   assert.doesNotMatch(text, /"node ~\/\.claude\/hooks\/(?:live-hook-integrity|clq-accept-gate)\.js"/);
   assert.doesNotMatch(text, /startup\|clear\|compact\|resume/, "the emptied legacy group is gone");
-  assert.match(text, /~\/\.claude\/hooks\/privacy-boundary-guard\.js/);
+  assert.doesNotMatch(text, /~\/\.claude\/hooks\/privacy-boundary-guard\.js/);
+  assert.match(text, /"node ~\/\.claude\/hooks\/host-guard\.js"/);
   assert.match(text, /~\/own\/check\.js ~\/\.claude\/hooks\/clq-accept-gate\.js/);
 });

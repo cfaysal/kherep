@@ -6,7 +6,13 @@
 # An entry that is absent on the host is skipped. drift-check.sh reports one that is still live, as information.
 hooks/clq-accept-gate.js
 hooks/clq-accept-gate.test.js
+hooks/commit-guard.js
+hooks/commit-guard.test.js
 hooks/critical-file-integrity.js
+hooks/deploy-guard.js
+hooks/deploy-guard.test.js
+hooks/dispatch-contract-guard.js
+hooks/dispatch-contract-guard.test.js
 hooks/drift-check-nudge.js
 hooks/drift-check-nudge.test.js
 hooks/drift-managed-path-watch.js
@@ -29,8 +35,14 @@ hooks/maestro-discipline.js
 hooks/manifest-watch.js
 hooks/memo-retro-reminder.js
 hooks/orchestra-default.js
+hooks/playwright-file-guard.js
+hooks/portable-scope-hooks.test.js
+hooks/privacy-boundary-guard.js
+hooks/privacy-boundary-guard.test.js
 hooks/runtime-capability-snapshot.js
 hooks/runtime-capability-snapshot.test.js
+hooks/secret-output-guard.js
+hooks/secret-output-guard.test.js
 hooks/simplify-nudge.js
 hooks/smoke-test-nudge.js
 hooks/smoke-test-nudge.test.js

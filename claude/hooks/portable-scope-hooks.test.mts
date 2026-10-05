@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-"use strict";
-const path = require("path");
-const { spawnSync } = require("child_process");
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 const hooks = [
   { file: "maestro-discipline.mts", marker: "MAESTRO TURN CHECK" },
@@ -10,17 +9,17 @@ const hooks = [
 let pass = 0;
 let fail = 0;
 
-function invoke(file, payload, envExtra = {}) {
-  const env = { ...process.env, ...envExtra };
+function invoke(file: string, payload: string | Record<string, unknown>, envExtra: Record<string, string> = {}) {
+  const env: Record<string, string | undefined> = { ...process.env, ...envExtra };
   if (!Object.hasOwn(envExtra, "KHEREP_WORKSPACE")) delete env.KHEREP_WORKSPACE;
-  return spawnSync("node", [path.join(__dirname, file)], {
+  return spawnSync("node", [path.join(import.meta.dirname, file)], {
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
     encoding: "utf8",
     env,
   });
 }
 
-function check(name, condition) {
+function check(name: string, condition: boolean): void {
   condition ? pass++ : fail++;
   console.log(`${condition ? "PASS" : "FAIL"} | ${name}`);
 }

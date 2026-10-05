@@ -22,20 +22,22 @@ after(() => {
 });
 
 interface HookCommand { command?: unknown }
-interface HookEntry { hooks?: HookCommand[] }
+interface HookEntry { matcher?: string; hooks?: HookCommand[] }
 interface Settings { hooks?: Record<string, HookEntry[]> }
 
 const settings = JSON.parse(fs.readFileSync(path.join(repo, "claude", "settings.user.json"), "utf8")) as Settings;
 
-interface Wired { event: string; command: string }
+interface Wired { event: string; matcher: string; command: string }
 
 // The one wired command, in whichever event, that runs the named hook file.
 function wiredCommand(hook: string): Wired {
   const found: Wired[] = [];
-  for (const [event, entries] of Object.entries(settings.hooks ?? {})) {
-    for (const entry of entries.flatMap((group) => group.hooks ?? [])) {
-      if (typeof entry.command === "string" && entry.command.includes(`/hooks/${hook}`)) {
-        found.push({ event, command: entry.command });
+  for (const [event, groups] of Object.entries(settings.hooks ?? {})) {
+    for (const group of groups) {
+      for (const entry of group.hooks ?? []) {
+        if (typeof entry.command === "string" && entry.command.includes(`/hooks/${hook}`)) {
+          found.push({ event, matcher: group.matcher ?? "", command: entry.command });
+        }
       }
     }
   }
@@ -52,23 +54,33 @@ function transcript(name: string, entries: unknown[]): string {
 const user = (text: string) => ({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
 const assistant = (text: string) => ({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
 
+interface Run { status: number | null; decision: unknown; permission: unknown; stderr: string }
+
 // Runs the wired command through a shell, the way Claude Code starts a hook.
-function runWired({ event, command }: Wired, payload: Record<string, unknown>): { status: number | null; decision: unknown; stderr: string } {
-  const resolved = command.replaceAll("__KHEREP_CLAUDE_HOME__", claudeSource);
+// claudeHome replaces the placeholder (default: this checkout's claude/), so a
+// test can point the same command at a copy with a broken guard.
+function runWired(
+  { event, command }: Wired, payload: Record<string, unknown>,
+  claudeHome = claudeSource, env: Record<string, string | undefined> = {},
+): Run {
+  const resolved = command.replaceAll("__KHEREP_CLAUDE_HOME__", claudeHome);
   const result = spawnSync(resolved, {
     shell: true,
     encoding: "utf8",
     input: JSON.stringify({ hook_event_name: event, cwd: WORKSPACE, ...payload }),
-    env: { ...process.env, KHEREP_WORKSPACE: WORKSPACE },
+    env: { ...process.env, KHEREP_WORKSPACE: WORKSPACE, ...env },
     windowsHide: true,
   });
-  let decision: unknown = null;
+  let output: { decision?: unknown; hookSpecificOutput?: { permissionDecision?: unknown } } = {};
   try {
-    decision = (JSON.parse(result.stdout) as { decision?: unknown }).decision;
-  } catch {
-    decision = null;
-  }
-  return { status: result.status, decision, stderr: result.stderr };
+    output = JSON.parse(result.stdout) ?? {};
+  } catch { /* no JSON on stdout */ }
+  return {
+    status: result.status,
+    decision: output.decision ?? null,
+    permission: output.hookSpecificOutput?.permissionDecision ?? null,
+    stderr: result.stderr,
+  };
 }
 
 // Both guards read the Stop payload (stop_hook_active, the finished turn), so
@@ -113,3 +125,92 @@ for (const guard of GUARDS) {
     assert.equal(decision, null);
   });
 }
+
+// Issue #237 batch 2: the six PreToolUse guards. Three block with exit 2 and a
+// stderr reason, three with a JSON deny on exit 0. Each case names a tool its
+// wired matcher has to cover, including the tools of the legacy groups hosts
+// still carry (see guard-matcher-coverage.test.mts).
+type Mode = "exit2" | "deny";
+interface ToolCase { tool: string; input: Record<string, unknown> }
+const bash = (command: string, tool = "Bash"): ToolCase => ({ tool, input: { command } });
+// Synthetic private markers, assembled so this file itself carries none.
+const PRIVATE_FILE = `D:/Work-${"credentials"}/fixture.env`;
+const PRIVATE_TAG = `<${"private"}>synthetic</${"private"}>`;
+const PRETOOL_GUARDS: { hook: string; matcher: string; mode: Mode; blocking: ToolCase[]; benign: ToolCase }[] = [
+  { hook: "commit-guard.mts", matcher: "Bash", mode: "exit2",
+    blocking: [bash('git commit -m "x Co-Authored-By: bot"')], benign: bash('git commit -m "plain subject"') },
+  { hook: "deploy-guard.mts", matcher: "Bash", mode: "exit2",
+    blocking: [bash("git push --force")], benign: bash("git push origin main") },
+  { hook: "secret-output-guard.mts", matcher: "", mode: "exit2",
+    blocking: [bash("printenv"), bash("Get-ChildItem Env:", "PowerShell")], benign: bash("git status") },
+  { hook: "privacy-boundary-guard.mts", matcher: "", mode: "deny",
+    blocking: [
+      { tool: "Read", input: { file_path: PRIVATE_FILE } },
+      { tool: "mcp__rovo__search", input: { query: PRIVATE_TAG } },
+    ],
+    benign: { tool: "Read", input: { file_path: path.join(WORKSPACE, "src", "a.ts") } } },
+  { hook: "dispatch-contract-guard.mts", matcher: "Agent|Task", mode: "deny",
+    blocking: [{ tool: "Agent", input: { subagent_type: "kherep-builder", prompt: "build it" } }],
+    benign: { tool: "Agent", input: { subagent_type: "general-purpose", model: "sonnet", prompt: "look it up" } } },
+  { hook: "playwright-file-guard.mts", matcher: "", mode: "deny",
+    blocking: [{ tool: "mcp__plugin_playwright_playwright__browser_navigate", input: { url: "file:///C:/report/index.html" } }],
+    benign: { tool: "mcp__plugin_playwright_playwright__browser_navigate", input: { url: "http://localhost:8080/" } } },
+];
+
+// The host's own policy settings must not decide these cases.
+const NEUTRAL_ENV = { KHEREP_WORK_ITEM_REQUIRED: "", KHEREP_ALLOWED_MODELS: undefined, KHEREP_AGENT_MODEL_POLICY: undefined };
+
+function runCase(wired: Wired, item: ToolCase, claudeHome?: string): Run {
+  return runWired(wired, { tool_name: item.tool, tool_input: item.input }, claudeHome, NEUTRAL_ENV);
+}
+
+function blocked(run: Run, mode: Mode, hook: string): boolean {
+  return mode === "exit2"
+    ? run.status === 2 && run.stderr.includes(hook.replace(".mts", ""))
+    : run.status === 0 && run.permission === "deny";
+}
+
+// Asserts that the guard blocks every blocking case and lets the benign one pass.
+function assertBlocks(guard: (typeof PRETOOL_GUARDS)[number], claudeHome?: string): void {
+  const wired = wiredCommand(guard.hook);
+  for (const item of guard.blocking) {
+    const run = runCase(wired, item, claudeHome);
+    assert.ok(blocked(run, guard.mode, guard.hook),
+      `${guard.hook} did not block ${item.tool}: status ${run.status}, stderr ${run.stderr}`);
+  }
+  const run = runCase(wired, guard.benign, claudeHome);
+  assert.equal(run.status, 0, `${guard.hook} benign: ${run.stderr}`);
+  assert.equal(run.permission, null, `${guard.hook} denied a benign ${guard.benign.tool}`);
+}
+
+for (const guard of PRETOOL_GUARDS) {
+  test(`${guard.hook} is wired under PreToolUse "${guard.matcher}" as an .mts file that exists`, () => {
+    const { event, matcher, command } = wiredCommand(guard.hook);
+    assert.equal(event, "PreToolUse");
+    assert.equal(matcher, guard.matcher);
+    assert.match(command, new RegExp(`^node "__KHEREP_CLAUDE_HOME__/hooks/${guard.hook.replace(".", "\\.")}"$`));
+    assert.ok(fs.statSync(path.join(repo, "claude", "hooks", guard.hook)).size > 0, `claude/hooks/${guard.hook} is not empty`);
+  });
+
+  test(`${guard.hook} still blocks through its wired command and allows a benign call`, () => {
+    assertBlocks(guard);
+  });
+}
+
+// Red-first evidence kept as a test: the same checks fail for a 0-byte or a
+// missing guard, so a conversion that leaves a guard unable to run cannot pass.
+test("a 0-byte or missing PreToolUse guard fails the blocking checks", () => {
+  const copy = path.join(TMP, "broken-claude");
+  fs.cpSync(path.join(repo, "claude", "hooks"), path.join(copy, "hooks"), { recursive: true });
+  const home = copy.replace(/\\/g, "/");
+  for (const guard of PRETOOL_GUARDS) {
+    const file = path.join(copy, "hooks", guard.hook);
+    const original = fs.readFileSync(file);
+    assertBlocks(guard, home);
+    fs.writeFileSync(file, "");
+    assert.throws(() => assertBlocks(guard, home), assert.AssertionError, `0-byte ${guard.hook}`);
+    fs.rmSync(file);
+    assert.throws(() => assertBlocks(guard, home), assert.AssertionError, `missing ${guard.hook}`);
+    fs.writeFileSync(file, original);
+  }
+});

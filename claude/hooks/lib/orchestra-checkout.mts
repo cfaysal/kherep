@@ -2,7 +2,7 @@
  * orchestra-checkout.mts  -  where the versioned Kherep source lives
  *
  * The hooks are installed globally under ~/.claude and apply to EVERY session. A
- * 0-byte commit-guard.js is broken everywhere, not just inside the Kherep
+ * 0-byte commit-guard.mts is broken everywhere, not just inside the Kherep
  * workspace, so self-healing must not hang on where a session happens to start.
  *
  * Resolving through the payload cwd alone is what drift-check-nudge.mts and

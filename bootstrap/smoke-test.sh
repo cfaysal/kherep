@@ -130,8 +130,8 @@ check_profile() {
 
   local must_exist=(
     hooks/maestro-discipline.mts hooks/clq-accept-gate.mts
-    hooks/privacy-boundary-guard.js hooks/runtime-capability-snapshot.mts
-    hooks/portable-scope-hooks.test.js
+    hooks/privacy-boundary-guard.mts hooks/runtime-capability-snapshot.mts
+    hooks/portable-scope-hooks.test.mts
     hooks/lib/private-path-policy.mts hooks/lib/private-path-rules.mts
     hooks/lib/workspace-scope.mts hooks/lib/workspace-scope.test.mts
     hooks/cbm-code-discovery-gate hooks/cbm-session-reminder hooks/cbm-subagent-reminder
@@ -172,7 +172,7 @@ check_profile() {
     "$CLAUDE_HOME/hooks/lib/workspace-scope.mts" "$CLAUDE_HOME/hooks/lib/private-path-policy.mts" || {
       note_fail "HOOK dependency resolution failed [$profile]";
     }
-  printf '{}\n' | node "$CLAUDE_HOME/hooks/privacy-boundary-guard.js" >/dev/null || {
+  printf '{}\n' | node "$CLAUDE_HOME/hooks/privacy-boundary-guard.mts" >/dev/null || {
     note_fail "INSTALLED privacy guard failed to execute [$profile]";
   }
   [ -e "$workspace/.claude/settings.local.json" ] || { note_fail "MISSING [$profile] project settings"; }
