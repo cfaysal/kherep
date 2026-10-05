@@ -4,6 +4,7 @@ import { mayContinue } from "./autonomy.mts";
 import { codexSessionRefs, isCodexSessionId, recordCodexSession } from "./codex-sessions.mts";
 import { confirmOffered, contextOutput, deliveryContext, sessionInbox, type HookDeps } from "./deliver-core.mts";
 import { cliCommand } from "./msg-cli.mts";
+import { nodeWakeBudget } from "./policy.mts";
 
 // The delivery hook under Codex (issue #31, step 4), started with
 // --runtime codex. Contract, from https://learn.chatgpt.com/docs/hooks.md
@@ -67,7 +68,8 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
   if (continued === true || arrived.length === 0) return "";
   // A continuation is an autonomous turn: the same budget and bypass check as
   // the Claude Stop path (autonomy.mts).
-  const allowed = deps.mayContinue ?? ((ids: string[]) => mayContinue(deps.paths, sessionId, mode, ids, deps.now?.() ?? Date.now()));
+  const allowed = deps.mayContinue ?? ((ids: string[]) => mayContinue(deps.paths, sessionId, mode, ids, deps.now?.() ?? Date.now(),
+    nodeWakeBudget(deps.paths)));
   if (!allowed(arrived)) return "";
   const receive = (deps.replyCommand ?? cliCommand()) + " msg inbox --from " + sessionId + " --receive";
   return JSON.stringify({ decision: "block", reason: CODEX_STOP_REASON + "\n" + receive + "\n" + CODEX_ESCALATION_NOTE });

@@ -3,18 +3,21 @@ import path from "node:path";
 
 import { ensureDir, type NodePaths } from "./config.mts";
 import { readJson, writeJsonAtomic } from "./inbox.mts";
+import { DEFAULT_TURN_BUDGET, type TurnBudget } from "./policy.mts";
 
 // Guards for autonomous turns (issue #31): model turns no user prompt started,
 // that is a wake by the listener (wake-hook.mts) and a Stop continuation by the
 // delivery hook (deliver-core.mts). Operator decisions of 2026-09-25:
 // - one budget per session for both: at most TURNS_PER_HOUR per rolling hour,
-//   TURNS_PER_DAY per rolling day and TURN_SPACING_MS between two;
+//   TURNS_PER_DAY per rolling day and TURN_SPACING_MS between two; the node
+//   policy's wake.budget may set other values within bounds (policy.mts
+//   wakeBudget, issue #259);
 // - a session in permission mode bypassPermissions is never driven
 //   autonomously; its messages wait for the next user prompt.
 
-export const TURNS_PER_HOUR = 6;
-export const TURNS_PER_DAY = 20;
-export const TURN_SPACING_MS = 30_000;
+export const TURNS_PER_HOUR = DEFAULT_TURN_BUDGET.perHour;
+export const TURNS_PER_DAY = DEFAULT_TURN_BUDGET.perDay;
+export const TURN_SPACING_MS = DEFAULT_TURN_BUDGET.spacingMs;
 const HOUR_MS = 60 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
 
@@ -113,26 +116,27 @@ function recentTurns(paths: NodePaths, sessionId: string, now: number): number[]
 }
 
 // Takes one autonomous turn when the budget allows it.
-export function takeTurn(paths: NodePaths, sessionId: string, now: number): Budget {
+export function takeTurn(paths: NodePaths, sessionId: string, now: number, budget: TurnBudget = DEFAULT_TURN_BUDGET): Budget {
   const file = turnsFile(paths, sessionId);
   ensureDir(listenerDir(paths));
   return withBudgetLock(file, () => {
     const turns = recentTurns(paths, sessionId, now);
-    if (turns.filter((t) => now - t < HOUR_MS).length >= TURNS_PER_HOUR || turns.length >= TURNS_PER_DAY) return "exhausted";
-    if (turns.some((t) => now - t < TURN_SPACING_MS)) return "spacing";
+    if (turns.filter((t) => now - t < HOUR_MS).length >= budget.perHour || turns.length >= budget.perDay) return "exhausted";
+    if (turns.some((t) => now - t < budget.spacingMs)) return "spacing";
     writeJsonAtomic(file, { turns: [...turns, now] });
     return "ok";
   });
 }
 
 // The delivery hook's gate for a Stop that would keep the turn going.
-export function mayContinue(paths: NodePaths, sessionId: unknown, permissionMode: unknown, messageIds: string[], now: number): boolean {
+export function mayContinue(paths: NodePaths, sessionId: unknown, permissionMode: unknown, messageIds: string[], now: number,
+  budget: TurnBudget = DEFAULT_TURN_BUDGET): boolean {
   if (!isPlainSessionId(sessionId)) return false;
   if (bypassesPermissions(permissionMode)) {
     audit(paths, now, sessionId, messageIds, "continue-permission-mode");
     return false;
   }
-  const ok = takeTurn(paths, sessionId, now) === "ok";
+  const ok = takeTurn(paths, sessionId, now, budget) === "ok";
   audit(paths, now, sessionId, messageIds, ok ? "continue" : "continue-budget");
   return ok;
 }

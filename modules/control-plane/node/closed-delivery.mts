@@ -12,7 +12,7 @@ import { progressRecords } from "./delivery-progress.mts";
 import { readLocalSessions } from "./exchange.mts";
 import { listInbox, markClosedAttempt, markRefused, MAX_REPLY_DEPTH, readJson, type InboxRecord } from "./inbox.mts";
 import { findKnown } from "./known-sessions.mts";
-import { acceptsMessage } from "./policy.mts";
+import { acceptsMessage, wakeBudget } from "./policy.mts";
 import { notReadyNow } from "./runtime-readiness.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { CLAUDE_RUNTIME } from "./sessions.mts";
@@ -188,7 +188,7 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   };
   const before = reusable ? null : startRefusal();
   if (before) return refuse(...before);
-  const budget = takeTurn(paths, reusable?.sessionId ?? sessionId, now);
+  const budget = takeTurn(paths, reusable?.sessionId ?? sessionId, now, wakeBudget(policy));
   if (budget === "spacing" || budget === "locked") {
     progressRecords(paths, records, "waiting", "retry-pending", now);
     return false;

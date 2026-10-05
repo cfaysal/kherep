@@ -8,6 +8,7 @@ import { nodePaths } from "./config.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
 import { contextOutput, deliveryContext, retryOffered, sessionInbox, type HookDeps } from "./deliver-core.mts";
 import { localSessionName } from "./exchange.mts";
+import { nodeWakeBudget } from "./policy.mts";
 
 // Claude Code hook that hands inbox messages to their session (issue #31,
 // step 3a). Contract, from https://code.claude.com/docs/en/hooks (fetched
@@ -55,7 +56,7 @@ export function deliverForHook(input: unknown, deps: HookDeps): string {
   }
   // A Stop continuation is an autonomous turn: budget and permission mode gate it.
   const gated: HookDeps = event === "Stop"
-    ? { ...deps, mayContinue: (ids) => mayContinue(deps.paths, sessionId, mode, ids, now) } : deps;
+    ? { ...deps, mayContinue: (ids) => mayContinue(deps.paths, sessionId, mode, ids, now, nodeWakeBudget(deps.paths)) } : deps;
   return contextOutput(event, deliveryContext(event, refs, gated));
 }
 
