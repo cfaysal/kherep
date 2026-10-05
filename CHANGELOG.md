@@ -412,6 +412,14 @@ increments the minor version; every other release increments the patch version.
   `wake-not-authorized` text now reads `the target node's policy did not
   authorize automatic delivery`. No new progress code: older Workers accept
   every frame.
+- Control Plane: a message for an ended Codex task whose working directory
+  the node's policy refuses (not absolute, missing, or outside the workspace
+  roots) no longer reads as a failed wake (issue #239). The exchange round's
+  resume reported that refusal as `failed/wake-failed`; it now waits with
+  `waiting/wake-not-authorized`, the code closed-session delivery uses for the
+  same check since issue #230, and the next round tries again. `wake-failed`
+  remains for a resume that did not start. No new progress code: older
+  Workers accept every frame.
 - Control Plane: a Codex run whose `codex exec` process dies abruptly no
   longer leaves its shell commands running (issue #233). On macOS a
   `sleep 901` outlived a SIGKILLed Codex intercom run in its own process

@@ -128,9 +128,10 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   // nothing and refuse the message after MAX_OFFERS rounds. With due messages
   // the context is not empty, unless a delivery hook offered them meanwhile.
   // Again: the directory may have been swapped for a link out of the roots since the start.
+  // A refused directory is policy, as for closed-session delivery (issue #239).
   const cwd = resolveCwd(deps.policy.sessions!, record.cwd, deps.realpath);
   if (!cwd.ok) {
-    explain(waiting, "wake-failed");
+    explain(waiting, "wake-not-authorized");
     log(`kherep-node: not resuming task ${record.taskId} for messages: ${cwd.reason}`);
     return;
   }
