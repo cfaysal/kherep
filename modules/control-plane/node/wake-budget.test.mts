@@ -55,7 +55,7 @@ test("a configured budget is read, missing fields fall back to the defaults", (t
 test("an out-of-range, non-integer, inverted or unknown budget rejects the whole wake section", (t) => {
   const rejected: unknown[] = [
     { perHour: 0 }, { perHour: 61, perDay: 100 }, { perDay: 0 }, { perHour: 1, perDay: 501 }, { spacingSeconds: 4 }, { spacingSeconds: 3601 },
-    { perHour: 7.5 }, { perHour: "8" }, { perDay: null }, { spacingSeconds: true }, { perHour: Number.NaN },
+    { perHour: 7.5 }, { perHour: "8" }, { perDay: null }, { spacingSeconds: true }, { perHour: Number.NaN /* null after JSON */ },
     { perHour: 10, perDay: 5 }, { perDay: 3 },
     { perHour: 8, extra: 1 }, { perhour: 8 }, { toString: 1 },
     null, [], 8, "fast",
@@ -143,6 +143,19 @@ test("Stop continuations draw on the configured budget", (t) => {
   assert.equal(stop(fallback, T0 + 5_000), false, "within the default 30 s");
   assert.deepEqual(auditLines(fallback).map((l) => l.action), ["continue", "continue-budget"]);
   assert.equal(id(2), auditLines(fallback).at(-1)?.messageIds[0]);
+});
+
+test("a Stop continuation with an unreadable policy file keeps the default budget", (t) => {
+  for (const garbage of ["{ not json", "", "[]", JSON.stringify({ version: 1, wake: { enabled: false, budget: { perHour: 1 } } })]) {
+    const { paths } = setup(t, { wake: undefined });
+    fs.writeFileSync(paths.policy, garbage);
+    arrive(paths, 1, T0);
+    assert.equal(stop(paths, T0), true, JSON.stringify(garbage));
+    arrive(paths, 2, T0);
+    assert.equal(stop(paths, T0 + 5_000), false, "default 30 s spacing: " + JSON.stringify(garbage));
+    arrive(paths, 3, T0);
+    assert.equal(stop(paths, T0 + 30_000), true, "default spacing passed: " + JSON.stringify(garbage));
+  }
 });
 
 test("doctor shows the effective budget", (t) => {
