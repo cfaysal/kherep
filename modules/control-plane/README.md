@@ -211,7 +211,9 @@ It is a per-message grant like the task grant, not a listing. An unlisted Claude
 1. Its `inReplyTo` names a message in this node's `sent/`, and it comes from a node, not from the operator API.
 2. It comes from the node the original was sent to. The Worker sets the sender node from the authenticated connection but does not check `inReplyTo`, so a third node that only knows a message id gets no grant.
 3. The original was sent from this session. `msg send` keeps the sending session's id as `fromSessionId` in the outbox and `sent/` record, next to `fromSession`, which is often its renameable name; the id never goes to the Worker. The id must match. A sent record of an earlier version without the id matches by its `fromSession` instead, which ends with the age bound.
-4. The original is at most 24 hours old by its `createdAt` (this node's clock) and not `refused`, `expired` or `error`; a `queued` original grants.
+4. The original is at most 24 hours old by its `createdAt` (this node's clock, not later than now) and not `refused`, `expired` or `error`; a `queued` original grants.
+
+Every reply to the same original arrives at reply depth 1, so the depth limit does not bound how often replies to one message wake the session within the 24 hours; the turn budget and spacing do. A `SessionStart` input without `permission_mode` (for example a resume) runs the launch check only for an explicitly listed session, so a session that only the reply grant covers does not arm there (`permission-mode-unknown`, fails closed); it arms at its next `Stop` or prompt.
 
 With `replies` on, every idle Claude Code session on the node keeps a 24-hour listener and takes one re-arm turn a day, as with `"*"`. The audit names the grant: `wake`, `backlog` and `stuck-offer` lines of reply-granted records carry `"grant": "reply"`. Turning the switch off ends a listener that is neither listed nor holds a task grant, audited `not-allowlisted` (issue #213). The switch applies to Claude Code listeners only; Codex sessions keep their own paths (see [Waking Codex sessions](#waking-codex-sessions)), where a reply to a Codex task session already carries its task id.
 

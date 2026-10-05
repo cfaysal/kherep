@@ -50,6 +50,14 @@ test("no grant from another node, the operator, or without a valid original", (t
   const incomplete = setup(t).paths;
   sentOriginal(incomplete, { createdAt: "yesterday" });
   assert.equal(replyGrants(incomplete, REFS, reply(), T0), false, "an unparseable createdAt");
+  const future = setup(t).paths;
+  sentOriginal(future, { createdAt: new Date(T0 + 60_000).toISOString() });
+  assert.equal(replyGrants(future, REFS, reply(), T0), false, "an original dated after now");
+  for (const missing of ["to", "fromSession"] as const) {
+    const partial = setup(t).paths;
+    sentOriginal(partial, { [missing]: undefined });
+    assert.equal(replyGrants(partial, REFS, reply(), T0), false, `no ${missing}`);
+  }
 });
 
 test("the session binds by id; the name counts only for a record without one", (t) => {

@@ -102,7 +102,7 @@ test("withdrawing the switch ends an unlisted listener: lock released, audit not
   }
 });
 
-test("a SessionStart listener wakes once for a granted backlog reply, audited with the grant", async (t) => {
+test("a SessionStart listener with a permission mode wakes once for a granted backlog reply, audited with the grant", async (t) => {
   const { paths } = setup(t, { wake: REPLIES });
   sentOriginal(paths);
   const waiting = arriveReply(paths, 1, T0 - 60_000);
@@ -110,6 +110,18 @@ test("a SessionStart listener wakes once for a granted backlog reply, audited wi
   assert.deepEqual(result, { code: 2, text: wakeText(1) });
   assert.deepEqual(auditLines(paths).map((l) => [l.ts, l.action, l.messageIds, l.grant]),
     [[new Date(T0 + WAKE_BACKLOG_AFTER_MS + 250).toISOString(), "backlog", [waiting], "reply"]]);
+});
+
+// A SessionStart input without permission_mode needs an explicit listing for
+// the launch check, so a session only the reply grant covers does not arm then
+// (fails closed); it arms at its next Stop or prompt.
+test("a SessionStart without permission_mode does not arm a replies-only session", async (t) => {
+  const { paths } = setup(t, { wake: REPLIES });
+  sentOriginal(paths);
+  arriveReply(paths, 1, T0 - 60_000);
+  const result = await listen(paths, { event: "SessionStart", source: "resume", mode: null, maxWaitMs: 20_000 });
+  assert.deepEqual(result, { code: 0 });
+  assert.deepEqual(actions(paths), [["permission-mode-unknown", undefined]]);
 });
 
 test("the budget and the bypassPermissions exclusion still apply", async (t) => {
