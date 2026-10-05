@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
-  isTaskId, type PermissionMode, type TaskReportBody, type TaskRequestBody, type TaskRuntime, type TaskState,
+  isTaskId, taskSessionName, type PermissionMode, type TaskReportBody, type TaskRequestBody, type TaskRuntime, type TaskState,
 } from "../protocol-tasks.mts";
 import type { ProcessIdentity } from "./codex-stop.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
-import { localSessionName } from "./exchange.mts";
+import { localSessionName, readDirectory } from "./exchange.mts";
 import { messageIds, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
 
 // The node's task files (issue #31, item 5), in its config directory:
@@ -194,4 +194,25 @@ export function readRequest(paths: NodePaths, requestId: string): TaskRequestRec
 
 export function requestIds(paths: NodePaths): string[] {
   return messageIds(paths.taskRequests);
+}
+
+// Issue #241: the task of this node's own task request whose session the
+// directory lists as sessionId on nodeId. Neither the request result nor task
+// control carries a task's session id; the target lists the session under the
+// task-<8> name it started it with, so exactly one dispatched request on that
+// node must carry a task id of that name. null when nothing matches uniquely.
+export function ownedTaskForSession(paths: NodePaths, nodeId: string, sessionId: string): string | null {
+  const listed = readDirectory(paths)?.sessions.filter((s) => s.nodeId === nodeId && s.sessionId === sessionId) ?? [];
+  const name = listed.length === 1 ? listed[0].name : undefined;
+  if (!name) return null;
+  const owned = new Set(requestIds(paths).flatMap((id) => {
+    try {
+      const request = readRequest(paths, id);
+      return request?.state === "dispatched" && request.nodeId === nodeId && request.taskId && taskSessionName(request.taskId) === name
+        ? [request.taskId] : [];
+    } catch {
+      return [];
+    }
+  }));
+  return owned.size === 1 ? [...owned][0] : null;
 }

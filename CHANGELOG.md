@@ -357,6 +357,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: `kherep-node msg stop <messageId>` for a message delivered
+  into an existing session no longer ends at the bare `not stopped: fresh
+  status does not identify a stoppable run (denied, source_not_found)` (issue
+  #241). Such a delivery starts no task, so the Worker holds no grant for the
+  message. When the directory lists the message's target session under the
+  task name of exactly one task this node requested on that node, `msg stop`
+  stops that task through the existing fresh status and run-bound stop and says
+  so; otherwise it names the target `<node>/<session>` and the message's
+  progress and says the session matches no task the sender owns. No Worker or
+  protocol change.
 - Control Plane: a delegated task start the target refuses is no longer lost
   silently (issue #240). A Git Bash `msg send <mac> --new codex --cwd
   /Users/...` stored `C:/Program Files/Git/Users/...`; the Mac refused the
