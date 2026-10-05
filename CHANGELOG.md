@@ -411,6 +411,17 @@ increments the minor version; every other release increments the patch version.
   decision, a silent exit 0, any other exit code and the PostToolUse phase
   behave as before. The Claude Code wiring, which runs the guards directly, is
   unchanged.
+- Bootstrap: `install.sh` with a `CLAUDE_HOME` other than `<HOME>/.claude`
+  no longer changes global or system `core.hooksPath` and no longer runs the
+  credential step, which read the file named by an inherited
+  `KHEREP_ATL_CRED_FILE_CLAUDE` (issue #256). A candidate run that forgot one
+  skip switch had pointed the account's Git hooks at a temporary directory. A
+  non-default home that is the real Claude home opts in per step with
+  `KHEREP_INSTALL_ALLOW_GITCONFIG=1` and `KHEREP_INSTALL_ALLOW_ATL_CREDENTIAL=1`.
+  The new `KHEREP_INSTALL_PREVIEW=1` implies the Git configuration, runtime
+  agent, credential and knowledge-space skips for any home, and the documented
+  preview uses it. Each skipped step names its reason. The default-home install
+  is unchanged.
 - Bootstrap: an upgrade now unwires every `settings.json` hook command that
   runs a script listed in `bootstrap/manifest/retired.txt` (issue #252). A host
   could carry a second, legacy wiring such as `node ~/.claude/hooks/<name>.js`

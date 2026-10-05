@@ -44,6 +44,37 @@ kherep_default_credentials_root() {
   printf '%s\n' "$HOME/.kherep/credentials"
 }
 
+# Issue #256. Two install steps act outside CLAUDE_HOME: the global (and opted-in
+# system) core.hooksPath binds the whole account, and the credential step reads
+# the file an inherited KHEREP_ATL_CRED_FILE_CLAUDE names and checks it live. A
+# CLAUDE_HOME other than <HOME>/.claude is a candidate until the operator says
+# otherwise, so there each step needs KHEREP_INSTALL_ALLOW_<STEP>=1.
+# KHEREP_INSTALL_PREVIEW=1 skips both and the knowledge space for any home.
+# Prints why step $1 (GITCONFIG, ATL_CREDENTIAL, KNOWLEDGE_SPACE) is skipped, or
+# nothing when it runs. Only the exact value 1 counts, for every switch.
+kherep_install_skip_reason() {
+  local step="$1" default home claude
+  if [ "$(kherep_env "INSTALL_SKIP_$step" 0)" = 1 ]; then
+    printf 'KHEREP_INSTALL_SKIP_%s=1\n' "$step"; return 0
+  fi
+  if [ "$(kherep_env INSTALL_PREVIEW 0)" = 1 ]; then
+    printf 'KHEREP_INSTALL_PREVIEW=1\n'; return 0
+  fi
+  case "$step" in GITCONFIG|ATL_CREDENTIAL) ;; *) return 0 ;; esac
+  [ "$(kherep_env "INSTALL_ALLOW_$step" 0)" = 1 ] && return 0
+  # lib.sh builds the default as $HOME/.claude, so HOME=/u/ gives /u//.claude:
+  # repeated and trailing slashes do not make another home. Git Bash paths are
+  # case-insensitive: /c/Users/Me and /c/users/me are one home.
+  default="$(printf '%s/.claude' "${HOME-}" | tr -s /)"; home="$default"
+  claude="$(printf '%s' "${CLAUDE_HOME-}" | tr -s /)"; claude="${claude%/}"
+  if [ "$KHEREP_PROFILE" = win ]; then
+    home="$(printf '%s' "$home" | tr 'A-Z' 'a-z')"; claude="$(printf '%s' "$claude" | tr 'A-Z' 'a-z')"
+  fi
+  [ "$claude" = "$home" ] && return 0
+  printf "CLAUDE_HOME '%s', not the default '%s'; KHEREP_INSTALL_ALLOW_%s=1 runs this step for it\n" \
+    "${CLAUDE_HOME-}" "$default" "$step"
+}
+
 # Issue #75. On Windows the Claude settings carry the workspace in native form
 # (D:/Work), and the harness injects that value into every tool call. Git Bash
 # names the same directory /d/Work. On the win profile a drive path is turned
