@@ -138,12 +138,28 @@ export function normalizePayloads(payload: HookPayload, phase = "pre"): HookPayl
   return [payload];
 }
 
+// Issue #258. Codex blocks a PreToolUse call on exit 2 with a stderr reason, or
+// on exit 0 with this JSON on stdout; anything else is a non-blocking failure.
+// On Windows Codex runs commandWindows under pwsh, which reports a native exit 2
+// as 1, so a guard's exit 2 reaches Codex only as this JSON.
+const PRE_TOOL_USE_PHASES = new Set(["pre", "pre-no-transcript", "pre-privacy"]);
+
+function denyOutput(reason: string): string {
+  return JSON.stringify({ hookSpecificOutput: {
+    hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason,
+  } });
+}
+
 function main(): void {
   const target = process.argv[2];
   const phase = process.argv[3] || "pre";
   if (!target || !path.isAbsolute(target)) process.exit(0);
   let payload: HookPayload;
   try { payload = JSON.parse(fs.readFileSync(0, "utf8")); } catch { process.exit(0); }
+  const preToolUse = PRE_TOOL_USE_PHASES.has(phase);
+  // PreToolUse stdout waits until no later item blocks, so a deny stays the one
+  // JSON document on stdout.
+  let held = "";
   for (const item of normalizePayloads(payload, phase)) {
     const normalized = phase === "pre-no-transcript"
       ? normalizeDeployApproval({ ...item, transcript_path: null }) : item;
@@ -152,13 +168,26 @@ function main(): void {
       input: JSON.stringify(normalized),
       windowsHide: true,
     });
+    if (preToolUse && result.status === 2) {
+      if (result.stderr) process.stderr.write(result.stderr);
+      const reason = result.stderr.trim() || `${path.basename(target)} blocked this tool call without giving a reason.`;
+      process.stdout.write(denyOutput(reason));
+      return;
+    }
     if (result.stdout) {
-      process.stdout.write(result.stdout);
-      if (phase === "pre-privacy") return;
+      if (!preToolUse) process.stdout.write(result.stdout);
+      else {
+        held += result.stdout;
+        if (phase === "pre-privacy") break;
+      }
     }
     if (result.stderr) process.stderr.write(result.stderr);
-    if (result.status && result.status !== 0) process.exit(result.status);
+    if (result.status) {
+      process.exitCode = result.status;
+      break;
+    }
   }
+  process.stdout.write(held);
 }
 
 // Node loads the main module from its real path, so a script started through a

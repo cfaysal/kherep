@@ -42,7 +42,7 @@ function fixture(t: TestContext) {
   return { hookDir: path.join(codexHome, "hooks", "kherep-maestro"), options };
 }
 
-interface WiredHook { event: string; matcher: string; command: string }
+interface WiredHook { event: string; matcher: string; command: string; commandWindows?: string }
 
 // Every hook in the installed config.toml with the event and matcher of its group.
 function wiredHooks(config: string): WiredHook[] {
@@ -54,7 +54,11 @@ function wiredHooks(config: string): WiredHook[] {
     const matcher = matcherLine ? JSON.parse(matcherLine[1]!) as string : "";
     for (const block of blocks) {
       const line = /^command = (".*")$/m.exec(block);
-      if (line) found.push({ event, matcher, command: JSON.parse(line[1]!) as string });
+      const windows = /^commandWindows = (".*")$/m.exec(block);
+      if (line) found.push({
+        event, matcher, command: JSON.parse(line[1]!) as string,
+        ...(windows ? { commandWindows: JSON.parse(windows[1]!) as string } : {}),
+      });
     }
   }
   return found;
@@ -68,28 +72,35 @@ function wiredGuard(config: string, hookDir: string, guard: string): WiredHook {
   return hits[0]!;
 }
 
+interface HookDecision { permissionDecision?: unknown; permissionDecisionReason?: unknown; hookEventName?: unknown }
+
+// The Codex PreToolUse JSON decision on stdout, or null when stdout holds none.
+function decisionOf(stdout: string): HookDecision | null {
+  try {
+    return (JSON.parse(stdout) as { hookSpecificOutput?: HookDecision }).hookSpecificOutput ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // Runs the wired `command` through the shell, as Codex does on macOS and Linux.
-// Not the Windows `commandWindows` form: `pwsh -NoProfile -Command` reports a
-// native exit 2 as 1 (measured with pwsh 7.6.6), which is a property of that
-// wrapper and the same for the .js and .mts guards, not of the guard itself.
 function runWired(hook: WiredHook, payload: Record<string, unknown>) {
   const input = JSON.stringify({ hook_event_name: hook.event, ...payload });
   const result = spawnSync(hook.command, { shell: true, input, encoding: "utf8", windowsHide: true });
-  let decision: unknown = null;
-  try {
-    decision = (JSON.parse(result.stdout) as { hookSpecificOutput?: { permissionDecision?: unknown } })
-      .hookSpecificOutput?.permissionDecision ?? null;
-  } catch { /* no JSON on stdout */ }
-  return { status: result.status, decision, stderr: result.stderr };
+  const decision = decisionOf(result.stdout);
+  return { status: result.status, decision: decision?.permissionDecision ?? null, reason: decision?.permissionDecisionReason, stderr: result.stderr };
 }
 
 // Each guard, its wired matcher, a tool the matcher names, and a blocking and a
-// benign input. commit-guard and deploy-guard block with exit 2 through the
-// adapter; playwright-file-guard denies through a JSON decision on exit 0.
+// benign input. Issue #258: commit-guard and deploy-guard block with exit 2, and
+// the adapter answers Codex with the JSON deny on exit 0, the form that survives
+// the Windows pwsh wrapper; playwright-file-guard denies through JSON itself.
+// The trailer is built from pieces so that a live commit guard does not match
+// this file's text in a command line.
 const CASES = [
   {
     guard: "commit-guard", matcher: "Bash|shell_command|exec_command|functions\\.exec", tool: "shell_command",
-    blocking: 'git commit -m "x Co-Authored-By: bot"', benign: 'git commit -m "plain subject"',
+    blocking: `git commit -m "x ${"Co-"}${"Authored-By"}: bot"`, benign: 'git commit -m "plain subject"',
   },
   {
     guard: "deploy-guard", matcher: "Bash|shell_command|exec_command|functions\\.exec", tool: "shell_command",
@@ -105,10 +116,12 @@ function assertGuardsBlock(config: string, hookDir: string): void {
     assert.ok(new RegExp(hook.matcher).test(item.tool), `${item.guard} matcher covers ${item.tool}`);
     assert.match(hook.command, /codex-hook-adapter\.mts"/, `${item.guard} runs through the adapter`);
     const blocked = runWired(hook, { tool_name: item.tool, tool_input: { command: item.blocking }, cwd: hookDir });
-    assert.equal(blocked.status, 2, `${item.guard} must block ${item.blocking}; stderr: ${blocked.stderr}`);
-    assert.match(blocked.stderr, new RegExp(`${item.guard} blocked`));
+    assert.equal(blocked.status, 0, `${item.guard} must answer ${item.blocking} on exit 0; stderr: ${blocked.stderr}`);
+    assert.equal(blocked.decision, "deny", `${item.guard} must deny ${item.blocking}; stderr: ${blocked.stderr}`);
+    assert.match(String(blocked.reason), new RegExp(`^${item.guard} blocked`));
     const allowed = runWired(hook, { tool_name: item.tool, tool_input: { command: item.benign }, cwd: hookDir });
     assert.equal(allowed.status, 0, `${item.guard} must allow ${item.benign}; stderr: ${allowed.stderr}`);
+    assert.equal(allowed.decision, null, `${item.guard} must allow ${item.benign}`);
   }
   const playwright = wiredGuard(config, hookDir, "playwright-file-guard");
   assert.equal(playwright.event, "PreToolUse");
@@ -134,6 +147,34 @@ test("each shared guard still blocks through its wired Codex command after an in
   }
   assertGuardsBlock(config, hookDir);
 });
+
+// Issue #258. Codex on Windows runs `commandWindows` as `pwsh -NoProfile -Command
+// <commandWindows>`, and pwsh reports a native exit 2 as 1 (measured with pwsh
+// 7.6.6), which Codex treats as a failed, non-blocking hook. The block has to
+// reach Codex as the JSON deny on stdout, whatever exit code pwsh reports.
+const PWSH = spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"], { windowsHide: true }).status === 0;
+
+test("commit-guard and deploy-guard deny through the rendered Windows command under pwsh",
+  { skip: !PWSH && "pwsh is not on PATH; the Windows commandWindows form needs it" }, (t) => {
+    const { hookDir, options } = fixture(t);
+    const config = fs.readFileSync(install(options).targets.config, "utf8");
+    for (const item of CASES) {
+      const hook = wiredGuard(config, hookDir, item.guard);
+      assert.equal(hook.commandWindows, `& ${hook.command}`, `${item.guard} carries the rendered Windows form`);
+      const run = (command: string) => spawnSync("pwsh", ["-NoProfile", "-Command", hook.commandWindows!], {
+        encoding: "utf8", windowsHide: true,
+        input: JSON.stringify({ hook_event_name: hook.event, tool_name: item.tool, tool_input: { command }, cwd: hookDir }),
+      });
+      const blocked = run(item.blocking);
+      const decision = decisionOf(blocked.stdout);
+      assert.equal(decision?.hookEventName, "PreToolUse", `${item.guard}; pwsh exit ${blocked.status}; stderr: ${blocked.stderr}`);
+      assert.equal(decision?.permissionDecision, "deny", `${item.guard}; pwsh exit ${blocked.status}`);
+      assert.match(String(decision?.permissionDecisionReason), new RegExp(`^${item.guard} blocked`));
+      const allowed = run(item.benign);
+      assert.equal(allowed.status, 0, `${item.guard} allows ${item.benign}; stderr: ${allowed.stderr}`);
+      assert.equal(allowed.stdout, "");
+    }
+  });
 
 test("an upgrade over the .js projection replaces its block and removes the old copies", (t) => {
   const { hookDir, options } = fixture(t);
