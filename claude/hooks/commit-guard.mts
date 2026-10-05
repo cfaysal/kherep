@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 // Early commit-message feedback. The commit-msg hook is the enforcement boundary.
+// The import also marks this file as ESM for `node --check` (live-hook-integrity).
+import process from "node:process";
 
 // The fields this hook reads from a PreToolUse payload.
 interface ToolPayload {

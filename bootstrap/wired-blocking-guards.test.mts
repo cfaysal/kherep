@@ -190,6 +190,11 @@ for (const guard of PRETOOL_GUARDS) {
     assert.equal(matcher, guard.matcher);
     assert.match(command, new RegExp(`^node "__KHEREP_CLAUDE_HOME__/hooks/${guard.hook.replace(".", "\\.")}"$`));
     assert.ok(fs.statSync(path.join(repo, "claude", "hooks", guard.hook)).size > 0, `claude/hooks/${guard.hook} is not empty`);
+    // live-hook-integrity.mts and smoke-test.sh call a hook DEFEKT when
+    // `node --check` rejects it. Without an import or export, Node checks an
+    // .mts as CommonJS without type stripping and rejects its annotations.
+    const check = spawnSync(process.execPath, ["--check", path.join(repo, "claude", "hooks", guard.hook)], { encoding: "utf8" });
+    assert.equal(check.status, 0, `node --check rejects ${guard.hook}: ${check.stderr}`);
   });
 
   test(`${guard.hook} still blocks through its wired command and allows a benign call`, () => {
