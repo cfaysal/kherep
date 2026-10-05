@@ -177,17 +177,21 @@ test("passes a guard's own JSON decision through unchanged", (t) => {
   }
 });
 
+// Node 22/24 print a type-stripping warning for the adapter .mts itself.
+const withoutTypeStrippingWarning = (stderr: string): string =>
+  stderr.replace(/\(node:\d+\) ExperimentalWarning: Type Stripping[^\n]*\n(\(Use `node --trace-warnings[^\n]*\n)?/g, "");
+
 test("leaves any other non-zero exit and every PostToolUse exit as it was", (t) => {
   const failing = syntheticGuard(t, "process.stderr.write('fixture-guard crashed\\n'); process.exit(1);");
   const failed = runAdapter(failing.guard, "pre", SHELL);
   assert.equal(failed.status, 1);
   assert.equal(failed.stdout, "");
-  assert.equal(failed.stderr, "fixture-guard crashed\n");
+  assert.equal(withoutTypeStrippingWarning(failed.stderr), "fixture-guard crashed\n");
   const blocking = syntheticGuard(t, "process.stderr.write('fixture-guard post\\n'); process.exit(2);");
   const post = runAdapter(blocking.guard, "post", SHELL);
   assert.equal(post.status, 2);
   assert.equal(post.stdout, "");
-  assert.equal(post.stderr, "fixture-guard post\n");
+  assert.equal(withoutTypeStrippingWarning(post.stderr), "fixture-guard post\n");
 });
 
 test("answers the first block of a multi-command payload alone and runs nothing after it", (t) => {
