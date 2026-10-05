@@ -115,6 +115,31 @@ test("the ancestry: the macOS --bg process family is Claude Code and interactive
   assert.equal(win("claude.exe daemon run --origin transient --spawned-by \"{\\\"label\\\":\\\"claude -p x\\\"}\""), "interactive");
 });
 
+test("the ancestry: on macOS and Linux a prompt that begins with a --bg subcommand is no --bg machinery (issue #245)", () => {
+  const linux = (args: string, extra?: Partial<Record<number, string | null>>) => ancestryMode(90, chain(args, extra), "linux");
+  for (const judge of [mac, linux]) {
+    // ps loses the quoting: claude -p "daemon foo" and claude "daemon foo" -p.
+    for (const args of ["claude -p daemon foo", "claude -p daemon run foo", "claude daemon foo -p", "claude daemon run the tests --print",
+      "claude bg-spare x -p", "claude bg-pty-host x --print=json"]) assert.equal(judge(args), "headless", args);
+    // A claude -p started directly by an interactive session whose prompt begins with daemon.
+    assert.equal(judge("claude -p hi", { 70: "claude daemon foo" }), "headless", "parent claude daemon foo");
+    assert.equal(judge("claude daemon foo"), "interactive", "its own prompt, no -p");
+    // Known residual: a parent whose prompt begins with "daemon run" and holds no separate -p reads as the daemon.
+    assert.equal(judge("claude -p hi", { 70: "claude daemon run the tests" }), "interactive", "known residual");
+  }
+});
+
+test("the ancestry: claude -p --resume of an interactive session is headless and arms no listener (issue #245)", async () => {
+  for (const args of [`claude -p --resume ${SESSION} answer`, `claude --resume ${SESSION} -p answer`, `${EXE} -p --resume ${SESSION} "answer"`]) {
+    for (const judge of [win, mac]) assert.equal(judge(args), "headless", args);
+  }
+  // Started in a terminal (sdk-cli), or from inside a session, whose CLAUDE_CODE_ENTRYPOINT it inherits.
+  for (const env of [{ CLAUDE_CODE_ENTRYPOINT: "sdk-cli" }, { CLAUDE_CODE_ENTRYPOINT: "cli" }]) {
+    assert.equal(await headlessMode({ env, ppid: 90, platform: "darwin", processTable: async () => chain(`claude -p --resume ${SESSION} hi`) }),
+      "headless", env.CLAUDE_CODE_ENTRYPOINT);
+  }
+});
+
 test("the ancestry: node running the claude script of an npm install is Claude Code", () => {
   assert.equal(mac("node /usr/local/bin/claude -p hi"), "headless");
   assert.equal(mac("/usr/bin/node --no-warnings /opt/homebrew/bin/claude --print"), "headless");

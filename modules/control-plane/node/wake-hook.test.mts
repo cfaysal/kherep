@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -30,6 +31,15 @@ const withoutTypeStrippingWarning = (stderr: string | Buffer): string => String(
 const NO_LISTING = `data:text/javascript,${encodeURIComponent("import cp from 'node:child_process';"
   + "import { syncBuiltinESMExports } from 'node:module';"
   + "cp.execFile = (...args) => { setImmediate(() => args.at(-1)(new Error('no listing'))); return {}; };"
+  + "syncBuiltinESMExports();")}`;
+// Preloaded instead: the listing shows the hook's parent as claude -p, as when
+// sh -c execs the hook in a Claude Code process (issue #245).
+const PRINT_LISTING = `data:text/javascript,${encodeURIComponent("import cp from 'node:child_process';"
+  + "import { syncBuiltinESMExports } from 'node:module';"
+  + "const rows = [[process.ppid, 1, 'claude -p hi'], [1, 0, 'init']];"
+  + "const out = process.platform === 'win32' ? JSON.stringify(rows.map(([ProcessId, ParentProcessId, CommandLine]) => "
+  + "({ ProcessId, ParentProcessId, CommandLine }))) : rows.map((row) => row.join(' ')).join(String.fromCharCode(10));"
+  + "cp.execFile = (...args) => { setImmediate(() => args.at(-1)(null, out)); return {}; };"
   + "syncBuiltinESMExports();")}`;
 
 test("wakes with the fixed text for a message that arrives after the grace period, by name or id", async (t) => {
@@ -220,4 +230,18 @@ test("runs as Claude Code starts it: exit 2 with the wake text on stderr, exit 0
     const quiet = run([], empty, stdin);
     assert.deepEqual([quiet.status, quiet.stdout, withoutTypeStrippingWarning(quiet.stderr)], [0, "", ""], stdin);
   }
+});
+
+test("a second hook of the same Claude Code process takes the kept run mode and lists no processes (issue #245)", (t) => {
+  const { root, paths } = setup(t);
+  arrive(paths, 1, Date.now() + 60_000, SELF);
+  const input = JSON.stringify({ session_id: SELF, hook_event_name: "Stop", stop_hook_active: false, permission_mode: "default" });
+  for (const listing of [PRINT_LISTING, NO_LISTING]) {
+    const run = spawnSync(process.execPath, ["--import", listing, HOOK, "--timeout", String(WAKE_TIMEOUT_S)], { input, encoding: "utf8",
+      env: { ...process.env, KHEREP_CONFIG_DIR: root, CLAUDE_CODE_ENTRYPOINT: "cli" }, timeout: 30_000 });
+    assert.deepEqual([run.status, run.stdout, withoutTypeStrippingWarning(run.stderr)], [0, "", ""]);
+  }
+  // Without the kept mode the second hook, whose listing fails, would listen and wake for the waiting message.
+  assert.deepEqual(auditLines(paths).map((l) => l.action), ["headless", "headless"]);
+  assert.deepEqual(fs.readdirSync(path.join(paths.dir, "run-modes")), [`${SELF}.${process.pid}.json`]);
 });
