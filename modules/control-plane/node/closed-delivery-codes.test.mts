@@ -70,10 +70,37 @@ for (const [what, code, reason, arrange, sessions = {}, messaging = {}, message 
     assert.match(String(audits(node).at(-1)?.reason), reason);
     assert.deepEqual(progress(node, id), ["waiting", code]);
     assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted");
+    assert.equal(getMessage(node.paths.inbox, id)?.closedAttempt, undefined, "tried again next round");
+    if (code !== "budget-exhausted") assert.equal(takeTurn(node.paths, SESSION, T0), "ok", "the turn budget is untouched");
   });
 }
 
-test("a start the policy refuses after a failed resume waits with the policy code", async (t) => {
+// A limit before the attempt clears: the next round starts the intercom session.
+const limits: [string, Record<string, unknown>, (node: Node) => void][] = [
+  ["maxConcurrent", { maxConcurrent: 1 }, (node) => writeTask(node.paths, { ...listTasks(node.paths)[0], state: "done" })],
+  ["maxStartsPerDay", { maxStartsPerDay: 1 }, (node) => {
+    node.tick(24 * 3_600_000);
+    writeLocalSessions(node.paths, [], T0 + 24 * 3_600_000);
+  }],
+];
+for (const [what, sessions, clear] of limits) {
+  test(`a message held by ${what} starts its intercom session once the limit clears`, async (t) => {
+    const node = closedNode(t, sessions);
+    writeTask(node.paths, task(node, 9, { state: what === "maxConcurrent" ? "running" : "done" }));
+    const id = deliver(node);
+    await deliverToClosed(node.deps());
+    assert.deepEqual(progress(node, id), ["waiting", "retry-pending"]);
+    clear(node);
+    await deliverToClosed(node.deps());
+    assert.equal(claudeRuns(node).length, 1, "started in the next round");
+    assert.deepEqual(progress(node, id), ["fallback", "fallback-running"]);
+    assert.ok(getMessage(node.paths.inbox, id)?.closedAttempt);
+  });
+}
+
+// The attempt is marked before the resume, so the message is never tried again:
+// a start the policy then refuses is a failed delivery, with the policy reason.
+test("a start the policy refuses after a failed resume is a failed delivery, not a waiting policy code", async (t) => {
   const node = closedNode(t);
   rememberMode(node.paths, SESSION, "auto");
   deliver(node);
@@ -93,8 +120,10 @@ test("a start the policy refuses after a failed resume waits with the policy cod
     return base.exec!(file, args, options);
   };
   await deliverToClosed({ ...base, exec });
-  assert.match(String(audits(node).at(-1)?.reason), /intercom session not resumed: resume failed; runtime codex is not enabled/);
-  assert.deepEqual(progress(node, id), ["waiting", "wake-disabled"]);
+  assert.match(String(audits(node).at(-1)?.reason),
+    /^intercom session not resumed: resume failed; new start refused: runtime codex is not enabled on this node$/);
+  assert.deepEqual(progress(node, id), ["failed", "fallback-failed"]);
+  assert.ok(getMessage(node.paths.inbox, id)?.closedAttempt);
 });
 
 test("a launch that fails still reports fallback-failed", async (t) => {

@@ -366,9 +366,11 @@ increments the minor version; every other release increments the patch version.
   now names its code: the working-directory checks, `delegate.accept` and an
   operator sender wait with `wake-not-authorized`, `maxConcurrent` and
   `maxStartsPerDay` before an attempt with `retry-pending`, and the start
-  checks a new intercom session needs (its runtime, permission mode and, after
-  a failed resume, the daily start limit) are made before the start with their
-  own codes. `fallback-failed` remains for a start or resume that failed. The
+  checks a new intercom session needs (its runtime and permission mode) are
+  made before the attempt with their own codes. `fallback-failed` remains for
+  a start or resume that failed, including a new start the policy refuses
+  after a failed resume, since that message is not tried again; its reason
+  names the policy (`new start refused: ...`). The
   `wake-not-authorized` text now reads `the target node's policy did not
   authorize automatic delivery`. No new progress code: older Workers accept
   every frame.

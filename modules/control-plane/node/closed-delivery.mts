@@ -181,14 +181,12 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   if (!cwd.ok) return refuse(cwd.reason, "wake-not-authorized");
   // What admitStart would refuse for a new intercom session, checked here so it reads as policy.
   const mode: PermissionMode = delegated(deps, sessions.defaultPermissionMode) ? sessions.defaultPermissionMode : "default";
-  const startRefusal = (afterResume: boolean): [string, MessageProgressCode] | null => {
+  const startRefusal = (): [string, MessageProgressCode] | null => {
     if (!sessions.runtimes.includes(found.runtime)) return [`runtime ${found.runtime} is not enabled on this node`, "wake-disabled"];
     if (!sessions.permissionModes.includes(mode)) return [`permission mode ${mode} is not allowed on this node`, "permission-restricted"];
-    // maxStartsPerDay, which a resume does not count (maxConcurrent passed above).
-    const daily = afterResume ? overLimit(deps, now) : null;
-    return daily ? [daily, "budget-exhausted"] : null;
+    return null;
   };
-  const before = reusable ? null : startRefusal(false);
+  const before = reusable ? null : startRefusal();
   if (before) return refuse(...before);
   const budget = takeTurn(paths, reusable?.sessionId ?? sessionId, now);
   if (budget === "spacing" || budget === "locked") {
@@ -211,9 +209,12 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
       return true;
     }
     why = `intercom session not resumed: ${failed}`;
-    const after = startRefusal(true);
-    if (after) {
-      refuse(`${why}; ${after[0]}`, after[1]);
+    // The attempt is marked and no round tries the message again, so a start
+    // refused now is a failed delivery; the reason keeps the policy (overLimit:
+    // maxStartsPerDay, which a resume does not count).
+    const refused = startRefusal()?.[0] ?? overLimit(deps, now);
+    if (refused) {
+      refuse(`${why}; new start refused: ${refused}`, "fallback-failed");
       return true;
     }
   }
