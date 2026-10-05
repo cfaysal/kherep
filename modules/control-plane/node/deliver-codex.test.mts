@@ -145,6 +145,17 @@ test("the entry point serves Codex only with --runtime codex and prints valid JS
   assert.match(typo.stderr, /unknown --runtime/);
 });
 
+test("a configured wake.budget sets the Codex continuation spacing (issue #259)", (t) => {
+  const paths = setup(t);
+  fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [],
+    wake: { enabled: true, sessions: ["unrelated"], budget: { spacingSeconds: 5 } } }));
+  inbox(paths, 1);
+  clock += 60_000;
+  assert.equal(JSON.parse(stop(paths)).decision, "block");
+  clock += 6_000;
+  assert.equal(JSON.parse(stop(paths)).decision, "block", "6 s later: past the configured 5 s, within the default 30 s");
+});
+
 test("a Stop continuation is an autonomous turn: never in bypassPermissions, and within the budget", (t) => {
   const paths = setup(t);
   inbox(paths, 1);

@@ -144,6 +144,17 @@ test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply de
   assert.deepEqual([queues(spent), actions(spent)], [[], [["budget", [f]]]]);
 });
 
+test("a configured wake.budget lets a seventh queue attempt of the hour through (issue #259)", posix, async (t) => {
+  const node = wakeNode(t);
+  const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8")) as { wake: Record<string, unknown> };
+  policy.wake.budget = { perHour: 8, perDay: 100 };
+  fs.writeFileSync(node.paths.policy, JSON.stringify(policy));
+  for (let n = 0; n < 6; n++) assert.equal(takeTurn(node.paths, SID, T0 - 50 * 60_000 + n * 2 * TURN_SPACING_MS), "ok");
+  const id = deliver(node, "x");
+  await poll(node);
+  assert.deepEqual([queues(node).length, actions(node)], [1, [["wake", [id]]]]);
+});
+
 test("a Codex task's thread is resumed, not queued; a failed queue is logged, redacted, and not repeated", posix, async (t) => {
   const node = wakeNode(t);
   writeTask(node.paths, { taskId: TASK, runtime: "codex", name: "task-3f2a1b0c", cwd: node.workspace, permissionMode: "auto", state: "done",

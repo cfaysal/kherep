@@ -12,7 +12,7 @@ import { progressRecords } from "./delivery-progress.mts";
 import { REOFFER_AFTER_MS, sessionInbox } from "./deliver-core.mts";
 import { getMessageProgress, messageIds, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
 import type { NodePolicy } from "./policy.mts";
-import { explicitlyListed, wakeAllowed } from "./policy.mts";
+import { explicitlyListed, wakeAllowed, wakeBudget } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { listTasks } from "./task-records.mts";
 import { killSwitch } from "./wake-hook.mts";
@@ -161,7 +161,7 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
   if (unconfirmed.length > 0) progressRecords(paths, unconfirmed, "waiting", "wake-unconfirmed", now);
   due = due.filter((r) => !queued[r.messageId]);
   if (pending.length > 0 || due.length === 0) return;
-  const budget = takeTurn(paths, sessionId, now);
+  const budget = takeTurn(paths, sessionId, now, wakeBudget(policy));
   if (budget === "spacing" || budget === "locked") {
     progressRecords(paths, due, "waiting", "retry-pending", now);
     return;

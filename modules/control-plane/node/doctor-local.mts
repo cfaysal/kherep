@@ -6,7 +6,7 @@ import { readConfig, type NodeConfig, type NodePaths } from "./config.mts";
 import { readDaemonState } from "./daemon-state.mts";
 import { readPrivateKey } from "./identity.mts";
 import { readJson } from "./inbox.mts";
-import { readPolicy, type NodePolicy } from "./policy.mts";
+import { readPolicy, wakeBudget, type NodePolicy, type WakeBudget } from "./policy.mts";
 import { WAKE_MAX_WAIT_MS } from "./wake-hook.mts";
 
 // The checks of `kherep-node doctor` that read only this node's config
@@ -63,6 +63,13 @@ export function daemonReadiness(paths: NodePaths, pidAlive: (pid: unknown) => bo
   }
 }
 
+// The effective autonomous-turn budget in the policy's units: the defaults
+// without a valid wake.budget (issue #259).
+function budgetReport(policy: NodePolicy): Required<WakeBudget> {
+  const { perHour, perDay, spacingMs } = wakeBudget(policy);
+  return { perHour, perDay, spacingSeconds: spacingMs / 1000 };
+}
+
 // A wake section the parser rejected disables waking (fail closed); doctor
 // reports it as a failure so the operator sees it.
 export function checkPolicy(file: string): { check: Check; policy: NodePolicy | null } {
@@ -79,7 +86,7 @@ export function checkPolicy(file: string): { check: Check; policy: NodePolicy | 
     ? { enabled: true, sessions: policy.wake.sessions, codexApp: policy.wake.codexApp === true, replies: policy.wake.replies === true }
     : { enabled: false, ...(wakeRejected ? { rejected: true } : {}) };
   return { check: { ok: !wakeRejected, source: raw ? "file" : "default", allowedCommands: policy.allowedCommands.length,
-    messagingRules: policy.messaging?.accept.length ?? 0, wake,
+    messagingRules: policy.messaging?.accept.length ?? 0, wake, wakeBudget: budgetReport(policy),
     sessions: policy.sessions?.enabled ? { enabled: true, runtimes: policy.sessions.runtimes } : { enabled: false },
     remoteMcp: policy.remoteMcp?.enabled === true,
     ...(wakeRejected ? { detail: "the wake section is malformed and waking is off" } : {}) }, policy };

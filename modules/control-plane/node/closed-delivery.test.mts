@@ -179,6 +179,18 @@ const refusals: [string, (node: Node) => void, Record<string, unknown>, RegExp][
     state: "idle", cwd: node.root }], T0 - 60_000), {}, /outside the workspace roots/],
 ];
 
+test("a configured wake.budget lets an intercom session start past six turns this hour (issue #259)", async (t) => {
+  const node = closedNode(t);
+  const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8")) as Record<string, unknown>;
+  fs.writeFileSync(node.paths.policy, JSON.stringify({ ...policy,
+    wake: { enabled: true, sessions: ["unrelated"], budget: { perHour: 8, perDay: 100 } } }));
+  rememberMode(node.paths, SESSION, "auto");
+  for (let i = 0; i < 6; i++) takeTurn(node.paths, SESSION, T0 - 50 * 60_000 + i * TURN_SPACING_MS * 2);
+  deliver(node);
+  await deliverToClosed(node.deps());
+  assert.equal(claudeRuns(node).length, 1);
+});
+
 for (const [what, arrange, sessions, reason] of refusals) {
   test(`no intercom session past ${what}`, async (t) => {
     const node = closedNode(t, sessions);

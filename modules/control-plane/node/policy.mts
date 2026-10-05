@@ -7,6 +7,7 @@ import { TASK_CONTROL_CAPABILITY, TASK_CONTROL_REPORT_CAPABILITY } from "../prot
 import {
   DELEGATE_ACCEPT_CAPABILITY, DELEGATE_REQUEST_CAPABILITY, RUNTIME_READY_CAPABILITIES, SESSIONS_CAPABILITY, type TaskRuntime,
 } from "../protocol-tasks.mts";
+import { readConfig, type NodePaths } from "./config.mts";
 import { parseSessionsPolicy, type SessionsPolicy } from "./session-policy.mts";
 
 // Local allowlist (issue #5, design section 4). The node refuses any command
@@ -19,7 +20,14 @@ import { parseSessionsPolicy, type SessionsPolicy } from "./session-policy.mts";
 export interface AcceptRule { session: string; from: string[] }
 // codexApp (issue #82): also wake the current Codex desktop app session (codex-app.mts).
 // replies (issue #253): a reply to a message a session sent may wake it (wake-reply.mts).
-export interface WakePolicy { sessions: string[]; codexApp?: boolean; replies?: boolean }
+// budget (issue #259): the per-session autonomous-turn budget (autonomy.mts), as written.
+// Its defaults (operator decision of 2026-09-25) live here, not in autonomy.mts,
+// because this file is staged into the messaging client without autonomy.mts
+// (claude-mcp-client.mts CLAUDE_CLIENT_GRAPH).
+export interface TurnBudget { perHour: number; perDay: number; spacingMs: number }
+export const DEFAULT_TURN_BUDGET: TurnBudget = { perHour: 6, perDay: 20, spacingMs: 30_000 };
+export interface WakeBudget { perHour?: number; perDay?: number; spacingSeconds?: number }
+export interface WakePolicy { sessions: string[]; codexApp?: boolean; replies?: boolean; budget?: WakeBudget }
 // resumeClosed (issue #102): a message for a known session of this node that
 // is no longer running resumes it, or starts an intercom session instead
 // (closed-delivery.mts). Only the boolean true enables it.
@@ -138,15 +146,60 @@ export function acceptsMessage(policy: NodePolicy, toSession: string, fromNodeId
 // with a non-empty list of session ids or names disables it (fail closed);
 // "*" matches every session, but only where it is written. codexApp and
 // replies must be booleans when present; with either true the list may be
-// empty or absent.
+// empty or absent. A budget that parseBudget rejects disables it as well.
 function parseWake(section: unknown): WakePolicy | null {
   if (typeof section !== "object" || section === null) return null;
-  const { enabled, sessions, codexApp, replies } = section as { enabled?: unknown; sessions?: unknown; codexApp?: unknown; replies?: unknown };
+  const { enabled, sessions, codexApp, replies, budget: rawBudget } = section as { enabled?: unknown; sessions?: unknown; codexApp?: unknown;
+    replies?: unknown; budget?: unknown };
   if (enabled !== true || [codexApp, replies].some((flag) => flag !== undefined && typeof flag !== "boolean")) return null;
+  const budget = rawBudget === undefined ? undefined : parseBudget(rawBudget);
+  if (budget === null) return null;
   const granted = codexApp === true || replies === true;
   const list = sessions === undefined && granted ? [] : sessions;
   if (!Array.isArray(list) || !list.every(isSessionRef) || (list.length === 0 && !granted)) return null;
-  return { sessions: [...list] as string[], ...(codexApp ? { codexApp: true } : {}), ...(replies ? { replies: true } : {}) };
+  return { sessions: [...list] as string[], ...(codexApp ? { codexApp: true } : {}), ...(replies ? { replies: true } : {}),
+    ...(budget ? { budget } : {}) };
+}
+
+// Hard bounds (issue #259), so that a policy can loosen the budget but never remove it.
+const BUDGET_BOUNDS: Record<keyof WakeBudget, [number, number]> = { perHour: [1, 60], perDay: [1, 500], spacingSeconds: [5, 3600] };
+
+// Only the known keys, each an integer within its bounds, and perDay, its
+// default included, at least perHour; anything else is null.
+function parseBudget(value: unknown): WakeBudget | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const budget: WakeBudget = {};
+  for (const [key, field] of Object.entries(value)) {
+    const name = key as keyof WakeBudget;
+    const bounds = Object.hasOwn(BUDGET_BOUNDS, name) ? BUDGET_BOUNDS[name] : null;
+    if (!bounds || !Number.isInteger(field) || field < bounds[0] || field > bounds[1]) return null;
+    budget[name] = field;
+  }
+  const effective = turnBudget(budget);
+  return effective.perDay >= effective.perHour ? budget : null;
+}
+
+const turnBudget = (budget: WakeBudget): TurnBudget => ({
+  perHour: budget.perHour ?? DEFAULT_TURN_BUDGET.perHour,
+  perDay: budget.perDay ?? DEFAULT_TURN_BUDGET.perDay,
+  spacingMs: budget.spacingSeconds === undefined ? DEFAULT_TURN_BUDGET.spacingMs : budget.spacingSeconds * 1000,
+});
+
+// The effective autonomous-turn budget: wake.budget, its missing fields and a
+// missing or rejected wake section falling back to DEFAULT_TURN_BUDGET.
+export const wakeBudget = (policy: NodePolicy): TurnBudget => turnBudget(policy.wake?.budget ?? {});
+
+// For a hook process, which has no policy loaded: the node's policy file, read
+// once when a Stop would continue the turn. A node.json that cannot be read
+// leaves the defaults, as an unreadable policy does.
+export function nodeWakeBudget(paths: NodePaths): TurnBudget {
+  let file: string;
+  try {
+    file = readConfig(paths.config)?.policyFile ?? paths.policy;
+  } catch {
+    return DEFAULT_TURN_BUDGET;
+  }
+  return wakeBudget(loadPolicy(file));
 }
 
 // refs: the session id and its current name, if any.

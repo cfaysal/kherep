@@ -15,7 +15,7 @@ import { getMessage, readJson, writeJsonAtomic } from "./inbox.mts";
 import { launchMode, type LaunchVerdict } from "./launch-mode.mts";
 import { armedSince, armingMark, nextOrder, orderOf, reclaimLock } from "./listener-order.mts";
 import { releaseOwn } from "./listener-sweep.mts";
-import { explicitlyListed, loadPolicy, readPolicy, wakeAllowed } from "./policy.mts";
+import { explicitlyListed, loadPolicy, readPolicy, wakeAllowed, wakeBudget } from "./policy.mts";
 import { mappingPending, taskForSession, type TaskRecord } from "./task-records.mts";
 import { transcriptMode } from "./transcript-mode.mts";
 import { atReplyLimit, pending, rememberWoken } from "./wake-pending.mts";
@@ -264,7 +264,7 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     if (messages + stuck.length > 0) due = "wake";
     else if (now() >= deadline) due = "rearm";
     else continue;
-    const budget = takeTurn(paths, sessionId, now());
+    const budget = takeTurn(paths, sessionId, now(), wakeBudget(policy));
     // Too soon after the last autonomous turn, or the budget was locked: try again at the next poll.
     if (budget === "spacing" || budget === "locked") continue;
     release();

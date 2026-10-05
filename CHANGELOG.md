@@ -11,6 +11,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Control Plane: the optional node policy object `wake.budget`
+  (`perHour`, `perDay`, `spacingSeconds`) sets the per-session budget of
+  autonomous turns, which stays 6 per rolling hour, 20 per rolling day and
+  30 s apart without it or for a missing field. Values must be integers within
+  hard bounds (`perHour` 1 to 60, `perDay` 1 to 500, `spacingSeconds` 5 to
+  3600) with `perDay` at least `perHour`; anything else, or an unknown key,
+  rejects the whole `wake` section. The Claude Code wake listener, the Claude
+  and Codex `Stop` continuations, the Codex task resume, `codex queue` and
+  closed-session delivery use the same effective budget, and `doctor` shows it
+  as `wakeBudget` (issue #259).
 - Control Plane: the opt-in node policy switch `wake.replies: true` lets a
   reply wake the idle Claude Code session that sent the original message,
   without listing the session; `sessions` may then be empty. The grant needs

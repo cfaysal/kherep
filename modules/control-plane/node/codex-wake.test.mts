@@ -130,6 +130,18 @@ test("the wake guards: allowlist or task grant, reply depth, kill switch, budget
   assert.equal(getMessage(node.paths.inbox, granted)?.state, "accepted", "it waits");
 });
 
+test("a configured wake.budget lets a seventh resume of the hour through (issue #259)", posix, async (t) => {
+  const node = await doneTask(t);
+  const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8")) as Record<string, unknown>;
+  fs.writeFileSync(node.paths.policy, JSON.stringify({ ...policy,
+    wake: { enabled: true, sessions: ["unrelated"], budget: { perHour: 8, perDay: 100 } } }));
+  for (let n = 0; n < 6; n++) assert.equal(takeTurn(node.paths, THREAD, T0 - 50 * 60_000 + n * TURN_SPACING_MS * 2), "ok");
+  const id = deliver(node, "about the task");
+  await pollCodexInbound(node.deps());
+  await runEnds(node, 2);
+  assert.deepEqual(auditLines(node).map((l) => [l.action, l.messageIds]), [["wake", [id]]]);
+});
+
 test("an allowlisted session gets every message; codex must be listed and sessions enabled", posix, async (t) => {
   const rewrite = (node: Node, change: (policy: Record<string, any>) => void): void => {
     const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8")) as Record<string, any>;

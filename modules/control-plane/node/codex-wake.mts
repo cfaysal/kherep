@@ -9,7 +9,7 @@ import { deliveryContext, MAX_OFFERS, offerEnded, sessionInbox } from "./deliver
 import { progressRecords } from "./delivery-progress.mts";
 import { exhaustedOfferReason, permanentFallbackFailure } from "./delivery-failure.mts";
 import { listInbox, markRefused, markRetry, MAX_REPLY_DEPTH, messageIds, type InboxRecord } from "./inbox.mts";
-import { wakeAllowed } from "./policy.mts";
+import { wakeAllowed, wakeBudget } from "./policy.mts";
 import { notReadyNow } from "./runtime-readiness.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit } from "./task-admission.mts";
@@ -144,7 +144,7 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
     for (const r of waiting) markRefused(paths.inbox, r.messageId, blocked);
     return note(paths, now, sessionId, due, "runtime-not-ready");
   }
-  const budget = takeTurn(paths, sessionId, now);
+  const budget = takeTurn(paths, sessionId, now, wakeBudget(policy));
   if (budget === "spacing" || budget === "locked") return explain(waiting, "retry-pending");
   if (budget === "exhausted") {
     explain(waiting, "budget-exhausted");
