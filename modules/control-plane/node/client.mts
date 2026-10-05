@@ -8,7 +8,7 @@ import {
   type TaskControlResultReceiptBody,
 } from "../protocol-task-control.mts";
 import {
-  isCommandArgs, isTaskRequestResult, TASK_REQUEST_RESULT, type TaskReportBody, type TaskRequestBody, type TaskRequestResult,
+  isCommandArgs, isTaskId, isTaskRequestResult, TASK_REQUEST_RESULT, type TaskReportBody, type TaskRequestBody, type TaskRequestResult,
   type TaskRuntime,
 } from "../protocol-tasks.mts";
 import {
@@ -375,21 +375,30 @@ export class NodeClient {
     this.processedSeq = envelope.seq;
     const out = [this.frame("command.ack", { commandId })];
     if (!isAllowed(this.policy, command)) {
-      out.push(this.frame("command.result", { commandId, ok: false, error: "rejected by local policy" }));
+      out.push(this.failedResult(commandId, command, args, "rejected by local policy"));
       return out;
     }
     const handler = this.options.handlers[command] as ((args?: unknown) => Promise<unknown>) | undefined;
     if (!isCommandArgs(command, args) || !handler) {
-      out.push(this.frame("command.result", { commandId, ok: false, error: handler ? "invalid command arguments" : "command not supported" }));
+      out.push(this.failedResult(commandId, command, args, handler ? "invalid command arguments" : "command not supported"));
       return out;
     }
     try {
       const result = await handler(args);
       out.push(this.frame("command.result", { commandId, ok: true, result }));
     } catch (error) {
-      out.push(this.frame("command.result", { commandId, ok: false, error: String((error as Error).message ?? error).slice(0, 1024) }));
+      out.push(this.failedResult(commandId, command, args, String((error as Error).message ?? error).slice(0, 1024)));
     }
     return out;
+  }
+
+  // Issue #240: every failed command result is logged with its task id and
+  // the error, one line of at most 256 characters; command args never are.
+  private failedResult(commandId: string, command: string, args: unknown, error: string): string {
+    const taskId = (args as { taskId?: unknown } | undefined)?.taskId;
+    const line = error.replace(/\s+/g, " ").trim().slice(0, 256);
+    this.options.log?.(`kherep-node: command ${command} ${commandId}${isTaskId(taskId) ? ` for task ${taskId}` : ""} failed: ${line}`);
+    return this.frame("command.result", { commandId, ok: false, error });
   }
 
   private frame(type: MessageType, body: Record<string, unknown>, sequenced = true): string {

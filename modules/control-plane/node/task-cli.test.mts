@@ -12,6 +12,8 @@ import { runMsg } from "./msg-cli.mts";
 import { loadPolicy } from "./policy.mts";
 import { startTask } from "./session-runner.mts";
 import { parseTaskArgs, runTaskArgs } from "./task-cli.mts";
+import { applyQueryResult, queueControlRequest } from "./task-control-store.mts";
+import { DISPATCHED_MEANING } from "./task-detail.mts";
 import { pollTasks, recordRequestResult, TASKS_ACTIVE } from "./task-exchange.mts";
 import { startArgs, T0, TASK, taskId, taskNode } from "./task-fixture.mts";
 import { readRequest, readTask, writeRequest, writeTask } from "./task-records.mts";
@@ -127,11 +129,22 @@ test("task show resolves an exact dispatched task id to metadata-only cached req
   assert.equal(shown.code, 0);
   assert.deepEqual(JSON.parse(shown.out[0]), {
     kind: "remote-request", requestId, taskId: TASK, target: { requestedNode: PEER, dispatchedNode: "unknown" },
-    runtime: "codex", dispatchState: "dispatched",
+    runtime: "codex", dispatchState: "dispatched", dispatchMeaning: DISPATCHED_MEANING,
     source: "local request cache", liveExecutionState: "unknown", desktopChatVisibility: "unknown",
     createdAt: new Date(T0).toISOString(),
   });
   assert.ok(!shown.out[0].includes("private"), "task text, title and directive stay out of detail output");
+
+  // Issue #240: the last status answer this node holds, with the state and reason the target reported.
+  const statusId = crypto.randomUUID();
+  queueControlRequest(node.paths, { name: "task.control.submit", requestId: statusId, action: "status", sourceRequestId: requestId }, T0);
+  applyQueryResult(node.paths, { name: "task.control.query.result", requestId: statusId, operationId: crypto.randomUUID(), state: "succeeded",
+    taskId: TASK, targetNodeId: PEER, action: "status", freshness: "cached", runtime: "codex", taskState: "failed", processState: "closed",
+    observedAt: new Date(T0 + 1000).toISOString(), stopSupported: false, stopConfirmed: false, reportedState: "failed",
+    reportedReason: "cwd does not exist on this node" }, T0 + 1000);
+  assert.deepEqual(JSON.parse(task(node, ["show", TASK]).out[0]).lastStatus, { state: "succeeded", taskState: "failed",
+    processState: "closed", reportedState: "failed", reportedReason: "cwd does not exist on this node",
+    observedAt: new Date(T0 + 1000).toISOString() });
 });
 
 test("task show rejects invalid, unknown and ambiguous ids explicitly", (t) => {

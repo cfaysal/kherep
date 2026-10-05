@@ -1,7 +1,9 @@
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import { TASK_CONTROL_CAPABILITY, type TaskControlResultBody } from "../../protocol-task-control.mts";
+import {
+  isTaskControlQueryResultBody, TASK_CONTROL_CAPABILITY, TASK_CONTROL_REPORT_CAPABILITY, type TaskControlResultBody,
+} from "../../protocol-task-control.mts";
 import { DELEGATE_ACCEPT_CAPABILITY, SESSIONS_CAPABILITY } from "../../protocol-tasks.mts";
 import { enroll, FACTS, newKey, registry } from "./helpers.mts";
 
@@ -249,5 +251,50 @@ describe("task-control grants and operation ledger", () => {
     expect(await registry().submitTaskControl(foreignNodeId, {
       name: "task.control.submit", requestId: crypto.randomUUID(), action: "status", sourceRequestId,
     })).toEqual({ reply: expect.objectContaining({ state: "denied", errorCode: "foreign_owner" }) });
+  });
+
+  it("adds the reported task state and reason only for an owner that advertises the report capability (issue #240)", async () => {
+    const reporting = await registeredNode(`report-owner-${crypto.randomUUID()}`, [...controlCaps, TASK_CONTROL_REPORT_CAPABILITY]);
+    const older = await registeredNode(`older-owner-${crypto.randomUUID()}`);
+    const targetNodeId = await registeredNode(`report-target-${crypto.randomUUID()}`,
+      [...controlCaps, DELEGATE_ACCEPT_CAPABILITY], ["claude"]);
+    const delegated = async (ownerNodeId: string) => {
+      const sourceRequestId = crypto.randomUUID();
+      const created = await registry().createTask({
+        title: "delegated", text: PRIVATE, requirements: { runtime: "claude", node: targetNodeId, cwd: "C:/Program Files/Git/Users/a" },
+        permissionMode: "auto", createdBy: `session:${ownerNodeId}/maestro`, requestedBy: `${ownerNodeId}/maestro`,
+        directive: "operator said so", requestId: sourceRequestId, fromNode: ownerNodeId,
+      });
+      if (!created.ok) throw new Error(created.reason);
+      return { sourceRequestId, taskId: created.task.taskId };
+    };
+    const status = (sourceRequestId: string) => ({
+      name: "task.control.submit" as const, requestId: crypto.randomUUID(), action: "status" as const, sourceRequestId,
+    });
+
+    const mine = await delegated(reporting);
+    const before = await registry().submitTaskControl(reporting, status(mine.sourceRequestId));
+    expect(before.reply).toMatchObject({ state: "pending", reportedState: "dispatched" });
+    expect(before.reply).not.toHaveProperty("reportedReason");
+    expect(await registry().reportTask(targetNodeId, { taskId: mine.taskId, state: "failed", reason: "cwd does not exist on this node" }))
+      .toBe(true);
+    const submit = status(mine.sourceRequestId);
+    const { execute } = await registry().submitTaskControl(reporting, submit);
+    expect((await registry().recordTaskControlResult(targetNodeId, {
+      name: "task.control.result", operationId: execute!.operationId, taskId: mine.taskId, state: "succeeded", runtime: "claude",
+      taskState: "failed", processState: "closed", observedAt: new Date().toISOString(), freshness: "fresh",
+      stopSupported: false, stopConfirmed: false,
+    })).ok).toBe(true);
+    const answered = await registry().queryTaskControl(reporting, submit.requestId);
+    expect(answered).toMatchObject({ state: "succeeded", freshness: "cached", taskState: "failed",
+      reportedState: "failed", reportedReason: "cwd does not exist on this node" });
+    expect(isTaskControlQueryResultBody(answered)).toBe(true);
+    expect(JSON.stringify(answered)).not.toContain("PRIVATE_SENTINEL");
+
+    const theirs = await delegated(older);
+    await registry().reportTask(targetNodeId, { taskId: theirs.taskId, state: "failed", reason: "cwd does not exist on this node" });
+    const plain = await registry().submitTaskControl(older, status(theirs.sourceRequestId));
+    expect(plain.reply).not.toHaveProperty("reportedState");
+    expect(plain.reply).not.toHaveProperty("reportedReason");
   });
 });

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { isNodeId, isPhase1Command, isSessionCommand, PHASE1_COMMANDS, type NodeCommand, type Phase1Command } from "../protocol.mts";
 import { CLAUDE_MCP_CAPABILITY, REMOTE_MCP_CAPABILITY, type McpRuntime } from "../protocol-mcp.mts";
 import { isSessionRef, MESSAGING_CAPABILITY, OPERATOR_NODE_ID } from "../protocol-messages.mts";
-import { TASK_CONTROL_CAPABILITY } from "../protocol-task-control.mts";
+import { TASK_CONTROL_CAPABILITY, TASK_CONTROL_REPORT_CAPABILITY } from "../protocol-task-control.mts";
 import {
   DELEGATE_ACCEPT_CAPABILITY, DELEGATE_REQUEST_CAPABILITY, RUNTIME_READY_CAPABILITIES, SESSIONS_CAPABILITY, type TaskRuntime,
 } from "../protocol-tasks.mts";
@@ -113,7 +113,8 @@ export function advertisedCapabilities(policy: NodePolicy, ready: readonly TaskR
   const s = policy.sessions;
   return [...policy.allowedCommands, ...(messagingEnabled(policy) ? [MESSAGING_CAPABILITY] : []),
     ...(s?.enabled ? [SESSIONS_CAPABILITY] : []), ...(s?.delegate.accept ? [DELEGATE_ACCEPT_CAPABILITY] : []),
-    ...(s?.delegate.request ? [DELEGATE_REQUEST_CAPABILITY] : []), ...(s?.ownTaskControl && s.runtimes.length > 0 ? [TASK_CONTROL_CAPABILITY] : []),
+    ...(s?.delegate.request ? [DELEGATE_REQUEST_CAPABILITY] : []),
+    ...(s?.ownTaskControl && s.runtimes.length > 0 ? [TASK_CONTROL_CAPABILITY, TASK_CONTROL_REPORT_CAPABILITY] : []),
     ...(mcpRuntimeEnabled(policy, "codex") ? [REMOTE_MCP_CAPABILITY] : []),
     ...(mcpRuntimeEnabled(policy, "claude-code") ? [CLAUDE_MCP_CAPABILITY] : []),
     ...(s?.enabled ? ready.filter((r) => s.runtimes.includes(r)).map((r) => RUNTIME_READY_CAPABILITIES[r]) : [])];

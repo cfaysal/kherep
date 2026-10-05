@@ -70,6 +70,9 @@ test("owner task control is default off and advertises only with enabled session
   const enabled = policyWith(t, { enabled: true, workspaceRoots: [ROOT], runtimes: ["codex"], ownTaskControl: true });
   assert.equal(enabled.sessions?.ownTaskControl, true);
   assert.equal(advertisedCapabilities(enabled).includes("sessions.own-task-control.v1"), true);
+  // Issue #240: an owner with task control also takes the reported task state in query results.
+  assert.equal(advertisedCapabilities(enabled).includes("sessions.own-task-control.report.v1"), true);
+  assert.equal(advertisedCapabilities(base).includes("sessions.own-task-control.report.v1"), false);
   const disabled = policyWith(t, { enabled: false, workspaceRoots: [ROOT], runtimes: ["codex"], ownTaskControl: true });
   assert.equal(disabled.sessions?.ownTaskControl, false);
   assert.equal(advertisedCapabilities(disabled).includes("sessions.own-task-control.v1"), false);

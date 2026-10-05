@@ -8,10 +8,11 @@ import { taskCliCommand } from "./msg-cli.mts";
 import type { NodePolicy } from "./policy.mts";
 import { notReady, type Readiness } from "./runtime-readiness.mts";
 import { claudeCall, findClaude, LIST_TIMEOUT_MS, type Exec } from "./sessions.mts";
-import { admitStart, overLimit, refuse, trim } from "./task-admission.mts";
+import { admitStart, overLimit, refuse, trim, type Admitted } from "./task-admission.mts";
 import { withNodeOnPath, withoutSessionMarkers } from "./task-env.mts";
 import { queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
 import { frameFollowUp } from "./task-prompt.mts";
+import { recordRefusal } from "./task-refusals.mts";
 
 // Starts, continues and stops Claude Code background sessions for tasks
 // (issue #31, item 5), from https://code.claude.com/docs/en/agent-view and
@@ -126,13 +127,32 @@ async function background(deps: RunnerDeps, launched: TaskRecord, args: string[]
   return saved;
 }
 
-export async function startTask(args: SessionStartArgs, deps: RunnerDeps): Promise<{ taskId: string; state: string; sessionId?: string }> {
-  const existing = readTask(deps.paths, args.taskId);
-  if (existing) return { taskId: existing.taskId, state: existing.state }; // a resent command
-  const { record, prompt } = admitStart(args, deps);
+async function admit(args: SessionStartArgs, deps: RunnerDeps): Promise<Admitted> {
+  const admitted = admitStart(args, deps);
   // Issue #197: a runtime that cannot run a turn starts nothing (no record, no start counted).
   const blocked = await notReady(deps.readiness, args.runtime);
   if (blocked) refuse(deps, args.taskId, blocked);
+  return admitted;
+}
+
+// Issue #240: a refusal record, so owner task control can answer with the
+// reason. Failing to write it never replaces the refusal itself.
+function keepRefusal(args: SessionStartArgs, deps: RunnerDeps, error: unknown): void {
+  if (deps.local) return;
+  try {
+    recordRefusal(deps.paths, args, trim(String((error as Error).message)), deps.now?.() ?? Date.now());
+  } catch (failed) {
+    deps.log?.(`kherep-node: task ${args.taskId}: refusal record not written: ${String((failed as Error).message)}`);
+  }
+}
+
+export async function startTask(args: SessionStartArgs, deps: RunnerDeps): Promise<{ taskId: string; state: string; sessionId?: string }> {
+  const existing = readTask(deps.paths, args.taskId);
+  if (existing) return { taskId: existing.taskId, state: existing.state }; // a resent command
+  const { record, prompt } = await admit(args, deps).catch((error: unknown) => {
+    keepRefusal(args, deps, error);
+    throw error;
+  });
   if (args.runtime === "codex") return startCodex(deps, record, prompt);
   const saved = await background(deps, record, ["--bg", "--name", args.name, "--permission-mode", record.permissionMode, prompt]);
   return { taskId: saved.taskId, state: saved.state, ...(saved.sessionId ? { sessionId: saved.sessionId } : {}) };

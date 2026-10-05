@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { isTaskId, type TaskRuntime } from "../protocol-tasks.mts";
 import { codexFiles } from "./codex-process.mts";
 import type { NodePaths } from "./config.mts";
+import { latestStatus } from "./task-control-store.mts";
 import {
   isActive, listTasks, readRequest, readTask, requestIds, type TaskRecord, type TaskRequestRecord,
 } from "./task-records.mts";
@@ -50,7 +51,19 @@ function codexOutput(paths: NodePaths, taskId: string): Record<string, unknown> 
   };
 }
 
-function remoteDetail(record: TaskRequestRecord): Record<string, unknown> {
+// Issue #240: dispatched only means the Worker queued the start for the
+// target; the target may still have refused it.
+export const DISPATCHED_MEANING = "queued by the Worker for the target node, not acknowledged by it; "
+  + "kherep-node task status <taskId> asks the target";
+
+function lastStatus(paths: NodePaths, taskId: string | undefined): Record<string, unknown> {
+  const result = taskId ? latestStatus(paths, taskId) : null;
+  if (!result) return {};
+  const { state, taskState, processState, errorCode, reportedState, reportedReason, observedAt } = result;
+  return { lastStatus: { state, taskState, processState, errorCode, reportedState, reportedReason, observedAt } };
+}
+
+function remoteDetail(paths: NodePaths, record: TaskRequestRecord): Record<string, unknown> {
   return {
     kind: "remote-request",
     requestId: record.requestId,
@@ -61,7 +74,9 @@ function remoteDetail(record: TaskRequestRecord): Record<string, unknown> {
     },
     runtime: (record.requirements.runtime ?? "claude") as TaskRuntime,
     dispatchState: record.state,
+    ...(record.state === "dispatched" ? { dispatchMeaning: DISPATCHED_MEANING } : {}),
     ...(record.state === "refused" && record.reason ? { refusalReason: record.reason } : {}),
+    ...lastStatus(paths, record.taskId),
     source: "local request cache",
     liveExecutionState: "unknown",
     desktopChatVisibility: "unknown",
@@ -74,7 +89,7 @@ export function resolveTaskDetail(paths: NodePaths, id: string): TaskDetailResul
   const local = readTask(paths, id);
   if (local) return { ok: true, detail: localDetail(paths, local) };
   const direct = readRequest(paths, id);
-  if (direct) return { ok: true, detail: remoteDetail(direct) };
+  if (direct) return { ok: true, detail: remoteDetail(paths, direct) };
   const reverse = requestIds(paths).flatMap((requestId) => {
     const request = readRequest(paths, requestId);
     return request?.taskId === id ? [request] : [];
@@ -83,7 +98,7 @@ export function resolveTaskDetail(paths: NodePaths, id: string): TaskDetailResul
   if (reverse.length > 1) {
     return { ok: false, error: "ambiguous task id " + id + ": " + reverse.map((record) => record.requestId).join(", ") };
   }
-  return { ok: true, detail: remoteDetail(reverse[0]) };
+  return { ok: true, detail: remoteDetail(paths, reverse[0]) };
 }
 
 export function listTaskLines(paths: NodePaths): string[] {

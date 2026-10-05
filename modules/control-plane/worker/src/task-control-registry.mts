@@ -1,9 +1,10 @@
 import {
-  TASK_CONTROL_CAPABILITY, type TaskControlErrorCode, type TaskControlQueryResultBody, type TaskControlRegisterBody,
-  type TaskControlRegistrationReceiptBody, type TaskControlResultBody, type TaskControlSubmitBody,
+  TASK_CONTROL_CAPABILITY, TASK_CONTROL_REPORT_CAPABILITY, TASK_CONTROL_TASK_STATES, type TaskControlErrorCode,
+  type TaskControlQueryResultBody, type TaskControlRegisterBody, type TaskControlRegistrationReceiptBody, type TaskControlResultBody,
+  type TaskControlSubmitBody, type TaskControlTaskState,
 } from "../../protocol-task-control.mts";
 import { OPERATOR_NODE_ID } from "../../protocol-messages.mts";
-import { SESSIONS_CAPABILITY } from "../../protocol-tasks.mts";
+import { MAX_REASON, SESSIONS_CAPABILITY } from "../../protocol-tasks.mts";
 import type { MessageStore } from "./message-store.mts";
 import type { TaskControlTaskSource, TaskStore } from "./task-store.mts";
 import type { TaskControlGrant } from "./task-control-grants.mts";
@@ -67,12 +68,12 @@ export class TaskControlRegistry {
           ? this.store.denyPending(ownerNodeId, body.requestId, "grant_revoked", Date.now())
           : this.denial(body.requestId, "grant_revoked") };
       }
-      return this.store.replay(ownerNodeId, body)!;
+      return this.reported(ownerNodeId, this.store.replay(ownerNodeId, body)!);
     }
     const resolved = this.resolve(ownerNodeId, body);
     if (!resolved.ok) return denied(resolved.errorCode);
     if (!this.grantUsable(resolved.grant)) return denied("grant_revoked");
-    return this.store.submit(resolved.grant, body, Date.now());
+    return this.reported(ownerNodeId, this.store.submit(resolved.grant, body, Date.now()));
   }
 
   query(ownerNodeId: string, requestId: string): TaskControlQueryResultBody {
@@ -89,7 +90,7 @@ export class TaskControlRegistry {
         ? this.store.denyPending(ownerNodeId, requestId, "grant_revoked", Date.now())
         : this.denial(requestId, "grant_revoked");
     }
-    return this.store.query(ownerNodeId, requestId);
+    return this.withReport(ownerNodeId, this.store.query(ownerNodeId, requestId));
   }
 
   retry(ownerNodeId: string, requestId: string) {
@@ -182,10 +183,29 @@ export class TaskControlRegistry {
       && this.hasRuntime(grant.targetNodeId, grant.runtime);
   }
 
-  private nodeEligible(nodeId: string, target: boolean): boolean {
+  // Issue #240: adds the task state (and reason) the target last reported, for
+  // an owner that advertises TASK_CONTROL_REPORT_CAPABILITY and holds a usable
+  // grant. A message-started task has no task row and gets nothing.
+  private withReport(ownerNodeId: string, reply: TaskControlQueryResultBody): TaskControlQueryResultBody {
+    const taskId = reply.operationId === undefined ? undefined : reply.taskId;
+    if (!taskId || !this.capabilities(ownerNodeId).includes(TASK_CONTROL_REPORT_CAPABILITY)) return reply;
+    const task = this.tasks.get(taskId, false);
+    if (!task || !(TASK_CONTROL_TASK_STATES as readonly string[]).includes(task.state)) return reply;
+    const reason = task.reason?.trim().slice(0, MAX_REASON);
+    return { ...reply, reportedState: task.state as TaskControlTaskState, ...(reason ? { reportedReason: reason } : {}) };
+  }
+
+  private reported(ownerNodeId: string, stored: StoredSubmit): StoredSubmit {
+    return { ...stored, reply: this.withReport(ownerNodeId, stored.reply) };
+  }
+
+  private capabilities(nodeId: string): string[] {
     const row = this.sql.exec("SELECT capabilities FROM nodes WHERE id = ? AND revoked_at IS NULL", nodeId).toArray()[0];
-    if (!row) return false;
-    const capabilities = JSON.parse(String(row.capabilities)) as string[];
+    return row ? JSON.parse(String(row.capabilities)) as string[] : [];
+  }
+
+  private nodeEligible(nodeId: string, target: boolean): boolean {
+    const capabilities = this.capabilities(nodeId);
     return capabilities.includes(TASK_CONTROL_CAPABILITY) && (!target || capabilities.includes(SESSIONS_CAPABILITY));
   }
 

@@ -357,6 +357,27 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: a delegated task start the target refuses is no longer lost
+  silently (issue #240). A Git Bash `msg send <mac> --new codex --cwd
+  /Users/...` stored `C:/Program Files/Git/Users/...`; the Mac refused the
+  start during admission without a log line or task record, and the sender
+  saw `task_unknown` under a `dispatched` that never changed. Now the node
+  logs every refused start (`task <taskId> refused: <reason>`) and every
+  failed command result with its task id and reason, never the prompt. A start
+  refused before a task record existed leaves a bounded record in
+  `task-refusals/` (at most 256, 7 days) that only owner task control reads,
+  so `task status` answers `taskState` `failed` with `processState` `closed`.
+  A requesting node with owner task control advertises
+  `sessions.own-task-control.report.v1`, and the Worker adds the state and
+  reason of the target's last `task.report` as `reportedState` and
+  `reportedReason`; older nodes and Workers never see them. `task show` says
+  that `dispatched` means queued by the Worker, not acknowledged by the target,
+  and shows the last status answer. `msg send <node> --new ... --cwd <dir>`
+  refuses, before writing anything, a directory rewritten by Git Bash path
+  conversion and, when the target's path style is known from its sessions in
+  the directory, a Windows drive path for a POSIX node or the reverse; the
+  error points to PowerShell or `MSYS_NO_PATHCONV=1`. The reported reason
+  reaches the requester only after the Worker is deployed.
 - Control Plane: a headless `claude -p` run no longer hangs until the wake
   hook's 24-hour timeout (issue #235). On Windows with Claude Code 2.1.289 the
   run waited for the wake listener, its only child process, and sent no API
