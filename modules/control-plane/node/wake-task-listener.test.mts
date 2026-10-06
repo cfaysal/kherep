@@ -3,9 +3,10 @@ import fs from "node:fs";
 import test from "node:test";
 
 import type { NodePaths } from "./config.mts";
+import { readRequest, writeRequest } from "./task-records.mts";
 import { WAKE_POLL_MS, wakeText } from "./wake-hook.mts";
 import {
-  arriveReply, arriveTaskMessage, auditLines, dispatchedRequest, listen, lockFile, sentOriginal, setup, T0,
+  arriveReply, arriveTaskMessage, auditLines, dispatchedRequest, listen, lockFile, SELF, sentOriginal, setup, T0,
 } from "./wake-fixture.mts";
 
 // The wake listener with wake.replies (issue #264): an unlisted session also
@@ -69,4 +70,35 @@ test("a reply and a task message woken together are audited with their own grant
   });
   assert.deepEqual(result, { code: 2, text: wakeText(2) });
   assert.deepEqual(actions(paths), [["wake", [reply], "reply"], ["wake", [task], "task"]]);
+});
+
+// Issue #266: the request index is built at every poll, so a request that is
+// dispatched only after its task's message arrived (`task new` or
+// `msg send --new --wait 0`) grants at the next poll.
+test("a request dispatched between two polls grants at the next poll", async (t) => {
+  const { paths } = setup(t, { wake: REPLIES });
+  const { taskId, nodeId, ...pending } = readRequest(paths, dispatchedRequest(paths))!;
+  writeRequest(paths, { ...pending, state: "pending" });
+  let message = "";
+  const result = await listen(paths, { token: "listener-1", maxWaitMs: 20_000, tick: (clock) => {
+    if (clock === T0 + 2 * WAKE_POLL_MS) message = arriveTaskMessage(paths, 1, clock);
+    if (clock === T0 + 4 * WAKE_POLL_MS) dispatchedRequest(paths);
+  } });
+  assert.deepEqual(result, { code: 2, text: wakeText(1) });
+  assert.deepEqual(actions(paths), [["wake", [message], "task"]]);
+});
+
+// Issue #266: a listed session wakes through its listing, so its task messages
+// are audited without a grant.
+test("a listed session's task message is audited without a grant", async (t) => {
+  for (const sessions of [[SELF], ["*"]]) {
+    const { paths } = setup(t, { wake: { enabled: true, sessions, replies: true } });
+    dispatchedRequest(paths);
+    let message = "";
+    const result = await listenFor(paths, (clock) => { message = arriveTaskMessage(paths, 1, clock); });
+    assert.deepEqual(result, { code: 2, text: wakeText(1) }, JSON.stringify(sessions));
+    const lines = auditLines(paths);
+    assert.deepEqual(lines.map((l) => [l.action, l.messageIds]), [["wake", [message]]], JSON.stringify(sessions));
+    assert.equal("grant" in lines[0], false, JSON.stringify(sessions));
+  }
 });

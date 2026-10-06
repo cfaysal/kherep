@@ -153,6 +153,18 @@ test("a task-message-granted message reports wake-pending with a replies-scoped 
   assert.deepEqual(observe({ token: "live", listed: false, replies: true }), ["wake-not-authorized", "wake-not-authorized", "wake-pending"]);
 });
 
+// Issue #266: the task message grant is covered by wake.replies; without it a
+// task message to an unlisted session is not authorized.
+test("a task message to an unlisted idle session stays wake-not-authorized without wake.replies", (t) => {
+  const node = taskNode(t, {}, { wake: { enabled: true, sessions: ["another-session"] } });
+  writeRequest(node.paths, { requestId: id(), title: "intercom: claude@n", text: "question", requirements: { runtime: "claude", node: PEER.nodeId },
+    directive: "Yes", requestedBy: "review", requestedBySessionId: SESSION, createdAt: new Date(T0 - 60_000).toISOString(),
+    state: "dispatched", taskId: TASK, nodeId: PEER.nodeId });
+  const messageId = deliver(node, "idle", TASK);
+  observeClaudeDeliveryProgress(node.deps());
+  assert.equal(code(node, messageId), "wake-not-authorized");
+});
+
 test("a task association grants no wake while sessions are disabled", (t) => {
   const node = taskNode(t, { enabled: false });
   writeTask(node.paths, { taskId: TASK, runtime: "claude", name: "task-3f2a1b0c", cwd: node.workspace,
