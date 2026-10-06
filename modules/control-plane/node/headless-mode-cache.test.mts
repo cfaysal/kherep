@@ -109,3 +109,62 @@ test("a full check prunes entries older than the bound", async (t) => {
   assert.equal(await decide(500, "claude"), "interactive");
   assert.deepEqual(fs.readdirSync(dir).sort(), [`${S}.500.json`, "recent-session.43.json"]);
 });
+
+// Issue #248: Claude Code's own pid in CLAUDE_PID keys the entry, so the hooks
+// of one Claude Code process share it even when a shell sits between them
+// (Git Bash on Windows). The hook's parent (ppid) runs parentArgs, its parent
+// (900) is the Claude Code process.
+const behind = (ppid: number, parentArgs: string, claudeArgs = "claude --resume abc"): ProcessTable => new Map([
+  [ppid, { ppid: 900, args: parentArgs }], [900, { ppid: 901, args: claudeArgs }], [901, { ppid: 1, args: "-zsh" }],
+]);
+const BASH = "/bin/bash -c node wake-hook.mts";
+
+test("CLAUDE_PID keys the entry: hooks behind a fresh shell each share one decision (issue #248)", async (t) => {
+  const { dir, decide } = cached(t);
+  const env = { CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_PID: "4242" };
+  let full = 0;
+  for (const ppid of [500, 501, 502]) {
+    assert.equal(await decide(ppid, "unused", env, { processTable: async () => {
+      full++;
+      return behind(ppid, BASH);
+    } }), "interactive");
+  }
+  assert.equal(full, 1);
+  assert.deepEqual(fs.readdirSync(dir), [`${S}.4242.json`]);
+});
+
+test("an invalid CLAUDE_PID falls back to the hook's parent pid as the key (issue #248)", async (t) => {
+  const { dir, decide, listings } = cached(t);
+  for (const pid of ["1", "0", "12abc", "../x", "", "12345678901", "-5"]) {
+    assert.equal(await decide(500, "claude --resume abc", { CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_PID: pid }), "interactive", pid);
+  }
+  assert.equal(listings(), 1);
+  assert.deepEqual(fs.readdirSync(dir), [`${S}.500.json`]);
+});
+
+test("two Claude Code processes with one session and parent pid keep two decisions by CLAUDE_PID (issue #248)", async (t) => {
+  const { dir, decide, listings } = cached(t);
+  for (let i = 0; i < 2; i++) {
+    assert.equal(await decide(500, "claude --resume abc", { CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_PID: "4242" }), "interactive");
+    assert.equal(await decide(500, "claude -p hi", { CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_PID: "4343" }), "headless");
+  }
+  assert.equal(listings(), 2);
+  assert.deepEqual(fs.readdirSync(dir).sort(), [`${S}.4242.json`, `${S}.4343.json`]);
+});
+
+test("without CLAUDE_PID a shell parent keeps nothing, its pid is never seen again; another parent is kept (issue #248)", async (t) => {
+  const { dir, decide } = cached(t);
+  const env = { CLAUDE_CODE_ENTRYPOINT: "cli" };
+  for (const [parent, platform] of [[BASH, "darwin"], ["sh -c node wake-hook.mts", "linux"], ["/bin/zsh -c x", "darwin"],
+    ["dash -c x", "linux"], ["-bash", "darwin"], ["\"C:\\Program Files\\Git\\usr\\bin\\bash.exe\" -c \"node wake-hook.mts\"", "win32"],
+    ["C:\\Windows\\system32\\cmd.exe /d /s /c \"node wake-hook.mts\"", "win32"], ["pwsh -NoProfile -Command x", "win32"],
+    ["powershell.exe -c x", "win32"]] as const) {
+    assert.equal(await decide(500, "unused", env, { platform, processTable: async () => behind(500, parent) }), "interactive", parent);
+    assert.equal(fs.existsSync(dir), false, parent);
+  }
+  assert.equal(await decide(500, "unused", env, { processTable: async () => behind(500, "node wrapper.mjs") }), "interactive");
+  assert.deepEqual(fs.readdirSync(dir), [`${S}.500.json`]);
+  // With CLAUDE_PID the same shell parent is kept.
+  assert.equal(await decide(510, "unused", { ...env, CLAUDE_PID: "4242" }, { processTable: async () => behind(510, BASH) }), "interactive");
+  assert.deepEqual(fs.readdirSync(dir).sort(), [`${S}.4242.json`, `${S}.500.json`]);
+});
