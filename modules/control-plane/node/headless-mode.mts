@@ -33,10 +33,12 @@ import { MAX_ANCESTORS, readProcessTable, type ProcessTable } from "./launch-mod
 // lists processes: <cache dir>/<session id>.<pid>.json holds the mode,
 // CLAUDE_CODE_ENTRYPOINT and the time, written atomically, and decides only for
 // the same three within RUN_MODE_MAX_AGE_MS. The pid is CLAUDE_PID, which
-// Claude Code sets for its subprocesses (undocumented) and which survives a
-// shell between Claude Code and the hook (Git Bash on Windows); a claude -p
-// started inside a session sets its own (measured 2026-10-06 on macOS and
-// Windows). Without a plain pid above 1 there, the hook's parent pid stands
+// Claude Code sets to its own pid in the subprocesses it spawns, hook commands
+// included (env-vars reference, read 2026-10-06), and which survives a shell
+// between Claude Code and the hook (Git Bash on Windows); a claude -p started
+// inside a session sets its own (measured 2026-10-06 on macOS and Windows).
+// Not covered: a version of Claude Code without CLAUDE_PID that runs
+// claude -p --resume of the session it runs in inherits that session's pid. Without a plain pid above 1 there, the hook's parent pid stands
 // in; when that parent is a shell, every hook has its own, so nothing is kept
 // or pruned and each hook checks in full. A claude -p --resume of an
 // interactive session runs in another process, so it gets its own full check.

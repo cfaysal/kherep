@@ -13,7 +13,7 @@ const FRAMED = `Task ${TASK} from the operator via the Kherep Control Plane: fix
   + "(your messages carry the task id automatically).";
 
 test("a task session does not inherit the daemon's Claude Code session markers (issue #235)", async (t) => {
-  const saved = { CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT, CLAUDECODE: process.env.CLAUDECODE };
+  const saved = { CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT, CLAUDECODE: process.env.CLAUDECODE, CLAUDE_PID: process.env.CLAUDE_PID };
   t.after(() => {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];
@@ -23,11 +23,12 @@ test("a task session does not inherit the daemon's Claude Code session markers (
   // The daemon started from a claude -p run or a Claude Code session.
   process.env.CLAUDE_CODE_ENTRYPOINT = "sdk-cli";
   process.env.CLAUDECODE = "1";
+  process.env.CLAUDE_PID = "4242";
   const node = taskNode(t);
   await startTask(startArgs(), node.deps());
   const keys = Object.keys(node.calls[0].options.env ?? {}).map((key) => key.toUpperCase());
   assert.ok(keys.includes("PATH"));
-  assert.deepEqual(keys.filter((key) => key === "CLAUDE_CODE_ENTRYPOINT" || key === "CLAUDECODE"), []);
+  assert.deepEqual(keys.filter((key) => key === "CLAUDE_CODE_ENTRYPOINT" || key === "CLAUDECODE" || key === "CLAUDE_PID"), []);
 });
 
 test("starts claude --bg with the exact arguments, maps the session id by name and reports started", async (t) => {
