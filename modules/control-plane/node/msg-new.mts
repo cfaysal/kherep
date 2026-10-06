@@ -5,7 +5,7 @@ import type { DirectoryBody } from "../protocol-messages.mts";
 import { isCodexSession } from "./codex-sessions.mts";
 import { readConfig, type NodePaths } from "./config.mts";
 import { cwdProblem, nodePathStyle } from "./cwd-guard.mts";
-import { KHEREP_SESSION_ENV, NO_SESSION, resolveNode, senderSession, SESSION_ENV } from "./msg-resolve.mts";
+import { KHEREP_SESSION_ENV, NO_SESSION, resolveNode, senderSession, senderSessionId, SESSION_ENV } from "./msg-resolve.mts";
 import { delegationBlocked } from "./task-cli.mts";
 import { readRequest, writeRequest } from "./task-records.mts";
 
@@ -69,8 +69,8 @@ export async function sendNew(io: NewIo, directory: DirectoryBody, target: strin
   const wait = values.wait === undefined ? DEFAULT_NEW_WAIT_S : Number(values.wait);
   if (!Number.isFinite(wait) || wait < 0) return fail(`--wait needs a number of seconds, got "${values.wait}"`);
   const requestId = crypto.randomUUID();
-  writeRequest(io.paths, { requestId, title: label, text, requirements, directive, requestedBy: from.value, label,
-    createdAt: new Date(io.now()).toISOString(), state: "pending" });
+  writeRequest(io.paths, { requestId, title: label, text, requirements, directive, requestedBy: from.value,
+    requestedBySessionId: senderSessionId(io.paths, io.env, from.value), label, createdAt: new Date(io.now()).toISOString(), state: "pending" });
   return waitForTask(io, requestId, wait * 1000, fail, node.value.name);
 }
 

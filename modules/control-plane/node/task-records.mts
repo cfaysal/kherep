@@ -86,6 +86,10 @@ export const intercomFor = (paths: NodePaths, record: InboxRecord): TaskRecord |
 export type RequestState = "pending" | "dispatched" | "refused";
 export interface TaskRequestRecord extends TaskRequestBody {
   createdAt: string; state: RequestState; taskId?: string; nodeId?: string; reason?: string;
+  // The requesting session's id beside requestedBy, which may be its renameable
+  // name, for the task message grant (wake-reply.mts, issue #264). Local, never
+  // on the wire: client.mts requestTask picks the frame's fields explicitly.
+  requestedBySessionId?: string;
 }
 
 export const ACTIVE_STATES: readonly TaskState[] = ["started", "running", "needs-input"];

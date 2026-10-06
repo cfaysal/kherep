@@ -10,7 +10,7 @@ import { wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { isActive, listTasks, taskForSession, taskGrants } from "./task-records.mts";
 import { killSwitch, WAKE_MAX_WAIT_MS } from "./wake-hook.mts";
-import { replyGrants } from "./wake-reply.mts";
+import { lazyRequests, replyGrants, taskMessageGrants } from "./wake-reply.mts";
 
 const refsOf = (session: { sessionId: string; name?: string }): string[] =>
   session.name ? [session.sessionId, session.name] : [session.sessionId];
@@ -29,9 +29,12 @@ function observeAccepted(deps: RunnerDeps, session: LocalSession, accepted: Inbo
   const refs = refsOf(session);
   const task = deps.policy.sessions?.enabled === true ? taskForSession(deps.paths, session.sessionId) : null;
   const granted = task ? accepted.filter((record) => taskGrants(task, record)) : [];
-  // Reply grant (issue #253): for an unlisted session only, as in its listener.
+  // Reply and task message grants (issues #253, #264): for an unlisted session
+  // only, as in its listener, and covered by the same replies scope.
+  const requests = lazyRequests(deps.paths);
   const replies = deps.policy.wake?.replies === true && !wakeAllowed(deps.policy, refs)
-    ? accepted.filter((record) => !granted.includes(record) && replyGrants(deps.paths, refs, record, now)) : [];
+    ? accepted.filter((record) => !granted.includes(record)
+      && (replyGrants(deps.paths, refs, record, now) || taskMessageGrants(deps.paths, refs, record, now, requests))) : [];
   const ordinary = accepted.filter((record) => !granted.includes(record) && !replies.includes(record));
   if (fs.existsSync(killSwitch(deps.paths))) {
     progressRecords(deps.paths, accepted, "waiting", "wake-disabled", now);
@@ -53,7 +56,7 @@ function observeAccepted(deps: RunnerDeps, session: LocalSession, accepted: Inbo
   }
   // Waking only for what the live listener's scope covers (issue #213). Without
   // its scope (an older listener) only the task grant, which every listener
-  // looks up; a reply only with a scope that says replies. Otherwise
+  // looks up; a reply or task message only with a scope that says replies. Otherwise
   // awaiting-user-turn: a new code would make an older Worker refuse the whole
   // status (isNodeMessageStatusBody).
   const scope = readJson<ListenerScope>(listenerScope(deps.paths, session.sessionId));

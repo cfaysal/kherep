@@ -5,7 +5,7 @@ import { makeEnvelope, parseEnvelope } from "../protocol.mts";
 import type { DirectoryBody } from "../protocol-messages.mts";
 import { NodeClient } from "./client.mts";
 import { listCodexTaskSessions } from "./codex-sessions.mts";
-import { writeDirectory } from "./exchange.mts";
+import { writeDirectory, writeLocalSessions } from "./exchange.mts";
 import { generateIdentity } from "./identity.mts";
 import { parseMsgArgs, runMsg } from "./msg-cli.mts";
 import { DIRECTIVE_REQUIRED } from "./msg-new.mts";
@@ -66,7 +66,8 @@ test("msg send --new writes a labelled task request for exactly that node and pr
   const [requestId] = requestIds(node.paths);
   assert.deepEqual(readRequest(node.paths, requestId), {
     requestId, title: LABEL, text: "please review PR 12", requirements: { runtime: "codex", node: PEER, cwd: "/w/repo" },
-    directive: ANSWER, requestedBy: "maestro", label: LABEL, createdAt: new Date(T0).toISOString(), state: "dispatched", taskId: TASK,
+    directive: ANSWER, requestedBy: "maestro", requestedBySessionId: "maestro", label: LABEL, createdAt: new Date(T0).toISOString(),
+    state: "dispatched", taskId: TASK,
   });
 
   // The daemon sends the label and the target node with the request.
@@ -87,8 +88,22 @@ test("msg send --new writes a labelled task request for exactly that node and pr
     return true;
   });
   assert.equal(frames.length, 1);
+  // requestedBySessionId stays local (issue #264): the frame carries the fields requestTask picks, nothing else.
+  assert.equal(readRequest(node.paths, requestIds(node.paths).find((r) => r !== requestId)!)?.requestedBySessionId, "maestro");
   assert.deepEqual({ ...frames[0], requestId: "-" }, { requestId: "-", title: LABEL, text: "hi", requirements: { runtime: "claude", node: PEER },
     directive: "Yes, open a new session", requestedBy: "maestro", label: LABEL });
+});
+
+// Issue #264: the request keeps the sending session's id beside requestedBy,
+// which is the session's renameable name when it has one, for the task message grant.
+test("msg send --new keeps the requesting session's id locally", async (t) => {
+  const node = taskNode(t, { delegate: { request: true } });
+  writeDirectory(node.paths, DIRECTORY);
+  writeLocalSessions(node.paths, [{ sessionId: "maestro", runtime: "claude-code", state: "working", name: "review" }], T0);
+  assert.equal((await send(node, ["send", "sekhmet", "--new", "claude", ...D, "--", "hi"], { ok: true, taskId: TASK })).code, 0);
+  const [requestId] = requestIds(node.paths);
+  const record = readRequest(node.paths, requestId);
+  assert.deepEqual([record?.requestedBy, record?.requestedBySessionId], ["review", "maestro"]);
 });
 
 test("msg send --new prints refusals with the reason and exits non-zero", async (t) => {
