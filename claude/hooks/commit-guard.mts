@@ -2,6 +2,7 @@
 // Early commit-message feedback. The commit-msg hook is the enforcement boundary.
 // The import also marks this file as ESM for `node --check` (live-hook-integrity).
 import process from "node:process";
+import { commitsViaGit } from "./lib/git-commit-match.mts";
 
 // The fields this hook reads from a PreToolUse payload.
 interface ToolPayload {
@@ -44,7 +45,7 @@ function subjectOf(message: string): string {
   try { payload = JSON.parse(await read(process.stdin)) as ToolPayload | null; } catch { process.exit(0); }
   if (!payload || !["Bash", "PowerShell"].includes(payload.tool_name as string)) process.exit(0);
   const command = payload.tool_input && payload.tool_input.command;
-  if (typeof command !== "string" || !/\bgit\b(?:\s+(?:-[cC]\s+\S+|--?[\w-]+(?:=\S+)?))*\s+commit\b/.test(command)) process.exit(0);
+  if (typeof command !== "string" || !commitsViaGit(command)) process.exit(0);
   const violations: string[] = [];
   if (/co-authored-by/i.test(command)) violations.push("commit message contains a Co-Authored-By trailer");
   if (/\u2014/.test(command)) violations.push("commit message contains an em dash (U+2014)");

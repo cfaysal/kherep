@@ -26,6 +26,7 @@ hooks/research-stop.test.mts
 hooks/dispatch-contract-guard.mts
 hooks/dispatch-contract-guard.test.mts
 hooks/lib/dispatch-policy.mts
+hooks/lib/git-commit-match.mts
 hooks/lib/private-path-policy.mts
 hooks/lib/private-path-rules.mts
 hooks/lib/real-path-policy.mts

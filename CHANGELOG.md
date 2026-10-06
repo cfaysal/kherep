@@ -424,6 +424,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- `commit-guard.mts` no longer backtracks exponentially while it looks for
+  `git ... commit` (issue #271, CodeQL `js/redos` alerts #16 and #17). Its
+  regex read `-C` both as a flag and as a flag with a value, and `--long` both
+  as `--` + `long` and `-` + `-long`; `git ` followed by 26 `-C -- ` pairs took
+  2.3 s and every further pair about 4x more, so a hook timeout let the call
+  through. The new `hooks/lib/git-commit-match.mts` splits the command into
+  tokens once and tracks the reachable tokens in one linear pass. It accepts
+  exactly the strings the regex accepted: a seeded differential test of
+  20,000 short token sequences finds no difference, and the guard's other
+  checks are unchanged. The installer manifest lists the new module.
 - Control Plane: on Windows the wake hook's kept run mode now hits (issue
   #248). Claude Code starts each hook through Git Bash, so the key
   `run-modes/<session_id>.<parent pid>.json` was new for every hook: each
