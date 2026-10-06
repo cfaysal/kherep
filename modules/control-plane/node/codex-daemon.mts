@@ -18,7 +18,7 @@ import { isCodexSessionId } from "./codex-sessions.mts";
 const PROBE_TIMEOUT_MS = 2_000;
 export const LOADED_TTL_MS = 10_000;
 // The largest daemon answer read; a longer one is refused.
-const MAX_BYTES = 1024 * 1024;
+export const MAX_BYTES = 1024 * 1024;
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 export type LoadedThreads = () => Promise<Set<string> | null>;
@@ -67,6 +67,7 @@ export function loadedThreads(socket: string, options: { platform?: NodeJS.Platf
     let buffer = Buffer.alloc(0);
     let upgraded = false;
     let parts: Buffer[] = [];
+    let partsBytes = 0;
     let done = false;
     const finish = (result: Set<string> | null): void => {
       if (done) return;
@@ -109,9 +110,12 @@ export function loadedThreads(socket: string, options: { platform?: NodeJS.Platf
         if (frame.opcode === 0x9 || frame.opcode === 0xa) continue;
         if (frame.opcode !== 0x1 && frame.opcode !== 0x0) return finish(null);
         parts.push(frame.payload);
+        partsBytes += frame.payload.length;
+        if (partsBytes > MAX_BYTES) return finish(null);
         if (!frame.fin) continue;
         const text = Buffer.concat(parts).toString("utf8");
         parts = [];
+        partsBytes = 0;
         answer(JSON.parse(text));
       }
     };
