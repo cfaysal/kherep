@@ -7,7 +7,7 @@ import {
 } from "../protocol-tasks.mts";
 import { readConfig, type NodePaths } from "./config.mts";
 import { CODEX_ACTIVE_MS, readCodexSession } from "./codex-sessions.mts";
-import { KHEREP_SESSION_ENV, senderSession, SESSION_ENV, sessionIdFromEnv } from "./msg-resolve.mts";
+import { KHEREP_SESSION_ENV, senderSession, senderSessionId, SESSION_ENV, sessionIdFromEnv } from "./msg-resolve.mts";
 import { loadPolicy } from "./policy.mts";
 import { listTaskLines, resolveTaskDetail } from "./task-detail.mts";
 import { NO_CHAINS, NOT_DELEGATING, TASKS_ACTIVE } from "./task-exchange.mts";
@@ -133,7 +133,7 @@ function newTask(context: TaskContext, words: string[], values: TaskArgs["values
   if (!isTaskText(text) || !isTaskRequirements(requirements)) return fail("task text or requirements are invalid");
   const requestId = crypto.randomUUID();
   writeRequest(paths, { requestId, title: values.title, text, requirements, directive, requestedBy: from.value,
-    createdAt: new Date(now()).toISOString(), state: "pending" });
+    requestedBySessionId: senderSessionId(paths, env, from.value), createdAt: new Date(now()).toISOString(), state: "pending" });
   out(requestId);
   return 0;
 }
