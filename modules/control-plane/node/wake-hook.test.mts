@@ -272,7 +272,9 @@ test("hooks behind a fresh bash each take the run mode kept under CLAUDE_PID (is
       assert.deepEqual([run.status, run.stdout, withoutTypeStrippingWarning(run.stderr)], [0, "", ""]);
     }
     const parents = fs.readFileSync(log, "utf8").trim().split(/\r?\n/);
-    assert.equal(new Set([...parents, String(process.pid)]).size, 3, "each hook has its own shell as parent");
+    // Windows may reuse a pid for the second shell, so only check that a shell, not this process, was the parent.
+    assert.equal(parents.length, 2, "both hooks recorded their parent");
+    assert.ok(!parents.includes(String(process.pid)), "each hook has a shell as parent");
     // The second hook's listing fails: only the kept mode makes it headless instead of waking.
     assert.deepEqual(auditLines(paths).map((l) => l.action), ["headless", "headless"]);
     assert.deepEqual(fs.readdirSync(path.join(paths.dir, "run-modes")), [`${SELF}.4242.json`]);
