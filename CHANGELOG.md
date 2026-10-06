@@ -17,7 +17,7 @@ increments the minor version; every other release increments the patch version.
   task id and no `inReplyTo`, is not left waiting for the next user turn. The
   grant needs the request to be dispatched, the message to come from the node
   the task was dispatched to, the request to be at most 24 hours old, and the
-  requesting session's id, which `msg send --new` now keeps locally as
+  requesting session's id, which `msg send --new` and `task new` now keep locally as
   `requestedBySessionId` and never sends to the Worker, to match (a request
   without it matches by `requestedBy`). It covers every message of the task,
   bounded by the turn budget. Audit lines name `"grant": "task"`, delivery
