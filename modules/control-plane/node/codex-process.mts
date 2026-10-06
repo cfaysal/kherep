@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { PermissionMode } from "../protocol-tasks.mts";
 import { codexCommand, type CodexCommand } from "./codex-binary.mts";
+import type { LoadedThreads } from "./codex-daemon.mts";
 import type { McpList } from "./codex-mcp.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
@@ -55,6 +56,9 @@ export interface CodexDeps {
   // The Codex home whose rollouts wake.codexApp reads (codex-app.mts);
   // CODEX_HOME or ~/.codex when absent.
   home?: string;
+  // The thread ids loaded on the shared app-server daemon, null when unknown
+  // (codex-daemon.mts); the control socket under home when absent.
+  loadedThreads?: LoadedThreads;
   // Starts the process; tests record the options.
   spawn?: typeof spawn;
   // Runs `codex <args>` for the MCP server list of intercom runs (codex-mcp.mts).

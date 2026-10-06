@@ -96,8 +96,10 @@ export function codexAppRollout(home: string, sessionId: string): AppCheck {
 
 // The one session wake.codexApp grants, among the candidate ids: the most
 // recently seen with an app rollout; null when there is none, or when two share
-// the latest time. A failed read refuses that candidate.
-export function currentCodexApp(paths: NodePaths, candidates: string[], home: string): string | null {
+// the latest time. A failed read refuses that candidate. A TUI reachable on the
+// shared daemon (codex-daemon.mts, issue #268) is never granted.
+export function currentCodexApp(paths: NodePaths, candidates: string[], home: string,
+  reachable: (sessionId: string) => boolean = () => false): string | null {
   const ranked = candidates.flatMap((sessionId) => {
     try {
       const seen = Date.parse(readCodexSession(paths, sessionId)?.lastSeen ?? "");
@@ -115,7 +117,7 @@ export function currentCodexApp(paths: NodePaths, candidates: string[], home: st
     } catch {
       check = "not-app";
     }
-    if (check !== "ok") continue;
+    if (check !== "ok" || reachable(candidate.sessionId)) continue;
     if (chosen) return null;
     chosen = candidate;
   }

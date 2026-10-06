@@ -17,10 +17,11 @@ const MESSAGE = "a1560000-0000-4000-8000-000000000001";
 const ORIGINAL = "a1560000-0000-4000-8000-000000000002";
 const PEER = { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "claude-peer" };
 
-function setup(t: test.TestContext, resumeClosed: boolean, address = APP): ReturnType<typeof taskNode>
-  & { poll: () => Promise<void>; launches: () => number } {
+// tui: the thread is loaded on the shared daemon and has the TUI marker (issue #268).
+function setup(t: test.TestContext, resumeClosed: boolean, address = APP, tui?: { wake: Record<string, unknown> }):
+  ReturnType<typeof taskNode> & { poll: () => Promise<void>; launches: () => number } {
   const node = taskNode(t, { runtimes: ["codex"], delegate: { accept: true } }, {
-    wake: { enabled: true, codexApp: true },
+    wake: { enabled: true, ...(tui?.wake ?? { codexApp: true }) },
     messaging: { accept: [{ session: "*", from: ["*"] }], resumeClosed },
   });
   const home = path.join(node.root, "codex-home");
@@ -32,8 +33,13 @@ function setup(t: test.TestContext, resumeClosed: boolean, address = APP): Retur
   writeLocalSessions(node.paths, [{ sessionId: APP, name: codexSessionName(APP), runtime: "codex", state: "active" }], T0);
   storeMessage(node.paths.inbox, { messageId: MESSAGE, from: PEER, toSession: address, text: "Synthetic Claude ACK",
     inReplyTo: ORIGINAL, createdAt: new Date(T0).toISOString() }, T0, 1);
+  if (tui) {
+    fs.mkdirSync(path.join(home, "tui-thread-reference-capabilities"));
+    fs.writeFileSync(path.join(home, "tui-thread-reference-capabilities", APP), "");
+  }
   let launches = 0;
-  const deps = () => ({ ...node.deps(), codex: { home, findCodex: () => { launches++; return null; } } });
+  const loadedThreads = async (): Promise<Set<string> | null> => (tui ? new Set([APP]) : null);
+  const deps = () => ({ ...node.deps(), codex: { home, loadedThreads, findCodex: () => { launches++; return null; } } });
   const poll = async () => { pollCodexQueue(deps()); await codexQueueIdle(); };
   return { ...node, poll, launches: () => launches };
 }
@@ -87,4 +93,18 @@ test("queued metadata from an earlier Desktop attempt does not hide waiting for 
     assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, "awaiting-user-turn");
     assert.equal(node.launches(), 0);
   }
+});
+
+test("a TUI that reads as Desktop but is loaded on the daemon with its marker is queued once listed by full id", async (t) => {
+  const listed = setup(t, false, APP, { wake: { sessions: [APP] } });
+  await listed.poll();
+  assert.equal(getMessageProgress(listed.paths.inbox, MESSAGE)?.code, "awaiting-user-turn", "no probe result in the first round");
+  await listed.poll();
+  assert.equal(listed.launches(), 1, "the second round runs codex queue");
+  assert.equal(getMessage(listed.paths.inbox, MESSAGE)?.toSession, APP);
+  assert.deepEqual(listTasks(listed.paths), [], "no intercom task or second writer");
+  const granted = setup(t, false, APP, { wake: { codexApp: true } });
+  for (let round = 0; round < 3; round++) await granted.poll();
+  assert.equal(granted.launches(), 0, "codexApp never grants a reachable TUI");
+  assert.equal(getMessageProgress(granted.paths.inbox, MESSAGE)?.code, "wake-not-authorized");
 });

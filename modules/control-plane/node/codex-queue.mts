@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { bypassesPermissions, isPlainSessionId, listenerDir, takeTurn, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
 import { codexAppRollout, codexHome, currentCodexApp } from "./codex-app.mts";
+import { daemonSocket, loadedThreads, probesSettled, tuiReachability } from "./codex-daemon.mts";
 import { codexSessionRefs, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { note, pruneNoted } from "./codex-wake.mts";
 import { queueArgs, runQueue } from "./codex-queue-run.mts";
@@ -22,7 +23,9 @@ import { killSwitch } from "./wake-hook.mts";
 // UserPromptSubmit or Stop hook. Queue cannot start a Desktop turn, and a
 // separate intercom task cannot confirm delivery in that chat (issue #156).
 // No second writer resumes the app's thread. Queue carries only the fixed
-// wake pointer and never peer text.
+// wake pointer and never peer text. A TUI whose rollout reads like a Desktop
+// chat is queued only when the shared app-server daemon has it loaded and its
+// TUI marker exists (codex-daemon.mts, issue #268); unknown means Desktop.
 //
 // Candidates are recorded Codex sessions seen within 12 hours, except task
 // threads. Both paths use the kill switch, full-id allowlist or codexApp
@@ -48,6 +51,7 @@ const inFlight = new Set<string>();
 export async function codexQueueIdle(): Promise<void> {
   for (let current = lane; ; current = lane) {
     await current;
+    await probesSettled();
     if (current === lane) return;
   }
 }
@@ -65,6 +69,9 @@ export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = (
     return;
   }
   const candidates = live.filter((id) => !tasks.has(id) && isPlainSessionId(id));
+  const home = deps.codex?.home ?? codexHome();
+  const probe = deps.codex?.loadedThreads ?? (() => loadedThreads(daemonSocket(home), { platform: deps.codex?.platform }));
+  const reachable = tuiReachability(home, probe, now);
   // wake.codexApp: the one app session it grants, looked up at most once per
   // round and only when a message waits for a session not listed by full id.
   let app: string | null | undefined;
@@ -73,7 +80,7 @@ export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = (
     app = null;
     if (!deps.policy.wake?.codexApp) return app;
     try {
-      app = currentCodexApp(deps.paths, candidates, deps.codex?.home ?? codexHome());
+      app = currentCodexApp(deps.paths, candidates, home, reachable);
     } catch (error) {
       log(`kherep-node: could not find the current Codex app session: ${String((error as Error).message ?? error)}`);
     }
@@ -81,7 +88,7 @@ export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = (
   };
   for (const sessionId of candidates) {
     try {
-      queueFor(deps, sessionId, live, now, log, appSession);
+      queueFor(deps, sessionId, live, now, log, appSession, reachable);
     } catch (error) {
       log(`kherep-node: could not wake Codex session ${sessionId}: ${String((error as Error).message ?? error)}`);
     }
@@ -89,7 +96,7 @@ export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = (
 }
 
 function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: number, log: (line: string) => void,
-  appSession: () => string | null): void {
+  appSession: () => string | null, reachable: (sessionId: string) => boolean): void {
   const { paths, policy } = deps;
   // A name another live session shares addresses neither: the message waits
   // for its sender to use the full id (codex-<8> names, issue #66).
@@ -145,8 +152,11 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
   // Keep its address even when resumeClosed permits genuinely closed targets.
   try {
     if (codexAppRollout(deps.codex?.home ?? codexHome(), sessionId) === "ok") {
-      progressRecords(paths, due, "waiting", "awaiting-user-turn", now);
-      return decide(due, "awaiting-user-turn");
+      if (!reachable(sessionId)) {
+        progressRecords(paths, due, "waiting", "awaiting-user-turn", now);
+        return decide(due, "awaiting-user-turn");
+      }
+      decide(due, "tui-reachable");
     }
   } catch {
     progressRecords(paths, due, "waiting", "wake-unconfirmed", now);
