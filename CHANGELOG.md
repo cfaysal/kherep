@@ -301,6 +301,9 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- Control Plane: Claude delivery progress builds the task request index once
+  per observation instead of once per session; behaviour is unchanged
+  (issue #266).
 - Claude hooks: the six blocking guards move from JavaScript to TypeScript
   (`.mts`, ESM, Node type stripping), with their tests and
   `portable-scope-hooks.test`: `commit-guard`, `deploy-guard`,

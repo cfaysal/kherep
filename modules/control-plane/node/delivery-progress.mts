@@ -10,7 +10,7 @@ import { wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { isActive, listTasks, taskForSession, taskGrants } from "./task-records.mts";
 import { killSwitch, WAKE_MAX_WAIT_MS } from "./wake-hook.mts";
-import { lazyRequests, replyGrants, taskMessageGrants } from "./wake-reply.mts";
+import { lazyRequests, replyGrants, taskMessageGrants, type RequestIndex } from "./wake-reply.mts";
 
 const refsOf = (session: { sessionId: string; name?: string }): string[] =>
   session.name ? [session.sessionId, session.name] : [session.sessionId];
@@ -20,7 +20,8 @@ export function progressRecords(paths: NodePaths, records: InboxRecord[], phase:
   for (const record of records) setMessageProgress(paths.inbox, record.messageId, phase, code, now, retryAt);
 }
 
-function observeAccepted(deps: RunnerDeps, session: LocalSession, accepted: InboxRecord[], now: number): void {
+function observeAccepted(deps: RunnerDeps, session: LocalSession, accepted: InboxRecord[], now: number,
+  requests: () => RequestIndex): void {
   if (accepted.length === 0) return;
   if (session.state !== "idle") {
     progressRecords(deps.paths, accepted, "waiting", "target-busy", now);
@@ -31,7 +32,6 @@ function observeAccepted(deps: RunnerDeps, session: LocalSession, accepted: Inbo
   const granted = task ? accepted.filter((record) => taskGrants(task, record)) : [];
   // Reply and task message grants (issues #253, #264): for an unlisted session
   // only, as in its listener, and covered by the same replies scope.
-  const requests = lazyRequests(deps.paths);
   const replies = deps.policy.wake?.replies === true && !wakeAllowed(deps.policy, refs)
     ? accepted.filter((record) => !granted.includes(record)
       && (replyGrants(deps.paths, refs, record, now) || taskMessageGrants(deps.paths, refs, record, now, requests))) : [];
@@ -110,7 +110,9 @@ export function observeClaudeDeliveryProgress(deps: RunnerDeps): void {
     }
   }
   progressRecords(deps.paths, ambiguous, "waiting", "ambiguous-target", now);
-  for (const session of claudeSessions.values()) observeAccepted(deps, session, assigned.get(session.sessionId) ?? [], now);
+  // One task request index per observation, read only if a session needs it (issue #266).
+  const requests = lazyRequests(deps.paths);
+  for (const session of claudeSessions.values()) observeAccepted(deps, session, assigned.get(session.sessionId) ?? [], now, requests);
 }
 
 // Codex task sessions the message resume (codex-wake.mts) skips: a running
