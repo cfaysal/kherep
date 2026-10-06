@@ -48,7 +48,7 @@ export function replyGrants(paths: NodePaths, refs: string[], record: InboxRecor
 // marks a task id two requests claim. Requests are keyed by request id, so a
 // grant would otherwise scan the directory for every record: the index is
 // built once per poll or observation (lazyRequests), over task-requests/, which
-// holds one file per `msg send --new` or `task request`. Any read error leaves
+// holds one file per `msg send --new` or `task new`. Any read error leaves
 // it empty, so nothing is granted: an unreadable file could be a second claim.
 export type RequestIndex = Map<string, TaskRequestRecord | null>;
 export function requestsByTask(paths: NodePaths): RequestIndex {
@@ -71,13 +71,12 @@ export function lazyRequests(paths: NodePaths): () => RequestIndex {
 }
 
 // Whether record is a message of a task the session with these refs requested,
-// from the node the Worker dispatched it to. As for replies, the Worker checks
-// neither taskId nor inReplyTo of a node's message, only from.nodeId, so the
-// node clause is the essential one. The session binds by the id the request
-// keeps; a request without one (an older version, `task request`) by its
-// requestedBy name. The
-// task's lifetime is not observable here, so the bound is 24 h from the
-// request's createdAt. Any doubt or read error denies.
+// from the node the Worker dispatched it to. The Worker accepts a taskId only
+// from or to the node running the task, but not only from the task's own
+// session, so the node clause is the essential one. The session binds by the
+// id the request keeps; a request an earlier version wrote without one binds
+// by its requestedBy name. The task's lifetime is not observable here, so the
+// bound is 24 h from the request's createdAt. Any doubt or read error denies.
 export function taskMessageGrants(paths: NodePaths, refs: string[], record: InboxRecord, now: number,
   requests: () => RequestIndex = () => requestsByTask(paths)): boolean {
   if (!isTaskId(record.taskId) || !isNodeId(record.from?.nodeId)) return false;

@@ -89,7 +89,7 @@ test("task new is refused unless the node allows requests, and never from a task
   assert.equal(ok.code, 0);
   const requestId = ok.out[0];
   // Issue #264: the request keeps the requesting session's id locally; the frame below stays without it.
-  assert.equal(typeof readRequest(node.paths, requestId)?.requestedBySessionId, "string");
+  assert.equal(readRequest(node.paths, requestId)?.requestedBySessionId, "maestro");
   const { client, frames, send } = await authedClient(node.paths);
   pollTasks(client, node.paths, loadPolicy(node.paths.policy), new Set(), send);
   assert.deepEqual(frames, [{ type: "task.request", body: { requestId, title: "Run tests", text: "run npm test",
