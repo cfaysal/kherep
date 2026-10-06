@@ -424,6 +424,23 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Claude hooks: `live-hook-integrity` now also measures the files a wired hook
+  imports, the transitive closure of its relative static imports under
+  `hooks/` (including `hooks/lib`), classifies each as missing, 0 bytes or
+  rejected by `node --check`, and restores it from the checkout with the same
+  SHA-256 proof as a wired file. `node --check` does not resolve imports, so a
+  hook whose library was missing or empty passed it and then failed at import
+  with exit 1, which Claude Code treats as non-blocking: a blocking guard
+  failed open without notice. A report line names the importing hooks, and the
+  journal entry records `kind` and `importedBy`. A restore now refuses to write
+  through a symbolic link or into a directory that resolves outside the hooks
+  directory. The inventory lives in the new `hooks/lib/hook-inventory.mts`,
+  which the installer manifest lists, and
+  `bootstrap/hook-require-resolution.test.mts` now fails when a file of that
+  closure is missing from the manifest. New tests cover a missing, empty and
+  syntax-broken library, a transitive and a sibling import, type-only imports,
+  comments, imports outside `hooks/`, symlinks and the report-only case
+  without a checkout (issue #273).
 - `commit-guard.mts` no longer backtracks exponentially while it looks for
   `git ... commit` (issue #271, CodeQL `js/redos` alerts #16 and #17). Its
   regex read `-C` both as a flag and as a flag with a value, and `--long` both

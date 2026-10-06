@@ -22,6 +22,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 
+import { hookInventory, relativeSpecifiers, wiredFiles } from "../claude/hooks/lib/hook-inventory.mts";
+
 const repo = path.resolve(import.meta.dirname, "..");
 const HOOK_ROOTS = ["claude/hooks", "codex/hooks"];
 const SKIPPED_DIRS = /^(?:_deprecated|node_modules|\.hook-adapter-)/;
@@ -112,4 +114,54 @@ test("der Codex-Privacy-Guard benennt Lib-Dateien, die in claude/hooks/lib liege
     .filter((name) => ![name, `${name}.js`].some((candidate) => fs.existsSync(path.join(libDir, candidate))))
     .sort();
   assert.deepEqual(missing, [], `benannt, aber nicht in claude/hooks/lib: ${JSON.stringify(missing)}`);
+});
+
+// Issue #273. live-hook-integrity misst zur Laufzeit die Importhülle der
+// verdrahteten Hooks mit lib/hook-inventory.mts. Dieselben Funktionen zeigen
+// hier, dass die Installation jede Datei dieser Hülle mitliefert: ein gesundes
+// Repo, dessen files.txt eine Lib vergisst, erzeugt genau den Live-Zustand, den
+// der Hook sonst erst beim Sessionstart findet.
+const TEST_HOME = "/kherep-test-home/.claude";
+
+function wiredInventory() {
+  const template = fs.readFileSync(path.join(repo, "claude", "settings.user.json"), "utf8")
+    .replaceAll("__KHEREP_CLAUDE_HOME__", TEST_HOME);
+  const { files } = wiredFiles(TEST_HOME, (name) => {
+    if (name === "settings.user.json") return template;
+    throw Object.assign(new Error(`${name} gibt es im Repo nicht`), { code: "ENOENT" });
+  });
+  return hookInventory(files, `${TEST_HOME}/hooks`, (_file, rel) => {
+    const source = path.join(repo, "claude", "hooks", rel);
+    return fs.existsSync(source) ? fs.readFileSync(source, "utf8") : null;
+  });
+}
+
+test("die Importhülle jedes verdrahteten Hooks steht in files.txt", () => {
+  const inventory = wiredInventory();
+  assert.ok(inventory.filter((entry) => !entry.wired).length > 5,
+    "kaum Importe gefunden - die Verdrahtung oder die Importform hat sich geändert und dieser Test misst nichts mehr");
+  const manifest = new Set(fs.readFileSync(path.join(repo, "bootstrap", "manifest", "files.txt"), "utf8")
+    .split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+  const missing = inventory
+    .filter((entry) => !manifest.has(`hooks/${entry.rel}`))
+    .map((entry) => `hooks/${entry.rel} (${entry.wired ? "verdrahtet" : `importiert von ${entry.importedBy.join(", ")}`})`)
+    .sort();
+  assert.deepEqual(missing, [], `zur Laufzeit geladen, aber nicht installiert:\n  ${missing.join("\n  ")}`);
+});
+
+// Beide Erkennungen müssen übereinstimmen: was der Scan oben als ESM-Verweis
+// einer Hook-Quelle sieht, sieht auch der Laufzeit-Scan, es sei denn, es ist ein
+// reiner Typ-Import, den Node nie auflöst.
+test("der Laufzeit-Scan sieht jeden relativen Import der Claude-Hooks außer reinen Typ-Importen", () => {
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const missed = references
+    .filter((reference) => reference.esm && reference.file.startsWith("claude/hooks/") && !reference.file.endsWith(".test.mts"))
+    .filter((reference) => {
+      const text = fs.readFileSync(path.join(repo, reference.file), "utf8");
+      const typeOnly = new RegExp(`\\bimport\\s+type\\b[^;]*?\\bfrom\\s*["']${escape(reference.specifier)}["']`);
+      return !relativeSpecifiers(text).includes(reference.specifier) && !typeOnly.test(text);
+    })
+    .map((reference) => `${reference.file} -> ${reference.specifier}`)
+    .sort();
+  assert.deepEqual(missed, [], `vom Laufzeit-Scan übersehen:\n  ${missed.join("\n  ")}`);
 });

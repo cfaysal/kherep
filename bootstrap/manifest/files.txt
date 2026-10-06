@@ -37,6 +37,8 @@ hooks/lib/research-evidence.mts
 hooks/lib/workspace-scope.mts
 hooks/lib/workspace-scope.test.mts
 hooks/lib/orchestra-checkout.mts
+hooks/lib/hook-inventory.mts
+hooks/lib/hook-inventory.test.mts
 hooks/cbm-code-discovery-gate
 hooks/playwright-file-guard.mts
 hooks/simplify-nudge.mts

@@ -134,6 +134,7 @@ check_profile() {
     hooks/portable-scope-hooks.test.mts
     hooks/lib/private-path-policy.mts hooks/lib/private-path-rules.mts
     hooks/lib/workspace-scope.mts hooks/lib/workspace-scope.test.mts
+    hooks/lib/hook-inventory.mts
     hooks/cbm-code-discovery-gate hooks/cbm-session-reminder hooks/cbm-subagent-reminder
     skills/codebase-memory skills/kherep-twg agents/kherep-builder.md
     teams/kherep/ROUTING.md teams/kherep/config.json
