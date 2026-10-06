@@ -232,16 +232,48 @@ test("runs as Claude Code starts it: exit 2 with the wake text on stderr, exit 0
   }
 });
 
-test("a second hook of the same Claude Code process takes the kept run mode and lists no processes (issue #245)", (t) => {
-  const { root, paths } = setup(t);
-  arrive(paths, 1, Date.now() + 60_000, SELF);
-  const input = JSON.stringify({ session_id: SELF, hook_event_name: "Stop", stop_hook_active: false, permission_mode: "default" });
-  for (const listing of [PRINT_LISTING, NO_LISTING]) {
-    const run = spawnSync(process.execPath, ["--import", listing, HOOK, "--timeout", String(WAKE_TIMEOUT_S)], { input, encoding: "utf8",
-      env: { ...process.env, KHEREP_CONFIG_DIR: root, CLAUDE_CODE_ENTRYPOINT: "cli" }, timeout: 30_000 });
-    assert.deepEqual([run.status, run.stdout, withoutTypeStrippingWarning(run.stderr)], [0, "", ""]);
+test("a second hook of the same Claude Code process takes the kept run mode and lists no processes (issues #245, #248)", (t) => {
+  // Kept under CLAUDE_PID (issue #248), else under the hook's parent pid, this test's process.
+  for (const [claudePid, key] of [["4242", "4242"], [undefined, String(process.pid)]] as const) {
+    const { root, paths } = setup(t);
+    arrive(paths, 1, Date.now() + 60_000, SELF);
+    const input = JSON.stringify({ session_id: SELF, hook_event_name: "Stop", stop_hook_active: false, permission_mode: "default" });
+    for (const listing of [PRINT_LISTING, NO_LISTING]) {
+      const run = spawnSync(process.execPath, ["--import", listing, HOOK, "--timeout", String(WAKE_TIMEOUT_S)], { input, encoding: "utf8",
+        env: { ...process.env, KHEREP_CONFIG_DIR: root, CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_PID: claudePid }, timeout: 30_000 });
+      assert.deepEqual([run.status, run.stdout, withoutTypeStrippingWarning(run.stderr)], [0, "", ""]);
+    }
+    // Without the kept mode the second hook, whose listing fails, would listen and wake for the waiting message.
+    assert.deepEqual(auditLines(paths).map((l) => l.action), ["headless", "headless"], key);
+    assert.deepEqual(fs.readdirSync(path.join(paths.dir, "run-modes")), [`${SELF}.${key}.json`]);
   }
-  // Without the kept mode the second hook, whose listing fails, would listen and wake for the waiting message.
-  assert.deepEqual(auditLines(paths).map((l) => l.action), ["headless", "headless"]);
-  assert.deepEqual(fs.readdirSync(path.join(paths.dir, "run-modes")), [`${SELF}.${process.pid}.json`]);
 });
+
+// Claude Code on Windows starts each hook through bash -c, so each hook has a
+// fresh shell as its parent (issue #248). "$@"; exit keeps bash as the parent
+// instead of letting it exec node; MSYS2_ARG_CONV_EXCL keeps Git Bash from
+// rewriting the arguments. The preload records each hook's parent pid.
+const viaBash = (args: string[], options: Parameters<typeof spawnSync>[2] = {}) =>
+  spawnSync("bash", ["-c", "\"$@\"; exit $?", "bash", ...args], { encoding: "utf8", timeout: 30_000, ...options });
+const RECORD_PPID = `data:text/javascript,${encodeURIComponent("import fs from 'node:fs';"
+  + "fs.appendFileSync(process.env.KHEREP_TEST_PPID_LOG, process.ppid + String.fromCharCode(10));")}`;
+const bashRunsNode = viaBash([process.execPath, "-e", "0"], { env: { ...process.env, MSYS2_ARG_CONV_EXCL: "*" } }).status === 0;
+
+test("hooks behind a fresh bash each take the run mode kept under CLAUDE_PID (issue #248)",
+  { skip: bashRunsNode ? false : "no bash that runs this node" }, (t) => {
+    const { root, paths } = setup(t);
+    arrive(paths, 1, Date.now() + 60_000, SELF);
+    const log = path.join(root, "parent-pids");
+    const input = JSON.stringify({ session_id: SELF, hook_event_name: "Stop", stop_hook_active: false, permission_mode: "default" });
+    for (const listing of [PRINT_LISTING, NO_LISTING]) {
+      const run = viaBash([process.execPath, "--import", RECORD_PPID, "--import", listing, HOOK, "--timeout", String(WAKE_TIMEOUT_S)],
+        { input, env: { ...process.env, KHEREP_CONFIG_DIR: root, CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_PID: "4242",
+          KHEREP_TEST_PPID_LOG: log, MSYS2_ARG_CONV_EXCL: "*" } });
+      assert.deepEqual([run.status, run.stdout, withoutTypeStrippingWarning(run.stderr)], [0, "", ""]);
+    }
+    const parents = fs.readFileSync(log, "utf8").trim().split(/\r?\n/);
+    assert.equal(new Set([...parents, String(process.pid)]).size, 3, "each hook has its own shell as parent");
+    // The second hook's listing fails: only the kept mode makes it headless instead of waking.
+    assert.deepEqual(auditLines(paths).map((l) => l.action), ["headless", "headless"]);
+    assert.deepEqual(fs.readdirSync(path.join(paths.dir, "run-modes")), [`${SELF}.4242.json`]);
+  });

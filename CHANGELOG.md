@@ -424,6 +424,19 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: on Windows the wake hook's kept run mode now hits (issue
+  #248). Claude Code starts each hook through Git Bash, so the key
+  `run-modes/<session_id>.<parent pid>.json` was new for every hook: each
+  hook paid the full process listing (348 to 362 ms, measured 2026-10-06) and
+  wrote an entry nobody read. A `claude -p` took a median of 8.1 s with the
+  hooks against 5.6 s without them; this removes the listing from that
+  difference after the first hook. The entry is now keyed on `CLAUDE_PID`,
+  Claude Code's own pid, which survives the shell and which a nested
+  `claude -p` sets anew, when it is a plain pid above 1; otherwise the parent
+  pid stays the key, and when that parent is a shell nothing is written or
+  pruned. Only a positive signal is headless, and an entry still answers only
+  for what a full check of the same Claude Code process found, with the same
+  entrypoint and within one hour.
 - Control Plane: an interactive Codex TUI whose rollout starts like a Desktop
   chat (Codex 0.160) is woken with `codex queue` again instead of waiting with
   `awaiting-user-turn` (issue #268). New `codex-daemon.mts` asks the shared
