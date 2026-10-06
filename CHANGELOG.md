@@ -440,7 +440,14 @@ increments the minor version; every other release increments the patch version.
   closure is missing from the manifest. New tests cover a missing, empty and
   syntax-broken library, a transitive and a sibling import, type-only imports,
   comments, imports outside `hooks/`, symlinks and the report-only case
-  without a checkout (issue #273).
+  without a checkout. Known limits: an ESM-shaped syntax error in a `.mts`
+  file, such as `export const x = ;`, is not detected, because `node --check`
+  exits 0 for it on Node 26.10 (follow-up issue #278); the syntax-broken test
+  uses a shape that `node --check` rejects. The integrity hook cannot heal its
+  own three library imports (`lib/workspace-scope.mts`,
+  `lib/orchestra-checkout.mts`, `lib/hook-inventory.mts`): if one of them is
+  broken the hook itself fails at import, and only `drift-check` and the smoke
+  test cover them (issue #273).
 - `commit-guard.mts` no longer backtracks exponentially while it looks for
   `git ... commit` (issue #271, CodeQL `js/redos` alerts #16 and #17). Its
   regex read `-C` both as a flag and as a flag with a value, and `--long` both
