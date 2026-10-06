@@ -42,11 +42,11 @@ function serverFrame(buffer: Buffer): { fin: boolean; opcode: number; payload: B
   let offset = 2;
   if (len === 126) {
     if (buffer.length < 4) return null;
-    len = buffer.readUInt16BE(2);
+    len = (buffer[2] << 8) | buffer[3];
     offset = 4;
   } else if (len === 127) {
     if (buffer.length < 10) return null;
-    const big = buffer.readBigUInt64BE(2);
+    const big = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength).getBigUint64(2);
     if (big > BigInt(MAX_BYTES)) throw new Error("a server frame is too large");
     len = Number(big);
     offset = 10;
@@ -61,7 +61,7 @@ function serverFrame(buffer: Buffer): { fin: boolean; opcode: number; payload: B
 export function loadedThreads(socket: string, options: { platform?: NodeJS.Platform; timeoutMs?: number } = {}): Promise<Set<string> | null> {
   if ((options.platform ?? process.platform) === "win32") return Promise.resolve(null);
   return new Promise((resolve) => {
-    const key = crypto.randomBytes(16).toString("base64");
+    const key = Buffer.from(crypto.randomBytes(16)).toString("base64");
     const accept = crypto.createHash("sha1").update(key + WS_GUID).digest("base64");
     const conn = net.connect({ path: socket });
     let buffer = Buffer.alloc(0);
@@ -95,7 +95,7 @@ export function loadedThreads(socket: string, options: { platform?: NodeJS.Platf
         if (end < 0) return;
         const [status, ...headers] = buffer.subarray(0, end).toString("latin1").split("\r\n");
         buffer = buffer.subarray(end + 4);
-        const accepted = headers.some((line) => {
+        const accepted = headers.some((line: string) => {
           const colon = line.indexOf(":");
           return line.slice(0, colon).trim().toLowerCase() === "sec-websocket-accept" && line.slice(colon + 1).trim() === accept;
         });

@@ -27,7 +27,9 @@ function home(t: test.TestContext): string {
 // Server frames are unmasked; client frames are masked (RFC 6455 5.1).
 function serverFrame(text: string): Buffer {
   const payload = Buffer.from(text);
-  const head = payload.length < 126 ? Buffer.from([0x81, payload.length]) : Buffer.from([0x81, 126, payload.length >> 8, payload.length & 0xff]);
+  const head = payload.length < 126 ? Buffer.from([0x81, payload.length])
+    : payload.length < 65_536 ? Buffer.from([0x81, 126, payload.length >> 8, payload.length & 0xff])
+    : Buffer.concat([Buffer.from([0x81, 127]), (() => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(payload.length)); return b; })()]);
   return Buffer.concat([head, payload]);
 }
 
@@ -103,6 +105,17 @@ test("the probe lists the threads loaded on the daemon and closes the socket", P
   assert.deepEqual(seen.sent.map((m) => m.method), ["initialize", "initialized", "thread/loaded/list"]);
   assert.equal((seen.sent[0].params as { clientInfo: { name: string } }).clientInfo.name, "kherep");
   await waitClosed(seen);
+});
+
+test("the probe reads 16-bit and 64-bit frame lengths", POSIX, async (t) => {
+  // 3 ids need the 16-bit length (126); 2000 ids exceed 64 KiB and need the 64-bit one (127).
+  for (const count of [3, 2000]) {
+    const dir = home(t);
+    const ids = Array.from({ length: count }, (_, i) => `01a11070-0000-7000-8000-${i.toString(16).padStart(12, "0")}`);
+    const seen = await fakeDaemon(t, dir, "list", ids);
+    assert.deepEqual(await loadedThreads(daemonSocket(dir)), new Set(ids), `${count} ids`);
+    await waitClosed(seen);
+  }
 });
 
 test("the probe fails closed to null on a missing socket, a non-socket, 403, an error, a partial list and a timeout", POSIX, async (t) => {
