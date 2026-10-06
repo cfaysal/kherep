@@ -252,9 +252,13 @@ test("a second hook of the same Claude Code process takes the kept run mode and 
 // Claude Code on Windows starts each hook through bash -c, so each hook has a
 // fresh shell as its parent (issue #248). "$@"; exit keeps bash as the parent
 // instead of letting it exec node; MSYS2_ARG_CONV_EXCL keeps Git Bash from
-// rewriting the arguments. The preload records each hook's parent pid.
+// rewriting the arguments. The preload records each hook's parent pid. Git
+// Bash parses its Windows command line itself and drops quote characters, so
+// the characters encodeURIComponent leaves alone are percent-encoded too.
+const bashSafe = (arg: string): string => arg.startsWith("data:")
+  ? arg.replace(/[!'()*~]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`) : arg;
 const viaBash = (args: string[], options: Parameters<typeof spawnSync>[2] = {}) =>
-  spawnSync("bash", ["-c", "\"$@\"; exit $?", "bash", ...args], { encoding: "utf8", timeout: 30_000, ...options });
+  spawnSync("bash", ["-c", "\"$@\"; exit $?", "bash", ...args.map(bashSafe)], { encoding: "utf8", timeout: 30_000, ...options });
 const RECORD_PPID = `data:text/javascript,${encodeURIComponent("import fs from 'node:fs';"
   + "fs.appendFileSync(process.env.KHEREP_TEST_PPID_LOG, process.ppid + String.fromCharCode(10));")}`;
 const bashRunsNode = viaBash([process.execPath, "-e", "0"], { env: { ...process.env, MSYS2_ARG_CONV_EXCL: "*" } }).status === 0;
