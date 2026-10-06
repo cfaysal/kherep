@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { daemonSocket, loadedThreads, LOADED_TTL_MS, probesSettled, tuiMarker, tuiReachability, type LoadedThreads } from "./codex-daemon.mts";
+import { daemonSocket, loadedThreads, LOADED_TTL_MS, MAX_BYTES, probesSettled, tuiMarker, tuiReachability, type LoadedThreads } from "./codex-daemon.mts";
 
 // The Codex app-server daemon probe (issue #268) against a fake WebSocket
 // server on a unix socket in a temporary Codex home. The real daemon socket
@@ -25,16 +25,23 @@ function home(t: test.TestContext): string {
 }
 
 // Server frames are unmasked; client frames are masked (RFC 6455 5.1).
+// first is the first byte: FIN and opcode.
+function frameHead(first: number, length: number): Buffer {
+  if (length < 126) return Buffer.from([first, length]);
+  if (length < 65_536) return Buffer.from([first, 126, length >> 8, length & 0xff]);
+  const big = Buffer.alloc(8);
+  big.writeBigUInt64BE(BigInt(length));
+  return Buffer.concat([Buffer.from([first, 127]), big]);
+}
+function frame(first: number, payload: Buffer | string): Buffer {
+  return Buffer.concat([frameHead(first, Buffer.byteLength(payload)), Buffer.from(payload)]);
+}
 function serverFrame(text: string): Buffer {
-  const payload = Buffer.from(text);
-  const head = payload.length < 126 ? Buffer.from([0x81, payload.length])
-    : payload.length < 65_536 ? Buffer.from([0x81, 126, payload.length >> 8, payload.length & 0xff])
-    : Buffer.concat([Buffer.from([0x81, 127]), (() => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(payload.length)); return b; })()]);
-  return Buffer.concat([head, payload]);
+  return frame(0x81, text);
 }
 
-function clientFrames(buffer: Buffer): { messages: unknown[]; rest: Buffer } {
-  const messages: unknown[] = [];
+function clientFrames(buffer: Buffer): { frames: { opcode: number; payload: Buffer }[]; rest: Buffer } {
+  const frames: { opcode: number; payload: Buffer }[] = [];
   for (;;) {
     if (buffer.length < 2) break;
     assert.ok(buffer[1] & 0x80, "client frames are masked");
@@ -43,18 +50,37 @@ function clientFrames(buffer: Buffer): { messages: unknown[]; rest: Buffer } {
     if (len === 126) { len = buffer.readUInt16BE(2); offset = 4; }
     if (buffer.length < offset + 4 + len) break;
     const mask = buffer.subarray(offset, offset + 4);
-    const payload = Buffer.from(buffer.subarray(offset + 4, offset + 4 + len).map((b, i) => b ^ mask[i % 4]));
-    messages.push(JSON.parse(payload.toString("utf8")));
+    frames.push({ opcode: buffer[0] & 0x0f, payload: Buffer.from(buffer.subarray(offset + 4, offset + 4 + len).map((b, i) => b ^ mask[i % 4])) });
     buffer = buffer.subarray(offset + 4 + len);
   }
-  return { messages, rest: buffer };
+  return { frames, rest: buffer };
 }
 
-type Mode = "list" | "forbidden" | "silent" | "partial" | "error";
+// bad-accept answers the upgrade with a wrong Sec-WebSocket-Accept; masked and
+// oversized answer initialize with a masked frame or a 64-bit length above
+// MAX_BYTES (no payload is sent); fragmented splits the list answer around a
+// ping; fragmented-oversized pads it with whitespace fragments past MAX_BYTES.
+type Mode = "list" | "forbidden" | "silent" | "partial" | "error" | "bad-accept" | "masked" | "oversized" | "fragmented" | "fragmented-oversized";
+
+function listAnswer(mode: Mode, text: string): Buffer[] {
+  if (mode === "fragmented") return [frame(0x01, text.slice(0, 10)), frame(0x89, "ping"), frame(0x00, text.slice(10, 20)), frame(0x80, text.slice(20))];
+  if (mode !== "fragmented-oversized") return [serverFrame(text)];
+  const fragment = 60_000;
+  const padding = frame(0x00, Buffer.alloc(fragment, 0x20));
+  return [frame(0x01, text.slice(0, -1)), ...Array.from({ length: Math.ceil(MAX_BYTES / fragment) }, () => padding), frame(0x80, text.slice(-1))];
+}
+
+function initializeAnswer(mode: Mode, text: string): Buffer {
+  // A masked frame keyed with four spaces: a parser that ignored the mask bit
+  // would read the key and text as JSON, then an empty pong.
+  if (mode === "masked") return Buffer.concat([Buffer.from([0x81, 0x80 | (text.length + 4)]), Buffer.from(`    ${text}`), Buffer.from([0x8a, 2, 0, 0])]);
+  if (mode === "oversized") return frameHead(0x81, MAX_BYTES + 1);
+  return serverFrame(text);
+}
 
 // A fake daemon answering by mode; records what the client sent and whether it closed.
 async function fakeDaemon(t: test.TestContext, dir: string, mode: Mode, ids: string[] = []) {
-  const seen = { connections: 0, closed: 0, sent: [] as Record<string, unknown>[] };
+  const seen = { connections: 0, closed: 0, sent: [] as Record<string, unknown>[], pongs: [] as string[] };
   const server = net.createServer((socket) => {
     seen.connections++;
     socket.on("close", () => { seen.closed++; });
@@ -70,20 +96,22 @@ async function fakeDaemon(t: test.TestContext, dir: string, mode: Mode, ids: str
         buffer = buffer.subarray(end + 4);
         if (mode === "silent") return;
         if (mode === "forbidden") return void socket.write("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
-        const accept = crypto.createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+        const accept = crypto.createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11${mode === "bad-accept" ? "x" : ""}`).digest("base64");
         socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
         upgraded = true;
       }
-      const { messages, rest } = clientFrames(buffer);
+      const { frames, rest } = clientFrames(buffer);
       buffer = rest;
-      for (const message of messages as Record<string, unknown>[]) {
+      for (const { opcode, payload } of frames) {
+        if (opcode === 0xa) { seen.pongs.push(payload.toString("utf8")); continue; }
+        const message = JSON.parse(payload.toString("utf8")) as Record<string, unknown>;
         seen.sent.push(message);
-        if (message.method === "initialize") socket.write(serverFrame(JSON.stringify({ id: message.id, result: { userAgent: "fake" } })));
+        if (message.method === "initialize") socket.write(initializeAnswer(mode, JSON.stringify({ id: message.id, result: { userAgent: "fake" } })));
         if (message.method !== "thread/loaded/list") continue;
         socket.write(serverFrame(JSON.stringify({ method: "thread/started", params: {} })));
         const reply = mode === "error" ? { error: { code: -32600, message: "no" } }
           : { result: { data: ids, nextCursor: mode === "partial" ? "more" : null } };
-        socket.write(serverFrame(JSON.stringify({ id: message.id, ...reply })));
+        for (const part of listAnswer(mode, JSON.stringify({ id: message.id, ...reply }))) socket.write(part);
       }
     });
   });
@@ -131,6 +159,32 @@ test("the probe fails closed to null on a missing socket, a non-socket, 403, an 
     assert.ok(Date.now() - started < 2_000, `${mode} ends within the timeout`);
     await waitClosed(seen);
   }
+});
+
+test("the probe fails closed on a wrong accept header, a masked frame and an oversized frame without waiting for the timeout", POSIX, async (t) => {
+  for (const mode of ["bad-accept", "masked", "oversized"] as Mode[]) {
+    const dir = home(t);
+    const seen = await fakeDaemon(t, dir, mode, [TUI]);
+    const started = Date.now();
+    assert.equal(await loadedThreads(daemonSocket(dir), { timeoutMs: 10_000 }), null, mode);
+    assert.ok(Date.now() - started < 5_000, `${mode} is refused, not timed out`);
+    await waitClosed(seen);
+  }
+});
+
+test("the probe reassembles a fragmented answer and answers a ping between the fragments", POSIX, async (t) => {
+  const dir = home(t);
+  const seen = await fakeDaemon(t, dir, "fragmented", [TUI, DESKTOP]);
+  assert.deepEqual(await loadedThreads(daemonSocket(dir)), new Set([TUI, DESKTOP]));
+  await waitClosed(seen);
+  assert.deepEqual(seen.pongs, ["ping"]);
+});
+
+test("the probe refuses fragments whose sum exceeds MAX_BYTES", POSIX, async (t) => {
+  const dir = home(t);
+  const seen = await fakeDaemon(t, dir, "fragmented-oversized", [TUI]);
+  assert.equal(await loadedThreads(daemonSocket(dir), { timeoutMs: 10_000 }), null);
+  await waitClosed(seen);
 });
 
 test("on win32 the probe returns null without connecting", async (t) => {

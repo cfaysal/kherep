@@ -88,7 +88,7 @@ export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = (
   };
   for (const sessionId of candidates) {
     try {
-      queueFor(deps, sessionId, live, now, log, appSession, reachable);
+      queueFor(deps, sessionId, live, now, log, appSession, home, reachable);
     } catch (error) {
       log(`kherep-node: could not wake Codex session ${sessionId}: ${String((error as Error).message ?? error)}`);
     }
@@ -96,7 +96,7 @@ export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = (
 }
 
 function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: number, log: (line: string) => void,
-  appSession: () => string | null, reachable: (sessionId: string) => boolean): void {
+  appSession: () => string | null, home: string, reachable: (sessionId: string) => boolean): void {
   const { paths, policy } = deps;
   // A name another live session shares addresses neither: the message waits
   // for its sender to use the full id (codex-<8> names, issue #66).
@@ -150,13 +150,14 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
   if (due.length === 0) return;
   // A recent hook registration is not proof that a Desktop chat is closed.
   // Keep its address even when resumeClosed permits genuinely closed targets.
+  let tuiReachable = false;
   try {
-    if (codexAppRollout(deps.codex?.home ?? codexHome(), sessionId) === "ok") {
+    if (codexAppRollout(home, sessionId) === "ok") {
       if (!reachable(sessionId)) {
         progressRecords(paths, due, "waiting", "awaiting-user-turn", now);
         return decide(due, "awaiting-user-turn");
       }
-      decide(due, "tui-reachable");
+      tuiReachable = true;
     }
   } catch {
     progressRecords(paths, due, "waiting", "wake-unconfirmed", now);
@@ -171,6 +172,9 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
   if (unconfirmed.length > 0) progressRecords(paths, unconfirmed, "waiting", "wake-unconfirmed", now);
   due = due.filter((r) => !queued[r.messageId]);
   if (pending.length > 0 || due.length === 0) return;
+  // Audited only for messages about to take the queue decision, not again in
+  // every round while a queued message waits for confirmation.
+  if (tuiReachable) decide(due, "tui-reachable");
   const budget = takeTurn(paths, sessionId, now, wakeBudget(policy));
   if (budget === "spacing" || budget === "locked") {
     progressRecords(paths, due, "waiting", "retry-pending", now);

@@ -47,11 +47,9 @@ type Node = ReturnType<typeof codexNode>;
 
 // A node with the given wake section and no codex binary: Desktop grants
 // wait for the original hook; an attempted TUI queue ends as queue-failed.
-// loaded stands in for the daemon probe (codex-daemon.mts); none answers null.
-function appNode(t: test.TestContext, wake: Record<string, unknown>, loaded: string[] | null = null):
-  { node: Node; home: string; poll: () => Promise<void> } {
+function appNode(t: test.TestContext, wake: Record<string, unknown>): { node: Node; home: string; poll: () => Promise<void> } {
   const home = codexHome(t);
-  const node = codexNode(t, {}, { home, findCodex: () => null, loadedThreads: async () => (loaded ? new Set(loaded) : null) });
+  const node = codexNode(t, {}, { home, findCodex: () => null });
   const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8")) as Record<string, unknown>;
   policy.wake = { enabled: true, ...wake };
   fs.writeFileSync(node.paths.policy, JSON.stringify(policy));
@@ -69,11 +67,6 @@ const audit = (node: Node): Record<string, unknown>[] => {
   return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>) : [];
 };
 const decisions = (node: Node): [unknown, unknown, unknown][] => audit(node).map((l) => [l.sessionId, l.action, l.grant]);
-// The marker a Codex TUI leaves for its thread (issue #268).
-function tuiMarker(home: string, sessionId: string): void {
-  fs.mkdirSync(path.join(home, "tui-thread-reference-capabilities"), { recursive: true });
-  fs.writeFileSync(path.join(home, "tui-thread-reference-capabilities", sessionId), "");
-}
 
 test("policy: wake.codexApp is an optional boolean; anything else disables waking", (t) => {
   const dir = codexHome(t);
@@ -234,41 +227,4 @@ test("without codexApp a Desktop has no grant; a full-id grant preserves Desktop
     await poll();
     assert.deepEqual(decisions(node), [[APP, desktop ? "awaiting-user-turn" : "queue-failed", undefined]]);
   }
-});
-
-// Issue #268: a Codex TUI's rollout starts like a Desktop chat's. Only a
-// thread loaded on the shared daemon and carrying the TUI marker takes the
-// TUI queue path; the first round has no probe result yet and waits.
-test("a Desktop-classified thread is queued as a TUI only when it is loaded on the daemon and has the marker", async (t) => {
-  for (const [label, loaded, marked, reachable] of [
-    ["loaded and marker", [APP], true, true],
-    ["loaded without marker", [APP], false, false],
-    ["marker without loaded", [APP_OLD], true, false],
-    ["probe null", null, true, false],
-  ] as [string, string[] | null, boolean, boolean][]) {
-    const { node, home, poll } = appNode(t, { sessions: [APP] }, loaded);
-    rollout(home, APP, APP_META);
-    if (marked) tuiMarker(home, APP);
-    recordCodexSession(node.paths, APP, node.workspace, T0, "default");
-    deliver(node, APP);
-    await poll();
-    await poll();
-    assert.deepEqual(decisions(node), [[APP, "awaiting-user-turn", undefined],
-      ...(reachable ? [[APP, "tui-reachable", undefined], [APP, "queue-failed", undefined]] : [])], label);
-  }
-});
-
-test("codexApp never grants a reachable TUI and picks the older Desktop chat instead", async (t) => {
-  const { node, home, poll } = appNode(t, { codexApp: true }, [APP]);
-  rollout(home, APP, APP_META);
-  rollout(home, APP_OLD, APP_META);
-  tuiMarker(home, APP);
-  recordCodexSession(node.paths, APP_OLD, node.workspace, T0 - 60_000, "default");
-  recordCodexSession(node.paths, APP, node.workspace, T0, "default");
-  deliver(node, APP);
-  deliver(node, APP_OLD);
-  await poll();
-  const first = decisions(node).length;
-  await poll();
-  assert.deepEqual(decisions(node).slice(first).sort(), [[APP, "not-allowlisted", undefined], [APP_OLD, "awaiting-user-turn", "codexApp"]]);
 });
