@@ -25,6 +25,8 @@ export type AutonomyAction = "wake" | "stuck-offer" | "budget" | "depth-limit" |
   | "permission-mode" | "not-allowlisted" | "parent-gone" | "continue" | "continue-budget" | "continue-permission-mode"
   // codex-queue.mts: waking an interactive Codex session with `codex queue`.
   | "queue-failed" | "permission-mode-unknown" | "ambiguous-name" | "intercom" | "intercom-refused" | "intercom-failed" | "awaiting-user-turn"
+  // codex-queue.mts: a Desktop-classified thread is a TUI on the shared app-server daemon (issue #268).
+  | "tui-reachable"
   // wake-hook.mts at SessionStart: messages that arrived while no listener ran (issue #101).
   | "backlog"
   // wake-hook.mts: the policy file turned unreadable; the listener keeps its last good policy (issue #213).

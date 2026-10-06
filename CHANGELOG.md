@@ -424,6 +424,17 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: an interactive Codex TUI whose rollout starts like a Desktop
+  chat (Codex 0.160) is woken with `codex queue` again instead of waiting with
+  `awaiting-user-turn` (issue #268). New `codex-daemon.mts` asks the shared
+  app-server daemon for `thread/loaded/list` over its control socket, a
+  WebSocket over a unix socket, with a 2 s timeout and a 10 s cache. Only a
+  thread the daemon lists that also has the marker
+  `<codex home>/tui-thread-reference-capabilities/<id>` takes the TUI queue
+  path, audited as `tui-reachable`; any probe failure, a missing marker, a
+  thread missing from the list, and Windows, where the probe does not
+  connect, keep the Desktop behaviour. `wake.codexApp` skips a reachable TUI,
+  which needs its full id in `wake.sessions`.
 - Codex hooks: `commit-guard` and `deploy-guard` now block under Codex on
   Windows (issue #258). Codex runs the Windows hook form under pwsh, which
   reports the guard's exit 2 as 1, and Codex treats that as a failed,
