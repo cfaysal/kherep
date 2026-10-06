@@ -168,12 +168,16 @@ check_profile() {
     ( cd "$hookrepo" && KHEREP_WORKSPACE="$TMP/hookcheck-$profile/Work" git -c core.hooksPath="$CLAUDE_HOME/kherep/githooks" commit -q -m "ABC-1 fix: with key" >/dev/null 2>&1 ) \
       || { note_fail "COMMIT-MSG hook rejected a valid subject [$profile]"; }
   fi
-  node -e 'require(process.argv[1]);require(process.argv[2])' \
-    "$CLAUDE_HOME/hooks/lib/workspace-scope.mts" "$CLAUDE_HOME/hooks/lib/private-path-policy.mts" || {
+  node -e 'require(process.argv[1]);require(process.argv[2]);require(process.argv[3])' \
+    "$CLAUDE_HOME/hooks/lib/workspace-scope.mts" "$CLAUDE_HOME/hooks/lib/private-path-policy.mts" \
+    "$CLAUDE_HOME/hooks/lib/git-commit-match.mts" || {
       note_fail "HOOK dependency resolution failed [$profile]";
     }
   printf '{}\n' | node "$CLAUDE_HOME/hooks/privacy-boundary-guard.mts" >/dev/null || {
     note_fail "INSTALLED privacy guard failed to execute [$profile]";
+  }
+  printf '{}\n' | node "$CLAUDE_HOME/hooks/commit-guard.mts" >/dev/null || {
+    note_fail "INSTALLED commit guard failed to execute [$profile]";
   }
   [ -e "$workspace/.claude/settings.local.json" ] || { note_fail "MISSING [$profile] project settings"; }
   [ -e "$workspace/CLAUDE.md" ] || { note_fail "MISSING [$profile] project CLAUDE.md"; }

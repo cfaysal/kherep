@@ -428,7 +428,7 @@ increments the minor version; every other release increments the patch version.
   `git ... commit` (issue #271, CodeQL `js/redos` alerts #16 and #17). Its
   regex read `-C` both as a flag and as a flag with a value, and `--long` both
   as `--` + `long` and `-` + `-long`; `git ` followed by 26 `-C -- ` pairs took
-  2.3 s and every further pair about 4x more, so a hook timeout let the call
+  2.3 s, and the time about doubled with each further pair, so a hook timeout let the call
   through. The new `hooks/lib/git-commit-match.mts` splits the command into
   tokens once and tracks the reachable tokens in one linear pass. It accepts
   exactly the strings the regex accepted: a seeded differential test of
