@@ -10,7 +10,7 @@ import { recordSent, writeLocalSessions, writeOutbox } from "./exchange.mts";
 import { getMessageProgress, markOffered, markReported, storeMessage, unreportedStatuses, writeJsonAtomic } from "./inbox.mts";
 import { T0, taskNode, TASK } from "./task-fixture.mts";
 import { ensureDir } from "./config.mts";
-import { writeTask } from "./task-records.mts";
+import { writeRequest, writeTask } from "./task-records.mts";
 
 const SESSION = "8e1f0000-0000-4000-8000-000000000001";
 const SESSION_TWO = "8e1f0000-0000-4000-8000-000000000002";
@@ -111,6 +111,33 @@ test("a reply-granted message reports wake-pending with a reply-scoped listener,
   };
   const granted = reply(PEER);
   const foreign = reply({ ...PEER, nodeId: "00000000-0000-4000-8000-0000000000dd" });
+  const observe = (scope?: unknown): string[] => {
+    if (scope !== undefined) {
+      ensureDir(listenerDir(node.paths));
+      writeJsonAtomic(listenerLock(node.paths, SESSION), { token: "live", pid: process.pid, startedAt: T0, event: "Stop" });
+      writeJsonAtomic(listenerScope(node.paths, SESSION), scope);
+    }
+    observeClaudeDeliveryProgress(node.deps());
+    return [code(node, unrelated), code(node, foreign), code(node, granted)].map(String);
+  };
+  assert.deepEqual(observe(), ["wake-not-authorized", "wake-not-authorized", "awaiting-user-turn"], "no listener");
+  assert.deepEqual(observe({ token: "live", listed: false }), ["wake-not-authorized", "wake-not-authorized", "awaiting-user-turn"],
+    "a listener without the reply scope");
+  assert.deepEqual(observe({ token: "live", listed: false, replies: true }), ["wake-not-authorized", "wake-not-authorized", "wake-pending"]);
+});
+
+// Issue #264: with wake.replies a message of a task the idle session requested,
+// from the node that runs it, is authorized and reported like a reply grant.
+test("a task-message-granted message reports wake-pending with a replies-scoped listener, else the next user turn", (t) => {
+  const node = taskNode(t, {}, { wake: { enabled: true, replies: true } });
+  writeRequest(node.paths, { requestId: id(), title: "intercom: claude@n", text: "question", requirements: { runtime: "claude", node: PEER.nodeId },
+    directive: "Yes", requestedBy: "review", requestedBySessionId: SESSION, createdAt: new Date(T0 - 60_000).toISOString(),
+    state: "dispatched", taskId: TASK, nodeId: PEER.nodeId });
+  const unrelated = deliver(node);
+  const granted = deliver(node, "idle", TASK);
+  const foreign = id();
+  storeMessage(node.paths.inbox, { messageId: foreign, from: { ...PEER, nodeId: "00000000-0000-4000-8000-0000000000dd" }, toSession: "review",
+    text: "private", taskId: TASK, createdAt: new Date(T0).toISOString() }, T0);
   const observe = (scope?: unknown): string[] => {
     if (scope !== undefined) {
       ensureDir(listenerDir(node.paths));

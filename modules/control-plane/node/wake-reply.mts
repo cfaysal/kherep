@@ -1,11 +1,12 @@
 import { isNodeId } from "../protocol.mts";
 import { isMessageId } from "../protocol-messages.mts";
-import { audit, type AutonomyAction } from "./autonomy.mts";
+import { isTaskId } from "../protocol-tasks.mts";
+import { audit, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
 import type { NodePaths } from "./config.mts";
 import { getSent, type SentRecord } from "./exchange.mts";
 import type { InboxRecord } from "./inbox.mts";
 import type { NodePolicy } from "./policy.mts";
-import { taskGrants, type TaskRecord } from "./task-records.mts";
+import { readRequest, requestIds, taskGrants, type TaskRecord, type TaskRequestRecord } from "./task-records.mts";
 
 // Reply grant (issue #253, operator decisions of 2026-10-05): with wake.replies
 // a reply to a message this node sent from a session may wake that session
@@ -39,26 +40,79 @@ export function replyGrants(paths: NodePaths, refs: string[], record: InboxRecor
   return age >= 0 && age <= REPLY_GRANT_MAX_AGE_MS && !ENDED.includes(sent.state);
 }
 
+// Task message grant (issue #264): a task this node requested answers with
+// messages that carry its task id and no inReplyTo (task-prompt.mts tells it to
+// answer with a plain msg send), so neither grant above covers them.
+
+// This node's task requests by the task id the Worker dispatched them as; null
+// marks a task id two requests claim. Requests are keyed by request id, so a
+// grant would otherwise scan the directory for every record: the index is
+// built once per poll or observation (lazyRequests), over task-requests/, which
+// holds one file per `msg send --new` or `task request`. Any read error leaves
+// it empty, so nothing is granted: an unreadable file could be a second claim.
+export type RequestIndex = Map<string, TaskRequestRecord | null>;
+export function requestsByTask(paths: NodePaths): RequestIndex {
+  const index: RequestIndex = new Map();
+  try {
+    for (const requestId of requestIds(paths)) {
+      const request = readRequest(paths, requestId);
+      if (typeof request?.taskId === "string") index.set(request.taskId, index.has(request.taskId) ? null : request);
+    }
+  } catch {
+    return new Map();
+  }
+  return index;
+}
+
+// requestsByTask, read on first use and kept for one poll or observation.
+export function lazyRequests(paths: NodePaths): () => RequestIndex {
+  let index: RequestIndex | undefined;
+  return () => (index ??= requestsByTask(paths));
+}
+
+// Whether record is a message of a task the session with these refs requested,
+// from the node the Worker dispatched it to. As for replies, the Worker checks
+// neither taskId nor inReplyTo of a node's message, only from.nodeId, so the
+// node clause is the essential one. The session binds by the id the request
+// keeps; a request without one (an older version, `task request`) by its
+// requestedBy name. The
+// task's lifetime is not observable here, so the bound is 24 h from the
+// request's createdAt. Any doubt or read error denies.
+export function taskMessageGrants(paths: NodePaths, refs: string[], record: InboxRecord, now: number,
+  requests: () => RequestIndex = () => requestsByTask(paths)): boolean {
+  if (!isTaskId(record.taskId) || !isNodeId(record.from?.nodeId)) return false;
+  const request = requests().get(record.taskId);
+  if (request?.state !== "dispatched" || request.nodeId !== record.from.nodeId) return false;
+  if (!refs.includes(request.requestedBySessionId ?? request.requestedBy)) return false;
+  const age = now - Date.parse(request.createdAt);
+  return age >= 0 && age <= REPLY_GRANT_MAX_AGE_MS;
+}
+
 // What a listener its listing does not cover wakes for (wake-hook.mts): the
-// records of its task grant and, with wake.replies, granted replies. reply
-// collects the ids granted as replies only, for the audit.
+// records of its task grant and, with wake.replies, granted replies and task
+// messages. kinds names the grant of each id granted that way, for the audit.
 export function unlistedGrants(paths: NodePaths, policy: NodePolicy, refs: string[], task: TaskRecord | undefined, now: number) {
-  const reply = new Set<string>();
+  const kinds = new Map<string, WakeGrant>();
+  const requests = lazyRequests(paths);
   const grants = (record: InboxRecord): boolean => {
     if (task && taskGrants(task, record)) return true;
-    if (policy.wake?.replies !== true || !replyGrants(paths, refs, record, now)) return false;
-    reply.add(record.messageId);
+    if (policy.wake?.replies !== true) return false;
+    let kind: WakeGrant;
+    if (replyGrants(paths, refs, record, now)) kind = "reply";
+    else if (taskMessageGrants(paths, refs, record, now, requests)) kind = "task";
+    else return false;
+    kinds.set(record.messageId, kind);
     return true;
   };
-  return { grants, reply };
+  return { grants, kinds };
 }
 
 // One audit line for the ids woken through the listing or a task grant, one
-// with grant "reply" for those only a reply granted.
+// per grant for those only a reply or task message grant covered.
 export function auditGranted(paths: NodePaths, now: number, sessionId: string, ids: string[], action: AutonomyAction,
-  reply: ReadonlySet<string>): void {
-  const replies = ids.filter((id) => reply.has(id));
-  const others = ids.filter((id) => !reply.has(id));
-  if (others.length > 0) audit(paths, now, sessionId, others, action);
-  if (replies.length > 0) audit(paths, now, sessionId, replies, action, "reply");
+  kinds: ReadonlyMap<string, WakeGrant>): void {
+  for (const grant of [undefined, "reply", "task"] as const) {
+    const some = ids.filter((id) => kinds.get(id) === grant);
+    if (some.length > 0) audit(paths, now, sessionId, some, action, grant);
+  }
 }

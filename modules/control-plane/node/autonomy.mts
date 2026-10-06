@@ -60,8 +60,9 @@ export const rememberedMode = (paths: NodePaths, sessionId: string): string | un
   readJson<{ permissionMode?: string }>(modeFile(paths, sessionId))?.permissionMode;
 
 // Why a session not in wake.sessions may be woken: "codexApp" (codex-app.mts),
-// "reply" (wake.replies, wake-reply.mts).
-export type WakeGrant = "codexApp" | "reply";
+// "reply" and "task", a message of a task the session requested (wake.replies,
+// wake-reply.mts).
+export type WakeGrant = "codexApp" | "reply" | "task";
 
 // One line per decision: ids, the action and any grant, never message text.
 export function audit(paths: NodePaths, now: number, sessionId: string, messageIds: string[], action: AutonomyAction,
@@ -152,8 +153,9 @@ export interface ListenerLock {
 
 // What the live listener wakes for (issue #213): every message for its session
 // (listed) or only those of its task grant (taskId) and, with replies, replies
-// to its own messages (issue #253). Kept beside the lock and valid only while
-// the lock carries the same token; delivery-progress.mts reads it.
+// to its own messages (issue #253) and messages of tasks it requested (issue
+// #264). Kept beside the lock and valid only while the lock carries the same
+// token; delivery-progress.mts reads it.
 // order: its lock's, so a listener can tell an older one's scope (issue #225).
 export interface ListenerScope { token: string; listed: boolean; taskId?: string; replies?: true; order?: number }
 export const listenerScope = (paths: NodePaths, sessionId: string): string => path.join(listenerDir(paths), `${sessionId}.scope.json`);

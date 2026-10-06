@@ -11,6 +11,18 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Control Plane: with `wake.replies: true` the messages of a task an idle
+  Claude Code session requested with `msg send <node> --new` also wake it
+  without a listing, so the task's plain `msg send` answer, which carries the
+  task id and no `inReplyTo`, is not left waiting for the next user turn. The
+  grant needs the request to be dispatched, the message to come from the node
+  the task was dispatched to, the request to be at most 24 hours old, and the
+  requesting session's id, which `msg send --new` now keeps locally as
+  `requestedBySessionId` and never sends to the Worker, to match (a request
+  without it matches by `requestedBy`). It covers every message of the task,
+  bounded by the turn budget. Audit lines name `"grant": "task"`, delivery
+  progress reports such messages like replies, and Codex requesters are out
+  of scope (issue #264).
 - Control Plane: the optional node policy object `wake.budget`
   (`perHour`, `perDay`, `spacingSeconds`) sets the per-session budget of
   autonomous turns, which stays 6 per rolling hour, 20 per rolling day and

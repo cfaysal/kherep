@@ -4,7 +4,7 @@ import path from "node:path";
 
 import {
   armedIdle, audit, bypassesPermissions, isPlainSessionId, listenerDir, listenerLock, modeFile, parentWatch, recordScope, rememberedMode,
-  rememberMode, takeTurn, wakeAudit, type ListenerLock, type ListenerScope,
+  rememberMode, takeTurn, wakeAudit, type ListenerLock, type ListenerScope, type WakeGrant,
 } from "./autonomy.mts";
 import { ensureDir, nodePaths, readConfig, type NodePaths } from "./config.mts";
 import { REOFFER_AFTER_MS } from "./deliver-core.mts";
@@ -124,7 +124,8 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
   // task record in the same directory waits for its mapping, the listener
   // waits too and looks the grant up again at each poll. The grant itself
   // only ever comes from the session id the node recorded. With wake.replies an
-  // unlisted session stays armed for replies to its own messages (wake-reply.mts).
+  // unlisted session stays armed for replies to its own messages and messages
+  // of tasks it requested (wake-reply.mts).
   const policyFile = readConfig(paths.config)?.policyFile ?? paths.policy;
   let policy = loadPolicy(policyFile);
   const grantFor = (): TaskRecord | undefined => policy.sessions?.enabled ? taskForSession(paths, sessionId) ?? undefined : undefined;
@@ -277,10 +278,10 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
       return { code: 2, text: REARM_TEXT };
     }
     if (backlog.length + stuck.length > 0) rememberWoken(paths, sessionId, [...backlog, ...stuck]);
-    const reply = granted?.reply ?? new Set<string>();
-    auditGranted(paths, now(), sessionId, stuck, "stuck-offer", reply);
-    auditGranted(paths, now(), sessionId, backlog, "backlog", reply);
-    auditGranted(paths, now(), sessionId, fresh, "wake", reply);
+    const kinds: ReadonlyMap<string, WakeGrant> = granted?.kinds ?? new Map();
+    auditGranted(paths, now(), sessionId, stuck, "stuck-offer", kinds);
+    auditGranted(paths, now(), sessionId, backlog, "backlog", kinds);
+    auditGranted(paths, now(), sessionId, fresh, "wake", kinds);
     return { code: 2, text: messages > 0 ? wakeText(messages) : STUCK_TEXT };
   }
 }

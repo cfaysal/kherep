@@ -8,6 +8,7 @@ import { recordSent, writeLocalSessions, writeOutbox, type OutboxRecord } from "
 import type { RunMode } from "./headless-mode.mts";
 import { storeMessage } from "./inbox.mts";
 import type { LaunchVerdict } from "./launch-mode.mts";
+import { writeRequest, type TaskRequestRecord } from "./task-records.mts";
 import { listenerDir, runWake, wakeAudit, type WakeDeps } from "./wake-hook.mts";
 
 // Shared fixture of the wake listener tests (wake-hook.test.mts,
@@ -54,6 +55,22 @@ export function sentOriginal(paths: NodePaths, overrides: Partial<OutboxRecord> 
 export function arriveReply(paths: NodePaths, n: number, at: number, options: { from?: string; depth?: number; toSession?: string } = {}): string {
   storeMessage(paths.inbox, { messageId: id(n), from: { nodeId: options.from ?? PEER, session: "build" }, toSession: options.toSession ?? "review",
     text: `${SECRET} ${n}`, inReplyTo: ORIGINAL, createdAt: new Date(at).toISOString() }, at, options.depth ?? 1);
+  return id(n);
+}
+
+// Task message grant (issue #264): a task request SELF ("review") sent an hour
+// before T0, dispatched as REQUESTED_TASK on PEER, and a message of that task.
+export const REQUESTED_TASK = id(0x600);
+export function dispatchedRequest(paths: NodePaths, overrides: Partial<TaskRequestRecord> = {}): string {
+  const request: TaskRequestRecord = { requestId: id(0x601), title: "intercom: claude@n", text: "question", requirements: { runtime: "claude", node: PEER },
+    directive: "Yes, start a new session", requestedBy: "review", requestedBySessionId: SELF, label: "intercom: claude@n",
+    createdAt: new Date(T0 - 3_600_000).toISOString(), state: "dispatched", taskId: REQUESTED_TASK, nodeId: PEER, ...overrides };
+  writeRequest(paths, request);
+  return request.requestId;
+}
+export function arriveTaskMessage(paths: NodePaths, n: number, at: number, options: { from?: string; taskId?: string } = {}): string {
+  storeMessage(paths.inbox, { messageId: id(n), from: { nodeId: options.from ?? PEER, session: "task-00000000" }, toSession: "review",
+    text: `${SECRET} ${n}`, taskId: options.taskId ?? REQUESTED_TASK, createdAt: new Date(at).toISOString() }, at, 0);
   return id(n);
 }
 
