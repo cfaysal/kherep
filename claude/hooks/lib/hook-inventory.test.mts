@@ -66,6 +66,11 @@ test("a /* or // inside a string does not swallow the imports after it", () => {
   assert.deepEqual(relativeSpecifiers(source), ["./lib/a.mts"]);
 });
 
+test("a block comment right after ) or } is stripped too", () => {
+  const source = `run()/* old wiring:\nimport { g } ${from("./lib/ghost.mts")};\n*/\nconst o = {}/*\nimport { h } ${from("./lib/ghost2.mts")};\n*/;`;
+  assert.deepEqual(relativeSpecifiers(source), []);
+});
+
 test("a default import named type is a runtime import", () => {
   assert.deepEqual(relativeSpecifiers(`import type ${from("./lib/t.mts")};`), ["./lib/t.mts"]);
 });
@@ -83,6 +88,16 @@ test("walks transitively and names every importer", () => {
   assert.equal(byRel["lib/b.mts"].wired, false);
   assert.deepEqual(byRel["lib/b.mts"].importedBy.sort(), ["lib/a.mts", "other.mts"]);
   assert.deepEqual(byRel["pairs.mts"].importedBy, ["guard.mts"]);
+});
+
+test("an in-bounds .. from lib/ and a direct import of the same file give one entry", () => {
+  const inventory = hookInventory([root("guard.mts")], HOOKS, reader({
+    [`${HOOKS}/guard.mts`]: `import { a } ${from("./lib/a.mts")};\nimport { s } ${from("./shared.mts")};`,
+    [`${HOOKS}/lib/a.mts`]: `import { s } ${from("../shared.mts")};`,
+  }));
+  const shared = inventory.filter((entry) => entry.rel.endsWith("shared.mts"));
+  assert.deepEqual(shared.map((entry) => entry.rel), ["shared.mts"]);
+  assert.deepEqual(shared[0].importedBy.sort(), ["guard.mts", "lib/a.mts"]);
 });
 
 test("drops targets outside the hooks directory, including through ..", () => {

@@ -92,10 +92,13 @@ export function wiredFiles(
 }
 
 // A comment opens only where code could stand: at a line start, after
-// whitespace or after , ; { ( . That keeps "http://x" and "hooks/*.mts" inside
-// strings intact, which a blind strip would turn into a comment swallowing the
-// imports that follow.
-const COMMENT = /(^|[\s,;{(])(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*)/g;
+// whitespace or after , ; { } ( ) . That keeps "http://x" and "hooks/*.mts"
+// inside strings intact, which a blind strip would turn into a comment
+// swallowing the imports that follow. Known limit: a /* after whitespace INSIDE
+// a string or regex literal still swallows source up to the next */. For the
+// repo hooks the agreement test in bootstrap/hook-require-resolution.test.mts
+// bounds this: it fails when this scan misses an import the plain scan sees.
+const COMMENT = /(^|[\s,;{}()])(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*)/g;
 // A statement starts a line. The clause between keyword and `from` holds names,
 // braces and commas only, so it may span lines but never crosses a quote or ;.
 const FROM_STATEMENT = /^[ \t]*(?:import|export)\b([^;'"]*?)\bfrom\s*(["'])(\.[^"']*)\2/gm;
@@ -136,7 +139,9 @@ export function hookInventory(roots: HookFile[], hooksDir: string, readSource: S
     if (!source) continue;
     const base = next.file.slice(0, next.file.lastIndexOf("/"));
     for (const specifier of relativeSpecifiers(source)) {
-      const file = joinPathLike(base, specifier);
+      // joinPathLike keeps a leading .. of the specifier; normalizing folds
+      // lib/../x.mts onto x.mts, so both spellings share one dedupe key.
+      const file = normalizePathLike(joinPathLike(base, specifier));
       if (!isWithinPath(file, dir) || file.length <= dir.length) continue;
       let entry = byKey.get(file.toLowerCase());
       if (!entry) {
