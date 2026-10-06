@@ -257,11 +257,18 @@ test("a second hook of the same Claude Code process takes the kept run mode and 
 // the characters encodeURIComponent leaves alone are percent-encoded too.
 const bashSafe = (arg: string): string => arg.startsWith("data:")
   ? arg.replace(/[!'()*~]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`) : arg;
+// On Windows a plain "bash" may resolve to the WSL launcher, which cannot run
+// this node.exe, so the test names Git Bash, as Claude Code uses it there.
+// Elsewhere (a per-user install) the test skips.
+const GIT_BASH = ["C:/Program Files/Git/bin/bash.exe", "C:/Program Files (x86)/Git/bin/bash.exe"];
+const BASH = process.platform === "win32" ? GIT_BASH.find((file) => fs.existsSync(file)) ?? null : "bash";
 const viaBash = (args: string[], options: Parameters<typeof spawnSync>[2] = {}) =>
-  spawnSync("bash", ["-c", "\"$@\"; exit $?", "bash", ...args.map(bashSafe)], { encoding: "utf8", timeout: 30_000, ...options });
+  spawnSync(BASH ?? "bash", ["-c", "\"$@\"; exit $?", "bash", ...args.map(bashSafe)], { encoding: "utf8", timeout: 30_000, ...options });
 const RECORD_PPID = `data:text/javascript,${encodeURIComponent("import fs from 'node:fs';"
   + "fs.appendFileSync(process.env.KHEREP_TEST_PPID_LOG, process.ppid + String.fromCharCode(10));")}`;
-const bashRunsNode = viaBash([process.execPath, "-e", "0"], { env: { ...process.env, MSYS2_ARG_CONV_EXCL: "*" } }).status === 0;
+// Only a bash that really ran this node counts: the probe must print its result.
+const bashProbe = BASH === null ? null : viaBash([process.execPath, "-p", "1+1"], { env: { ...process.env, MSYS2_ARG_CONV_EXCL: "*" } });
+const bashRunsNode = bashProbe?.status === 0 && String(bashProbe.stdout).trim() === "2";
 
 test("hooks behind a fresh bash each take the run mode kept under CLAUDE_PID (issue #248)",
   { skip: bashRunsNode ? false : "no bash that runs this node" }, (t) => {
