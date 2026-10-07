@@ -151,6 +151,32 @@ test("refuses a split block with an unknown table between the end marker and the
     /Refusing to overwrite a managed block without an exact known managed fragment/);
 });
 
+test("moves a key after the end marker only along with a trust table that ends the block", () => {
+  // Trust tables in the middle of the block, a managed table last: in TOML a key
+  // after the marker belongs to that managed table, so it must not move.
+  const last = HEAD.lastIndexOf("[[hooks.SubagentStart]]");
+  const middle = `${HEAD.slice(0, last)}${STATE_INSIDE}\n\n${HEAD.slice(last)}`;
+  const layout = (key: string) =>
+    [BEFORE + START, middle, END, ...(key ? [key] : []), "", STATE_BETWEEN, "", TAIL, ""].join("\n");
+
+  assert.equal(prepareManagedConfig(layout(""), OPTIONS).managedFragment, "replaced");
+  assert.throws(() => prepareManagedConfig(layout(SEPARATED_KEY), OPTIONS),
+    /Refusing to overwrite a managed block without an exact known managed fragment/);
+});
+
+test("refuses a split block whose head differs in one line", () => {
+  const altered = HEAD.replace(/timeout = (\d+)/, (_, seconds) => `timeout = ${Number(seconds) + 1}`);
+  assert.notEqual(altered, HEAD);
+
+  assert.throws(() => prepareManagedConfig(split(TAIL).replace(HEAD, altered), OPTIONS),
+    /Refusing to overwrite a managed block without an exact known managed fragment/);
+});
+
+test("refuses a split block with CRLF line endings", () => {
+  assert.throws(() => prepareManagedConfig(split(TAIL).replace(/\n/g, "\r\n"), OPTIONS),
+    /Refusing to overwrite a managed block without an exact known managed fragment/);
+});
+
 test("refuses a split block with unknown content left inside the block", () => {
   const config = split(TAIL).replace(`${HEAD}\n`, `${HEAD}\n\n${OPERATOR}\n`);
 
