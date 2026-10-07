@@ -165,8 +165,15 @@ writes `broker` on every install and the space only once it resolved, so a file 
 `OBS-RESULT: failed no space configured`, not `missing broker`.
 
     <confluence.json broker> create --space <spaceKey> --parent <the id the nodes map gives for that node> \
-      --title "<short title>" --format storage --body-file <file> \
+      --title "<short title>" --format storage --body-file "$f" \
       --labels type-observation,evidence-<value>,status-author-model[,session-<session-id from the brief>]
+
+You create the body file in Bash with `f="$(mktemp)"`, write the body into `"$f"`, pass
+`--body-file "$f"` and remove the file with `rm -f "$f"` after the broker call. A shell variable does
+not outlive its Bash call, so these steps run in one command. You NEVER use a Windows backslash path
+in Bash, not even the scratchpad path from your context: Bash eats the backslashes, the drive colon
+becomes U+F03A, and the page body lands as a mangled file in the caller's working directory. That
+left untracked page bodies in Windows checkouts from 2026-09 on.
 
 The separate `labels` verb exists for correcting a page that already has some. For a page you
 are creating, the labels belong in the create call, so that no version of the page ever exists

@@ -24,6 +24,13 @@
  * brief. What the brief may contain is the Maestro's decision, bounded by the
  * instruction below.
  *
+ * STRAY BODY FILES (issue #280). Independently of the decision, the hook reads
+ * the top level of cwd and of the git root containing it, once each, for names
+ * starting with "C" + U+F03A: what MSYS makes of a "C:\..." path written from
+ * Bash, as claude-obs did with its page bodies on Windows. It reports a count
+ * and one shortened example as systemMessage, which is shown to the user and
+ * not sent to the model. It never deletes or moves a file.
+ *
  * Counterpart of the Codex runtime's codex/hooks/observation-stop.mts, which
  * judges a turn id; this one judges the Claude Code transcript, because Claude
  * decides "substantial" and "already dispatched" from it. Any error fails open.
@@ -112,10 +119,41 @@ export function decision(value: unknown, env: EnvLike = process.env): Continuati
   return { decision: "block", reason: OBSERVATION_REASON };
 }
 
+const STRAY_PREFIX = `C${String.fromCharCode(0xf03a)}`;
+
+function gitRoot(start: string): string {
+  for (let dir = start; ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, ".git"))) return dir;
+    if (path.dirname(dir) === dir) return "";
+  }
+}
+
+function strayNames(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir).filter((name) => name.startsWith(STRAY_PREFIX));
+  } catch {
+    return [];
+  }
+}
+
+export function strayWarning(value: unknown, env: EnvLike = process.env): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const payload = value as StopPayload;
+  if (typeof payload.cwd !== "string" || !isKherepScope(payload, env)) return null;
+  const cwd = path.resolve(payload.cwd);
+  const dirs = [...new Set([cwd, gitRoot(cwd)].filter(Boolean))];
+  const found = dirs.flatMap((dir) => strayNames(dir).map((name) => `${path.basename(dir)}/C<U+F03A>...${name.slice(-20)}`));
+  if (!found.length) return null;
+  return `Kherep: ${found.length} stray file(s) named C<U+F03A>..., a Windows path written from Bash (likely an observation page body), e.g. ${found[0]}. Left in place; move them out and never commit them.`;
+}
+
 function main(): void {
   try {
-    const result = decision(JSON.parse(fs.readFileSync(0, "utf8")));
-    if (result) process.stdout.write(JSON.stringify(result));
+    const payload: unknown = JSON.parse(fs.readFileSync(0, "utf8"));
+    const result = decision(payload);
+    const warning = strayWarning(payload);
+    const output = warning ? { ...result, systemMessage: warning } : result;
+    if (output) process.stdout.write(JSON.stringify(output));
   } catch {
     // Fail open: a hook that cannot decide says nothing and lets the turn end.
   }

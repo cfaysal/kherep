@@ -920,6 +920,19 @@ increments the minor version; every other release increments the patch version.
   `SMOKE_SUBTEST_TIMEOUT`, so a real hang becomes a finding and the report is
   still printed. Without GNU `timeout` or `gtimeout`, as on a stock Mac, it
   runs unbounded as before.
+- Observation agent: on Windows `claude-obs` left its page bodies in the
+  calling session's working directory as untracked files named like
+  `C<U+F03A>Users...finding1_body.txt` (issue #280). The agent had no rule for
+  creating its `--body-file` and wrote to the backslash scratchpad path from
+  Bash, where the backslashes vanished and MSYS mapped the drive colon to
+  U+F03A, so the path became a relative file name. The agent now creates the
+  file with `f="$(mktemp)"`, passes `--body-file "$f"`, removes it after the
+  broker call and never uses a Windows backslash path in Bash; the contract
+  test pins that. `codex-obs` writes no files and is unchanged. The
+  observation Stop hook also reads the top level of the working directory and
+  its git root and, when names starting with `C` and U+F03A are there, shows
+  their count and one shortened example as a warning. It never moves or
+  deletes them.
 
 ## [0.1.2] - 2026-09-24
 

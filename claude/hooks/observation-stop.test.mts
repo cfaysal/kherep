@@ -60,11 +60,11 @@ interface Run {
   status: number | null;
 }
 
-function runRaw(stdin: string): Run {
+function runRaw(stdin: string, workspace = WORKSPACE): Run {
   const result = spawnSync(process.execPath, [HOOK], {
     input: stdin,
     encoding: "utf8",
-    env: { ...process.env, KHEREP_WORKSPACE: WORKSPACE },
+    env: { ...process.env, KHEREP_WORKSPACE: workspace },
   });
   return { stdout: result.stdout, status: result.status };
 }
@@ -242,6 +242,64 @@ test("sidechain entries in the transcript do not split the ending turn", () => {
     toolResult("t2"),
     assistantText("Done."),
   ]));
+});
+
+// --- stray body files (issue #280) -------------------------------------------
+// MSYS maps the colon of "C:\..." to U+F03A when Bash writes a backslash path.
+
+const STRAY = "C\uF03AUsersTesterAppDataLocalTempscratchpadfinding1_body.txt";
+const TRIVIAL = [userPrompt("thanks"), assistantText("ok")];
+
+function strayRepo(): { ws: string; repo: string; sub: string } {
+  const ws = fs.mkdtempSync(path.join(TMP, "ws-"));
+  const repo = path.join(ws, "repo");
+  const sub = path.join(repo, "pkg");
+  fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+  fs.mkdirSync(sub);
+  fs.writeFileSync(path.join(repo, "C-ordinary.txt"), "x");
+  return { ws, repo, sub };
+}
+
+function runIn(cwd: string, ws: string, entries: unknown[], extra: Record<string, unknown> = {}): Run {
+  return runRaw(JSON.stringify({ cwd, stop_hook_active: false, transcript_path: transcript(entries), ...extra }), ws);
+}
+
+type Warned = { decision?: unknown; reason?: unknown; systemMessage: string };
+
+function warningOf(result: Run): Warned {
+  assert.equal(result.status, 0, "the hook always exits 0");
+  const parsed = JSON.parse(result.stdout) as Warned;
+  assert.equal(typeof parsed.systemMessage, "string");
+  return parsed;
+}
+
+test("stray files in the cwd and its git root are counted, shortened and left in place", () => {
+  const { ws, repo, sub } = strayRepo();
+  fs.writeFileSync(path.join(repo, STRAY), "body");
+  fs.writeFileSync(path.join(sub, `${STRAY}.2`), "body");
+  const parsed = warningOf(runIn(sub, ws, TRIVIAL));
+  assert.equal(parsed.decision, undefined, "a trivial turn still does not block");
+  assert.match(parsed.systemMessage, /\b2 stray\b/);
+  assert.match(parsed.systemMessage, /C<U\+F03A>/);
+  for (const leak of [TMP, "UsersTester", "\uF03A"]) assert.ok(!parsed.systemMessage.includes(leak), leak);
+  assert.ok(fs.existsSync(path.join(repo, STRAY)) && fs.existsSync(path.join(sub, `${STRAY}.2`)));
+  // cwd at the git root reads that directory once.
+  assert.match(warningOf(runIn(repo, ws, TRIVIAL, { stop_hook_active: true })).systemMessage, /\b1 stray\b/);
+});
+
+test("a stray file adds the warning without changing the block decision", () => {
+  const { ws, repo } = strayRepo();
+  fs.writeFileSync(path.join(repo, STRAY), "body");
+  const parsed = warningOf(runIn(repo, ws, SUBSTANTIAL));
+  assert.equal(parsed.decision, "block");
+  assert.equal(parsed.reason, reasonOf(run(SUBSTANTIAL)));
+});
+
+test("no stray file, or a cwd outside the workspace, adds nothing", () => {
+  const { ws, repo, sub } = strayRepo();
+  assertSilent(runIn(sub, ws, TRIVIAL));
+  fs.writeFileSync(path.join(repo, STRAY), "body");
+  assertSilent(runIn(sub, path.join(TMP, "elsewhere"), TRIVIAL));
 });
 
 // --- fail open ---------------------------------------------------------------

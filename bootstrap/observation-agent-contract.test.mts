@@ -132,6 +132,23 @@ test("both routing files treat OBS-RESULT: failed as a failure, not an empty res
   }
 });
 
+// Issue #280. On Windows the agent wrote its body file to the backslash
+// scratchpad path from Bash; Bash ate the backslashes, MSYS mapped the colon
+// to U+F03A, and the page body landed in the caller's checkout. Every text
+// that asks for --body-file must create it with mktemp and ban such paths.
+test("a text that asks for --body-file creates it with mktemp and bans backslash paths", () => {
+  assert.match(CLAUDE_OBS, /--body-file/, "the Claude text no longer files through --body-file");
+  for (const [name, text] of [["claude-obs", CLAUDE_OBS], ["codex-obs", codexProjection()]]) {
+    if (!/--body-file/.test(text)) continue;
+    assert.match(text, /f="\$\(mktemp\)"/, name);
+    assert.doesNotMatch(text, /--body-file <[^>]*>/, `${name}: a placeholder lets the model pick a path`);
+    assert.match(text, /--body-file "\$f"/, name);
+    assert.match(text, /rm -f "\$f"/, name);
+    assert.match(text, /never[^.]{0,80}Windows backslash path[^.]{0,40}Bash/i, name);
+    assert.doesNotMatch(text, /[A-Za-z]:\\/, `${name}: carries a Windows backslash path itself`);
+  }
+});
+
 test("both definitions stay under the size cap", () => {
   for (const file of [
     path.join(REPO, "claude", "agents", "claude-obs.md"),
