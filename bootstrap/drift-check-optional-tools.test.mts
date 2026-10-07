@@ -70,7 +70,7 @@ test("a partial Jira set reports its absent members as missing", (t) => {
   assert.match(drift.out, /^ok +project\/tools\/atl-jira\.mts$/m);
   assert.ok(SHARED_JIRA_MODULES.length >= 5, `found only ${SHARED_JIRA_MODULES.join(", ")}`);
   for (const name of ["atl-jira-ccoder.mts", ...SHARED_JIRA_MODULES]) {
-    assert.match(drift.out, new RegExp(`^MISSING-LIVE +project/tools/${name.replace(/\./g, "\\.")} `, "m"), name);
+    assert.match(drift.out, new RegExp(`^MISSING-LIVE +project/tools/${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} `, "m"), name);
   }
 });
 
