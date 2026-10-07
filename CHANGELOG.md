@@ -24,6 +24,15 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control plane node: outbox resends and inbox status re-reports back off on a
+  live connection. The first resend still comes exactly 30 seconds after the
+  first send, later ones wait with equal jitter up to 10 minutes; a status is
+  reported at once for each new state or progress and then on the same
+  schedule. The schedule starts over after the Worker answers and on every new
+  connection. `directory.request` bursts from the `msg` CLI are coalesced to
+  at most one directory request per 10 seconds per connection. Before, every
+  unanswered status was re-sent on each 2-second exchange round (issue #308,
+  PR 2 of 4).
 - Bootstrap: `drift-check.sh` compares the optional Jira helpers in
   `<workspace>/tools/` when `KHEREP_INSTALL_ATLASSIAN_TOOLS=1` is set or when
   any of the twelve exact file names is present. Before, it compared them only

@@ -9,6 +9,7 @@ import {
   markReported, messageIds, readJson, refuseUndeliverable, UNDELIVERABLE_AFTER_MS, unreportedStatuses, writeJsonAtomic,
 } from "./inbox.mts";
 import { rememberSessions } from "./known-sessions.mts";
+import { directoryDue, sendSchedule } from "./send-schedule.mts";
 
 // The local exchange between the daemon and the session tools (issue #31,
 // step 3a): plain files in the node's config directory, no local socket.
@@ -20,10 +21,11 @@ import { rememberSessions } from "./known-sessions.mts";
 
 export const EXCHANGE_INTERVAL_MS = 2_000;
 export const DIRECTORY_INTERVAL_MS = 60_000;
-// An outbox record the Worker has not answered this long after it went out is
-// sent again on the same connection, so a lost answer on a live connection
-// heals without a reconnect (issue #195). The Worker deduplicates by messageId.
-export const SEND_RETRY_MS = 30_000;
+// An outbox record the Worker has not answered is sent again on the same
+// connection, first SEND_RETRY_MS after it went out and then with backoff, so a
+// lost answer on a live connection heals without a reconnect (issues #195,
+// #308). The Worker deduplicates by messageId.
+export { SEND_RETRY_MS } from "./send-schedule.mts";
 
 // depth: the reply depth (inbox.mts InboxRecord.depth); fromSessionId: the
 // sender session's id where fromSession is its name (the reply grant,
@@ -240,18 +242,31 @@ function toSendBody(record: OutboxRecord): MessageSendBody | null {
   return isMessageSendBody(body) ? body : null;
 }
 
-// One exchange round while connected: a requested directory refresh, every
-// outbox record not sent on this connection within SEND_RETRY_MS (inflight
-// maps it to its send time), and the status of every inbox record that became
-// delivered or refused. send returns false when the socket is gone; nothing
-// counts as sent or reported unless it went out.
+// A status report's identity: a new state or new progress is a new report.
+function reportKey(record: { messageId: string; state: string; progress?: MessageProgress }): string {
+  return `${record.messageId} ${record.state} ${record.progress?.observedAt ?? ""}`;
+}
+
+// One exchange round while connected: a requested directory refresh, unless
+// this connection asked within DIRECTORY_COALESCE_MS (the request then waits),
+// every outbox record that is due, and the status of every inbox record not
+// yet confirmed by a receipt. inflight maps each outbox record to the time it
+// last went out on this connection; the backoff schedule (send-schedule.mts)
+// lives beside it. A status report is due at once for each new (state,
+// progress), later with the same backoff. send returns false when the socket
+// is gone; nothing counts as sent or reported unless it went out.
 export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Map<string, number>, send: (frame: string) => boolean,
-  now: number = Date.now()): void {
+  now: number = Date.now(), random: () => number = Math.random): void {
   const sendAll = (frames: string[]): boolean => frames.length > 0 && frames.every(send);
-  if (takeDirectoryRequest(paths)) sendAll(client.directoryRequest());
-  for (const messageId of messageIds(paths.outbox)) {
-    const sentAt = inflight.get(messageId);
-    if (sentAt !== undefined && now - sentAt < SEND_RETRY_MS) continue;
+  const schedule = sendSchedule(inflight);
+  if (directoryDue(schedule, now) && takeDirectoryRequest(paths) && sendAll(client.directoryRequest())) schedule.directorySentAt = now;
+  const outbox = messageIds(paths.outbox);
+  const listed = new Set(outbox);
+  // A record that left the outbox was answered: it starts over if it comes back.
+  for (const messageId of inflight.keys()) if (!listed.has(messageId)) inflight.delete(messageId);
+  schedule.outbox.retain(inflight.keys());
+  for (const messageId of outbox) {
+    if (!schedule.outbox.due(messageId, now)) continue;
     let record: OutboxRecord | null | undefined;
     try {
       record = getOutbox(paths, messageId);
@@ -265,9 +280,17 @@ export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Map
       continue;
     }
     // The Worker deduplicates by messageId, so a resend is safe.
-    if (sendAll(client.sendMessage(body))) inflight.set(messageId, now);
+    if (sendAll(client.sendMessage(body))) {
+      inflight.set(messageId, now);
+      schedule.outbox.sent(messageId, now, random);
+    }
   }
-  for (const record of unreportedStatuses(paths.inbox, now)) {
-    sendAll(client.reportStatus(record.messageId, record.state, record.reason, record.progress));
+  const pending = unreportedStatuses(paths.inbox, now);
+  schedule.reports.retain(pending.map(reportKey));
+  for (const record of pending) {
+    const key = reportKey(record);
+    if (schedule.reports.due(key, now) && sendAll(client.reportStatus(record.messageId, record.state, record.reason, record.progress))) {
+      schedule.reports.sent(key, now, random);
+    }
   }
 }
