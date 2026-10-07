@@ -1050,7 +1050,7 @@ increments the minor version; every other release increments the patch version.
   Windows path format are read from Node's source.
 - Claude hooks: `hooks/lib/hook-syntax.mts` now reports a `.js` or `.cjs` file
   DEFEKT when `node --check` rejected it under another name (issue #298).
-  Node prints the realpath of a file symbolic link and honours a
+  Node prints the realpath of a file or directory symbolic link and honours a
   `//# sourceURL=` comment, so a broken hook reached through a renamed link,
   or one carrying such a comment, was UNGEPRUEFT instead of DEFEKT (never OK).
   Since #292 the check child runs without `NODE_OPTIONS` and parses only the
@@ -1059,8 +1059,8 @@ increments the minor version; every other release increments the patch version.
   names, as long as it is not a `node:` internal frame and the child exited
   non-zero on its own; Node's own failures (a missing file, an invalid
   `package.json`) stay UNGEPRUEFT. When the name differs from the file's, the
-  reason says so. Measured on Node 26.10.0 on macOS; Windows junctions and
-  file links are read from Node's source.
+  reason says so. Measured on Node 26.10.0 on macOS and, for a directory
+  junction, on Windows 11; Windows file links are read from Node's source.
 
 ## [0.1.2] - 2026-09-24
 
