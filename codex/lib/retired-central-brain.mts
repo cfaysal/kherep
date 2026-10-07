@@ -32,6 +32,8 @@ export function managedFragmentFamily(current: RenderOptions, previousStop: Rend
     parityConfig.renderBeforeObservationHookWithoutNativeHooks(options),
     parityConfig.renderBeforeResearchHooks(options),
     parityConfig.renderBeforeResearchHooksWithoutNativeHooks(options),
+    parityConfig.renderBeforeHookIntegrity(options),
+    parityConfig.renderBeforeHookIntegrityWithoutNativeHooks(options),
     parityConfig.renderBeforePostLegacyHooks(options),
     parityConfig.renderBeforePostLegacyHooksWithoutNativeHooks(options),
   ]);
