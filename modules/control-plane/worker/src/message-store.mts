@@ -27,6 +27,10 @@ CREATE TABLE IF NOT EXISTS messages (
   expires_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_to_state ON messages (to_node, state, created_at);
+CREATE INDEX IF NOT EXISTS messages_queued_expiry ON messages (expires_at) WHERE state = 'queued';
+CREATE INDEX IF NOT EXISTS messages_from_node ON messages (from_node);
+-- For a later sweep of final-state rows by age (issue #308); not read yet.
+CREATE INDEX IF NOT EXISTS messages_state_updated ON messages (state, updated_at);
 `;
 
 export const MESSAGE_TTL_MS = 24 * 60 * 60_000;
@@ -58,6 +62,22 @@ type Audit = (actor: string, action: string, target: string | null, detail: unkn
 type Capabilities = (nodeId: string) => string[] | null;
 
 const COLUMNS = "id, from_node, from_session, to_node, to_session, in_reply_to, state, reason, progress_phase, progress_code, progress_observed_at, progress_retry_at, created_at, updated_at, expires_at";
+
+// The queries that run on every send, status report and sender reconnect.
+// Each names its index of SCHEMA (INDEXED BY fails the query rather than fall
+// back to another plan), so its cost does not grow with the final-state rows
+// the table keeps (issue #308). Exported with sample bindings for the
+// query-plan test.
+const EXPIRE_DUE = `SELECT ${COLUMNS} FROM messages INDEXED BY messages_queued_expiry
+  WHERE state = 'queued' AND expires_at <= ?`;
+const NEXT_EXPIRY = "SELECT MIN(expires_at) AS next FROM messages INDEXED BY messages_queued_expiry WHERE state = 'queued'";
+const STATUS_PAGE = `SELECT rowid AS cursor, ${COLUMNS} FROM messages INDEXED BY messages_from_node
+  WHERE from_node = ? AND rowid > ? ORDER BY rowid LIMIT ?`;
+export const HOT_MESSAGE_QUERIES = {
+  expireDue: { sql: EXPIRE_DUE, args: [0] },
+  nextExpiry: { sql: NEXT_EXPIRY, args: [] },
+  statusPage: { sql: STATUS_PAGE, args: ["node", 0, 128] },
+} as const;
 
 function toRecord(row: Record<string, SqlStorageValue>): MessageRecord {
   return {
@@ -191,8 +211,7 @@ export class MessageStore {
     const effects = none();
     const pageSize = Math.min(128, Math.max(1, Math.floor(limit)));
     const cursor = Math.max(0, Math.floor(afterRowId));
-    const rows = this.sql.exec(`SELECT rowid AS cursor, ${COLUMNS} FROM messages
-      WHERE from_node = ? AND rowid > ? ORDER BY rowid LIMIT ?`, nodeId, cursor, pageSize).toArray();
+    const rows = this.sql.exec(STATUS_PAGE, nodeId, cursor, pageSize).toArray();
     for (const row of rows) effects.statuses.push({ nodeId, body: statusOf(toRecord(row)) });
     const nextCursor = rows.length === pageSize ? Number(rows.at(-1)?.cursor) : null;
     return { effects, nextCursor };
@@ -201,7 +220,7 @@ export class MessageStore {
   // Queued messages past their 24 h lifetime become expired and lose their text.
   expireDue(now: number): MessageEffects {
     const effects = none();
-    for (const row of this.sql.exec(`SELECT ${COLUMNS} FROM messages WHERE state = 'queued' AND expires_at <= ?`, now).toArray()) {
+    for (const row of this.sql.exec(EXPIRE_DUE, now).toArray()) {
       this.setState(toRecord(row), "expired", null, "system", now, effects);
     }
     return effects;
@@ -218,7 +237,7 @@ export class MessageStore {
   }
 
   nextExpiry(): number | null {
-    const row = this.sql.exec("SELECT MIN(expires_at) AS next FROM messages WHERE state = 'queued'").one();
+    const row = this.sql.exec(NEXT_EXPIRY).one();
     return row.next === null ? null : Number(row.next);
   }
 

@@ -33,6 +33,19 @@ increments the minor version; every other release increments the patch version.
   at most one directory request per 10 seconds per connection. Before, every
   unanswered status was re-sent on each 2-second exchange round (issue #308,
   PR 2 of 4).
+- Control plane Worker: a message send, a status report and a sender's
+  reconnect replay no longer scan the whole `messages` table, which keeps every
+  final-state row. Two additive indexes (`messages_queued_expiry`,
+  `messages_from_node`) serve the hot queries, which name them with
+  `INDEXED BY`; a third, `messages_state_updated`, is created for a later
+  sweep of final-state rows and is not read yet. With 2,000 final-state
+  messages a send now reads 4 rows instead of 4,009, a status report 5 instead
+  of 2,008, and the cost no longer grows with the table. The Registry caches the directory rows until a
+  write to nodes, runtimes or sessions. A new SQL meter logs one
+  `registry.sql` line with `path`, `rowsRead` and `rowsWritten` per Registry
+  request, without message text, and the committed `wrangler.jsonc` and the
+  README override example turn on Workers Logs; it takes effect with the
+  operator's next deploy (issue #308, PR 1 of 4).
 - Bootstrap: `drift-check.sh` compares the optional Jira helpers in
   `<workspace>/tools/` when `KHEREP_INSTALL_ATLASSIAN_TOOLS=1` is set or when
   any of the twelve exact file names is present. Before, it compared them only
