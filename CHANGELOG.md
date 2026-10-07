@@ -22,6 +22,19 @@ increments the minor version; every other release increments the patch version.
   `searchConfluence` tool under any server name, including a claude.ai
   connector named by a UUID (issue #304).
 
+### Fixed
+
+- Bootstrap: `drift-check.sh` compares the optional Jira helpers in
+  `<workspace>/tools/` when `KHEREP_INSTALL_ATLASSIAN_TOOLS=1` is set or when
+  any of the twelve exact file names is present. Before, it compared them only
+  with the switch, so a stale `atl-jira.mts` from an earlier installation with
+  the switch passed as clean. A stale file is now `DRIFT` and the absent members
+  of an incomplete set are `MISSING-LIVE`. Without the switch and without any of
+  these files the check still passes and prints one informational
+  `NOT-INSTALLED project/tools/<Jira set>` line. Look-alikes such as
+  `atl-jira.mjs`, `*.bak-*` copies and `_deprecated/` never count as present
+  (issue #302).
+
 ## [0.2.0] - 2026-10-07
 
 ### Added
