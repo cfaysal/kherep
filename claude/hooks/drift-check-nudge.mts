@@ -130,8 +130,9 @@ function spawnRefresh(payload: ScopePayload | null): boolean {
   }
 }
 
-// Per-file status lines from drift-check.sh: every label it prints except "ok"
-// and RETIRED-LIVE, which is information and never changes the verdict (#45).
+// Per-file status lines from drift-check.sh: every label it prints except "ok",
+// RETIRED-LIVE (#45) and NOT-INSTALLED (#302), which are information and never
+// change the verdict.
 // The trailing \s is load-bearing: it keeps the closing "DRIFT-CHECK FOUND
 // DRIFT" summary out of the count.
 function findingsOf(report: string): string[] {
