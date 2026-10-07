@@ -933,6 +933,21 @@ increments the minor version; every other release increments the patch version.
   its git root and, when names starting with `C` and U+F03A are there, shows
   their count and one shortened example as a warning. It never moves or
   deletes them.
+- Bootstrap: `smoke-test.sh` no longer uses `node --check` for the wired
+  hooks' `HOOK SYNTAX` and `LIVE HOOK SYNTAX` checks, so a `.mts` hook with an
+  ESM syntax error such as `export const x = ;` is a finding instead of a pass
+  (issue #278). A `hook_syntax()` helper calls `hooks/lib/hook-syntax.mts`: the
+  repo copy for the repo source, and for the live hook the copy installed next
+  to it, without falling back to the repo copy, so a missing installed library
+  is a finding too. Only a proven OK passes. UNGEPRUEFT, a missing checker and
+  any other exit are findings marked `UNCHECKED`, never a silent pass; such a
+  finding names the first `Error` line of a failing checker, and a trailing CR
+  on the checker's output is ignored. `.js`
+  hooks keep their check through the library's dispatch.
+  `hooks/lib/hook-syntax.mts` is now in the smoke test's list of installed
+  files. The comments in `commit-guard`, `playwright-file-guard` and
+  `secret-output-guard` no longer claim that their `node:process` import marks
+  the file as ESM for `node --check`; nothing needs that import any more.
 
 ## [0.1.2] - 2026-09-24
 
