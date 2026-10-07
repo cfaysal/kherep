@@ -28,9 +28,13 @@ const repo = path.resolve(import.meta.dirname, "..");
 const HOOK_ROOTS = ["claude/hooks", "codex/hooks"];
 const SKIPPED_DIRS = /^(?:_deprecated|node_modules|\.hook-adapter-)/;
 const SOURCE = /\.(?:js|mts)$/;
-// require("./x") und require('./x'), plus die ESM-Form import ... from "./x.mts".
+// require("./x") und require('./x'), plus die ESM-Formen import ... from "./x.mts"
+// und import("./x.mts") mit String-Literal. Mit dieser Form lädt
+// live-hook-integrity.mts seine eigenen Libs (Issue #279); `typeof import(...)`
+// ist ein Typ und wird nie geladen.
 const REQUIRE_SPECIFIER = /require\(\s*(["'])(\.[^"']*)\1\s*\)/g;
 const IMPORT_SPECIFIER = /\bfrom\s*(["'])(\.[^"']*)\1/g;
+const DYNAMIC_SPECIFIER = /(?<!\btypeof\s+)\bimport\s*\(\s*(["'])(\.[^"']*)\1\s*\)/g;
 
 interface Reference {
   file: string;
@@ -54,7 +58,7 @@ function sourceFiles(dir: string, rel: string): string[] {
 function referencesIn(rel: string): Reference[] {
   const text = fs.readFileSync(path.join(repo, rel), "utf8");
   const found: Reference[] = [];
-  for (const [pattern, esm] of [[REQUIRE_SPECIFIER, false], [IMPORT_SPECIFIER, true]] as const) {
+  for (const [pattern, esm] of [[REQUIRE_SPECIFIER, false], [IMPORT_SPECIFIER, true], [DYNAMIC_SPECIFIER, true]] as const) {
     pattern.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(text)) !== null) found.push({ file: rel, specifier: match[2], esm });

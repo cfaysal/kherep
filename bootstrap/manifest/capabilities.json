@@ -82,6 +82,7 @@
     "lib/private-path-policy.mts",
     "lib/private-path-rules.mts",
     "lib/real-path-policy.mts",
+    "lib/restore-write.mts",
     "lib/workspace-scope.mts"
   ],
   "pluginEntrypoints": {
