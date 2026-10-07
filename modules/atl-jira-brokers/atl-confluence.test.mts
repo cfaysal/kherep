@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseArgs, runCli, type Injected } from "./atl-confluence.mts";
+import { runCli, type Injected } from "./atl-confluence.mts";
 import type { HttpResponse, RequestOptions } from "./confluence-session.mts";
 
 const BROKER = "atl-confluence.mts";
@@ -23,8 +23,9 @@ const SITE = "https://wiki.example.com";
 const AUTHOR = "service-account-for-tests";
 // Compared whole: a regex with an unescaped "|" matched this line on any one of
 // its words and so asserted nothing.
-const USAGE = "Usage: create | update | get [--body-only [--format storage|adf]] | delete | purge"
-  + " | labels | move | space | children | related | search | context | orphans | stitch | selftest";
+const VERBS = ["create", "update", "get", "delete", "purge", "labels", "move", "space", "children", "related",
+  "search", "context", "orphans", "stitch", "selftest"];
+const USAGE = `Usage: ${VERBS.join(" | ")}. Run help for the flags of each verb.`;
 
 interface Call {
   url: string;
@@ -85,10 +86,6 @@ function defaultApi(call: Call): HttpResponse {
   if (call.url.includes("/wiki/api/v2/pages/5001")) return response(200, PAGE);
   return response(200, {});
 }
-
-test(`${BROKER} parses flags into a plain map`, () => {
-  assert.deepEqual(parseArgs(["--id", "5001", "--format", "storage"]), { id: "5001", format: "storage" });
-});
 
 test(`${BROKER} reads only ${OWN_ENV}`, async () => {
   const { err, calls, injected } = harness({ env: { KHEREP_ATL_SITE: SITE, [FOREIGN_ENV]: CRED_PATH } });
@@ -187,6 +184,80 @@ test(`${BROKER} prints a usage line for an unknown verb`, async () => {
   assert.deepEqual(calls, []);
 });
 
+// #299. A positional or an unknown flag used to be skipped silently, so
+// `get 275907063` lost the id and failed without saying why.
+test(`${BROKER} help lists every verb with its flags and exits 0 in all three spellings`, async () => {
+  for (const spelling of ["help", "--help", "-h"]) {
+    const { out, err, calls, injected } = harness();
+    assert.equal(await runCli([spelling], injected), 0, spelling);
+    assert.deepEqual(err, []);
+    assert.deepEqual(calls, []);
+    for (const verb of VERBS) assert.ok(out.some((line) => line.startsWith(`  ${verb}`)), `${spelling} lacks ${verb}`);
+    assert.ok(out.includes("  get --id <id> [--format <storage|adf>] [--body-only]"), out.join("\n"));
+    assert.ok(out.includes("  stitch --space <key> [--id <id>] [--limit <n>] [--per-orphan <n>] [--dry-run]"));
+  }
+});
+
+test(`${BROKER} refuses a positional and names the call it probably meant`, async () => {
+  const { err, calls, injected } = harness({ api: defaultApi });
+  assert.equal(await runCli(["get", "275907063"], injected), 1);
+  assert.deepEqual(err, [[
+    "get expects --id <id>; got positional '275907063'.",
+    "Did you mean: get --id 275907063",
+    "Usage: get --id <id> [--format <storage|adf>] [--body-only]",
+  ].join("\n")]);
+  assert.deepEqual(calls, [], "a refused call must not reach the network");
+});
+
+test(`${BROKER} refuses an unknown flag and names the verb syntax`, async () => {
+  const { err, calls, injected } = harness({ api: defaultApi });
+  assert.equal(await runCli(["get", "--id", "5001", "--title", "x"], injected), 1);
+  assert.deepEqual(err, ["get does not take --title.\nUsage: get --id <id> [--format <storage|adf>] [--body-only]"]);
+  assert.deepEqual(calls, []);
+});
+
+test(`${BROKER} prints the full syntax for a missing required flag`, async () => {
+  const { err, calls, injected } = harness({ api: defaultApi });
+  assert.equal(await runCli(["move", "--id", "5001"], injected), 1);
+  assert.deepEqual(err, ["move: --parent is missing.\nUsage: move --id <id> --parent <id>"]);
+  assert.deepEqual(calls, []);
+});
+
+test(`${BROKER} refuses a flag given twice instead of keeping the last value`, async () => {
+  const { err, calls, injected } = harness({ api: defaultApi });
+  assert.equal(await runCli(["get", "--id", "5001", "--id", "5002"], injected), 1);
+  assert.match(err.join("\n"), /--id was given more than once/);
+  assert.deepEqual(calls, []);
+});
+
+test(`${BROKER} selftest takes no arguments`, async () => {
+  const { err, calls, injected } = harness({ api: defaultApi });
+  assert.equal(await runCli(["selftest", "--id", "5001"], injected), 1);
+  assert.deepEqual(err, ["selftest does not take --id.\nUsage: selftest"]);
+  assert.deepEqual(calls, []);
+});
+
+test(`${BROKER} stitch --dry-run before --id keeps the id`, async () => {
+  const { err, calls, injected } = harness({
+    api: (call) => call.url.includes("/spaces?keys=") ? response(200, SPACE) : response(200, { results: [] }),
+  });
+  injected.semantic = async () => ({ titles: [], error: "no semantic search in tests" });
+  assert.equal(await runCli(["stitch", "--space", "KB", "--dry-run", "--id", "404"], injected), 1);
+  // Only the single-page path checks the id against the space; the sweep that
+  // runs when --dry-run swallows --id never says this.
+  assert.deepEqual(err, ["That id is not a page in this space."]);
+  assert.equal(calls.filter((call) => call.options?.method === "PUT").length, 0, "a dry run writes nothing");
+});
+
+test(`${BROKER} search with a malformed call is unavailable, not a measured no match`, async () => {
+  const { out, err, calls, injected } = harness({ api: defaultApi });
+  assert.equal(await runCli(["search", "--space", "KB", "hook order"], injected), 2);
+  assert.deepEqual(out, ["status: unavailable"]);
+  assert.match(err.join("\n"), /got positional 'hook order'/);
+  assert.match(err.join("\n"), /Did you mean: search --query "hook order"/);
+  assert.deepEqual(calls, []);
+});
+
 test(`${BROKER} never prints the secret or the bearer token`, async () => {
   const runs: string[][] = [
     ["create", "--space", "KB", "--title", "T", "--body", "x", "--format", "storage"],
@@ -232,14 +303,23 @@ test(`${BROKER} update sends the version it read`, async () => {
       ? response(200, { ...PAGE, version: { number: 4 } })
       : response(200, { ...PAGE, version: { number: 5 } })),
   });
-  assert.equal(await runCli(
-    ["update", "--id", "5001", "--body", "x", "--format", "storage", "--version", "99"],
-    injected,
-  ), 0);
+  assert.equal(await runCli(["update", "--id", "5001", "--body", "x", "--format", "storage"], injected), 0);
   const put = calls.find((call) => call.options?.method === "PUT");
   assert.ok(put);
   const body = JSON.parse(String(put.options?.body)) as { version: { number: number } };
-  assert.equal(body.version.number, 5, "the caller's --version must be ignored");
+  assert.equal(body.version.number, 5);
+});
+
+// #299. A caller's --version used to be read past and ignored; it is now refused
+// outright, before anything is read or sent.
+test(`${BROKER} update refuses a caller-supplied --version`, async () => {
+  const { err, calls, injected } = harness({ api: defaultApi });
+  assert.equal(await runCli(
+    ["update", "--id", "5001", "--body", "x", "--format", "storage", "--version", "99"],
+    injected,
+  ), 1);
+  assert.match(err.join("\n"), /^update does not take --version\./);
+  assert.deepEqual(calls, []);
 });
 
 // OP-1419. The re-parenting verb. `movePage` had existed and been covered since

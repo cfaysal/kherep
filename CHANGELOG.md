@@ -411,6 +411,21 @@ increments the minor version; every other release increments the patch version.
   Windows. With it the installer reports the value it replaced, and a failed
   write fails the install. The global and repository-local bindings are
   unchanged.
+- Atlassian brokers: all four brokers parse arguments strictly from a per-verb
+  flag table in the new shared module `atlassian-cli-args.mts`, which installs
+  with the default Confluence set. A positional argument, an unknown flag, a
+  flag without a value, a repeated flag or a missing required flag is refused
+  before any configuration, credential or network access, and the message
+  names the verb's full syntax and, for a positional, the call it probably
+  meant (`Did you mean: get --id 275907063`). Before, the Claude Jira and both
+  Confluence brokers skipped positionals and unknown flags silently and kept
+  the last of a repeated flag. `help`, `--help` and `-h` list every verb with
+  its flags and exit 0; the Codex Jira broker returns the list as JSON.
+  `selftest` with arguments is now an error, a caller-supplied `--version` on
+  Confluence `update` is refused instead of ignored, and a refused `search`
+  call stays `status: unavailable` with exit 2. `stitch --dry-run --id <id>`
+  keeps the id instead of reading `--id` as the value of `--dry-run`, and the
+  routing documents name `stitch --space <key> --id <id>` (issue #299).
 
 ### Removed
 

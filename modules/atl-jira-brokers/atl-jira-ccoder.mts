@@ -10,6 +10,7 @@ import {
   parseCredentialText,
   type AtlassianCredentials,
 } from "./atlassian-credentials.mts";
+import { CliArgsError, DE, helpText, isHelp, parseVerbArgs, type VerbTable } from "./atlassian-cli-args.mts";
 import { renderAdf } from "./jira-adf.mts";
 import { DESCRIPTION_UNREADABLE, adfToText } from "./jira-adf-text.mts";
 import {
@@ -570,8 +571,8 @@ async function cmdComment(ctx: BrokerContext, args: Args): Promise<number> {
 // nur der multipart-Body und der XSRF-Header, beide in jira-attach.mts gebaut.
 //
 // EINE Datei pro Aufruf. Jira nimmt laut Doku bis zu 60 Teile in einer Anfrage,
-// aber beide Broker lesen ein Flag genau einmal - der Codex-Broker weist ein
-// wiederholtes Flag absichtlich ab - und diese Schranke fuer eine Bequemlichkeit
+// aber beide Broker lesen ein Flag genau einmal und weisen ein wiederholtes
+// Flag absichtlich ab - und diese Schranke fuer eine Bequemlichkeit
 // aufzuweichen, nach der niemand gefragt hat, waere der falsche Tausch.
 async function cmdAttach(ctx: BrokerContext, args: Args): Promise<number> {
   const issueKey = commandKey(ctx, args);
@@ -851,16 +852,6 @@ async function cmdSelftest(ctx: BrokerContext): Promise<number> {
   return discriminates ? 0 : 1;
 }
 
-export function parseArgs(argv: string[]): Args {
-  const args: Args = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    if (!argv[index].startsWith("--")) continue;
-    args[argv[index].slice(2)] = argv[index + 1];
-    index += 1;
-  }
-  return args;
-}
-
 // OP-1372. The duplicate check the house rules demand before creating a work
 // item is only possible with a search that runs under the service account.
 async function cmdSearch(ctx: BrokerContext, args: Args): Promise<number> {
@@ -890,7 +881,29 @@ async function cmdSearch(ctx: BrokerContext, args: Args): Promise<number> {
   return status === 200 ? 0 : 1;
 }
 
-const COMMANDS: Record<string, (ctx: BrokerContext, args: Args) => Promise<number>> = {
+// What each verb reads, and nothing else. Parser and help text both come from
+// this table, so neither can drift from the other.
+const BODY = { body: "<text>", "body-file": "<path>" };
+export const FLAGS = {
+  create: { required: { summary: "<text>" }, optional: { type: "<name>", parent: "<KEY>", assignee: "<accountId>", ...BODY } },
+  update: {
+    required: { key: "<KEY>" },
+    optional: { summary: "<text>", ...BODY, labels: "<a,b>", components: "<a,b>", assignee: "<accountId>" },
+  },
+  comment: { required: { key: "<KEY>" }, oneOf: [BODY] },
+  attach: { required: { key: "<KEY>", file: "<path>" }, optional: { "content-type": "<type>" } },
+  download: { required: { key: "<KEY>", id: "<id>" }, optional: { accept: "<type>" } },
+  get: { required: { key: "<KEY>" }, optional: { fields: "<a,b>" } },
+  search: { required: { jql: "<jql>" }, optional: { max: "<n>", fields: "<a,b>", page: "<token>" } },
+  transition: { required: { key: "<KEY>", to: "<new|indeterminate|done>" }, optional: { acceptance: "<evidence>" } },
+  link: { required: { type: "<name>", outward: "<KEY>", inward: "<KEY>" } },
+  unlink: { required: { type: "<name>", outward: "<KEY>", inward: "<KEY>" } },
+  selftest: {},
+} satisfies VerbTable;
+
+type Verb = keyof typeof FLAGS;
+
+const COMMANDS: Record<Verb, (ctx: BrokerContext, args: Args) => Promise<number>> = {
   create: cmdCreate,
   update: cmdUpdate,
   comment: cmdComment,
@@ -919,24 +932,34 @@ export async function runCli(argv: string[], injected: Partial<BrokerContext> = 
     session: {},
   };
   const [command, ...rest] = argv;
+  if (isHelp(command)) {
+    for (const line of helpText(FLAGS, DE)) ctx.log(line);
+    return 0;
+  }
   try {
-    const run = COMMANDS[command];
-    if (!run) fail("Nutzung: create | update | comment | attach | download | get | search | transition | link | unlink | selftest");
+    // One line on purpose: the contract test requires the verbs of this usage
+    // string to be exactly the keys of FLAGS.
+    if (!Object.hasOwn(FLAGS, command)) fail("Nutzung: create | update | comment | attach | download | get | search | transition | link | unlink | selftest. Die Flags je Verb zeigt help.");
+    const verb = command as Verb;
+    // Arguments first: a malformed call fails before configuration, any
+    // credential read or any network call.
+    const args = parseVerbArgs(verb, FLAGS[verb], rest, DE);
     // The seed is validated for every command, so a misconfigured host fails
     // on configuration before any credential read or network call.
     // selftest stops there: it proves the credential and must not depend on
     // a reachable project, or a broken credential would surface as a failed
     // project lookup.
     ctx.seed = jiraSeed(ctx.env);
-    if (command !== "selftest") {
+    if (verb !== "selftest") {
       ctx.jira = configuredBinding(ctx.env) ?? await resolveBinding(ctx);
     }
-    return await run(ctx, parseArgs(rest));
+    return await COMMANDS[verb](ctx, args);
   } catch (error) {
     let message: string;
     if (error instanceof CliFailure) {
       message = error.cliMessage;
-    } else if (error instanceof AtlassianCredentialError || error instanceof JiraConfigError) {
+    } else if (error instanceof CliArgsError || error instanceof AtlassianCredentialError
+      || error instanceof JiraConfigError) {
       message = error.message;
     } else {
       message = "Interner Fehler.";

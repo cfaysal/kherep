@@ -185,6 +185,8 @@ cmp_block "project/AGENTS.md" "$CLAUDE_SRC/AGENTS.project.md" "$WS/AGENTS.md"
 # on every run, so it is compared on every run too.
 cmp_file "project/tools/atlassian-credentials.mts" \
   "$HERE/../modules/atl-jira-brokers/atlassian-credentials.mts" "$WS/tools/atlassian-credentials.mts"
+cmp_file "project/tools/atlassian-cli-args.mts" \
+  "$HERE/../modules/atl-jira-brokers/atlassian-cli-args.mts" "$WS/tools/atlassian-cli-args.mts"
 # OP-1405. The Confluence broker. Its sources live in the Jira broker directory
 # because the installers copy that directory flat into $WS/tools/.
 cmp_file "project/tools/atl-confluence.mts" \

@@ -101,7 +101,7 @@ for required in \
 done
 # OP-1432. The Confluence brokers and exactly the modules they import ship with
 # the observation agent, so they are installed by default, not behind the switch.
-CONFLUENCE_TOOLS="atlassian-credentials.mts confluence-contract.mts confluence-content.mts confluence-session.mts confluence-related.mts confluence-semantic.mts confluence-neighbours.mts confluence-neighbour-cli.mts confluence-runtime-label.mts atl-confluence.mts atl-confluence-ccoder.mts"
+CONFLUENCE_TOOLS="atlassian-credentials.mts atlassian-cli-args.mts confluence-contract.mts confluence-content.mts confluence-session.mts confluence-related.mts confluence-semantic.mts confluence-neighbours.mts confluence-neighbour-cli.mts confluence-runtime-label.mts atl-confluence.mts atl-confluence-ccoder.mts"
 for tool in $CONFLUENCE_TOOLS; do
   [ -e "$REPO_ROOT/modules/atl-jira-brokers/$tool" ] || { echo "FATAL: managed source missing: modules/atl-jira-brokers/$tool"; exit 1; }
 done

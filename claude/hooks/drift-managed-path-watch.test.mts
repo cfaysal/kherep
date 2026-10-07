@@ -99,6 +99,7 @@ test("a managed live path names its versioned source", () => {
     [path.join(WS, "tools", "atl-jira.mts"), "modules/atl-jira-brokers/atl-jira.mts"],
     [path.join(WS, "tools", "atl-jira-ccoder.mts"), "modules/atl-jira-brokers/atl-jira-ccoder.mts"],
     [path.join(WS, "tools", "atlassian-credentials.mts"), "modules/atl-jira-brokers/atlassian-credentials.mts"],
+    [path.join(WS, "tools", "atlassian-cli-args.mts"), "modules/atl-jira-brokers/atlassian-cli-args.mts"],
     [path.join(WS, "tools", "jira-adf.mts"), "modules/atl-jira-brokers/jira-adf.mts"],
     [path.join(WS, "tools", "jira-transition-guard.mts"), "modules/atl-jira-brokers/jira-transition-guard.mts"],
     // OP-1405. The Confluence broker, installed into the same flat tools

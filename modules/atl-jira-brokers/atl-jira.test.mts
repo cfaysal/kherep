@@ -491,9 +491,64 @@ test("unknown command flags are rejected before authentication", async () => {
       fetch: async () => { fetchAttempted = true; throw new Error("must not run"); },
     });
     assert.equal(result.exitCode, 1);
-    assert.deepEqual(result.output, { status: 0, error: "Unbekanntes CLI-Argument." });
+    // #299: the message names the verb and its syntax, not just the fault.
+    assert.equal(result.output.status, 0);
+    assert.match(String(result.output.error), new RegExp(`^${argv[0]} kennt --typo nicht\\.\\nNutzung: ${argv[0]} `));
     assert.equal(fetchAttempted, false);
   }
+});
+
+// #299. The Codex broker already refused positionals and unknown flags, but its
+// messages named neither the verb nor the form it expected.
+const VERBS = ["create", "update", "comment", "attach", "download", "get", "search", "transition", "link", "unlink", "selftest"];
+
+test("help lists every verb with its flags as JSON and exits 0 without configuration", async () => {
+  for (const spelling of ["help", "--help", "-h"]) {
+    const counters = { credentialReads: 0, fetches: 0 };
+    const result = await runCli([spelling], { ...blockedDependencies(counters), env: {} });
+    assert.equal(result.exitCode, 0, spelling);
+    const usage = result.output.usage as string[];
+    assert.ok(Array.isArray(usage), `${spelling} returns no usage list`);
+    assert.deepEqual(Object.keys(result.output), ["usage"]);
+    for (const verb of VERBS) assert.ok(usage.some((line) => line.startsWith(`  ${verb}`)), `${spelling} lacks ${verb}`);
+    assert.ok(usage.includes("  create --summary <text> --body <text> [--type <name>] [--parent <KEY>] [--assignee <accountId>]"));
+    assert.deepEqual(counters, { credentialReads: 0, fetches: 0 });
+  }
+});
+
+test("a positional names the verb syntax and the call it probably meant", async () => {
+  const counters = { credentialReads: 0, fetches: 0 };
+  const result = await runCli(["get", "OP-999"], blockedDependencies(counters));
+  assert.equal(result.exitCode, 1);
+  assert.deepEqual(result.output, {
+    status: 0,
+    error: "get erwartet --key <KEY>; Positionsargument 'OP-999' erhalten.\n"
+      + "Meinten Sie: get --key OP-999\nNutzung: get --key <KEY> [--fields <a,b>]",
+  });
+  assert.deepEqual(counters, { credentialReads: 0, fetches: 0 });
+});
+
+test("a missing required flag prints the full syntax", async () => {
+  const counters = { credentialReads: 0, fetches: 0 };
+  const result = await runCli(["transition", "--key", "OP-999"], blockedDependencies(counters));
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.output.error, "transition: --to fehlt.\n"
+    + "Nutzung: transition --key <KEY> --to <new|indeterminate|done> [--acceptance <evidence>]");
+  assert.deepEqual(counters, { credentialReads: 0, fetches: 0 });
+});
+
+test("selftest with arguments names its syntax instead of the verb list", async () => {
+  const counters = { credentialReads: 0, fetches: 0 };
+  const result = await runCli(["selftest", "--key", "OP-1"], blockedDependencies(counters));
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.output.error, "selftest kennt --key nicht.\nNutzung: selftest");
+  assert.deepEqual(counters, { credentialReads: 0, fetches: 0 });
+});
+
+test("an unknown verb points at help", async () => {
+  const result = await runCli(["destroy"], blockedDependencies({ credentialReads: 0, fetches: 0 }));
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.output.error, `Nutzung: ${VERBS.join(" | ")}. Die Flags je Verb zeigt help.`);
 });
 
 test("Done without acceptance fails before credentials and every request", async () => {
@@ -882,7 +937,8 @@ test("an unknown flag on link is refused like everywhere else", async () => {
   ], blockedDependencies(counters));
   assert.equal(result.exitCode, 1);
   assert.equal(counters.fetches, 0);
-  assert.equal(result.output.error, "Unbekanntes CLI-Argument.");
+  assert.equal(result.output.error,
+    "link kennt --key nicht.\nNutzung: link --type <name> --outward <KEY> --inward <KEY>");
 });
 
 test("link fails when the readback shows the pair linked the other way round", async () => {
@@ -1155,7 +1211,7 @@ test("attach rejects a flag it does not know and a repeated one", async () => {
     dependencies(unknown.fetchImpl, attachFiles()),
   );
   assert.equal(strange.exitCode, 1);
-  assert.equal(strange.output.error, "Unbekanntes CLI-Argument.");
+  assert.match(String(strange.output.error), /^attach kennt --size nicht\.\nNutzung: attach /);
 
   // One file per call, and this is where that is enforced: a second --file is a
   // repeated flag, not a second attachment.
@@ -1165,7 +1221,7 @@ test("attach rejects a flag it does not know and a repeated one", async () => {
     dependencies(twice.fetchImpl, attachFiles()),
   );
   assert.equal(repeated.exitCode, 1);
-  assert.equal(repeated.output.error, "Ein CLI-Argument wurde mehrfach angegeben.");
+  assert.match(String(repeated.output.error), /^attach: --file wurde mehrfach angegeben\.\nNutzung: attach /);
   assert.equal(twice.calls.length, 0);
 });
 
