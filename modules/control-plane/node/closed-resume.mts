@@ -135,9 +135,9 @@ function senderLabel(deps: RunnerDeps, from: InboxRecord["from"]): string | unde
 
 // A new intercom session with the messages of one sender as its task text,
 // framed as the delivery hook frames them (each with its --reply-to command),
-// as far as they fit; the messages it carries are delivered once its turn
-// shows progress (Claude: the watch round, run-progress.mts; Codex: once its
-// run completes the turn, see handOver).
+// as far as they fit; the messages it carries are offered to it and delivered
+// only once its turn completed (Claude: the watch round, run-progress.mts
+// settleCarried, issue #308; Codex: codex-runner.mts adoptOffered, issue #119).
 export async function startIntercom(deps: RunnerDeps, target: ClosedTarget, records: InboxRecord[],
   mode: PermissionMode, directive = fallbackDirective(target.sessionId), taskId: string = crypto.randomUUID()): Promise<string | null> {
   const from = records[0].from;
@@ -163,22 +163,23 @@ export async function startIntercom(deps: RunnerDeps, target: ClosedTarget, reco
   if (!["started", "running"].includes(result.state) || !["started", "running"].includes(started.state)) {
     return started.reason ?? "the local delivery task did not start";
   }
-  const ids = carried.map((record) => record.messageId);
-  const linked = attachDelivery(deps.paths, started, ids);
-  // Claude: delivered once the watch round sees the turn's progress (issue #197, run-progress.mts).
-  const tracked = target.runtime === "codex" ? linked : { ...linked, carried: ids };
-  if (tracked !== started) writeTask(deps.paths, tracked, deps.now?.());
+  const linked = attachDelivery(deps.paths, started, carried.map((record) => record.messageId));
   for (const record of carried) setMessageProgress(deps.paths.inbox, record.messageId, "fallback", "fallback-running", deps.now?.());
-  if (target.runtime === "codex") handOver(deps, taskId, args.name, carried);
+  const offered = handOver(deps, args.name, carried);
+  const tracked = target.runtime === "codex" ? linked : { ...linked, carried: offered };
+  if (tracked !== started) writeTask(deps.paths, tracked, deps.now?.());
+  if (target.runtime === "codex") adoptOffered(deps, taskId, offered);
   return null;
 }
 
-// Issue #119: a Codex intercom run on Windows ends with the daemon, so its
-// messages are delivered only once it completes its turn (codex-runner.mts
-// adoptOffered). Until then they wait, offered, for the intercom session, which
-// the next exchange round resumes for them if the run ends without completing
-// (codex-wake.mts, task grant). A message answered meanwhile stays delivered.
-function handOver(deps: RunnerDeps, taskId: string, name: string, carried: InboxRecord[]): void {
+// Issues #119 and #308: the carried messages wait, offered, for the intercom
+// session they were readdressed to, until its turn completed: a Codex run on
+// Windows ends with the daemon (codex-runner.mts adoptOffered), and progress of
+// a Claude session is no read receipt (run-progress.mts settleCarried). A run
+// that ends without completing leaves them to the next offer (codex-wake.mts,
+// task grant; the delivery hook). A message answered meanwhile stays
+// delivered. Returns the ids it offered.
+function handOver(deps: RunnerDeps, name: string, carried: InboxRecord[]): string[] {
   const now = deps.now?.() ?? Date.now();
   const ids: string[] = [];
   for (const { messageId } of carried) {
@@ -188,5 +189,5 @@ function handOver(deps: RunnerDeps, taskId: string, name: string, carried: Inbox
     markClosedAttempt(deps.paths.inbox, messageId, now, name);
     ids.push(messageId);
   }
-  adoptOffered(deps, taskId, ids);
+  return ids;
 }

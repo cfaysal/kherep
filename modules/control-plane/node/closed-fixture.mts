@@ -46,9 +46,16 @@ export const audits = (node: Node): Record<string, unknown>[] => {
 };
 
 // Issue #197: a watch round once the intercom turn still works after the
-// settle time, which confirms the messages its start carried.
+// settle time. That is progress, but no read receipt (issue #308).
 export async function turnProgress(node: Node): Promise<void> {
   node.tick(WORKING_SETTLE_MS);
+  await watchTasks(node.deps());
+}
+
+// Issue #308: a watch round once the intercom turn finished, which delivers
+// the messages its start carried.
+export async function turnDone(node: Node): Promise<void> {
+  for (const row of node.rows) row.state = "done";
   await watchTasks(node.deps());
 }
 
@@ -59,9 +66,8 @@ export const COPY = "c0ffee00-0000-4000-8000-000000000109";
 export async function endedIntercom(node: Node): Promise<{ task: TaskRecord; id: string }> {
   deliver(node);
   await deliverToClosed(node.deps());
-  // Its turn finished: the watch round confirms the message it carried (issue #197).
-  for (const row of node.rows) row.state = "done";
-  await watchTasks(node.deps());
+  // Its turn finished: the watch round delivers the message it carried (issue #308).
+  await turnDone(node);
   const [task] = listTasks(node.paths);
   writeTask(node.paths, { ...task, state: "done" });
   node.tick(TURN_SPACING_MS * 2);

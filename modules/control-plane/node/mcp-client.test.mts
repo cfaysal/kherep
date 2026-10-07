@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { makeEnvelope, parseEnvelope, type Envelope } from "../protocol.mts";
 import { CLAUDE_MCP_CAPABILITY, REMOTE_MCP_CAPABILITY, type McpIntentRegistration } from "../protocol-mcp.mts";
+import { MESSAGING_ACK_CAPABILITY } from "../protocol-messages.mts";
 import { NodeClient } from "./client.mts";
 import { generateIdentity } from "./identity.mts";
 import { advertisedCapabilities, DEFAULT_POLICY, loadPolicy, mcpRuntimeEnabled, type NodePolicy } from "./policy.mts";
@@ -59,7 +60,7 @@ test("Claude MCP policy requires a literal nested opt-in and advertises its sepa
   const enabled = read({ enabled: true, claudeCode: true });
   assert.equal(mcpRuntimeEnabled(enabled, "claude-code"), true);
   assert.equal(mcpRuntimeEnabled(enabled, "unknown"), false);
-  assert.deepEqual(advertisedCapabilities(enabled), [REMOTE_MCP_CAPABILITY, CLAUDE_MCP_CAPABILITY]);
+  assert.deepEqual(advertisedCapabilities(enabled), [MESSAGING_ACK_CAPABILITY, REMOTE_MCP_CAPABILITY, CLAUDE_MCP_CAPABILITY]);
 });
 
 function rotationId(frames: Envelope[]): string {

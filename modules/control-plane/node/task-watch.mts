@@ -4,7 +4,7 @@ import { watchCodexTasks } from "./codex-watch.mts";
 import { retireCopies } from "./copy-retire.mts";
 import { resolveDelivery, updateDeliverySession } from "./delivery-identity.mts";
 import { readdress } from "./inbox.mts";
-import { claudeProgressed, confirmCarried, failStalledClaude, progressOverdue, refuseCarried } from "./run-progress.mts";
+import { claudeProgressed, failStalledClaude, progressOverdue, refuseCarried, settleCarried } from "./run-progress.mts";
 import { agentRows, findRow, mapIds, runClaude, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { isActive, listTasks, mappingPendingAt, queueReport, writeTask } from "./task-records.mts";
 
@@ -49,11 +49,11 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
       }
       continue;
     }
-    // Issue #197: the first progress of the run's turn confirms the messages it
-    // carried; none within NO_PROGRESS_MS fails it (run-progress.mts). A failed
-    // listing decides nothing; a state outside AGENT_STATES (idle) is no progress.
+    // Issue #197: no progress of the run's turn within NO_PROGRESS_MS fails it
+    // (run-progress.mts). A failed listing decides nothing; a state outside
+    // AGENT_STATES (idle) is no progress.
     if (rows && mapped.awaitingProgressSince !== undefined && !record.running) {
-      if (claudeProgressed(mapped, row, now)) mapped = confirmCarried(deps, mapped);
+      if (claudeProgressed(mapped, row, now)) mapped = { ...mapped, awaitingProgressSince: undefined };
       else if (row && (row.state === "failed" || row.state === "stopped")) {
         refuseCarried(deps, mapped);
         mapped = { ...mapped, awaitingProgressSince: undefined, carried: undefined };
@@ -62,6 +62,8 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
         continue;
       }
     }
+    // Issue #308: what an intercom start carried is delivered only once its turn completed.
+    if (row && mapped.carried) mapped = settleCarried(deps, mapped, row);
     const agentState = row ? AGENT_STATES[String(row.state)] : undefined;
     if (record.running) {
       // Reported done by the session: released once its process has ended.
@@ -73,7 +75,7 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
     const next = agentState ?? record.state;
     const reported = next !== record.state || mapped.sessionId !== record.sessionId;
     if (!reported && mapped.shortId === record.shortId && mapped.mappingPendingSince === record.mappingPendingSince
-      && mapped.awaitingProgressSince === record.awaitingProgressSince) continue;
+      && mapped.awaitingProgressSince === record.awaitingProgressSince && mapped.carried === record.carried) continue;
     // An intercom session resumed as a copy under a new id (issue #109) takes over its waiting messages.
     if (record.local === "intercom" && record.sessionId && mapped.sessionId && mapped.sessionId !== record.sessionId) {
       const moved = readdress(deps.paths.inbox, record.sessionId, mapped.sessionId);

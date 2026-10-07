@@ -70,7 +70,7 @@ test("the messages a Claude intercom start carried are refused, not delivered, w
   await deliverToClosed(node.deps());
   const [task] = listTasks(node.paths);
   assert.deepEqual(task.carried, [id]);
-  assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted", "not delivered at the start (the live finding)");
+  assert.equal(getMessage(node.paths.inbox, id)?.state, "offered", "not delivered at the start (the live finding)");
   node.rows[0].state = "blocked";
   node.tick(NO_PROGRESS_MS);
   await watchTasks(node.deps());

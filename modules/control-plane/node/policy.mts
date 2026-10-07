@@ -2,7 +2,7 @@ import fs from "node:fs";
 
 import { isNodeId, isPhase1Command, isSessionCommand, PHASE1_COMMANDS, type NodeCommand, type Phase1Command } from "../protocol.mts";
 import { CLAUDE_MCP_CAPABILITY, REMOTE_MCP_CAPABILITY, type McpRuntime } from "../protocol-mcp.mts";
-import { isSessionRef, MESSAGING_CAPABILITY, OPERATOR_NODE_ID } from "../protocol-messages.mts";
+import { isSessionRef, MESSAGING_ACK_CAPABILITY, MESSAGING_CAPABILITY, OPERATOR_NODE_ID } from "../protocol-messages.mts";
 import { TASK_CONTROL_CAPABILITY, TASK_CONTROL_REPORT_CAPABILITY } from "../protocol-task-control.mts";
 import {
   DELEGATE_ACCEPT_CAPABILITY, DELEGATE_REQUEST_CAPABILITY, RUNTIME_READY_CAPABILITIES, SESSIONS_CAPABILITY, type TaskRuntime,
@@ -115,12 +115,14 @@ export function mcpRuntimeEnabled(policy: NodePolicy, runtime: unknown): runtime
 }
 
 // What this node advertises in register: its allowed commands, plus
-// messaging.v1 only when at least one accept rule exists, and the session
-// capabilities its sessions section enables. ready: the runtimes whose last
-// readiness probe passed (issue #197), advertised only while enabled.
+// messaging.v1 only when at least one accept rule exists, always
+// messaging.ack.v1 (every node acknowledges the final statuses of the
+// messages it sent, issue #308), and the session capabilities its sessions
+// section enables. ready: the runtimes whose last readiness probe passed
+// (issue #197), advertised only while enabled.
 export function advertisedCapabilities(policy: NodePolicy, ready: readonly TaskRuntime[] = []): string[] {
   const s = policy.sessions;
-  return [...policy.allowedCommands, ...(messagingEnabled(policy) ? [MESSAGING_CAPABILITY] : []),
+  return [...policy.allowedCommands, ...(messagingEnabled(policy) ? [MESSAGING_CAPABILITY] : []), MESSAGING_ACK_CAPABILITY,
     ...(s?.enabled ? [SESSIONS_CAPABILITY] : []), ...(s?.delegate.accept ? [DELEGATE_ACCEPT_CAPABILITY] : []),
     ...(s?.delegate.request ? [DELEGATE_REQUEST_CAPABILITY] : []),
     ...(s?.ownTaskControl && s.runtimes.length > 0 ? [TASK_CONTROL_CAPABILITY, TASK_CONTROL_REPORT_CAPABILITY] : []),

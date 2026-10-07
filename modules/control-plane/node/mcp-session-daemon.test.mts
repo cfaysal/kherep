@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { makeEnvelope, parseEnvelope, type SessionInfo } from "../protocol.mts";
+import { MESSAGING_ACK_CAPABILITY } from "../protocol-messages.mts";
 import { NodeClient } from "./client.mts";
 import { nodePaths, type NodeConfig } from "./config.mts";
 import { startDaemon, SESSIONS_INTERVAL_MS } from "./daemon.mts";
@@ -104,7 +105,7 @@ test("the daemon reloads a policy-file revocation after discovery and sends no n
   release(); await flush();
   const frames = f.frames.map(decode);
   assert.deepEqual(frames.map(frame => frame.type), ["register"]);
-  assert.deepEqual((frames[0]!.body as { capabilities: unknown }).capabilities, []);
+  assert.deepEqual((frames[0]!.body as { capabilities: unknown }).capabilities, [MESSAGING_ACK_CAPABILITY]);
 });
 
 test("the daemon publishes the one complete discovery result before the intent with ascending seq", async t => {
