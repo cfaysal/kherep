@@ -9,8 +9,8 @@ import type { DirectoryBody, MessageProgress } from "../protocol-messages.mts";
 import { NodeClient } from "./client.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
 import {
-  exchangeOptions, getSent, pollExchange, readDirectory, readLocalSessions, recordSent, recordingSessions, requestDirectory, writeOutbox,
-  type OutboxRecord,
+  exchangeOptions, getSent, pollExchange, readDirectory, readLocalSessions, recordSent, recordingSessions, requestDirectory, SEND_RETRY_MS,
+  writeOutbox, type OutboxRecord,
 } from "./exchange.mts";
 import { generateIdentity } from "./identity.mts";
 import { getMessage, getReceipt, markDelivered, markOffered, markRefused, setMessageProgress, storeMessage, UNDELIVERABLE_AFTER_MS, writeJsonAtomic } from "./inbox.mts";
@@ -193,10 +193,13 @@ test("retries terminal inbox states until the Worker receipt confirms persistenc
   for (const id of [ID_A, ID_B]) {
     storeMessage(paths.inbox, { messageId: id, from: { nodeId: PEER, session: "s-a" }, toSession: "review", text: "hi", createdAt: new Date(0).toISOString() });
   }
-  assert.deepEqual(poll(client, paths).map((e) => e.body), [
+  const live = new Map<string, number>();
+  const t0 = Date.now();
+  assert.deepEqual(poll(client, paths, live, true, t0).map((e) => e.body), [
     { messageId: ID_A, state: "accepted" }, { messageId: ID_B, state: "accepted" },
   ]);
-  assert.deepEqual(poll(client, paths).map((e) => e.body), [
+  assert.deepEqual(poll(client, paths, live, true, t0 + 2_000), [], "the next round waits for the receipt (issue #308)");
+  assert.deepEqual(poll(client, paths, live, true, t0 + SEND_RETRY_MS).map((e) => e.body), [
     { messageId: ID_A, state: "accepted" }, { messageId: ID_B, state: "accepted" },
   ], "a lost initial accepted report is retried without reconnecting");
   for (const messageId of [ID_A, ID_B]) {

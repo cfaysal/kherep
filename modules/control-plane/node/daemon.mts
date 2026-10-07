@@ -159,7 +159,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     let directory: NodeJS.Timeout | null = null;
     let exchangePending = false;
     // Outbox records sent on this connection, with their send time; an
-    // unanswered one is sent again after SEND_RETRY_MS or a reconnect.
+    // unanswered one is sent again with backoff (send-schedule.mts), or at
+    // once after a reconnect, which starts with a new map.
     const inflight = new Map<string, number>();
     const requestsInflight = new Set<string>();
     taskControlInflight = new Set<string>();
