@@ -933,6 +933,11 @@ increments the minor version; every other release increments the patch version.
   its git root and, when names starting with `C` and U+F03A are there, shows
   their count and one shortened example as a warning. It never moves or
   deletes them.
+- Claude hooks: the observation Stop hook's stray-file warning now matches any
+  drive letter followed by U+F03A, not only `C`. A body written from Bash to a
+  `D:\...` path, where a workspace can sit, became a `D`+U+F03A file in the
+  working directory and was not reported. A name that only contains U+F03A
+  further in is still ignored.
 
 ## [0.1.2] - 2026-09-24
 
