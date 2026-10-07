@@ -287,6 +287,33 @@ function liveText(box: Box, name: string): string | null {
   check("a .mts incident is journalled as DEFEKT", (journalOf(box)[0] || NO_ENTRY).state, "DEFEKT");
 }
 
+// --- an ESM syntax error in a .mts hook (issue #278) ------------------------
+// `node --check` exits 0 for this file because it contains `export`, so the
+// verdict has to come from the parsers Node runs at load time.
+{
+  const box = sandbox();
+  place(box, "clq-accept-gate.mts", { live: "export const x = ;\n", repo: "export const x = 1;\n" });
+  wire(box, { SessionStart: ["node ~/.claude/hooks/clq-accept-gate.mts"] });
+  const seen = contextOf(run(box)) || "";
+  check("an ESM syntax error in a .mts hook is rejected by Node's parser", seen.includes("clq-accept-gate.mts") && seen.includes("rejected by Node's parser"), true);
+  check("the broken .mts hook is restored", liveText(box, "clq-accept-gate.mts"), "export const x = 1;\n");
+  check("and journalled as DEFEKT", (journalOf(box)[0] || NO_ENTRY).state, "DEFEKT");
+  check("with the restore proven at the target", Boolean(seen.includes("verified at the target") && seen.includes(sha256(Buffer.from("export const x = 1;\n")).slice(0, 12))), true);
+}
+
+// --- valid typed .mts without import or export is healthy (issue #278) -------
+// `node --check` compiles this as CommonJS without type stripping and rejects
+// the annotation; restoring it would overwrite a healthy hook.
+{
+  const box = sandbox();
+  const typed = "const x: number = 1;\nconsole.log(x);\n";
+  place(box, "clq-accept-gate.mts", { live: typed, repo: "export const other = 2;\n" });
+  wire(box, { SessionStart: ["node ~/.claude/hooks/clq-accept-gate.mts"] });
+  check("a valid typed .mts without import or export stays silent", contextOf(run(box)), null);
+  check("and is left untouched", liveText(box, "clq-accept-gate.mts"), typed);
+  check("and leaves no journal entry", journalOf(box).length, 0);
+}
+
 // --- both live settings files are read --------------------------------------
 {
   const box = sandbox();

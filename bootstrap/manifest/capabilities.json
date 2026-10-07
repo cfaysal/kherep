@@ -77,6 +77,7 @@
     "live-hook-integrity.mts",
     "lib/git-commit-match.mts",
     "lib/hook-inventory.mts",
+    "lib/hook-syntax.mts",
     "lib/orchestra-checkout.mts",
     "lib/private-path-policy.mts",
     "lib/private-path-rules.mts",

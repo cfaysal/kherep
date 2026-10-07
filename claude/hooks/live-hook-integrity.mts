@@ -6,7 +6,7 @@
  * all, and repairs it from the versioned source when it cannot. "Every file" is
  * what Node loads to run them: the wired files plus the transitive closure of
  * their relative static imports under hooks/ (lib/hook-inventory.mts). A missing
- * or 0-byte lib passes `node --check` of its importer and still kills the hook
+ * or 0-byte lib passes the syntax check of its importer and still kills the hook
  * at import with exit 1, which Claude Code treats as non-blocking (issue #273).
  *
  * GRUND: since 2026-08-05 ~/.claude/hooks/commit-guard.js has repeatedly fallen
@@ -16,19 +16,22 @@
  * this has to hold regardless of who does the writing.
  *
  * Three states, never merged (goldene Regel 12): OK (present, non-empty, parses),
- * DEFEKT (absent, 0 bytes, rejected by `node --check`), UNGEPRUEFT (the read path
- * itself failed). A failed read must never look like a healthy file. A restore
- * counts only when MEASURED at the target: size > 0 and the SHA-256 there equals
- * the source, because reporting one's own copy action is not a measurement
- * (goldene Regel 13). That source is resolved through lib/orchestra-checkout.mts
- * and NOT through the session cwd: these hooks are global, so a wiped guard has
- * to be repairable from a session started anywhere. A restore never writes
+ * DEFEKT (absent, 0 bytes, rejected by Node's parser), UNGEPRUEFT (the read path
+ * or the syntax check itself failed). A failed read must never look like a
+ * healthy file. A restore counts only when MEASURED at the target: size > 0 and
+ * the SHA-256 there equals the source, because reporting one's own copy action
+ * is not a measurement (goldene Regel 13). That source is resolved through
+ * lib/orchestra-checkout.mts and NOT through the session cwd: these hooks are
+ * global, so a wiped guard has to be repairable from a session started
+ * anywhere. A restore never writes
  * through a symbolic link or into a directory that resolves outside the real
  * hooks directory.
  *
- * Speed: `node --check` over all wired files costs ~2s per session start, an
- * in-process parse ~5ms. The child `node --check` runs only to CONFIRM a file the
- * in-process parse rejected, so the DEFEKT verdict is still node's own.
+ * Syntax: lib/hook-syntax.mts, in-process and without running the file.
+ * GRUND (issue #278): `node --check` never type-strips a .mts; it exited 0 for
+ * `export const x = ;` and rejected valid typed code without import/export. A
+ * .mts now goes through module.stripTypeScriptTypes and a V8 module parse, ~1 ms
+ * per file; .js keeps vm.Script, confirmed by a child `node --check`.
  *
  * Fail-safe: any unexpected error is caught, reported, exit 0. Silent when
  * everything is OK. No network, no child process beyond that `node --check`.
@@ -37,12 +40,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import vm from "node:vm";
-import { execFileSync } from "node:child_process";
 
 import { isWithinPath, joinPathLike, normalizePathLike, type ScopePayload } from "./lib/workspace-scope.mts";
 import { checkoutFor } from "./lib/orchestra-checkout.mts";
 import { hookInventory, wiredFiles } from "./lib/hook-inventory.mts";
+import { quietStripWarning, syntaxVerdict } from "./lib/hook-syntax.mts";
 
 type Before = { size?: number; mtime?: string; ino?: number };
 type Verdict = { state: "OK" | "DEFEKT" | "UNGEPRUEFT"; reason?: string; before?: Before };
@@ -51,28 +53,8 @@ type Restored = { proven: boolean; sha?: string; why?: string };
 const sha256 = (buf: Buffer): string => crypto.createHash("sha256").update(buf).digest("hex");
 const errorCode = (error: unknown): string | undefined => (error ? (error as NodeJS.ErrnoException).code : undefined);
 
-function parsesInProcess(source: string, filename: string): boolean {
-  try {
-    new vm.Script(source, { filename });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// The verdict, not the fast path. Returns "" when node itself accepts the file.
-function nodeCheckDetail(file: string): string {
-  try {
-    execFileSync(process.execPath, ["--check", file], { stdio: ["ignore", "ignore", "pipe"], timeout: 15_000 });
-    return "";
-  } catch (error) {
-    const lines = String((error && (error as { stderr?: unknown }).stderr) || "").split(/\r?\n/).map((l) => l.trim());
-    return lines.find((l) => /Error|error:/.test(l)) || "rejected by node --check";
-  }
-}
-
 // `kind` only words the absent case: "wired but" or "imported but" not present.
-function classify(file: string, kind: string): Verdict {
+async function classify(file: string, kind: string): Promise<Verdict> {
   let stat: fs.Stats;
   try {
     stat = fs.statSync(file);
@@ -94,11 +76,9 @@ function classify(file: string, kind: string): Verdict {
   } catch (error) {
     return { state: "UNGEPRUEFT", reason: `unreadable (${errorCode(error) || "unknown"})`, before };
   }
-  if (parsesInProcess(source, file)) return { state: "OK", before };
-  // node accepting what the in-process parse rejected (top-level return in CJS,
-  // for instance) means the file is fine. node --check has the last word.
-  const detail = nodeCheckDetail(file);
-  return detail ? { state: "DEFEKT", reason: `rejected by node --check: ${detail}`, before } : { state: "OK", before };
+  const verdict = await syntaxVerdict(file, source);
+  if (verdict.state === "OK") return { state: "OK", before };
+  return { state: verdict.state, reason: verdict.state === "DEFEKT" ? verdict.detail : `syntax unchecked (${verdict.detail})`, before };
 }
 
 // Every target already lies under hooksDir as a string. This proves it on disk:
@@ -176,7 +156,8 @@ function emit(lines: string[]): void {
   );
 }
 
-function main(): void {
+async function main(): Promise<void> {
+  quietStripWarning();
   let payload: ScopePayload | null = {};
   try {
     payload = JSON.parse(fs.readFileSync(0, "utf8") || "{}") as ScopePayload | null;
@@ -206,7 +187,7 @@ function main(): void {
   };
 
   for (const { file, rel, wired, importedBy } of hookInventory(files, hooksDir, readSource)) {
-    const { state, reason, before = {} } = classify(file, wired ? "wired" : "imported");
+    const { state, reason, before = {} } = await classify(file, wired ? "wired" : "imported");
     if (state === "OK") continue;
     const label = importedBy.length ? `${rel} (imported by ${importedBy.join(", ")})` : rel;
     const entry: Record<string, unknown> = {
@@ -237,13 +218,12 @@ function main(): void {
   emit(lines);
 }
 
-try {
-  main();
-} catch (error) {
-  try {
-    emit([`the integrity check itself failed (${(error && (error as Error).message) || "unknown"}); nothing was verified`]);
-  } catch {
-    /* never break session start */
-  }
-}
-process.exit(0);
+main()
+  .catch((error: unknown) => {
+    try {
+      emit([`the integrity check itself failed (${(error && (error as Error).message) || "unknown"}); nothing was verified`]);
+    } catch {
+      /* never break session start */
+    }
+  })
+  .finally(() => process.exit(0));
