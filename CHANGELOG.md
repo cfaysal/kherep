@@ -920,6 +920,19 @@ increments the minor version; every other release increments the patch version.
   `SMOKE_SUBTEST_TIMEOUT`, so a real hang becomes a finding and the report is
   still printed. Without GNU `timeout` or `gtimeout`, as on a stock Mac, it
   runs unbounded as before.
+- Observation agent: on Windows `claude-obs` left its page bodies in the
+  calling session's working directory as untracked files named like
+  `C<U+F03A>Users...finding1_body.txt` (issue #280). The agent had no rule for
+  creating its `--body-file` and wrote to the backslash scratchpad path from
+  Bash, where the backslashes vanished and MSYS mapped the drive colon to
+  U+F03A, so the path became a relative file name. The agent now creates the
+  file with `f="$(mktemp)"`, passes `--body-file "$f"`, removes it after the
+  broker call and never uses a Windows backslash path in Bash; the contract
+  test pins that. `codex-obs` writes no files and is unchanged. The
+  observation Stop hook also reads the top level of the working directory and
+  its git root and, when names starting with `C` and U+F03A are there, shows
+  their count and one shortened example as a warning. It never moves or
+  deletes them.
 - Bootstrap: `smoke-test.sh` no longer uses `node --check` for the wired
   hooks' `HOOK SYNTAX` and `LIVE HOOK SYNTAX` checks, so a `.mts` hook with an
   ESM syntax error such as `export const x = ;` is a finding instead of a pass
@@ -927,7 +940,9 @@ increments the minor version; every other release increments the patch version.
   repo copy for the repo source, and for the live hook the copy installed next
   to it, without falling back to the repo copy, so a missing installed library
   is a finding too. Only a proven OK passes. UNGEPRUEFT, a missing checker and
-  any other exit are findings marked `UNCHECKED`, never a silent pass. `.js`
+  any other exit are findings marked `UNCHECKED`, never a silent pass; such a
+  finding names the first `Error` line of a failing checker, and a trailing CR
+  on the checker's output is ignored. `.js`
   hooks keep their check through the library's dispatch.
   `hooks/lib/hook-syntax.mts` is now in the smoke test's list of installed
   files. The comments in `commit-guard`, `playwright-file-guard` and
