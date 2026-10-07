@@ -986,13 +986,15 @@ increments the minor version; every other release increments the patch version.
   "vm.Script rejected it and node --check could not confirm (...)" instead of
   DEFEKT; only a child that exited non-zero on its own and printed a
   `SyntaxError` for the checked file is a rejection. The probe import that
-  keeps a checked module from linking now carries an import attribute no
-  module format accepts, so a `--import`/`--require` customization hook that
+  keeps a checked module from linking now carries an import attribute that
+  Node's load step rejects, so a `--import`/`--require` customization hook that
   resolves the probe specifier is stopped by Node's load step before anything
   is instantiated (UNGEPRUEFT, never OK); before, the checked file's top-level
   code ran first. Residual risk: a hook that also overrides the import
-  attributes or short-circuits `load` can still bypass the probe and run the
-  checked file; such a hook owns the process and is outside this check.
+  attributes, short-circuits `load`, or returns a format whose attributes Node
+  does not validate (`module-typescript`, `commonjs-typescript`) can still
+  bypass the probe and run the checked file; the verdict then stays
+  UNGEPRUEFT, never OK. Such a hook owns the process and is outside this check.
   Measured on Node 26.10.0; same source paths in 22.18.0 and 24.1.0.
 
 ## [0.1.2] - 2026-09-24
