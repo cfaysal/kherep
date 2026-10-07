@@ -24,5 +24,6 @@ export default defineConfig({
   ],
   test: {
     include: ["test/**/*.test.mts"],
+    setupFiles: ["./test/quiet-sql-log.mts"],
   },
 });
