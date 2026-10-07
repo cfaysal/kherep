@@ -13,7 +13,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { after, test } from "node:test";
 
-import { esmParses, syntaxVerdict, type SyntaxVerdict } from "./hook-syntax.mts";
+import { linkFailureVerdict, syntaxVerdict, type SyntaxVerdict } from "./hook-syntax.mts";
 
 const LIB = path.join(import.meta.dirname, "hook-syntax.mts");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "hook-syntax-"));
@@ -76,11 +76,15 @@ test("a checked module is never executed", async () => {
   assert.equal(process.exitCode, before);
 });
 
-test("an unknown resolution failure is UNGEPRUEFT, never OK", async () => {
+test("an unknown resolution failure is UNGEPRUEFT, never OK", () => {
   // A request that fails with a code outside the known link failures proves
-  // neither a parse nor a non-parse.
-  const v = await esmParses(`import ${JSON.stringify("node:kherep-no-such-builtin")};\n`);
-  assert.equal(v.state, "UNGEPRUEFT", detailOf(v));
+  // neither a parse nor a non-parse. Tested on synthetic errors: which failing
+  // request Node reports first differs between versions.
+  const coded = (code: string) => Object.assign(new Error(code), { code });
+  assert.equal(linkFailureVerdict(coded("ERR_UNKNOWN_BUILTIN_MODULE")).state, "UNGEPRUEFT");
+  assert.equal(linkFailureVerdict(new Error("no code")).state, "UNGEPRUEFT");
+  assert.equal(linkFailureVerdict(coded("ERR_UNSUPPORTED_ESM_URL_SCHEME")).state, "OK");
+  assert.equal(linkFailureVerdict(new SyntaxError("Unexpected token")).state, "DEFEKT");
 });
 
 test("a Node without module.stripTypeScriptTypes gives UNGEPRUEFT, never OK", async () => {
