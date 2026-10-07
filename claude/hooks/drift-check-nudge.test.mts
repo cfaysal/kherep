@@ -152,6 +152,17 @@ check(
   null
 );
 
+// NOT-INSTALLED names the optional Jira set on a host without it (#302). It is
+// information like RETIRED-LIVE, so a PASS report carrying it raises no nudge.
+check(
+  "a PASS report with a NOT-INSTALLED line yields no findings",
+  contextOf(run({ cwd: IN_SCOPE }, claudeHomeWith(
+    "ok            hooks/commit-guard.js\n" +
+      "NOT-INSTALLED project/tools/<Jira set> (optional; KHEREP_INSTALL_ATLASSIAN_TOOLS=1 installs and compares it)\n\n" +
+      "DRIFT-CHECK PASS (repo == live)\n", 1))),
+  null
+);
+
 check(
   "an all-ok PASS report yields no findings",
   contextOf(run({ cwd: IN_SCOPE }, claudeHomeWith(CLEAN, 1))),

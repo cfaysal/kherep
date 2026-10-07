@@ -209,7 +209,16 @@ cmp_file "project/tools/confluence-neighbour-cli.mts" \
   "$HERE/../modules/atl-jira-brokers/confluence-neighbour-cli.mts" "$WS/tools/confluence-neighbour-cli.mts"
 cmp_file "project/tools/confluence-runtime-label.mts" \
   "$HERE/../modules/atl-jira-brokers/confluence-runtime-label.mts" "$WS/tools/confluence-runtime-label.mts"
-if [ "$INSTALL_ATLASSIAN_TOOLS" = "1" ]; then
+# Issue #302. The Jira set is optional, but presence decides: the flag adds it,
+# and a host that has any of its files is compared like a flagged one, so a stale
+# broker cannot hide behind a missing flag. Only these exact names count, never
+# atl-jira.mjs, a *.bak-* copy or anything under _deprecated/.
+JIRA_TOOLS="atl-jira.mts atl-jira-ccoder.mts jira-adf.mts jira-config.mts jira-transition-guard.mts jira-fields.mts jira-links.mts jira-search.mts jira-attach.mts jira-adf-text.mts jira-download.mts jira-discovery.mts"
+jira_present="$INSTALL_ATLASSIAN_TOOLS"
+for tool in $JIRA_TOOLS; do
+  if [ -e "$WS/tools/$tool" ] || [ -L "$WS/tools/$tool" ]; then jira_present=1; break; fi
+done
+if [ "$jira_present" = "1" ]; then
 cmp_file "project/tools/atl-jira.mts" \
   "$HERE/../modules/atl-jira-brokers/atl-jira.mts" "$WS/tools/atl-jira.mts"
 cmp_file "project/tools/atl-jira-ccoder.mts" \
@@ -234,6 +243,9 @@ cmp_file "project/tools/jira-download.mts" \
   "$HERE/../modules/atl-jira-brokers/jira-download.mts" "$WS/tools/jira-download.mts"
 cmp_file "project/tools/jira-discovery.mts" \
   "$HERE/../modules/atl-jira-brokers/jira-discovery.mts" "$WS/tools/jira-discovery.mts"
+else
+  # Information, not drift: like RETIRED-LIVE it never changes the verdict.
+  echo "NOT-INSTALLED project/tools/<Jira set> (optional; KHEREP_INSTALL_ATLASSIAN_TOOLS=1 installs and compares it)"
 fi
 
 # Issue #252. The comparison above sees files, not what settings.json runs. A
