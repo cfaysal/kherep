@@ -114,7 +114,10 @@ function mcpParts(name: string): { server: string; tool: string } | null {
 
 function isBrain(call: ToolCall): boolean {
   const mcp = mcpParts(call.name);
-  if (mcp) return mcp.tool === "searchConfluenceUsingCql" || (mcp.tool === "search" && /rovo|atlassian/i.test(mcp.server));
+  if (mcp) {
+    return mcp.tool === "searchConfluenceUsingCql"
+      || (["search", "searchConfluence"].includes(mcp.tool) && /rovo|atlassian/i.test(mcp.server));
+  }
   if (!SHELL_TOOLS.has(call.name)) return false;
   const command = commandOf(call);
   return /^\s*(?:&\s*)?(?:"[^"]*node(?:\.exe)?"|'[^']*node(?:\.exe)?'|node(?:\.exe)?)\s+(?:"[^"]*atl-confluence(?:-ccoder)?\.mts"|'[^']*atl-confluence(?:-ccoder)?\.mts'|\S*atl-confluence(?:-ccoder)?\.mts)\s+(?:search|related|get)\b/i.test(command)

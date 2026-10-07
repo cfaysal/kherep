@@ -103,13 +103,15 @@
     "kherep-linkedin-cli",
     "codebase-memory-mcp",
     "forge-knowledge",
-    "n8n",
-    "rovo"
+    "n8n"
   ],
   "retiredMcpServers": [
-    "atlassian"
+    "rovo"
   ],
   "pluginMcpServers": {
+    "atlassian": {
+      "url": "https://mcp.atlassian.com/v2/mcp"
+    },
     "context7": {
       "command": "npx",
       "args": [
@@ -133,7 +135,7 @@
     {
       "id": "atlassian@claude-plugins-official",
       "mode": "project",
-      "target": "atlassian-rovo@openai-curated"
+      "target": "atlassian MCP"
     },
     {
       "id": "caveman@caveman",

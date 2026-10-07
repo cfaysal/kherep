@@ -11,11 +11,10 @@ import { nativeWorkspacePath } from "../lib/workspace-path.mts";
 import { resolveTarget as resolveCredentialTarget } from "../bootstrap/atl-credential-format.mts";
 import { mergeLocalInferenceConfig } from "../bootstrap/render-profile.mts";
 import * as registryBridgeModule from "../modules/mcp-auth-bridge/registry-http-wrapper.mts";
-import { runCodex } from "./lib/codex-cli.mts";
 import { setPluginEnabled } from "./lib/plugin-config.mts";
 import { componentHash } from "./lib/component-hash.mts";
 import { prepareManagedConfig } from "./lib/config-preservation.mts";
-import type { Capabilities, McpCompatibilityOptions, RunCodex } from "./lib/contracts.mts";
+import type { Capabilities, McpCompatibilityOptions, PluginMcpServer, RunCodex } from "./lib/contracts.mts";
 import { controlPlaneCli, controlPlaneRulesPath, renderControlPlaneRules } from "./lib/control-plane-rules.mts";
 import { controlPlaneOutbox } from "./lib/outbox-writable-root.mts";
 import { InstallTransaction } from "./lib/install-transaction.mts";
@@ -40,7 +39,8 @@ const USER_END = "<!-- kherep-user-parity:end -->";
 export const CONFIG_START = "# >>> Kherep Codex Maestro >>>";
 const CONFIG_END = "# <<< Kherep Codex Maestro <<<";
 export const LOCAL_PLUGIN_ID = "kherep-maestro@kherep";
-export const ROVO_PLUGIN_ID = "atlassian-rovo@openai-curated";
+// The v2 Atlassian remote MCP server, rendered only with the optional Atlassian tool set.
+export const ATLASSIAN_MCP_SERVER = "atlassian";
 const OBSERVATION_WORKSPACE_SENTINEL =
   'const SELECTED_WORKSPACE = "__KHEREP_SELECTED_WORKSPACE__";';
 const RETIRED_MCP_SERVERS = ["claude-baton"];
@@ -114,11 +114,6 @@ function timestamp(): string {
 
 function hashFile(file: string): string {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-}
-
-export function registerNativePlugin(pluginId: string, options: InstallOptions): void {
-  const invoke: RunCodex = options.runCodex || ((args) => runCodex(args, options));
-  invoke(["plugin", "add", pluginId]);
 }
 
 export function resolveWorkspace(options: InstallOptions = {}, platform: string = process.platform): string {
@@ -287,6 +282,9 @@ export function install(options: InstallOptions = {}) {
     ...RETIRED_MCP_SERVERS,
     ...(capabilities.retiredMcpServers || []),
   ])];
+  const { [ATLASSIAN_MCP_SERVER]: atlassianMcp, ...basePluginMcpServers } = capabilities.pluginMcpServers || {};
+  const optionalPluginMcpServers: Record<string, PluginMcpServer> =
+    atlassianMcp ? { [ATLASSIAN_MCP_SERVER]: atlassianMcp } : {};
   const controlPlaneOutboxPath = path.resolve(options.controlPlaneOutbox || controlPlaneOutbox(process.env, platform));
   const messagingClient = {
     enabled: options.messagingClient === true,
@@ -304,7 +302,9 @@ export function install(options: InstallOptions = {}) {
     endMarker: CONFIG_END,
     retiredMcpServerNames,
     registryProjections,
-    pluginMcpServers: capabilities.pluginMcpServers || {},
+    pluginMcpServers: installAtlassianTools
+      ? { ...optionalPluginMcpServers, ...basePluginMcpServers } : basePluginMcpServers,
+    optionalPluginMcpServers,
     contextHook: targets.contextHook,
     hookDir: targets.hookDir,
     node: mcp.node,
@@ -339,7 +339,6 @@ export function install(options: InstallOptions = {}) {
     if (existingPlugin.config !== existingConfig) transaction.writeFile(targets.config, existingPlugin.config);
     if (!options.skipPluginRegistration) {
       localPlugin.registerLocalPlugin(localMarketplace, LOCAL_PLUGIN_ID, { ...options, codexHome });
-      if (installAtlassianTools) registerNativePlugin(ROVO_PLUGIN_ID, { ...options, codexHome });
     }
 
     for (const [source, target] of [
@@ -496,7 +495,7 @@ export function install(options: InstallOptions = {}) {
         }
         return { name, status: "configured", transport };
       }),
-      pluginMcpServers: Object.keys(capabilities.pluginMcpServers || {}).map((name) => ({
+      pluginMcpServers: Object.keys(managedConfigOptions.pluginMcpServers).map((name) => ({
         name,
         status: Object.hasOwn(pluginMcpServers, name) ? "configured" : "preserved-existing",
       })),
@@ -506,9 +505,6 @@ export function install(options: InstallOptions = {}) {
       messagingClient: { status: messagingClient.enabled ? "configured" : "disabled" },
       // Issue #212: the top-level model_reasoning_effort the installer kept or set.
       reasoningEffort: preparedConfig.reasoningEffort,
-      nativePlugins: installAtlassianTools
-        ? [{ id: ROVO_PLUGIN_ID, status: "installed-restart-required" }]
-        : [],
       twg: {
         status: "installed",
         componentSha256: componentHash(sources.twg),

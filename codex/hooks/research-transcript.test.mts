@@ -58,6 +58,20 @@ test("recognizes direct function_call and custom_tool_call research tools", () =
   assert.equal(researchFacts(underscored, "D:/Work/repo", () => false).codeGraph, true);
 });
 
+test("counts the v2 Atlassian Confluence search only on an Atlassian server", () => {
+  const brain = (name: string): boolean => {
+    const parsed = parseRollout(rollout(started("turn"), call(name, { query: "x" })), "turn");
+    assert.ok(parsed);
+    return researchFacts(parsed, "D:/Work/repo", () => false).brain;
+  };
+  assert.equal(brain("mcp__atlassian__searchConfluence"), true);
+  assert.equal(brain("mcp__rovo__searchConfluence"), true);
+  assert.equal(brain("mcp__atlassian__search"), true);
+  assert.equal(brain("mcp__0000_aaaa__searchConfluenceUsingCql"), true);
+  assert.equal(brain("mcp__bexio__searchConfluence"), false);
+  assert.equal(brain("mcp__bexio__search"), false);
+});
+
 test("parses actual nested tools calls inside functions.exec", () => {
   const source = [
     "const results = await Promise.all([",

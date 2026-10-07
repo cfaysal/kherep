@@ -41,6 +41,9 @@ export interface ManagedConfigOptions {
   retiredMcpServerNames: string[];
   registryProjections: McpProjection[];
   pluginMcpServers: Record<string, PluginMcpServer>;
+  // Plugin servers an install renders only on request. A block with or without
+  // them is the installer's own; every older block lacks them.
+  optionalPluginMcpServers?: Record<string, PluginMcpServer>;
   contextHook: string;
   hookDir: string;
   node: string;
@@ -53,6 +56,11 @@ export interface ManagedConfigOptions {
   // Issue #72. The Control Plane outbox, made a writable root of the sandbox.
   controlPlaneOutbox?: string;
   messagingClient?: parityConfig.MessagingClientRenderOptions;
+}
+
+interface PluginSet {
+  plugins: Record<string, PluginMcpServer>;
+  predecessorPlugins: Record<string, PluginMcpServer>;
 }
 
 export function replaceExactManagedFragment(
@@ -236,6 +244,19 @@ function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
     .filter(([name]) => !managedConfig.hasUnmanagedMcp(
       config, name, options.startMarker, options.endMarker,
     )));
+  // Optional servers render first, so neither block form is a substring of the other.
+  const optionalServers = options.optionalPluginMcpServers || {};
+  const withoutOptional = (servers: Record<string, PluginMcpServer>) =>
+    Object.fromEntries(Object.entries(servers).filter(([name]) => !Object.hasOwn(optionalServers, name)));
+  const optional = Object.fromEntries(Object.entries(optionalServers)
+    .filter(([name]) => !managedConfig.hasUnmanagedMcp(config, name, options.startMarker, options.endMarker)));
+  const base: PluginSet = {
+    plugins: withoutOptional(pluginMcpServers), predecessorPlugins: withoutOptional(options.pluginMcpServers),
+  };
+  const pluginSets: PluginSet[] = Object.keys(optional).length
+    ? [base, { plugins: { ...optional, ...base.plugins },
+      predecessorPlugins: { ...optional, ...base.predecessorPlugins } }]
+    : [base];
   const operatorEffort = topLevelSetting(migrated, "model_reasoning_effort");
   let reasoningEffort: ReasoningEffortReport;
   let next = migrated;
@@ -267,42 +288,42 @@ function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
   const outboxVariants = [...new Set([outbox, ...managedOutboxRoots(next, options.startMarker, options.endMarker)])]
     .filter((root): root is string => Boolean(root))
     .map((root) => ({ ...withoutOutbox, outboxWritableRoot: root }));
-  const currentVariants = [withoutOutbox, ...outboxVariants]
-    .flatMap((value) => value.messagingClient
-      ? [value, { ...value, messagingClient: { ...value.messagingClient, enabled: !value.messagingClient.enabled } }]
-      : [value]);
-  const beforeControlPlaneWindowsVariants = currentVariants
-    .map((value) => ({ ...value, controlPlaneHook: undefined }));
-  // Every block written before issue #68 lacks the commandWindows forms.
-  const beforeWindowsCommands = { ...withoutOutbox, windowsHookCommands: false };
-  // Every block written before the control-plane hook existed lacks it.
-  const beforeControlPlane = { ...beforeWindowsCommands, controlPlaneHook: undefined };
-  const currentLegacyOptions = { ...beforeControlPlane, memoryProvider: "unconfigured" as const };
-  const legacyRenderOptions = { ...currentLegacyOptions, observationStopHook: false };
-  const predecessorRenderOptions = {
-    ...legacyRenderOptions,
-    mcpServers: registryProjections.flatMap<McpServerSpec>((projection) => {
-      if (projection.transport === "http") {
-        return [{
-          name: projection.name,
-          transport: "http",
-          authentication: "registry-bearer",
-          sourceName: projection.authentication === "registry-bearer"
-            ? projection.sourceName : options.mcpCompatibility?.sourceNames?.[projection.name] ?? projection.name,
-        }];
-      }
-      return projection.transport === "stdio" ? [projection] : [];
-    }),
-    pluginMcpServers: options.pluginMcpServers,
-    registryBridge: retiredBridge,
-  };
-  const historical = recognizeHistoricalManagedConfig(
-    next, currentRenderOptions, legacyRenderOptions, predecessorRenderOptions,
-  );
-  const upgrade = preserveConfigUpgrade(next, {
-    startMarker: options.startMarker,
-    endMarker: options.endMarker,
-    knownManagedFragments: withManagedNodePaths([
+  // Every block shape below is known with and without the optional plugin servers.
+  const knownFragments = ({ plugins, predecessorPlugins }: PluginSet): string[] => {
+    const currentVariants = [withoutOutbox, ...outboxVariants]
+      .flatMap((value) => value.messagingClient
+        ? [value, { ...value, messagingClient: { ...value.messagingClient, enabled: !value.messagingClient.enabled } }]
+        : [value])
+      .map((value) => ({ ...value, pluginMcpServers: plugins }));
+    const beforeControlPlaneWindowsVariants = currentVariants
+      .map((value) => ({ ...value, controlPlaneHook: undefined }));
+    // Every block written before issue #68 lacks the commandWindows forms.
+    const beforeWindowsCommands = { ...withoutOutbox, pluginMcpServers: plugins, windowsHookCommands: false };
+    // Every block written before the control-plane hook existed lacks it.
+    const beforeControlPlane = { ...beforeWindowsCommands, controlPlaneHook: undefined };
+    const currentLegacyOptions = { ...beforeControlPlane, memoryProvider: "unconfigured" as const };
+    const legacyRenderOptions = { ...currentLegacyOptions, observationStopHook: false };
+    const predecessorRenderOptions = {
+      ...legacyRenderOptions,
+      mcpServers: registryProjections.flatMap<McpServerSpec>((projection) => {
+        if (projection.transport === "http") {
+          return [{
+            name: projection.name,
+            transport: "http",
+            authentication: "registry-bearer",
+            sourceName: projection.authentication === "registry-bearer"
+              ? projection.sourceName : options.mcpCompatibility?.sourceNames?.[projection.name] ?? projection.name,
+          }];
+        }
+        return projection.transport === "stdio" ? [projection] : [];
+      }),
+      pluginMcpServers: predecessorPlugins,
+      registryBridge: retiredBridge,
+    };
+    const historical = recognizeHistoricalManagedConfig(
+      next, { ...currentRenderOptions, pluginMcpServers: plugins }, legacyRenderOptions, predecessorRenderOptions,
+    );
+    return [
       ...[...currentVariants, ...beforeControlPlaneWindowsVariants,
         beforeWindowsCommands, beforeControlPlane].flatMap((current) => {
         const previousStop = { ...current, observationStopHook: false };
@@ -315,7 +336,12 @@ function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
       parityConfig.renderPreviousNudgesPrefix({ ...predecessorRenderOptions, registryBridge: options.registryBridge }),
       parityConfig.renderLegacyJavaScript(predecessorRenderOptions),
       parityConfig.renderLegacyJavaScriptPrefix(predecessorRenderOptions),
-    ].concat(historical), options.node, previousNodes),
+    ].concat(historical);
+  };
+  const upgrade = preserveConfigUpgrade(next, {
+    startMarker: options.startMarker,
+    endMarker: options.endMarker,
+    knownManagedFragments: withManagedNodePaths(pluginSets.flatMap(knownFragments), options.node, previousNodes),
     managedReplacement: parityConfig.render(currentRenderOptions),
     mcpServerNames: registryProjections.map(({ name }) => name),
     retiredBridge,
