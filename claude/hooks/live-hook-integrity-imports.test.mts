@@ -270,6 +270,22 @@ function chainBox(aLive: string): Box {
   check("the wired file is journalled as kind wired", (journalOf(box).find((e) => e.file === "guard.mts") || {}).kind, "wired");
 }
 
+// --- 14. <CLAUDE_HOME>/hooks itself is a link: restored at the link target ---------
+// Intended (issue #279): Claude Code loads the hooks through the same link, so the
+// link target IS the live file, as in an install linked into a dotfiles checkout.
+{
+  const box = guardBox({ live: "", repo: LIB });
+  const real = path.join(box.root, "dotfiles", "hooks");
+  fs.mkdirSync(path.dirname(real), { recursive: true });
+  fs.renameSync(box.hooks, real);
+  if (trySymlink(real, box.hooks, "dir")) {
+    const seen = run(box) || "";
+    check("a 0-byte lib under a linked hooks/ is restored", seen.includes("lib/dep.mts") && seen.includes("RESTORED"), true);
+    check("at the link target", fs.readFileSync(path.join(real, "lib", "dep.mts"), "utf8"), LIB);
+    check("and hooks/ is still the link", fs.lstatSync(box.hooks).isSymbolicLink(), true);
+  }
+}
+
 try {
   fs.rmSync(TMP, { recursive: true, force: true });
 } catch {

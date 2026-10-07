@@ -12,8 +12,8 @@ import { hookInventory, relativeSpecifiers, wiredFiles, type HookFile } from "./
 
 const HOOKS = "/home/example/.claude/hooks";
 
-// Fixture sources spell `from` through this helper, so the literal text of this
-// file holds no relative from-clause: bootstrap/hook-require-resolution.test.mts scans
+// Fixture sources spell `from` (and `import(`, below) through a helper, so the
+// literal text of this file holds no relative import: bootstrap/hook-require-resolution.test.mts scans
 // every hook file for exactly that and would read a fixture as a real import.
 const from = (specifier: string, quote = '"'): string => `from ${quote}${specifier}${quote}`;
 
@@ -73,6 +73,37 @@ test("a block comment right after ) or } is stripped too", () => {
 
 test("a default import named type is a runtime import", () => {
   assert.deepEqual(relativeSpecifiers(`import type ${from("./lib/t.mts")};`), ["./lib/t.mts"]);
+});
+
+// Issue #279. PowerShell 5.1 and Notepad save UTF-8 with a BOM; it sat in front
+// of the first import and hid it from the line-anchored scan.
+test("a leading byte order mark does not hide the first import", () => {
+  const bom = String.fromCharCode(0xfeff);
+  assert.deepEqual(relativeSpecifiers(`${bom}import { a } ${from("./lib/a.mts")};`), ["./lib/a.mts"]);
+  assert.deepEqual(relativeSpecifiers(`${bom}import "./lib/side.mts";`), ["./lib/side.mts"]);
+});
+
+// Spelled through a helper for the same reason as `from` above.
+const dynamic = (specifier: string, quote = '"'): string => `import(${quote}${specifier}${quote})`;
+
+test("a string-literal dynamic import is a runtime import, typeof import() is a type", () => {
+  const source = [
+    `const a = await ${dynamic("./lib/a.mts")};`,
+    `const load = () => ${dynamic("./lib/b.mts", "'")};`,
+    `type C = typeof ${dynamic("./lib/c.mts")};`,
+    `type D = typeof  ${dynamic("./lib/d.mts")}["x"];`,
+    `// await ${dynamic("./lib/ghost.mts")};`,
+    `const e = await ${dynamic("node:fs")};`,
+    "const f = await import(`./lib/${name}.mts`);",
+  ].join("\n");
+  assert.deepEqual(relativeSpecifiers(source).sort(), ["./lib/a.mts", "./lib/b.mts"]);
+});
+
+test("the walk follows a dynamic import like a static one", () => {
+  const inventory = hookInventory([root("guard.mts")], HOOKS, reader({
+    [`${HOOKS}/guard.mts`]: `const m = await ${dynamic("./lib/a.mts")};`,
+  }));
+  assert.deepEqual(inventory.map((entry) => entry.rel), ["guard.mts", "lib/a.mts"]);
 });
 
 test("walks transitively and names every importer", () => {

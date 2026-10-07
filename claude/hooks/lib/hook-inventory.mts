@@ -14,9 +14,13 @@
  * lib/, so "direct ./lib/* imports" would have missed both.
  *
  * The scan is a regex over the source, not a parser: the import surface of the
- * hooks is one syntactic family with explicit extensions and no dynamic import.
+ * hooks is one syntactic family with explicit extensions, plus a dynamic
+ * import() with a string literal. live-hook-integrity.mts loads its own libs
+ * that way so it can report one it cannot load (issue #279); a computed
+ * specifier is not seen, and `typeof import()` is a type, never loaded.
  * bootstrap/hook-require-resolution.test.mts holds the repo to that and checks
- * the closure against the install manifest with these same functions.
+ * the closure against the install manifest with these same functions. A
+ * leading byte order mark (PowerShell 5.1, Notepad) is dropped before the scan.
  *
  * Runtime-neutral on purpose: hooks directory and readers are parameters, so a
  * Codex counterpart can reuse the walk. Paths are strings (workspace-scope), so
@@ -103,6 +107,7 @@ const COMMENT = /(^|[\s,;{}()])(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*)/g;
 // braces and commas only, so it may span lines but never crosses a quote or ;.
 const FROM_STATEMENT = /^[ \t]*(?:import|export)\b([^;'"]*?)\bfrom\s*(["'])(\.[^"']*)\2/gm;
 const BARE_IMPORT = /^[ \t]*import\s*(["'])(\.[^"']*)\1/gm;
+const DYNAMIC_IMPORT = /(?<!\btypeof\s+)\bimport\s*\(\s*(["'])(\.[^"']*)\1\s*\)/g;
 const CODE_EXTENSION = /\.(?:mts|mjs|cjs|js)$/i;
 
 // The relative specifiers Node resolves when it loads this module. `import type`
@@ -110,12 +115,14 @@ const CODE_EXTENSION = /\.(?:mts|mjs|cjs|js)$/i;
 // `{ type X }` is not, the module still loads. Without an explicit code extension
 // a specifier does not resolve for .mts at all, so it is no file to measure.
 export function relativeSpecifiers(source: string): string[] {
-  const code = String(source).replace(COMMENT, "$1");
+  const code = String(source).replace(/^\uFEFF/, "").replace(COMMENT, "$1");
   const found: string[] = [];
   for (const match of code.matchAll(FROM_STATEMENT)) {
     if (!/^\s*type\s+\S/.test(match[1])) found.push(match[3]);
   }
-  for (const match of code.matchAll(BARE_IMPORT)) found.push(match[2]);
+  for (const pattern of [BARE_IMPORT, DYNAMIC_IMPORT]) {
+    for (const match of code.matchAll(pattern)) found.push(match[2]);
+  }
   return [...new Set(found)].filter((specifier) => CODE_EXTENSION.test(specifier));
 }
 

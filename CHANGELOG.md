@@ -953,6 +953,25 @@ increments the minor version; every other release increments the patch version.
   `D:\...` path, where a workspace can sit, became a `D`+U+F03A file in the
   working directory and was not reported. A name that only contains U+F03A
   further in is still ignored.
+- Claude hooks: `live-hook-integrity` no longer writes a restore through a link
+  planted after its check (issue #279). The restore checked the target with
+  `lstat` and then wrote with `copyFileSync`, which follows a link at the
+  destination on every platform. The new `hooks/lib/restore-write.mts` opens
+  the file without `O_TRUNC`, with `O_NOFOLLOW` where the platform has it, and
+  writes only when the opened file has the `(dev, ino)` the path had; on Windows
+  a volume without file ids is refused. A swapped-in file is left
+  byte-identical. A linked `<CLAUDE_HOME>/hooks` is still restored at its
+  target on purpose, and a test pins that; a link at the file or at a
+  subdirectory that leads elsewhere is still refused. The hook now loads its
+  own libs with dynamic `import()` and checks the functions it uses, so a
+  missing, 0-byte or broken lib no longer makes it exit 1 unreported: it
+  reports one line, journals it as kind `self`, exits 0 and restores the lib
+  when `workspace-scope`, `orchestra-checkout` and `restore-write` loaded.
+  `hooks/lib/hook-inventory.mts` and the install manifest test also follow a
+  string-literal `import("./x.mts")`, not `typeof import()`, and the inventory
+  scan ignores a leading byte order mark. `hooks/lib/restore-write.mts` is in
+  the install manifest, the required hooks and the smoke test's list of
+  installed files.
 
 ## [0.1.2] - 2026-09-24
 
