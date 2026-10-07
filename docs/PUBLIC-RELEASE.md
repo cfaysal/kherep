@@ -1,11 +1,12 @@
 # Public release review
 
-A clean working tree is only one part of a public release. Review the exact revision to publish, its reachable Git history, and the third-party material it redistributes.
+Kherep is developed in its public repository, `cfaysal/kherep`. Every commit pushed to it, on any branch, is public from that moment, and a release is a tagged revision of `main` in the same repository. Review each change before it is pushed, and review the release revision and the third-party material it redistributes before it is tagged.
 
 ## Content and configuration
 
 - Keep sessions, internal project records, connection profiles, credentials, and private infrastructure inventories outside source control.
 - Use synthetic identities and reserved domains in examples.
+- Commit with a GitHub noreply address; the author and committer addresses are published with every commit and tag.
 - Describe configured, tested, and running capabilities separately.
 - Verify installation instructions in a disposable candidate and preserve recovery evidence outside the public tree.
 
@@ -19,18 +20,22 @@ The audit inspects both indexed and working-tree bytes. It reports review catego
 
 ## History and redistribution
 
-Removing a file from the current tree leaves earlier versions in Git history. Review all refs intended for publication, including tags and branches. If private data was committed, prepare a sanitized history or a clean public export and obtain explicit authority before replacing remote history or changing repository visibility. Rotate any credential that was exposed; a history rewrite cannot revoke it.
+Removing a file from the current tree leaves earlier versions in Git history, and a pushed branch is public even if it is never merged. If private data reaches the repository, rotate any exposed credential first, because a history rewrite cannot revoke it, and obtain explicit authority before rewriting remote history.
 
 Choose the project license explicitly. Preserve the licenses, attribution, and redistribution obligations of bundled third-party material. Check source snapshots and binary branding assets separately.
 
 ## Delivery
 
-Run the checks required by [CONTRIBUTING.md](../CONTRIBUTING.md), inspect the final diff, and identify the candidate by its revision and file hashes. Obtain authority for the publication action and read back the exact revision and repository visibility at the destination before claiming delivery.
+Run the checks required by [CONTRIBUTING.md](../CONTRIBUTING.md), inspect the final diff, and identify the candidate by its revision. Obtain authority for the publication action and read back the exact revision at the destination before claiming delivery.
 
 ## Versions and releases
 
 Kherep has one product version, `version` in the root `package.json`, following [Semantic Versioning](https://semver.org/). `package-lock.json`, the Codex plugin manifests and the newest release section of [CHANGELOG.md](../CHANGELOG.md) repeat it, and `bootstrap/version-contract.test.mts` keeps them equal. While the version is `0.y.z`, a release that breaks a documented interface increments the minor version; every other release increments the patch version.
 
-A release is an annotated tag `vX.Y.Z` on the released commit. Push that tag explicitly by name, for example `git push origin refs/tags/vX.Y.Z`. Never push with `--tags`, `--mirror` or `--follow-tags`: they would publish every local tag.
+A release goes through the same pull request path as any other change:
 
-The public repository receives an export of the released revision, never the private history. Build it with `node bootstrap/public-export.mts <revision> <outDir>`. The command writes the revision's tree without `.git` and without the paths in `bootstrap/manifest/public-export-exclude.txt`, fails if an excluded path or a symlink would remain, and writes a SHA-256 manifest beside the output directory. Run the publication audit and the checks above on that exported tree.
+1. On a branch from the current `main`, set the new version in `package.json`, in both version fields of `package-lock.json` and in the two Codex plugin manifests. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add an empty `## [Unreleased]` above it, and update the link references at the end of the file. Run `node bootstrap/version-contract.test.mts` and the checks above.
+2. Open a pull request and merge it by rebase once its checks pass.
+3. Fetch `main` and tag the merged commit on `main`, not the commit on the release branch: a rebase merge gives the commit a new hash. Confirm that `package.json` at that commit carries the version, then create an annotated tag: `git tag -a vX.Y.Z -m "Kherep X.Y.Z" <commit>`.
+4. Push that one tag by name, for example `git push origin refs/tags/vX.Y.Z`. Never push with `--tags`, `--mirror` or `--follow-tags`: they would publish every local tag.
+5. Read the tag back from the remote with `git ls-remote --tags origin vX.Y.Z`; its peeled entry (`vX.Y.Z^{}`) must name the merged commit on `main`.
