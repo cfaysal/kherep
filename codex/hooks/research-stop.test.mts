@@ -54,6 +54,7 @@ test("requires both Brain and graph attempts when a repository patch occurred", 
 test("accepts only a nonempty opt-out reason in the final assistant message", () => {
   const work = call("exec_command", { cmd: "npm test" });
   assert.equal(decision(payload(transcript(started, work, message("assistant", "[research: none - local mechanical check]"))), env, exists, config), null);
+  assert.equal(decision(payload(transcript(started, work, message("assistant", "[research: none \u2013 local mechanical check]"))), env, exists, config), null, "an en dash opts out (#293)");
   assert.ok(decision(payload(transcript(started, work, message("assistant", "[research: none - ]"))), env, exists, config));
   assert.ok(decision(payload(transcript(started, message("user", "[research: none - user said it]"), work, message("assistant", "done"))), env, exists, config));
   assert.ok(decision(payload(transcript(started, message("assistant", "[research: none - commentary]"), work, message("assistant", "done"))), env, exists, config));
