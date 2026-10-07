@@ -25,9 +25,12 @@
  * caught them either.
  * A module customization hook (`--import`/`--require` with `module.register` or
  * `module.registerHooks`) that resolves the probe specifier is stopped by the
- * probe's import attribute, which no format accepts, before anything is
- * instantiated: UNGEPRUEFT, never OK. A hook that also rewrites the import
- * attributes or short-circuits `load` owns the process and is outside this check.
+ * probe's import attribute before anything is instantiated, for every format
+ * whose attributes Node validates: UNGEPRUEFT, never OK. A hook that also
+ * rewrites the import attributes, short-circuits `load`, or returns a format
+ * whose attributes Node does not validate (`module-typescript`,
+ * `commonjs-typescript`) can still let the checked file run; the verdict then
+ * stays UNGEPRUEFT ("module linked"), never OK. Such a hook owns the process.
  *
  * CLI for shell callers: `node hook-syntax.mts <file>` prints `OK`, `DEFEKT
  * <detail>` or `UNGEPRUEFT <detail>` and exits 0, 1 or 2.
