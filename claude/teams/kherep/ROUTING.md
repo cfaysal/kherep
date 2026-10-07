@@ -87,6 +87,17 @@ and a branch per product would force a shared page into one half or duplicate it
 authoritative schema; where it and this file disagree, the home page is a description of what
 exists and this file is the instruction.
 
+Those nodes are names here and page ids at the site, and no agent guesses one. The same per-host
+`confluence.json` that names the space carries a map from every node this rule prescribes to the id
+it has in that space, resolved through the broker under the service account when the space was
+configured and written beside the space key. An observation is created with the mapped id as its
+parent. A node that did not resolve is named by the setup step and is absent from the map, and a page
+whose node is absent is reported rather than filed somewhere plausible. The app level is not in the
+map: it is read from the mapped shelf's children at write time, because an app node appears without
+the space being reconfigured. Until 2026-09-22 this rule existed and the mapping did not - ten
+observation pages written that day landed as direct children of the home page, siblings of the
+hierarchy they were meant to sit in, with nothing failing.
+
 The brief marks each finding, because the observation agent sees only what the Maestro passes it
 and cannot re-run anything. A finding the dispatching session ran in this turn is marked
 `measured:` with the command and the deciding output excerpt, redacted as the privacy rules
@@ -98,17 +109,6 @@ names the actual reporter, and "operator-reported" appears only when the operato
 2026-10-07 and 2026-10-08, before the brief carried these markers, pages 276858041, 277054539 and
 277054566 were filed as assumed and operator-reported although the dispatching session had measured
 each finding in the same turn.
-
-Those nodes are names here and page ids at the site, and no agent guesses one. The same per-host
-`confluence.json` that names the space carries a map from every node this rule prescribes to the id
-it has in that space, resolved through the broker under the service account when the space was
-configured and written beside the space key. An observation is created with the mapped id as its
-parent. A node that did not resolve is named by the setup step and is absent from the map, and a page
-whose node is absent is reported rather than filed somewhere plausible. The app level is not in the
-map: it is read from the mapped shelf's children at write time, because an app node appears without
-the space being reconfigured. Until 2026-09-22 this rule existed and the mapping did not - ten
-observation pages written that day landed as direct children of the home page, siblings of the
-hierarchy they were meant to sit in, with nothing failing.
 
 The runtime label carries the host as well as the runtime, because the two service accounts are
 shared across machines and the author of a page therefore no longer says which one wrote it. Both

@@ -104,7 +104,8 @@ const ROUTING_FILES = [path.join(REPO, "claude", "teams", "kherep", "ROUTING.md"
 test("both texts label a brief finding by its measured: or relayed: marker", () => {
   for (const [name, text] of [["claude-obs", CLAUDE_OBS], ["codex-obs", codexProjection()]]) {
     assert.match(text, /`measured:`[^.]{0,200}command[^.]{0,200}excerpt[\s\S]{0,200}`confirmed`/i, name);
-    assert.match(text, /`relayed:`[\s\S]{0,200}`assumed`/i, name);
+    assert.match(text, /`relayed:`[^.]{0,120}`assumed`/i, name);
+    assert.match(text, /never upgrade a label/i, name);
     assert.match(text, /`measured:` without[^.]{0,120}(command|excerpt)[\s\S]{0,200}`assumed`/i, name);
     assert.match(text, /dispatching session is never[^.]{0,40}operator/i, name);
     assert.match(text, /actual reporter/i, name);
@@ -120,6 +121,7 @@ test("both routing files define the brief markers and the actual reporter", () =
     const text = fs.readFileSync(file, "utf8");
     const section = text.slice(text.indexOf("## Session observations"), text.indexOf("## Linking"));
     assert.match(section, /`measured:`[\s\S]{0,400}`relayed:`/, file);
+    assert.match(section, /`relayed:`[^.]{0,120}`assumed`/, file);
     assert.match(section, /actual reporter/i, file);
     assert.match(section, /276858041[\s\S]{0,80}277054539[\s\S]{0,80}277054566/, file);
   }
