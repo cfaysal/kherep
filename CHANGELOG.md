@@ -844,6 +844,22 @@ increments the minor version; every other release increments the patch version.
   script argument in one form only, or defines the check without both forms,
   and CI runs the unit, Codex, module, broker and Control Plane node suites on
   Node 22.18.0 and 24.1.0.
+- Codex installer: a managed block that the Codex app split while storing hook
+  trust is installed again instead of refused (issue #274). On a Windows host
+  the app had written its `[hooks.state]` trust tables inside the block, moved
+  the managed tail (the Control Plane deliver hooks and
+  `[mcp_servers.kherep_messaging]`) verbatim behind the end marker, and left
+  one trust table's `enabled = false` after the marker. The TOML was unchanged,
+  but no known fragment matched, so the installer refused and a shared-guard
+  fix could not reach Codex. The installer now puts the tail back into the
+  block and the trust tables, with their keys, behind the end marker, then runs
+  the unchanged exact match. It does so only when the block without its trust
+  tables is the exact start of a known fragment and the exact rest follows the
+  marker with nothing but trust tables in between, and moves a key after the
+  marker only together with a trust table that ends the block. Anything else,
+  such as a changed managed line, an unknown table, unknown content in the
+  block or CRLF line endings, is still refused. The hooks arrays and the trust
+  state are kept, so no hook needs to be trusted again.
 
 ## [0.1.2] - 2026-09-24
 
