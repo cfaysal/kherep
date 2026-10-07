@@ -22,6 +22,7 @@ export function renderObservationInstruction(workspace: string): string {
   return [
     "Dispatch exactly one `codex-obs` with `fork_turns: \"none\"`.",
     "Pass only the completed turn, relevant tool evidence, and compact task state.",
+    "Mark each finding measured: (with command and deciding output excerpt) or relayed: (with source).",
     "Require the worker to return one strict JSON document; the worker performs no config or broker I/O.",
     "Validate the candidate envelope and every title, bodyStorage, evidence, labels, and placement field.",
     "Require placement to contain exactly project and app, and base labels to contain exactly type-observation, evidence-<value>, and status-author-model.",

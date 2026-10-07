@@ -72,6 +72,7 @@ export const OBSERVATION_REASON = [
   "Session observation (ROUTING.md, Session observations): this turn was substantial and did not dispatch the observation agent.",
   "Before ending, call the Agent tool with subagent_type \"claude-obs\" and model \"haiku\"; run_in_background true is fine.",
   "Give it a short, sanitized brief of THIS turn's findings only: no customer names, no credentials, no hosts, no private file content, no raw transcript.",
+  "Mark each finding measured: (with command and deciding output excerpt) or relayed: (with source).",
   "An empty result is valid.",
   "If the turn produced nothing new, or nothing can be shared safely, dispatch nothing and end the turn with [obs: none – <reason>] instead.",
   "An observation run never dispatches another.",

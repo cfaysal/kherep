@@ -30,6 +30,7 @@ export function observationPrompt(workspace = SELECTED_WORKSPACE, platform = pro
   return [
   "Before the final response, dispatch the codex-obs agent for this completed user turn using agent_type codex-obs, model gpt-5.6-luna, reasoning_effort low, and fork_turns none.",
   "Give it only a bounded, sanitized summary; never pass raw sessions, credentials, customer-private material, or private infrastructure.",
+  "Mark each finding measured: (with command and deciding output excerpt) or relayed: (with source).",
   "Require one strict JSON candidate. The worker performs no configuration or broker I/O.",
   "Validate the candidate fields title, bodyStorage, evidence, labels, and placement. An empty result is valid; an empty observations array means zero writes.",
   "For nonempty candidates, read the canonical Codex Confluence configuration and require observationPublishingAuthorized to be literal true.",
