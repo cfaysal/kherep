@@ -31,24 +31,24 @@ export function reanchorSplitManagedBlock(
   const body = tables(config.slice(start + startMarker.length, end));
   const head = body.filter((table) => !isState(table)).join("").trim();
   const after = config.slice(end + endMarker.length);
-  if (!head || (after && !after.startsWith("\n"))) return undefined;
+  if (!head || !after.startsWith("\n")) return undefined;
+  const firstTable = after.search(/^\[/m);
+  if (firstTable < 0) return undefined;
   // In TOML, the keys between the marker and the next table belong to the last
   // table of the block. They may move only along with a trust table.
-  const firstTable = after.search(/^\[/m);
-  const separated = firstTable < 0 ? after : after.slice(0, firstTable);
+  const separated = after.slice(0, firstTable);
   if (separated.trim() && !isState(body.at(-1) ?? "")) return undefined;
-  const following = firstTable < 0 ? [] : tables(after.slice(firstTable));
-  const between = following.findIndex((table) => !isState(table));
-  if (between < 0) return undefined;
-  const rest = following.slice(between).join("");
-  const fragments = [...new Set(knownFragments.map((fragment) => fragment.trim()))]
-    .sort((left, right) => right.length - left.length);
+  const following = tables(after.slice(firstTable));
+  const tailIndex = following.findIndex((table) => !isState(table));
+  if (tailIndex < 0) return undefined;
+  const rest = following.slice(tailIndex).join("");
+  const moved = [...body.filter(isState), separated.slice(1), ...following.slice(0, tailIndex)]
+    .join("").replace(/^\n+|\n+$/g, "");
+  const fragments = knownFragments.map((fragment) => fragment.trim()).sort((left, right) => right.length - left.length);
   for (const fragment of fragments) {
     if (!fragment.startsWith(`${head}\n`)) continue;
     const tail = fragment.slice(head.length).trim();
-    if (!tail || !rest.startsWith(tail) || !/^(?:\n|$)/.test(rest.slice(tail.length))) continue;
-    const moved = [...body.filter(isState), separated.slice(1), ...following.slice(0, between)]
-      .join("").replace(/^\n+|\n+$/g, "");
+    if (rest !== tail && !rest.startsWith(`${tail}\n`)) continue;
     const remainder = rest.slice(tail.length).replace(/^\n+/, "");
     return `${config.slice(0, start)}${startMarker}\n${fragment}\n${endMarker}\n`
       + (moved ? `\n${moved}\n` : "") + (remainder ? `\n${remainder}` : "");

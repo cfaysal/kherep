@@ -100,8 +100,9 @@ test("re-anchors a block whose tail the Codex app moved behind the end marker", 
     assert.equal(result.managedFragment, "replaced");
     assert.equal(managedBlock(result.config), managedBlock(FRESH));
     assert.deepEqual(tomlShape(result.config), tomlShape(config));
-    assert.equal(result.config.split("[mcp_servers.kherep_messaging]").length, 2);
-    assert.equal(result.config.split("deliver-hook.mts").length, 7);
+    // The tail went back into the block and left no copy behind.
+    assert.equal(result.config.split("[mcp_servers.kherep_messaging]").length, FRESH.split("[mcp_servers.kherep_messaging]").length);
+    assert.equal(result.config.split("deliver-hook.mts").length, FRESH.split("deliver-hook.mts").length);
     const after = result.config.slice(result.config.indexOf(END));
     assert.ok(after.includes(`${STATE_INSIDE}\n${SEPARATED_KEY}\n`));
     if (between) assert.ok(after.includes(between));
