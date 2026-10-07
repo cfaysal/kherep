@@ -66,6 +66,16 @@ export function quietStripWarning(): void {
   });
 }
 
+// The verdict for the error a probe import failed with. Which failing request
+// Node reports first differs between versions (26.10 names an unknown builtin
+// before the probe, 24.1 the probe), so the mapping is tested on its own.
+export function linkFailureVerdict(error: unknown): SyntaxVerdict {
+  const code = errorCode(error);
+  if (error instanceof SyntaxError && !code) return { state: "DEFEKT", detail: `rejected by Node's parser: ${firstLine(error)}` };
+  if (code && LINK_FAILED.has(code)) return OK;
+  return { state: "UNGEPRUEFT", detail: `${code || (error as Error)?.name || "error"}: ${firstLine(error)}` };
+}
+
 // V8's module parse of plain JavaScript. The probe import cannot resolve, so the
 // graph never links and nothing evaluates; a resolution failure means the parse
 // passed. A module that DID evaluate is reported, never taken as OK.
@@ -73,10 +83,7 @@ export async function esmParses(js: string): Promise<SyntaxVerdict> {
   try {
     await import(`data:text/javascript,${encodeURIComponent(`${js}\n${PROBE}\n`)}`);
   } catch (error) {
-    const code = errorCode(error);
-    if (error instanceof SyntaxError && !code) return { state: "DEFEKT", detail: `rejected by Node's parser: ${firstLine(error)}` };
-    if (code && LINK_FAILED.has(code)) return OK;
-    return { state: "UNGEPRUEFT", detail: `${code || (error as Error)?.name || "error"}: ${firstLine(error)}` };
+    return linkFailureVerdict(error);
   }
   return { state: "UNGEPRUEFT", detail: "module linked; the probe import did not stop evaluation" };
 }
