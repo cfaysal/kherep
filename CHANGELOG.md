@@ -1029,6 +1029,25 @@ increments the minor version; every other release increments the patch version.
   when everything is OK and always exits 0. A failing own lib is reported as
   kind `self`. The installer recognizes the previous managed block and
   upgrades it; Codex then asks to review exactly the one new hook.
+- Claude hooks: `hooks/lib/hook-syntax.mts` no longer lets a `NODE_OPTIONS`
+  preload decide the `node --check` confirmation of a `.js` or `.cjs` file
+  (issue #292). A preload that printed one stderr line turned a real
+  rejection into UNGEPRUEFT, and a preload calling `process.exit(0)` made a
+  broken file OK, a false OK. The check child now runs without
+  `NODE_OPTIONS` (matched case-insensitively on Windows), so no preload can
+  print, exit early or forge a rejection; this is the policy the `.mts` path
+  has had since #284, only Node's default loader is trusted. An operator's
+  `--no-experimental-detect-module` is therefore not applied either. The
+  rejection is read from the block Node prints (`<path>:<line>`, source line,
+  caret, blank line, `SyntaxError: ...`): a `SyntaxError` line counts only
+  when a line within the four above it names the checked file, wherever the
+  block sits in stderr, so lines printed before it (`NODE_DEBUG`, a loader
+  warning) no longer hide a rejection. The `node --check` tests move to
+  `hooks/lib/hook-syntax-check.test.mts`. The ExperimentalWarning control in
+  `hook-syntax.test.mts` records whether this Node still warns for
+  `module.stripTypeScriptTypes` (`MEASURED |`) and asserts the filter only
+  while it does. Measured on Node 26.10.0; Node 22.18.0, 24.1.0 and the
+  Windows path format are read from Node's source.
 
 ## [0.1.2] - 2026-09-24
 

@@ -15,7 +15,8 @@
  * anything is instantiated, so top-level code never runs. ~1 ms per file.
  * .mjs takes the second step only. .js and .cjs keep the path the integrity hook
  * had before: an in-process vm.Script parse, confirmed by `node --check` when it
- * rejects, which is correct for CommonJS.
+ * rejects, which is correct for CommonJS. That child runs without NODE_OPTIONS,
+ * the policy the .mts path has: only Node's default loader is trusted (#292).
  *
  * Three states, never merged (goldene Regel 12): OK, DEFEKT (Node's parser
  * rejected it), UNGEPRUEFT (neither proven). A Node without the stripper, or an
@@ -129,13 +130,18 @@ function stripVerdict(source: string): SyntaxVerdict | string {
 // to a non-zero exit on its own and printed a SyntaxError for THIS file is a
 // rejection. One that never ran or never finished (ENOENT, ETIMEDOUT, a signal,
 // exit 9 for a bad NODE_OPTIONS, a SyntaxError in a preload) proves nothing (#284).
+// Node prints a rejection as one block: `<path>:<line>`, the source line, the
+// caret line, a blank line, `SyntaxError: ...`. A SyntaxError line counts only
+// when a line within the four above it names this file, wherever the block sits,
+// so lines printed before it (NODE_DEBUG, a loader warning) are ignored (#292).
 export function checkFailureVerdict(error: unknown, file: string): SyntaxVerdict {
   const e = (error ?? {}) as { code?: string; status?: number | null; signal?: string | null; stderr?: unknown };
   const lines = String(e.stderr ?? "").split(/\r?\n/).map((l) => l.trim());
-  const syntax = lines.find((l) => /^SyntaxError\b/.test(l));
-  const ours = new RegExp(`(^|[\\\\/])${path.basename(file).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\d+$`).test(lines[0] || "");
-  if (typeof e.status === "number" && e.status !== 0 && !e.signal && syntax && ours) {
-    return { state: "DEFEKT", detail: `rejected by node --check: ${syntax}` };
+  const escaped = path.basename(file).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const ours = new RegExp(`(^|[\\\\/])${escaped}:\\d+$`, process.platform === "win32" ? "i" : "");
+  const block = lines.findIndex((l, i) => /^SyntaxError\b/.test(l) && lines.slice(Math.max(0, i - 4), i).some((a) => ours.test(a)));
+  if (typeof e.status === "number" && e.status !== 0 && !e.signal && block >= 0) {
+    return { state: "DEFEKT", detail: `rejected by node --check: ${lines[block]}` };
   }
   let why = firstLine(error);
   if (e.code) why = e.code;
@@ -153,8 +159,13 @@ function scriptVerdict(file: string, source: string): SyntaxVerdict {
   } catch {
     /* confirm with node itself */
   }
+  // Without NODE_OPTIONS: no preload may print, exit early or forge a rejection;
+  // the operator's loader flags are not the syntax contract (#292). Windows
+  // environment names are case-insensitive.
+  const win = process.platform === "win32";
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => (win ? k.toUpperCase() : k) !== "NODE_OPTIONS"));
   try {
-    execFileSync(process.execPath, ["--check", file], { stdio: ["ignore", "ignore", "pipe"], timeout: 15_000 });
+    execFileSync(process.execPath, ["--check", file], { env, stdio: ["ignore", "ignore", "pipe"], timeout: 15_000 });
     return OK;
   } catch (error) {
     return checkFailureVerdict(error, file);
