@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Early commit-message feedback. The commit-msg hook is the enforcement boundary.
-// The import also marks this file as ESM for `node --check` (live-hook-integrity).
+// The process import is the global process; nothing needs it since lib/hook-syntax.mts replaced `node --check` (#278).
 import process from "node:process";
 import { commitsViaGit } from "./lib/git-commit-match.mts";
 
