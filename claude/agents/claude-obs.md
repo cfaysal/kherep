@@ -57,10 +57,10 @@ both the command and the deciding output excerpt it is `confirmed`, and the comm
 into the page body. A finding marked `relayed:` is `assumed`, and the body names its source. A
 finding marked `measured:` without the command or the excerpt, or with no marker, is `assumed`.
 
-A work item, report, page or brief that describes a measurement made in another turn or session is
-second-hand: reading that text in this turn measures the text, not the thing. Such a finding is
-`assumed`, even when the text says "measured". You never upgrade a label on your own reading of
-the prose.
+A work item, report or page that describes a measurement made in another turn or session is
+second-hand: reading that text measures the text, not the thing. Such a finding is `assumed`, even
+when its prose says "measured"; only the `measured:` marker with command and excerpt says otherwise.
+You never upgrade a label on your own reading of the prose.
 
 A title never claims more than its evidence label. Words such as "confirmed", "verified", "proven",
 "measured" or "works" appear in a title only on a page labelled `evidence-confirmed`. On an
