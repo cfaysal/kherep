@@ -10,7 +10,7 @@ import { pathToFileURL } from "node:url";
 import {
   AGENTS_START,
   CONFIG_START,
-  LOCAL_PLUGIN_ID, ROVO_PLUGIN_ID,
+  ATLASSIAN_MCP_SERVER, LOCAL_PLUGIN_ID,
   USER_START,
   install,
   parseArgs,
@@ -86,7 +86,7 @@ function fixtureMcpServer(root: string, name: string): Record<string, unknown> {
       env: { FIXTURE_TOKEN: FIXTURE_AUTHORIZATION },
     };
   }
-  if (["rovo", "kherep-linkedin-cli"].includes(name)) {
+  if (name === "kherep-linkedin-cli") {
     return { type: "http", url: `https://${name}.example.invalid/mcp` };
   }
   // The fall-through shape is static-bearer HTTP: the only source whose secret
@@ -338,8 +338,11 @@ test("Windows entrypoint delegates to the shared Node installer", () => {
   assert.match(entrypoint, /"--enable-messaging-client"/);
   assert.doesNotMatch(entrypoint, /Set-MarkedBlock/);
 });
-test("uses the CLI-installable Atlassian Rovo plugin id", () => {
-  assert.equal(ROVO_PLUGIN_ID, "atlassian-rovo@openai-curated");
+test("targets the v2 Atlassian MCP server and retires v1 rovo", () => {
+  assert.deepEqual(CAPABILITIES.pluginMcpServers?.[ATLASSIAN_MCP_SERVER], { url: "https://mcp.atlassian.com/v2/mcp" });
+  assert.deepEqual(CAPABILITIES.retiredMcpServers, ["rovo"]);
+  assert.equal(CAPABILITIES.mcpServers.includes("rovo"), false);
+  assert.equal(JSON.stringify(CAPABILITIES).includes("atlassian-rovo@openai-curated"), false);
 });
 test("uses canonical Kherep product identifiers", () => {
   assert.equal(AGENTS_START, "<!-- kherep:start -->");
@@ -422,7 +425,9 @@ test("installs the Mac-compatible projection without replacing user state", asyn
   assert.ok(n8n.includes(`args = [${JSON.stringify(result.targets.registryRuntime)}]`));
   assert.match(n8n, /NODE_EXTRA_CA_CERTS/);
   assert.doesNotMatch(n8n, /NODE_TLS_REJECT_UNAUTHORIZED/);
-  assert.equal(config.includes("[mcp_servers.atlassian]"), false);
+  // The operator's own atlassian table wins over the managed v2 render, as context7's does.
+  assert.equal(occurrences(config, "[mcp_servers.atlassian]"), 1);
+  assert.match(mcpTable(config, "atlassian"), /command = "legacy"/);
   assert.equal(config.includes("[mcp_servers.openaiDeveloperDocs]"), true);
   assert.equal(config.includes('command = "undefined"'), false);
   assert.match(mcpTable(config, "forge-knowledge"), /^required = false$/m);
@@ -433,7 +438,7 @@ test("installs the Mac-compatible projection without replacing user state", asyn
   assert.equal(occurrences(config, CONFIG_START), 1);
   assert.equal(result.receipt.memoryProvider, "unconfigured");
   assert.deepEqual(result.receipt.reasoningEffort, { status: "configured", value: "xhigh" });
-  assert.deepEqual(codexCalls.map(({ args }) => args), [["plugin", "marketplace", "list", "--json"], ["plugin", "marketplace", "add", "./marketplace", "--json"], ["plugin", "add", LOCAL_PLUGIN_ID], ["plugin", "add", ROVO_PLUGIN_ID]]);
+  assert.deepEqual(codexCalls.map(({ args }) => args), [["plugin", "marketplace", "list", "--json"], ["plugin", "marketplace", "add", "./marketplace", "--json"], ["plugin", "add", LOCAL_PLUGIN_ID]]);
   assert.ok(config.includes(process.execPath.replace(/\\/g, "\\\\")));
   assert.ok(config.includes("kherep-maestro-context.mts"));
   assert.equal(
@@ -513,11 +518,11 @@ test("installs the Mac-compatible projection without replacing user state", asyn
   assert.equal(fs.readFileSync(path.join(result.backupRoot, "agents", "win-agent.toml"), "utf8"), 'name = "personal"\n');
   assert.equal(result.receipt.projection.commands.find((entry) => entry.name === "kickoff")?.status, "replaced-with-backup");
   assert.equal(result.receipt.projection.agents.find((entry) => entry.name === "win-agent")?.status, "replaced-with-backup");
-  assert.equal(result.receipt.pluginMcpServers[0].status, "preserved-existing");
-  assert.equal(result.receipt.pluginMcpServers.some((entry) => entry.name === "atlassian"), false);
+  assert.equal(result.receipt.pluginMcpServers.find((entry) => entry.name === "context7")?.status, "preserved-existing");
+  assert.equal(result.receipt.pluginMcpServers.find((entry) => entry.name === "atlassian")?.status, "preserved-existing");
   assert.deepEqual(
-    result.receipt.retiredMcpServers.find((entry) => entry.name === "atlassian"),
-    { name: "atlassian", status: "removed" },
+    result.receipt.retiredMcpServers.find((entry) => entry.name === "rovo"),
+    { name: "rovo", status: "absent" },
   );
   assert.equal(result.receipt.pluginMcpServers.find((entry) => entry.name === "openaiDeveloperDocs")?.status, "configured");
   assert.deepEqual(
@@ -549,6 +554,46 @@ test("install keeps the operator's reasoning effort and reports it", async (t) =
   assert.equal(occurrences(config, "model_reasoning_effort"), 1);
   assert.deepEqual(result.receipt.reasoningEffort, { status: "preserved-existing", value: "low" });
 });
+// Issue #304. An older installer rendered the v1 rovo table inside the managed
+// block and no atlassian table. On the reported host the operator removed that
+// rovo table in the Codex app, which also appended an app connector table. No
+// rovo table is the wanted state, and the connector table is the operator's.
+const OLD_ROVO_TABLE = '[mcp_servers.rovo]\nenabled = true\nrequired = false\nurl = "https://rovo.example.invalid/mcp"\n'
+  + "startup_timeout_sec = 30.0\ntool_timeout_sec = 60.0\n\n";
+for (const rovo of ["removed by the host", "still in the block"]) {
+  test(`installs the v2 Atlassian server over an old block with rovo ${rovo}, beside a foreign app table`, (t) => {
+    const { root, codexCalls, codexHome, installOptions } = fixture();
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const configTarget = path.join(codexHome, "config.toml");
+    install({ ...installOptions, installAtlassianTools: false });
+    let old = fs.readFileSync(configTarget, "utf8");
+    assert.equal(old.includes("[mcp_servers.atlassian]"), false);
+    if (rovo === "still in the block") old = old.replace("[mcp_servers.context7]", `${OLD_ROVO_TABLE}[mcp_servers.context7]`);
+    const foreign = "[apps.connector_0000]\nenabled = true\n";
+    const seeded = `${old}\n${foreign}`;
+    fs.writeFileSync(configTarget, seeded);
+    const end = "# <<< Kherep Codex Maestro <<<";
+    const outside = (text: string): string => text.slice(text.indexOf(end));
+
+    const result = install(installOptions);
+    const config = fs.readFileSync(configTarget, "utf8");
+    assert.equal(occurrences(config, foreign), 1);
+    assert.equal(outside(config), outside(seeded), "everything after the managed block, the app table included, is unchanged");
+    assert.equal(config.includes("[mcp_servers.rovo]"), false);
+    assert.match(mcpTable(config, "atlassian"), /^url = "https:\/\/mcp\.atlassian\.com\/v2\/mcp"$/m);
+    assert.ok(config.indexOf("[mcp_servers.atlassian]") < config.indexOf(end));
+    assert.equal(result.receipt.pluginMcpServers.find((entry) => entry.name === "atlassian")?.status, "configured");
+    assert.deepEqual(result.receipt.retiredMcpServers.find((entry) => entry.name === "rovo"),
+      { name: "rovo", status: rovo === "still in the block" ? "removed" : "absent" });
+    assert.equal(codexCalls.some(({ args }) => args.join(" ").includes("atlassian-rovo")), false);
+    assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), config, "a reinstall is idempotent");
+
+    // Dropping the optional tool set again removes only the managed v2 table.
+    const without = fs.readFileSync(install({ ...installOptions, installAtlassianTools: false }).targets.config, "utf8");
+    assert.equal(without.includes("[mcp_servers.atlassian]"), false);
+    assert.equal(outside(without), outside(seeded));
+  });
+}
 test("default install projects observation delivery without optional Jira tooling", async (t) => {
   const { root, codexCalls, codexHome, installOptions, workspace } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -673,8 +718,9 @@ test("default install projects observation delivery without optional Jira toolin
     observationAgent,
     /trusted Maestro main thread is the Codex publisher/,
   );
-  assert.deepEqual(result.receipt.nativePlugins, []);
-  assert.ok(!codexCalls.some(({ args }) => args.join(" ") === `plugin add ${ROVO_PLUGIN_ID}`));
+  assert.equal(result.receipt.pluginMcpServers.some((entry) => entry.name === ATLASSIAN_MCP_SERVER), false);
+  assert.equal(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8").includes("[mcp_servers.atlassian]"), false);
+  assert.deepEqual(codexCalls.filter(({ args }) => args[1] === "add").map(({ args }) => args), [["plugin", "add", LOCAL_PLUGIN_ID]]);
 });
 test("normal reinstall preserves the previously validated operator adapter", (t) => {
   const { root, codexHome, installOptions } = fixture();

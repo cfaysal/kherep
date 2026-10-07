@@ -343,7 +343,7 @@ if [ "$SKIP_DEPS" = "0" ]; then
   else
     echo "install: WARNING deps phase incomplete (npm globals and/or plugins) - managed files stay committed"
   fi
-  echo "install: MCP -> review 'claude mcp list'. Atlassian (rovo/forge-knowledge) need interactive OAuth re-consent."
+  echo "install: MCP -> review 'claude mcp list'. Atlassian (v2 server 'atlassian', https://mcp.atlassian.com/v2/mcp; forge-knowledge) need interactive OAuth re-consent."
 else
   echo "install: SKIP_DEPS=1 (no npm/plugins/mcp)"
 fi

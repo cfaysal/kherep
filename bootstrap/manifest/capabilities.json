@@ -26,8 +26,7 @@
     "claude-baton",
     "codebase-memory-mcp",
     "forge-knowledge",
-    "n8n",
-    "rovo"
+    "n8n"
   ],
   "ownedAgents": {
     "kherep-builder": "kherep-builder.md",

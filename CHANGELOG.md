@@ -9,6 +9,18 @@ increments the minor version; every other release increments the patch version.
 
 ## [Unreleased]
 
+### Changed
+
+- Atlassian MCP: Kherep targets the v2 Atlassian remote MCP server. The Claude
+  capability check no longer expects a `rovo` server. With the optional
+  Atlassian tool set the Codex installer writes the managed MCP server
+  `atlassian` (`https://mcp.atlassian.com/v2/mcp`) instead of registering the
+  legacy `atlassian-rovo@openai-curated` plugin, retires the v1 `rovo` table,
+  and recognises a managed block an earlier installer wrote with or without
+  that `rovo` table; tables outside the block stay untouched. The install
+  receipt drops `nativePlugins`. The research-evidence matchers count the v2
+  `searchConfluence` tool on an Atlassian server (issue #304).
+
 ## [0.2.0] - 2026-10-07
 
 ### Added

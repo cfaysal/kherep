@@ -103,9 +103,11 @@ test("every accepted Brain lookup form passes, a foreign search tool does not", 
     tool("Skill", { skill: "kherep-twg" }),
     tool("mcp__rovo__search", { query: "x" }),
     tool("mcp__0000-aaaa__searchConfluenceUsingCql", { cql: "text ~ x" }),
+    tool("mcp__atlassian__searchConfluence", { query: "x" }),
+    tool("mcp__plugin_atlassian_atlassian__searchConfluence", { query: "x" }),
   ];
   for (const form of forms) assert.equal(decide([user("q"), WORK, form]), null, JSON.stringify(form));
-  for (const form of [tool("mcp__bexio__search", {}), bash("node C:/Kherep/tools/atl-confluence-ccoder.mts create --space KB")]) {
+  for (const form of [tool("mcp__bexio__search", {}), tool("mcp__bexio__searchConfluence", {}), bash("node C:/Kherep/tools/atl-confluence-ccoder.mts create --space KB")]) {
     assert.ok(decide([user("q"), WORK, form]), `${JSON.stringify(form)} must not count as research`);
   }
 });
