@@ -884,6 +884,17 @@ increments the minor version; every other release increments the patch version.
   such as a changed managed line, an unknown table, unknown content in the
   block or CRLF line endings, is still refused. The hooks arrays and the trust
   state are kept, so no hook needs to be trusted again.
+- Bootstrap: on Windows `smoke-test.sh` looked hung in
+  `install-transaction.test.sh` and was killed after six minutes, which also
+  withheld every result it had buffered (issue #276). The sub-test was not
+  hung: under Git Bash it takes about 12 minutes and printed nothing after
+  `test_lock`, and the Windows process list showed its bash idle without
+  children because MSYS fork and exec do not keep Windows parent links. The
+  transaction test now names each test on stderr as it starts, and
+  `smoke-test.sh` runs it under `timeout` with a 30-minute bound, set with
+  `SMOKE_SUBTEST_TIMEOUT`, so a real hang becomes a finding and the report is
+  still printed. Without GNU `timeout` or `gtimeout`, as on a stock Mac, it
+  runs unbounded as before.
 
 ## [0.1.2] - 2026-09-24
 

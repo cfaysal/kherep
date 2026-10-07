@@ -41,6 +41,13 @@ case "${SMOKE_SOURCE:-head}" in
   working-tree) tar --exclude=.git -cf - -C "$REPO" . | tar -xf - -C "$TMP/repo" ;;
   *) echo "SMOKE FAIL: SMOKE_SOURCE must be head or working-tree"; exit 1 ;;
 esac
+SUBTEST_TIMEOUT="${SMOKE_SUBTEST_TIMEOUT:-1800}"
+case "$SUBTEST_TIMEOUT" in
+  ''|*[!0-9]*) SUBTEST_TIMEOUT=0 ;;
+esac
+[ "$((10#$SUBTEST_TIMEOUT))" -gt 0 ] || {
+  echo "SMOKE FAIL: SMOKE_SUBTEST_TIMEOUT must be a positive number of seconds" >&2; exit 1;
+}
 
 fail=0
 
@@ -53,6 +60,21 @@ fail=0
 # bootstrap sub-tests as findings and reported 19 where four were real (OP-669).
 FINDING_MARKER="SMOKE-FINDING"
 note_fail() { echo "$FINDING_MARKER $*"; fail=1; }
+
+# Issue #276. A sub-test that never returns must become a finding, or the run
+# never prints the results it buffered above. --foreground keeps Ctrl-C reaching
+# the sub-test; on expiry only the sub-test's own bash is signalled, so its
+# children may outlive it. An exit of 124 or 137 reads as a timeout. Without GNU
+# timeout (stock macOS, or Windows timeout.exe first in PATH) it runs unbounded.
+run_bounded() {
+  local secs="$1" bin
+  shift
+  bin="$(command -v timeout || command -v gtimeout || true)"
+  case "$([ -z "$bin" ] || "$bin" --version 2>/dev/null </dev/null)" in
+    *'GNU coreutils'*) "$bin" --foreground -k 30 "$secs" "$@" ;;
+    *) echo "smoke: no GNU timeout, running the sub-test unbounded" >&2; "$@" ;;
+  esac
+}
 
 check_profile() {
   local profile="$1" host_home="$TMP/$1/home" workspace credentials extra_plugin
@@ -416,7 +438,13 @@ if [ "${SMOKE_SKIP_BOOTSTRAP_TESTS:-0}" != 1 ]; then
   node "$TMP/repo/bootstrap/prepare-secrets.test.mts" || note_fail "SUBTEST prepare-secrets.test.mts failed"
   node "$TMP/repo/bootstrap/reconcile-plugins.test.mts" || note_fail "SUBTEST reconcile-plugins.test.mts failed"
   bash "$TMP/repo/bootstrap/build-secrets.test.sh" || note_fail "SUBTEST build-secrets.test.sh failed"
-  bash "$TMP/repo/bootstrap/install-transaction.test.sh" || note_fail "SUBTEST install-transaction.test.sh failed"
+  subtest_rc=0
+  run_bounded "$SUBTEST_TIMEOUT" bash "$TMP/repo/bootstrap/install-transaction.test.sh" || subtest_rc=$?
+  case "$subtest_rc" in
+    0) ;;
+    124|137) note_fail "SUBTEST install-transaction.test.sh timed out after ${SUBTEST_TIMEOUT}s" ;;
+    *) note_fail "SUBTEST install-transaction.test.sh failed" ;;
+  esac
 fi
 # Terminal marker first, then publish: an unmarked report is an incomplete run
 # and claude/hooks/smoke-test-nudge.mts must be able to tell the two apart.
