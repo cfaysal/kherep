@@ -8,6 +8,7 @@ import { recoverManagedMcpProjection } from "./mcp-operator-binding.mts";
 import * as parityConfig from "./parity-config.mts";
 import { recognizeHistoricalManagedConfig } from "./historical-managed-artifacts.mts";
 import { configureMemoryNotify } from "./memory-provider.mts";
+import { reanchorSplitManagedBlock, UnknownManagedFragmentError } from "./managed-block-split.mts";
 import { managedNodePaths, withManagedNodePaths } from "./node-path.mts";
 import { managedOutboxRoots, projectOutboxWritableRoot } from "./outbox-writable-root.mts";
 import { managedFragmentFamily, retiredCentralBrainFragments, retireUnmanagedCentralBrainTable } from "./retired-central-brain.mts";
@@ -95,7 +96,7 @@ export function replaceExactManagedFragment(
     const absolute = bodyStart + offset;
     return config.slice(0, absolute) + next + config.slice(absolute + candidate.length);
   }
-  throw new Error("Refusing to overwrite a managed block without an exact known managed fragment");
+  throw new UnknownManagedFragmentError([next, ...candidates]);
 }
 
 export function migrateExactUnmanagedMcpArg(
@@ -194,6 +195,19 @@ function reportedValue(raw: string): string {
 }
 
 export function prepareManagedConfig(config: string, options: ManagedConfigOptions) {
+  try {
+    return prepareAnchoredConfig(config, options);
+  } catch (error) {
+    // Issue #274. A block the Codex app split around its trust tables is matched
+    // again once the split is undone; any other unknown block still refuses.
+    const anchored = error instanceof UnknownManagedFragmentError
+      ? reanchorSplitManagedBlock(config, options.startMarker, options.endMarker, error.knownFragments) : undefined;
+    if (!anchored) throw error;
+    return { ...prepareAnchoredConfig(anchored, options), managedFragment: "replaced" as const };
+  }
+}
+
+function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
   const retiredMcpServers = options.retiredMcpServerNames.map((name) => ({
     name,
     status: managedConfig.removeMcpTables(config, [name]) !== config ? "removed" : "absent",
