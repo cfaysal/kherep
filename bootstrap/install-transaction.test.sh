@@ -856,9 +856,16 @@ JS
     { cat "$ROOT/drift.log"; fail "drift-check failed after a committed install with a failed deps phase"; }
 }
 
-test_library; test_retire; test_retire_declared; test_lock; test_preflights; test_path_guards; test_partial; test_term; test_commit_signal; test_secrets
-test_deps_failure; test_default_confluence_brokers; test_upgrade_retires_mpac; test_upgrade_retires_js_hooks
-test_upgrade_unwires_legacy_hooks; test_upgrade_moves_clq_to_stop; test_upgrade_retires_guard_js_hooks
+# Issue #276. Every test after test_lock writes only to its own log, and under
+# Git Bash on Windows the run takes about 12 minutes, so a silent run looked
+# like a hang. Name each test on stderr as it starts.
+for tx_test in test_library test_retire test_retire_declared test_lock test_preflights test_path_guards \
+  test_partial test_term test_commit_signal test_secrets test_deps_failure test_default_confluence_brokers \
+  test_upgrade_retires_mpac test_upgrade_retires_js_hooks test_upgrade_unwires_legacy_hooks \
+  test_upgrade_moves_clq_to_stop test_upgrade_retires_guard_js_hooks; do
+  echo "transaction test: $tx_test (${SECONDS}s)" >&2
+  "$tx_test"
+done
 host_hooks_paths > "$TMP/host-hooks-path.after"
 cmp -s "$TMP/host-hooks-path.before" "$TMP/host-hooks-path.after" ||
   fail "the host's system or global core.hooksPath changed during the run"
