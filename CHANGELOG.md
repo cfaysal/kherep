@@ -996,6 +996,18 @@ increments the minor version; every other release increments the patch version.
   bypass the probe and run the checked file; the verdict then stays
   UNGEPRUEFT, never OK. Such a hook owns the process and is outside this check.
   Measured on Node 26.10.0; same source paths in 22.18.0 and 24.1.0.
+- Research Stop hooks: Claude and Codex now recognise the same opt-out marker.
+  Codex accepted only an ASCII hyphen after `none` and rejected the marker
+  with an en dash (U+2013) or em dash (U+2014), which models write in
+  practice, so such a turn was sent back once for research it had declared
+  irrelevant; Claude accepted anything after `none`, including
+  `[research: none]` without a reason, although ROUTING.md and both hook texts
+  require one. Both runtimes now use one pattern: a hyphen, en dash or em dash
+  followed by a nonempty one-line reason inside the brackets, matched anywhere
+  in the final assistant text of the ending turn. A bare `[research: none]` in
+  Claude now gets one continuation instead of opting out. The documented form
+  stays `[research: none - <reason>]`. A shared contract test runs the same
+  cases against both patterns and fails when they drift (issue #293).
 
 ## [0.1.2] - 2026-09-24
 
