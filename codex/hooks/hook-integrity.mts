@@ -87,9 +87,21 @@ export function hookCommandParts(config: string): string[] {
   return parts;
 }
 
+// config.toml may name the home through a symlink (macOS /var -> /private/var) while
+// hooksDir comes from this file's real path: a part under another spelling of the
+// same directory is mapped onto hooksDir by the real path of its directory.
+const realOrNull = (p: string): string | null => { try { return lib.normalizePathLike(fs.realpathSync(p)); } catch { return null; } };
+function underHooksDir(part: string, hooksDir: string, realHooks: string | null): string {
+  if (lib.isWithinPath(part, hooksDir) || !realHooks) return part;
+  const realDir = realOrNull(path.dirname(part));
+  const real = realDir && `${realDir}/${path.basename(part)}`;
+  return real && lib.isWithinPath(real, realHooks) ? `${hooksDir}${real.slice(realHooks.length)}` : part;
+}
+
 export function wiredHookFiles(parts: string[], hooksDir: string): HookFile[] {
   const found = new Map<string, HookFile>();
-  for (const file of parts.map(lib.normalizePathLike)) {
+  const realHooks = realOrNull(hooksDir);
+  for (const file of parts.map((part) => underHooksDir(lib.normalizePathLike(part), hooksDir, realHooks))) {
     if (!/\.(?:js|mts)$/i.test(file) || !lib.isWithinPath(file, hooksDir) || file.length <= hooksDir.length) continue;
     found.set(file.toLowerCase(), { file, rel: file.slice(hooksDir.length + 1) });
   }

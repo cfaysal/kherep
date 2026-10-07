@@ -84,3 +84,19 @@ test("resolves the checkout from the deliver-hook command first, else gives up w
     fs.rmSync(empty, { recursive: true, force: true });
   }
 });
+
+test("maps a wired path under a symlinked spelling of the home onto the real hooks dir", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hook-integrity-alias-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const real = path.join(root, "real-home");
+  fs.mkdirSync(path.join(real, "hooks", "kherep-maestro"), { recursive: true });
+  fs.writeFileSync(path.join(real, "hooks", "kherep-maestro", "commit-guard.mts"), "export {};\n");
+  const alias = path.join(root, "alias-home");
+  try { fs.symlinkSync(real, alias, "junction"); } catch (error) { t.skip(`no directory link here (${(error as NodeJS.ErrnoException).code})`); return; }
+  const hooksDir = `${lib.normalizePathLike(fs.realpathSync(real))}/hooks`;
+  const wired = wiredHookFiles([path.join(alias, "hooks", "kherep-maestro", "commit-guard.mts")], hooksDir);
+  assert.deepEqual(wired.map((entry) => entry.rel), ["kherep-maestro/commit-guard.mts"]);
+  assert.ok(wired[0].file.startsWith(hooksDir), wired[0].file);
+  // A path outside the home stays outside, link or not.
+  assert.deepEqual(wiredHookFiles([path.join(root, "elsewhere.mts")], hooksDir), []);
+});
