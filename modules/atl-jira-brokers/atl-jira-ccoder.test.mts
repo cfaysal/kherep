@@ -4,7 +4,6 @@ import { readFile as nodeReadFile } from "node:fs/promises";
 
 import {
   adf,
-  parseArgs,
   parseCredentialText,
   runCli,
   selectTransition,
@@ -214,8 +213,74 @@ test("adf splits on blank lines and keeps single newlines inside a paragraph", (
   ]);
 });
 
-test("parseArgs reads flag value pairs and ignores stray positionals", () => {
-  assert.deepEqual(parseArgs(["--key", "OP-1", "noise", "--to", "done"]), { key: "OP-1", to: "done" });
+// #299. This used to lock in that a stray positional was skipped silently, which
+// is how `get <KEY>` instead of `get --key <KEY>` lost the key.
+test("a stray positional is refused before credentials and every request", async () => {
+  const h = harness({ api: () => jsonResponse(200, {}) });
+  assert.equal(await runCli(["transition", "--key", "OP-1", "noise", "--to", "done"], h.injected), 1);
+  assert.deepEqual(h.err, ["transition erwartet --key <KEY> --to <new|indeterminate|done>; Positionsargument 'noise' erhalten."
+    + "\nNutzung: transition --key <KEY> --to <new|indeterminate|done> [--acceptance <evidence>]"]);
+  assert.equal(h.counters.credentialReads, 0);
+  assert.equal(h.calls.length, 0);
+});
+
+const VERBS = ["create", "update", "comment", "attach", "download", "get", "search", "transition", "link", "unlink", "selftest"];
+
+test("help lists every verb with its flags and exits 0 without configuration", async () => {
+  for (const spelling of ["help", "--help", "-h"]) {
+    const h = harness({ api: () => jsonResponse(200, {}) });
+    h.injected.env = {};
+    assert.equal(await runCli([spelling], h.injected), 0, spelling);
+    assert.deepEqual(h.err, []);
+    for (const verb of VERBS) assert.ok(h.out.some((line) => line.startsWith(`  ${verb}`)), `${spelling} lacks ${verb}`);
+    assert.ok(h.out.includes("  get --key <KEY> [--fields <a,b>]"), h.out.join("\n"));
+    assert.ok(h.out.includes("  comment --key <KEY> (--body <text> | --body-file <path>)"));
+    assert.equal(h.counters.credentialReads, 0);
+    assert.equal(h.calls.length, 0);
+  }
+});
+
+test("a positional names the call it probably meant", async () => {
+  const h = harness({ api: () => jsonResponse(200, {}) });
+  assert.equal(await runCli(["get", "OP-1"], h.injected), 1);
+  assert.deepEqual(h.err, [[
+    "get erwartet --key <KEY>; Positionsargument 'OP-1' erhalten.",
+    "Meinten Sie: get --key OP-1",
+    "Nutzung: get --key <KEY> [--fields <a,b>]",
+  ].join("\n")]);
+  assert.equal(h.calls.length, 0);
+});
+
+test("an unknown flag is refused with the verb syntax", async () => {
+  const h = harness({ api: () => jsonResponse(200, {}) });
+  assert.equal(await runCli(["get", "--key", "OP-1", "--id", "5"], h.injected), 1);
+  assert.deepEqual(h.err, ["get kennt --id nicht.\nNutzung: get --key <KEY> [--fields <a,b>]"]);
+  assert.equal(h.calls.length, 0);
+});
+
+test("a missing required flag prints the full syntax", async () => {
+  const h = harness({ api: () => jsonResponse(200, {}) });
+  assert.equal(await runCli(["download", "--key", "OP-1"], h.injected), 1);
+  assert.deepEqual(h.err, ["download: --id fehlt.\nNutzung: download --key <KEY> --id <id> [--accept <type>]"]);
+  assert.equal(h.calls.length, 0);
+});
+
+test("a flag without a value and a repeated flag are refused", async () => {
+  const missing = harness({ api: () => jsonResponse(200, {}) });
+  assert.equal(await runCli(["comment", "--body", "--key", "OP-1"], missing.injected), 1);
+  assert.match(missing.err.join("\n"), /^comment: --body braucht einen Wert\./);
+  const repeated = harness({ api: () => jsonResponse(200, {}) });
+  assert.equal(await runCli(["get", "--key", "OP-1", "--key", "OP-2"], repeated.injected), 1);
+  assert.match(repeated.err.join("\n"), /^get: --key wurde mehrfach angegeben\./);
+  assert.equal(missing.calls.length + repeated.calls.length, 0);
+});
+
+test("selftest takes no arguments", async () => {
+  const h = harness({ api: () => jsonResponse(200, {}) });
+  assert.equal(await runCli(["selftest", "--key", "OP-1"], h.injected), 1);
+  assert.deepEqual(h.err, ["selftest kennt --key nicht.\nNutzung: selftest"]);
+  assert.equal(h.counters.credentialReads, 0);
+  assert.equal(h.calls.length, 0);
 });
 
 const LOCALISED_TRANSITIONS = [
@@ -266,7 +331,7 @@ test("an unknown command is rejected before authentication", async () => {
   const h = harness({ api: () => jsonResponse(200, {}) });
   assert.equal(await runCli(["destroy"], h.injected), 1);
   assert.equal(h.calls.length, 0);
-  assert.match(h.err[0], /^Nutzung: create \| update \| comment \| attach \| download \| get \| search \| transition \| link \| unlink \| selftest$/);
+  assert.equal(h.err[0], `Nutzung: ${VERBS.join(" | ")}. Die Flags je Verb zeigt help.`);
 });
 
 test("Done without a valid acceptance marker fails before credentials and every request", async () => {

@@ -76,6 +76,10 @@ export function fixedPairs(home: string, workspace: string): ManagedPair[] {
       source: "modules/atl-jira-brokers/atlassian-credentials.mts",
     },
     {
+      live: joinPathLike(workspace, "tools/atlassian-cli-args.mts"),
+      source: "modules/atl-jira-brokers/atlassian-cli-args.mts",
+    },
+    {
       live: joinPathLike(workspace, "tools/atl-jira-ccoder.mts"),
       source: "modules/atl-jira-brokers/atl-jira-ccoder.mts",
     },

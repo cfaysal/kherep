@@ -10,6 +10,7 @@ import {
   parseCredentialText,
   type AtlassianCredentials,
 } from "./atlassian-credentials.mts";
+import { CliArgsError, DE, helpText, isHelp, parseVerbArgs, type VerbTable } from "./atlassian-cli-args.mts";
 import { renderAdf } from "./jira-adf.mts";
 import { DESCRIPTION_UNREADABLE, adfToText } from "./jira-adf-text.mts";
 import {
@@ -409,25 +410,6 @@ function identity(json: JiraPayload | undefined, location: "self" | "creator" | 
 
 type Options = Record<string, string | undefined>;
 
-function parseOptions(argv: string[]): Options {
-  const options: Options = {};
-  for (let index = 0; index < argv.length; index += 2) {
-    const flag = argv[index];
-    const value: string | undefined = argv[index + 1];
-    if (!flag?.startsWith("--") || value === undefined) stop("CLI-Argumente sind unvollständig.");
-    const name = flag.slice(2);
-    if (options[name] !== undefined) stop("Ein CLI-Argument wurde mehrfach angegeben.");
-    options[name] = value;
-  }
-  return options;
-}
-
-function rejectUnknownOptions(options: Options, allowed: string[]): void {
-  if (Object.keys(options).some((name) => !allowed.includes(name))) {
-    stop("Unbekanntes CLI-Argument.");
-  }
-}
-
 function requireText(options: Options, name: string): string {
   const value = options[name];
   if (typeof value !== "string" || !value.trim()) stop(`--${name} fehlt.`);
@@ -613,7 +595,7 @@ async function comment(options: Options, deps: BrokerDeps): Promise<CliResult> {
 // gleicher Token, gleiche cloudId, gleicher Sprach-Header.
 //
 // EINE Datei pro Aufruf. Jira nimmt laut Doku bis zu 60 Teile in einer Anfrage,
-// aber parseOptions weist ein wiederholtes Flag absichtlich ab, und diese
+// aber der Parser weist ein wiederholtes Flag absichtlich ab, und diese
 // Schranke fuer eine Bequemlichkeit aufzuweichen, nach der niemand gefragt hat,
 // waere der falsche Tausch.
 async function attach(options: Options, deps: BrokerDeps): Promise<CliResult> {
@@ -937,25 +919,42 @@ async function unlink(options: Options, deps: BrokerDeps): Promise<CliResult> {
     : { exitCode: 0, output };
 }
 
-// OP-1124: one table instead of an allow-list plus an if-chain. The two used to
-// be kept in step by hand, and a command present in one and missing in the other
-// would have fallen through runCli without a result.
-interface Command {
-  allowed: string[];
-  run: (options: Options, deps: BrokerDeps) => Promise<CliResult>;
-}
+// OP-1124: one table instead of an allow-list plus an if-chain. The flags each
+// verb reads now come from the same table as the help text (#299), so parser,
+// help and dispatch cannot drift apart; the type below keeps COMMANDS in step.
+export const FLAGS = {
+  create: {
+    required: { summary: "<text>", body: "<text>" },
+    optional: { type: "<name>", parent: "<KEY>", assignee: "<accountId>" },
+  },
+  update: {
+    required: { key: "<KEY>" },
+    optional: { summary: "<text>", body: "<text>", labels: "<a,b>", components: "<a,b>", assignee: "<accountId>" },
+  },
+  comment: { required: { key: "<KEY>", body: "<text>" } },
+  attach: { required: { key: "<KEY>", file: "<path>" }, optional: { "content-type": "<type>" } },
+  download: { required: { key: "<KEY>", id: "<id>" }, optional: { accept: "<type>" } },
+  get: { required: { key: "<KEY>" }, optional: { fields: "<a,b>" } },
+  search: { required: { jql: "<jql>" }, optional: { max: "<n>", fields: "<a,b>", page: "<token>" } },
+  transition: { required: { key: "<KEY>", to: "<new|indeterminate|done>" }, optional: { acceptance: "<evidence>" } },
+  link: { required: { type: "<name>", outward: "<KEY>", inward: "<KEY>" } },
+  unlink: { required: { type: "<name>", outward: "<KEY>", inward: "<KEY>" } },
+  selftest: {},
+} satisfies VerbTable;
 
-const COMMANDS: Record<string, Command> = {
-  create: { allowed: ["type", "summary", "body", "parent", "assignee"], run: create },
-  update: { allowed: ["key", "summary", "body", "labels", "components", "assignee"], run: update },
-  comment: { allowed: ["key", "body"], run: comment },
-  attach: { allowed: ["key", "file", "content-type"], run: attach },
-  download: { allowed: ["key", "id", "accept"], run: download },
-  get: { allowed: ["key", "fields"], run: get },
-  search: { allowed: ["jql", "max", "fields", "page"], run: search },
-  transition: { allowed: ["key", "to", "acceptance"], run: transition },
-  link: { allowed: ["type", "outward", "inward"], run: link },
-  unlink: { allowed: ["type", "outward", "inward"], run: unlink },
+type Verb = keyof typeof FLAGS;
+
+const COMMANDS: Record<Exclude<Verb, "selftest">, (options: Options, deps: BrokerDeps) => Promise<CliResult>> = {
+  create,
+  update,
+  comment,
+  attach,
+  download,
+  get,
+  search,
+  transition,
+  link,
+  unlink,
 };
 
 export async function runCli(argv: string[], injected: Partial<BrokerDeps> = {}): Promise<CliResult> {
@@ -968,25 +967,26 @@ export async function runCli(argv: string[], injected: Partial<BrokerDeps> = {})
   };
   try {
     const [name, ...rest] = argv;
-    if (name === "selftest" && rest.length === 0) {
-      // selftest needs the site it should prove itself against, and nothing
-      // else. Validating it here keeps the contract that a misconfigured host
-      // fails on configuration, before any credential read or network call.
-      deps.seed = jiraSeed(deps.env);
-      return await selftest(deps);
-    }
-    const command = COMMANDS[name];
-    if (!command) stop("Nutzung: create | update | comment | attach | download | get | search | transition | link | unlink | selftest.");
-    const options = parseOptions(rest);
-    rejectUnknownOptions(options, command.allowed);
+    // Help stays inside the JSON-only stdout contract.
+    if (isHelp(name)) return { exitCode: 0, output: { usage: helpText(FLAGS, DE) } };
+    // One line on purpose: the contract test requires the verbs of this usage
+    // string to be exactly the keys of FLAGS.
+    if (!Object.hasOwn(FLAGS, name)) stop("Nutzung: create | update | comment | attach | download | get | search | transition | link | unlink | selftest. Die Flags je Verb zeigt help.");
+    const verb = name as Verb;
+    const options = parseVerbArgs(verb, FLAGS[verb], rest, DE);
+    // A misconfigured host fails on configuration, before any credential read
+    // or network call. selftest needs the site it should prove itself against,
+    // and nothing else.
     deps.seed = jiraSeed(deps.env);
+    if (verb === "selftest") return await selftest(deps);
     deps.jira = configuredBinding(deps.env) ?? await resolveBinding(deps);
-    return await command.run(options, deps);
+    return await COMMANDS[verb](options, deps);
   } catch (error) {
     let output: CliOutput;
     if (error instanceof CliFailure) {
       output = error.output;
-    } else if (error instanceof AtlassianCredentialError || error instanceof JiraConfigError) {
+    } else if (error instanceof CliArgsError || error instanceof AtlassianCredentialError
+      || error instanceof JiraConfigError) {
       output = { status: 0, error: error.message };
     } else {
       output = { status: 0, error: "Interner Fehler." };

@@ -11,6 +11,7 @@ import { readFile as nodeReadFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { CliArgsError, EN, helpText, isHelp, parseVerbArgs, type VerbTable } from "./atlassian-cli-args.mts";
 import { ConfluenceError } from "./confluence-contract.mts";
 import {
   addLabels,
@@ -76,23 +77,32 @@ function fail(message: string): never {
   throw new CliFailure(message);
 }
 
-// Flags without a value. Otherwise "--body-only --id 5001" reads "--id" as one.
-const VALUELESS = new Set(["body-only"]);
+// What each verb reads, and nothing else. The parser and the help text are
+// both generated from this table, so neither can drift from the other.
+const BODY = { body: "<text>", "body-file": "<path>" };
+export const FLAGS = {
+  create: {
+    required: { space: "<key>", title: "<title>", format: "<storage|wiki|adf>" },
+    oneOf: [BODY],
+    optional: { parent: "<id>", labels: "<a,b>" },
+  },
+  update: { required: { id: "<id>", format: "<storage|wiki|adf>" }, oneOf: [BODY], optional: { title: "<title>", message: "<text>" } },
+  get: { required: { id: "<id>" }, optional: { format: "<storage|adf>" }, valueless: ["body-only"] },
+  delete: { required: { id: "<id>" } },
+  purge: { required: { id: "<id>" } },
+  labels: { required: { id: "<id>" }, optional: { labels: "<a,b>", remove: "<a,b>" } },
+  move: { required: { id: "<id>", parent: "<id>" } },
+  space: { required: { space: "<key>" } },
+  children: { required: { id: "<id>" } },
+  related: { required: { space: "<key>", title: "<title>" }, optional: { id: "<id>", parent: "<id>", limit: "<n>" } },
+  search: { required: { space: "<key>", query: "<terms>" }, optional: { limit: "<n>" } },
+  context: { required: { space: "<key>", id: "<id>" } },
+  orphans: { required: { space: "<key>" } },
+  stitch: { required: { space: "<key>" }, optional: { id: "<id>", limit: "<n>", "per-orphan": "<n>" }, valueless: ["dry-run"] },
+  selftest: {},
+} satisfies VerbTable;
 
-export function parseArgs(argv: string[]): Args {
-  const args: Args = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    if (!argv[index].startsWith("--")) continue;
-    const name = argv[index].slice(2);
-    if (VALUELESS.has(name)) {
-      args[name] = "";
-      continue;
-    }
-    args[name] = argv[index + 1];
-    index += 1;
-  }
-  return args;
-}
+type Verb = keyof typeof FLAGS;
 
 async function bodyOf(ctx: CliContext, args: Args): Promise<string> {
   const file = args["body-file"];
@@ -220,7 +230,7 @@ async function cmdSelftest(ctx: CliContext): Promise<number> {
   return report.ok ? 0 : 1;
 }
 
-const COMMANDS: Record<string, (ctx: CliContext, args: Args) => Promise<number>> = {
+const COMMANDS: Record<Verb, (ctx: CliContext, args: Args) => Promise<number>> = {
   create: cmdCreate,
   update: cmdUpdate,
   get: cmdGet,
@@ -253,16 +263,27 @@ export async function runCli(argv: string[], injected: Injected = {}): Promise<n
     session: {},
   };
   const [command, ...rest] = argv;
+  if (isHelp(command)) {
+    for (const line of helpText(FLAGS, EN)) ctx.log(line);
+    return 0;
+  }
   try {
-    const run = COMMANDS[command];
-    // One line on purpose: the contract test reads this source and requires every
-    // verb of the command table to appear in a single usage string.
-    if (!run) fail("Usage: create | update | get [--body-only [--format storage|adf]] | delete | purge | labels | move | space | children | related | search | context | orphans | stitch | selftest");
-    return await run(ctx, parseArgs(rest));
+    // One line on purpose: the contract test reads this source and requires the
+    // verbs of this usage string to be exactly the keys of FLAGS.
+    if (!Object.hasOwn(FLAGS, command)) fail("Usage: create | update | get | delete | purge | labels | move | space | children | related | search | context | orphans | stitch | selftest. Run help for the flags of each verb.");
+    const verb = command as Verb;
+    return await COMMANDS[verb](ctx, parseVerbArgs(verb, FLAGS[verb], rest, EN));
   } catch (error) {
-    ctx.logError(error instanceof CliFailure || error instanceof ConfluenceError
-      ? error.cliMessage
-      : "Internal error.");
+    let message = "Internal error.";
+    if (error instanceof CliFailure || error instanceof ConfluenceError) message = error.cliMessage;
+    else if (error instanceof CliArgsError) message = error.message;
+    ctx.logError(message);
+    // search keeps its research contract: exit 1 is a measured "no match", so a
+    // call that never searched is unavailable (2), not a zero.
+    if (command === "search" && error instanceof CliArgsError) {
+      ctx.log("status: unavailable");
+      return 2;
+    }
     return 1;
   }
 }

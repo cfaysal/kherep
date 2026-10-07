@@ -462,6 +462,7 @@ test("installs the Mac-compatible projection without replacing user state", asyn
     "atl-jira.mts",
     "atl-jira-ccoder.mts",
     "atlassian-credentials.mts",
+    "atlassian-cli-args.mts",
     "jira-adf.mts",
     "jira-config.mts",
     "jira-fields.mts",
@@ -584,6 +585,7 @@ test("default install projects observation delivery without optional Jira toolin
   assert.equal(fs.readFileSync(retired, "utf8"), "operator-owned-retired\n");
   for (const name of [
     "atlassian-credentials.mts",
+    "atlassian-cli-args.mts",
     "atl-confluence.mts",
     "confluence-contract.mts",
     "confluence-content.mts",
@@ -773,7 +775,8 @@ test("rolls every managed target back when installation fails", (t) => {
   fs.writeFileSync(configTarget, 'model = "keep"\n', "utf8");
   const brokerNames = [
     "atl-jira", "atl-jira-ccoder", "jira-adf", "jira-config", "jira-fields", "jira-links", "jira-transition-guard",
-    "atlassian-credentials", "atl-confluence", "confluence-contract", "confluence-content", "confluence-session",
+    "atlassian-credentials", "atlassian-cli-args", "atl-confluence", "confluence-contract", "confluence-content",
+    "confluence-session",
     "confluence-related", "confluence-semantic", "confluence-neighbours", "confluence-neighbour-cli", "confluence-runtime-label",
   ];
   for (const name of brokerNames) {

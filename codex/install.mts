@@ -193,6 +193,7 @@ export function install(options: InstallOptions = {}) {
     localInferenceConfig: path.join(repoRoot, "bootstrap", "manifest", "local-inference.json"),
     twg: path.join(repoRoot, "modules", "twg", "runtime"),
     atlassianCredentials: path.join(repoRoot, "modules", "atl-jira-brokers", "atlassian-credentials.mts"),
+    atlassianCliArgs: path.join(repoRoot, "modules", "atl-jira-brokers", "atlassian-cli-args.mts"),
     jiraAdfRenderer: path.join(repoRoot, "modules", "atl-jira-brokers", "jira-adf.mts"),
     jiraAdfReader: path.join(repoRoot, "modules", "atl-jira-brokers", "jira-adf-text.mts"),
     jiraAttach: path.join(repoRoot, "modules", "atl-jira-brokers", "jira-attach.mts"),
@@ -235,6 +236,7 @@ export function install(options: InstallOptions = {}) {
     twg: path.join(codexHome, "kherep", "twg"),
     memoryNotifyHook: path.join(codexHome, "hooks", "kherep-maestro", "codex-memory-notify.js"),
     atlassianCredentials: path.join(workspace, "tools", "atlassian-credentials.mts"),
+    atlassianCliArgs: path.join(workspace, "tools", "atlassian-cli-args.mts"),
     jiraAdfRenderer: path.join(workspace, "tools", "jira-adf.mts"),
     jiraAdfReader: path.join(workspace, "tools", "jira-adf-text.mts"),
     jiraAttach: path.join(workspace, "tools", "jira-attach.mts"),
@@ -342,6 +344,7 @@ export function install(options: InstallOptions = {}) {
 
     for (const [source, target] of [
       [sources.atlassianCredentials, targets.atlassianCredentials],
+      [sources.atlassianCliArgs, targets.atlassianCliArgs],
       [sources.confluenceContract, targets.confluenceContract],
       [sources.confluenceContent, targets.confluenceContent],
       [sources.confluenceSession, targets.confluenceSession],

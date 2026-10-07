@@ -10,6 +10,9 @@ const brokers = [
   { name: "atl-jira-ccoder.mts", ownEnv: "KHEREP_ATL_CRED_FILE_CLAUDE", foreignEnv: "KHEREP_ATL_CRED_FILE_CODEX" },
 ];
 const SHARED_CREDENTIAL_MODULE = "atlassian-credentials.mts";
+// #299. The strict argument parser both broker families share, installed with
+// the default Confluence set for the same reason as the credential parser.
+const SHARED_CLI_ARGS_MODULE = "atlassian-cli-args.mts";
 
 // A source with its line comments removed. These files carry long explanatory
 // comments by design, so an assertion about what the CODE does must not be
@@ -324,6 +327,7 @@ test("every Confluence module and broker is covered by every projection site", (
   );
   const projected = [
     SHARED_CREDENTIAL_MODULE,
+    SHARED_CLI_ARGS_MODULE,
     ...SHARED_CONFLUENCE_MODULES,
     ...confluenceBrokers.map((broker) => broker.name),
   ];
@@ -357,4 +361,29 @@ test("the documented scope per verb is the one the contract declares", async () 
     space: "read:space:confluence",
     children: "read:page:confluence",
   });
+});
+
+// #299. Every broker parses its arguments through the one strict parser, from a
+// per-verb FLAGS table, and the literal one-line usage string above stays the
+// exact verb list of that table. A verb added to the table and forgotten in the
+// usage line, or the other way round, fails here rather than in a caller.
+const ALL_BROKERS = [...brokers, ...confluenceBrokers].map((broker) => broker.name);
+
+test("every broker parses arguments through the shared strict parser", () => {
+  for (const name of ALL_BROKERS) {
+    const source = fs.readFileSync(path.join(sourceRoot, name), "utf8");
+    assert.match(source, /import \{[^}]*\bparseVerbArgs\b[^}]*\} from "\.\/atlassian-cli-args\.mts";/s, name);
+    assert.match(codeOnly(source), /parseVerbArgs\(verb, FLAGS\[verb\], rest, (?:EN|DE)\)/, name);
+    assert.doesNotMatch(codeOnly(source), /function parse(?:Args|Options)\b|rejectUnknownOptions|VALUELESS/, name);
+  }
+});
+
+test("each broker's usage line names exactly the verbs of its FLAGS table", async () => {
+  for (const name of ALL_BROKERS) {
+    const source = fs.readFileSync(path.join(sourceRoot, name), "utf8");
+    const lines = [...codeOnly(source).matchAll(/(?:Usage|Nutzung): ((?:[a-z]+ \| )+[a-z]+)/g)];
+    assert.equal(lines.length, 1, `${name} must carry exactly one usage line`);
+    const { FLAGS } = await import(pathToFileURL(path.join(sourceRoot, name)).href) as { FLAGS: Record<string, unknown> };
+    assert.deepEqual(lines[0][1].split(" | ").sort(), Object.keys(FLAGS).sort(), name);
+  }
 });

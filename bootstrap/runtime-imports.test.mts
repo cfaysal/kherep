@@ -33,6 +33,7 @@ test("projected runtime artifacts import from their installed layouts", async (t
     path.join(bridge, "registry-http-wrapper.mts"),
     path.join(bridge, "supergateway-secret-wrapper.mts"),
     path.join(brokers, "atlassian-credentials.mts"),
+    path.join(brokers, "atlassian-cli-args.mts"),
     path.join(brokers, "atl-jira.mts"),
     path.join(brokers, "atl-jira-ccoder.mts"),
     // OP-1405. The Confluence brokers import their shared modules through

@@ -19,6 +19,14 @@ Provide these environment variables to the runtime invoking the broker. Keep act
 
 For example, `{"Task":"10001"}` illustrates the type-map format. The name and ID must come from the configured site; the example is not a default. Jira's REST API retains `project` and `issue` terminology.
 
+## Arguments and help
+
+All four brokers take `help` (also `--help` or `-h`) and list every verb with its required flags, alternatives in `( | )` and `[optional]` flags, with exit 0 and without reading configuration or credentials. The Codex Jira broker keeps its JSON-only stdout and returns the list as `{"usage": [...]}`.
+
+Arguments are strict. A positional argument, an unknown flag, a flag without a value, a repeated flag or a missing required flag is refused before any configuration, credential or network access. The message names the verb's full syntax and, for a positional, the call it probably meant, for example `Did you mean: get --id 275907063`. `search` reports such a refusal as `status: unavailable` with exit 2, because its exit 1 means a search that ran and matched nothing. The Jira brokers answer in German, the Confluence brokers in English.
+
+The flags each verb reads are declared once per broker in a `FLAGS` table; the parser and the help text are both generated from it by `atlassian-cli-args.mts`. That module installs with the default Confluence set, beside `atlassian-credentials.mts`, because both broker families import it.
+
 ## Confluence brokers
 
 `atl-confluence-ccoder.mts` (Claude) and `atl-confluence.mts` (Codex) read the same two credential variables as their Jira counterparts and the same `KHEREP_ATL_SITE`. They need no space or page binding: a space is resolved from its key at call time.
