@@ -168,7 +168,8 @@ test("6. a 0-byte own lib workspace-scope is reported only", (t) => {
 
 test("7. without a checkout nothing is written and the result is NOT restored", (t) => {
   const ctx = fixture(t);
-  const encoded = (value: string) => JSON.stringify(value.replace(/"/g, '\\"')).slice(1, -1);
+  // A path as it appears inside the TOML basic string (JSON escaping; paths hold no quotes).
+  const encoded = (value: string) => JSON.stringify(value).slice(1, -1);
   const deliver = path.join("modules", "control-plane", "node", "deliver-hook.mts");
   const text = fs.readFileSync(ctx.config, "utf8");
   assert.ok(text.includes(encoded(path.join(REPO, deliver))), "the installed config names the deliver hook in this checkout");
