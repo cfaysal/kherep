@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// Unit test for hook-syntax.mts (issue #278). Pure strings into syntaxVerdict,
-// except where Node itself needs a file: the .js confirmation, the CLI and the
-// stderr check, which use one mkdtemp directory. Runs on its own as
-// `node hook-syntax.test.mts`, like every suite in CI.
+// Unit test for hook-syntax.mts (issues #278 and #284). Pure strings into
+// syntaxVerdict, except where Node itself needs a file: the .js confirmation,
+// the CLI, the stderr checks and the loader-hook fixture, which use one mkdtemp
+// directory. Runs on its own as `node hook-syntax.test.mts`, like every suite
+// in CI.
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import module from "node:module";
 import os from "node:os";
@@ -13,7 +14,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { after, test } from "node:test";
 
-import { linkFailureVerdict, syntaxVerdict, type SyntaxVerdict } from "./hook-syntax.mts";
+import { checkFailureVerdict, linkFailureVerdict, syntaxVerdict, type SyntaxVerdict } from "./hook-syntax.mts";
 
 const LIB = path.join(import.meta.dirname, "hook-syntax.mts");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "hook-syntax-"));
@@ -122,12 +123,11 @@ test("CommonJS keeps the vm.Script path confirmed by node --check", async () => 
 // child re-emits the text of Node's type-stripping warning itself, so its
 // survival is proven on Node versions that no longer print it on their own.
 const NODE_STRIP_WARNING = "Type Stripping is an experimental feature and might change at any time";
-function warningRun(quiet: boolean): string {
-  const lib = pathToFileURL(LIB).href;
+function warningRun(viaLib: boolean): string {
   const script = [
-    `const m = await import(${JSON.stringify(lib)});`,
-    quiet ? "m.quietStripWarning();" : "",
-    'await m.syntaxVerdict("hook.mts", "export const x: number = 1;\\n");',
+    // The control calls the stripper directly: the warning exists in this Node.
+    viaLib ? `const m = await import(${JSON.stringify(pathToFileURL(LIB).href)});\nawait m.syntaxVerdict("hook.mts", "export const x: number = 1;\\n");`
+      : 'const { default: m } = await import("node:module");\nm.stripTypeScriptTypes("const x: number = 1;");',
     `process.emitWarning(${JSON.stringify(NODE_STRIP_WARNING)}, "ExperimentalWarning");`,
     'process.emitWarning("kherep unrelated deprecation", "DeprecationWarning");',
   ].join("\n");
@@ -136,7 +136,7 @@ function warningRun(quiet: boolean): string {
 
 test("only the stripper's ExperimentalWarning is filtered", () => {
   const loud = warningRun(false);
-  assert.match(loud, /ExperimentalWarning: stripTypeScriptTypes/, "control: the warning exists unfiltered");
+  assert.match(loud, /ExperimentalWarning: stripTypeScriptTypes/, "control: the warning exists in this Node");
   const quiet = warningRun(true);
   assert.doesNotMatch(quiet, /stripTypeScriptTypes/);
   assert.ok(quiet.includes(`ExperimentalWarning: ${NODE_STRIP_WARNING}`), quiet);
@@ -169,4 +169,79 @@ test("records whether node --check still passes an ESM syntax error in .mts", ()
   fs.writeFileSync(file, "export const x = ;\n");
   const status = spawnSync(process.execPath, ["--check", file]).status;
   console.log(`MEASURED | node ${process.version} --check on "export const x = ;" (.mts) exits ${status}`);
+});
+
+// ---- issue #284 ----
+
+// Item 1: the filter must not rewrap listeners. A `once` listener fires once, a
+// listener attached after quietStripWarning() never sees the stripper's warning
+// and the printer stays installed (listener count unchanged). Counted, not
+// compared as a list: Node 24.1 may emit its own warning for the .mts import.
+test("the warning filter leaves listeners alone: once fires once, a late listener is shielded", () => {
+  const script = [
+    `const m = await import(${JSON.stringify(pathToFileURL(LIB).href)});`,
+    'const seen = []; process.once("warning", (w) => seen.push("once:" + w.name)); const before = process.listeners("warning").length;',
+    'm.quietStripWarning(); process.on("warning", (w) => seen.push("late:" + w.message.split(" ")[0]));',
+    'await m.syntaxVerdict("hook.mts", "export const x: number = 1;\\n");',
+    'process.emitWarning("kherep one", "DeprecationWarning"); process.emitWarning("kherep two", "DeprecationWarning");',
+    'await new Promise((r) => setTimeout(r, 20)); console.log(JSON.stringify({ before, after: process.listeners("warning").length, seen }));',
+  ].join("\n");
+  const run = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" });
+  const out = JSON.parse(run.stdout.trim().split(/\r?\n/).pop() || "{}");
+  const seen: string[] = out.seen || [];
+  assert.equal(out.after, out.before, run.stdout + run.stderr);
+  assert.equal(seen.filter((s) => s.startsWith("once:")).length, 1, seen.join());
+  assert.equal(seen.filter((s) => s === "late:kherep").length, 2, seen.join());
+  assert.ok(!seen.some((s) => s.includes("stripTypeScriptTypes")), seen.join());
+});
+
+// Item 2: a node --check that did not run or did not finish proves nothing.
+test("a node --check that did not run or finish is UNGEPRUEFT, not DEFEKT", async () => {
+  const broken = path.join(TMP, "unconfirmed.js");
+  fs.writeFileSync(broken, "function guard( { return;\n");
+  const execPath = process.execPath;
+  process.execPath = path.join(TMP, "no-such-node"); // a real ENOENT through the public path
+  try {
+    const v = await syntaxVerdict(broken, fs.readFileSync(broken, "utf8"));
+    assert.equal(v.state, "UNGEPRUEFT", detailOf(v));
+    assert.match(detailOf(v), /ENOENT/);
+  } finally {
+    process.execPath = execPath;
+  }
+  const caught = (fn: () => void): unknown => { try { fn(); } catch (e) { return e; } return undefined; };
+  const io = { stdio: ["ignore", "ignore", "pipe"] as ["ignore", "ignore", "pipe"] };
+  const timedOut = caught(() => execFileSync(process.execPath, ["--check", broken], { ...io, timeout: 1 })); // a real ETIMEDOUT
+  assert.equal(checkFailureVerdict(timedOut, broken).state, "UNGEPRUEFT", String((timedOut as Error).message));
+  const shapes = [
+    { status: null, signal: "SIGKILL", stderr: Buffer.alloc(0) },
+    { status: 9, signal: null, stderr: "node: --bogus is not allowed in NODE_OPTIONS\n" },
+    { status: 1, signal: null, stderr: "Error: Cannot find module 'x'\n" },
+    { status: 1, signal: null, stderr: `${path.join(TMP, "preload.js")}:1\nconst = 1;\n      ^\n\nSyntaxError: Unexpected token '='\n` },
+  ];
+  for (const s of shapes) assert.equal(checkFailureVerdict(Object.assign(new Error("Command failed"), s), broken).state, "UNGEPRUEFT", JSON.stringify(s));
+  const rejected = caught(() => execFileSync(process.execPath, ["--check", broken], { ...io, timeout: 15_000 }));
+  assert.equal(checkFailureVerdict(rejected, broken).state, "DEFEKT", String((rejected as Error).message));
+});
+
+// Item 3: a customization hook that resolves the probe specifier must not let
+// the module evaluate; the verdict is UNGEPRUEFT and names the hook. The fixture
+// has one module request, the probe, so the reported failure is deterministic.
+test("a loader hook that resolves the probe gives UNGEPRUEFT before anything runs", () => {
+  const hook = path.join(TMP, "resolve-probe.mjs");
+  fs.writeFileSync(hook, [
+    `import { registerHooks } ${from("node:module")};`,
+    'const stub = "data:text/javascript," + encodeURIComponent("globalThis.__kherepStubRan = true;");',
+    'registerHooks({ resolve(specifier, context, next) { return specifier.startsWith("kherep-syntax-probe:") ? { url: stub, format: "module", shortCircuit: true } : next(specifier, context); } });',
+  ].join("\n"));
+  const script = [
+    `const m = await import(${JSON.stringify(pathToFileURL(LIB).href)});`,
+    'const v = await m.syntaxVerdict("hook.mts", "globalThis.__kherepHookRan = true;\\nexport const x: number = 1;\\n");',
+    'console.log(JSON.stringify({ v, hookRan: globalThis.__kherepHookRan === true, stubRan: globalThis.__kherepStubRan === true }));',
+  ].join("\n");
+  const run = spawnSync(process.execPath, [`--import=${pathToFileURL(hook).href}`, "--input-type=module", "-e", script], { encoding: "utf8" });
+  const out = JSON.parse(run.stdout.trim().split(/\r?\n/).pop() || "{}");
+  assert.equal(out.hookRan, false, run.stdout + run.stderr);
+  assert.equal(out.stubRan, false);
+  assert.equal(out.v.state, "UNGEPRUEFT");
+  assert.match(out.v.detail, /customization hook/);
 });

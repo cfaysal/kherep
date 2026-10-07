@@ -23,6 +23,11 @@
  * Known limit: link-time SyntaxErrors (`import { nope } from "node:fs"`) are not
  * detected; the probe's failed resolution comes first. `node --check` never
  * caught them either.
+ * A module customization hook (`--import`/`--require` with `module.register` or
+ * `module.registerHooks`) that resolves the probe specifier is stopped by the
+ * probe's import attribute, which no format accepts, before anything is
+ * instantiated: UNGEPRUEFT, never OK. A hook that also rewrites the import
+ * attributes or short-circuits `load` owns the process and is outside this check.
  *
  * CLI for shell callers: `node hook-syntax.mts <file>` prints `OK`, `DEFEKT
  * <detail>` or `UNGEPRUEFT <detail>` and exits 0, 1 or 2.
@@ -43,27 +48,42 @@ const OK: SyntaxVerdict = { state: "OK" };
 // The codes a module request fails with when only resolution stopped it.
 const LINK_FAILED = new Set(["ERR_UNSUPPORTED_ESM_URL_SCHEME", "ERR_UNSUPPORTED_RESOLVE_REQUEST", "ERR_MODULE_NOT_FOUND"]);
 const TS_REJECTED = new Set(["ERR_INVALID_TYPESCRIPT_SYNTAX", "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX"]);
-const PROBE = 'import "kherep-syntax-probe:never";';
+// The probe's import attribute is one no module format accepts, so even a
+// customization hook that resolves the specifier stops at Node's load step
+// (ERR_IMPORT_ATTRIBUTE_UNSUPPORTED) before anything is instantiated (#284).
+const PROBE = 'import "kherep-syntax-probe:never" with { type: "kherep-syntax-probe" };';
+const HOOK_RESOLVED = "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED";
 
 const errorCode = (error: unknown): string | undefined =>
   error && typeof error === "object" ? (error as NodeJS.ErrnoException).code : undefined;
 const firstLine = (error: unknown): string =>
   String((error && (error as Error).message) || error).split(/\r?\n/)[0].trim();
 
-let quieted = false;
+// Kept for its callers (live-hook-integrity.mts): since #284 the strip call
+// below quiets its own ExperimentalWarning, so there is nothing to do here.
+export function quietStripWarning(): void {}
 
-// The stripper announces itself as experimental once per process on stderr.
-// This drops that one warning and forwards every other one to the listeners
-// that were there, Node's printer included. Idempotent.
-export function quietStripWarning(): void {
-  if (quieted) return;
-  quieted = true;
-  const listeners = process.listeners("warning");
-  process.removeAllListeners("warning");
-  process.on("warning", (warning: Error) => {
-    if (warning.name === "ExperimentalWarning" && /\bstripTypeScriptTypes\b/.test(warning.message)) return;
-    for (const listener of listeners) listener.call(process, warning);
-  });
+// The stripper announces itself as experimental once per process, through
+// process.emitWarning, synchronously, before it parses. Swapping that function
+// for the duration of the one call drops exactly that warning and nothing else:
+// no listener is touched, a `once` listener stays a once listener, and a
+// listener attached later never sees it either (#284). Node marks the warning
+// as emitted before it calls emitWarning, so it stays silent for the process.
+function withoutStripWarning<T>(run: () => T): T {
+  const emit = process.emitWarning;
+  const filtered = (warning: string | Error, ...rest: unknown[]): void => {
+    const option = rest[0] as string | { type?: string } | undefined;
+    const type = typeof option === "string" ? option : option?.type ?? (warning as Error).name;
+    const text = typeof warning === "string" ? warning : String(warning?.message);
+    if (type === "ExperimentalWarning" && /\bstripTypeScriptTypes\b/.test(text)) return;
+    Reflect.apply(emit, process, [warning, ...rest]);
+  };
+  process.emitWarning = filtered as typeof process.emitWarning;
+  try {
+    return run();
+  } finally {
+    process.emitWarning = emit;
+  }
 }
 
 // The verdict for the error a probe import failed with. Which failing request
@@ -73,12 +93,14 @@ export function linkFailureVerdict(error: unknown): SyntaxVerdict {
   const code = errorCode(error);
   if (error instanceof SyntaxError && !code) return { state: "DEFEKT", detail: `rejected by Node's parser: ${firstLine(error)}` };
   if (code && LINK_FAILED.has(code)) return OK;
+  if (code === HOOK_RESOLVED) return { state: "UNGEPRUEFT", detail: "a module customization hook resolved the probe import; only Node's default loader is trusted" };
   return { state: "UNGEPRUEFT", detail: `${code || (error as Error)?.name || "error"}: ${firstLine(error)}` };
 }
 
-// V8's module parse of plain JavaScript. The probe import cannot resolve, so the
-// graph never links and nothing evaluates; a resolution failure means the parse
-// passed. A module that DID evaluate is reported, never taken as OK.
+// V8's module parse of plain JavaScript. The probe import cannot resolve (or,
+// under a hook that resolves it, cannot load), so the graph never links and
+// nothing evaluates; a resolution failure means the parse passed. A module that
+// DID evaluate is reported, never taken as OK.
 export async function esmParses(js: string): Promise<SyntaxVerdict> {
   try {
     await import(`data:text/javascript,${encodeURIComponent(`${js}\n${PROBE}\n`)}`);
@@ -92,7 +114,7 @@ function stripVerdict(source: string): SyntaxVerdict | string {
   const strip = (module as { stripTypeScriptTypes?: (code: string) => string }).stripTypeScriptTypes;
   if (typeof strip !== "function") return { state: "UNGEPRUEFT", detail: "this Node has no module.stripTypeScriptTypes" };
   try {
-    return strip(source);
+    return withoutStripWarning(() => strip(source));
   } catch (error) {
     const code = errorCode(error);
     if (code && TS_REJECTED.has(code)) return { state: "DEFEKT", detail: `rejected by Node's parser: ${code}: ${firstLine(error)}` };
@@ -100,8 +122,27 @@ function stripVerdict(source: string): SyntaxVerdict | string {
   }
 }
 
-// CommonJS, unchanged from the integrity hook: node --check has the last word
-// over what the in-process parse rejected (a top-level return, for instance).
+// node --check's answer about a script vm.Script rejected. Only a child that ran
+// to a non-zero exit on its own and printed a SyntaxError for THIS file is a
+// rejection. One that never ran or never finished (ENOENT, ETIMEDOUT, a signal,
+// exit 9 for a bad NODE_OPTIONS, a SyntaxError in a preload) proves nothing (#284).
+export function checkFailureVerdict(error: unknown, file: string): SyntaxVerdict {
+  const e = (error ?? {}) as { code?: string; status?: number | null; signal?: string | null; stderr?: unknown };
+  const lines = String(e.stderr ?? "").split(/\r?\n/).map((l) => l.trim());
+  const syntax = lines.find((l) => /^SyntaxError\b/.test(l));
+  const ours = new RegExp(`(^|[\\\\/])${path.basename(file).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\d+$`).test(lines[0] || "");
+  if (typeof e.status === "number" && e.status !== 0 && !e.signal && syntax && ours) {
+    return { state: "DEFEKT", detail: `rejected by node --check: ${syntax}` };
+  }
+  let why = firstLine(error);
+  if (e.code) why = e.code;
+  else if (e.signal) why = `killed by ${e.signal}`;
+  else if (typeof e.status === "number") why = `exit ${e.status}: ${lines.find((l) => l) || "no stderr"}`;
+  return { state: "UNGEPRUEFT", detail: `vm.Script rejected it and node --check could not confirm (${why})` };
+}
+
+// CommonJS, as in the integrity hook: node --check has the last word over what
+// the in-process parse rejected (a top-level return, for instance).
 function scriptVerdict(file: string, source: string): SyntaxVerdict {
   try {
     new vm.Script(source, { filename: file });
@@ -113,8 +154,7 @@ function scriptVerdict(file: string, source: string): SyntaxVerdict {
     execFileSync(process.execPath, ["--check", file], { stdio: ["ignore", "ignore", "pipe"], timeout: 15_000 });
     return OK;
   } catch (error) {
-    const lines = String((error && (error as { stderr?: unknown }).stderr) || "").split(/\r?\n/).map((l) => l.trim());
-    return { state: "DEFEKT", detail: `rejected by node --check: ${lines.find((l) => /Error|error:/.test(l)) || "rejected by node --check"}` };
+    return checkFailureVerdict(error, file);
   }
 }
 
@@ -133,7 +173,6 @@ export async function syntaxVerdict(file: string, source: string): Promise<Synta
 }
 
 async function cli(file: string | undefined): Promise<number> {
-  quietStripWarning();
   if (!file) {
     console.log("UNGEPRUEFT usage: node hook-syntax.mts <file>");
     return 2;
