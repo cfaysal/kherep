@@ -162,7 +162,8 @@ test("code work inside a git repository also needs the code graph", () => {
 test("the visible marker passes, from the transcript or from last_assistant_message", () => {
   assert.equal(decide([user("q"), WORK, EDIT, said("Done. [research: none - pure rename]")]), null);
   assert.equal(decide([user("q"), WORK, said("done")], { last_assistant_message: "[Research: NONE - trivial]" }), null);
-  assert.ok(decide([user("q"), WORK, said("[research: none]")]) === null, "the marker without reason still opts out");
+  assert.ok(decide([user("q"), WORK, said("[research: none]")]), "a marker without reason does not opt out (#293)");
+  assert.equal(decide([user("q"), WORK, said("Done. [research: none \u2013 pure rename]")]), null, "an en dash opts out (#293)");
   assert.ok(decide([user("q"), WORK, said("research none - missing brackets")]));
 });
 
