@@ -129,7 +129,7 @@ matching page was found. A failed search is NOT an empty answer. If the semantic
 the result is UNKNOWN, the verb exits non-zero and the run says so instead of reporting zero
 neighbours. A link to a page that was not read back is never written.
 
-After writing, the new page is stitched in the other direction: `stitch --id <new page>` puts a link
+After writing, the new page is stitched in the other direction: `stitch --space <key> --id <id>` puts a link
 to it on the pages it belongs next to. Outgoing links do not help the new page - by definition nobody
 names it yet - so the write lands on the neighbour. Without this step every observation adds one more
 page nothing points at, and the problem grows with every session.
