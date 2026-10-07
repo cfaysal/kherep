@@ -6,7 +6,7 @@ import type { Exists } from "./research-transcript.mts";
 
 export type EnvLike = Record<string, string | undefined>;
 // Byte-identical to claude/hooks/lib/research-evidence.mts (#293).
-export const RESEARCH_OPT_OUT = /\[\s*research\s*:\s*none\s*[\-\u2013\u2014]\s*[^\]\s][^\]\r\n]*\]/i;
+export const RESEARCH_OPT_OUT = /\[\s*research\s*:\s*none\s*[\-\u2013\u2014]\s*[^\]\[\s][^\]\[\r\n]*\]/i;
 const SPACE_KEY = /^[A-Za-z0-9~_-]{1,64}$/;
 
 export function normalize(value: unknown): string {
