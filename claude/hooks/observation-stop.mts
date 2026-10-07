@@ -26,7 +26,7 @@
  *
  * STRAY BODY FILES (issue #280). Independently of the decision, the hook reads
  * the top level of cwd and of the git root containing it, once each, for names
- * starting with "C" + U+F03A: what MSYS makes of a "C:\..." path written from
+ * starting with a drive letter + U+F03A: what MSYS makes of a "C:\..." or "D:\..." path written from
  * Bash, as claude-obs did with its page bodies on Windows. It reports a count
  * and one shortened example as systemMessage, which is shown to the user and
  * not sent to the model. It never deletes or moves a file.
@@ -119,7 +119,8 @@ export function decision(value: unknown, env: EnvLike = process.env): Continuati
   return { decision: "block", reason: OBSERVATION_REASON };
 }
 
-const STRAY_PREFIX = `C${String.fromCharCode(0xf03a)}`;
+// Any drive letter: the workspace itself can sit on D:.
+const STRAY_NAME = /^[A-Za-z]\uf03a/;
 
 function gitRoot(start: string): string {
   for (let dir = start; ; dir = path.dirname(dir)) {
@@ -130,7 +131,7 @@ function gitRoot(start: string): string {
 
 function strayNames(dir: string): string[] {
   try {
-    return fs.readdirSync(dir).filter((name) => name.startsWith(STRAY_PREFIX));
+    return fs.readdirSync(dir).filter((name) => STRAY_NAME.test(name));
   } catch {
     return [];
   }
@@ -142,9 +143,9 @@ export function strayWarning(value: unknown, env: EnvLike = process.env): string
   if (typeof payload.cwd !== "string" || !isKherepScope(payload, env)) return null;
   const cwd = path.resolve(payload.cwd);
   const dirs = [...new Set([cwd, gitRoot(cwd)].filter(Boolean))];
-  const found = dirs.flatMap((dir) => strayNames(dir).map((name) => `${path.basename(dir)}/C<U+F03A>...${name.slice(-20)}`));
+  const found = dirs.flatMap((dir) => strayNames(dir).map((name) => `${path.basename(dir)}/${name[0]}<U+F03A>...${name.slice(-20)}`));
   if (!found.length) return null;
-  return `Kherep: ${found.length} stray file(s) named C<U+F03A>..., a Windows path written from Bash (likely an observation page body), e.g. ${found[0]}. Left in place; move them out and never commit them.`;
+  return `Kherep: ${found.length} stray file(s) named <drive><U+F03A>..., a Windows path written from Bash (likely an observation page body), e.g. ${found[0]}. Left in place; move them out and never commit them.`;
 }
 
 function main(): void {
