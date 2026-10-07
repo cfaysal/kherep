@@ -58,7 +58,7 @@ test("recognizes direct function_call and custom_tool_call research tools", () =
   assert.equal(researchFacts(underscored, "D:/Work/repo", () => false).codeGraph, true);
 });
 
-test("counts the v2 Atlassian Confluence search only on an Atlassian server", () => {
+test("counts the v2 Confluence search under any server, a bare search only on an Atlassian server", () => {
   const brain = (name: string): boolean => {
     const parsed = parseRollout(rollout(started("turn"), call(name, { query: "x" })), "turn");
     assert.ok(parsed);
@@ -68,7 +68,7 @@ test("counts the v2 Atlassian Confluence search only on an Atlassian server", ()
   assert.equal(brain("mcp__rovo__searchConfluence"), true);
   assert.equal(brain("mcp__atlassian__search"), true);
   assert.equal(brain("mcp__0000_aaaa__searchConfluenceUsingCql"), true);
-  assert.equal(brain("mcp__bexio__searchConfluence"), false);
+  assert.equal(brain("mcp__1cecfb42-00ea-4453-a5ff-9da9581aab32__searchConfluence"), true);
   assert.equal(brain("mcp__bexio__search"), false);
 });
 

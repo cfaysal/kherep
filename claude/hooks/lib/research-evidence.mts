@@ -103,11 +103,11 @@ export function isBrainLookup(block: ContentBlock, extraSkills: ReadonlySet<stri
   }
   const mcp = mcpParts(name);
   if (!mcp) return false;
-  // A bare "search" tool, like the v2 server's "searchConfluence", is only an
-  // Atlassian search when the server says so; the v1 CQL search is unambiguous
-  // under any server name.
-  return mcp.tool === "searchConfluenceUsingCql"
-    || (["search", "searchConfluence"].includes(mcp.tool) && /rovo|atlassian/i.test(mcp.server));
+  // A bare "search" tool is only an Atlassian search when the server says so.
+  // The v1 CQL search and the v2 "searchConfluence" are unambiguous under any
+  // server name, including a claude.ai connector named by a UUID.
+  return ["searchConfluenceUsingCql", "searchConfluence"].includes(mcp.tool)
+    || (mcp.tool === "search" && /rovo|atlassian/i.test(mcp.server));
 }
 
 export function isCodeGraphCall(block: ContentBlock): boolean {

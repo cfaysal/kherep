@@ -19,7 +19,8 @@ increments the minor version; every other release increments the patch version.
   and recognises a managed block an earlier installer wrote with or without
   that `rovo` table; tables outside the block stay untouched. The install
   receipt drops `nativePlugins`. The research-evidence matchers count the v2
-  `searchConfluence` tool on an Atlassian server (issue #304).
+  `searchConfluence` tool under any server name, including a claude.ai
+  connector named by a UUID (issue #304).
 
 ## [0.2.0] - 2026-10-07
 

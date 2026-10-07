@@ -114,9 +114,11 @@ function mcpParts(name: string): { server: string; tool: string } | null {
 
 function isBrain(call: ToolCall): boolean {
   const mcp = mcpParts(call.name);
+  // A bare "search" counts only on an Atlassian server; the v1 CQL search and the
+  // v2 "searchConfluence" count under any server name, a UUID connector included.
   if (mcp) {
-    return mcp.tool === "searchConfluenceUsingCql"
-      || (["search", "searchConfluence"].includes(mcp.tool) && /rovo|atlassian/i.test(mcp.server));
+    return ["searchConfluenceUsingCql", "searchConfluence"].includes(mcp.tool)
+      || (mcp.tool === "search" && /rovo|atlassian/i.test(mcp.server));
   }
   if (!SHELL_TOOLS.has(call.name)) return false;
   const command = commandOf(call);
