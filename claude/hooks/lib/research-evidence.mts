@@ -16,8 +16,10 @@ import path from "node:path";
 import { contentBlocks, type ContentBlock, type TranscriptEntry } from "./turn-substance.mts";
 import { joinPathLike, normalizePathLike } from "./workspace-scope.mts";
 
-// The visible classification a turn gives when research is not relevant.
-export const RESEARCH_OPT_OUT = /\[\s*research\s*:\s*none\b/i;
+// The visible classification a turn gives when research is not relevant:
+// [research: none - <reason>], the dash a hyphen, en dash or em dash, the reason
+// required. Byte-identical to codex/hooks/research-common.mts (#293).
+export const RESEARCH_OPT_OUT = /\[\s*research\s*:\s*none\s*[\-\u2013\u2014]\s*[^\]\s][^\]\r\n]*\]/i;
 
 // <claude-home>/kherep/confluence.json, seen from <claude-home>/hooks/lib.
 const DEFAULT_CONFIG = path.join(import.meta.dirname, "..", "..", "kherep", "confluence.json");

@@ -17,7 +17,8 @@
  *   2. cwd is outside the configured Kherep workspace
  *   3. the transcript is missing, unreadable or empty
  *   4. the ending turn is trivial - the predicate observation-stop.mts uses
- *   5. the ending turn opts out with [research: none ...]
+ *   5. the ending turn opts out with [research: none - <reason>]; the reason is
+ *      required, the dash may be a hyphen, en dash or em dash
  *   6. the ending turn made a Brain lookup and, if it changed files inside a git
  *      repository, also queried the code graph
  *
