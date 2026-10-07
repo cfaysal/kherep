@@ -17,6 +17,7 @@
  * had before: an in-process vm.Script parse, confirmed by `node --check` when it
  * rejects, which is correct for CommonJS. That child runs without NODE_OPTIONS,
  * the policy the .mts path has: only Node's default loader is trusted (#292).
+ * So its rejection counts under whatever name Node prints for the file (#298).
  *
  * Three states, never merged (goldene Regel 12): OK, DEFEKT (Node's parser
  * rejected it), UNGEPRUEFT (neither proven). A Node without the stripper, or an
@@ -127,23 +128,31 @@ function stripVerdict(source: string): SyntaxVerdict | string {
 }
 
 // node --check's answer about a script vm.Script rejected. Only a child that ran
-// to a non-zero exit on its own and printed a SyntaxError for THIS file is a
-// rejection. One that never ran or never finished (ENOENT, ETIMEDOUT, a signal,
-// exit 9 for a bad NODE_OPTIONS, a SyntaxError in a preload) proves nothing (#284).
-// Node prints a rejection as one block: `<path>:<line>`, the source line, the
+// to a non-zero exit on its own and printed a rejection block is a rejection.
+// One that never ran or never finished (ENOENT, ETIMEDOUT, a signal, exit 9 for
+// a bad NODE_OPTIONS) proves nothing (#284).
+// Node prints a rejection as one block: `<where>:<line>`, the source line, the
 // caret line, a blank line, `SyntaxError: ...`. A SyntaxError line counts only
-// right after that blank line and when a line within the four above it names
-// this file, wherever the block sits, so lines printed before it (NODE_DEBUG, a
+// right after that blank line and when a line within the four above it is such
+// a location, wherever the block sits, so lines printed before it (NODE_DEBUG, a
 // loader warning) and a source line that itself starts with `SyntaxError` are
-// ignored (#292).
+// ignored (#292). The location may name another path than `file`: Node prints
+// the realpath of a link and honours `//# sourceURL=` (#298). That is sound only
+// because scriptVerdict runs the child without NODE_OPTIONS, so no preload can
+// print or forge a block, and node --check parses exactly this one file; drop
+// that env filter and a forged block becomes a false DEFEKT. A `node:` location
+// is Node's own failure (a missing file, an invalid package.json), never ours.
+const LOCATION = /^(?!node:)\S.*:\d+$/;
 export function checkFailureVerdict(error: unknown, file: string): SyntaxVerdict {
   const e = (error ?? {}) as { code?: string; status?: number | null; signal?: string | null; stderr?: unknown };
   const lines = String(e.stderr ?? "").split(/\r?\n/).map((l) => l.trim());
-  const escaped = path.basename(file).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const ours = new RegExp(`(^|[\\\\/])${escaped}:\\d+$`, process.platform === "win32" ? "i" : "");
-  const block = lines.findIndex((l, i) => /^SyntaxError\b/.test(l) && lines[i - 1] === "" && lines.slice(Math.max(0, i - 4), i).some((a) => ours.test(a)));
+  const where = (i: number): string | undefined => lines.slice(Math.max(0, i - 4), i).find((a) => LOCATION.test(a));
+  const block = lines.findIndex((l, i) => /^SyntaxError\b/.test(l) && lines[i - 1] === "" && where(i) !== undefined);
   if (typeof e.status === "number" && e.status !== 0 && !e.signal && block >= 0) {
-    return { state: "DEFEKT", detail: `rejected by node --check: ${lines[block]}` };
+    const named = where(block)!.replace(/:\d+$/, "");
+    const escaped = path.basename(file).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const ours = new RegExp(`(^|[\\\\/])${escaped}$`, process.platform === "win32" ? "i" : "");
+    return { state: "DEFEKT", detail: `rejected by node --check: ${lines[block]}${ours.test(named) ? "" : ` (Node named it ${named})`}` };
   }
   let why = firstLine(error);
   if (e.code) why = e.code;
