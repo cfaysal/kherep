@@ -200,8 +200,8 @@ export function prepareManagedConfig(config: string, options: ManagedConfigOptio
   } catch (error) {
     // Issue #274. A block the Codex app split around its trust tables is matched
     // again once the split is undone; any other unknown block still refuses.
-    const anchored = error instanceof UnknownManagedFragmentError
-      ? reanchorSplitManagedBlock(config, options.startMarker, options.endMarker, error.knownFragments) : undefined;
+    if (!(error instanceof UnknownManagedFragmentError)) throw error;
+    const anchored = reanchorSplitManagedBlock(config, options.startMarker, options.endMarker, error.knownFragments);
     if (!anchored) throw error;
     return { ...prepareAnchoredConfig(anchored, options), managedFragment: "replaced" as const };
   }
