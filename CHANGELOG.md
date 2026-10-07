@@ -424,6 +424,31 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Claude hooks: `live-hook-integrity` and
+  `bootstrap/wired-blocking-guards.test.mts` no longer use `node --check` for
+  `.mts` files. `node --check` never type-strips a `.mts`: it compiles the raw
+  source as CommonJS with module detection, exits 0 for any file that contains
+  `import` or `export`, so `export const x = ;` passed as healthy, and rejects
+  valid type annotations in a file without them, so a healthy hook such as
+  `const x: number = 1;` was reported as broken and overwritten (measured on
+  Node 26.10.0; the same code is in 22.18.0 and 24.1.0 by source). The new
+  `hooks/lib/hook-syntax.mts` runs the two parsers Node runs at load time,
+  in-process and without executing the hook: `module.stripTypeScriptTypes`,
+  then a V8 module parse of the stripped source through a `data:` import whose
+  link is made to fail, so top-level code never runs; about 1 ms per file
+  instead of a child process. A report line for such a file reads "rejected by
+  Node's parser". The `.js` path (`vm.Script`, confirmed by `node --check`) is
+  unchanged. Only the stripper's own ExperimentalWarning is filtered in the
+  hook's process; every other warning, Node's type-stripping warning included,
+  still prints. Known limits: link-time SyntaxErrors such as
+  `import { nope } from "node:fs"` are not detected, as `node --check` never
+  detected them; a Node build without `module.stripTypeScriptTypes` gives
+  UNGEPRUEFT, never OK; and the new library joins the integrity hook's own
+  imports, which it cannot heal for itself (issue #279). Tests cover the ESM
+  error shapes, TypeScript-only and V8-only errors, valid typed code without
+  imports, non-execution, BOM and CRLF, the warning filter and the
+  command-line entry `node hooks/lib/hook-syntax.mts <file>`.
+  `bootstrap/smoke-test.sh` follows separately (issue #278).
 - Claude hooks: `live-hook-integrity` now also measures the files a wired hook
   imports, the transitive closure of its relative static imports under
   `hooks/` (including `hooks/lib`), classifies each as missing, 0 bytes or

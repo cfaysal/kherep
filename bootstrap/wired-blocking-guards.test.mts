@@ -12,6 +12,8 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
+import { syntaxVerdict } from "../claude/hooks/lib/hook-syntax.mts";
+
 const repo = path.resolve(import.meta.dirname, "..");
 const claudeSource = path.join(repo, "claude").replace(/\\/g, "/");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "wired-blocking-guards-"));
@@ -184,17 +186,17 @@ function assertBlocks(guard: (typeof PRETOOL_GUARDS)[number], claudeHome?: strin
 }
 
 for (const guard of PRETOOL_GUARDS) {
-  test(`${guard.hook} is wired under PreToolUse "${guard.matcher}" as an .mts file that exists`, () => {
+  test(`${guard.hook} is wired under PreToolUse "${guard.matcher}" as an .mts file that exists`, async () => {
     const { event, matcher, command } = wiredCommand(guard.hook);
     assert.equal(event, "PreToolUse");
     assert.equal(matcher, guard.matcher);
     assert.match(command, new RegExp(`^node "__KHEREP_CLAUDE_HOME__/hooks/${guard.hook.replace(".", "\\.")}"$`));
-    assert.ok(fs.statSync(path.join(repo, "claude", "hooks", guard.hook)).size > 0, `claude/hooks/${guard.hook} is not empty`);
-    // live-hook-integrity.mts and smoke-test.sh call a hook DEFEKT when
-    // `node --check` rejects it. Without an import or export, Node checks an
-    // .mts as CommonJS without type stripping and rejects its annotations.
-    const check = spawnSync(process.execPath, ["--check", path.join(repo, "claude", "hooks", guard.hook)], { encoding: "utf8" });
-    assert.equal(check.status, 0, `node --check rejects ${guard.hook}: ${check.stderr}`);
+    const file = path.join(repo, "claude", "hooks", guard.hook);
+    assert.ok(fs.statSync(file).size > 0, `claude/hooks/${guard.hook} is not empty`);
+    // live-hook-integrity.mts calls a hook DEFEKT when Node's parser rejects it.
+    // `node --check` cannot say so for .mts (issue #278); lib/hook-syntax.mts can.
+    const verdict = await syntaxVerdict(file, fs.readFileSync(file, "utf8"));
+    assert.equal(verdict.state, "OK", `Node's parser rejects ${guard.hook}: ${JSON.stringify(verdict)}`);
   });
 
   test(`${guard.hook} still blocks through its wired command and allows a benign call`, () => {
@@ -217,5 +219,17 @@ test("a 0-byte or missing PreToolUse guard fails the blocking checks", () => {
     fs.rmSync(file);
     assert.throws(() => assertBlocks(guard, home), assert.AssertionError, `missing ${guard.hook}`);
     fs.writeFileSync(file, original);
+  }
+});
+
+// Red-first evidence for the syntax assertion above: a 0-byte guard and one with
+// an ESM syntax error must not pass it. `node --check` passes both (issue #278).
+test("the syntax assertion rejects a 0-byte guard and an ESM syntax error", async () => {
+  for (const guard of PRETOOL_GUARDS) {
+    const file = path.join(TMP, "syntax", guard.hook);
+    for (const source of ["", "export const x = ;\n"]) {
+      const verdict = await syntaxVerdict(file, source);
+      assert.equal(verdict.state, "DEFEKT", `${guard.hook} with ${JSON.stringify(source)}: ${JSON.stringify(verdict)}`);
+    }
   }
 });

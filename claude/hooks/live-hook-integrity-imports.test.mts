@@ -6,10 +6,10 @@
 // source is a fixture checkout in the same temp tree, reached through the
 // payload cwd. Neither the real ~/.claude nor the real checkout is touched.
 //
-// The fixtures are ESM .mts files that pass `node --check` on their own. That is
-// the point: a hook whose lib is missing or empty passes its own syntax check
+// The fixtures are ESM .mts files that pass the syntax check on their own. That
+// is the point: a hook whose lib is missing or empty passes its own syntax check
 // and dies at import, so only the closure walk can see it.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -38,10 +38,9 @@ const from = (specifier: string, quote = '"'): string => `from ${quote}${specifi
 const GUARD = `import { x } ${from("./lib/dep.mts")};\nconsole.log(x);\n`;
 const LIB = "export const x = 1;\n";
 // Measured on Node 26.10: `node --check` on a .mts that contains ESM syntax
-// accepts even `export const x = ;` (exit 0), so an ESM-shaped syntax error is
-// invisible to the verdict for wired and imported files alike. This shape is
-// one node rejects; case 4 probes that first and skips where it does not.
-const BROKEN_LIB = "function guard( { return;\n";
+// accepts this (exit 0); the verdict now comes from the parsers Node runs at
+// load time (lib/hook-syntax.mts, issue #278), so it is DEFEKT.
+const BROKEN_LIB = "export const x = ;\n";
 const sha256 = (text: string): string => crypto.createHash("sha256").update(Buffer.from(text)).digest("hex");
 
 function sandbox(): Box {
@@ -149,13 +148,10 @@ function trySymlink(target: string, link: string, type: "file" | "dir"): boolean
 // --- 4. syntax-broken lib -------------------------------------------------------
 {
   const box = guardBox({ live: BROKEN_LIB, repo: LIB });
-  if (spawnSync(process.execPath, ["--check", path.join(box.hooks, "lib", "dep.mts")]).status === 0) {
-    console.log(`SKIP | syntax case: node ${process.version} --check accepts the broken fixture`);
-  } else {
-    const seen = run(box) || "";
-    check("a broken lib is rejected by node --check", seen.includes("lib/dep.mts") && seen.includes("node --check"), true);
-    check("a broken lib is restored", live(box, "lib/dep.mts"), LIB);
-  }
+  const seen = run(box) || "";
+  check("a broken lib is rejected by Node's parser", seen.includes("lib/dep.mts") && seen.includes("rejected by Node's parser"), true);
+  check("a broken lib is restored", live(box, "lib/dep.mts"), LIB);
+  check("and its restore is journalled as proven", (journalOf(box)[0] || {}).restoreProven, true);
 }
 
 // --- 5. transitive: guard -> lib/a -> lib/b ---------------------------------------
@@ -179,6 +175,14 @@ function chainBox(aLive: string): Box {
   run(box);
   check("a 0-byte middle lib is restored", live(box, "lib/a.mts"), A);
   check("and the walk continues past it through the versioned source", live(box, "lib/b.mts"), B);
+}
+{
+  // An early error only V8 finds: it passes type stripping, not the module parse.
+  const box = chainBox(A);
+  place(box, "lib/b.mts", { live: "export { nope };\n", repo: B });
+  const seen = run(box) || "";
+  check("a transitive lib with a V8-only early error is rejected", seen.includes("lib/b.mts (imported by lib/a.mts)") && seen.includes("rejected by Node's parser"), true);
+  check("and restored", live(box, "lib/b.mts"), B);
 }
 
 // --- 6. sibling import outside lib/ -----------------------------------------------
