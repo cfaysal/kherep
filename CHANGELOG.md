@@ -972,6 +972,28 @@ increments the minor version; every other release increments the patch version.
   scan ignores a leading byte order mark. `hooks/lib/restore-write.mts` is in
   the install manifest, the required hooks and the smoke test's list of
   installed files.
+- Claude hooks: `hooks/lib/hook-syntax.mts` follow-ups from the review of PR
+  #283. The stripper's ExperimentalWarning is now dropped by swapping
+  `process.emitWarning` only for the duration of the
+  `module.stripTypeScriptTypes` call instead of re-registering the process's
+  warning listeners, which had made a `once` listener fire more than once and
+  still delivered the warning to listeners attached later; every other
+  warning, Node's own type-stripping warning included, still prints, and
+  `quietStripWarning()` stays exported as a no-op for its callers. For `.js`
+  and `.cjs`, a `node --check` child that did not run or did not finish
+  (ENOENT, ETIMEDOUT after 15 s, a signal, exit 9 for a bad `NODE_OPTIONS`, a
+  `SyntaxError` from a preload rather than the checked file) is UNGEPRUEFT
+  "vm.Script rejected it and node --check could not confirm (...)" instead of
+  DEFEKT; only a child that exited non-zero on its own and printed a
+  `SyntaxError` for the checked file is a rejection. The probe import that
+  keeps a checked module from linking now carries an import attribute no
+  module format accepts, so a `--import`/`--require` customization hook that
+  resolves the probe specifier is stopped by Node's load step before anything
+  is instantiated (UNGEPRUEFT, never OK); before, the checked file's top-level
+  code ran first. Residual risk: a hook that also overrides the import
+  attributes or short-circuits `load` can still bypass the probe and run the
+  checked file; such a hook owns the process and is outside this check.
+  Measured on Node 26.10.0; same source paths in 22.18.0 and 24.1.0.
 
 ## [0.1.2] - 2026-09-24
 
