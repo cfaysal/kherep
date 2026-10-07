@@ -16,6 +16,9 @@
   "workers_dev": false,
   // No Wrangler usage telemetry from this project, including test and dry runs.
   "send_metrics": false,
+  // Workers Logs for every invocation, including the Registry's per-request
+  // SQLite row counts (issue #308). Takes effect only on the operator's deploy.
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
   "durable_objects": {
     "bindings": [
       { "name": "NODE_SESSION", "class_name": "NodeSession" },

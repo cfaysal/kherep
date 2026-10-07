@@ -107,7 +107,7 @@ A message goes from a session on one node to a session on another node. A sessio
 
 ### Directory
 
-The Worker answers `directory.get` from the Registry with every node that is not revoked and the sessions each node last reported; sessions of a revoked node never appear, and `startedAt` is left out. A directory that would not fit into one 64 KiB frame drops sessions from the end and sets `truncated`. Directory requests are not audited: nodes ask every minute, and the frame carries no message content.
+The Worker answers `directory.get` from the Registry with every node that is not revoked and the sessions each node last reported; sessions of a revoked node never appear, and `startedAt` is left out. A directory that would not fit into one 64 KiB frame drops sessions from the end and sets `truncated`. Directory requests are not audited: nodes ask every minute, and the frame carries no message content. The Registry keeps the directory rows in memory and reads them again only after a write to nodes, runtimes or sessions (issue #308); a session snapshot that changes nothing is no write.
 
 ### Session messaging
 
@@ -564,6 +564,7 @@ The committed [`worker/wrangler.jsonc`](worker/wrangler.jsonc) contains placehol
   "account_id": "<your account id>",
   "workers_dev": false,
   "send_metrics": false,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
   "routes": [{ "pattern": "control.example.com", "custom_domain": true }],
   "durable_objects": {
     "bindings": [
@@ -598,6 +599,27 @@ npx wrangler deploy --config /path/outside/the/repository/kherep-control.jsonc \
 Then put a Cloudflare Access application with an allow policy for the operators in front of `control.example.com/api/*`. Leave `/node/*` outside Access. Deploying and creating these resources is an operator action; the repository never does it.
 
 Durable Object classes are declared with the `exports` map, which replaces the legacy `migrations` array. A Worker deployed earlier with `migrations` (tag `v1`, `new_sqlite_classes`) moves to `exports` without data migration; the move is one-way, so do not return to `migrations` afterwards.
+
+#### Observability and SQLite cost
+
+The committed `wrangler.jsonc` and the override example above turn on Workers Logs for every invocation (`"observability": { "enabled": true, "head_sampling_rate": 1 }`). It takes effect only when the operator deploys with an override that carries it; the repository deploys nothing. Each Registry request then writes one log line, for example:
+
+```json
+{ "event": "registry.sql", "path": "sendMessage", "rowsRead": 4, "rowsWritten": 8 }
+```
+
+`path` is the Registry method; `rowsRead` and `rowsWritten` are the SQLite rows that the request's cursors read and wrote (`worker/src/sql-meter.mts`). The line carries no message text, session or identity, and no duration: time does not advance in synchronous Durable Object code. Every request path runs its SQL in one synchronous region, so no row is counted for two requests. SQL outside a request, such as the schema set-up when the Registry starts, counts only toward the totals of `Registry.sqlStats()`. Each line is a log event and counts toward the Workers Logs limits of the account's plan.
+
+Durable Object SQLite storage is billed by rows read and rows written. The Workers Free plan includes 5 million rows read per day ([Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)). Costs per request measured by the Worker tests with 2,000 final-state messages and 500 sessions (issue #308):
+
+| Request path | Rows read before | Rows read now | Rows written now |
+| --- | --- | --- | --- |
+| `sendMessage` (`message.send`) | 4,009 | 4 | 8 |
+| `reportMessageStatus` (`message.status` from the target) | 2,008 | 5 | 5 |
+| `messageStatusPageFor` (reconnect replay, a sender with 3 messages) | 2,004 | 4 | 0 |
+| `directory` (`directory.get`) | 504 | 0, or 504 after a write to nodes, runtimes or sessions | 0 |
+
+Before, a send scanned the `messages` table twice and a status report or a replay page once, and the table keeps every final-state row, so the cost grew with every message ever sent; doubling the messages doubled these reads. Now the hot queries name their index (`INDEXED BY`): `messages_queued_expiry` (queued rows by expiry) and `messages_from_node` (replay). A third index, `messages_state_updated` (state and last change), is created now for a later sweep of final-state rows and is not read yet. Doubling the messages leaves the "now" column unchanged. Each index adds a written row when a write touches its columns: a send now writes 8 rows instead of 5, a status report 5 instead of 4. The indexes are created on the first Registry start after the deploy, which reads the `messages` table once.
 
 ### Node
 
@@ -725,4 +747,4 @@ npm test                            # Workers Vitest integration, runs locally i
 npm run check:bundle                # wrangler deploy --dry-run: bundles and validates, deploys nothing
 ```
 
-The Worker tests run inside the local `workerd` runtime. They cover the handshake (valid signature, wrong key, unknown node, revoked key, replayed and expired nonce), enrollment single use and expiry, seq/ack resend after reconnect, offline marking by the alarm, Access JWT rejection and the command allowlist, message routing (sender taken from the connection, duplicate ids, offline queue and flush, refusals, text removal, expiry, status forwarding including a node-reported `refused` after `accepted`, audit without text, both message endpoints), the Registry column migration, the directory frame (revoked nodes left out, truncation), and drive the real node client over a WebSocket against the real `NodeSession`, including a failed session listing that leaves the Registry unchanged and an operator message that the node's policy accepts. An end-to-end test carries a message from one node's `msg send` through the Worker into the other node's inbox and delivery hook, which offers it on `UserPromptSubmit` and confirms it on `Stop`, and only then the `delivered` status back into the first node's `sent/` file. Two task tests carry an operator task from `POST /api/tasks` through the real `NodeSession` to the real node client and session runner (with an injected `claude`), `task.report` `started`, `task done` and a continue back, and a delegated `task new` request through both nodes' opt-ins, the empty-directive and no-chain refusals and the audit. The node tests inject the command runner and never start the real `claude` executable. [`test-vectors.json`](test-vectors.json) holds the RFC 8032 section 7.1 test key and a challenge signature that both sides must reproduce. The Worker has its own `package.json` so the root install stays free of Cloudflare tooling.
+The Worker tests run inside the local `workerd` runtime. They cover the handshake (valid signature, wrong key, unknown node, revoked key, replayed and expired nonce), enrollment single use and expiry, seq/ack resend after reconnect, offline marking by the alarm, Access JWT rejection and the command allowlist, message routing (sender taken from the connection, duplicate ids, offline queue and flush, refusals, text removal, expiry, status forwarding including a node-reported `refused` after `accepted`, audit without text, both message endpoints), the Registry column migration, the directory frame (revoked nodes left out, truncation), the Registry read budget (a send, a status report, a cached directory request and a reconnect replay page each read at most 32 rows with 2,000 final-state messages and 500 sessions, unchanged when the messages double, and `EXPLAIN QUERY PLAN` shows no scan of `messages` for the hot queries), and drive the real node client over a WebSocket against the real `NodeSession`, including a failed session listing that leaves the Registry unchanged and an operator message that the node's policy accepts. An end-to-end test carries a message from one node's `msg send` through the Worker into the other node's inbox and delivery hook, which offers it on `UserPromptSubmit` and confirms it on `Stop`, and only then the `delivered` status back into the first node's `sent/` file. Two task tests carry an operator task from `POST /api/tasks` through the real `NodeSession` to the real node client and session runner (with an injected `claude`), `task.report` `started`, `task done` and a continue back, and a delegated `task new` request through both nodes' opt-ins, the empty-directive and no-chain refusals and the audit. The node tests inject the command runner and never start the real `claude` executable. [`test-vectors.json`](test-vectors.json) holds the RFC 8032 section 7.1 test key and a challenge signature that both sides must reproduce. The Worker has its own `package.json` so the root install stays free of Cloudflare tooling.
