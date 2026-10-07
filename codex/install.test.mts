@@ -182,6 +182,36 @@ test("installs native Codex research hooks and every local dependency idempotent
   assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), config);
 });
 
+// Issue #275. The integrity hook is installed byte-identical, wired once as the
+// last entry of the Maestro SessionStart group, and every file it may restore
+// maps to a versioned source with exactly the installed bytes.
+test("installs the Codex hook-integrity hook last in its SessionStart group with a source for every hook file", async (t) => {
+  const { root, codexHome, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const config = fs.readFileSync(install(installOptions).targets.config, "utf8");
+  const hookDir = path.join(codexHome, "hooks", "kherep-maestro");
+  assert.equal(fs.readFileSync(path.join(hookDir, "codex-hook-integrity.mts"), "utf8"),
+    fs.readFileSync(path.join(here, "hooks", "hook-integrity.mts"), "utf8"));
+  const maestro = renderedHookGroup(config, "SessionStart");
+  assert.equal(occurrences(config.replace(/^commandWindows = .*\n/gm, ""), "codex-hook-integrity.mts"), 1);
+  assert.match(maestro.split("[[hooks.SessionStart.hooks]]").at(-1)!, /codex-hook-integrity\.mts[\s\S]*timeout = 30/);
+  const { sourceOf } = await import("./hooks/hook-integrity.mts");
+  const installed = [
+    "kherep-maestro-context.mts",
+    ...fs.readdirSync(hookDir, { recursive: true, encoding: "utf8" })
+      .filter((rel) => /\.(?:mts|js)$/.test(rel)).map((rel) => `kherep-maestro/${rel.replace(/\\/g, "/")}`),
+  ];
+  for (const rel of installed) {
+    const source = sourceOf(rel);
+    if ("hint" in source) {
+      assert.match(rel, /codex-observation-(?:stop|turn-completion)\.mts$/, `${rel} has no versioned source`);
+      continue;
+    }
+    assert.equal(fs.readFileSync(path.join(codexHome, "hooks", rel), "utf8"),
+      fs.readFileSync(path.join(here, "..", source.from), "utf8"), `${rel} <- ${source.from}`);
+  }
+});
+
 // Without the commandWindows lines, which repeat each command (issue #68), so a
 // script name occurs once per hook.
 function renderedHookGroup(config: string, event: string): string {

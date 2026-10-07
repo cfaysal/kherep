@@ -1,0 +1,86 @@
+// Issue #275. The pure parts of the Codex hook-integrity hook: which commands
+// it reads, which files it keeps, where each installed file comes from, and
+// which checkout it restores from. The installed hook end to end is in
+// codex/hook-integrity-install.test.mts.
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { before, test } from "node:test";
+
+import { ALWAYS_CHECK, checkoutOf, hookCommandParts, lib, loadLibs, sourceOf, wiredHookFiles } from "./hook-integrity.mts";
+
+const REPO = path.resolve(import.meta.dirname, "..", "..").replace(/\\/g, "/");
+
+before(async () => {
+  assert.equal(await loadLibs(), null, "the libs load from the checkout's claude/hooks/lib");
+});
+
+test("loads every lib it uses as functions", () => {
+  for (const fn of ["isWithinPath", "joinPathLike", "normalizePathLike", "checkoutFor", "isCheckout", "writeExact", "hookInventory", "syntaxVerdict"]) {
+    assert.equal(typeof Reflect.get(lib, fn), "function", fn);
+  }
+});
+
+test("reads the double-quoted parts of every command in every hooks table, and nothing else", () => {
+  const config = [
+    "[mcp_servers.x]", 'command = "\\"/home/u/.codex/hooks/not-a-hook.mts\\""', "",
+    "[[hooks.PreToolUse]]", 'matcher = "Bash"', "",
+    "[[hooks.PreToolUse.hooks]]", 'type = "command"',
+    'command = "\\"C:\\\\Program Files\\\\node.exe\\" \\"C:\\\\Users\\\\a b\\\\.codex\\\\hooks\\\\kherep-maestro\\\\codex-hook-adapter.mts\\" \\"pre\\""',
+    'commandWindows = "& \\"C:\\\\other.mts\\""', "timeout = 10", "",
+    "[[hooks.Stop.hooks]]", `command = '"node" "/home/u/.codex/hooks/literal.js"'`,
+  ].join("\n");
+  assert.deepEqual(hookCommandParts(config), [
+    "C:\\Program Files\\node.exe", "C:\\Users\\a b\\.codex\\hooks\\kherep-maestro\\codex-hook-adapter.mts", "pre",
+    "node", "/home/u/.codex/hooks/literal.js",
+  ]);
+  assert.deepEqual(hookCommandParts("[[hooks.Stop.hooks]]\ncommand = \"\\\"/x.mts\\\" \\uZZZZ\"\n"), [], "an undecodable string is skipped");
+});
+
+test("keeps only .mts and .js files under the hooks directory, once each", () => {
+  const hooksDir = "C:/Users/a b/.codex/hooks";
+  const files = wiredHookFiles([
+    "C:\\Program Files\\node.exe", "C:\\Users\\a b\\.codex\\hooks\\kherep-maestro\\commit-guard.mts",
+    "c:/users/a b/.codex/hooks/kherep-maestro/commit-guard.mts", "C:/Users/a b/.codex/hooks/x.js",
+    "C:/Users/a b/.codex/hooks/run.sh", "C:/elsewhere/hooks/y.mts", "pre",
+  ], hooksDir);
+  assert.deepEqual(files.map(({ rel }) => rel), ["kherep-maestro/commit-guard.mts", "x.js"]);
+});
+
+test("maps every installed file to its versioned source, and the rendered ones to a hint", () => {
+  const map: [string, string][] = [
+    ["kherep-maestro/lib/git-commit-match.mts", "claude/hooks/lib/git-commit-match.mts"],
+    ["kherep-maestro/commit-guard.mts", "claude/hooks/commit-guard.mts"],
+    ["kherep-maestro/codex-hook-adapter.mts", "codex/hooks/hook-adapter.mts"],
+    ["kherep-maestro/codex-hook-integrity.mts", "codex/hooks/hook-integrity.mts"],
+    ["kherep-maestro/research-common.mts", "codex/hooks/research-common.mts"],
+    ["kherep-maestro/acceptance-policy.mts", "codex/hooks/acceptance-policy.mts"],
+    ["kherep-maestro-context.mts", "codex/hooks/kherep-maestro-context.mts"],
+  ];
+  for (const [rel, from] of map) assert.deepEqual(sourceOf(rel), { from }, rel);
+  for (const rel of ["kherep-maestro/codex-observation-stop.mts", "kherep-maestro/codex-observation-turn-completion.mts"]) {
+    assert.match(String((sourceOf(rel) as { hint?: string }).hint), /run codex\/install\.mts/, rel);
+  }
+  assert.ok("hint" in sourceOf("operator-hook.mts"), "a file Kherep did not install has no source");
+  for (const specifier of ALWAYS_CHECK) {
+    const from = (sourceOf(`kherep-maestro/${specifier.slice(2)}`) as { from: string }).from;
+    assert.ok(fs.existsSync(path.join(REPO, from)), `${specifier} has a source in claude/hooks/lib`);
+  }
+  // The guard really loads them through a computed require: the names stand in its source.
+  const guard = fs.readFileSync(path.join(REPO, "codex", "hooks", "privacy-boundary-guard.mts"), "utf8");
+  for (const name of ["workspace-scope.mts", "private-path-policy.mts"]) assert.match(guard, new RegExp(`libRoot, "${name}"`));
+});
+
+test("resolves the checkout from the deliver-hook command first, else gives up without one", () => {
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-integrity-unit-"));
+  try {
+    const env = { CLAUDE_HOME: empty, KHEREP_WORKSPACE: empty };
+    const deliver = `${REPO}/modules/control-plane/node/deliver-hook.mts`;
+    assert.equal(checkoutOf(["node", deliver, "--runtime", "codex"], { cwd: empty }, env), REPO);
+    assert.equal(checkoutOf(["node", `${empty}/gone/modules/control-plane/node/deliver-hook.mts`], { cwd: empty }, env), "");
+    assert.equal(checkoutOf([], { cwd: empty }, env), "");
+  } finally {
+    fs.rmSync(empty, { recursive: true, force: true });
+  }
+});

@@ -996,6 +996,25 @@ increments the minor version; every other release increments the patch version.
   bypass the probe and run the checked file; the verdict then stays
   UNGEPRUEFT, never OK. Such a hook owns the process and is outside this check.
   Measured on Node 26.10.0; same source paths in 22.18.0 and 24.1.0.
+- Codex hooks: a hook-integrity check now runs in every Codex session
+  (#275). Before, only the Claude `live-hook-integrity` hook checked hook
+  files, and only when a Claude session started, so a missing or 0-byte shared
+  guard under `<CODEX_HOME>/hooks` failed open on a day with only Codex
+  sessions. `codex/hooks/hook-integrity.mts` is installed as
+  `hooks/kherep-maestro/codex-hook-integrity.mts` and appended as the last
+  entry of the Maestro `SessionStart` group (`timeout = 30`), after the
+  optional native hook, so every existing entry keeps its positional trust
+  key. It checks every `.mts`/`.js` hook file that `config.toml` wires under
+  `<CODEX_HOME>/hooks`, their import closure and the libs the privacy guard
+  loads through a computed `require`. A broken file is restored from the
+  checkout named by the deliver-hook command, else from the Claude-side
+  checkout chain, and counts as restored only when a re-read matches the
+  checkout's SHA-256. The two installer-rendered observation hooks are
+  reported only, and without a checkout nothing is written. Findings go to
+  `<CODEX_HOME>/.cache/hook-integrity/incidents.jsonl`; the hook is silent
+  when everything is OK and always exits 0. A failing own lib is reported as
+  kind `self`. The installer recognizes the previous managed block and
+  upgrades it; Codex then asks to review exactly the one new hook.
 
 ## [0.1.2] - 2026-09-24
 

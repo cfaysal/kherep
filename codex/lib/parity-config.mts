@@ -152,6 +152,9 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
       // answer can be used.
       hook("codex-confluence-delivery-check.mts"),
       ...native(options.nativeHooks?.contextCli),
+      // Issue #275. LAST in the group, after the optional native hook: Codex trust
+      // keys are positional, so every entry before it keeps its index and trust.
+      hook("codex-hook-integrity.mts", { timeout: 30 }),
     ]),
     group("PreCompact", "manual|auto", [hook("codex-precompact-checkpoint.mts", { timeout: 30 })]),
     group("Stop", "", [
@@ -294,7 +297,7 @@ export function renderWithoutNativeHooks(options: RenderOptions): string {
 }
 export function renderPreviousNativeHooks(current: RenderOptions): string {
   const options = beforeWindowsCommands(current);
-  const hooks = withoutHooks(renderHooks(options, true), PRE_RESEARCH_HOOKS);
+  const hooks = withoutHooks(renderHooks(options, true), [...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
   return ["# Managed Kherep Codex Maestro parity projection.", hooks, renderMcp(options), renderPluginMcp(options), ""].join("\n\n");
 }
 
@@ -305,12 +308,14 @@ export function renderPreviousNativeHooks(current: RenderOptions): string {
 // in any spelling.
 export const POST_LEGACY_HOOKS = [
   "codex-confluence-delivery-check",
+  "codex-hook-integrity",
   "codex-observation-turn-completion",
   "codex-research-first",
   "codex-research-stop",
 ];
 const PRE_OBSERVATION_HOOKS = ["codex-observation-turn-completion"];
 const PRE_RESEARCH_HOOKS = ["codex-research-first", "codex-research-stop"];
+const PRE_INTEGRITY_HOOKS = ["codex-hook-integrity"];
 
 function withoutHooks(config: string, names: readonly string[]): string {
   return config
@@ -381,19 +386,28 @@ export function renderBeforePostLegacyHooksWithoutNativeHooks(options: RenderOpt
 }
 
 export function renderBeforeObservationHook(options: RenderOptions): string {
-  return withoutHooks(render(options), [...PRE_OBSERVATION_HOOKS, ...PRE_RESEARCH_HOOKS]);
+  return withoutHooks(render(options), [...PRE_OBSERVATION_HOOKS, ...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
 }
 
 export function renderBeforeObservationHookWithoutNativeHooks(options: RenderOptions): string {
-  return withoutHooks(renderWithoutNativeHooks(options), [...PRE_OBSERVATION_HOOKS, ...PRE_RESEARCH_HOOKS]);
+  return withoutHooks(renderWithoutNativeHooks(options), [...PRE_OBSERVATION_HOOKS, ...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
 }
 
 export function renderBeforeResearchHooks(options: RenderOptions): string {
-  return withoutHooks(render(options), PRE_RESEARCH_HOOKS);
+  return withoutHooks(render(options), [...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
 }
 
 export function renderBeforeResearchHooksWithoutNativeHooks(options: RenderOptions): string {
-  return withoutHooks(renderWithoutNativeHooks(options), PRE_RESEARCH_HOOKS);
+  return withoutHooks(renderWithoutNativeHooks(options), [...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
+}
+
+// Issue #275. The projection immediately before the Codex hook-integrity hook.
+export function renderBeforeHookIntegrity(options: RenderOptions): string {
+  return withoutHooks(render(options), PRE_INTEGRITY_HOOKS);
+}
+
+export function renderBeforeHookIntegrityWithoutNativeHooks(options: RenderOptions): string {
+  return withoutHooks(renderWithoutNativeHooks(options), PRE_INTEGRITY_HOOKS);
 }
 
 export function renderLegacyJavaScriptPrefix(options: RenderOptions): string {
