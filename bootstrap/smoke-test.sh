@@ -69,15 +69,18 @@ note_fail() { echo "$FINDING_MARKER $*"; fail=1; }
 # that fails open, and a line without the marker never reaches the nudge.
 # Usage: hook_syntax <checker> <label> <context> <file>
 hook_syntax() {
-  local checker="$1" label="$2" context="$3" file="$4" out rc=0
+  local checker="$1" label="$2" context="$3" file="$4" err="$TMP/hook-syntax.err" out rc=0
   [ -f "$checker" ] || { note_fail "$label UNCHECKED $context (checker missing: $checker)"; return 0; }
-  out="$(node "$checker" "$file" 2>/dev/null)" || rc=$?
+  out="$(node "$checker" "$file" 2>"$err")" || rc=$?
+  # First line only, and no CR, so a CRLF stdout cannot turn OK into a finding.
   out="${out%%$'\n'*}"
+  out="${out%$'\r'}"
   case "$rc:$out" in
     0:OK) ;;
     1:DEFEKT\ *) note_fail "$label $context (${out#DEFEKT })" ;;
     2:UNGEPRUEFT\ *) note_fail "$label UNCHECKED $context (${out#UNGEPRUEFT })" ;;
-    *) note_fail "$label UNCHECKED $context (checker exit $rc${out:+: $out})" ;;
+    *) out="${out:-$(grep -m 1 -E '^[A-Za-z]*Error\b' "$err" 2>/dev/null || head -n 1 "$err" 2>/dev/null)}"
+       note_fail "$label UNCHECKED $context (checker exit $rc${out:+: $out})" ;;
   esac
 }
 
