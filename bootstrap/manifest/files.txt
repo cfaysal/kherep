@@ -40,6 +40,7 @@ hooks/lib/orchestra-checkout.mts
 hooks/lib/hook-inventory.mts
 hooks/lib/hook-inventory.test.mts
 hooks/lib/hook-syntax.mts
+hooks/lib/hook-syntax-check.test.mts
 hooks/lib/hook-syntax.test.mts
 hooks/lib/restore-write.mts
 hooks/lib/restore-write.test.mts
