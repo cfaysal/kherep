@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Unit test for the node --check confirmation of .js and .cjs in hook-syntax.mts
-// (issues #284 and #292). Synthetic stderr into checkFailureVerdict, real
+// (issues #284, #292 and #298). Synthetic stderr into checkFailureVerdict, real
 // children through syntaxVerdict, all files in one mkdtemp directory whose path
 // has a space. Runs on its own as `node hook-syntax-check.test.mts`, like every
 // suite in CI. Node 22.18 and 24.1 print their own ExperimentalWarning for a
@@ -56,8 +56,9 @@ test("a node --check that did not run or finish is UNGEPRUEFT, not DEFEKT", asyn
     { status: null, signal: "SIGKILL", stderr: Buffer.alloc(0) },
     { status: 9, signal: null, stderr: "node: --bogus is not allowed in NODE_OPTIONS\n" },
     { status: 1, signal: null, stderr: "Error: Cannot find module 'x'\n" },
-    { status: 1, signal: null, stderr: `${path.join(TMP, "preload.js")}:1\nconst = 1;\n      ^\n\nSyntaxError: Unexpected token '='\n` },
   ];
+  // A preload's SyntaxError block is no longer told apart by its name (#298):
+  // the child runs without NODE_OPTIONS, guarded by the forging-preload test below.
   for (const s of shapes) assert.equal(checkFailureVerdict(Object.assign(new Error("Command failed"), s), broken).state, "UNGEPRUEFT", JSON.stringify(s));
   const rejected = caught(() => execFileSync(process.execPath, ["--check", broken], { ...io, timeout: 15_000 }));
   assert.equal(checkFailureVerdict(rejected, broken).state, "DEFEKT", String((rejected as Error).message));
@@ -94,18 +95,21 @@ test("a rejection block after other stderr lines is DEFEKT with the real message
   // message reported is still Node's, the line after the blank one.
   const own = checkFailureVerdict(failure(`${file}:1\nSyntaxError = ;\n            ^\n\nSyntaxError: Invalid left-hand side in assignment\n`), file);
   assert.equal(detailOf(own), "rejected by node --check: SyntaxError: Invalid left-hand side in assignment");
-  // Windows paths compare case-insensitively, POSIX paths do not.
-  const upper = checkFailureVerdict(failure(`hi\r\n${block(winFile.toUpperCase(), "\r\n")}`), file).state;
-  assert.equal(upper, process.platform === "win32" ? "DEFEKT" : "UNGEPRUEFT");
+  // Any well-formed block counts (#298); the name only shapes the detail, and
+  // Windows paths compare case-insensitively there, POSIX paths do not.
+  const upper = checkFailureVerdict(failure(`hi\r\n${block(winFile.toUpperCase(), "\r\n")}`), file);
+  assert.equal(upper.state, "DEFEKT", detailOf(upper));
+  assert.equal(detailOf(upper).endsWith(`(Node named it ${winFile.toUpperCase()})`), process.platform !== "win32", detailOf(upper));
 });
 
-test("no block naming the checked file, or no own non-zero exit, is UNGEPRUEFT", () => {
+test("no well-formed rejection block, or no own non-zero exit, is UNGEPRUEFT", () => {
   const file = path.join(TMP, "broken.js");
   const far = `${file}:1\none\ntwo\nthree\nfour\nSyntaxError: Unexpected token ';'\n`;
   const shapes: [string, Error][] = [
     ["location line five lines above", failure(far)],
     ["a SyntaxError line without a location line", failure("preload says hi\nSyntaxError: fake from preload\n")],
-    ["another file's block", failure(`hi\n${block(path.join(TMP, "other-broken.js"))}`)],
+    ["a node: location with a plain Error", failure("node:internal/modules/helpers:91\n    throw error;\n    ^\n\nError: Invalid package config /x/package.json.\n")],
+    ["a node: location with a SyntaxError", failure("node:internal/x:1\nsrc\n^\n\nSyntaxError [ERR_X]: from Node itself\n")],
     ["exit 0", failure(block(file), 0)],
     ["a signal", failure(block(file), null, "SIGTERM")],
   ];
@@ -144,4 +148,63 @@ test("a NODE_OPTIONS preload neither hides nor fakes a node --check rejection", 
   const forge = `process.stderr.write(${JSON.stringify(block(healthy))});\nprocess.exit(1);`;
   v = await underPreload(forge, healthy);
   assert.equal(v.state, "OK", `forging preload: ${detailOf(v)}`);
+});
+
+// ---- issue #298: Node names the rejected file by another name ----
+
+const expectDefekt = async (file: string, named: RegExp | null): Promise<void> => {
+  const v = await syntaxVerdict(file, fs.readFileSync(file, "utf8"));
+  assert.equal(v.state, "DEFEKT", `${file}: ${detailOf(v)}`);
+  if (named) assert.match(detailOf(v), named);
+};
+
+test("a block whose location names another file is DEFEKT, and the detail says so", () => {
+  const file = path.join(TMP, "broken.js");
+  const other = path.join(TMP, "other-broken.js");
+  for (const where of [other, "other.js", "/etc/elsewhere/abs.js", "https://example.org/p/remote.js", "file:///tmp/x.js", "weird:name:9", "legacy.js"]) {
+    const v = checkFailureVerdict(failure(`hi\n${block(where)}`), file);
+    assert.equal(v.state, "DEFEKT", `${where}: ${detailOf(v)}`);
+    assert.equal(detailOf(v), `rejected by node --check: SyntaxError: Unexpected token ';' (Node named it ${where})`);
+  }
+  // "Unexpected end of input": empty source and caret lines put the location four lines up.
+  const eoi = checkFailureVerdict(failure(`${file}:2\n\n\n\nSyntaxError: Unexpected end of input\n`), file);
+  assert.equal(detailOf(eoi), "rejected by node --check: SyntaxError: Unexpected end of input");
+});
+
+test("real children: a directory link and a sourceURL comment are DEFEKT", async () => {
+  const realDir = path.join(TMP, "real dir");
+  fs.mkdirSync(realDir, { recursive: true });
+  fs.writeFileSync(path.join(realDir, "target-real.js"), "const x = ;\n");
+  const dirLink = path.join(TMP, "dirlink");
+  fs.symlinkSync(realDir, dirLink, process.platform === "win32" ? "junction" : "dir"); // junctions need no privilege
+  await expectDefekt(path.join(dirLink, "target-real.js"), null);
+  await expectDefekt(write("sourceurl.js", "//# sourceURL=other.js\nconst x = ;\n"), /\(Node named it other\.js\)$/);
+});
+
+test("a real child on a file link with another name in another directory is DEFEKT", async (t) => {
+  const target = path.join(TMP, "real dir", "link-target.js");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, "const x = ;\n");
+  const link = path.join(TMP, "link dir", "hook-link.js");
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  try {
+    fs.symlinkSync(target, link, "file");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") {
+      t.skip("file symlink creation needs a Windows privilege; the directory link case remains mandatory");
+      return;
+    }
+    throw error;
+  }
+  await expectDefekt(link, /link-target\.js\)$/);
+});
+
+test("a malformed package.json next to the file is Node's own failure: UNGEPRUEFT", async () => {
+  const dir = path.join(TMP, "bad package");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "package.json"), "{");
+  const file = path.join(dir, "return.js"); // vm.Script rejects it, so node --check is asked
+  fs.writeFileSync(file, "if (process.env.NEVER) return;\nmodule.exports = 1;\n");
+  const v = await syntaxVerdict(file, fs.readFileSync(file, "utf8"));
+  assert.equal(v.state, "UNGEPRUEFT", detailOf(v));
 });
