@@ -61,6 +61,26 @@ fail=0
 FINDING_MARKER="SMOKE-FINDING"
 note_fail() { echo "$FINDING_MARKER $*"; fail=1; }
 
+# Issue #278: `node --check` never type-strips a .mts and exits 0 for any file
+# with import or export, so `export const x = ;` passed. hook-syntax.mts runs
+# Node's load-time parsers without executing the hook and exits 0 OK, 1 DEFEKT,
+# 2 UNGEPRUEFT. Only a proven OK passes. UNGEPRUEFT, a missing checker and any
+# other exit are findings marked UNCHECKED: a hook nobody could parse may be one
+# that fails open, and a line without the marker never reaches the nudge.
+# Usage: hook_syntax <checker> <label> <context> <file>
+hook_syntax() {
+  local checker="$1" label="$2" context="$3" file="$4" out rc=0
+  [ -f "$checker" ] || { note_fail "$label UNCHECKED $context (checker missing: $checker)"; return 0; }
+  out="$(node "$checker" "$file" 2>/dev/null)" || rc=$?
+  out="${out%%$'\n'*}"
+  case "$rc:$out" in
+    0:OK) ;;
+    1:DEFEKT\ *) note_fail "$label $context (${out#DEFEKT })" ;;
+    2:UNGEPRUEFT\ *) note_fail "$label UNCHECKED $context (${out#UNGEPRUEFT })" ;;
+    *) note_fail "$label UNCHECKED $context (checker exit $rc${out:+: $out})" ;;
+  esac
+}
+
 # Issue #276. A sub-test that never returns must become a finding, or the run
 # never prints the results it buffered above. --foreground keeps Ctrl-C reaching
 # the sub-test; on expiry only the sub-test's own bash is signalled, so its
@@ -156,7 +176,7 @@ check_profile() {
     hooks/portable-scope-hooks.test.mts
     hooks/lib/private-path-policy.mts hooks/lib/private-path-rules.mts
     hooks/lib/workspace-scope.mts hooks/lib/workspace-scope.test.mts
-    hooks/lib/hook-inventory.mts
+    hooks/lib/hook-inventory.mts hooks/lib/hook-syntax.mts
     hooks/cbm-code-discovery-gate hooks/cbm-session-reminder hooks/cbm-subagent-reminder
     skills/codebase-memory skills/kherep-twg agents/kherep-builder.md
     teams/kherep/ROUTING.md teams/kherep/config.json
@@ -294,16 +314,19 @@ check_profile() {
     local src="$TMP/repo/claude/hooks/$hook" live="$CLAUDE_HOME/hooks/$hook"
     if [ ! -f "$src" ]; then note_fail "HOOK MISSING [$profile]: $hook"
     elif [ ! -s "$src" ]; then note_fail "HOOK EMPTY [$profile]: $hook"
-    elif ! node --check "$src" >/dev/null 2>&1; then note_fail "HOOK SYNTAX [$profile]: $hook"
+    else hook_syntax "$TMP/repo/claude/hooks/lib/hook-syntax.mts" "HOOK SYNTAX" "[$profile]: $hook" "$src"
     fi
     # The repo side says nothing about what actually runs. A wired hook that is
     # empty or unparseable AFTER install still runs, does nothing and exits 0 -
     # fail-open, and invisible to any repo-only assertion.
     # GRUND: 2026-08-05 commit-guard.js sat at 0 bytes live for 19 hours while
     # the repo source stayed correct.
+    # The checker is the installed lib, the one live-hook-integrity imports, with
+    # no fallback to the repo copy: a missing or broken installed lib is a
+    # finding here, not hidden behind a healthy repo.
     if [ ! -f "$live" ]; then note_fail "LIVE HOOK MISSING [$profile]: $hook"
     elif [ ! -s "$live" ]; then note_fail "LIVE HOOK EMPTY [$profile]: $hook (0 bytes runs and enforces nothing)"
-    elif ! node --check "$live" >/dev/null 2>&1; then note_fail "LIVE HOOK SYNTAX [$profile]: $hook"
+    else hook_syntax "$CLAUDE_HOME/hooks/lib/hook-syntax.mts" "LIVE HOOK SYNTAX" "[$profile]: $hook" "$live"
     fi
   done <<< "$wired_hooks"
 
