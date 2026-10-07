@@ -132,14 +132,16 @@ function stripVerdict(source: string): SyntaxVerdict | string {
 // exit 9 for a bad NODE_OPTIONS, a SyntaxError in a preload) proves nothing (#284).
 // Node prints a rejection as one block: `<path>:<line>`, the source line, the
 // caret line, a blank line, `SyntaxError: ...`. A SyntaxError line counts only
-// when a line within the four above it names this file, wherever the block sits,
-// so lines printed before it (NODE_DEBUG, a loader warning) are ignored (#292).
+// right after that blank line and when a line within the four above it names
+// this file, wherever the block sits, so lines printed before it (NODE_DEBUG, a
+// loader warning) and a source line that itself starts with `SyntaxError` are
+// ignored (#292).
 export function checkFailureVerdict(error: unknown, file: string): SyntaxVerdict {
   const e = (error ?? {}) as { code?: string; status?: number | null; signal?: string | null; stderr?: unknown };
   const lines = String(e.stderr ?? "").split(/\r?\n/).map((l) => l.trim());
   const escaped = path.basename(file).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const ours = new RegExp(`(^|[\\\\/])${escaped}:\\d+$`, process.platform === "win32" ? "i" : "");
-  const block = lines.findIndex((l, i) => /^SyntaxError\b/.test(l) && lines.slice(Math.max(0, i - 4), i).some((a) => ours.test(a)));
+  const block = lines.findIndex((l, i) => /^SyntaxError\b/.test(l) && lines[i - 1] === "" && lines.slice(Math.max(0, i - 4), i).some((a) => ours.test(a)));
   if (typeof e.status === "number" && e.status !== 0 && !e.signal && block >= 0) {
     return { state: "DEFEKT", detail: `rejected by node --check: ${lines[block]}` };
   }
