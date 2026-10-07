@@ -1003,8 +1003,10 @@ increments the minor version; every other release increments the patch version.
   irrelevant; Claude accepted anything after `none`, including
   `[research: none]` without a reason, although ROUTING.md and both hook texts
   require one. Both runtimes now use one pattern: a hyphen, en dash or em dash
-  followed by a nonempty one-line reason inside the brackets, matched anywhere
-  in the final assistant text of the ending turn. A bare `[research: none]` in
+  followed by a nonempty one-line reason without `[` inside the brackets,
+  matched anywhere in the final assistant text of the ending turn. Excluding
+  `[` keeps a line of unterminated markers linear: 8000 of them took 1.8 s
+  with a reason that could span them and under a millisecond now. A bare `[research: none]` in
   Claude now gets one continuation instead of opting out. The documented form
   stays `[research: none - <reason>]`. A shared contract test runs the same
   cases against both patterns and fails when they drift (issue #293).

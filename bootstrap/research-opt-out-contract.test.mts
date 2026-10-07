@@ -30,6 +30,7 @@ const CASES: Array<[string, string, boolean]> = [
   ["multiline reason", "[research: none - a\nb]", false],
   ["other dash characters", "[research: none \u2212 x] [research: none \u2010 x]", false],
   ["obs marker", `[obs: none ${EN} x]`, false],
+  ["bracket in reason", "[research: none - a [b] c]", false],
   // Known limits, pinned so a future tightening is a visible flip.
   ["code block", "```\n[research: none - x]\n```", true],
   ["literal placeholder", "[research: none - <reason>]", true],
@@ -46,4 +47,16 @@ test("both runtimes classify every opt-out case the same way", () => {
 test("the two runtimes use one byte-identical pattern", () => {
   assert.equal(CLAUDE.source, CODEX.source, "the two runtimes drifted; #293");
   assert.equal(CLAUDE.flags, CODEX.flags, "the two runtimes drifted; #293");
+});
+
+test("a line of unterminated markers is matched in linear time", () => {
+  // A reason may not contain "[", so each unterminated marker stops at the next
+  // one instead of scanning to the end of the line: 8000 of them took 1.8 s
+  // with the first #293 pattern and well under a millisecond with this one.
+  const text = "[research: none - ".repeat(8000);
+  for (const pattern of [CLAUDE, CODEX]) {
+    const started = performance.now();
+    assert.equal(pattern.test(text), false);
+    assert.ok(performance.now() - started < 200, "quadratic backtracking is back");
+  }
 });
