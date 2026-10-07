@@ -90,6 +90,10 @@ test("a rejection block after other stderr lines is DEFEKT with the real message
     assert.equal(v.state, "DEFEKT", `${label}: ${detailOf(v)}`);
     assert.equal(detailOf(v), "rejected by node --check: SyntaxError: Unexpected token ';'", label);
   }
+  // The source line of the block may itself start with SyntaxError; the
+  // message reported is still Node's, the line after the blank one.
+  const own = checkFailureVerdict(failure(`${file}:1\nSyntaxError = ;\n            ^\n\nSyntaxError: Invalid left-hand side in assignment\n`), file);
+  assert.equal(detailOf(own), "rejected by node --check: SyntaxError: Invalid left-hand side in assignment");
   // Windows paths compare case-insensitively, POSIX paths do not.
   const upper = checkFailureVerdict(failure(`hi\r\n${block(winFile.toUpperCase(), "\r\n")}`), file).state;
   assert.equal(upper, process.platform === "win32" ? "DEFEKT" : "UNGEPRUEFT");
@@ -127,6 +131,12 @@ test("a NODE_OPTIONS preload neither hides nor fakes a node --check rejection", 
   const broken = write("my broken.js", "const x = ;\n");
   const healthy = write("my return.cjs", "if (process.env.NEVER) return;\nmodule.exports = 1;\n");
   const print = 'process.stderr.write("preload says hi\\n");';
+  // Control: the quoted NODE_OPTIONS form really loads the preload in a plain
+  // child, so the cases below are not green just because nothing was loaded.
+  const marker = path.join(TMP, "preload ran.txt");
+  const probe = write(`pre ${++preloads}.cjs`, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "1");`);
+  execFileSync(process.execPath, ["-e", "0"], { stdio: "ignore", env: { ...process.env, NODE_OPTIONS: `--require ${JSON.stringify(probe)}` } });
+  assert.ok(fs.existsSync(marker), "the NODE_OPTIONS preload did not load in a plain child");
   let v = await underPreload(print, broken);
   assert.equal(v.state, "DEFEKT", `print-only preload: ${detailOf(v)}`);
   v = await underPreload(`${print}\nprocess.exit(0);`, broken);
