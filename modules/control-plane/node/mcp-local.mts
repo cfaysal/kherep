@@ -7,7 +7,7 @@ import {
 } from "../protocol-mcp.mts";
 import type { NodeClient } from "./client.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
-import { listInbox, writeJsonAtomic } from "./inbox.mts";
+import { getMessage, listInbox, markOffered, writeJsonAtomic } from "./inbox.mts";
 import { writePrivateWindowsMcpCredential, type CredentialPowerShellDeps } from "./mcp-credential-file.mts";
 import { publishSessionFrames } from "./session-publication.mts";
 
@@ -167,4 +167,13 @@ export function readMcpInbox(paths: NodePaths, sessionId: string, limit: number)
     messageId: record.messageId, from: { ...record.from }, createdAt: record.createdAt, text: record.text,
     ...(record.inReplyTo ? { inReplyTo: record.inReplyTo } : {}), depth: record.depth ?? 0,
   }));
+}
+
+// Issue #308: the waiting records an inbox response returned to the session
+// are offered, as a delivery hook offers them. The session's Stop (when its
+// client fires hooks) or a reply confirms them; a client without hooks
+// reaches delivered only through a reply. Already offered or final records
+// stay as they are.
+export function offerMcpInbox(paths: NodePaths, messageIds: string[], now: number = Date.now()): void {
+  for (const id of messageIds) if (getMessage(paths.inbox, id)?.state === "accepted") markOffered(paths.inbox, id, now);
 }

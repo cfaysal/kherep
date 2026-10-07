@@ -12,8 +12,8 @@ import {
   type TaskRuntime,
 } from "../protocol-tasks.mts";
 import {
-  isDirectoryBody, isMessageDeliverBody, isMessageId, isMessageReceiptBody, isMessageStatusBody, type DirectoryBody,
-  type MessageDeliverBody, type MessageProgress, type MessageReceiptBody, type MessageSendBody, type MessageState,
+  isDirectoryBody, isFinalMessageState, isMessageDeliverBody, isMessageId, isMessageReceiptBody, isMessageStatusBody, messageStatusAck,
+  type DirectoryBody, type MessageDeliverBody, type MessageProgress, type MessageReceiptBody, type MessageSendBody, type MessageState,
 } from "../protocol-messages.mts";
 import { signChallenge, type NodeIdentity } from "./identity.mts";
 import { discoverMcpSessions } from "./mcp-session-discovery.mts";
@@ -60,6 +60,8 @@ export interface ClientOptions {
   mcpIntentReceipt?: (body: McpIntentReceiptBody) => void;
   mcpDisabled?: () => void;
   readMcpInbox?: (sessionId: string, limit: number) => McpInboxItem[] | Promise<McpInboxItem[]>;
+  // Issue #308: the messages a returned inbox response carries, offered to their session.
+  offerMcpInbox?: (messageIds: string[]) => void;
   // Issue #197: the runtimes whose last readiness probe passed; a change re-registers.
   readyRuntimes?: () => readonly TaskRuntime[];
   log?: (line: string) => void;
@@ -164,8 +166,11 @@ export class NodeClient {
         return [];
       case "message.status": {
         const body = envelope.body;
-        if (isMessageStatusBody(body)) this.callback(body.messageId, () => this.options.sentUpdate?.(body.messageId, body.state, body.reason, body.progress));
-        return [];
+        if (!isMessageStatusBody(body)) return [];
+        const recorded = this.callback(body.messageId, () => this.options.sentUpdate?.(body.messageId, body.state, body.reason, body.progress));
+        // Issue #308: a final status recorded here (or with no local record) is acknowledged.
+        return recorded && this.authenticated && isFinalMessageState(body.state)
+          ? [this.frame("event", { ...messageStatusAck(body.messageId, body.state) })] : [];
       }
       case "mcp.credential":
         if (this.authenticated && this.policy.remoteMcp?.enabled === true) {
@@ -199,6 +204,7 @@ export class NodeClient {
           if (Buffer.byteLength(response, "utf8") > MAX_FRAME_BYTES) {
             return [this.frame("mcp.inbox.response", { requestId: body.requestId, ok: false, error: MCP_INBOX_TOO_LARGE })];
           }
+          if (items) this.callback("MCP inbox offer", () => this.options.offerMcpInbox?.(items.map((item) => item.messageId)));
           return [response];
         } catch {
           return [this.frame("mcp.inbox.response", { requestId: body.requestId, ok: false, error: "local inbox read failed" })];

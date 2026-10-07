@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
-import { audits, closedNode, deliver, PEER, SESSION, turnProgress, type Node } from "./closed-fixture.mts";
+import { audits, closedNode, deliver, PEER, SESSION, turnDone, type Node } from "./closed-fixture.mts";
 import { deliveryContext } from "./deliver-core.mts";
 import { writeLocalSessions } from "./exchange.mts";
 import { getMessage } from "./inbox.mts";
@@ -134,7 +134,7 @@ test("an intercom session that cannot be resumed, or continues as a copy that is
     const runs = claudeRuns(node).map((c) => c.args[0]);
     assert.deepEqual(runs, output === null ? ["--bg", "--resume", "--bg"] : ["--bg", "--resume", "stop", "--bg"]);
     assert.equal(listTasks(node.paths).length, 2);
-    await turnProgress(node);
+    await turnDone(node);
     assert.equal(getMessage(node.paths.inbox, id)?.state, "delivered");
     const last = audits(node).at(-1)!;
     assert.equal(last.outcome, "new");

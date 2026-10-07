@@ -1,4 +1,5 @@
-import { getMessage, listInbox, markDelivered, markRefused, setMessageProgress } from "./inbox.mts";
+import { settleOffered } from "./codex-runner.mts";
+import { listInbox, markRefused, setMessageProgress } from "./inbox.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { queueReport, writeTask, type TaskRecord } from "./task-records.mts";
 
@@ -38,11 +39,17 @@ export function claudeProgressed(record: TaskRecord, row: Record<string, unknown
 export const progressOverdue = (record: TaskRecord, now: number): boolean =>
   record.awaitingProgressSince !== undefined && now - Date.parse(record.awaitingProgressSince) >= NO_PROGRESS_MS;
 
-// Messages a Claude intercom start carried in its task text (closed-resume.mts
-// startIntercom): delivered once its turn shows progress.
-export function confirmCarried(deps: RunnerDeps, record: TaskRecord): TaskRecord {
-  for (const id of record.carried ?? []) if (getMessage(deps.paths.inbox, id)?.state === "accepted") markDelivered(deps.paths.inbox, id);
-  return { ...record, awaitingProgressSince: undefined, carried: undefined };
+// Issue #308: the messages a Claude intercom start carried in its task text
+// (closed-resume.mts startIntercom) are offered to it and settled when its
+// turn ends, as a Codex run settles its offers (codex-runner.mts
+// settleOffered): delivered once the session is done, offered again when it
+// failed or was stopped. Progress (working, a prompt the turn raised) is no
+// read receipt. The session's own Stop hook may confirm them earlier.
+export function settleCarried(deps: RunnerDeps, record: TaskRecord, row: Record<string, unknown>): TaskRecord {
+  const completed = row.state === "done";
+  if (!completed && row.state !== "failed" && row.state !== "stopped") return record;
+  settleOffered(deps, { ...record, offered: record.carried }, completed);
+  return { ...record, carried: undefined };
 }
 
 // The waiting messages this run delivers (delivery identity) are refused with

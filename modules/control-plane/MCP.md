@@ -202,7 +202,7 @@ Each node may hold at most 128 unexpired intents. Claimed intents continue to co
 | --- | --- |
 | `sessions` | Returns bounded address references from Registry metadata, with the node-reported `kind` when present |
 | `send` | Sends through the existing message router from the verified originating session |
-| `inbox` | Reads the exact originating session inbox from its online node, without changing message state |
+| `inbox` | Reads the exact originating session inbox from its online node and marks the waiting messages it returned `offered` |
 | `reply` | Derives the recipient from stored message provenance and enforces the reply-depth limit |
 | `status` | Returns metadata-only state for a message visible to the caller's node |
 
@@ -225,9 +225,9 @@ Inbox has three distinct results: items, a successful empty list, or a fixed off
 
 Codex CLI replies preserve the full sender session id supplied by the delivery hook, so a native MCP message and its CLI response retain the same exact identities. Explicit aliases remain supported by the CLI, but historical alias messages are not reinterpreted as full-id hops in a native reply chain.
 
-An inbox read is read-only. Returning text over HTTP does not mark a message offered or delivered and does not prove that a chat saw or understood it. Existing delivery hooks and `message.receipt` remain the delivery confirmation path.
+An inbox read offers what it returned (issue #308). The node marks each returned `accepted` record `offered`, as a delivery hook offer does, once the response fits the transport limit; it marks nothing `delivered`, because returning text over HTTP does not prove that a chat saw or understood it. The session's `Stop` hook, or a reply, confirms the offered records: `msg send --reply-to` marks a message `delivered`, and a threaded reply, through the `reply` tool or the CLI, makes the Worker mark it `replied`. `StopFailure` is no receipt. If the MCP client fires no hooks, an MCP-read message reaches `delivered` only through a reply.
 
-The complete serialized inbox response must fit the existing 64 KiB transport limit, measured as UTF-8 bytes including JSON escaping and envelope metadata. If the requested messages do not fit, the tool returns a fixed error rather than truncating messages, omitting records or reporting a successful empty inbox. Retry with a smaller `limit` and a fresh native intent. If one message alone exceeds the serialized limit, use the local `msg inbox` CLI. Message bodies and delivery state remain unchanged.
+The complete serialized inbox response must fit the existing 64 KiB transport limit, measured as UTF-8 bytes including JSON escaping and envelope metadata. If the requested messages do not fit, the tool returns a fixed error rather than truncating messages, omitting records or reporting a successful empty inbox. Retry with a smaller `limit` and a fresh native intent. If one message alone exceeds the serialized limit, use the local `msg inbox` CLI. A read that does not fit leaves message bodies and delivery state unchanged.
 
 ## Measuring native ACK latency
 

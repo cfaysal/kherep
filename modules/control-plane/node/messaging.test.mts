@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { makeEnvelope, parseEnvelope, type Envelope } from "../protocol.mts";
-import { MESSAGING_CAPABILITY, type MessageDeliverBody } from "../protocol-messages.mts";
+import { MESSAGING_ACK_CAPABILITY, MESSAGING_CAPABILITY, type MessageDeliverBody } from "../protocol-messages.mts";
 import { NodeClient } from "./client.mts";
 import { generateIdentity } from "./identity.mts";
 import { getMessage, storeMessage } from "./inbox.mts";
@@ -59,9 +59,9 @@ test("accept rules match the session exactly or by wildcard, and the sender by i
 });
 
 test("messaging.v1 is advertised only when an accept rule exists", async () => {
-  assert.deepEqual(advertisedCapabilities(DEFAULT_POLICY), [...DEFAULT_POLICY.allowedCommands]);
+  assert.deepEqual(advertisedCapabilities(DEFAULT_POLICY), [...DEFAULT_POLICY.allowedCommands, MESSAGING_ACK_CAPABILITY]);
   const policy: NodePolicy = { ...DEFAULT_POLICY, messaging: { accept: [{ session: "*", from: ["operator"] }] } };
-  assert.deepEqual(advertisedCapabilities(policy), [...DEFAULT_POLICY.allowedCommands, MESSAGING_CAPABILITY]);
+  assert.deepEqual(advertisedCapabilities(policy), [...DEFAULT_POLICY.allowedCommands, MESSAGING_CAPABILITY, MESSAGING_ACK_CAPABILITY]);
   const { frames } = await authed(policy);
   const [register] = frames;
   assert.deepEqual((register.body as { capabilities: string[] }).capabilities, advertisedCapabilities(policy));

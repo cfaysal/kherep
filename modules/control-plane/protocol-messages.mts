@@ -23,6 +23,11 @@ export type MessageState = (typeof MESSAGE_STATES)[number];
 export const NODE_REPORTED_STATES = ["accepted", "delivered", "refused"] as const;
 export type NodeReportedState = (typeof NODE_REPORTED_STATES)[number];
 
+// The states after which a message changes no more (issue #308): the sending
+// node acknowledges each with message.status.ack.
+export const FINAL_MESSAGE_STATES = ["delivered", "replied", "refused", "expired"] as const;
+export type FinalMessageState = (typeof FINAL_MESSAGE_STATES)[number];
+
 export const MESSAGE_PROGRESS_CODES = {
   waiting: ["awaiting-user-turn", "awaiting-turn-confirmation", "target-busy", "wake-unconfirmed", "retry-pending", "wake-disabled", "wake-not-authorized",
     "permission-restricted", "operator-stopped", "reply-limit", "budget-exhausted", "ambiguous-target"],
@@ -172,6 +177,29 @@ export function isMessageReceiptBody(body: unknown): body is MessageReceiptBody 
     && isNodeReportedState(body.requestedState) && isMessageState(body.storedState)
     && (body.storedProgressAt === undefined || (body.requestedState === "accepted" && body.storedState === "accepted"
       && isIsoInstant(body.storedProgressAt)));
+}
+
+// ---- Status acknowledgement (issue #308) ------------------------------------
+// Sending node -> Worker, an event once the node recorded a final
+// message.status it received: the Worker may then drop the message row. An
+// event, because an older Worker ignores unknown events; message.status and
+// message.receipt keep their key-strict bodies. A node that sends it
+// advertises MESSAGING_ACK_CAPABILITY.
+export const MESSAGING_ACK_CAPABILITY = "messaging.ack.v1";
+export const MESSAGE_STATUS_ACK = "message.status.ack";
+export interface MessageStatusAckBody { name: typeof MESSAGE_STATUS_ACK; messageId: string; state: FinalMessageState }
+
+export function isFinalMessageState(value: unknown): value is FinalMessageState {
+  return (FINAL_MESSAGE_STATES as readonly unknown[]).includes(value);
+}
+
+export function messageStatusAck(messageId: string, state: FinalMessageState): MessageStatusAckBody {
+  return { name: MESSAGE_STATUS_ACK, messageId, state };
+}
+
+export function isMessageStatusAckBody(body: unknown): body is MessageStatusAckBody {
+  return isObject(body) && only(body, ["name", "messageId", "state"]) && body.name === MESSAGE_STATUS_ACK
+    && isMessageId(body.messageId) && isFinalMessageState(body.state);
 }
 
 // ---- Directory (step 3a) ---------------------------------------------------

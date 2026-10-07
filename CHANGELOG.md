@@ -24,6 +24,18 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control plane node: `delivered` is a read receipt on every path. The
+  messages a new Claude intercom session carries in its task text are offered
+  to it and become `delivered` only once its turn completed (the session
+  `done` in the watch round, or its own `Stop`); before, a session still
+  `working` 30 seconds after its start already counted. A failed or stopped
+  turn offers them again. The records an MCP `inbox` read returns are offered,
+  so a reply or the session's `Stop` confirms them; a read that does not fit
+  the transport offers nothing, and `StopFailure` stays no receipt. The node
+  answers every final `message.status` it recorded (`delivered`, `replied`,
+  `refused`, `expired`), also for a message without a local `sent/` record,
+  with the event `message.status.ack`, and advertises `messaging.ack.v1`. An
+  older Worker ignores the event (issue #308, PR 3 of 4).
 - Control plane node: outbox resends and inbox status re-reports back off on a
   live connection. The first resend still comes exactly 30 seconds after the
   first send, later ones wait with equal jitter up to 10 minutes; a status is
