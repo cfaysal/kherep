@@ -11,6 +11,8 @@ import type { McpServerSpec } from "./contracts.mts";
 import * as parityConfigApi from "./parity-config.mts";
 import {
   render,
+  renderBeforeHookIntegrity,
+  renderBeforeHookIntegrityWithoutNativeHooks,
   renderBeforeResearchHooks,
   renderBeforeResearchHooksWithoutNativeHooks,
   renderBeforePostLegacyHooks,
@@ -151,6 +153,55 @@ test("upgrades the exact pre-research managed block and then settles", () => {
   assert.equal(prepareManagedConfig(upgraded, managed).config, upgraded);
 });
 
+// Issue #275. Codex trust keys are positional (<event>:<group>:<entry>), so the
+// integrity hook may only be APPENDED: every entry rendered before it keeps its
+// group and index, and the new one is the last of the Maestro SessionStart group.
+function hookEntries(config: string): string[][] {
+  return config.split(/^(?=\[\[hooks\.[A-Za-z]+\]\]$)/m).slice(1)
+    .map((group) => group.split(/^\[\[hooks\.[A-Za-z]+\.hooks\]\]$/m).map((entry) => entry.trim()));
+}
+
+test("appends the Codex hook-integrity hook last in the Maestro SessionStart group and moves no other entry", () => {
+  const base = { contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks", node: "/synthetic/node",
+    mcpServers: [], controlPlaneHook: "/synthetic/checkout/modules/control-plane/node/deliver-hook.mts" };
+  const native = { ...base, memoryProvider: "central-brain" as const,
+    nativeHooks: { contextCli: "/synthetic/context.js", captureCli: "/synthetic/capture.mjs", profile: "/synthetic/profile.json" } };
+  for (const options of [base, native]) {
+    const current = hookEntries(render(options));
+    const previous = hookEntries(renderBeforeHookIntegrity(options));
+    assert.equal(current.length, previous.length, "no group added or removed");
+    const changed = current.flatMap((group, index) => (group.length === previous[index]!.length ? [] : [index]));
+    assert.equal(changed.length, 1, "exactly one group gained an entry");
+    const group = current[changed[0]!]!;
+    assert.match(group[0]!, /^\[\[hooks\.SessionStart\]\]/);
+    assert.match(group.join("\n"), /Loading Kherep Maestro/, "it is the Maestro group");
+    assert.deepEqual(group.slice(0, -1), previous[changed[0]!], "every earlier entry keeps its index");
+    assert.match(group.at(-1)!, /codex-hook-integrity\.mts[\s\S]*\ntimeout = 30$/);
+    if (options === native) assert.match(group.at(-2)!, /\/synthetic\/context\.js/, "after the optional native hook");
+    current.forEach((entries, index) => index === changed[0] || assert.deepEqual(entries, previous[index]));
+  }
+});
+
+test("upgrades the exact pre-integrity managed block and then settles", () => {
+  const options = { contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks",
+    node: "/synthetic/node", mcpServers: [] };
+  const managed = { ...options, startMarker: "# start synthetic", endMarker: "# end synthetic",
+    retiredMcpServerNames: [], registryProjections: [], pluginMcpServers: {}, registry: "/synthetic/registry.json",
+    registryBridge: "/synthetic/bridge.mts", registryRuntime: "/synthetic/runtime.mts",
+    memoryNotifyHook: "/synthetic/notify.mts" };
+  for (const previous of [renderBeforeHookIntegrity(options), renderBeforeHookIntegrityWithoutNativeHooks(options)]) {
+    assert.doesNotMatch(previous, /codex-hook-integrity/);
+    assert.match(previous, /codex-research-first\.mts/);
+    const upgraded = prepareManagedConfig(`${managed.startMarker}\n${previous}${managed.endMarker}`, managed).config;
+    assert.match(upgraded, /codex-hook-integrity\.mts/);
+    assert.equal(prepareManagedConfig(upgraded, managed).config, upgraded);
+  }
+  for (const historical of [renderBeforeResearchHooks(options), renderBeforePostLegacyHooks(options),
+    renderPreviousNudges(options), renderLegacyJavaScript(options)]) {
+    assert.doesNotMatch(historical, /codex-hook-integrity/, "no older installer wrote the integrity hook");
+  }
+});
+
 test("exports the exact JavaScript predecessor projection renderers", () => {
   assert.equal(typeof Reflect.get(parityConfigApi, "renderLegacyJavaScript"), "function");
   assert.equal(typeof Reflect.get(parityConfigApi, "renderLegacyJavaScriptPrefix"), "function");
@@ -168,6 +219,7 @@ test("historical native and observation renderers retain their pre-research byte
   for (const renderer of renderers) {
     const historical = renderer(options);
     assert.doesNotMatch(historical, /codex-research-(?:first|stop)\.mts/);
+    assert.doesNotMatch(historical, /codex-hook-integrity/);
   }
 });
 
