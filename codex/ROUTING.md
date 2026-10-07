@@ -92,6 +92,18 @@ and a branch per product would force a shared page into one half or duplicate it
 authoritative schema; where it and this file disagree, the home page is a description of what
 exists and this file is the instruction.
 
+The brief marks each finding, because the observation agent sees only what the Maestro passes it
+and cannot re-run anything. A finding the dispatching session ran in this turn is marked
+`measured:` with the command and the deciding output excerpt, redacted as the privacy rules
+require; any other finding is marked `relayed:` and names its source: another session, an agent,
+the operator or a page. A finding of mixed provenance is split into one line of each. `confirmed` on such a page means attested by the
+session that measured it, with the command and excerpt on the page; the agent did not measure it
+again. A `relayed:` finding, or a `measured:` one without its evidence, is `assumed`. The page body
+names the actual reporter, and "operator-reported" appears only when the operator is the source. On
+2026-10-07 and 2026-10-08, before the brief carried these markers, pages 276858041, 277054539 and
+277054566 were filed as assumed and operator-reported although the dispatching session had measured
+each finding in the same turn.
+
 Those nodes are names here and page ids at the site, and no publisher guesses one. The same per-host
 `confluence.json` that names the space carries a map from every node this rule prescribes to the id
 it has in that space, resolved through the broker under the service account when the space was

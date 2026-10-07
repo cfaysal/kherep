@@ -52,16 +52,22 @@ Every observation carries two statements, and they are not the same thing:
 You set `confirmed` only when the turn contains actual evidence: a measurement, a tool output,
 a file that was read. An agent's own claim is not evidence. When in doubt, `assumed`.
 
+The brief marks each finding. `measured:` means the dispatching session ran it in this turn; with
+both the command and the deciding output excerpt it is `confirmed`, and the command and excerpt go
+into the page body. A finding marked `relayed:` is `assumed`, and the body names its source. A
+finding marked `measured:` without the command or the excerpt, or with no marker, is `assumed`.
+
 A work item, report, page or brief that describes a measurement made in another turn or session is
 second-hand: reading that text in this turn measures the text, not the thing. Such a finding is
-`assumed`, even when the text says "measured".
+`assumed`, even when the text says "measured". You never upgrade a label on your own reading of
+the prose.
 
 A title never claims more than its evidence label. Words such as "confirmed", "verified", "proven",
 "measured" or "works" appear in a title only on a page labelled `evidence-confirmed`. On an
-`assumed` page the title states the finding neutrally or names its source, for example
-"(operator-reported)". Search hits and links carry the title without the label, so a reader who
-sees only the title takes it for a measurement. On 2026-09-28 a page labelled `evidence-assumed`
-was filed with a title ending in "confirmed" and had to be renamed.
+`assumed` page the title states the finding neutrally or names its source, and says
+"(operator-reported)" only when the operator is the source. The dispatching session is never called
+the operator. Search hits and links carry the title without the label, so a reader who sees only
+the title takes it for a measurement, as happened on 2026-09-28.
 
 You NEVER set an existing observation to `superseded` or `refuted`. You record a contradiction
 by naming the contradicted page in your new observation. Resolving it belongs to the working
@@ -232,7 +238,9 @@ session label out of `--labels` and write "Session id: not given in the brief." 
 never derive, shorten or invent one: a made-up session label groups a page with nothing.
 
 Origin, timestamp and source reference belong in the page body: host, runtime, session id, turn
-id and what the finding rests on.
+id and what the finding rests on. The origin line names the actual reporter: "dispatching session
+<id>, measured in this turn: <command> -> <excerpt>" or "relayed from <source> via dispatching
+session <id>".
 
 ## Limits
 

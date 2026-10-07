@@ -43,6 +43,18 @@ increments the minor version; every other release increments the patch version.
   `NOT-INSTALLED project/tools/<Jira set>` line. Look-alikes such as
   `atl-jira.mjs`, `*.bak-*` copies and `_deprecated/` never count as present
   (issue #302).
+- Session observations: the brief marks each finding `measured:`, with the
+  command and the deciding output excerpt, when the dispatching session ran it
+  in this turn, and `relayed:`, with its source, otherwise. `claude-obs` and
+  `codex-obs` label a `measured:` finding with that evidence `confirmed` and
+  put the command and excerpt in the page body; a `relayed:` finding, a
+  `measured:` one without evidence, or an unmarked one stays `assumed`. The
+  origin line names the actual reporter, a title says "(operator-reported)"
+  only when the operator is the source, and the dispatching session is never
+  called the operator. Before, findings the dispatching session had measured
+  in the same turn were filed as assumed and operator-reported. Both
+  `ROUTING.md` files and the three observation hook reasons state the brief
+  contract (issue #309).
 
 ## [0.2.0] - 2026-10-07
 

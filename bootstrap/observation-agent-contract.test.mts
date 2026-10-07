@@ -96,6 +96,44 @@ test("both texts treat a second-hand measurement as assumed", () => {
   }
 });
 
+// Issue #309. Pages 276858041, 277054539 and 277054566 were filed as assumed
+// and "(operator-reported)" although the dispatching session had measured the
+// finding in the same turn. The brief now marks each finding.
+const ROUTING_FILES = [path.join(REPO, "claude", "teams", "kherep", "ROUTING.md"), path.join(REPO, "codex", "ROUTING.md")];
+
+test("both texts label a brief finding by its measured: or relayed: marker", () => {
+  for (const [name, text] of [["claude-obs", CLAUDE_OBS], ["codex-obs", codexProjection()]]) {
+    assert.match(text, /`measured:`[^.]{0,200}command[^.]{0,200}excerpt[\s\S]{0,200}`confirmed`/i, name);
+    assert.match(text, /`relayed:`[\s\S]{0,200}`assumed`/i, name);
+    assert.match(text, /`measured:` without[^.]{0,120}(command|excerpt)[\s\S]{0,200}`assumed`/i, name);
+    assert.match(text, /dispatching session is never[^.]{0,40}operator/i, name);
+    assert.match(text, /actual reporter/i, name);
+  }
+});
+
+test("the Claude text calls a finding operator-reported only when the operator is the source", () => {
+  assert.match(CLAUDE_OBS, /"\(operator-reported\)"[^.]{0,120}only when the operator is the source/i);
+});
+
+test("both routing files define the brief markers and the actual reporter", () => {
+  for (const file of ROUTING_FILES) {
+    const text = fs.readFileSync(file, "utf8");
+    const section = text.slice(text.indexOf("## Session observations"), text.indexOf("## Linking"));
+    assert.match(section, /`measured:`[\s\S]{0,400}`relayed:`/, file);
+    assert.match(section, /actual reporter/i, file);
+    assert.match(section, /276858041[\s\S]{0,80}277054539[\s\S]{0,80}277054566/, file);
+  }
+});
+
+test("every observation hook reason asks the dispatcher to mark each finding", () => {
+  for (const hook of ["claude/hooks/observation-stop.mts", "codex/hooks/observation-stop.mts", "codex/hooks/observation-turn-completion.mts"]) {
+    const source = fs.readFileSync(path.join(REPO, hook), "utf8");
+    assert.ok(source.includes(
+      "Mark each finding measured: (with command and deciding output excerpt) or relayed: (with source).",
+    ), hook);
+  }
+});
+
 // OP-1437. A brief headed "Scope: Kherep" got two of three pages placed by
 // content instead. The named node now binds every finding of the run.
 test("the Claude text binds every finding to the node the brief names", () => {
