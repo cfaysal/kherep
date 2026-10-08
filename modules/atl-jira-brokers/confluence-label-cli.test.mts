@@ -217,6 +217,17 @@ for (const { name: BROKER, run: runCli, env: OWN_ENV } of BROKERS) {
     assert.deepEqual(postedNames(calls), ["alpha", HERE]);
   });
 
+  test(`${BROKER} create says the page exists unlabelled when the runtime label write fails`, async () => {
+    const page = labelPage([]);
+    const api = (call: Call) => (call.options?.method === "POST" && call.url.endsWith("/label")
+      ? response(500, { message: "label write failed" }) : page(call));
+    const { out, err, injected } = harness({ env: LABEL_ENV, api });
+    const argv = ["create", "--space", "KB", "--title", "New page", "--body", "<p>x</p>", "--format", "storage"];
+    assert.equal(await runCli(argv, injected), 1);
+    assert.ok(out.includes("id: 5001"), out.join("\n"));
+    assert.match(err.join("\n"), /Page 5001 exists, but its runtime label could not be written/);
+  });
+
   test(`${BROKER} --keep-runtime removes the other runtime label and proves it by reading back`, async () => {
     const { out, err, calls, injected } = harness({ env: LABEL_ENV, api: labelPage(["type-observation", HERE, THERE]) });
     assert.equal(await runCli(["labels", "--id", "5001", "--keep-runtime", THERE], injected), 0);
