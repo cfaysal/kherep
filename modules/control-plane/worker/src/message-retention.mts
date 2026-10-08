@@ -36,8 +36,12 @@ const FINAL = "('delivered', 'replied', 'refused', 'expired')";
 const ROW_COLUMNS = "id, from_node, to_node, state, reason, depth, reply_message_id, deletable";
 const ROW = `SELECT ${ROW_COLUMNS} FROM messages WHERE id = ?`;
 const TOMBSTONE = "SELECT id, from_node, to_node, state, reason, depth, reply_message_id, deleted_at FROM message_tombstones WHERE id = ?";
+// Due rows in deadline order, whatever they are: a deadline the sweep must not
+// act on (a row stored before this version, or not final) is cleared instead, or
+// the alarm would re-arm on it forever.
 const SWEEP_DUE = `SELECT ${ROW_COLUMNS} FROM messages INDEXED BY messages_delete_after
-  WHERE delete_after <= ? AND deletable = 1 AND state IN ${FINAL} ORDER BY delete_after LIMIT ?`;
+  WHERE delete_after <= ? ORDER BY delete_after LIMIT ?`;
+const CLEAR_DUE = "UPDATE messages SET delete_after = NULL WHERE id = ?";
 const NEXT_DELETE = "SELECT MIN(delete_after) AS next FROM messages INDEXED BY messages_delete_after WHERE delete_after IS NOT NULL";
 const PRUNE_DUE = `SELECT id FROM message_tombstones INDEXED BY tombstones_deleted_at
   WHERE deleted_at <= ? ORDER BY deleted_at LIMIT ?`;
@@ -117,7 +121,10 @@ export class MessageRetention {
   // batch was full and more may be due.
   sweepDue(now: number): boolean {
     const rows = this.sql.exec(SWEEP_DUE, now, RETENTION_BATCH).toArray();
-    for (const row of rows) this.remove(row, "system", "fallback", now);
+    for (const row of rows) {
+      if (row.deletable === 1 && isFinalMessageState(row.state)) this.remove(row, "system", "fallback", now);
+      else this.sql.exec(CLEAR_DUE, row.id);
+    }
     return rows.length === RETENTION_BATCH;
   }
 
