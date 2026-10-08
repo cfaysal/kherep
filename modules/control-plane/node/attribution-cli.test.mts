@@ -24,7 +24,8 @@ function seeded(t: TestContext): NodePaths {
   const rows: Partial<AttributionRecord>[] = [
     { ts: new Date(NOW - 30 * HOUR).toISOString() },
     { ts: new Date(NOW - 2 * HOUR).toISOString(), kind: "pr-create", remoteRef: null, pr: 7, prSource: "stdout" },
-    { ts: new Date(NOW - HOUR).toISOString(), branch: "feat/b", sha: "b".repeat(40), repo: "example/other",
+    { ts: new Date(NOW - HOUR).toISOString(), branch: "feat/b", remoteRef: "refs/heads/feat/b", sha: "b".repeat(40),
+      repo: "example/other",
       sessionId: "synthetic-codex-1", runtime: "codex", sessionSource: "marker" },
   ];
   for (const row of rows) appendAttribution(paths, { ...base, ...row }, NOW);
@@ -53,6 +54,17 @@ test("--branch, --pr, --repo and --since filter the records", (t) => {
   assert.deepEqual(shas(run(paths, ["--json", "--repo", "example/repo"]).out), ["push:feat/a", "pr-create:feat/a"]);
   assert.deepEqual(shas(run(paths, ["--json", "--since", "3"]).out), ["pr-create:feat/a", "push:feat/b"]);
   assert.deepEqual(shas(run(paths, ["--json", "--branch", "feat/a", "--since", "24"]).out), ["pr-create:feat/a"]);
+});
+
+// `git push origin main:feat/c` records the local branch main; asking for the
+// branch the PR uses must still find it.
+test("--branch also matches the pushed remote branch", (t) => {
+  const paths = seeded(t);
+  appendAttribution(paths, { v: 1, ts: new Date(NOW).toISOString(), kind: "push", sessionId: "synthetic-claude-2",
+    runtime: "claude", sessionSource: "CLAUDE_CODE_SESSION_ID", repo: "example/repo", toplevel: "/synthetic/repo",
+    branch: "main", remoteRef: "refs/heads/feat/c", sha: "c".repeat(40), pr: null }, NOW);
+  assert.deepEqual(shas(run(paths, ["--json", "--branch", "feat/c"]).out), ["push:main"]);
+  assert.deepEqual(shas(run(paths, ["--json", "--branch", "c"]).out), []);
 });
 
 test("the text form prints one line per record with session, runtime, repo, branch, sha and PR", (t) => {

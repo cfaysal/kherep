@@ -43,7 +43,10 @@ export function runAttribution(argv: string[], deps: AttributionCliDeps): number
     return 2;
   }
   const after = since === undefined ? -Infinity : (deps.now?.() ?? Date.now()) - since * HOUR;
-  const records = readAttribution(deps.paths).filter((record) => (values.branch === undefined || record.branch === values.branch)
+  // A push records the local branch and the remote ref; a PR's head is the latter.
+  const onBranch = (record: AttributionRecord): boolean => values.branch === undefined
+    || record.branch === values.branch || record.remoteRef === `refs/heads/${values.branch}`;
+  const records = readAttribution(deps.paths).filter((record) => onBranch(record)
     && (pr === undefined || record.pr === pr) && (values.repo === undefined || record.repo === values.repo)
     && Date.parse(record.ts) >= after);
   if (values.json) write(`${JSON.stringify(records, null, 2)}\n`);
