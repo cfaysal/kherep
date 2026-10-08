@@ -51,6 +51,15 @@
             "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/deploy-guard.mts\""
           }
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/main-checkout-guard.mts\""
+          }
+        ]
       }
     ],
     "PostToolUse": [

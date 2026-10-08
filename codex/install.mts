@@ -45,7 +45,7 @@ const OBSERVATION_WORKSPACE_SENTINEL =
   'const SELECTED_WORKSPACE = "__KHEREP_SELECTED_WORKSPACE__";';
 const RETIRED_MCP_SERVERS = ["claude-baton"];
 const SHARED_HOOKS = [
-  "commit-guard.mts", "deploy-guard.mts", "playwright-file-guard.mts",
+  "commit-guard.mts", "deploy-guard.mts", "playwright-file-guard.mts", "main-checkout-guard.mts",
   "manifest-watch.mts", "loc-watch.mts", "umlaut-translit-watch.mts", "simplify-nudge.mts",
 ];
 

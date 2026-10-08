@@ -421,15 +421,18 @@ fi
 # CLAUDE_HOME other than the default one skips it too, unless
 # KHEREP_INSTALL_ALLOW_GITCONFIG=1: a candidate home bound globally leaves every
 # repository of the account on a hook directory that is deleted later (#256).
+# The same directory holds post-checkout (issue #325). It only warns when a
+# branch checkout leaves a workspace repository's main checkout off its default
+# branch, and needs the mode bit like commit-msg.
 SKIP_GITCONFIG="$(kherep_install_skip_reason GITCONFIG)"
 GITHOOKS_DIR="$CLAUDE_HOME/kherep/githooks"
 if [ -n "$SKIP_GITCONFIG" ]; then
-  chmod +x "$GITHOOKS_DIR/commit-msg" 2>/dev/null || true
+  chmod +x "$GITHOOKS_DIR/commit-msg" "$GITHOOKS_DIR/post-checkout" 2>/dev/null || true
   echo "install: SKIP_GITCONFIG=1 (by $SKIP_GITCONFIG; global, system and repo-local core.hooksPath untouched; hook file still placed)"
 elif [ -f "$GITHOOKS_DIR/commit-msg" ]; then
   # Windows checkouts routinely drop the mode bit; without +x git skips the hook
   # silently and the rule would bind on one host but not the other.
-  chmod +x "$GITHOOKS_DIR/commit-msg" 2>/dev/null || true
+  chmod +x "$GITHOOKS_DIR/commit-msg" "$GITHOOKS_DIR/post-checkout" 2>/dev/null || true
   # Git for Windows stores the drive form C:/... of the /c/... path passed here,
   # so the same directory must not read as a replacement (issue #99).
   source "$REPO_ROOT/bootstrap/bind-repo-hookspath.sh"

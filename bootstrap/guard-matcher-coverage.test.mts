@@ -88,6 +88,19 @@ for (const legacy of LEGACY) {
   });
 }
 
+// Issue #325. main-checkout-guard has no legacy group: it is new, and it has to
+// see both shell tools. It gets its own group, so the "Bash" group keeps exactly
+// commit-guard and deploy-guard and no matcher of an existing group changes.
+test("main-checkout-guard.mts covers Bash and PowerShell in a group of its own", () => {
+  const current = templateMatcher("PreToolUse", "main-checkout-guard.mts");
+  assert.ok(matcherMatches(current, "Bash") && matcherMatches(current, "PowerShell"), `matcher "${current}"`);
+  assert.ok(!matcherMatches(current, "Read"), `matcher "${current}" is limited to the shell tools`);
+  const bash = template.hooks.PreToolUse!.filter((group) => group.matcher === "Bash");
+  assert.equal(bash.length, 1);
+  assert.deepEqual(bash[0]!.hooks!.map((entry) => String(entry.command).replace(/^.*\/hooks\/|"$/g, "")),
+    ["commit-guard.mts", "deploy-guard.mts"]);
+});
+
 test("no template entry wires a .js script", () => {
   const commands = Object.values(template.hooks).flat().flatMap((group) => group.hooks ?? []).map((h) => String(h.command));
   assert.deepEqual(commands.filter((command) => /\.js"?$/.test(command)), []);

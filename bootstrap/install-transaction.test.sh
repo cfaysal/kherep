@@ -765,7 +765,8 @@ test_upgrade_retires_guard_js_hooks() {
     const wired = Object.entries(s.hooks).flatMap(([event, groups]) => groups.flatMap((g) =>
       (g.hooks || []).map((h) => ({ event, matcher: g.matcher ?? "", command: String(h.command) }))));
     const expected = { "commit-guard": "Bash", "deploy-guard": "Bash", "dispatch-contract-guard": "Agent|Task",
-      "playwright-file-guard": "", "privacy-boundary-guard": "", "secret-output-guard": "" };
+      "playwright-file-guard": "", "privacy-boundary-guard": "", "secret-output-guard": "",
+      "main-checkout-guard": "Bash|PowerShell" };
     for (const [name, matcher] of Object.entries(expected)) {
       if (wired.some((h) => h.command.includes(`hooks/${name}.js`))) fail(`${name}.js still wired`);
       const mts = wired.filter((h) => h.command.includes(`hooks/${name}.mts`));
@@ -775,7 +776,10 @@ test_upgrade_retires_guard_js_hooks() {
     }
     const legacyMatchers = ["Read|Grep|Glob|Edit|Write|MultiEdit|Bash", "Agent|Task|Workflow|WebSearch|WebFetch|mcp__.*",
       "Bash|PowerShell", "mcp__plugin_playwright_playwright__browser_navigate"];
-    const left = (s.hooks.PreToolUse || []).filter((g) => legacyMatchers.includes(g.matcher));
+    // Issue #325: the template has its own "Bash|PowerShell" group for main-checkout-guard,
+    // so that matcher may stay as long as the group holds nothing else.
+    const managedOnly = (g) => (g.hooks || []).every((h) => String(h.command).includes("hooks/main-checkout-guard.mts"));
+    const left = (s.hooks.PreToolUse || []).filter((g) => legacyMatchers.includes(g.matcher) && !managedOnly(g));
     if (left.length) fail(`legacy groups stayed: ${JSON.stringify(left)}`);
   ' "$C/settings.json" || { cat "$C/settings.json"; fail "the upgraded settings do not wire exactly the .mts guards"; }
   HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \

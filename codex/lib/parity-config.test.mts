@@ -24,6 +24,16 @@ import {
   renderPreviousNudgesPrefix,
 } from "./parity-config.mts";
 
+// Issue #325. main-checkout-guard is appended as the last entry of the shell
+// PreToolUse group, after commit-guard and deploy-guard, so every positional
+// trust key rendered before it stays valid. Read through the module namespace:
+// the renderer is new, and a missing export must fail these tests, not the file.
+const renderBeforeMainCheckoutGuard = Reflect.get(parityConfigApi, "renderBeforeMainCheckoutGuard") as
+  ((options: Parameters<typeof render>[0]) => string) | undefined;
+const renderBeforeMainCheckoutGuardWithoutNativeHooks =
+  Reflect.get(parityConfigApi, "renderBeforeMainCheckoutGuardWithoutNativeHooks") as
+  ((options: Parameters<typeof render>[0]) => string) | undefined;
+
 const SHARED_NUDGES = ["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"];
 const SHARED_GUARDS = ["commit-guard", "deploy-guard", "playwright-file-guard"];
 
@@ -167,7 +177,9 @@ test("appends the Codex hook-integrity hook last in the Maestro SessionStart gro
   const native = { ...base, memoryProvider: "central-brain" as const,
     nativeHooks: { contextCli: "/synthetic/context.js", captureCli: "/synthetic/capture.mjs", profile: "/synthetic/profile.json" } };
   for (const options of [base, native]) {
-    const current = hookEntries(render(options));
+    // The projection right after the integrity hook arrived: today's minus the
+    // hooks added since (issue #325).
+    const current = hookEntries((renderBeforeMainCheckoutGuard ?? render)(options));
     const previous = hookEntries(renderBeforeHookIntegrity(options));
     assert.equal(current.length, previous.length, "no group added or removed");
     const changed = current.flatMap((group, index) => (group.length === previous[index]!.length ? [] : [index]));
@@ -199,6 +211,48 @@ test("upgrades the exact pre-integrity managed block and then settles", () => {
   for (const historical of [renderBeforeResearchHooks(options), renderBeforePostLegacyHooks(options),
     renderPreviousNudges(options), renderLegacyJavaScript(options)]) {
     assert.doesNotMatch(historical, /codex-hook-integrity/, "no older installer wrote the integrity hook");
+  }
+});
+
+test("appends main-checkout-guard last in the shell PreToolUse group and moves no other entry", () => {
+  assert.equal(typeof renderBeforeMainCheckoutGuard, "function");
+  const base = { contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks", node: "/synthetic/node",
+    mcpServers: [], controlPlaneHook: "/synthetic/checkout/modules/control-plane/node/deliver-hook.mts" };
+  const native = { ...base, memoryProvider: "central-brain" as const,
+    nativeHooks: { contextCli: "/synthetic/context.js", captureCli: "/synthetic/capture.mjs", profile: "/synthetic/profile.json" } };
+  for (const options of [base, native]) {
+    const current = hookEntries(render(options));
+    const previous = hookEntries(renderBeforeMainCheckoutGuard!(options));
+    assert.equal(current.length, previous.length, "no group added or removed");
+    const changed = current.flatMap((group, index) => (group.length === previous[index]!.length ? [] : [index]));
+    assert.equal(changed.length, 1, "exactly one group gained an entry");
+    const group = current[changed[0]!]!;
+    assert.match(group[0]!, /^\[\[hooks\.PreToolUse\]\]\nmatcher = "Bash\|shell_command\|exec_command\|functions\\\\\.exec"$/);
+    assert.deepEqual(group.slice(0, -1), previous[changed[0]!], "every earlier entry keeps its index");
+    assert.match(group.at(-2)!, /deploy-guard\.mts/);
+    assert.match(group.at(-1)!, /codex-hook-adapter\.mts[^\n]*main-checkout-guard\.mts\\" \\"pre\\"/);
+    current.forEach((entries, index) => index === changed[0] || assert.deepEqual(entries, previous[index]));
+  }
+});
+
+test("upgrades the exact pre-main-checkout-guard managed block and then settles", () => {
+  assert.equal(typeof renderBeforeMainCheckoutGuardWithoutNativeHooks, "function");
+  const options = { contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks",
+    node: "/synthetic/node", mcpServers: [] };
+  const managed = { ...options, startMarker: "# start synthetic", endMarker: "# end synthetic",
+    retiredMcpServerNames: [], registryProjections: [], pluginMcpServers: {}, registry: "/synthetic/registry.json",
+    registryBridge: "/synthetic/bridge.mts", registryRuntime: "/synthetic/runtime.mts",
+    memoryNotifyHook: "/synthetic/notify.mts" };
+  for (const previous of [renderBeforeMainCheckoutGuard!(options), renderBeforeMainCheckoutGuardWithoutNativeHooks!(options)]) {
+    assert.doesNotMatch(previous, /main-checkout-guard/);
+    assert.match(previous, /codex-hook-integrity\.mts/);
+    const upgraded = prepareManagedConfig(`${managed.startMarker}\n${previous}${managed.endMarker}`, managed).config;
+    assert.match(upgraded, /main-checkout-guard\.mts/);
+    assert.equal(prepareManagedConfig(upgraded, managed).config, upgraded);
+  }
+  for (const historical of [renderBeforeHookIntegrity(options), renderBeforeResearchHooks(options),
+    renderBeforePostLegacyHooks(options), renderPreviousNudges(options), renderLegacyJavaScript(options)]) {
+    assert.doesNotMatch(historical, /main-checkout-guard/, "no older installer wrote main-checkout-guard");
   }
 });
 
