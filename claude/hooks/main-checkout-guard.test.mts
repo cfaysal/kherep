@@ -136,3 +136,36 @@ test("other tools and malformed payloads pass", () => {
   assert.equal(result.status, 0);
   assertPassed(run("git switch feat", { tool: "Read" }), "Read tool");
 });
+
+// Issue #346. The workspace and the directory may name the same place in two
+// spellings: a Windows 8.3 short name, or a link to the workspace. A lexical or
+// a canonical match counts.
+function shortName(long: string): string {
+  return spawnSync("cmd", ["/d", "/s", "/c", `"for %I in ("${long}") do @echo %~sI"`],
+    { encoding: "utf8", windowsVerbatimArguments: true }).stdout.trim();
+}
+
+function shortOrSkip(long: string): string | null {
+  if (process.platform !== "win32") return null;
+  const short = shortName(long);
+  return !short || short.toLowerCase() === long.toLowerCase() || !fs.existsSync(short) ? null : short;
+}
+
+test("T1: a workspace set as an 8.3 short name still guards the long checkout path", (t) => {
+  const short = shortOrSkip(workspace);
+  if (!short) return t.skip("not win32, or this volume has no 8.3 short names");
+  assertBlocked(run("git switch feat", { env: { KHEREP_WORKSPACE: short } }), "short workspace, long cwd");
+});
+
+test("T2: a checkout reached through an 8.3 short name is still guarded", (t) => {
+  const short = shortOrSkip(main);
+  if (!short) return t.skip("not win32, or this volume has no 8.3 short names");
+  assertBlocked(run("git switch feat", { cwd: short }), "long workspace, short cwd");
+});
+
+test("T3: a workspace reached through a link still guards the checkout", () => {
+  const link = path.join(root, "ws-link");
+  fs.symlinkSync(workspace, link, process.platform === "win32" ? "junction" : "dir");
+  assertBlocked(run("git switch feat", { env: { KHEREP_WORKSPACE: link } }), "linked workspace");
+  assertPassed(run("git switch main", { env: { KHEREP_WORKSPACE: link } }), "linked workspace, switch main");
+});

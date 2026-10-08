@@ -2,8 +2,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 
-import { commandSegments, gitSubcommand, hostPath } from "../../../claude/hooks/lib/command-walk.mts";
-import { configuredWorkspace, isWithinPath } from "../../../claude/hooks/lib/workspace-scope.mts";
+import { commandSegments, gitSubcommand } from "../../../claude/hooks/lib/command-walk.mts";
+import { isWithinWorkspace } from "../../../claude/hooks/lib/real-path-policy.mts";
 import { normalizePayloads } from "../../../codex/hooks/hook-adapter.mts";
 import { appendAttribution, isSessionId, repoSlug, writePendingMarker, type AttributionRecord } from "./attribution.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
@@ -47,16 +47,10 @@ function git(dir: string, args: string[]): string | null {
   return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
-// realpathSync.native expands Windows 8.3 short names (C:\Users\RUNNER~1),
-// which git never reports; the JS realpath keeps them.
-function longPath(target: string): string {
-  try { return fs.realpathSync.native(target); } catch { return target; }
-}
-
 // The toplevel of the repository <dir> is in, when that lies in the workspace.
 function workspaceToplevel(dir: string, env: NodeJS.ProcessEnv): string | null {
   const toplevel = git(dir, ["rev-parse", "--show-toplevel"]);
-  return toplevel && isWithinPath(longPath(toplevel), longPath(hostPath(configuredWorkspace(env)))) ? toplevel : null;
+  return toplevel && isWithinWorkspace(toplevel, env) ? toplevel : null;
 }
 
 const PR_URL = /https?:\/\/[^\s"'\\]+?\/([^/\s"'\\]+)\/([^/\s"'\\]+)\/pull\/(\d+)/;
