@@ -9,6 +9,20 @@ increments the minor version; every other release increments the patch version.
 
 ## [Unreleased]
 
+### Added
+
+- Confluence brokers: new read-only verb `list --space <key>
+  [--title-contains <text>] [--label <name>] [--limit <n>]`. It reads every
+  page of the space through the paginated v2 pages endpoint, filters titles by
+  case-insensitive substring in the broker, and filters by label through one
+  v1 CQL query that follows `_links.next`. It prints one `page` row per match,
+  then `total:`, `shown:` and `truncated:`. The total is counted by reading
+  every result page, never taken from `totalSize`; only `--limit` truncates.
+  Exit 0 for any completed read, including `total: 0`, and exit 1 for a
+  Confluence or argument error, which prints no `total:`. The space index now
+  stops on a cursor that adds no new page, not only on an empty page
+  (issue #315).
+
 ### Changed
 
 - Atlassian MCP: Kherep targets the v2 Atlassian remote MCP server. The Claude
@@ -24,6 +38,12 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Confluence brokers: `search` passes `--limit` to the semantic search as
+  `min(max(limit, 25), 100)`, where 100 is the `twg rovo search` maximum.
+  Before, the limit never reached it and every search asked for the default
+  25 proposals. After the hits it prints `truncated: true|false`; true means
+  the proposals filled the request or `--limit` was above 100. Exit codes are
+  unchanged (issue #315).
 - Control plane node: `delivered` is a read receipt on every path. The
   messages a new Claude intercom session carries in its task text are offered
   to it and become `delivered` only once its turn completed (the session

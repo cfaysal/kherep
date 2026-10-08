@@ -59,6 +59,7 @@ export async function spaceIndex(session: ConfluenceSession, spaceId: string): P
   while (path) {
     const { json } = await session.request({ method: "GET", path, scope: SCOPES.get });
     const rows = rowsOf(json);
+    const before = byId.size;
     for (const row of rows) {
       const id = text(row.id);
       if (!id) continue;
@@ -70,9 +71,9 @@ export async function spaceIndex(session: ConfluenceSession, spaceId: string): P
     }
     const next = (json as { _links?: { next?: unknown } })?._links?.next;
     const link = typeof next === "string" ? next : "";
-    // Only follow a cursor that actually advanced. A link that returns the same
-    // page forever is the shape that hung two runs on 2026-09-21 for two hours.
-    path = link && rows.length ? (link.startsWith("/wiki") ? link : `/wiki${link}`) : null;
+    // Only follow a cursor that added a page. A link that returns the same page
+    // forever is the shape that hung two runs on 2026-09-21 for two hours.
+    path = link && byId.size > before ? (link.startsWith("/wiki") ? link : `/wiki${link}`) : null;
   }
   return { byId, byTitle, parents };
 }

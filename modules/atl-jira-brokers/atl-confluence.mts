@@ -29,6 +29,7 @@ import {
   cmdChildren,
   cmdContext,
   cmdGetBody,
+  cmdList,
   cmdMove,
   cmdOrphans,
   cmdRelated,
@@ -96,6 +97,7 @@ export const FLAGS = {
   children: { required: { id: "<id>" } },
   related: { required: { space: "<key>", title: "<title>" }, optional: { id: "<id>", parent: "<id>", limit: "<n>" } },
   search: { required: { space: "<key>", query: "<terms>" }, optional: { limit: "<n>" } },
+  list: { required: { space: "<key>" }, optional: { "title-contains": "<text>", label: "<name>", limit: "<n>" } },
   context: { required: { space: "<key>", id: "<id>" } },
   orphans: { required: { space: "<key>" } },
   stitch: { required: { space: "<key>" }, optional: { id: "<id>", limit: "<n>", "per-orphan": "<n>" }, valueless: ["dry-run"] },
@@ -242,6 +244,7 @@ const COMMANDS: Record<Verb, (ctx: CliContext, args: Args) => Promise<number>> =
   children: cmdChildren,
   related: cmdRelated,
   search: cmdSearch,
+  list: cmdList,
   context: cmdContext,
   orphans: cmdOrphans,
   stitch: cmdStitch,
@@ -270,7 +273,7 @@ export async function runCli(argv: string[], injected: Injected = {}): Promise<n
   try {
     // One line on purpose: the contract test reads this source and requires the
     // verbs of this usage string to be exactly the keys of FLAGS.
-    if (!Object.hasOwn(FLAGS, command)) fail("Usage: create | update | get | delete | purge | labels | move | space | children | related | search | context | orphans | stitch | selftest. Run help for the flags of each verb.");
+    if (!Object.hasOwn(FLAGS, command)) fail("Usage: create | update | get | delete | purge | labels | move | space | children | related | search | list | context | orphans | stitch | selftest. Run help for the flags of each verb.");
     const verb = command as Verb;
     return await COMMANDS[verb](ctx, parseVerbArgs(verb, FLAGS[verb], rest, EN));
   } catch (error) {
