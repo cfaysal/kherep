@@ -102,6 +102,12 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- main-checkout-guard and the attribution hook: a repository counts as
+  inside the workspace when its path matches the workspace as written or
+  after both sides are resolved on the file system. A workspace or checkout
+  given as a Windows 8.3 short name, or reached through a junction or
+  symbolic link, is now guarded instead of passing unchecked. Both use the
+  shared `isWithinWorkspace()` in `real-path-policy.mts` (issue #346).
 - Control Plane worker: an npm override raises `sharp` from 0.35.4 to
   0.35.5 (CVE-2026-96889, Dependabot alert #12). `miniflare` pins
   `sharp` to exactly 0.35.4, also in its latest release, so Dependabot could

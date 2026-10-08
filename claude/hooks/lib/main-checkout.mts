@@ -12,8 +12,9 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 
-import { commandSegments, gitSubcommand, hostPath, resolveDir, type Segment } from "./command-walk.mts";
-import { configuredWorkspace, isWithinPath, normalizePathLike, type EnvLike } from "./workspace-scope.mts";
+import { commandSegments, gitSubcommand, resolveDir, type Segment } from "./command-walk.mts";
+import { isWithinWorkspace } from "./real-path-policy.mts";
+import { normalizePathLike, type EnvLike } from "./workspace-scope.mts";
 
 export interface CheckoutIntent {
   dir: string;
@@ -107,7 +108,7 @@ function staysOnDefault(intent: CheckoutIntent, main: string): boolean {
 }
 
 export function judge(intent: CheckoutIntent, env: EnvLike = process.env): Judgement {
-  if (!isWithinPath(intent.dir, hostPath(configuredWorkspace(env))) || !isMainCheckout(intent.dir)) return { action: "pass" };
+  if (!isWithinWorkspace(intent.dir, env) || !isMainCheckout(intent.dir)) return { action: "pass" };
   const main = defaultBranch(intent.dir);
   if (!main) {
     return { action: "warn", message: `main-checkout-guard could not determine the default branch of ${intent.dir} `
