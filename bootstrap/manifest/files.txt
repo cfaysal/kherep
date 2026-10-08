@@ -5,6 +5,8 @@ hooks/commit-guard.mts
 hooks/commit-guard.test.mts
 hooks/deploy-guard.mts
 hooks/deploy-guard.test.mts
+hooks/main-checkout-guard.mts
+hooks/main-checkout-guard.test.mts
 hooks/maestro-discipline.mts
 hooks/manifest-watch.mts
 hooks/manifest-watch.test.mts
@@ -27,6 +29,8 @@ hooks/dispatch-contract-guard.mts
 hooks/dispatch-contract-guard.test.mts
 hooks/lib/dispatch-policy.mts
 hooks/lib/git-commit-match.mts
+hooks/lib/main-checkout.mts
+hooks/lib/main-checkout.test.mts
 hooks/lib/private-path-policy.mts
 hooks/lib/private-path-rules.mts
 hooks/lib/real-path-policy.mts
@@ -101,6 +105,7 @@ skills/local-inference
 skills/forge-bulk-op-pattern
 skills/vite-base-forge
 kherep/githooks/commit-msg
+kherep/githooks/post-checkout
 skills/domain-modeling
 skills/codebase-design
 skills/improve-codebase-architecture

@@ -122,7 +122,9 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
   const groups = [
     group("PreToolUse", "Read|Grep|Glob|Edit|Write|MultiEdit|apply_patch|Bash|shell_command|exec_command|functions\\.exec", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
     group("PreToolUse", "Agent|spawn_agent|Task|Workflow|WebSearch|WebFetch|mcp__.*", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
-    group("PreToolUse", "Bash|shell_command|exec_command|functions\\.exec", [adapted("commit-guard.mts", "pre"), adapted("deploy-guard.mts", "pre-no-transcript")]),
+    group("PreToolUse", "Bash|shell_command|exec_command|functions\\.exec", [adapted("commit-guard.mts", "pre"), adapted("deploy-guard.mts", "pre-no-transcript"),
+      // Issue #325. Appended last: Codex trust keys are positional.
+      adapted("main-checkout-guard.mts", "pre")]),
     group("PreToolUse", "Agent|spawn_agent", [hook("codex-dispatch-contract-guard.mts")]),
     group("PreToolUse", "mcp__playwright__browser_navigate", [hook("playwright-file-guard.mts")]),
     ...(options.messagingClient?.enabled
@@ -312,10 +314,17 @@ export const POST_LEGACY_HOOKS = [
   "codex-observation-turn-completion",
   "codex-research-first",
   "codex-research-stop",
+  // With its extension: a bare "main-checkout-guard" also matches a checkout
+  // directory of that name in the control-plane hook path.
+  "main-checkout-guard.mts",
 ];
 const PRE_OBSERVATION_HOOKS = ["codex-observation-turn-completion"];
 const PRE_RESEARCH_HOOKS = ["codex-research-first", "codex-research-stop"];
-const PRE_INTEGRITY_HOOKS = ["codex-hook-integrity"];
+const PRE_INTEGRITY_HOOKS = ["codex-hook-integrity", "main-checkout-guard.mts"];
+// Issue #325. Every render from before the integrity hook predates the
+// main-checkout guard too, so PRE_INTEGRITY_HOOKS lists both; this list alone
+// gives the block in between.
+const PRE_MAIN_CHECKOUT_HOOKS = ["main-checkout-guard.mts"];
 
 function withoutHooks(config: string, names: readonly string[]): string {
   return config
@@ -408,6 +417,15 @@ export function renderBeforeHookIntegrity(options: RenderOptions): string {
 
 export function renderBeforeHookIntegrityWithoutNativeHooks(options: RenderOptions): string {
   return withoutHooks(renderWithoutNativeHooks(options), PRE_INTEGRITY_HOOKS);
+}
+
+// Issue #325. The projection immediately before the main-checkout guard.
+export function renderBeforeMainCheckoutGuard(options: RenderOptions): string {
+  return withoutHooks(render(options), PRE_MAIN_CHECKOUT_HOOKS);
+}
+
+export function renderBeforeMainCheckoutGuardWithoutNativeHooks(options: RenderOptions): string {
+  return withoutHooks(renderWithoutNativeHooks(options), PRE_MAIN_CHECKOUT_HOOKS);
 }
 
 export function renderLegacyJavaScriptPrefix(options: RenderOptions): string {

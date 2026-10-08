@@ -186,7 +186,8 @@ check_profile() {
     session-kickoff/protocol.md settings.json CLAUDE.md
     statusline-command.sh kherep/local-inference/runner.mts
     kherep/local-inference/lib/profile.mts kherep/local-inference/lib/transport.mts kherep/local-inference/config.json kherep/twg/cli.mts
-    kherep/githooks/commit-msg
+    kherep/githooks/commit-msg kherep/githooks/post-checkout
+    hooks/main-checkout-guard.mts hooks/lib/main-checkout.mts
   )
   for file in "${must_exist[@]}"; do
     [ -e "$CLAUDE_HOME/$file" ] || { note_fail "MISSING [$profile] $file"; }
@@ -214,9 +215,13 @@ check_profile() {
     ( cd "$hookrepo" && KHEREP_WORKSPACE="$TMP/hookcheck-$profile/Work" git -c core.hooksPath="$CLAUDE_HOME/kherep/githooks" commit -q -m "ABC-1 fix: with key" >/dev/null 2>&1 ) \
       || { note_fail "COMMIT-MSG hook rejected a valid subject [$profile]"; }
   fi
-  node -e 'require(process.argv[1]);require(process.argv[2]);require(process.argv[3])' \
+  # Issue #325. git skips a hook without the mode bit silently, like commit-msg.
+  if [ -e "$CLAUDE_HOME/kherep/githooks/post-checkout" ] && [ ! -x "$CLAUDE_HOME/kherep/githooks/post-checkout" ]; then
+    note_fail "POST-CHECKOUT hook not executable [$profile]"
+  fi
+  node -e 'require(process.argv[1]);require(process.argv[2]);require(process.argv[3]);require(process.argv[4])' \
     "$CLAUDE_HOME/hooks/lib/workspace-scope.mts" "$CLAUDE_HOME/hooks/lib/private-path-policy.mts" \
-    "$CLAUDE_HOME/hooks/lib/git-commit-match.mts" || {
+    "$CLAUDE_HOME/hooks/lib/git-commit-match.mts" "$CLAUDE_HOME/hooks/lib/main-checkout.mts" || {
       note_fail "HOOK dependency resolution failed [$profile]";
     }
   printf '{}\n' | node "$CLAUDE_HOME/hooks/privacy-boundary-guard.mts" >/dev/null || {
@@ -224,6 +229,9 @@ check_profile() {
   }
   printf '{}\n' | node "$CLAUDE_HOME/hooks/commit-guard.mts" >/dev/null || {
     note_fail "INSTALLED commit guard failed to execute [$profile]";
+  }
+  printf '{}\n' | node "$CLAUDE_HOME/hooks/main-checkout-guard.mts" >/dev/null || {
+    note_fail "INSTALLED main-checkout guard failed to execute [$profile]";
   }
   [ -e "$workspace/.claude/settings.local.json" ] || { note_fail "MISSING [$profile] project settings"; }
   [ -e "$workspace/CLAUDE.md" ] || { note_fail "MISSING [$profile] project CLAUDE.md"; }

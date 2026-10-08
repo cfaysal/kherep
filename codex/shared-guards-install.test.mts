@@ -84,9 +84,10 @@ function decisionOf(stdout: string): HookDecision | null {
 }
 
 // Runs the wired `command` through the shell, as Codex does on macOS and Linux.
-function runWired(hook: WiredHook, payload: Record<string, unknown>) {
+function runWired(hook: WiredHook, payload: Record<string, unknown>, env: Record<string, string> = {}) {
   const input = JSON.stringify({ hook_event_name: hook.event, ...payload });
-  const result = spawnSync(hook.command, { shell: true, input, encoding: "utf8", windowsHide: true });
+  const result = spawnSync(hook.command, { shell: true, input, encoding: "utf8", windowsHide: true,
+    env: { ...process.env, ...env } });
   const decision = decisionOf(result.stdout);
   return { status: result.status, decision: decision?.permissionDecision ?? null, reason: decision?.permissionDecisionReason, stderr: result.stderr };
 }
@@ -213,4 +214,37 @@ test("a wired guard whose file is missing or empty fails these checks", (t) => {
     }
   }
   assertGuardsBlock(config, hookDir);
+});
+
+// Issue #325. A fourth shared guard; it has no .js past, so it is not in GUARDS.
+test("main-checkout-guard denies git switch feat in the main checkout through its wired Codex command", (t) => {
+  const { hookDir, options } = fixture(t);
+  const hook = wiredGuard(fs.readFileSync(install(options).targets.config, "utf8"), hookDir, "main-checkout-guard");
+  assert.equal(fs.readFileSync(path.join(hookDir, "main-checkout-guard.mts"), "utf8"),
+    fs.readFileSync(path.join(import.meta.dirname, "..", "claude", "hooks", "main-checkout-guard.mts"), "utf8"));
+  assert.deepEqual([hook.event, hook.matcher, /codex-hook-adapter\.mts"/.test(hook.command)],
+    ["PreToolUse", "Bash|shell_command|exec_command|functions\\.exec", true]);
+  const [main, linked] = [path.join(options.workspace, "repo"), path.join(options.workspace, "repo-wt")];
+  fs.mkdirSync(main, { recursive: true });
+  for (const args of [["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"], ["branch", "feat"],
+    ["update-ref", "refs/remotes/origin/main", "HEAD"], ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
+    ["worktree", "add", "-q", linked, "-b", "wt-branch"]]) {
+    const result = spawnSync("git", ["-c", `core.hooksPath=${path.join(options.workspace, "no-hooks")}`,
+      "-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.com", ...args], { cwd: main, encoding: "utf8" });
+    assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
+  }
+  const env = { KHEREP_WORKSPACE: options.workspace, KHEREP_MAIN_CHECKOUT: "" };
+  const payload = (command: string, cwd = main) => ({ tool_name: "shell_command", tool_input: { command }, cwd });
+  const denied = runWired(hook, payload("git switch feat"), env);
+  assert.deepEqual([denied.status, denied.decision], [0, "deny"], denied.stderr);
+  assert.match(String(denied.reason), /^main-checkout-guard blocked/);
+  for (const [command, cwd] of [["git switch main", main], ["git switch feat", linked], ["git checkout -- a.txt", main]]) {
+    const allowed = runWired(hook, payload(command!, cwd), env);
+    assert.deepEqual([allowed.status, allowed.decision], [0, null], `${command} in ${cwd}: ${allowed.stderr}`);
+  }
+  assert.equal(hook.commandWindows, `& ${hook.command}`);
+  if (!PWSH) return;
+  const pwsh = spawnSync("pwsh", ["-NoProfile", "-Command", hook.commandWindows!], { encoding: "utf8", windowsHide: true,
+    env: { ...process.env, ...env }, input: JSON.stringify({ hook_event_name: hook.event, ...payload("git switch feat") }) });
+  assert.equal(decisionOf(pwsh.stdout)?.permissionDecision, "deny", `pwsh exit ${pwsh.status}; stderr: ${pwsh.stderr}`);
 });

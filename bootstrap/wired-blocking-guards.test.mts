@@ -128,13 +128,23 @@ for (const guard of GUARDS) {
   });
 }
 
-// Issue #237 batch 2: the six PreToolUse guards. Three block with exit 2 and a
-// stderr reason, three with a JSON deny on exit 0. Each case names a tool its
-// wired matcher has to cover, including the tools of the legacy groups hosts
-// still carry (see guard-matcher-coverage.test.mts).
+// Issue #237 batch 2: the six PreToolUse guards, and main-checkout-guard from
+// issue #325. Four block with exit 2 and a stderr reason, three with a JSON deny
+// on exit 0. Each case names a tool its wired matcher has to cover, including
+// the tools of the legacy groups hosts still carry (see guard-matcher-coverage.test.mts).
 type Mode = "exit2" | "deny";
 interface ToolCase { tool: string; input: Record<string, unknown> }
 const bash = (command: string, tool = "Bash"): ToolCase => ({ tool, input: { command } });
+// Issue #325. main-checkout-guard judges a real repository: a main checkout in
+// the workspace whose default branch is origin/HEAD -> origin/main.
+const MAIN_CHECKOUT = path.join(WORKSPACE, "repo");
+fs.mkdirSync(MAIN_CHECKOUT);
+for (const args of [["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"],
+  ["update-ref", "refs/remotes/origin/main", "HEAD"], ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]]) {
+  const result = spawnSync("git", ["-c", `core.hooksPath=${TMP}`, "-c", "user.name=Synthetic",
+    "-c", "user.email=synthetic@example.com", ...args], { cwd: MAIN_CHECKOUT, encoding: "utf8" });
+  assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
+}
 // Synthetic private markers, assembled so this file itself carries none.
 const PRIVATE_FILE = `D:/Work-${"credentials"}/fixture.env`;
 const PRIVATE_TAG = `<${"private"}>synthetic</${"private"}>`;
@@ -143,6 +153,9 @@ const PRETOOL_GUARDS: { hook: string; matcher: string; mode: Mode; blocking: Too
     blocking: [bash('git commit -m "x Co-Authored-By: bot"')], benign: bash('git commit -m "plain subject"') },
   { hook: "deploy-guard.mts", matcher: "Bash", mode: "exit2",
     blocking: [bash("git push --force")], benign: bash("git push origin main") },
+  { hook: "main-checkout-guard.mts", matcher: "Bash|PowerShell", mode: "exit2",
+    blocking: [bash(`git -C "${MAIN_CHECKOUT}" switch feat`), bash(`git -C "${MAIN_CHECKOUT}" checkout -b feat`, "PowerShell")],
+    benign: bash(`git -C "${MAIN_CHECKOUT}" switch main`) },
   { hook: "secret-output-guard.mts", matcher: "", mode: "exit2",
     blocking: [bash("printenv"), bash("Get-ChildItem Env:", "PowerShell")], benign: bash("git status") },
   { hook: "privacy-boundary-guard.mts", matcher: "", mode: "deny",
