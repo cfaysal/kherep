@@ -10,6 +10,7 @@ import { test } from "node:test";
 import { renderAgent } from "../codex/lib/component-render.mts";
 import type { Capabilities } from "../codex/lib/contracts.mts";
 import { agentSourcePath } from "../codex/lib/parity-projection.mts";
+import { OBS_BRIEF_FORMAT } from "../claude/hooks/lib/obs-brief-policy.mts";
 
 const REPO = path.resolve(import.meta.dirname, "..");
 const CLAUDE_OBS = fs.readFileSync(path.join(REPO, "claude", "agents", "claude-obs.md"), "utf8");
@@ -127,12 +128,21 @@ test("both routing files define the brief markers and the actual reporter", () =
   }
 });
 
-test("every observation hook reason asks the dispatcher to mark each finding", () => {
+// Issue #331. The hooks state the exact syntax the dispatch guards enforce.
+test("every observation hook reason states the brief format the dispatch guards check", () => {
   for (const hook of ["claude/hooks/observation-stop.mts", "codex/hooks/observation-stop.mts", "codex/hooks/observation-turn-completion.mts"]) {
     const source = fs.readFileSync(path.join(REPO, hook), "utf8");
-    assert.ok(source.includes(
-      "Mark each finding measured: (with command and deciding output excerpt) or relayed: (with source).",
-    ), hook);
+    assert.ok(source.includes(OBS_BRIEF_FORMAT), hook);
+  }
+});
+
+test("both routing files state that the dispatch guard checks the brief format", () => {
+  for (const file of ROUTING_FILES) {
+    const text = fs.readFileSync(file, "utf8");
+    const section = text.slice(text.indexOf("## Session observations"), text.indexOf("## Linking"));
+    assert.ok(section.includes("`` measured: `<command>` -> <deciding output excerpt> ``"), file);
+    assert.ok(section.includes("`` relayed: <source> ``"), file);
+    assert.match(section, /dispatch\s+guard[\s\S]{0,300}denies a brief/, file);
   }
 });
 

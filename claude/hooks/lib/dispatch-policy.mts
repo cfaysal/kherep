@@ -2,6 +2,7 @@
 // Local configuration can replace the allow-list and override individual pins;
 // empty, malformed or inconsistent overrides remain fail-closed.
 
+import { observationBriefIssue } from "./obs-brief-policy.mts";
 import { referencesArtifact, referencesCredentials } from "./private-path-policy.mts";
 
 export type CanonicalModel = string;
@@ -14,6 +15,8 @@ export interface DispatchEvent {
   agent?: unknown;
   model?: unknown;
   prompt?: unknown;
+  // The Agent tool's prompt alone, without its description (issue #331).
+  brief?: unknown;
   privacy?: unknown;
   [key: string]: unknown;
 }
@@ -184,6 +187,12 @@ export function evaluateDispatch(event: DispatchEvent | null | undefined): Dispa
         normalized
       );
     }
+  }
+  // Issue #331. Only the prompt is the brief: the description is a short label
+  // that must neither supply a finding marker nor be read as part of one.
+  if (normalized.agent === "claude-obs") {
+    const issue = observationBriefIssue(String(event.brief ?? ""));
+    if (issue) return deny("OBS_BRIEF_FORMAT", issue, normalized);
   }
   return { decision: "allow", metadata: { agent: normalized.agent, model: normalized.model, privacy: normalized.privacy } };
 }

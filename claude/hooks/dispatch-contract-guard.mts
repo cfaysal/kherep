@@ -51,6 +51,7 @@ function main(): void {
     agent: input.subagent_type || input.agent_type,
     model: input.model,
     prompt: [input.description, input.prompt].filter(Boolean).join("\n"),
+    brief: input.prompt,
     cwd: payload.cwd,
   };
   const result = evaluateDispatch(event);

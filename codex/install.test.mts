@@ -624,7 +624,9 @@ test("default install projects observation delivery without optional Jira toolin
     input: JSON.stringify({ tool_name: "spawn_agent", tool_input: { task_name: "obs", message: "m", agent_type: "codex-obs", ...extra } }),
   }).stdout;
   assert.ok(guard({}).includes(`pinned to model ${obsModel};`));
-  assert.equal(guard({ model: obsModel }), "");
+  // Issue #331. The installed guard loads the brief check from its lib sibling.
+  assert.match(guard({ model: obsModel }), /Observation brief format: the brief marks no finding/);
+  assert.equal(guard({ model: obsModel, message: "- measured: `node t.mts` -> 1 pass\n- relayed: the operator" }), "");
 
   assert.deepEqual(fs.readFileSync(jira), jiraBefore);
   assert.equal(fs.readFileSync(retired, "utf8"), "operator-owned-retired\n");

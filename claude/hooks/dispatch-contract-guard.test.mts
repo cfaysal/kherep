@@ -112,6 +112,20 @@ check("custom artifact root cannot cross Agent boundary", {
 }, true, "PRIVACY_AGENT_FORBIDDEN", { KHEREP_LOCAL_OUTPUT_ROOT: "/Volumes/results-17", HOME: "/Users/example" });
 check("plugin rescue forwarder exception", call("codex:codex-rescue"), false);
 check("other direct codex agent denied", call("codex:other", "opus"), true, "CODEX_AGENT_DIRECT_FORBIDDEN");
+// Issue #331. The observation brief format is checked at dispatch.
+const obs = (prompt: string, description = "Record observations", model = "haiku") => ({
+  tool_name: "Agent",
+  tool_input: { subagent_type: "claude-obs", model, description, prompt },
+});
+const GOOD_BRIEF = "Scope: Kherep\n- measured: `node x.test.mts` -> 12 pass, 0 fail\n- relayed: the operator, in chat";
+check("claude-obs prose brief denied", obs("MEASURED by running the tests: all green."), true, "OBS_BRIEF_FORMAT");
+check("claude-obs measured without command denied", obs("1. measured: ran the tests -> green"), true, "finding 1 (measured:) has no command");
+check("claude-obs deny states the format", obs("no markers"), true, "measured: `<command>` -> <deciding output excerpt>");
+check("claude-obs well-formed brief allowed", obs(GOOD_BRIEF), false);
+check("claude-obs marker in the description does not count", obs("All green.", "relayed: operator"), true, "OBS_BRIEF_FORMAT");
+check("claude-obs description cannot break a good brief", obs(GOOD_BRIEF, "measured: tests"), false);
+check("claude-obs pin is checked before the brief", obs(GOOD_BRIEF, "Record observations", "opus"), true, "OWNED_AGENT_MODEL_MISMATCH");
+check("other agent with a prose prompt unaffected", { tool_name: "Agent", tool_input: { subagent_type: "general-purpose", model: "sonnet", prompt: "MEASURED by hand." } }, false);
 check("non-dispatch tool ignored", { tool_name: "Bash", tool_input: { command: "echo ok" } }, false);
 check("malformed dispatch input fails closed", "not-json", true, "HOOK_INPUT_INVALID");
 check("missing tool_input fails closed", { tool_name: "Agent" }, true, "HOOK_SCHEMA_UNKNOWN");
