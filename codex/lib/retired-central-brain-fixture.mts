@@ -30,6 +30,10 @@ export function withRetiredCentralBrain(
   text = text.replace(/\n\n\[\[hooks\.SessionStart\.hooks\]\]\ntype = "command"\ncommand = .*codex-hook-integrity\.mts.*\ntimeout = 30(?=\n)/, "");
   // Issue #325. Nor main-checkout-guard, the last entry of the shell PreToolUse group.
   text = text.replace(/\n\n\[\[hooks\.PreToolUse\.hooks\]\]\ntype = "command"\ncommand = .*main-checkout-guard\.mts.*\ntimeout = 10(?=\n)/, "");
+  // Issue #325, PR-A. Nor the attribution hook: its own PostToolUse group, then
+  // the entry after main-checkout-guard.
+  text = text.replace(/\n\n\[\[hooks\.PostToolUse\]\]\nmatcher = "Bash[^\n]*\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = .*attribution-hook\.mts.*\ntimeout = 10(?=\n)/, "");
+  text = text.replace(/\n\n\[\[hooks\.PreToolUse\.hooks\]\]\ntype = "command"\ncommand = .*attribution-hook\.mts.*\ntimeout = 10(?=\n)/, "");
   text = insertBefore(text, "\n\n[[hooks.PostToolUse]]", entry("UserPromptSubmit", hooks.contextCli, 15));
   text = insertBefore(text, "\n\n[[hooks.PreCompact]]", entry("SessionStart", hooks.contextCli, 15));
   text = insertBefore(text, "\n\n[[hooks.SubagentStart]]", entry("Stop", hooks.captureCli, 10));

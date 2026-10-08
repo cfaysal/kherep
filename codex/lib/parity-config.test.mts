@@ -33,6 +33,8 @@ const renderBeforeMainCheckoutGuard = Reflect.get(parityConfigApi, "renderBefore
 const renderBeforeMainCheckoutGuardWithoutNativeHooks =
   Reflect.get(parityConfigApi, "renderBeforeMainCheckoutGuardWithoutNativeHooks") as
   ((options: Parameters<typeof render>[0]) => string) | undefined;
+const renderBeforeAttributionHook = Reflect.get(parityConfigApi, "renderBeforeAttributionHook") as
+  ((options: Parameters<typeof render>[0]) => string) | undefined;
 
 const SHARED_NUDGES = ["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"];
 const SHARED_GUARDS = ["commit-guard", "deploy-guard", "playwright-file-guard"];
@@ -221,7 +223,9 @@ test("appends main-checkout-guard last in the shell PreToolUse group and moves n
   const native = { ...base, memoryProvider: "central-brain" as const,
     nativeHooks: { contextCli: "/synthetic/context.js", captureCli: "/synthetic/capture.mjs", profile: "/synthetic/profile.json" } };
   for (const options of [base, native]) {
-    const current = hookEntries(render(options));
+    // The projection right after the guard arrived: today's minus the hooks
+    // added since (the attribution hook, issue #325 PR-A).
+    const current = hookEntries((renderBeforeAttributionHook ?? render)(options));
     const previous = hookEntries(renderBeforeMainCheckoutGuard!(options));
     assert.equal(current.length, previous.length, "no group added or removed");
     const changed = current.flatMap((group, index) => (group.length === previous[index]!.length ? [] : [index]));
