@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { forcePushVerdict, gitInvocations, legacyForcePush, shellSegments } from "./git-push-match.mts";
+import { forcePushVerdict, gitInvocations, legacyForcePush, segmentVerdict, shellSegments } from "./git-push-match.mts";
 
 // The seven cases measured in the issue, with the verdict each must get now.
 const ISSUE: Array<[string, "force" | "none"]> = [
@@ -127,6 +127,15 @@ test("gitInvocations skips global options and their values", () => {
   assert.deepEqual(verbs("/usr/bin/git status && GIT.EXE log"), ["status@1", "log@4"]);
   assert.deepEqual(verbs("gitk push"), []);
   assert.deepEqual(verbs("git"), []);
+});
+
+test("segmentVerdict runs any per-segment check with the same scan (#328)", () => {
+  const hasX = (segment: string[]) => segment.includes("x");
+  assert.equal(segmentVerdict("a && x", hasX), "match");
+  assert.equal(segmentVerdict("a 'b x'", hasX), "match");
+  assert.equal(segmentVerdict("a x-y", hasX), "none");
+  assert.equal(segmentVerdict("a 'b", hasX), "uncertain");
+  assert.equal(segmentVerdict("a", () => { throw new Error("boom"); }), "uncertain");
 });
 
 // A seeded generator, so a failure names a reproducible input.
