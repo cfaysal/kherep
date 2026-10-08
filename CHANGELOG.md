@@ -110,6 +110,12 @@ increments the minor version; every other release increments the patch version.
   receipt drops `nativePlugins`. The research-evidence matchers count the v2
   `searchConfluence` tool under any server name, including a claude.ai
   connector named by a UUID (issue #304).
+- Codex delivery hook: the reason of a blocked `Stop` now starts with
+  `Kherep message delivery (not an error):` (`CODEX_STOP_MARKER`), because the
+  Codex desktop app shows the block as "Blocked · Stop · User · Feedback" with
+  the reason beneath it. The retrieval command, the escalation note, the
+  continuation budget and the 6 KiB limit are unchanged; the Claude `Stop`
+  path is untouched (issue #359).
 
 ### Fixed
 
