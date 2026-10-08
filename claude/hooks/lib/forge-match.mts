@@ -1,5 +1,6 @@
 // Issue #328. Does a shell command deploy a Forge app to production, or
-// install it on a named site? deploy-guard rules 1 and 2 ask this.
+// install it on a named site? deploy-guard rules 1 and 2 ask this. Issue #347:
+// rule 4 asks whether it starts a tunnel.
 //
 // The old rules ran regexes over the whole string. `forge deploy` and
 // `-e production` never had to belong to the same command, so
@@ -10,7 +11,8 @@
 // commands and scans quoted words again as shell (#327). This module reads
 // the arguments of each forge invocation in a segment. Where the parse is
 // unsure the verdict is `uncertain`, and the rules fall back to
-// legacyForgeDeploy() and legacyForgeInstall(), so they fail closed.
+// legacyForgeDeploy(), legacyForgeInstall() and legacyForgeTunnel(), so they
+// fail closed.
 
 import { segmentVerdict, type GitInvocation, type SegmentVerdict } from "./git-push-match.mts";
 
@@ -96,6 +98,15 @@ export function forgeInstallVerdict(command: string): { verdict: SegmentVerdict;
   return { verdict, site };
 }
 
+// Operator decision 3 of #347: the verb is case-sensitive, as in the CLI.
+function tunnels(segment: string[]): boolean {
+  return forgeInvocations(segment).some(({ verb }) => verb === "tunnel");
+}
+
+export function forgeTunnelVerdict(command: string): SegmentVerdict {
+  return segmentVerdict(command, tunnels);
+}
+
 // The regexes of rules 1 and 2 before #328, unchanged. The rules ask them only
 // when the verdict is uncertain, so an unparseable command fails closed.
 export function legacyForgeDeploy(command: string): boolean {
@@ -106,4 +117,9 @@ export function legacyForgeInstall(command: string): string | null {
   if (!/\bforge\s+install\b/.test(command)) return null;
   const siteMatch = command.match(/(?:^|\s)(?:--site|-s)[=\s]+([^\s"']+)/);
   return siteMatch ? siteMatch[1]! : null;
+}
+
+// The regex of rule 4 before #347, unchanged, asked only when the verdict is uncertain.
+export function legacyForgeTunnel(command: string): boolean {
+  return /\bforge\s+tunnel\b/.test(command);
 }

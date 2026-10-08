@@ -135,6 +135,17 @@ increments the minor version; every other release increments the patch version.
   a complete forge command stays blocked. When the command cannot be parsed
   the old regexes decide, so both rules still fail closed. `forge tunnel`
   keeps its whole-string rule (issue #328).
+- Deploy guard: rule 4 now blocks `forge tunnel` only when `tunnel` is the
+  verb of a forge invocation, read with the segment scan of rules 1 and 2.
+  It now also blocks `forge.cmd`, `forge.exe`, a Windows path to
+  `forge.cmd`, `npx @forge/cli` with or without a version, and a flag before
+  the verb. A mention with punctuation on the verb, a backticked mention in a
+  heredoc body and JSON text pass. Quoted text that spells the complete
+  command, such as `echo "forge tunnel"`, stays blocked (#327 decision 2).
+  `forge TUNNEL` passes, because the verb is case-sensitive. When the command
+  cannot be parsed the old regex decides, so the rule fails closed. The
+  deploy-auth token still never unblocks rule 4, and the guard footer now says
+  so instead of offering it (issue #347).
 - Control Plane worker: an npm override raises `sharp` from 0.35.4 to
   0.35.5 (CVE-2026-96889, Dependabot alert #12). `miniflare` pins
   `sharp` to exactly 0.35.4, also in its latest release, so Dependabot could

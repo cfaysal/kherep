@@ -1,9 +1,11 @@
-// Issue #328. The segment-anchored Forge checks behind deploy-guard rules 1 and 2.
+// Issues #328 and #347. The segment-anchored Forge checks behind deploy-guard rules 1, 2 and 4.
 // Pure: no forge, no file system, so every case is a plain table row.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { forgeDeployVerdict, forgeInstallVerdict, forgeInvocations, legacyForgeDeploy, legacyForgeInstall } from "./forge-match.mts";
+import {
+  forgeDeployVerdict, forgeInstallVerdict, forgeInvocations, forgeTunnelVerdict, legacyForgeDeploy, legacyForgeInstall, legacyForgeTunnel,
+} from "./forge-match.mts";
 
 const deploy = (command: string) => forgeDeployVerdict(command);
 const install = (command: string) => forgeInstallVerdict(command).verdict;
@@ -135,6 +137,58 @@ test("legacy functions keep the regexes of rules 1 and 2 before #328", () => {
   assert.equal(legacyForgeInstall("forge.cmd install -s x"), null);
 });
 
+// Issue #347: rule 4 reads the verb of each forge invocation. The forms the
+// regex missed, the wrappers it already caught, and #327 decision 2 (variant
+// B): quoted text that spells the command stays a match.
+const TUNNELS: string[] = [
+  "forge.cmd tunnel",
+  "forge.exe tunnel",
+  "npx @forge/cli tunnel",
+  "npx @forge/cli@latest tunnel",
+  "C:\\Users\\x\\AppData\\Roaming\\npm\\forge.cmd tunnel",
+  "forge --verbose tunnel",
+  "forge tunnel",
+  "cd app && forge tunnel",
+  "bash -c 'forge tunnel'",
+  'pwsh -Command "forge tunnel"',
+  'ssh example-host "cd app && forge tunnel"',
+  "bash <<EOF\nforge tunnel\nEOF",
+  'echo "forge tunnel"',
+  "grep forge tunnel notes.md",
+  'node broker.mts comment --body "do not run forge tunnel here"',
+];
+
+// The false positives measured in #347, and neighbours that never tunnel.
+// Operator decision 3: oclif verbs are case-sensitive, so `forge TUNNEL` passes.
+const NO_TUNNEL: string[] = [
+  'gh issue comment 347 --body "rule 4 blocks forge tunnel, see #347"',
+  "cat > note.md <<'EOF'\nRule 4 blocks `forge tunnel` now.\nEOF",
+  `echo '{"text":"forge tunnel"}'`,
+  "forge tunnels",
+  "forgery tunnel",
+  "cloudflared tunnel run",
+  "forge TUNNEL",
+  "forge deploy -e development",
+];
+
+test("a forge tunnel matches, also the forms the regex missed", () => {
+  for (const command of TUNNELS) assert.equal(forgeTunnelVerdict(command), "match", command);
+});
+
+test("text that only mentions a tunnel, and other verbs, are none", () => {
+  for (const command of NO_TUNNEL) assert.equal(forgeTunnelVerdict(command), "none", command);
+});
+
+test("an unparseable tunnel is uncertain, and the legacy regex of rule 4 decides it", () => {
+  assert.equal(forgeTunnelVerdict('echo "see forge tunnel, #347'), "uncertain");
+  assert.equal(forgeTunnelVerdict('forge tunnel "unterminated'), "match");
+  assert.equal(forgeTunnelVerdict(undefined as never), "uncertain");
+  assert.equal(legacyForgeTunnel('echo "see forge tunnel, #347'), true);
+  assert.equal(legacyForgeTunnel('echo "see forge tunnel, #347"'), true);
+  assert.equal(legacyForgeTunnel("forge.cmd tunnel"), false);
+  assert.equal(legacyForgeTunnel("forge tunnels"), false);
+});
+
 test("forgeInvocations takes the next word that is not a flag as the verb", () => {
   const verbs = (command: string) => forgeInvocations(command.split(" ")).map(({ verb, at }) => `${verb}@${at}`);
   assert.deepEqual(verbs("forge --verbose deploy -e x"), ["deploy@2"]);
@@ -154,7 +208,7 @@ function random(seed: number): () => number {
   };
 }
 
-const PIECES = ["forge", "forge.cmd", "@forge/cli", "deploy", "install", "list", "-e", "-eproduction", "--environment=",
+const PIECES = ["forge", "forge.cmd", "@forge/cli", "deploy", "install", "tunnel", "list", "-e", "-eproduction", "--environment=",
   "production", "prod", "-s", "--site", "-s=", "x", " ", " ", "\n", "'", '"', "\\", "`", "$(", "(", ")", ";", "&&", "|",
   ">", "2>&1", "<<", "EOF", "--", "\r\n", "\t", "#", "ssh", "bash -c "];
 
@@ -166,6 +220,7 @@ test("fuzz: the verdicts are always one of three and never throw", () => {
     for (let k = 0; k < length; k++) command += PIECES[Math.floor(next() * PIECES.length)];
     assert.ok(["match", "none", "uncertain"].includes(forgeDeployVerdict(command)), JSON.stringify(command));
     assert.ok(["match", "none", "uncertain"].includes(install(command)), JSON.stringify(command));
+    assert.ok(["match", "none", "uncertain"].includes(forgeTunnelVerdict(command)), JSON.stringify(command));
   }
 });
 
@@ -173,6 +228,7 @@ test("a long adversarial command stays linear", () => {
   const started = Date.now();
   forgeDeployVerdict(`${"forge deploy ".repeat(20000)}-e x`);
   forgeDeployVerdict(`forge ${"--verbose ".repeat(20000)}deploy`);
+  forgeTunnelVerdict(`forge ${"--verbose ".repeat(20000)}tunnel`);
   forgeInstallVerdict(`${"forge install -s ".repeat(20000)}`);
   forgeInstallVerdict(`${"'a b' ".repeat(20000)}`);
   forgeDeployVerdict(`echo ${"$(".repeat(5000)}`);

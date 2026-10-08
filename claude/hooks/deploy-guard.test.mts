@@ -252,6 +252,25 @@ check("#328 decision 1: prod alias", "forge deploy -e prod", true, "forge deploy
 check("#328 decision 4: install list is read-only", "forge install list --site example.atlassian.net", false);
 check("#328 unparseable command falls back to the legacy regexes", 'forge deploy -e production "unterminated', true, "forge deploy --environment production blocked");
 
+// ---- Rule 4: issue #347, the tunnel verb of a forge invocation ----
+for (const [name, command, block] of [
+  ["#347 FN: forge.cmd", "forge.cmd tunnel", true],
+  ["#347 FN: forge.exe", "forge.exe tunnel", true],
+  ["#347 FN: npx @forge/cli", "npx @forge/cli tunnel", true],
+  ["#347 FN: npx @forge/cli@latest", "npx @forge/cli@latest tunnel", true],
+  ["#347 FN: Windows path to forge.cmd", "C:\\Users\\x\\AppData\\Roaming\\npm\\forge.cmd tunnel", true],
+  ["#347 FN: a flag before the verb", "forge --verbose tunnel", true],
+  ["#347 FP: punctuation attached to the verb", 'gh issue comment 347 --body "rule 4 blocks forge tunnel, see #347"', false],
+  ["#347 FP: a backticked mention in a heredoc", "cat > note.md <<'EOF'\nRule 4 blocks `forge tunnel` now.\nEOF", false],
+  ["#347 FP: JSON text", `echo '{"text":"forge tunnel"}'`, false],
+  ["forge tunnel still blocks", "forge tunnel", true],
+  ["the token never disarms rule 4", "KHEREP_DEPLOY_AUTH=approved forge tunnel", true],
+  ["#347 unparseable command falls back to the legacy regex", 'echo "see forge tunnel, #347', true],
+  // #327 decision 2 (variant B): quoted text that spells the command stays blocked.
+  ["#347 variant B: quoted text that spells the command", 'echo "forge tunnel"', true],
+] as const) check(name, command, block, block ? "forge tunnel blocked" : undefined);
+check("#347 decision 2: the footer does not offer the token for forge tunnel", "forge tunnel", true, "never unblocks forge tunnel");
+
 // ---- Fail-safe: non-Bash tool and malformed stdin allow ----
 (function nonBash() {
   const res = spawnSync("node", [HOOK], {
