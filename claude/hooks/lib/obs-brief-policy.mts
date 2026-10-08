@@ -35,7 +35,7 @@ function findings(brief: string): Finding[] {
   const marks = [...brief.matchAll(MARKER)];
   return marks.map((mark, index) => ({
     kind: mark[1],
-    text: brief.slice(mark.index + mark[0].length, index + 1 < marks.length ? marks[index + 1].index : brief.length),
+    text: brief.slice(mark.index + mark[0].length, marks[index + 1]?.index ?? brief.length),
   }));
 }
 
@@ -48,18 +48,24 @@ function measuredIssue(text: string): string | null {
   return rest.slice(arrow + 2).trim() ? null : "has no deciding output excerpt after ->";
 }
 
+function findingIssue({ kind, text }: Finding): string | null {
+  if (kind === "measured") return measuredIssue(text);
+  return text.trim() ? null : "names no source";
+}
+
+function firstProblem(brief: string): string | null {
+  const list = findings(brief);
+  if (!list.length) return "the brief marks no finding";
+  for (const [index, finding] of list.entries()) {
+    const issue = findingIssue(finding);
+    if (issue) return `finding ${index + 1} (${finding.kind}:) ${issue}`;
+  }
+  return null;
+}
+
 // null when the brief is well-formed, else the deny reason: the first problem,
 // the format, and what to do when nothing is worth filing.
 export function observationBriefIssue(brief: string, nothingToFile: string = CLAUDE_NOTHING_TO_FILE): string | null {
-  const list = findings(brief);
-  let problem = list.length ? "" : "the brief marks no finding";
-  for (const [index, finding] of list.entries()) {
-    const issue = finding.kind === "measured" ? measuredIssue(finding.text)
-      : finding.text.trim() ? null : "names no source";
-    if (issue) {
-      problem = `finding ${index + 1} (${finding.kind}:) ${issue}`;
-      break;
-    }
-  }
+  const problem = firstProblem(brief);
   return problem ? `Observation brief format: ${problem}. ${OBS_BRIEF_FORMAT} ${nothingToFile}` : null;
 }

@@ -54,8 +54,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-const projectedName = (name: string, entry: Record<string, unknown>): string =>
-  typeof entry.as === "string" && entry.as ? entry.as : name;
+function projectedName(name: string, entry: Record<string, unknown>): string {
+  return typeof entry.as === "string" && entry.as ? entry.as : name;
+}
 
 export function dispatchPins(capabilities: unknown): Pins {
   const agents = isRecord(capabilities) ? capabilities.agents : undefined;
@@ -102,7 +103,7 @@ export function validate(payload: unknown, { pins, observationAgent }: DispatchP
   if (input.reasoning_effort && !(typeof input.reasoning_effort === "string" && ALLOWED_EFFORTS.has(input.reasoning_effort))) {
     return `Unsupported Kherep reasoning effort: ${input.reasoning_effort}`;
   }
-  if (agent && agent === observationAgent) {
+  if (agent === observationAgent) {
     const policy = obsBriefPolicy();
     return policy.observationBriefIssue(input.message, policy.CODEX_NOTHING_TO_FILE);
   }
