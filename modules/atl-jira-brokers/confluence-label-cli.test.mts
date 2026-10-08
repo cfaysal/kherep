@@ -71,7 +71,7 @@ function brokerHarness(ownEnv: string, options: HarnessOptions = {}) {
     },
     async fetch(url, requestOptions) {
       calls.push({ url, options: requestOptions });
-      if (url.startsWith("https://auth.atlassian.com")) return response(200, { access_token: "token", expires_in: 3600 });
+      if (new URL(url).origin === "https://auth.atlassian.com") return response(200, { access_token: "token", expires_in: 3600 });
       if (url.endsWith("/_edge/tenant_info")) return response(200, { cloudId: "cloud-id-for-tests" });
       return options.api ? options.api({ url, options: requestOptions }) : response(200, {});
     },
