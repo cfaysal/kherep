@@ -44,7 +44,10 @@ test("the first non-empty line has to be the status line", () => {
 
 test("exactly one OBS-RESULT line may exist", () => {
   malformed("OBS-RESULT: wrote 1 5\nOBS-RESULT: empty nothing", /more than one OBS-RESULT line/);
-  malformed("OBS-RESULT: empty nothing\nnote: OBS-RESULT was hard", /more than one OBS-RESULT line/);
+  malformed("OBS-RESULT: wrote 1 5\n  OBS-RESULT: failed again", /more than one OBS-RESULT line/);
+  // A page title in the list after the status line may name OBS-RESULT.
+  valid("OBS-RESULT: wrote 1 278102262\n278102262 OBS-RESULT failure handling is a Maestro duty", "wrote");
+  valid("OBS-RESULT: empty nothing\nnote: OBS-RESULT was hard", "empty");
 });
 
 test("wrote needs a positive integer count", () => {

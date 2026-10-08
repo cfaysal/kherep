@@ -4,8 +4,8 @@
 // read `OBS-RESULT: failed wrote 4 pages: 1,2,3,4`, which is neither. The
 // SubagentStop hook obs-result-check.mts applies this check.
 //
-// - The first non-empty line is the status line, and no other line names
-//   OBS-RESULT.
+// - The first non-empty line is the status line, and no other line starts
+//   with `OBS-RESULT:`.
 // - wrote: n is a positive integer without a leading zero, the ids are numeric
 //   (separated by commas or whitespace), and there are exactly n of them.
 // - empty and failed: a non-empty reason whose first word is no status word.
@@ -37,7 +37,8 @@ export function checkObsResult(message: string): ObsCheck {
   const first = lines.find((line) => line.trim()) ?? "";
   const match = STATUS_LINE.exec(first.trim());
   if (!match) return { problem: "the first non-empty line is no OBS-RESULT status line" };
-  if (lines.filter((line) => line.includes("OBS-RESULT")).length > 1) {
+  // Only lines that start a status count: a page title may name OBS-RESULT.
+  if (lines.filter((line) => line.trim().startsWith("OBS-RESULT:")).length > 1) {
     return { problem: "more than one OBS-RESULT line" };
   }
   const status = match[1] as ObsStatus;
