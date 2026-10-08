@@ -17,6 +17,7 @@ import { KHEREP_REPO, substituteTemplatePaths } from "./render-profile-paths.mts
 const HERE = import.meta.dirname;
 const HOOK = "modules/control-plane/node/deliver-hook.mts";
 const WAKE = "modules/control-plane/node/wake-hook.mts";
+const ATTRIBUTION = "modules/control-plane/node/attribution-hook.mts";
 const EVENTS = ["UserPromptSubmit", "Stop", "StopFailure"];
 // The events the wake listener is armed at, after the delivery hook where the
 // event has one. SessionStart (issue #97) has none: the listener ends its group.
@@ -34,6 +35,9 @@ const deliverCommand = (value: HookGroups, event: string) =>
 const wakeEntries = (value: HookGroups, event: string) =>
   value.hooks[event].flatMap((group) => group.hooks).filter((hook) => hook.command.includes("wake-hook"));
 const wakeEntry = (value: HookGroups, event: string) => value.hooks[event].at(-1)?.hooks.at(-1);
+// Issue #325. The PostToolUse group that records gh pr create.
+const attributionGroup = (value: HookGroups) => (value.hooks.PostToolUse as { matcher?: string; hooks: { command: string }[] }[])
+  .find((group) => group.matcher === "Bash|PowerShell");
 // The installed entry: the timeout Claude Code enforces and the one the
 // listener derives its re-arm deadline from are one number.
 const wakeHook = (repo: string, seconds: number) =>
@@ -114,6 +118,14 @@ test("install wires the delivery and wake hooks from the checkout, drift-check i
     assert.deepEqual([listened.status, listened.stdout, withoutTypeStrippingWarning(listened.stderr)], [0, "", ""], listened.stderr);
   }
 
+  // Issue #325. The attribution hook runs from the checkout in a PostToolUse
+  // group of its own; as stored it is inert outside a git repository.
+  const attribution = attributionGroup(settings);
+  assert.deepEqual(attribution?.hooks, [{ type: "command", command: hookCommand(forward(KHEREP_REPO), ATTRIBUTION) }]);
+  const recorded = bash(["-c", attribution!.hooks[0]!.command], f, JSON.stringify({ session_id: "s",
+    hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "gh pr create --fill" }, cwd: f.ws }));
+  assert.deepEqual([recorded.status, recorded.stdout, withoutTypeStrippingWarning(recorded.stderr)], [0, "", ""], recorded.stderr);
+
   const drift = bash([slash(path.join(HERE, "drift-check.sh"))], f);
   assert.equal(drift.status, 0, `${drift.stdout}\n${drift.stderr}`);
 
@@ -127,6 +139,7 @@ test("install wires the delivery and wake hooks from the checkout, drift-check i
   const source = JSON.parse(fs.readFileSync(path.join(HERE, "..", "claude", "settings.user.json"), "utf8"));
   for (const event of EVENTS) assert.equal(deliverCommand(captured, event), deliverCommand(source, event));
   for (const event of WAKE_EVENTS) assert.deepEqual(wakeEntry(captured, event), wakeEntry(source, event));
+  assert.deepEqual(attributionGroup(captured), attributionGroup(source));
   // The listener joins SessionStart last; the hooks before it keep their order.
   const scripts = (value: HookGroups) => value.hooks.SessionStart.flatMap((group) => group.hooks)
     .map((hook) => /\/([^/"]+)"/.exec(hook.command)?.[1]);

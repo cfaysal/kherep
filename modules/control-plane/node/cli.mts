@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 import { ATTACH_USAGE, runAttach } from "./attach.mts";
+import { ATTRIBUTION_USAGE, runAttribution } from "./attribution-cli.mts";
 import { nodePaths, readConfig } from "./config.mts";
 import { startDaemon } from "./daemon.mts";
 import { runDoctor } from "./doctor.mts";
@@ -23,6 +24,7 @@ import { runTaskControlArgs, TASK_CONTROL_USAGE } from "./task-control-cli.mts";
 //   node cli.mts msg sessions|send|inbox|status ...   (see msg-cli.mts)
 //   node cli.mts task done|show|new ...               (see task-cli.mts)
 //   node cli.mts attach <node>/<session>              (see attach.mts)
+//   node cli.mts attribution [--branch] [--pr] ...    (see attribution-cli.mts)
 //
 // The enrollment code can also come from KHEREP_ENROLL_CODE so it stays out of
 // shell history. KHEREP_CONFIG_DIR overrides the config location.
@@ -35,12 +37,14 @@ const USAGE = `usage:
 ${MSG_USAGE.replace("usage:\n", "")}
 ${TASK_USAGE.replace("usage:\n", "")}
 ${TASK_CONTROL_USAGE.replace("usage:\n", "")}
-${ATTACH_USAGE.replace("usage:\n", "")}`;
+${ATTACH_USAGE.replace("usage:\n", "")}
+${ATTRIBUTION_USAGE.replace("usage:\n", "")}`;
 
 export async function main(argv: string[]): Promise<number> {
   // msg has its own options, and message text may look like anything else.
   if (argv[0] === "msg") return runMsg(argv.slice(1), { paths: nodePaths(), env: process.env });
   if (argv[0] === "attach") return runAttach(argv.slice(1), { paths: nodePaths() });
+  if (argv[0] === "attribution") return runAttribution(argv.slice(1), { paths: nodePaths() });
   if (argv[0] === "task" && ["status", "stop", "result"].includes(argv[1] ?? "")) {
     return runTaskControlArgs(argv.slice(1), { paths: nodePaths() });
   }

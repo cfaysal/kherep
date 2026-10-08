@@ -80,6 +80,11 @@ const CRITICAL: CriticalFile[] = [
     executable: true,
     why: "git post-checkout hook: the only main-checkout warning that reaches every runtime",
   },
+  // Issue #325, PR-A. A 0-byte pre-push or writer records no push, silently.
+  { rel: "kherep/githooks/pre-push", source: "claude/kherep/githooks/pre-push", executable: true,
+    why: "git pre-push hook: the only push attribution that reaches every runtime" },
+  { rel: "kherep/githooks/attribution-record.mts", source: "claude/kherep/githooks/attribution-record.mts",
+    executable: false, why: "the writer pre-push runs; outside hooks/, so live-hook-integrity never sees it" },
   // OP-734, 2026-08-10. Both run or are trusted at SessionStart and no other
   // layer looks at them: live-hook-integrity.mts covers only .js and .mts under
   // hooks/, and drift-check.sh only reports when a human runs it.

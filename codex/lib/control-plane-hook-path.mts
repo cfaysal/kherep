@@ -7,6 +7,9 @@ import { command, hookGroup } from "./parity-config.mts";
 // the block is matched. Both `command` and `commandWindows` carry the same form.
 const DELIVER_HOOK = /\\"((?:[^"\\]|\\\\)*?(?:\\\\|\/)modules(?:\\\\|\/)control-plane(?:\\\\|\/)node(?:\\\\|\/)deliver-hook\.mts)\\" \\"--runtime\\" \\"codex\\"/g;
 const DELIVER_COMMAND = new RegExp(`^command = ".*${DELIVER_HOOK.source}"$`, "m");
+// Issue #325, PR-A. The attribution hook sits beside the deliver hook in the
+// same checkout directory and is pointed at the current checkout with it.
+const CHECKOUT_HOOK = /\\"((?:[^"\\]|\\\\)*?(?:\\\\|\/)modules(?:\\\\|\/)control-plane(?:\\\\|\/)node(?:\\\\|\/))(deliver|attribution)-hook\.mts\\" \\"--runtime\\" \\"codex\\"/g;
 const DELIVER_EVENTS = [
   ["SessionStart", "startup|resume|clear|compact"],
   ["UserPromptSubmit", ""],
@@ -54,8 +57,9 @@ export function pointDeliverHooksAt(
   if (!controlPlaneHook || end < 0) return config;
   // The hook path exactly as a rendered TOML string spells it.
   const current = JSON.stringify(command(controlPlaneHook)).slice(3, -3);
+  const dir = current.slice(0, -"deliver-hook.mts".length);
   const body = config.slice(start, end)
-    .replace(DELIVER_HOOK, () => `\\"${current}\\" \\"--runtime\\" \\"codex\\"`);
+    .replace(CHECKOUT_HOOK, (_match, _dir, name: string) => `\\"${dir}${name}-hook.mts\\" \\"--runtime\\" \\"codex\\"`);
   return config.slice(0, start) + dropSurplusDeliverGroups(body) + config.slice(end);
 }
 

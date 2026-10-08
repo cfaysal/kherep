@@ -26,6 +26,8 @@ const REL = path.join("kherep", "githooks", "commit-msg");
 // Issue #325. The post-checkout hook is the second critical git hook. Its
 // fixture is healthy unless a test says otherwise.
 const POST_CHECKOUT = path.join("kherep", "githooks", "post-checkout");
+// Issue #325, PR-A. pre-push and the attribution writer it runs: healthy too.
+const ATTRIBUTION_FILES = [path.join("kherep", "githooks", "pre-push"), path.join("kherep", "githooks", "attribution-record.mts")];
 
 interface Box {
   claude: string;
@@ -50,6 +52,10 @@ function sandbox(live: string | null, postCheckout: string | null = GOOD): Box {
   fs.mkdirSync(path.dirname(livePath), { recursive: true });
   if (live !== null) fs.writeFileSync(livePath, live, "utf8");
   if (postCheckout !== null) fs.writeFileSync(path.join(claude, POST_CHECKOUT), postCheckout, "utf8");
+  for (const rel of ATTRIBUTION_FILES) {
+    fs.writeFileSync(path.join(checkout, "claude", rel), GOOD, "utf8");
+    fs.writeFileSync(path.join(claude, rel), GOOD, "utf8");
+  }
   return { claude, live: livePath, workspace };
 }
 
@@ -138,6 +144,18 @@ test("a 0-byte or absent post-checkout is reported and restored", () => {
     assert.match(context, /kherep\/githooks\/post-checkout: .*RESTORED from the repo/);
     assert.doesNotMatch(context, /commit-msg/, "the healthy commit-msg is not reported");
     assert.equal(fs.readFileSync(path.join(box.claude, POST_CHECKOUT), "utf8"), GOOD);
+  }
+});
+
+test("a 0-byte pre-push or attribution writer is reported and restored", () => {
+  for (const rel of ATTRIBUTION_FILES) {
+    const box = sandbox(GOOD);
+    fs.writeFileSync(path.join(box.claude, rel), "", "utf8");
+    const { status, context } = session(box);
+    assert.equal(status, 0);
+    const shown = rel.split(path.sep).join("/");
+    assert.ok(context.split("\n").some((line) => line.includes(`${shown}: `) && line.includes("RESTORED from the repo")), context);
+    assert.equal(fs.readFileSync(path.join(box.claude, rel), "utf8"), GOOD);
   }
 });
 

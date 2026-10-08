@@ -34,6 +34,10 @@ export interface NodePaths {
   tasks: string; taskReports: string; taskRequests: string; taskControl: string;
   // Issue #240: starts refused before a task record existed (task-refusals.mts).
   taskRefusals: string;
+  // Issue #325: the local push and pr-create log (attribution.mts) and the
+  // pending markers a Codex PreToolUse leaves for the pre-push hook. No daemon
+  // exchange, Worker message or sessions.json ever reads either.
+  attribution: string; attributionPending: string;
   // Remote MCP remains opt-in. Credential material and intent exchange stay in the private config root.
   mcp: string; mcpCredential: string; mcpIntents: string; mcpReceipts: string;
 }
@@ -57,6 +61,8 @@ export function nodePaths(root: string = configRoot()): NodePaths {
     taskRequests: path.join(dir, "task-requests"),
     taskControl: path.join(dir, "task-control"),
     taskRefusals: path.join(dir, "task-refusals"),
+    attribution: path.join(dir, "attribution.jsonl"),
+    attributionPending: path.join(dir, "attribution", "pending"),
     mcp: path.join(dir, "mcp"),
     mcpCredential: path.join(dir, "mcp", "credential.json"),
     mcpIntents: path.join(dir, "mcp", "intents"),
