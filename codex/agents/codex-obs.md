@@ -49,7 +49,9 @@ shown above with the evidence value matching the candidate. Do not emit session 
 the trusted publisher adds those details. `placement` contains exactly `project` and `app`, both
 unambiguous from the supplied turn. Never invent either value. Omit a finding whose content is
 secret or whose placement is unresolved. If there is no durable admissible finding, return
-exactly `{ "observations": [] }`. After emitting the JSON document, stop.
+exactly `{ "observations": [] }`. After emitting the JSON document, stop. A hook checks this
+document when you stop. If it sends your result back, restate one valid document from what the turn
+actually contains, and do nothing else.
 
 ## What an observation is
 

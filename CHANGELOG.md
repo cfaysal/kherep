@@ -22,6 +22,18 @@ increments the minor version; every other release increments the patch version.
   instead. The message comes from `last_assistant_message`, else the agent
   transcript. No message text reaches stdout, and any error is one
   `systemMessage` with exit 0.
+- Codex observation candidate check: a new Codex `SubagentStop` hook,
+  `codex-obs-result-check.mts`, wired with matcher `codex-obs` in the last hook
+  group of the managed block, checks the worker's candidate through
+  `codex/hooks/obs-candidate-policy.mts`: exactly one strict JSON document whose
+  only key is an `observations` array, each candidate with exactly `title`,
+  `bodyStorage`, `evidence`, `labels` and `placement`. A fenced or otherwise
+  malformed candidate is sent back to the worker once (`decision: "block"`); on
+  the continuation the operator gets a `systemMessage` and the Maestro publishes
+  nothing. The message comes from `last_assistant_message`, else the subagent
+  rollout; when neither is visible the hook says so. It prints one JSON document
+  or nothing, never message text. An upgrade appends only this group, so every
+  existing positional trust key stays (issue #326).
 - Attribution log: a new git `pre-push` hook beside `commit-msg` records one
   line per pushed ref in the node's local
   `<config root>/control-plane/attribution.jsonl` (mode `0600`) for
