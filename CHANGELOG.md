@@ -11,6 +11,26 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Main-checkout guard: a new `PreToolUse` hook, `main-checkout-guard.mts`,
+  keeps the main checkout of a workspace repository (git-dir equals
+  common-dir) on its default branch, because sessions share it. It blocks
+  `git checkout <ref>` without `--` (a SHA included), `checkout -b`, `-B`,
+  `--orphan`, `--detach`, and `git switch` to any branch other than the
+  default, including `-c`, `-C` and `--detach`, with exit 2 and a pointer to
+  `git worktree add <path> -b <branch>`. File checkouts, `restore`,
+  `worktree add`, `pull`, `fetch`, `merge`, `rebase`, linked worktrees and
+  repositories outside the workspace pass. The default branch is
+  `origin/HEAD`, else a local `main` or `master`; without one it warns and
+  exits 0. The inline `KHEREP_MAIN_CHECKOUT=switch` prefix, or
+  `$env:KHEREP_MAIN_CHECKOUT='switch';` in PowerShell, lets one approved
+  command through; a persistent variable is ignored. Claude runs it for Bash
+  and PowerShell in a new `Bash|PowerShell` group; Codex runs it through the
+  hook adapter as the last entry of the shell group, so a block arrives as a
+  JSON deny. A new git `post-checkout` hook beside `commit-msg` warns, and
+  always exits 0, when a branch checkout leaves such a main checkout off its
+  default branch; it is silent in linked worktrees, after `worktree add`,
+  during a rebase and with the marker. `critical-file-integrity.mts` guards it
+  like `commit-msg` (issue #325).
 - Confluence brokers: new read-only verb `list --space <key>
   [--title-contains <text>] [--label <name>] [--limit <n>]`. It reads every
   page of the space through the paginated v2 pages endpoint, filters titles by
