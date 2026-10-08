@@ -9,7 +9,7 @@ interface ToolPayload extends ScopePayload {
   tool_input?: unknown;
 }
 
-const FILE_SHELL_TOOLS = new Set<unknown>(["Read", "Grep", "Glob", "Edit", "Write", "MultiEdit", "Bash"]);
+const FILE_SHELL_TOOLS = new Set<unknown>(["Read", "Grep", "Glob", "Edit", "Write", "MultiEdit", "Bash", "PowerShell"]);
 const CLOUD_BOUNDARY_TOOLS = new Set<unknown>(["Agent", "Task", "Workflow", "WebSearch", "WebFetch"]);
 const PRIVATE_PATTERN = /work-credentials|\b(?:host_vars|group_vars)\b|customer[ -]?internals?|forge service cred|<private>/i;
 const RUNNER_SUFFIX = "/.claude/kherep/local-inference/runner.mts";
@@ -76,7 +76,7 @@ function main(): void {
       deny("Missing file_path for a privacy-relevant file operation.");
       return;
     }
-    if (tool === "Bash") {
+    if (tool === "Bash" || tool === "PowerShell") {
       const command = typeof input.command === "string" ? input.command.trim() : "";
       if (!command) { deny("Missing command for a privacy-relevant shell operation."); return; }
       if (isRunnerInvocation(command)) return;

@@ -346,13 +346,45 @@ shortCase("T2 root short, Read long", shortRoot, { tool_name: "Read", tool_input
 shortCase("T3 root long, Bash cat short", vaultLong, { tool_name: "Bash", tool_input: { command: `cat "${shortFile}"` } });
 shortCase("T4 root short, Bash cat long", shortRoot, { tool_name: "Bash", tool_input: { command: `cat "${longFile}"` } });
 shortCase("T5 root long, Agent prompt short", vaultLong, { tool_name: "Agent", tool_input: { prompt: `Review "${shortFile}"` } });
-// The PowerShell tool is not classified by this guard at all, a separate
-// known gap. Recorded, not counted, so the gap stays visible.
-if (vaultShort) {
-  const ps = run({ ...nativeScope, tool_name: "PowerShell", tool_input: { command: `Get-Content "${shortFile}"` } },
-    { KHEREP_WORKSPACE: nativeWorkspace, KHEREP_CREDENTIALS_ROOT: vaultLong });
-  console.log(`INFO | PowerShell root long, Get-Content short | got ${ps.denied ? "DENY" : "ALLOW"} (known separate gap, not counted)`);
+shortCase("T6 root long, PowerShell Get-Content short", vaultLong, { tool_name: "PowerShell", tool_input: { command: `Get-Content "${shortFile}"` } });
+
+// Issue #358. The PowerShell tool is classified like Bash, and the shell walk
+// follows `sl`, colon-attached parameters and `pwsh -Command` / `bash -c`.
+// The private markers are assembled so that this source holds none literally.
+const artifactFile = ["D:", "Work", "analysis", ["local", "inference"].join("-"), "private.json"].join("\\");
+const defaultCredentialsFile = `D:/Work-${"credentials"}/x`;
+const credentialsVar = ["KHEREP", "CREDENTIALS", "ROOT"].join("_");
+function ps(command: string): Record<string, unknown> {
+  return { ...winScope, tool_name: "PowerShell", tool_input: { command } };
 }
+check("P1 PowerShell Get-Content credentials", ps("Get-Content E:\\vault-17\\plain-file"), true, customWinCredentials);
+check("P1b PowerShell $env credentials variable", ps(`Get-Content $env:${credentialsVar}\\plain-file`), true, customWinCredentials);
+check("P2 PowerShell gc credentials", ps("gc E:\\vault-17\\plain-file"), true, customWinCredentials);
+check("P3 PowerShell -LiteralPath credentials", ps("Get-Content -LiteralPath 'E:\\vault-17\\plain-file'"), true, customWinCredentials);
+check("P4 PowerShell Set-Location then relative Get-Content", ps("Set-Location E:\\vault-17; Get-Content plain-file"), true, customWinCredentials);
+check("P5 PowerShell pwsh -NoProfile -Command", ps("pwsh -NoProfile -Command \"Get-Content E:\\vault-17\\plain-file\""), true, customWinCredentials);
+check("P6 PowerShell Copy-Item out of credentials", ps("Copy-Item E:\\vault-17\\plain-file D:\\Work\\kherep\\copy"), true, customWinCredentials);
+check("P7 PowerShell artifact root read", ps(`Get-Content ${artifactFile}`), true);
+check("P8 PowerShell Invoke-WebRequest to inference port", ps("Invoke-WebRequest http://127.0.0.1:8000/v1/models"), true);
+check("P9 empty PowerShell input fails closed", { ...winScope, tool_name: "PowerShell", tool_input: {} }, true);
+check("P9b blank PowerShell command fails closed", ps("   "), true);
+
+// Gaps for both tools: the root literal never appears in the command.
+const splitRoots = { KHEREP_WORKSPACE: nativeWorkspace, KHEREP_CREDENTIALS_ROOT: nativeCredentials };
+for (const tool of ["PowerShell", "Bash"]) {
+  function split(name: string, command: string): void {
+    check(`${name} (${tool})`, { ...nativeScope, tool_name: tool, tool_input: { command } }, true, splitRoots);
+  }
+  split("S11 sl .. then relative gc", "sl ..; gc native-credentials/plain-file");
+  split("S12a pwsh -Command with cd and relative path", "pwsh -NoProfile -Command \"cd ..; gc native-credentials/plain-file\"");
+  split("S12b bash -c with cd and relative path", "bash -c \"cd .. && cat native-credentials/plain-file\"");
+  split("S12c powershell.exe -exec Bypass -Command", "powershell.exe -exec Bypass -Command \"sl ..; gc native-credentials/plain-file\"");
+  split("S13 colon-attached -LiteralPath relative", "Get-Content -LiteralPath:'../native-credentials/plain-file'");
+}
+
+check("C14 PowerShell public path allowed", ps("Get-Content D:\\Work\\kherep\\README.md; sl ..; gc kherep/docs/a.md"), false, customWinCredentials);
+check("C15 approved local runner from PowerShell",
+  ps(`node ~/.claude/kherep/local-inference/runner.mts --backend win --task review --input-file ${defaultCredentialsFile}`), false);
 
 try { fs.rmSync(fixture, { recursive: true, force: true }); } catch {}
 console.log(`\n=== ${pass} pass, ${fail} fail ===`);

@@ -25,9 +25,9 @@ export interface EscapeMarker {
 
 const SEPARATORS = new Set([";", "&", "|", "\n", "\r", "(", ")"]);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-const CHANGE_DIR = new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
-const SHELLS = new Set(["bash", "sh", "zsh", "dash", "pwsh", "powershell"]);
-const SHELL_SCRIPT_FLAG = /^-(?:[A-Za-z]*c|command)$/i;
+export const CHANGE_DIR = new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
+export const SHELLS = new Set(["bash", "sh", "zsh", "dash", "pwsh", "powershell"]);
+export const SHELL_SCRIPT_FLAG = /^-(?:[A-Za-z]*c|command)$/i;
 const GIT_VALUE_OPTIONS = new Set(["-c", "--git-dir", "--work-tree", "--namespace", "--config-env"]);
 
 // Heredoc and PowerShell here-string bodies are data, not commands: a commit

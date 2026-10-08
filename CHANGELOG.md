@@ -127,7 +127,19 @@ increments the minor version; every other release increments the patch version.
   names and the native one that expands them, through the new
   `canonicalPathForms()` in `real-path-policy.mts` (issue #348). The check is
   additive: nothing denied before is allowed now. The PowerShell tool is
-  still not classified by this guard; that is a separate gap.
+  covered as well since issue #358.
+- Privacy boundary guard: the PowerShell tool is classified like Bash. Before,
+  every PowerShell call passed unchecked, so `Get-Content`, `gc`, `Copy-Item`,
+  `-LiteralPath`, `pwsh -Command`, `$env:` expansion of a protected root and
+  direct HTTP to the local inference ports were allowed, and an empty command
+  did not fail closed. The shell walk in `private-path-policy.mts`, which Bash
+  and Codex use too, now follows `sl`, reads a colon-attached parameter value
+  (`-LiteralPath:<path>`), and walks the script of `bash -c`, `pwsh -Command`
+  and the other shells in `command-walk.mts` in the current directory. A
+  protected path split across a directory change and a relative path inside
+  such a script is now denied for both tools. The check is additive and the
+  deny texts are unchanged. Not covered: relative .NET paths, `Join-Path`,
+  string concatenation and backtick-escaped spaces (issue #358).
 - Deploy guard: the Forge rules only count a flag in the arguments of the
   same `forge deploy` or `forge install`. Before, they matched `forge deploy`
   and `-e production`, or `forge install` and `-s`, anywhere in the command,
