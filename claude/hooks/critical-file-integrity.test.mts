@@ -23,6 +23,9 @@ after(() => {
 
 const GOOD = "#!/usr/bin/env bash\n# fixture commit-msg\nexit 1\n";
 const REL = path.join("kherep", "githooks", "commit-msg");
+// Issue #325. The post-checkout hook is the second critical git hook. Its
+// fixture is healthy unless a test says otherwise.
+const POST_CHECKOUT = path.join("kherep", "githooks", "post-checkout");
 
 interface Box {
   claude: string;
@@ -34,7 +37,7 @@ let seq = 0;
 
 // A throwaway Claude home plus a fixture checkout under <workspace>/kherep that
 // carries the versioned commit-msg the hook restores from.
-function sandbox(live: string | null): Box {
+function sandbox(live: string | null, postCheckout: string | null = GOOD): Box {
   const root = path.join(TMP, `case-${++seq}`);
   const claude = path.join(root, "home", ".claude");
   const workspace = path.join(root, "ws");
@@ -42,9 +45,11 @@ function sandbox(live: string | null): Box {
   fs.mkdirSync(path.join(checkout, "claude", "hooks"), { recursive: true });
   fs.mkdirSync(path.join(checkout, "claude", "kherep", "githooks"), { recursive: true });
   fs.writeFileSync(path.join(checkout, "claude", "kherep", "githooks", "commit-msg"), GOOD, "utf8");
+  fs.writeFileSync(path.join(checkout, "claude", POST_CHECKOUT), GOOD, "utf8");
   const livePath = path.join(claude, REL);
   fs.mkdirSync(path.dirname(livePath), { recursive: true });
   if (live !== null) fs.writeFileSync(livePath, live, "utf8");
+  if (postCheckout !== null) fs.writeFileSync(path.join(claude, POST_CHECKOUT), postCheckout, "utf8");
   return { claude, live: livePath, workspace };
 }
 
@@ -123,6 +128,17 @@ test("without a checkout the hook says enforcement is off and claims no repair",
   assert.match(context, /IS OFF/);
   assert.doesNotMatch(context, /RESTORED/);
   assert.equal(fs.readFileSync(box.live, "utf8"), "");
+});
+
+test("a 0-byte or absent post-checkout is reported and restored", () => {
+  for (const live of ["", null]) {
+    const box = sandbox(GOOD, live);
+    const { status, context } = session(box);
+    assert.equal(status, 0);
+    assert.match(context, /kherep\/githooks\/post-checkout: .*RESTORED from the repo/);
+    assert.doesNotMatch(context, /commit-msg/, "the healthy commit-msg is not reported");
+    assert.equal(fs.readFileSync(path.join(box.claude, POST_CHECKOUT), "utf8"), GOOD);
+  }
 });
 
 test("malformed stdin never breaks a session start", () => {

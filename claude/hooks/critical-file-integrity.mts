@@ -73,6 +73,13 @@ const CRITICAL: CriticalFile[] = [
     executable: true,
     why: "git commit-msg hook: the only work-item enforcement that binds every runtime",
   },
+  {
+    // Issue #325. The same 0-byte failure mode: sh runs it and warns about nothing.
+    rel: "kherep/githooks/post-checkout",
+    source: "claude/kherep/githooks/post-checkout",
+    executable: true,
+    why: "git post-checkout hook: the only main-checkout warning that reaches every runtime",
+  },
   // OP-734, 2026-08-10. Both run or are trusted at SessionStart and no other
   // layer looks at them: live-hook-integrity.mts covers only .js and .mts under
   // hooks/, and drift-check.sh only reports when a human runs it.

@@ -1,0 +1,58 @@
+#!/bin/sh
+# Runtime-independent main-checkout warning for repositories under KHEREP_WORKSPACE.
+# Issue #325. Sessions share a repository's main checkout, so a branch switch
+# there moves every other session's working tree. git runs post-checkout after
+# HEAD has moved and ignores its exit status, so this hook cannot stop the
+# checkout: it only warns, and it always exits 0. The PreToolUse
+# main-checkout-guard is the blocking layer for agent tool calls.
+#
+# Arguments: previous HEAD, new HEAD, 1 for a branch checkout (0 for files).
+[ "$3" = 1 ] || exit 0
+[ "$KHEREP_MAIN_CHECKOUT" = switch ] && exit 0
+# An all-zero previous HEAD is a clone or a `git worktree add`.
+case "$1" in *[!0]*) ;; *) exit 0 ;; esac
+
+# The workspace as commit-msg reads it: a non-empty KHEREP_WORKSPACE, else the
+# workspace line of the commit-policy file next to this hook.
+WORKSPACE=$KHEREP_WORKSPACE
+POLICY_FILE="$(dirname "$0")/commit-policy"
+if [ -z "$WORKSPACE" ] && [ -f "$POLICY_FILE" ]; then
+  WORKSPACE=$(sed -n 's/^workspace=//p' "$POLICY_FILE" | tr -d '\r' | head -n 1)
+fi
+[ -n "$WORKSPACE" ] || exit 0
+
+# Only the main checkout: in a linked worktree git-dir and common-dir differ.
+GIT_DIR_ABS=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || exit 0
+COMMON_DIR=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+[ "$GIT_DIR_ABS" = "$COMMON_DIR" ] || exit 0
+# A rebase checks out its base on a detached HEAD and comes back by itself.
+[ -d "$GIT_DIR_ABS/rebase-merge" ] || [ -d "$GIT_DIR_ABS/rebase-apply" ] && exit 0
+
+TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+canonical_dir() {
+  KHEREP_PATH=$(printf '%s' "$1" | tr '\\' '/')
+  (CDPATH=; export CDPATH; cd -P "$KHEREP_PATH" && pwd -P) 2>/dev/null
+}
+TOP_REAL=$(canonical_dir "$TOPLEVEL") || exit 0
+WORK_REAL=$(canonical_dir "$WORKSPACE") || exit 0
+TOP_LC=$(printf '%s' "$TOP_REAL" | tr 'A-Z' 'a-z')
+WORK_LC=$(printf '%s' "$WORK_REAL" | tr 'A-Z' 'a-z' | sed 's|/*$||')
+case "$TOP_LC" in "$WORK_LC"|"$WORK_LC"/*) ;; *) exit 0 ;; esac
+
+# The default branch: origin/HEAD, else a local main or master. Never
+# init.defaultBranch alone. Without one there is nothing to compare against.
+DEFAULT=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null) && DEFAULT=${DEFAULT#refs/remotes/origin/}
+if [ -z "$DEFAULT" ]; then
+  for name in main master; do
+    git show-ref --verify --quiet "refs/heads/$name" && { DEFAULT=$name; break; }
+  done
+fi
+[ -n "$DEFAULT" ] || exit 0
+BRANCH=$(git symbolic-ref --quiet --short HEAD 2>/dev/null)
+[ "$BRANCH" = "$DEFAULT" ] && exit 0
+
+printf '\nKherep: the main checkout %s is now on %s, not on its default branch %s.\n' \
+  "$TOPLEVEL" "${BRANCH:-a detached HEAD}" "$DEFAULT" >&2
+printf 'Other sessions share this checkout. Switch it back with: git switch %s\n' "$DEFAULT" >&2
+printf 'Do branch work in a linked worktree instead: git worktree add <path> -b <branch>\n' >&2
+exit 0
