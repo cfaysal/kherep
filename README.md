@@ -10,7 +10,21 @@ Use Kherep to give your agents consistent working rules, reusable skills and a s
 
 *Watch the overview: [Kherep - Your runtimes, Your rules](https://youtu.be/w9pLDRU_ulo)*
 
-## Features
+## Contents
+
+- [Key capabilities](#key-capabilities)
+- [Architecture](#architecture)
+- [Supported integrations](#supported-integrations)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Security model](#security-model)
+- [Documentation](#documentation)
+- [Development](#development)
+- [Contributing](#contributing)
+- [Roadmap](#roadmap)
+- [License](#license)
+
+## Key capabilities
 
 - **Maestro agent orchestration:** plan work, delegate focused tasks and verify the combined result.
 - **Claude Code and Codex adapters:** shared rules with installation and hooks for each runtime.
@@ -24,7 +38,54 @@ Use Kherep to give your agents consistent working rules, reusable skills and a s
 
 Backends and integrations are configured separately. Installing an adapter does not provision a model, MCP service or Confluence space.
 
-## How it works
+## Architecture
+
+Kherep is installed from a source checkout into the configuration homes of the agent runtimes on a host. The installer places rules, hooks, skills, agents and routing, binds a Git `commit-msg` hook and keeps backups. Optional integrations are reached only through configured adapters.
+
+```mermaid
+flowchart LR
+  operator([Operator])
+
+  subgraph host["Host: Windows or macOS"]
+    direction TB
+    bootstrap["Installer and drift check<br/>bootstrap/"]
+    subgraph runtimes["Agent runtimes"]
+      claude["Claude Code<br/>rules, hooks, skills, agents"]
+      codex["Codex<br/>adapter projection"]
+    end
+    githook["Git commit-msg hook"]
+    brokers["Atlassian brokers"]
+    runner["Local inference runner"]
+    bridge["MCP auth bridge"]
+    nodeDaemon["Control Plane node daemon"]
+  end
+
+  confluence[("Confluence space<br/>Central Brain")]
+  model["Local model server"]
+  mcp["Configured MCP services"]
+  worker["Control Plane Worker<br/>Cloudflare"]
+  peers["Other enrolled nodes"]
+
+  operator --> runtimes
+  bootstrap -->|installs| runtimes
+  bootstrap -->|binds| githook
+  runtimes --> brokers --> confluence
+  runtimes --> runner --> model
+  runtimes --> bridge --> mcp
+  nodeDaemon <--> worker <--> peers
+  nodeDaemon -.->|delivers peer messages| runtimes
+```
+
+| Component | Directory | Responsibility |
+| --- | --- | --- |
+| Claude adapter | `claude/` | Rules, hooks, skills, agents, commands and routing for Claude Code |
+| Codex adapter | `codex/` | Projection of the shared rules, skills and agents into Codex; see [adapter architecture](codex/ARCHITECTURE.md) |
+| Bootstrap | `bootstrap/` | Host profiles, managed installation, backups, drift checks and the commit policy |
+| Atlassian brokers | `modules/atl-jira-brokers/` | Jira and Confluence operations under a service account, including the Central Brain space |
+| Teamwork Graph | `modules/twg/` | Bounded, read-only Teamwork Graph lookups |
+| Local inference | `modules/local-inference/` | Runner for a configured local model server, reached locally or over SSH |
+| MCP auth bridge | `modules/mcp-auth-bridge/` | Authenticated transport wrappers for configured MCP servers |
+| Control Plane | `modules/control-plane/` | Cloudflare Worker, node daemon and shared protocol for enrollment, session messaging and tasks |
 
 ### Central Brain
 
@@ -38,7 +99,22 @@ Sessions are reminded to search the space before answering, and the matching pag
 
 Sessions on different nodes exchange messages through one Cloudflare Worker, and a session can ask another node to start a new intercom session. A peer message informs; it never approves. See the [detailed diagram](https://raw.githubusercontent.com/cfaysal/kherep/main/assets/illustrations/kherep-control-plane.svg).
 
-## Get started
+## Supported integrations
+
+Each integration is optional unless a component's guide says otherwise, and each needs your own account, service or backend.
+
+| Integration | Used for | Guide |
+| --- | --- | --- |
+| Claude Code | Runtime adapter with rules, hooks, skills, agents and routing | [Installation](docs/INSTALLATION.md) |
+| Codex | Runtime adapter with rules, skills, agents, hooks and MCP projection | [Codex integration](docs/CODEX.md) |
+| Confluence | Central Brain knowledge space, written through service-account brokers | [Atlassian brokers](modules/atl-jira-brokers/README.md) |
+| Jira | Optional service-account helpers | [Atlassian brokers](modules/atl-jira-brokers/README.md) |
+| Atlassian Teamwork Graph | Read-only lookups | [Teamwork Graph](modules/twg/README.md) |
+| MCP servers | Transport and authentication adapters for servers you configure | [Codex adapter architecture](codex/ARCHITECTURE.md#mcp-projection) |
+| Local model server | Local inference, including the private-input route | [Installation](docs/INSTALLATION.md#5-configure-integrations) |
+| Cloudflare Workers and Access | Control Plane Worker and its Access-protected operator API | [Control Plane](modules/control-plane/README.md#setup) |
+
+## Installation
 
 Use Node.js 24, npm and Git. The Claude installer also needs Bash; on Windows use Git Bash.
 
@@ -48,9 +124,28 @@ cd kherep
 npm ci
 ```
 
-Follow the [installation guide](docs/INSTALLATION.md) to select your workspace, review an isolated installation and set up the required runtime. For the Central Brain space and the brokers that write to it, see [Atlassian brokers](modules/atl-jira-brokers/README.md).
+Follow the [installation guide](docs/INSTALLATION.md) to select your workspace, review an isolated installation and set up the required runtime. The guide's isolated preview writes into a new candidate directory and leaves your live configuration unchanged; inspect it before installing for real. For Codex, follow [Codex integration](docs/CODEX.md). For the Central Brain space and the brokers that write to it, see [Atlassian brokers](modules/atl-jira-brokers/README.md).
 
 Runtime adapters target Windows and macOS. See each component's documentation for its requirements.
+
+After installation, confirm the result in the runtime itself as described in [Verify the installed runtime](docs/INSTALLATION.md#verify-the-installed-runtime). `bootstrap/drift-check.sh` compares the managed source with the installed files and exits non-zero on drift.
+
+## Configuration
+
+Kherep is configured through environment variables at installation time and operator files outside the checkout. Connection profiles ship unconfigured. The settings, their defaults and the model and work-item policies are listed in [Configure integrations](docs/INSTALLATION.md#5-configure-integrations) and [Model and work-item policy](docs/INSTALLATION.md#model-and-work-item-policy).
+
+Keep personal configuration and credentials outside the checkout.
+
+## Security model
+
+- **Credentials stay outside the checkout.** Integration configuration lives under an operator-chosen root, and Jira and Confluence writes go through brokers that act as a service account.
+- **The Git `commit-msg` hook is the enforcement boundary for every runtime.** It applies the host's commit policy, including optional work-item keys, and rejects AI attribution trailers. The Claude `commit-guard` hook gives earlier feedback; it does not replace the Git hook.
+- **Claude guards check tool calls before they run.** They keep private paths and local-inference artifacts out of agents, workflows, web and MCP tools; block shell commands whose output is likely to print secrets; require explicit confirmation for production deploys, force pushes and destructive Kubernetes and Helm commands; and enforce the model policy for agent dispatch.
+- **Hook integrity is checked at session start.** Wired hook files that are missing, empty or unloadable are detected and repaired from the versioned source.
+- **Installation is reviewable and reversible.** An isolated preview, managed backups and a drift check precede and follow changes to a live configuration.
+- **The Control Plane authenticates nodes and operators separately.** Nodes hold Ed25519 keys and connect with a signed challenge; the operator API requires a verified Cloudflare Access token; peer messages reach a session only as framed content that is not a user instruction. See the [Control Plane security model](modules/control-plane/README.md#security-model).
+
+To report a vulnerability, follow the [security policy](.github/SECURITY.md).
 
 ## Documentation
 
@@ -58,8 +153,13 @@ Runtime adapters target Windows and macOS. See each component's documentation fo
 | --- | --- |
 | [Installation](docs/INSTALLATION.md) | Claude setup, isolated preview, upgrades and rollback |
 | [Codex integration](docs/CODEX.md) | Codex installer options and runtime verification |
+| [Codex adapter architecture](codex/ARCHITECTURE.md) | Memory backends, research enforcement, hook integrity and MCP projection in Codex |
 | [Atlassian brokers](modules/atl-jira-brokers/README.md) | Jira and Confluence service-account operations, including the Central Brain space |
 | [Control Plane](modules/control-plane/README.md) | Cloudflare Worker and node daemon for node enrollment, liveness, session messaging and task sessions |
+| [Teamwork Graph](modules/twg/README.md) | Runtime contract and installation of the Teamwork Graph integration |
+| [Public release review](docs/PUBLIC-RELEASE.md) | Review steps before pushing and before tagging a release |
+| [Changelog](CHANGELOG.md) | Notable changes per release |
+| [Security policy](.github/SECURITY.md) | Private vulnerability reporting |
 | [Contributing](CONTRIBUTING.md) | Source setup and test commands |
 | [Agent instructions](AGENTS.md) | Reading order and repository working rules |
 
@@ -76,9 +176,29 @@ Runtime adapters target Windows and macOS. See each component's documentation fo
 | `modules/twg/` | Bounded Teamwork Graph reads |
 | `modules/control-plane/` | Control Plane Worker, node daemon and their shared protocol |
 | `lib/` | Shared helpers for `KHEREP_*` environment lookup and Windows workspace paths |
-| `assets/` | Branding banner |
+| `docs/` | Installation, Codex and release guides, and design plans |
+| `assets/` | Branding banner and illustrations |
+| `.github/` | CI workflows, issue and pull request templates, security policy |
 
-Keep personal configuration and credentials outside the checkout. See the component guides for configuration, permissions and supported integrations.
+## Development
+
+Kherep's TypeScript runs directly on Node.js through type stripping; `tsc` is the type check only.
+
+```sh
+npm ci
+npm run typecheck
+npm run test:bootstrap
+```
+
+[CONTRIBUTING.md](CONTRIBUTING.md) lists the checks for each component. CI runs the suites on Linux, macOS and Windows for every pull request.
+
+## Contributing
+
+Track changes in [GitHub Issues](https://github.com/cfaysal/kherep/issues). Changes reach `main` only through a pull request, merged by rebase. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks and conventions.
+
+## Roadmap
+
+Planned and in-progress work is tracked as [open issues](https://github.com/cfaysal/kherep/issues). Released changes and the `[Unreleased]` section are in the [changelog](CHANGELOG.md).
 
 ## License
 
