@@ -1,0 +1,214 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1080" width="1600" height="1080" role="img" aria-labelledby="t d">
+  <title id="t">Kherep Control Plane</title>
+  <desc id="d">How agent sessions on different hosts and runtimes exchange messages through one Cloudflare Worker, and how a new intercom session is started on another node.</desc>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#C98F51"/>
+    </marker>
+    <marker id="arrh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#FFECC4"/>
+    </marker>
+    <marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#ECD2A3"/>
+    </marker>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#FFECC4" stop-opacity="1"/>
+      <stop offset="0.45" stop-color="#ECD2A3" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#C98F51" stop-opacity="0"/>
+    </radialGradient>
+    <path id="journey-msg" d="M260 232 V452 H520 V244 H1080 V220 H1340 V360"/>
+    <path id="journey-receipt" d="M1118 260 H1094 V360 H530 V470 H482"/>
+    <path id="journey-intercom" d="M200 740 H1404"/>
+  </defs>
+  <style>
+    .bg { fill: #181818; }
+    .frame { fill: none; stroke: #604830; stroke-width: 2; }
+    .host { fill: #1f1915; stroke: #604830; stroke-width: 1.5; }
+    .box { fill: #241c16; stroke: #966136; stroke-width: 1.5; }
+    .box-hi { fill: #2b2016; stroke: #C98F51; stroke-width: 2; }
+    .box-warn { fill: #301818; stroke: #966136; stroke-width: 1.5; stroke-dasharray: 6 4; }
+    .title { font: 600 40px Georgia, 'Times New Roman', serif; fill: #FFECC4; letter-spacing: 10px; }
+    .sub { font: 400 18px 'Segoe UI', Inter, Arial, sans-serif; fill: #ECD2A3; }
+    .col { font: 600 15px 'Segoe UI', Inter, Arial, sans-serif; fill: #C98F51; letter-spacing: 3px; }
+    .h { font: 600 17px 'Segoe UI', Inter, Arial, sans-serif; fill: #FFECC4; }
+    .b { font: 400 14px 'Segoe UI', Inter, Arial, sans-serif; fill: #E8E8E8; }
+    .m { font: 400 13px Consolas, 'Cascadia Mono', monospace; fill: #ECD2A3; }
+    .lbl { font: 400 12px 'Segoe UI', Inter, Arial, sans-serif; fill: #C98F51; font-style: italic; }
+    .st { fill: #181818; stroke: #C98F51; stroke-width: 1.2; }
+    .st-end { fill: #181818; stroke: #966136; stroke-width: 1; stroke-dasharray: 4 3; }
+    .flow { stroke: #C98F51; stroke-width: 2; fill: none; }
+    .back { stroke: #ECD2A3; stroke-width: 2; fill: none; stroke-dasharray: 7 5; animation: march 1.2s linear infinite; }
+    @keyframes march { to { stroke-dashoffset: -24; } }
+    @media (prefers-reduced-motion: reduce) {
+      .pkt { display: none; }
+      .back { animation: none; }
+    }
+  </style>
+
+  <rect class="bg" width="1600" height="1080"/>
+  <rect class="frame" x="12" y="12" width="1576" height="1056" rx="6"/>
+
+  <text class="title" x="40" y="66">KHEREP CONTROL PLANE</text>
+  <text class="sub" x="40" y="96">Agent sessions on different hosts and runtimes talk through one Worker. A peer message informs; it never approves.</text>
+
+  <!-- ===== Node A ===== -->
+  <text class="col" x="40" y="140">NODE A · SENDER</text>
+  <rect class="host" x="40" y="152" width="440" height="470" rx="8"/>
+
+  <rect class="box-hi" x="60" y="172" width="400" height="84" rx="6"/>
+  <text class="h" x="78" y="198">Session (Claude Code or Codex)</text>
+  <text class="m" x="78" y="222">msg send &lt;node&gt;/&lt;session&gt; -- "…"</text>
+  <text class="b" x="78" y="244">A session can only send as itself.</text>
+
+  <rect class="box" x="60" y="276" width="400" height="96" rx="6"/>
+  <text class="h" x="78" y="302">outbox / &lt;id&gt;.json</text>
+  <text class="b" x="78" y="326">Written atomically, text up to 16 KiB.</text>
+  <text class="b" x="78" y="346">Resent after 30 s without an answer,</text>
+  <text class="b" x="78" y="364">and again after every reconnect.</text>
+
+  <rect class="box" x="60" y="392" width="400" height="120" rx="6"/>
+  <text class="h" x="78" y="418">Node daemon</text>
+  <text class="b" x="78" y="442">One outbound WebSocket. The Ed25519 key is</text>
+  <text class="b" x="78" y="462">made on the host; the Worker only ever sees</text>
+  <text class="b" x="78" y="482">the public key. Session list refreshed every</text>
+  <text class="b" x="78" y="502">60 s, liveness ping every 30 s.</text>
+
+  <rect class="box" x="60" y="532" width="400" height="70" rx="6"/>
+  <text class="m" x="78" y="558">msg sessions</text>
+  <text class="b" x="78" y="582">Lists every node and its sessions.</text>
+
+  <path class="flow" d="M260 256 V274" marker-end="url(#arr)"/>
+  <path class="flow" d="M260 372 V390" marker-end="url(#arr)"/>
+
+  <!-- ===== Worker ===== -->
+  <text class="col" x="560" y="140">CONTROL PLANE · CLOUDFLARE WORKER</text>
+  <rect class="host" x="560" y="152" width="480" height="470" rx="8"/>
+
+  <rect class="box-hi" x="580" y="172" width="440" height="110" rx="6"/>
+  <text class="h" x="598" y="198">NodeSession · one Durable Object per node</text>
+  <text class="b" x="598" y="222">Signs in each node with a challenge: nonce, node</text>
+  <text class="b" x="598" y="242">id and time, signed by the node, valid for 30 s.</text>
+  <text class="b" x="598" y="262">Revoking a node closes its socket at once.</text>
+
+  <rect class="box" x="580" y="300" width="440" height="96" rx="6"/>
+  <text class="h" x="598" y="326">Registry · one Durable Object</text>
+  <text class="b" x="598" y="350">Nodes, sessions, messages, tasks, and an</text>
+  <text class="b" x="598" y="370">audit log that never stores message text.</text>
+
+  <text class="h" x="598" y="432">Message states</text>
+  <rect class="st" x="598" y="446" width="78" height="28" rx="14"/><text class="m" x="612" y="465">queued</text>
+  <text class="lbl" x="682" y="465">→</text>
+  <rect class="st" x="698" y="446" width="92" height="28" rx="14"/><text class="m" x="712" y="465">accepted</text>
+  <text class="lbl" x="796" y="465">→</text>
+  <rect class="st" x="812" y="446" width="100" height="28" rx="14"/><text class="m" x="826" y="465">delivered</text>
+  <text class="lbl" x="918" y="465">→</text>
+  <rect class="st" x="934" y="446" width="80" height="28" rx="14"/><text class="m" x="948" y="465">replied</text>
+  <rect class="st-end" x="598" y="484" width="92" height="28" rx="14"/><text class="m" x="614" y="503">refused</text>
+  <rect class="st-end" x="698" y="484" width="214" height="28" rx="14"/><text class="m" x="712" y="503">expired · queued 24 h</text>
+  <text class="b" x="598" y="540">States only move forward. A node may report</text>
+  <text class="b" x="598" y="560">accepted, delivered or refused; the Worker alone</text>
+  <text class="b" x="598" y="580">sets queued, replied and expired.</text>
+  <text class="m" x="598" y="606">≤ 100 queued per target · reply depth ≤ 6</text>
+
+  <!-- ===== Node B ===== -->
+  <text class="col" x="1120" y="140">NODE B · RECEIVER</text>
+  <rect class="host" x="1120" y="152" width="440" height="470" rx="8"/>
+
+  <rect class="box" x="1140" y="172" width="400" height="96" rx="6"/>
+  <text class="h" x="1158" y="198">Node daemon</text>
+  <text class="b" x="1158" y="222">Checks the node's accept policy; a miss is</text>
+  <text class="b" x="1158" y="242">answered with refused. A hit is stored in</text>
+  <text class="m" x="1158" y="262">inbox/&lt;id&gt;.json</text>
+
+  <rect class="box-hi" x="1140" y="288" width="400" height="140" rx="6"/>
+  <text class="h" x="1158" y="314">Into a running session</text>
+  <text class="b" x="1158" y="338">Claude Code: an idle listener wakes the session,</text>
+  <text class="b" x="1158" y="358">then a hook injects the message as framed peer</text>
+  <text class="b" x="1158" y="378">content, marked as not an instruction.</text>
+  <text class="b" x="1158" y="402">Codex: hooks at prompt and stop; an idle chat</text>
+  <text class="b" x="1158" y="420">gets a wake pointer without the peer text.</text>
+
+  <rect class="box" x="1140" y="448" width="400" height="84" rx="6"/>
+  <text class="h" x="1158" y="474">Session already closed</text>
+  <text class="b" x="1158" y="498">If the node allows it: hand over, resume or start</text>
+  <text class="b" x="1158" y="518">a session, behind guards that fail closed.</text>
+
+  <rect class="box" x="1140" y="552" width="400" height="50" rx="6"/>
+  <text class="b" x="1158" y="582">Offered in a turn, delivered at the next Stop.</text>
+
+  <path class="flow" d="M1340 268 V286" marker-end="url(#arr)"/>
+
+  <!-- ===== Cross-host arrows ===== -->
+  <path class="flow" d="M460 452 H520 V244 H578" marker-end="url(#arr)"/>
+  <text class="lbl" x="484" y="200">message.send</text>
+  <path class="flow" d="M1020 244 H1080 V220 H1138" marker-end="url(#arr)"/>
+  <text class="lbl" x="1046" y="200">message.deliver</text>
+  <path class="back" d="M1138 260 H1094 V360 H1022" marker-end="url(#arrg)"/>
+  <text class="lbl" x="1046" y="390">status</text>
+  <path class="back" d="M578 360 H530 V470 H462" marker-end="url(#arrg)"/>
+  <text class="lbl" x="484" y="500">receipt</text>
+
+  <!-- ===== Intercom lane ===== -->
+  <rect class="host" x="40" y="650" width="1520" height="156" rx="8"/>
+  <text class="col" x="60" y="678">INTERCOM · A NEW SESSION ON ANOTHER NODE</text>
+
+  <rect class="box" x="60" y="694" width="280" height="96" rx="6"/>
+  <text class="h" x="76" y="720">Operator decides</text>
+  <text class="b" x="76" y="744">Existing session or a new one</text>
+  <text class="b" x="76" y="764">is asked, never chosen by the agent.</text>
+
+  <rect class="box-hi" x="362" y="694" width="280" height="96" rx="6"/>
+  <text class="m" x="376" y="720">msg send &lt;node&gt; --new &lt;runtime&gt;</text>
+  <text class="m" x="376" y="740">  --directive "&lt;answer&gt;"</text>
+  <text class="b" x="376" y="766">writes a task request</text>
+
+  <rect class="box" x="664" y="694" width="280" height="96" rx="6"/>
+  <text class="h" x="678" y="720">Worker checks</text>
+  <text class="b" x="678" y="744">directive present · no chains ·</text>
+  <text class="b" x="678" y="764">the target accepts delegation</text>
+
+  <rect class="box" x="966" y="694" width="280" height="96" rx="6"/>
+  <text class="h" x="980" y="720">Exactly that node starts it</text>
+  <text class="b" x="980" y="744">A background Claude Code or Codex</text>
+  <text class="b" x="980" y="764">session; its prompt quotes the directive.</text>
+
+  <rect class="box" x="1268" y="694" width="272" height="96" rx="6"/>
+  <text class="h" x="1282" y="720">Reply</text>
+  <text class="b" x="1282" y="744">The new session answers with</text>
+  <text class="b" x="1282" y="764">an ordinary msg send.</text>
+
+  <path class="flow" d="M340 742 H360" marker-end="url(#arr)"/>
+  <path class="flow" d="M642 742 H662" marker-end="url(#arr)"/>
+  <path class="flow" d="M944 742 H964" marker-end="url(#arr)"/>
+  <path class="flow" d="M1246 742 H1266" marker-end="url(#arr)"/>
+
+  <!-- ===== Guarantees ===== -->
+  <rect class="box-warn" x="40" y="826" width="1520" height="170" rx="6"/>
+  <text class="col" x="64" y="856">GUARANTEES AND LIMITS</text>
+  <text class="b" x="64" y="886">• At least once: queued messages are redelivered when a node comes back.</text>
+  <text class="b" x="64" y="910">• The sender is the signed-in connection, never a field in the message.</text>
+  <text class="b" x="64" y="934">• A peer message cannot approve a deploy, a publication, a deletion or a</text>
+  <text class="b" x="80" y="954">permission change. Only the operator, in the receiving session, can.</text>
+  <text class="b" x="64" y="978">• Peer text sits in a block with a random tag, so it cannot close the block.</text>
+  <text class="b" x="820" y="886">• A final status is acknowledged by the sender; then the message is deleted.</text>
+  <text class="b" x="820" y="910">• Message text is kept only while it waits in the queue.</text>
+  <text class="b" x="820" y="934">• Wakes and continuations have an hourly and daily budget and never run</text>
+  <text class="b" x="836" y="954">in a session that bypasses permission prompts.</text>
+  <text class="b" x="820" y="978">• Delivered means it reached the session, not that the model understood it.</text>
+
+  <text class="lbl" x="40" y="1030">Source: github.com/cfaysal/kherep · modules/control-plane (worker, node, protocol) · state of 8 October 2026</text>
+
+  <!-- ===== Animated packets (hidden with reduced motion) ===== -->
+  <g class="pkt">
+    <circle r="11" fill="url(#glow)">
+      <animateMotion dur="6s" repeatCount="indefinite"><mpath href="#journey-msg"/></animateMotion>
+    </circle>
+    <circle r="8" fill="url(#glow)">
+      <animateMotion dur="6s" begin="3s" repeatCount="indefinite"><mpath href="#journey-receipt"/></animateMotion>
+      <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.85;1" dur="6s" begin="3s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="10" fill="url(#glow)">
+      <animateMotion dur="7s" begin="1.5s" repeatCount="indefinite"><mpath href="#journey-intercom"/></animateMotion>
+    </circle>
+  </g>
+</svg>
