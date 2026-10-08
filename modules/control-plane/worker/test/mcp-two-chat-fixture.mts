@@ -46,7 +46,8 @@ interface LocalModule {
   recordMcpCredential(paths: NodePaths, body: McpCredentialBody): void;
   recordMcpIntentReceipt(paths: NodePaths, inflight: Set<string>, body: McpIntentReceiptBody): void;
   disableMcp(paths: NodePaths, inflight: Set<string>): void;
-  readMcpInbox(paths: NodePaths, sessionId: string, limit: number): McpInboxItem[];
+  readMcpInbox(paths: NodePaths, sessionId: string, limit: number, messageId?: string): McpInboxItem[];
+  answerMcpInbox(paths: NodePaths, messageIds: string[]): void;
   pollMcpIntents(client: NodeClient, paths: NodePaths, inflight: Set<string>, send: (frame: string) => boolean): Promise<void>;
 }
 const runtimeOnly = (name: string): Promise<unknown> =>
@@ -77,7 +78,7 @@ export interface NativeNode {
 // `sessions` is read on every listing, so a caller may change it in place.
 export async function startNativeNode(name: string, sessions: SessionInfo[]): Promise<NativeNode> {
   const { processMcpIntentHook } = await runtimeOnly("mcp-intent-hook") as HookModule;
-  const { disableMcp, hasMcpCredential, pollMcpIntents, readMcpInbox, recordMcpCredential, recordMcpIntentReceipt } =
+  const { answerMcpInbox, disableMcp, hasMcpCredential, pollMcpIntents, readMcpInbox, recordMcpCredential, recordMcpIntentReceipt } =
     await runtimeOnly("mcp-local") as LocalModule;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-two-chat-"));
   // The workerd test file system reports mtimeMs 0 for every file. The intent
@@ -115,7 +116,8 @@ export async function startNativeNode(name: string, sessions: SessionInfo[]): Pr
       mcpCredential: (body) => recordMcpCredential(paths, body),
       mcpIntentReceipt: (body) => recordMcpIntentReceipt(paths, current, body),
       mcpDisabled: () => disableMcp(paths, current),
-      readMcpInbox: (sessionId, limit) => { inboxReads.push(sessionId); return readMcpInbox(paths, sessionId, limit); },
+      readMcpInbox: (sessionId, limit, messageId) => { inboxReads.push(sessionId); return readMcpInbox(paths, sessionId, limit, messageId); },
+      answerMcpInbox: (messageIds) => answerMcpInbox(paths, messageIds),
       ...exchangeOptions(paths),
     });
     client = connected;

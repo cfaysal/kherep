@@ -59,9 +59,11 @@ export interface ClientOptions {
   mcpCredential?: (body: McpCredentialBody) => void;
   mcpIntentReceipt?: (body: McpIntentReceiptBody) => void;
   mcpDisabled?: () => void;
-  readMcpInbox?: (sessionId: string, limit: number) => McpInboxItem[] | Promise<McpInboxItem[]>;
+  readMcpInbox?: (sessionId: string, limit: number, messageId?: string) => McpInboxItem[] | Promise<McpInboxItem[]>;
   // Issue #308: the messages a returned inbox response carries, offered to their session.
   offerMcpInbox?: (messageIds: string[]) => void;
+  // Issue #308: the item an MCP reply answers (mcp.inbox.request with reply).
+  answerMcpInbox?: (messageIds: string[]) => void;
   // Issue #197: the runtimes whose last readiness probe passed; a change re-registers.
   readyRuntimes?: () => readonly TaskRuntime[];
   log?: (line: string) => void;
@@ -197,14 +199,18 @@ export class NodeClient {
         const body = envelope.body;
         if (!mcpRuntimeEnabled(this.policy, body.runtime ?? "codex")) return [];
         try {
-          const items = await this.options.readMcpInbox?.(body.sessionId, body.limit);
+          const items = await this.options.readMcpInbox?.(body.sessionId, body.limit, body.messageId);
           const response = this.frame("mcp.inbox.response", items
             ? { requestId: body.requestId, ok: true, items }
             : { requestId: body.requestId, ok: false, error: "local inbox reader is unavailable" });
           if (Buffer.byteLength(response, "utf8") > MAX_FRAME_BYTES) {
             return [this.frame("mcp.inbox.response", { requestId: body.requestId, ok: false, error: MCP_INBOX_TOO_LARGE })];
           }
-          if (items) this.callback("MCP inbox offer", () => this.options.offerMcpInbox?.(items.map((item) => item.messageId)));
+          if (items) {
+            const ids = items.map((item) => item.messageId);
+            if (body.reply) this.callback("MCP reply", () => this.options.answerMcpInbox?.(ids));
+            else this.callback("MCP inbox offer", () => this.options.offerMcpInbox?.(ids));
+          }
           return [response];
         } catch {
           return [this.frame("mcp.inbox.response", { requestId: body.requestId, ok: false, error: "local inbox read failed" })];

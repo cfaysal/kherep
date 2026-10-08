@@ -11,6 +11,24 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- Control plane Worker: a message is deleted once its sender acknowledged the
+  final status (`message.status.ack`, `delivered`, `replied`, `refused` or
+  `expired`). The acknowledgement must come from the sending node and name the
+  stored final state; a repeat is a no-op. Messages from the operator API and
+  from senders without `messaging.ack.v1` are deleted 24 hours after their
+  final state, and a revoked node's final messages at once; `queued` and
+  `accepted` messages are never deleted. A 24-hour tombstone (ids, nodes,
+  final state, reason, reply depth, reply id; no text, no sessions) answers a
+  late resend, a late target report, MCP `status` and task-control
+  provenance. The Worker now stores every message's reply depth and refuses a
+  reply beyond `MAX_REPLY_DEPTH` with `reply depth exceeded`. An MCP `reply`
+  to a deleted message reads that one item from the replying node's inbox
+  (`mcp.inbox.request` with `messageId` and `reply`; the node marks it
+  answered); an older node fails it closed. Messages stored before this
+  deploy are never deleted, whatever acknowledgements, replays or revocations
+  reach them. `GET /api/messages` no longer lists acknowledged messages; the
+  audit keeps their history without text. All new queries are index-backed
+  and covered by the read-budget test (issue #308, PR 4 of 4).
 - Atlassian MCP: Kherep targets the v2 Atlassian remote MCP server. The Claude
   capability check no longer expects a `rovo` server. With the optional
   Atlassian tool set the Codex installer writes the managed MCP server

@@ -44,7 +44,9 @@ export type McpCredentialBody = { requestId: string; ok: true; token: string; ve
   | { requestId: string; ok: false; error: string };
 export type McpIntentReceiptBody = { requestId: string; ok: true; expiresAt: number; version: number }
   | { requestId: string; ok: false; error: string };
-export interface McpInboxRequestBody { requestId: string; sessionId: string; limit: number; runtime?: McpRuntime }
+// messageId and reply (issue #308): the one item an MCP reply answers, whose
+// parent row the Worker no longer holds; the node marks it answered.
+export interface McpInboxRequestBody { requestId: string; sessionId: string; limit: number; runtime?: McpRuntime; messageId?: string; reply?: true }
 export interface McpInboxItem {
   messageId: string;
   from: { nodeId: string; session: string };
@@ -119,7 +121,9 @@ export function isMcpIntentReceiptBody(value: unknown): value is McpIntentReceip
 export function isMcpInboxRequestBody(value: unknown): value is McpInboxRequestBody {
   return isObject(value) && typeof value.requestId === "string" && UUID.test(value.requestId)
     && isShortString(value.sessionId, 128) && Number.isSafeInteger(value.limit) && Number(value.limit) > 0 && Number(value.limit) <= 20
-    && (value.runtime === undefined || value.runtime === "codex" || value.runtime === "claude-code");
+    && (value.runtime === undefined || value.runtime === "codex" || value.runtime === "claude-code")
+    && (value.messageId === undefined || (typeof value.messageId === "string" && UUID.test(value.messageId)))
+    && (value.reply === undefined || (value.reply === true && value.messageId !== undefined));
 }
 
 export function isMcpInboxResponseBody(value: unknown): value is McpInboxResponseBody {

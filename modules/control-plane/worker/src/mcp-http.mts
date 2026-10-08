@@ -137,7 +137,13 @@ function server(env: Env, principal: Principal): McpServer {
   async ({ requestId: id, inReplyTo, text }, ctx) => {
     const prepared = await prepareIntentClaim(principal, "reply", id, { inReplyTo, text }, ctx.mcpReq._meta);
     if (!prepared.ok) return error(prepared.error);
-    const sent = await registryStub(env).replyMcpMessage(prepared.intent, inReplyTo, text);
+    let sent = await registryStub(env).replyMcpMessage(prepared.intent, inReplyTo, text);
+    if (!sent.ok && "lookup" in sent && sent.lookup !== undefined) {
+      // The parent row is gone (issue #308): the replying node supplies the item.
+      const inbox = await sessionStub(env, principal.nodeId).requestMcpInbox(sent.lookup, 1, prepared.intent.runtime, inReplyTo);
+      sent = await registryStub(env).replyMcpMessage(prepared.intent, inReplyTo, text,
+        inbox.ok ? inbox.items.find((item) => item.messageId === inReplyTo) ?? null : null);
+    }
     if (!sent.ok) return error("denied" in sent ? sent.error : "reply was not accepted");
     try {
       await routeEffects(env, sent.effects);

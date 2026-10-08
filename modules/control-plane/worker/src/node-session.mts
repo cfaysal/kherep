@@ -4,7 +4,9 @@ import {
   isCommandResultBody, isNodeId, isPhase1Command, isRegisterBody, isRuntimeList, isSessionCommand, isSessionList,
   makeEnvelope, NONCE_TTL_MS, parseEnvelope, PING_FRAME, PONG_FRAME, type Envelope, type MessageType, type NodeCommand,
 } from "../../protocol.mts";
-import { isDirectoryGetBody, isMessageSendBody, isNodeMessageStatusBody } from "../../protocol-messages.mts";
+import {
+  isDirectoryGetBody, isMessageSendBody, isMessageStatusAckBody, isNodeMessageStatusBody, MESSAGE_STATUS_ACK,
+} from "../../protocol-messages.mts";
 import { isCommandArgs } from "../../protocol-tasks.mts";
 import {
   isMcpCredentialRotateBody, isMcpInboxResponseBody, isMcpIntentRegistration, MCP_INBOX_TOO_LARGE,
@@ -188,7 +190,9 @@ export class NodeSession extends DurableObject<Env> {
     return ws !== null;
   }
 
-  requestMcpInbox(sessionId: string, limit: number, runtime: McpRuntime): Promise<McpInboxResponseBody> {
+  // messageId (issue #308): one item, for an MCP reply whose parent row is
+  // gone; the node marks it answered. An older node ignores both fields.
+  requestMcpInbox(sessionId: string, limit: number, runtime: McpRuntime, messageId?: string): Promise<McpInboxResponseBody> {
     const ws = this.authedSocket();
     if (!ws) return Promise.resolve({ requestId: crypto.randomUUID(), ok: false, error: "originating node is offline" });
     const requestId = crypto.randomUUID();
@@ -201,7 +205,7 @@ export class NodeSession extends DurableObject<Env> {
         resolve({ requestId, ok: false, error: "originating node did not answer inbox request" });
       }, MCP_INBOX_TIMEOUT_MS);
       this.pendingInbox.set(requestId, { socket: ws, resolve, timer });
-      this.sendControl(ws, "mcp.inbox.request", { requestId, sessionId, limit, runtime });
+      this.sendControl(ws, "mcp.inbox.request", { requestId, sessionId, limit, runtime, ...(messageId ? { messageId, reply: true } : {}) });
     });
   }
 
@@ -277,6 +281,10 @@ export class NodeSession extends DurableObject<Env> {
       case "task.request":
         return handleTaskFrame(this.env, nodeId, envelope.type, body, (type, reply) => this.sendControl(ws, type, reply));
       case "event":
+        if (body.name === MESSAGE_STATUS_ACK) {
+          if (!isMessageStatusAckBody(body)) return this.sendControl(ws, "error", { error: "invalid message.status.ack body" });
+          return registry.ackMessageStatus(nodeId, body);
+        }
         return typeof body.name === "string" && body.name.startsWith("task.control.")
           ? handleTaskControlEvent(this.env, nodeId, body, (type, reply) => this.sendControl(ws, type, reply),
             this.localControl(ws, nodeId))

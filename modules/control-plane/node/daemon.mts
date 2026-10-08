@@ -32,7 +32,7 @@ import {
   applyQueryResult, receiptResult, recordRegistrationReceipt, recoverOperations,
 } from "./task-control-store.mts";
 import {
-  disableMcp, hasMcpCredential, offerMcpInbox, pollMcpIntents, readMcpInbox, recordMcpCredential, recordMcpIntentReceipt,
+  answerMcpInbox, disableMcp, hasMcpCredential, offerMcpInbox, pollMcpIntents, readMcpInbox, recordMcpCredential, recordMcpIntentReceipt,
 } from "./mcp-local.mts";
 
 // Application ping interval. The Worker answers PING_FRAME through
@@ -131,8 +131,9 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     mcpCredential: (body) => recordMcpCredential(paths, body),
     mcpIntentReceipt: (body) => recordMcpIntentReceipt(paths, mcpInflight, body),
     mcpDisabled: () => disableMcp(paths, mcpInflight),
-    readMcpInbox: (sessionId, limit) => readMcpInbox(paths, sessionId, limit),
+    readMcpInbox: (sessionId, limit, messageId) => readMcpInbox(paths, sessionId, limit, messageId),
     offerMcpInbox: (messageIds) => offerMcpInbox(paths, messageIds),
+    answerMcpInbox: (messageIds) => answerMcpInbox(paths, messageIds),
     taskControlExecute: (body) => handleTaskControlExecute(paths, body,
       (execute) => executeTaskControl(execute, { nodeId: config.nodeId, paths, runner })),
     ...exchangeOptions(paths), log,

@@ -203,7 +203,7 @@ Each node may hold at most 128 unexpired intents. Claimed intents continue to co
 | `sessions` | Returns bounded address references from Registry metadata, with the node-reported `kind` when present |
 | `send` | Sends through the existing message router from the verified originating session |
 | `inbox` | Reads the exact originating session inbox from its online node and marks the waiting messages it returned `offered` |
-| `reply` | Derives the recipient from stored message provenance and enforces the reply-depth limit |
+| `reply` | Derives the recipient from stored message provenance, or from the replying node's inbox once the original was deleted, and enforces the reply-depth limit |
 | `status` | Returns metadata-only state for a message visible to the caller's node |
 
 A `sessions` entry carries `kind` when the node reported one. `codex-task` marks a Codex task run
@@ -218,6 +218,20 @@ replied, recorded by the Registry at that moment. A reply refused at send time n
 original and is never named; a marking reply that its recipient later refuses stays named. Messages
 marked replied before this column existed carry no `replyMessageId`. The sending session can read
 the reply with `status` and, while its node is online, with `inbox`.
+
+After the sender acknowledged the final status, the Worker deletes the message (issue #308) and
+`status` answers from its tombstone for 24 hours: the final `state`, `updatedAt` as the deletion
+time, no `progress`, and `replyMessageId` when it was replied. After that the message is no longer
+available to `status`.
+
+`reply` to a message the Worker no longer holds asks the replying node for that one inbox item:
+`mcp.inbox.request` with `limit` 1, `messageId` and `reply: true`, for the claimed session. The node
+returns the item only when it is addressed to that session and marks it answered, as
+`msg send --reply-to` does. The Worker sends the reply to the item's sender, checked against the
+tombstone while one exists, and derives the reply depth itself (tombstone depth plus one, or 1 once
+the tombstone is gone). The claim is recovered for the second step, not spent twice. An offline
+node, an older node that ignores `messageId`, or a missing or contradicting item fails closed with
+`reply was not accepted`.
 
 For an accepted message, `status` also returns validated `progress` metadata when available: a fixed `phase` and `code`, `observedAt`, and optional `retryAt`. These codes distinguish waiting for a user turn, waking, fallback activity and delivery failures. Accepted progress does not prove delivery. Invalid progress and stale progress on terminal states are omitted. Arbitrary persisted reasons and message bodies are never included in a status result. `state` stays the canonical state. `status` also returns `senderState` (issue #197), the state a sender reads, derived from `state` and the returned `progress` by `senderState` in `protocol-messages.mts`, the function `msg status` uses: `running` for `awaiting-turn-confirmation` and `fallback-running`, `stopped` for `operator-stopped`, otherwise the canonical state. `running` reports the last observation, not liveness. An `accepted` message without progress whose `updatedAt` is at least 5 minutes before the Worker's clock (`silentlyAccepted`, `ACCEPTED_SILENCE_MS`) also carries `hint`: a fixed text naming the possible causes (target session not running, target node offline or on an older version) and the `sessions` tool as the next check. `hint` never contains a persisted reason. Clients that read only `state` are unaffected.
 

@@ -1,9 +1,11 @@
 import { env } from "cloudflare:workers";
+import { runInDurableObject } from "cloudflare:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { describe, expect, it, vi } from "vitest";
 
+import { makeEnvelope } from "../../protocol.mts";
 import { digestMcpArguments, REMOTE_MCP_CAPABILITY } from "../../protocol-mcp.mts";
-import type { MessageDeliverBody } from "../../protocol-messages.mts";
+import { MAX_REPLY_DEPTH, MESSAGE_STATUS_ACK, type MessageDeliverBody } from "../../protocol-messages.mts";
 import { deliverForHook } from "../../node/deliver-hook.mts";
 import { getMessage } from "../../node/inbox.mts";
 import { handleMcp } from "../src/mcp-http.mts";
@@ -147,6 +149,50 @@ describe("two chats on one node through the native MCP path (issue #192)", () =>
       expect(own.structuredContent).toMatchObject({ ok: true, messageId: replyB.requestId });
       expect((await registry().listMessages(node.nodeId, 100)).find((message) => message.messageId === replyB.requestId))
         .toMatchObject({ fromNode: node.nodeId, fromSession: CHAT_B, toNode: peer.nodeId, toSession: PEER_SESSION });
+    } finally {
+      await node.close();
+      peer.socket.ws.close(1000, "done");
+    }
+  }, 20_000);
+
+  it("replies through the node once the parent row was deleted after its ack (issue #308)", async () => {
+    const peer = await startPeer();
+    const node = await startNativeNode("two-chat-deleted", sessionsOf(CHAT_A, CHAT_B));
+    const sql = <T,>(run: (db: SqlStorage) => T) => runInDurableObject(registry(), (_i, state) => run(state.storage.sql));
+    try {
+      const toA = peerSend(peer.socket, { nodeId: node.nodeId, session: CHAT_A }, "synthetic question for chat A");
+      await vi.waitFor(() => expect(getMessage(node.paths.inbox, toA)?.state).toBe("accepted"), WAIT);
+      // The Worker stores delivered, the peer acknowledges it, and the row goes.
+      await registry().reportMessageStatus(node.nodeId, { messageId: toA, state: "delivered" });
+      peer.socket.send(makeEnvelope("event", { name: MESSAGE_STATUS_ACK, messageId: toA, state: "delivered" }, 0, 0));
+      await vi.waitFor(async () => expect(await sql((db) => db.exec("SELECT id FROM messages WHERE id = ?", toA).toArray()))
+        .toEqual([]), WAIT);
+      const chat = await node.mcp();
+
+      // Chat B cannot answer chat A's message: the node returns no item for B.
+      const asB = await node.hook(CHAT_B, "reply-deleted-b", "reply", { inReplyTo: toA, text: "synthetic reply as chat B" });
+      const denied = await chat.callTool({ name: "reply", arguments: asB, _meta: claudeMeta("reply-deleted-b") });
+      expect(denied.content).toEqual([{ type: "text", text: "reply was not accepted" }]);
+
+      const asA = await node.hook(CHAT_A, "reply-deleted-a", "reply", { inReplyTo: toA, text: "synthetic answer from chat A" });
+      const sent = await chat.callTool({ name: "reply", arguments: asA, _meta: claudeMeta("reply-deleted-a") });
+      expect(sent.structuredContent).toMatchObject({ ok: true, messageId: asA.requestId, state: "queued" });
+      const [frame] = await delivered(peer.socket, 1);
+      expect(frame).toMatchObject({ messageId: asA.requestId, from: { nodeId: node.nodeId, session: CHAT_A },
+        toSession: PEER_SESSION, inReplyTo: toA, text: "synthetic answer from chat A" });
+      const lookups = node.received.filter((envelope) => envelope.type === "mcp.inbox.request").map((envelope) => envelope.body);
+      expect(lookups).toEqual([expect.objectContaining({ sessionId: CHAT_B, limit: 1, messageId: toA, reply: true }),
+        expect.objectContaining({ sessionId: CHAT_A, limit: 1, messageId: toA, reply: true })]);
+      expect(getMessage(node.paths.inbox, toA)?.state).toBe("delivered");
+      expect(await sql((db) => db.exec("SELECT depth FROM messages WHERE id = ?", asA.requestId).toArray()))
+        .toEqual([{ depth: 1 }]);
+
+      // The Worker derives the depth itself: at the limit the reply is refused.
+      await sql((db) => db.exec("UPDATE message_tombstones SET depth = ? WHERE id = ?", MAX_REPLY_DEPTH, toA));
+      const deep = await node.hook(CHAT_A, "reply-deep-a", "reply", { inReplyTo: toA, text: "synthetic answer too deep" });
+      const refused = await chat.callTool({ name: "reply", arguments: deep, _meta: claudeMeta("reply-deep-a") });
+      expect(refused.content).toEqual([{ type: "text", text: "reply was not accepted" }]);
+      expect(await sql((db) => db.exec("SELECT id FROM messages WHERE id = ?", deep.requestId).toArray())).toEqual([]);
     } finally {
       await node.close();
       peer.socket.ws.close(1000, "done");
