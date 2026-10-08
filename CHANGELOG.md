@@ -131,6 +131,13 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- claude-obs reads its host configuration `<Claude home>/kherep/confluence.json`
+  with the Read tool instead of `cat`, which the auto-mode classifier denied.
+  The user settings allow exactly that one file with a new rule,
+  `Read(//__KHEREP_CLAUDE_HOME__/kherep/confluence.json)`. The renderer writes
+  it in the absolute POSIX form Claude Code matches on every platform:
+  `Read(//c/Users/<user>/.claude/kherep/confluence.json)` on Windows,
+  `Read(//Users/<user>/.claude/kherep/confluence.json)` on macOS (issue #363).
 - main-checkout-guard and the attribution hook: a repository counts as
   inside the workspace when its path matches the workspace as written or
   after both sides are resolved on the file system. A workspace or checkout

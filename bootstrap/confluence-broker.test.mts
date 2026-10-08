@@ -51,10 +51,11 @@ function tempRoot(t: TestContext): string {
 
 // The settings pair exactly as install.sh renders it, optionally over an
 // existing user settings file.
-function render(root: string, profile: string, workspace: string, existingUser = "-"): { user: Settings; project: Settings } {
+function render(root: string, profile: string, workspace: string, existingUser = "-",
+  claudeHome = path.join(root, "claude-home")): { user: Settings; project: Settings } {
   const user = path.join(root, `settings-${profile}.json`);
   const project = path.join(root, `settings-${profile}.local.json`);
-  renderSettings([profile, workspace, path.join(root, "credentials"), path.join(root, "claude-home"),
+  renderSettings([profile, workspace, path.join(root, "credentials"), claudeHome,
     path.join(REPO, "claude", "settings.user.json"), path.join(REPO, "claude", "settings.project.json"),
     existingUser, "-", user, project]);
   const read = (file: string) => JSON.parse(fs.readFileSync(file, "utf8")) as Settings;
@@ -162,7 +163,27 @@ test("a re-render replaces the old backslash broker rules and keeps every unrela
     ALL_VERBS.map((verb) => `Bash(${broker} ${verb}:*)`));
   for (const rule of obsolete) assert.ok(!allow.includes(rule), `still allowed: ${rule}`);
   for (const rule of unrelated) assert.ok(allow.includes(rule), `lost: ${rule}`);
-  assert.equal(allow.length, obsolete.length + unrelated.length, "the allowlist does not grow");
+  // The one non-broker template rule is the confluence.json Read rule (issue #363).
+  assert.equal(allow.length, obsolete.length + unrelated.length + 1, "the allowlist does not grow");
+});
+
+// Issue #363. claude-obs reads confluence.json with the Read tool. The one Read
+// rule names that file in the absolute form `//<path>`, and Claude Code matches
+// a Windows path in POSIX form (C:\Users\a is /c/Users/a).
+test("the one Read rule renders to the absolute confluence.json path on every host", (t) => {
+  const homes: Record<string, string> = { win: "C:\\Users\\example\\.claude", mac: "/Users/example/.claude" };
+  for (const { profile, workspace } of HOSTS) {
+    const allow = render(tempRoot(t), profile, workspace, "-", homes[profile]).user.permissions?.allow ?? [];
+    const reads = allow.filter((rule) => rule.startsWith("Read("));
+    assert.equal(reads.length, 1, `${profile}: ${JSON.stringify(reads)}`);
+    assert.match(reads[0], /^Read\(\/\/[^\\*]*\/\.claude\/kherep\/confluence\.json\)$/, profile);
+    if (profile === "mac") {
+      assert.equal(reads[0], "Read(//Users/example/.claude/kherep/confluence.json)");
+    }
+    if (profile === "win" && process.platform === "win32") {
+      assert.equal(reads[0], "Read(//c/Users/example/.claude/kherep/confluence.json)");
+    }
+  }
 });
 
 // The seeded values differ from everything the stubs return: the nodes survive

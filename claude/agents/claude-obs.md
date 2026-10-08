@@ -78,7 +78,7 @@ runtime, not to you.
 You write through exactly one program, the Claude Confluence broker. You never compose its command:
 the installer stores it, absolute and complete, as the `broker` field of the host configuration
 file described under Filing, and that value ends in `/tools/atl-confluence-ccoder.mts`. Read that
-file before your first broker call. Every broker call in this file is written as
+file with the Read tool before your first broker call. Every broker call in this file is written as
 
     <confluence.json broker> <verb> ...
 
@@ -161,14 +161,15 @@ number. If they are not, your status is `failed` and says so.
 
 ## Filing
 
-The target space lives in the host's own configuration, not in this file:
-`~/.claude/kherep/confluence.json` (under the directory `CLAUDE_CONFIG_DIR` names, where it is set)
-with `spaceKey`, `spaceId`, `spaceName`, `broker` and `nodes`. It is never
-the bare user home: `~/.kherep/confluence.json` is not a valid location, and a file found there is
-not your configuration. A missing file is `failed missing broker`, see The broker. The installer
-writes `broker` on every install and the space only once it resolved, so a file that has `broker` but no
-`spaceKey` is a host without a space: you do NOT write and report
-`OBS-RESULT: failed no space configured`, not `missing broker`.
+The target space lives in the host's own configuration, not in this file: `confluence.json` in
+`<Claude home>/kherep/`, where the Claude home is `~/.claude` or the directory `CLAUDE_CONFIG_DIR`
+names (`echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"` prints it), with `spaceKey`, `spaceId`,
+`spaceName`, `broker` and `nodes`. You read it with the Read tool at that fixed absolute path, on
+Windows in drive form (`C:/...`), never with `cat` or any other shell command: the host allows
+exactly that Read. `~/.kherep/confluence.json` in the bare user home is never your configuration.
+A missing file is `failed missing broker`, see The broker. The installer writes `broker` on every
+install and the space only once it resolved, so a file that has `broker` but no `spaceKey` is a host
+without a space: you do NOT write and report `OBS-RESULT: failed no space configured`, not `missing broker`.
 
     <confluence.json broker> create --space <spaceKey> --parent <the id the nodes map gives for that node> \
       --title "<short title>" --format storage --body-file "$f" \
@@ -181,9 +182,8 @@ in Bash, not even the scratchpad path from your context: Bash eats the backslash
 becomes U+F03A, and the page body lands as a mangled file in the caller's working directory. That
 left untracked page bodies in Windows checkouts from 2026-09 on.
 
-The separate `labels` verb exists for correcting a page that already has some. For a page you
-are creating, the labels belong in the create call, so that no version of the page ever exists
-without them.
+The separate `labels` verb exists for correcting a page that already has some. For a page you are
+creating, the labels belong in the create call, so that no version of the page ever exists without them.
 
 Before each `create`, when the brief names a node, you check that `--parent` is exactly the id the
 `nodes` map gives for that named node. If it is not, you correct it before the call; you never

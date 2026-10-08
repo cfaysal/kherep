@@ -84,13 +84,20 @@ function renderWorkspaceTools(value: string, workspaceCommand: string): string {
   return value.replaceAll(WORKSPACE_TOOL, `node ${workspaceCommand}/tools/`);
 }
 
+// Issue #363. A file permission rule names an absolute path as `//` plus the
+// path, and Claude Code matches a Windows path in POSIX form (C:\Users\a is
+// /c/Users/a). A rule on a file in the Claude home therefore takes the POSIX
+// form: Read(//c/Users/a/.claude/x) on Windows, Read(//Users/a/.claude/x) on macOS.
+const CLAUDE_HOME_FILE_RULE = "(//__KHEREP_CLAUDE_HOME__/";
+
 function rewriteValue(value: unknown, replacements: PortablePaths): unknown {
   if (Array.isArray(value)) return value.map((item) => rewriteValue(item, replacements));
   if (isRecord(value)) {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, rewriteValue(item, replacements)]));
   }
   if (typeof value !== "string") return value;
-  let rendered = renderWorkspaceTools(value, replacements.workspaceCommand);
+  let rendered = renderWorkspaceTools(value, replacements.workspaceCommand)
+    .replaceAll(CLAUDE_HOME_FILE_RULE, `(/${toBashPath(replacements.claudeHome)}/`);
   for (const [placeholder, key] of Object.entries(PATH_PLACEHOLDERS)) {
     rendered = rendered.replaceAll(placeholder, replacements[key]);
   }
