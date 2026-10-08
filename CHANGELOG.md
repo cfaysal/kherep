@@ -86,6 +86,18 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Plugin reconciliation: `claude plugin list --json` now also reports rows
+  with `"scope": "synced"`, plugins synced from claude.ai, and one such row
+  made `reconcile-plugins` fail with `Claude plugin list contains a malformed
+  entry`, so the install ended with errors and no plugin was reconciled.
+  `synced` is now a known scope: the row is read for duplicate detection and
+  never installed, enabled or removed, like `project` and `local`. A
+  well-formed row with a scope the installer does not know is skipped with
+  one line per scope naming the plugin ids, so a future scope does not break
+  the install either. A row that is malformed in shape, including a
+  non-string scope, stays fatal. A declared plugin that is present only as a
+  synced row still gets its own user-scope install; the synced row is left
+  untouched (issue #338).
 - Deploy guard: the force-push rule only counts a force flag in the
   arguments of the same `git push`. Before, it matched `git push` and a force
   flag anywhere in the command, so `gh api … -f body=x && git push origin
