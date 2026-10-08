@@ -130,11 +130,11 @@ for (const broker of BROKERS) {
     assert.ok(out.includes("truncated: true"));
   });
 
-  test(`${broker.name} search below 25 still asks for 25 and is not truncated when fewer came back`, async () => {
+  test(`${broker.name} search below 25 still asks for 25 and reports the --limit cut as truncated`, async () => {
     const { out, limits, injected } = harness(broker.env, async () => ({ titles: NOTES.slice(0, 24) }));
     assert.equal(await broker.run(["search", "--space", "KB", "--query", "notes", "--limit", "2"], injected), 0);
     assert.deepEqual(limits, [25]);
-    assert.ok(out.includes("truncated: false"));
+    assert.ok(out.includes("truncated: true"), "24 matching pages, only 2 shown");
     assert.ok(out.includes("count: 2"));
   });
 

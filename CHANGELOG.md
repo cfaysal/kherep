@@ -42,8 +42,8 @@ increments the minor version; every other release increments the patch version.
   `min(max(limit, 25), 100)`, where 100 is the `twg rovo search` maximum.
   Before, the limit never reached it and every search asked for the default
   25 proposals. After the hits it prints `truncated: true|false`; true means
-  the proposals filled the request or `--limit` was above 100. Exit codes are
-  unchanged (issue #315).
+  `--limit` cut off a further matching page, the proposals filled the request,
+  or `--limit` was above 100. Exit codes are unchanged (issue #315).
 - Control plane node: `delivered` is a read receipt on every path. The
   messages a new Claude intercom session carries in its task text are offered
   to it and become `delivered` only once its turn completed (the session
