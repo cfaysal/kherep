@@ -81,6 +81,7 @@ for (const [name, command, block] of [
   ["force push inside ssh quotes", 'ssh example-host "cd repo && git push -f origin main"', true],
   ["force push in a heredoc fed to bash", "bash <<EOF\ngit push -f origin main\nEOF", true],
   ["unterminated quote falls back to the old regexes", 'git push origin "x -f', true],
+  ["unterminated quote without a force flag stays allowed", 'git push origin "unterminated', false],
 ] as const) check(name, command, block, block ? "force-push blocked" : undefined);
 
 // ---- Rule B: kubectl apply (SHOULD BLOCK) ----

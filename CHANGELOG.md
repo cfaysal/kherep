@@ -97,8 +97,9 @@ increments the minor version; every other release increments the patch version.
   `+HEAD:main` and `--force-with-lease=` with an empty value.
   `--force-if-includes` alone and `-f` after `--` stay allowed. The new
   `hooks/lib/git-push-match.mts` splits the command into simple commands in
-  one linear pass, scans quoted words and heredoc bodies again as shell down
-  to depth 3, and when it cannot parse the command it falls back to the old
+  one linear pass, scans quoted words again as shell down to depth 3, reads
+  heredoc body lines word by word, and when it cannot parse the command it
+  falls back to the old
   regexes, so the rule still fails closed. The installer manifest lists the
   new module (issue #327).
 - Confluence brokers: `labels --id <page>` without `--labels` or `--remove`
