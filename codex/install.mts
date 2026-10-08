@@ -181,6 +181,8 @@ export function install(options: InstallOptions = {}) {
     researchCommon: path.join(sourceRoot, "hooks", "research-common.mts"),
     researchExecParser: path.join(sourceRoot, "hooks", "research-exec-parser.mts"),
     researchTranscript: path.join(sourceRoot, "hooks", "research-transcript.mts"),
+    obsResultHook: path.join(sourceRoot, "hooks", "obs-result-check.mts"),
+    obsCandidatePolicy: path.join(sourceRoot, "hooks", "obs-candidate-policy.mts"),
     registryBridge: path.join(repoRoot, "modules", "mcp-auth-bridge", "registry-http-wrapper.mts"),
     registryRuntime: path.join(repoRoot, "modules", "mcp-auth-bridge", "supergateway-secret-wrapper.mts"),
     localInferenceRunner: path.join(repoRoot, "modules", "local-inference", "runner.mts"),
@@ -434,6 +436,9 @@ export function install(options: InstallOptions = {}) {
     transaction.copyFile(sources.researchCommon, path.join(targets.hookDir, "research-common.mts"));
     transaction.copyFile(sources.researchExecParser, path.join(targets.hookDir, "research-exec-parser.mts"));
     transaction.copyFile(sources.researchTranscript, path.join(targets.hookDir, "research-transcript.mts"));
+    // Issue #326, PR-B. It reads its rollout fallback through research-transcript.mts.
+    transaction.copyFile(sources.obsResultHook, path.join(targets.hookDir, "codex-obs-result-check.mts"));
+    transaction.copyFile(sources.obsCandidatePolicy, path.join(targets.hookDir, "obs-candidate-policy.mts"));
     transaction.remove(targets.memoryNotifyHook);
     // Issue #72. Beside the deliver hook: the msg CLI from the same checkout.
     transaction.writeFile(controlPlaneRulesPath(codexHome), renderControlPlaneRules(controlPlaneCli(repoRoot)));
@@ -473,7 +478,7 @@ export function install(options: InstallOptions = {}) {
       manifestSha256: hashFile(capabilitiesFile),
       canonicalTargetPolicy: capabilities.canonicalTargetPolicy,
       claudeModified: false,
-      hooks: ["PreToolUse", "UserPromptSubmit", "PostToolUse", "SessionStart", "PreCompact", "Stop", "SubagentStart"],
+      hooks: ["PreToolUse", "UserPromptSubmit", "PostToolUse", "SessionStart", "PreCompact", "Stop", "SubagentStart", "SubagentStop"],
       mcpServers: registryProjections.map((projection) => {
         const { name, transport } = projection;
         if (recoveredMcpServers.has(name)) return { name, status: "preserved-existing" };

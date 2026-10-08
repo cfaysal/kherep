@@ -79,10 +79,13 @@ const fragmentB = render(renderB).trim();
 
 const TRUST = ["[hooks.state]", "", '[hooks.state."fixture:stop:0:0"]', 'trusted_hash = "sha256:fixture"', ""].join("\n");
 
-// The three deliver-hook groups, which close the hooks of a rendered fragment.
+// The three deliver-hook groups of a rendered fragment. Only the SubagentStop
+// group (issue #326) follows them, and it is no deliver group.
 function deliverGroups(rendered: string): string {
   const hooks = rendered.trim().split("\n\n[mcp_servers.")[0];
-  return hooks.slice(hooks.lastIndexOf("[[hooks.SessionStart]]", hooks.indexOf("deliver-hook.mts")));
+  const start = hooks.lastIndexOf("[[hooks.SessionStart]]", hooks.indexOf("deliver-hook.mts"));
+  const end = hooks.indexOf("\n\n[[hooks.SubagentStop]]", start);
+  return hooks.slice(start, end < 0 ? undefined : end);
 }
 
 function deliverEvents(config: string): string[] {

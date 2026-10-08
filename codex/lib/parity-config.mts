@@ -202,6 +202,9 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
   }
   if (native(options.nativeHooks?.captureCli).length)
     groups.push(group("SessionEnd", "other", native(options.nativeHooks?.captureCli, 3)));
+  // Issue #326, PR-B. The last group of the block: Codex trust keys are
+  // positional per event, and no earlier group or entry moves.
+  groups.push(group("SubagentStop", "codex-obs", [hook("codex-obs-result-check.mts")]));
   return groups.join("\n\n");
 }
 
@@ -336,15 +339,16 @@ export const POST_LEGACY_HOOKS = [
   // directory of that name in the control-plane hook path.
   "main-checkout-guard.mts",
   "attribution-hook.mts",
+  "codex-obs-result-check.mts",
 ];
 const PRE_OBSERVATION_HOOKS = ["codex-observation-turn-completion"];
 const PRE_RESEARCH_HOOKS = ["codex-research-first", "codex-research-stop"];
-const PRE_INTEGRITY_HOOKS = ["codex-hook-integrity", "main-checkout-guard.mts", "attribution-hook.mts"];
-// Issue #325. Every render from before the integrity hook predates the
-// main-checkout guard and the attribution hook too, so PRE_INTEGRITY_HOOKS
-// lists all three; the lists below give the blocks in between.
-const PRE_MAIN_CHECKOUT_HOOKS = ["main-checkout-guard.mts", "attribution-hook.mts"];
-const PRE_ATTRIBUTION_HOOKS = ["attribution-hook.mts"];
+// Issue #325. Every render from before a hook predates each hook added after
+// it, so each list extends the list of the hook that came next.
+const PRE_OBS_RESULT_HOOKS = ["codex-obs-result-check.mts"];
+const PRE_ATTRIBUTION_HOOKS = ["attribution-hook.mts", ...PRE_OBS_RESULT_HOOKS];
+const PRE_MAIN_CHECKOUT_HOOKS = ["main-checkout-guard.mts", ...PRE_ATTRIBUTION_HOOKS];
+const PRE_INTEGRITY_HOOKS = ["codex-hook-integrity", ...PRE_MAIN_CHECKOUT_HOOKS];
 
 // A group whose every entry was removed goes with them: its header block is
 // followed by no entry of its own event. No render has an empty group.
@@ -458,6 +462,15 @@ export function renderBeforeAttributionHook(options: RenderOptions): string {
 
 export function renderBeforeAttributionHookWithoutNativeHooks(options: RenderOptions): string {
   return withoutHooks(renderWithoutNativeHooks(options), PRE_ATTRIBUTION_HOOKS);
+}
+
+// Issue #326, PR-B. The projection immediately before the obs-result check.
+export function renderBeforeObsResultCheck(options: RenderOptions): string {
+  return withoutHooks(render(options), PRE_OBS_RESULT_HOOKS);
+}
+
+export function renderBeforeObsResultCheckWithoutNativeHooks(options: RenderOptions): string {
+  return withoutHooks(renderWithoutNativeHooks(options), PRE_OBS_RESULT_HOOKS);
 }
 
 export function renderLegacyJavaScriptPrefix(options: RenderOptions): string {

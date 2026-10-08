@@ -34,6 +34,8 @@ export function withRetiredCentralBrain(
   // the entry after main-checkout-guard.
   text = text.replace(/\n\n\[\[hooks\.PostToolUse\]\]\nmatcher = "Bash[^\n]*\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = .*attribution-hook\.mts.*\ntimeout = 10(?=\n)/, "");
   text = text.replace(/\n\n\[\[hooks\.PreToolUse\.hooks\]\]\ntype = "command"\ncommand = .*attribution-hook\.mts.*\ntimeout = 10(?=\n)/, "");
+  // Issue #326, PR-B. Nor the obs-result check, the SubagentStop group that ends the hooks.
+  text = text.replace(/\n\n\[\[hooks\.SubagentStop\]\]\nmatcher = "codex-obs"\n\n\[\[hooks\.SubagentStop\.hooks\]\]\ntype = "command"\ncommand = .*codex-obs-result-check\.mts.*\ntimeout = 10(?=\n)/, "");
   text = insertBefore(text, "\n\n[[hooks.PostToolUse]]", entry("UserPromptSubmit", hooks.contextCli, 15));
   text = insertBefore(text, "\n\n[[hooks.PreCompact]]", entry("SessionStart", hooks.contextCli, 15));
   text = insertBefore(text, "\n\n[[hooks.SubagentStart]]", entry("Stop", hooks.captureCli, 10));

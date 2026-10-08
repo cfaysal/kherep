@@ -56,6 +56,8 @@ test("maps every installed file to its versioned source, and the rendered ones t
     ["kherep-maestro/codex-hook-integrity.mts", "codex/hooks/hook-integrity.mts"],
     ["kherep-maestro/research-common.mts", "codex/hooks/research-common.mts"],
     ["kherep-maestro/acceptance-policy.mts", "codex/hooks/acceptance-policy.mts"],
+    ["kherep-maestro/obs-candidate-policy.mts", "codex/hooks/obs-candidate-policy.mts"],
+    ["kherep-maestro/codex-obs-result-check.mts", "codex/hooks/obs-result-check.mts"],
     ["kherep-maestro-context.mts", "codex/hooks/kherep-maestro-context.mts"],
   ];
   for (const [rel, from] of map) assert.deepEqual(sourceOf(rel), { from }, rel);

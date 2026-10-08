@@ -38,6 +38,8 @@ export function managedFragmentFamily(current: RenderOptions, previousStop: Rend
     parityConfig.renderBeforeMainCheckoutGuardWithoutNativeHooks(options),
     parityConfig.renderBeforeAttributionHook(options),
     parityConfig.renderBeforeAttributionHookWithoutNativeHooks(options),
+    parityConfig.renderBeforeObsResultCheck(options),
+    parityConfig.renderBeforeObsResultCheckWithoutNativeHooks(options),
     parityConfig.renderBeforePostLegacyHooks(options),
     parityConfig.renderBeforePostLegacyHooksWithoutNativeHooks(options),
   ]);

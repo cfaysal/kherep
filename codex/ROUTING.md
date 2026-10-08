@@ -60,7 +60,11 @@ attribute to a tool, and every dispatch while its pin source is unreadable. Agen
 
 The Codex worker is read-only and returns only a strict JSON candidate. The Maestro validates it,
 reads the configured authority and publishes a nonempty candidate. An empty result is valid and
-causes zero writes. Claude keeps its direct-publication workflow: `claude-obs` starts its final
+causes zero writes. A `SubagentStop` hook with matcher `codex-obs` checks the candidate first: a
+malformed one, a fenced one included, goes back to the worker once with a fixed instruction; a second
+malformed result reaches the operator as a warning, and the Maestro treats it as a failure and
+publishes nothing. A result the hook cannot see is reported as not visible, and the Maestro's own
+validation still applies to every candidate. Claude keeps its direct-publication workflow: `claude-obs` starts its final
 message with one `OBS-RESULT: wrote | empty | failed` status line, and the Claude Maestro reports
 `OBS-RESULT: failed` to the user in the same turn as a failure, never as a valid empty result. The
 Codex Maestro does the same for its own publish step: a missing broker, missing credential or
