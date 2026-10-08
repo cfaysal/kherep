@@ -15,6 +15,7 @@ import {
 } from "./workspace-scope.mts";
 import { canonicalPathForms, canonicalPathLike } from "./real-path-policy.mts";
 import { artifactRoots, credentialsRoots, expandHome, type RootContext } from "./private-path-rules.mts";
+import { CHANGE_DIR, SHELL_SCRIPT_FLAG, SHELLS } from "./command-walk.mts";
 
 // Der Tool-Input, so wie ein Hook ihn weiterreicht. Gelesen wird gezielt nur
 // command; jedes andere Feld erreicht die Prüfung über allStrings.
@@ -107,7 +108,8 @@ function shellSegments(command: string): string[] {
 }
 
 function resolveShellPath(value: unknown, cwd: string): string {
-  let candidate = String(value || "").replace(/^[({]+|[)},]+$/g, "");
+  // Issue #358: a PowerShell parameter can carry its value after a colon.
+  let candidate = String(value || "").replace(/^[({]+|[)},]+$/g, "").replace(/^-[A-Za-z]+:/, "");
   if (candidate.includes("=") && !candidate.startsWith("=")) candidate = candidate.slice(candidate.indexOf("=") + 1);
   if (!candidate || /^-/.test(candidate) || /^[a-z]+:\/\//i.test(candidate)) return "";
   candidate = normalizePathLike(expandHome(candidate));
@@ -126,15 +128,19 @@ function withinRoots(value: string, roots: string[]): boolean {
   return [value, ...canonicalPathForms(value)].some((form) => roots.some((root) => isWithinPath(form, root)));
 }
 
-function shellReferencesRoots(command: string, payload: ScopePayload, roots: string[], env: EnvLike): boolean {
-  let cwd = payloadCwd(payload);
-  cwd = canonicalPathLike(cwd) || cwd;
+function shellReferencesRoots(command: string, payload: ScopePayload, roots: string[], env: EnvLike, start = payloadCwd(payload)): boolean {
+  let cwd = canonicalPathLike(start) || start;
   for (const segment of shellSegments(expandKnownShellValues(command, payload, env))) {
     const words = shellWords(segment);
     if (!words.length) continue;
     if (withinRoots(cwd, roots)) return true;
-    const executable = (normalizePathLike(words[0]).split("/").pop() || "").toLowerCase();
-    const isCd = ["cd", "chdir", "pushd", "set-location", "push-location"].includes(executable);
+    const executable = (normalizePathLike(words[0]).split("/").pop() || "").toLowerCase().replace(/\.exe$/, "");
+    const isCd = CHANGE_DIR.has(executable);
+    // Issue #358: a `bash -c` or `pwsh -Command` script runs in the current
+    // directory. Each word that follows a script flag is walked, so `-exec Bypass` cannot hide it.
+    const reenters = SHELLS.has(executable) && words.some((word, k) =>
+      k > 1 && SHELL_SCRIPT_FLAG.test(words[k - 1]) && shellReferencesRoots(word, payload, roots, env, cwd));
+    if (reenters) return true;
     if (isCd) {
       const word = words.slice(1).find((item) => !item.startsWith("-") && item.toLowerCase() !== "/d");
       const unresolved = resolveShellPath(word, cwd);
