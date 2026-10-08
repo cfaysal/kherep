@@ -75,7 +75,8 @@ increments the minor version; every other release increments the patch version.
   nothing but a runtime label would be added to such a page, it refuses with
   exit 1 and writes nothing. `create` gives every new page the computed
   runtime label, also without `--labels`; before, a page created without
-  `--labels` carried none (issue #318).
+  `--labels` carried none. When that label write fails, `create` exits 1 and
+  names the page that now exists without a runtime label (issue #318).
 - Confluence brokers: `search` passes `--limit` to the semantic search as
   `min(max(limit, 25), 100)`, where 100 is the `twg rovo search` maximum.
   Before, the limit never reached it and every search asked for the default

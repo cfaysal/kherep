@@ -144,7 +144,11 @@ async function cmdCreate(ctx: CliContext, args: Args): Promise<number> {
   if (!page.id) fail("create returned no page id, so nothing about it can be verified.");
   printPage(ctx, page);
   // Every page gets a runtime label, with or without --labels (issue #318).
-  const labelled = await ensureRuntimeLabel(session, page.id, (args.labels ?? "").split(","), CRED_ENV, ctx.env);
+  const labelled = await ensureRuntimeLabel(session, page.id, (args.labels ?? "").split(","), CRED_ENV, ctx.env)
+    .catch((error: unknown) => {
+      ctx.logError(`Page ${page.id} exists, but its runtime label could not be written.`);
+      throw error;
+    });
   for (const line of labelled.lines) ctx.log(line);
   // Golden rule 13: the broker's own report is not evidence. The authorship
   // this broker exists to fix is proven by READING THE PAGE BACK.
