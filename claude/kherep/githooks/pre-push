@@ -1,0 +1,33 @@
+#!/bin/sh
+# Runtime-independent push attribution for repositories under KHEREP_WORKSPACE.
+# Issue #325. Records which session pushed which ref in the local attribution
+# log (attribution-record.mts beside this hook). It never blocks a push: every
+# path ends in exit 0, and git's ref lines on stdin are always drained.
+#
+# Arguments: remote name, remote URL. Only owner/name of the URL is recorded.
+drain() { cat >/dev/null 2>&1; exit 0; }
+
+# The workspace as commit-msg reads it: a non-empty KHEREP_WORKSPACE, else the
+# workspace line of the commit-policy file next to this hook.
+WORKSPACE=$KHEREP_WORKSPACE
+POLICY_FILE="$(dirname "$0")/commit-policy"
+if [ -z "$WORKSPACE" ] && [ -f "$POLICY_FILE" ]; then
+  WORKSPACE=$(sed -n 's/^workspace=//p' "$POLICY_FILE" | tr -d '\r' | head -n 1)
+fi
+[ -n "$WORKSPACE" ] || drain
+
+TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null) || drain
+canonical_dir() {
+  KHEREP_PATH=$(printf '%s' "$1" | tr '\\' '/')
+  (CDPATH=; export CDPATH; cd -P "$KHEREP_PATH" && pwd -P) 2>/dev/null
+}
+TOP_REAL=$(canonical_dir "$TOPLEVEL") || drain
+WORK_REAL=$(canonical_dir "$WORKSPACE") || drain
+TOP_LC=$(printf '%s' "$TOP_REAL" | tr 'A-Z' 'a-z')
+WORK_LC=$(printf '%s' "$WORK_REAL" | tr 'A-Z' 'a-z' | sed 's|/*$||')
+case "$TOP_LC" in "$WORK_LC"|"$WORK_LC"/*) ;; *) drain ;; esac
+
+command -v node >/dev/null 2>&1 || drain
+# Node 22 and 24 print a type-stripping ExperimentalWarning for an .mts file.
+node --disable-warning=ExperimentalWarning "$(dirname "$0")/attribution-record.mts" push "$2" "$TOPLEVEL" || true
+exit 0

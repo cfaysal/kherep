@@ -111,6 +111,8 @@ skills/forge-bulk-op-pattern
 skills/vite-base-forge
 kherep/githooks/commit-msg
 kherep/githooks/post-checkout
+kherep/githooks/pre-push
+kherep/githooks/attribution-record.mts
 skills/domain-modeling
 skills/codebase-design
 skills/improve-codebase-architecture

@@ -83,6 +83,15 @@
             "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/drift-managed-path-watch.mts\""
           }
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/attribution-hook.mts\""
+          }
+        ]
       }
     ],
     "SessionStart": [

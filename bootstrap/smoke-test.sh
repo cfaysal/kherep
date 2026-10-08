@@ -187,7 +187,8 @@ check_profile() {
     statusline-command.sh kherep/local-inference/runner.mts
     kherep/local-inference/lib/profile.mts kherep/local-inference/lib/transport.mts kherep/local-inference/config.json kherep/twg/cli.mts
     kherep/githooks/commit-msg kherep/githooks/post-checkout
-    hooks/main-checkout-guard.mts hooks/lib/main-checkout.mts
+    kherep/githooks/pre-push kherep/githooks/attribution-record.mts
+    hooks/main-checkout-guard.mts hooks/lib/main-checkout.mts hooks/lib/command-walk.mts
   )
   for file in "${must_exist[@]}"; do
     [ -e "$CLAUDE_HOME/$file" ] || { note_fail "MISSING [$profile] $file"; }
@@ -218,6 +219,10 @@ check_profile() {
   # Issue #325. git skips a hook without the mode bit silently, like commit-msg.
   if [ -e "$CLAUDE_HOME/kherep/githooks/post-checkout" ] && [ ! -x "$CLAUDE_HOME/kherep/githooks/post-checkout" ]; then
     note_fail "POST-CHECKOUT hook not executable [$profile]"
+  fi
+  # Issue #325, PR-A. The same silent skip would leave pushes unattributed.
+  if [ -e "$CLAUDE_HOME/kherep/githooks/pre-push" ] && [ ! -x "$CLAUDE_HOME/kherep/githooks/pre-push" ]; then
+    note_fail "PRE-PUSH hook not executable [$profile]"
   fi
   node -e 'require(process.argv[1]);require(process.argv[2]);require(process.argv[3]);require(process.argv[4]);require(process.argv[5])' \
     "$CLAUDE_HOME/hooks/lib/workspace-scope.mts" "$CLAUDE_HOME/hooks/lib/private-path-policy.mts" \

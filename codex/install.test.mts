@@ -1366,11 +1366,17 @@ test("wires the control-plane delivery hook from the checkout and upgrades a blo
   const config = fs.readFileSync(result.targets.config, "utf8");
   assert.equal(occurrences(config, groups), 1);
   assert.equal(occurrences(config, "deliver-hook.mts"), 6);
-  // The existing hooks are untouched: without the three groups and the
-  // commandWindows forms (issue #68) the block is the one the previous installer
-  // wrote, and a reinstall recognises and upgrades it.
+  // Issue #325. The attribution hook beside it: a PreToolUse entry and a PostToolUse group.
+  assert.equal(occurrences(config, "attribution-hook.mts"), 4);
+  // The existing hooks are untouched: without the three groups, the attribution
+  // hook that only comes with them, and the commandWindows forms (issue #68) the
+  // block is the one the previous installer wrote, and a reinstall recognises and
+  // upgrades it.
   const previous = config.replace(`\n\n${groups}`, "").replace(/^commandWindows = .*\n/gm, "")
-    .replace(/^\[sandbox_workspace_write\]\nwritable_roots = .*\n\n/m, "");
+    .replace(/^\[sandbox_workspace_write\]\nwritable_roots = .*\n\n/m, "")
+    .replace(/\n\n\[\[hooks\.PostToolUse\]\]\nmatcher = "Bash[^\n]*\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = .*attribution-hook\.mts.*\ntimeout = 10(?=\n)/, "")
+    .replace(/\n\n\[\[hooks\.PreToolUse\.hooks\]\]\ntype = "command"\ncommand = .*attribution-hook\.mts.*\ntimeout = 10(?=\n)/, "");
+  assert.equal(occurrences(previous, "attribution-hook.mts"), 0);
   assert.notEqual(previous, config);
   fs.writeFileSync(result.targets.config, previous);
   assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), config);

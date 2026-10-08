@@ -108,6 +108,14 @@ function withWindowsCommand(hook: HookSpec): HookSpec {
   return { ...hook, commandWindows: `& ${hook.command}` };
 }
 
+const SHELL_MATCHER = "Bash|shell_command|exec_command|functions\\.exec";
+
+// Issue #325, PR-A. The attribution hook lives next to the deliver hook in the
+// checkout; the path is spelled with whatever separator the deliver hook uses.
+export function attributionHookPath(controlPlaneHook: string): string {
+  return controlPlaneHook.replace(/deliver-hook\.mts$/, "attribution-hook.mts");
+}
+
 export function renderHooks(options: RenderOptions, previousNative = false): string {
   const { contextHook, hookDir, node } = options;
   const group = (event: string, matcher: string, hooks: HookSpec[]): string =>
@@ -119,12 +127,19 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
       ? [{ command: previousNative ? command(node, cli, "codex", "--profile", options.nativeHooks.profile)
         : nativeCommand([node, cli, "codex", "--profile", options.nativeHooks.profile], process.platform,
           options.nativeHooks.extraCaCertificates), timeout }] : [];
+  // Issue #325, PR-A. The attribution hook runs from the checkout beside the
+  // deliver hook, directly with --runtime codex: it never blocks, so it needs no
+  // adapter. Its PreToolUse phase ends the shell group; its PostToolUse phase is
+  // a group of its own after the only other one, which matches no shell tool.
+  // Both placements keep every positional trust key rendered before them.
+  const attribution: HookSpec[] = options.controlPlaneHook
+    ? [{ command: command(node, attributionHookPath(options.controlPlaneHook), "--runtime", "codex") }] : [];
   const groups = [
     group("PreToolUse", "Read|Grep|Glob|Edit|Write|MultiEdit|apply_patch|Bash|shell_command|exec_command|functions\\.exec", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
     group("PreToolUse", "Agent|spawn_agent|Task|Workflow|WebSearch|WebFetch|mcp__.*", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
-    group("PreToolUse", "Bash|shell_command|exec_command|functions\\.exec", [adapted("commit-guard.mts", "pre"), adapted("deploy-guard.mts", "pre-no-transcript"),
+    group("PreToolUse", SHELL_MATCHER, [adapted("commit-guard.mts", "pre"), adapted("deploy-guard.mts", "pre-no-transcript"),
       // Issue #325. Appended last: Codex trust keys are positional.
-      adapted("main-checkout-guard.mts", "pre")]),
+      adapted("main-checkout-guard.mts", "pre"), ...attribution]),
     group("PreToolUse", "Agent|spawn_agent", [hook("codex-dispatch-contract-guard.mts")]),
     group("PreToolUse", "mcp__playwright__browser_navigate", [hook("playwright-file-guard.mts")]),
     ...(options.messagingClient?.enabled
@@ -145,6 +160,7 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
       adapted("umlaut-translit-watch.mts", "post"),
       adapted("simplify-nudge.mts", "post"),
     ]),
+    ...(attribution.length ? [group("PostToolUse", SHELL_MATCHER, attribution)] : []),
     group("SessionStart", "startup|resume|clear|compact", [
       { command: command(node, contextHook), status: "Loading Kherep Maestro" },
       hook("codex-cbm-reminder.mts"),
@@ -317,20 +333,25 @@ export const POST_LEGACY_HOOKS = [
   // With its extension: a bare "main-checkout-guard" also matches a checkout
   // directory of that name in the control-plane hook path.
   "main-checkout-guard.mts",
+  "attribution-hook.mts",
 ];
 const PRE_OBSERVATION_HOOKS = ["codex-observation-turn-completion"];
 const PRE_RESEARCH_HOOKS = ["codex-research-first", "codex-research-stop"];
-const PRE_INTEGRITY_HOOKS = ["codex-hook-integrity", "main-checkout-guard.mts"];
+const PRE_INTEGRITY_HOOKS = ["codex-hook-integrity", "main-checkout-guard.mts", "attribution-hook.mts"];
 // Issue #325. Every render from before the integrity hook predates the
-// main-checkout guard too, so PRE_INTEGRITY_HOOKS lists both; this list alone
-// gives the block in between.
-const PRE_MAIN_CHECKOUT_HOOKS = ["main-checkout-guard.mts"];
+// main-checkout guard and the attribution hook too, so PRE_INTEGRITY_HOOKS
+// lists all three; the lists below give the blocks in between.
+const PRE_MAIN_CHECKOUT_HOOKS = ["main-checkout-guard.mts", "attribution-hook.mts"];
+const PRE_ATTRIBUTION_HOOKS = ["attribution-hook.mts"];
 
+// A group whose every entry was removed goes with them: its header block is
+// followed by no entry of its own event. No render has an empty group.
 function withoutHooks(config: string, names: readonly string[]): string {
-  return config
-    .split("\n\n")
-    .filter((block) => !names.some((name) => block.includes(name)))
-    .join("\n\n");
+  const blocks = config.split("\n\n").filter((block) => !names.some((name) => block.includes(name)));
+  return blocks.filter((block, index) => {
+    const event = /^\[\[hooks\.(\w+)\]\]/.exec(block)?.[1];
+    return !event || blocks[index + 1]?.startsWith(`[[hooks.${event}.hooks]]`);
+  }).join("\n\n");
 }
 
 function withoutPostLegacyHooks(config: string): string {
@@ -426,6 +447,15 @@ export function renderBeforeMainCheckoutGuard(options: RenderOptions): string {
 
 export function renderBeforeMainCheckoutGuardWithoutNativeHooks(options: RenderOptions): string {
   return withoutHooks(renderWithoutNativeHooks(options), PRE_MAIN_CHECKOUT_HOOKS);
+}
+
+// Issue #325, PR-A. The projection immediately before the attribution hook.
+export function renderBeforeAttributionHook(options: RenderOptions): string {
+  return withoutHooks(render(options), PRE_ATTRIBUTION_HOOKS);
+}
+
+export function renderBeforeAttributionHookWithoutNativeHooks(options: RenderOptions): string {
+  return withoutHooks(renderWithoutNativeHooks(options), PRE_ATTRIBUTION_HOOKS);
 }
 
 export function renderLegacyJavaScriptPrefix(options: RenderOptions): string {
