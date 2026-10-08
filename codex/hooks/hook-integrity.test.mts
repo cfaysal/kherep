@@ -70,6 +70,9 @@ test("maps every installed file to its versioned source, and the rendered ones t
   // The guard really loads them through a computed require: the names stand in its source.
   const guard = fs.readFileSync(path.join(REPO, "codex", "hooks", "privacy-boundary-guard.mts"), "utf8");
   for (const name of ["workspace-scope.mts", "private-path-policy.mts"]) assert.match(guard, new RegExp(`libRoot, "${name}"`));
+  const dispatchGuard = fs.readFileSync(path.join(REPO, "codex", "hooks", "dispatch-contract-guard.mts"), "utf8");
+  assert.match(dispatchGuard, /"lib", "obs-brief-policy\.mts"/);
+  assert.ok(ALWAYS_CHECK.includes("./lib/obs-brief-policy.mts"));
 });
 
 test("resolves the checkout from the deliver-hook command first, else gives up without one", () => {

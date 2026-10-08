@@ -1,19 +1,23 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
 import { renderAgent } from "../lib/component-render.mts";
 import type { Capabilities } from "../lib/contracts.mts";
 import { agentSourcePath } from "../lib/parity-projection.mts";
-import { CAPABILITIES_FILE, decide, dispatchPins, loadPins, validate } from "./dispatch-contract-guard.mts";
+import { CAPABILITIES_FILE, decide, dispatchPins, dispatchPolicy, loadPolicy, validate } from "./dispatch-contract-guard.mts";
 
 const REPO = path.resolve(import.meta.dirname, "..", "..");
 const GUARD = path.join(import.meta.dirname, "dispatch-contract-guard.mts");
 const MANIFEST = path.join(REPO, "codex", "parity", "capabilities.json");
-const PINS = loadPins();
+const POLICY = loadPolicy();
+const PINS = POLICY.pins;
 const OBS_MODEL = PINS.get("codex-obs") ?? "";
+// Issue #331: a codex-obs message must be a well-formed observation brief.
+const BRIEF = "- measured: `node x.test.mts` -> 12 pass, 0 fail\n- relayed: the operator, in chat";
 
 function spawnDispatch(input: Record<string, unknown>, tool = "spawn_agent") {
   return { tool_name: tool, tool_input: { task_name: "t", message: "m", ...input } };
@@ -35,7 +39,7 @@ test("accepts bounded Codex dispatches and inherited models", () => {
   assert.equal(validate({
     tool_name: "Agent",
     tool_input: { task_name: "review", message: "Review the stabilized diff." },
-  }, PINS), null);
+  }, POLICY), null);
   assert.equal(validate({
     tool_name: "spawn_agent",
     tool_input: {
@@ -44,16 +48,16 @@ test("accepts bounded Codex dispatches and inherited models", () => {
       model: "gpt-5.6-sol",
       reasoning_effort: "high",
     },
-  }, PINS), null);
+  }, POLICY), null);
 });
 
 test("rejects malformed or unsupported dispatch contracts", () => {
-  assert.match(validate({ tool_name: "Agent", tool_input: {} }, PINS) ?? "", /task_name/);
+  assert.match(validate({ tool_name: "Agent", tool_input: {} }, POLICY) ?? "", /task_name/);
   assert.match(validate({
     tool_name: "Agent",
     tool_input: { task_name: "x", message: "y", model: "opus" },
-  }, PINS) ?? "", /Unsupported/);
-  assert.match(validate(spawnDispatch({ reasoning_effort: "extreme" }), PINS) ?? "", /reasoning effort/);
+  }, POLICY) ?? "", /Unsupported/);
+  assert.match(validate(spawnDispatch({ reasoning_effort: "extreme" }), POLICY) ?? "", /reasoning effort/);
 });
 
 test("accepts the pinned cheap model used by the obs and broker agents", () => {
@@ -65,16 +69,16 @@ test("accepts the pinned cheap model used by the obs and broker agents", () => {
       model: "gpt-5.6-luna",
       reasoning_effort: "low",
     },
-  }, PINS), null);
+  }, POLICY), null);
   assert.match(validate({
     tool_name: "spawn_agent",
     tool_input: { task_name: "x", message: "y", model: "gpt-5.6-nonexistent" },
-  }, PINS) ?? "", /Unsupported/);
+  }, POLICY) ?? "", /Unsupported/);
 });
 
 test("a pinned agent dispatched without a model is denied and told its pin", () => {
   for (const tool of ["spawn_agent", "Agent"]) {
-    const reason = validate(spawnDispatch({ agent_type: "codex-obs" }, tool), PINS) ?? "";
+    const reason = validate(spawnDispatch({ agent_type: "codex-obs" }, tool), POLICY) ?? "";
     assert.match(reason, /codex-obs/, tool);
     assert.ok(reason.includes(OBS_MODEL), reason);
   }
@@ -82,40 +86,80 @@ test("a pinned agent dispatched without a model is denied and told its pin", () 
 
 test("a pinned agent dispatched with another model is denied and told its pin", () => {
   for (const model of ["gpt-5.6-sol", "gpt-5.6-terra", "opus"]) {
-    const reason = validate(spawnDispatch({ agent_type: "codex-obs", model }), PINS) ?? "";
+    const reason = validate(spawnDispatch({ agent_type: "codex-obs", model }), POLICY) ?? "";
     assert.ok(reason.includes(OBS_MODEL), `${model}: ${reason}`);
     assert.ok(reason.includes(model), reason);
   }
-  assert.ok((validate(spawnDispatch({ agent_type: " codex-obs ", model: "gpt-5.6-sol" }), PINS) ?? "").includes(OBS_MODEL));
+  assert.ok((validate(spawnDispatch({ agent_type: " codex-obs ", model: "gpt-5.6-sol" }), POLICY) ?? "").includes(OBS_MODEL));
 });
 
 test("a pinned agent dispatched with its pin is allowed", () => {
   assert.equal(validate(spawnDispatch({
-    agent_type: "codex-obs", model: OBS_MODEL, reasoning_effort: "low", fork_turns: "none",
-  }), PINS), null);
+    agent_type: "codex-obs", model: OBS_MODEL, reasoning_effort: "low", fork_turns: "none", message: BRIEF,
+  }), POLICY), null);
+});
+
+test("a codex-obs dispatch with a malformed brief is denied and told the format", () => {
+  const dispatch = (message: string) => validate(spawnDispatch({ agent_type: "codex-obs", model: OBS_MODEL, message }), POLICY) ?? "";
+  assert.match(dispatch("MEASURED by running the tests: all green."), /marks no finding/);
+  assert.match(dispatch("1. measured: ran the tests -> green"), /finding 1 \(measured:\) has no command/);
+  assert.match(dispatch("- measured: `npm test` printed green"), /has no -> after the command/);
+  const reason = dispatch("no markers");
+  assert.ok(reason.includes("measured: `<command>` -> <deciding output excerpt>"), reason);
+  assert.match(reason, /relayed: line/);
+  assert.doesNotMatch(reason, /\[obs: none/, "Codex has no opt-out marker");
+});
+
+test("the brief check binds only the observation agent, named by the manifest", () => {
+  assert.equal(POLICY.observationAgent, "codex-obs");
+  assert.equal(validate(spawnDispatch({ agent_type: "kherep-builder", message: "MEASURED by hand." }), POLICY), null);
+  assert.equal(validate(spawnDispatch({ message: "MEASURED by hand." }), POLICY), null);
+  const renamed = dispatchPolicy({ agents: { "claude-obs": { as: "obs-x", model: OBS_MODEL } } });
+  assert.equal(renamed.observationAgent, "obs-x");
+  assert.match(validate(spawnDispatch({ agent_type: "obs-x", message: "prose" }), renamed) ?? "", /Observation brief format/);
+  assert.equal(validate(spawnDispatch({ agent_type: "codex-obs", message: "prose" }), renamed), null);
+  assert.equal(dispatchPolicy({ agents: {} }).observationAgent, null);
+});
+
+test("the installed guard loads the brief check from its lib sibling and fails closed without it", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-dispatch-guard-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const hookDir = path.join(root, "hooks", "kherep-maestro");
+  fs.mkdirSync(path.join(hookDir, "lib"), { recursive: true });
+  fs.mkdirSync(path.join(root, "hooks", "parity"));
+  const guard = path.join(hookDir, "codex-dispatch-contract-guard.mts");
+  fs.copyFileSync(GUARD, guard);
+  fs.copyFileSync(MANIFEST, path.join(root, "hooks", "parity", "capabilities.json"));
+  const run = (message: string) => spawnSync(process.execPath, [guard], {
+    encoding: "utf8", input: JSON.stringify(spawnDispatch({ agent_type: "codex-obs", model: OBS_MODEL, message })),
+  }).stdout;
+  assert.match(denied(run(BRIEF)), /failed unexpectedly/, "no lib: the observation dispatch is refused");
+  fs.copyFileSync(path.join(REPO, "claude", "hooks", "lib", "obs-brief-policy.mts"), path.join(hookDir, "lib", "obs-brief-policy.mts"));
+  assert.equal(run(BRIEF), "");
+  assert.match(denied(run("All green.")), /Observation brief format/);
 });
 
 test("an unpinned agent keeps the model the Maestro selects from the allowed set", () => {
   assert.equal(PINS.has("kherep-builder"), false);
-  assert.equal(validate(spawnDispatch({ agent_type: "kherep-builder", model: "gpt-5.6-terra" }), PINS), null);
-  assert.equal(validate(spawnDispatch({ agent_type: "kherep-builder" }), PINS), null);
-  assert.match(validate(spawnDispatch({ agent_type: "kherep-builder", model: "opus" }), PINS) ?? "", /Unsupported/);
+  assert.equal(validate(spawnDispatch({ agent_type: "kherep-builder", model: "gpt-5.6-terra" }), POLICY), null);
+  assert.equal(validate(spawnDispatch({ agent_type: "kherep-builder" }), POLICY), null);
+  assert.match(validate(spawnDispatch({ agent_type: "kherep-builder", model: "opus" }), POLICY) ?? "", /Unsupported/);
 });
 
 test("an agent_type that is not a string is refused instead of skipping the pin", () => {
-  assert.match(validate(spawnDispatch({ agent_type: ["codex-obs"], model: "gpt-5.6-sol" }), PINS) ?? "", /agent_type/);
+  assert.match(validate(spawnDispatch({ agent_type: ["codex-obs"], model: "gpt-5.6-sol" }), POLICY) ?? "", /agent_type/);
 });
 
 test("hook input that does not name its tool is refused", () => {
   for (const payload of [null, [], "spawn_agent", 7, {}, { tool_input: {} }, { tool_name: 1 }]) {
-    assert.match(validate(payload, PINS) ?? "", /Malformed hook input/, JSON.stringify(payload));
+    assert.match(validate(payload, POLICY) ?? "", /Malformed hook input/, JSON.stringify(payload));
   }
-  assert.equal(validate({ tool_name: "Read", tool_input: {} }, PINS), null);
+  assert.equal(validate({ tool_name: "Read", tool_input: {} }, POLICY), null);
 });
 
 test("unparseable stdin and an unreadable pin source fail closed", () => {
-  assert.match(decide("{not json", () => PINS) ?? "", /malformed JSON/);
-  assert.match(decide("", () => PINS) ?? "", /malformed JSON/);
+  assert.match(decide("{not json", () => POLICY) ?? "", /malformed JSON/);
+  assert.match(decide("", () => POLICY) ?? "", /malformed JSON/);
   assert.match(decide(JSON.stringify(spawnDispatch({})), () => { throw new Error("gone"); }) ?? "", /pin policy/);
   assert.throws(() => dispatchPins({ agents: { x: { enforcePin: true, model: "opus" } } }), /allowed model/);
   assert.throws(() => dispatchPins({}), /agents/);
@@ -125,7 +169,9 @@ test("the guard process denies malformed stdin and enforces the pin end to end",
   assert.match(denied(runGuard("{not json")), /malformed JSON/);
   assert.match(denied(runGuard("")), /malformed JSON/);
   assert.ok(denied(runGuard(JSON.stringify(spawnDispatch({ agent_type: "codex-obs" })))).includes(OBS_MODEL));
-  assert.equal(runGuard(JSON.stringify(spawnDispatch({ agent_type: "codex-obs", model: OBS_MODEL }))), "");
+  assert.equal(runGuard(JSON.stringify(spawnDispatch({ agent_type: "codex-obs", model: OBS_MODEL, message: BRIEF }))), "");
+  assert.match(denied(runGuard(JSON.stringify(spawnDispatch({ agent_type: "codex-obs", model: OBS_MODEL, message: "All green." })))),
+    /Observation brief format/);
 });
 
 test("the guard's pin map is exactly what the projection writes into the agent TOML", () => {

@@ -125,6 +125,14 @@ test("2b. a 0-byte lib the privacy guard loads through a computed require is res
   assertRestored(ctx, result, "lib/private-path-rules.mts", "claude/hooks/lib/private-path-rules.mts");
 });
 
+test("2c. a 0-byte lib the dispatch guard loads through a computed require is restored", (t) => {
+  const ctx = fixture(t);
+  fs.writeFileSync(path.join(ctx.hookDir, "lib", "obs-brief-policy.mts"), "");
+  const result = run(ctx);
+  assert.match(String(result.context), /lib\/obs-brief-policy\.mts \(imported by [^)]*codex-dispatch-contract-guard\.mts/);
+  assertRestored(ctx, result, "lib/obs-brief-policy.mts", "claude/hooks/lib/obs-brief-policy.mts");
+});
+
 test("3. a missing commit-guard.mts is restored", (t) => {
   const ctx = fixture(t);
   fs.rmSync(path.join(ctx.hookDir, "commit-guard.mts"));

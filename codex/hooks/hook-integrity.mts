@@ -27,13 +27,16 @@ type Restored = { proven: boolean; sha?: string; why?: string };
 type LoadFailure = { rel: string; why: string; loaded: number };
 
 const SELF = "kherep-maestro/codex-hook-integrity.mts";
-const PRIVACY_GUARD = "kherep-maestro/codex-privacy-boundary-guard.mts";
 // privacy-boundary-guard.mts requires workspace-scope and private-path-policy by a
-// computed path the walk cannot see (the other two are the latter's imports), so
-// the walk reads all four as imports of the guard.
-export const ALWAYS_CHECK = ["workspace-scope", "private-path-policy", "private-path-rules", "real-path-policy"]
-  .map((name) => `./lib/${name}.mts`);
-const COMPUTED_IMPORTS = ALWAYS_CHECK.map((specifier) => `\nimport "${specifier}";`).join("");
+// computed path the walk cannot see (the other two are the latter's imports), and
+// dispatch-contract-guard.mts requires obs-brief-policy the same way (issue #331),
+// so the walk reads them as imports of the guard that loads them.
+const COMPUTED: Record<string, string[]> = {
+  "kherep-maestro/codex-privacy-boundary-guard.mts": ["workspace-scope", "private-path-policy", "private-path-rules", "real-path-policy"],
+  "kherep-maestro/codex-dispatch-contract-guard.mts": ["obs-brief-policy"],
+};
+export const ALWAYS_CHECK = Object.values(COMPUTED).flat().map((name) => `./lib/${name}.mts`);
+const computedImports = (rel: string): string => (COMPUTED[rel] || []).map((name) => `\nimport "./lib/${name}.mts";`).join("");
 const RENDERED = new Set(["kherep-maestro/codex-observation-stop.mts", "kherep-maestro/codex-observation-turn-completion.mts"]);
 // Copied from codex/hooks under their own name; every other plain name is a shared Claude guard.
 const CODEX_HELPERS = new Set(["acceptance-policy.mts", "research-common.mts", "research-exec-parser.mts", "research-transcript.mts"]);
@@ -219,7 +222,7 @@ async function main(): Promise<void> {
     const source = sourceOf(rel);
     const text = [file, repoRoot && "from" in source ? lib.joinPathLike(repoRoot, source.from) : ""]
       .map((candidate) => (candidate ? read(candidate) : "")).find((bytes) => typeof bytes !== "string" && bytes.length)?.toString("utf8");
-    return rel === PRIVACY_GUARD ? `${text || ""}${COMPUTED_IMPORTS}` : text || null;
+    return COMPUTED[rel] ? `${text || ""}${computedImports(rel)}` : text || null;
   };
 
   for (const { file, rel, wired: isWired, importedBy } of lib.hookInventory(wired, hooksDir, readSource)) {

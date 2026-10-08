@@ -105,7 +105,13 @@ require; any other finding is marked `relayed:` and names its source: another se
 the operator or a page. A finding of mixed provenance is split into one line of each. `confirmed` on such a page means attested by the
 session that measured it, with the command and excerpt on the page; the agent did not measure it
 again. A `relayed:` finding, or a `measured:` one without its evidence, is `assumed`. The page body
-names the actual reporter, and "operator-reported" appears only when the operator is the source. On
+names the actual reporter, and "operator-reported" appears only when the operator is the source.
+Each finding starts its own line, optionally as a list item, in the form
+`` measured: `<command>` -> <deciding output excerpt> `` or `` relayed: <source> ``. The dispatch
+guard of each runtime checks this before the agent starts: it denies a brief with no marked
+finding, a `measured:` finding without the command in an inline code span or without `->` and an
+excerpt after it, and an empty `relayed:` finding, and its reason names the finding and the format,
+so the session resends in the same turn (issue #331). On
 2026-10-07 and 2026-10-08, before the brief carried these markers, pages 276858041, 277054539 and
 277054566 were filed as assumed and operator-reported although the dispatching session had measured
 each finding in the same turn.

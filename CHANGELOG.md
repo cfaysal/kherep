@@ -159,6 +159,20 @@ increments the minor version; every other release increments the patch version.
   in the same turn were filed as assumed and operator-reported. Both
   `ROUTING.md` files and the three observation hook reasons state the brief
   contract (issue #309).
+- Session observations: both dispatch guards check the brief format before
+  the observation agent starts. A `claude-obs` prompt or a `codex-obs`
+  message is denied when it marks no finding, when a `measured:` finding has
+  no command in an inline code span or no `->` with an excerpt after it, or
+  when a `relayed:` finding is empty; the Claude rule id is `OBS_BRIEF_FORMAT`.
+  The reason names the finding by position and states the exact format, so
+  the session can resend in the same turn. The Claude guard reads the Agent
+  prompt only, never the description. The check lives in the new
+  `claude/hooks/lib/obs-brief-policy.mts`, which the Claude manifest installs
+  and the Codex guard loads from its installed `lib` sibling; Codex hook
+  integrity checks and restores it. The three observation hook reasons and
+  both `ROUTING.md` files now state the exact syntax. Before, only the Stop
+  hooks described the format, so a session that dispatched the agent on its
+  own never saw it (issue #331).
 
 ## [0.2.0] - 2026-10-07
 

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -16,6 +17,27 @@ const DISPATCH_TOOLS = new Set(["Agent", "spawn_agent"]);
 export const CAPABILITIES_FILE = path.join(import.meta.dirname, "..", "parity", "capabilities.json");
 
 export type Pins = ReadonlyMap<string, string>;
+// The pins plus the projected name of the observation agent, whose brief format
+// is checked at dispatch (issue #331); null when the manifest projects none.
+export interface DispatchPolicy {
+  pins: Pins;
+  observationAgent: string | null;
+}
+// The manifest key of the observation agent; the projected name is its `as`.
+const OBSERVATION_ENTRY = "claude-obs";
+
+// The brief check is the Claude hook lib, found the way privacy-boundary-guard.mts
+// finds its libs: beside this file at the install target (hookDir/lib, copied from
+// claude/hooks/lib), else in the checkout under claude/hooks/lib. It is loaded only
+// for an observation dispatch, so a missing lib refuses that dispatch (main fails
+// closed) and no other.
+type ObsBriefPolicy = typeof import("../../claude/hooks/lib/obs-brief-policy.mts");
+const require = createRequire(import.meta.url);
+function obsBriefPolicy(): ObsBriefPolicy {
+  const local = path.join(import.meta.dirname, "lib", "obs-brief-policy.mts");
+  const checkout = path.resolve(import.meta.dirname, "..", "..", "claude", "hooks", "lib", "obs-brief-policy.mts");
+  return require(fs.existsSync(local) ? local : checkout) as ObsBriefPolicy;
+}
 
 function deny(reason: string): void {
   process.stdout.write(JSON.stringify({
@@ -32,6 +54,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+const projectedName = (name: string, entry: Record<string, unknown>): string =>
+  typeof entry.as === "string" && entry.as ? entry.as : name;
+
 export function dispatchPins(capabilities: unknown): Pins {
   const agents = isRecord(capabilities) ? capabilities.agents : undefined;
   if (!isRecord(agents)) throw new Error("The parity manifest has no agents table.");
@@ -41,16 +66,22 @@ export function dispatchPins(capabilities: unknown): Pins {
     if (typeof entry.model !== "string" || !ALLOWED_MODELS.has(entry.model)) {
       throw new Error(`Pinned agent ${name} has no allowed model.`);
     }
-    pins.set(typeof entry.as === "string" && entry.as ? entry.as : name, entry.model);
+    pins.set(projectedName(name, entry), entry.model);
   }
   return pins;
 }
 
-export function loadPins(): Pins {
-  return dispatchPins(JSON.parse(fs.readFileSync(CAPABILITIES_FILE, "utf8")));
+export function dispatchPolicy(capabilities: unknown): DispatchPolicy {
+  const pins = dispatchPins(capabilities);
+  const entry = (capabilities as { agents: Record<string, unknown> }).agents[OBSERVATION_ENTRY];
+  return { pins, observationAgent: isRecord(entry) ? projectedName(OBSERVATION_ENTRY, entry) : null };
 }
 
-export function validate(payload: unknown, pins: Pins): string | null {
+export function loadPolicy(): DispatchPolicy {
+  return dispatchPolicy(JSON.parse(fs.readFileSync(CAPABILITIES_FILE, "utf8")));
+}
+
+export function validate(payload: unknown, { pins, observationAgent }: DispatchPolicy): string | null {
   // codex/lib/parity-config.mts registers this guard for Agent|spawn_agent only, so
   // input that does not name its tool is an unclassifiable dispatch.
   if (!isRecord(payload) || typeof payload.tool_name !== "string") {
@@ -71,19 +102,23 @@ export function validate(payload: unknown, pins: Pins): string | null {
   if (input.reasoning_effort && !(typeof input.reasoning_effort === "string" && ALLOWED_EFFORTS.has(input.reasoning_effort))) {
     return `Unsupported Kherep reasoning effort: ${input.reasoning_effort}`;
   }
+  if (agent && agent === observationAgent) {
+    const policy = obsBriefPolicy();
+    return policy.observationBriefIssue(input.message, policy.CODEX_NOTHING_TO_FILE);
+  }
   return null;
 }
 
-export function decide(raw: string, readPins: () => Pins = loadPins): string | null {
+export function decide(raw: string, readPolicy: () => DispatchPolicy = loadPolicy): string | null {
   let payload: unknown;
   try { payload = JSON.parse(raw); } catch {
     return "Dispatch hook received malformed JSON; refusing an unclassifiable agent dispatch.";
   }
-  let pins: Pins;
-  try { pins = readPins(); } catch {
+  let policy: DispatchPolicy;
+  try { policy = readPolicy(); } catch {
     return "Kherep dispatch pin policy is unreadable; refusing the agent dispatch.";
   }
-  return validate(payload, pins);
+  return validate(payload, policy);
 }
 
 function main(): void {
