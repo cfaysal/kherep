@@ -3,7 +3,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { normalizePathLike } from "./workspace-scope.mts";
+import { hostPath } from "./command-walk.mts";
+import { configuredWorkspace, isWithinPath, normalizePathLike, type EnvLike } from "./workspace-scope.mts";
 
 // Der Plattform-Schalter ist ein Wert aus process.platform, kein freier String:
 // nur "win32" verzweigt, alles andere ist der POSIX-Zweig. Als Union getypt,
@@ -40,4 +41,18 @@ export function canonicalPathLike(value: unknown, platform: Platform = process.p
   } catch {
     return "";
   }
+}
+
+// Issue #346. realpathSync.native expands Windows 8.3 short names
+// (C:\Users\RUNNER~1), which git never reports, and resolves links; the JS
+// realpath keeps short names. A path that does not exist stays as given.
+export function longPath(target: string): string {
+  try { return fs.realpathSync.native(target); } catch { return target; }
+}
+
+// <dir> lies in the configured workspace, compared lexically or canonically:
+// a short name or a link on either side still matches.
+export function isWithinWorkspace(dir: string, env: EnvLike = process.env): boolean {
+  const workspace = hostPath(configuredWorkspace(env));
+  return isWithinPath(dir, workspace) || isWithinPath(longPath(dir), longPath(workspace));
 }
