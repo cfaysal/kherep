@@ -281,7 +281,7 @@ function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
     next, options.node, options.controlPlaneHook, options.startMarker, options.endMarker,
   );
   const currentRenderOptions = { ...withoutOutbox,
-    controlPlaneHook: externalDeliverHooks ? undefined : withoutOutbox.controlPlaneHook,
+    omitDeliveryHooks: externalDeliverHooks,
     outboxWritableRoot: outboxRoot?.managedTable ? outbox : undefined };
   // A block may carry the table for this outbox or for the one an earlier
   // install named, and the current render may have dropped it since.
@@ -294,6 +294,7 @@ function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
       .flatMap((value) => value.messagingClient
         ? [value, { ...value, messagingClient: { ...value.messagingClient, enabled: !value.messagingClient.enabled } }]
         : [value])
+      .flatMap((value) => value.controlPlaneHook ? [value, { ...value, omitDeliveryHooks: true }] : [value])
       .map((value) => ({ ...value, pluginMcpServers: plugins }));
     const beforeControlPlaneWindowsVariants = currentVariants
       .map((value) => ({ ...value, controlPlaneHook: undefined }));

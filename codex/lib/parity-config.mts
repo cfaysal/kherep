@@ -50,6 +50,8 @@ export interface RenderOptions extends McpRenderOptions {
   // The control-plane delivery hook in the checkout (issue #31, step 4). Blocks
   // written before it existed are rendered without it.
   controlPlaneHook?: string;
+  // Exact external delivery groups keep ownership; attribution still needs the checkout.
+  omitDeliveryHooks?: boolean;
   // Legacy renders only: true was the combined macOS Stop hook, false was the
   // separate Windows observation Stop hook. Omitted means quiet observations.
   observationStopHook?: boolean;
@@ -189,7 +191,7 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
     ]),
     group("SubagentStart", ".*", [hook("codex-cbm-reminder.mts")]),
   ];
-  if (options.controlPlaneHook) {
+  if (options.controlPlaneHook && !options.omitDeliveryHooks) {
     // Runs from the checkout, because it imports the modules next to it.
     const deliver: HookSpec = { command: command(node, options.controlPlaneHook, "--runtime", "codex") };
     groups.push(
