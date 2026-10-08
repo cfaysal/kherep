@@ -47,10 +47,16 @@ function git(dir: string, args: string[]): string | null {
   return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
+// realpathSync.native expands Windows 8.3 short names (C:\Users\RUNNER~1),
+// which git never reports; the JS realpath keeps them.
+function longPath(target: string): string {
+  try { return fs.realpathSync.native(target); } catch { return target; }
+}
+
 // The toplevel of the repository <dir> is in, when that lies in the workspace.
 function workspaceToplevel(dir: string, env: NodeJS.ProcessEnv): string | null {
   const toplevel = git(dir, ["rev-parse", "--show-toplevel"]);
-  return toplevel && isWithinPath(toplevel, hostPath(configuredWorkspace(env))) ? toplevel : null;
+  return toplevel && isWithinPath(longPath(toplevel), longPath(hostPath(configuredWorkspace(env)))) ? toplevel : null;
 }
 
 const PR_URL = /https?:\/\/[^\s"'\\]+?\/([^/\s"'\\]+)\/([^/\s"'\\]+)\/pull\/(\d+)/;

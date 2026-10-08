@@ -71,6 +71,24 @@ test("a Claude gh pr create records the PR number from the tool output", () => {
   assert.ok(!fs.readFileSync(d.paths.attribution, "utf8").includes(TITLE), "the PR title is never recorded");
 });
 
+// Windows runners hand out the temp directory as an 8.3 short path while git
+// reports the long one; a workspace named either way must still match.
+test("a workspace given as a Windows short path still scopes the repository", (t) => {
+  if (process.platform !== "win32") return t.skip("8.3 short names exist only on Windows");
+  const long = path.join(root, "long workspace name");
+  fs.mkdirSync(long, { recursive: true });
+  const short = spawnSync("cmd", ["/d", "/s", "/c", `"for %I in ("${long}") do @echo %~sI"`],
+    { encoding: "utf8", windowsVerbatimArguments: true }).stdout.trim();
+  if (!short || short.toLowerCase() === long.toLowerCase() || !fs.existsSync(short)) {
+    return t.skip("this volume has no 8.3 short names");
+  }
+  const dir = repo(long);
+  const d = { ...deps(), env: { KHEREP_WORKSPACE: short } };
+  handleAttributionHook(post(dir, "gh pr create --fill", { stdout: "https://github.com/example/repo/pull/3\n" }),
+    "claude", d);
+  assert.equal(readAttribution(d.paths).length, 1);
+});
+
 test("without a URL in the output the gh pr view fallback names the PR", () => {
   const dir = repo();
   const seen: string[] = [];
