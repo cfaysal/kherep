@@ -11,6 +11,22 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Attribution log: a new git `pre-push` hook beside `commit-msg` records one
+  line per pushed ref in the node's local
+  `<config root>/control-plane/attribution.jsonl` (mode `0600`) for
+  repositories under the workspace, and always exits 0. The session is
+  `CLAUDE_CODE_SESSION_ID`, else `KHEREP_SESSION_ID`, else a marker the Codex
+  `PreToolUse` phase leaves for that repository within 120 seconds, else
+  `unknown`. `gh pr create` never reaches git, so
+  `modules/control-plane/node/attribution-hook.mts` records it at
+  `PostToolUse`, from the checkout, in Claude for Bash and PowerShell and in
+  Codex for the shell tools; the PR number comes from the tool output, else
+  `gh pr view`, else it stays `null`. A record holds ids, owner/name, the
+  toplevel, branch, remote ref, SHA and PR number, never commit subjects, PR
+  text, tokens or the environment; every append drops records older than 90
+  days. `kherep-node attribution [--branch] [--pr] [--repo] [--since <hours>]
+  [--json]` reads it. The token walk of the main-checkout guard moved to
+  `claude/hooks/lib/command-walk.mts` and serves both hooks.
 - Main-checkout guard: a new `PreToolUse` hook, `main-checkout-guard.mts`,
   keeps the main checkout of a workspace repository (git-dir equals
   common-dir) on its default branch, because sessions share it. It blocks

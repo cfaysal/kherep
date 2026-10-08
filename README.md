@@ -40,7 +40,7 @@ Backends and integrations are configured separately. Installing an adapter does 
 
 ## Architecture
 
-Kherep is installed from a source checkout into the configuration homes of the agent runtimes on a host. The installer places rules, hooks, skills, agents and routing, binds the Git `commit-msg` and `post-checkout` hooks and keeps backups. Optional integrations are reached only through configured adapters.
+Kherep is installed from a source checkout into the configuration homes of the agent runtimes on a host. The installer places rules, hooks, skills, agents and routing, binds the Git `commit-msg`, `post-checkout` and `pre-push` hooks and keeps backups. Optional integrations are reached only through configured adapters.
 
 ```mermaid
 flowchart LR
@@ -141,6 +141,7 @@ Keep personal configuration and credentials outside the checkout.
 - **Credentials stay outside the checkout.** Integration configuration lives under an operator-chosen root, and Jira and Confluence writes go through brokers that act as a service account.
 - **The Git `commit-msg` hook is the enforcement boundary for every runtime.** It applies the host's commit policy, including optional work-item keys, and rejects AI attribution trailers. The Claude `commit-guard` hook gives earlier feedback; it does not replace the Git hook.
 - **Claude guards check tool calls before they run.** They keep private paths and local-inference artifacts out of agents, workflows, web and MCP tools; block shell commands whose output is likely to print secrets; require explicit confirmation for production deploys, force pushes and destructive Kubernetes and Helm commands; keep the main checkout of a managed repository on its default branch, so feature work happens in a worktree; and enforce the model policy for agent dispatch. In Codex the shared guards run through the hook adapter, and the Git `post-checkout` hook warns when a main checkout leaves its default branch anyway.
+- **Pushes and pull requests are attributed locally.** The Git `pre-push` hook and a `PostToolUse` hook for `gh pr create` record which session pushed which ref or opened which PR in a host-local log, mode `0600` and trimmed after 90 days. The log holds ids, refs, SHAs and PR numbers, never commit subjects, PR text or tokens, and never leaves the host. Its session ids are what the runtime reported, so they attribute work; they do not authenticate it.
 - **Hook integrity is checked at session start.** Wired hook files that are missing, empty or unloadable are detected and repaired from the versioned source.
 - **Installation is reviewable and reversible.** An isolated preview, managed backups and a drift check precede and follow changes to a live configuration.
 - **The Control Plane authenticates nodes and operators separately.** Nodes hold Ed25519 keys and connect with a signed challenge; the operator API requires a verified Cloudflare Access token; peer messages reach a session only as framed content that is not a user instruction. See the [Control Plane security model](modules/control-plane/README.md#security-model).

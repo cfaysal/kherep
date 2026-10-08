@@ -174,6 +174,18 @@ Fresh measurement and cached results are explicit; connectivity or missing data 
 never evidence that a process stopped. Claude process state remains unknown and its
 remote stop is unsupported until an equivalent live identity check exists.
 
+The attribution log (`attribution.jsonl`, issue #325) is host-local. The git
+`pre-push` hook (`claude/kherep/githooks/attribution-record.mts`) and
+`node/attribution-hook.mts` write it; only `kherep-node attribution` reads it.
+The daemon protocol, the Worker and `sessions.json` never read it, and nothing
+in it leaves the host. A record holds a session id and its source, the runtime,
+owner/name of the repository, the toplevel path, branch, remote ref, SHA and PR
+number; never message text, commit subjects, PR titles or bodies, tokens or the
+environment. Its session id is what the runtime reported to the writing process
+(an environment variable, the hook payload, or a Codex PreToolUse marker), so it
+attributes a push to a session; it does not authenticate one. The file is mode
+`0600`, and every append drops records older than 90 days.
+
 ## Health and doctor
 
 `GET /health` is the one unauthenticated Worker route besides the node
