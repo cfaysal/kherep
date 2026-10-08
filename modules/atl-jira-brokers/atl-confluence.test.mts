@@ -24,7 +24,7 @@ const AUTHOR = "service-account-for-tests";
 // Compared whole: a regex with an unescaped "|" matched this line on any one of
 // its words and so asserted nothing.
 const VERBS = ["create", "update", "get", "delete", "purge", "labels", "move", "space", "children", "related",
-  "search", "context", "orphans", "stitch", "selftest"];
+  "search", "list", "context", "orphans", "stitch", "selftest"];
 const USAGE = `Usage: ${VERBS.join(" | ")}. Run help for the flags of each verb.`;
 
 interface Call {

@@ -31,11 +31,14 @@ function response(status: number, body: unknown): HttpResponse {
 // The space: one shelf (7000) holding two leaves, plus a page elsewhere on the
 // site that the semantic search also proposes.
 const SPACE = { results: [{ id: "9001", key: "KB", name: "Knowledge" }] };
+// Issue #315: enough further leaves that a search can find more than 25.
+const NOTES = Array.from({ length: 120 }, (_, i) => `Note ${String(i + 1).padStart(3, "0")}`);
 const PAGES = {
   results: [
     { id: "7000", title: "Development", parentId: null },
     { id: "7001", title: "Hook ordering in Stop events", parentId: "7000" },
     { id: "7002", title: "Broker verbs and exit codes", parentId: "7000" },
+    ...NOTES.map((title, i) => ({ id: String(8001 + i), title, parentId: "7000" })),
   ],
 };
 const LABELS: Record<string, string[]> = {
@@ -51,10 +54,11 @@ function api(url: string): HttpResponse {
   return response(200, {});
 }
 
-function harness(env: string, semantic: (query: string) => Promise<Proposals>) {
+function harness(env: string, semantic: (query: string, limit?: number) => Promise<Proposals>) {
   const out: string[] = [];
   const err: string[] = [];
   const queries: string[] = [];
+  const limits: (number | undefined)[] = [];
   const injected: Injected = {
     env: { KHEREP_ATL_SITE: SITE, [env]: CRED_PATH },
     async readFile(path) {
@@ -69,25 +73,29 @@ function harness(env: string, semantic: (query: string) => Promise<Proposals>) {
     log: (line) => { out.push(line); },
     logError: (line) => { err.push(line); },
     now: () => 1_000_000,
-    semantic: async (query) => { queries.push(query); return semantic(query); },
+    semantic: async (query, limit) => { queries.push(query); limits.push(limit); return semantic(query, limit); },
   };
-  return { out, err, queries, injected };
+  return { out, err, queries, limits, injected };
 }
 
 const proposing = (...titles: string[]) => async (): Promise<Proposals> => ({ titles });
+// A semantic search that always has more to offer than it is asked for.
+const plenty = async (_query: string, limit = 25): Promise<Proposals> => ({ titles: NOTES.slice(0, limit) });
 
 for (const broker of BROKERS) {
   test(`${broker.name} search prints space hits with evidence label and URL, exit 0`, async () => {
-    const { out, queries, injected } = harness(
+    const { out, queries, limits, injected } = harness(
       broker.env,
       proposing("Somewhere else entirely", "Development", "Hook ordering in Stop events", "Broker verbs and exit codes"),
     );
     const code = await broker.run(["search", "--space", "KB", "--query", "stop hook order"], injected);
     assert.equal(code, 0);
     assert.deepEqual(queries, ["stop hook order"]);
+    assert.deepEqual(limits, [25], "the default asks the semantic search for 25");
     assert.deepEqual(out, [
       `hit\t7001\tHook ordering in Stop events\tevidence-confirmed\t${SITE}/wiki/spaces/KB/pages/7001`,
       `hit\t7002\tBroker verbs and exit codes\tno evidence label\t${SITE}/wiki/spaces/KB/pages/7002`,
+      "truncated: false",
       "count: 2",
       "status: hit",
     ]);
@@ -103,10 +111,37 @@ for (const broker of BROKERS) {
     assert.match(out[0], /^hit\t7002\t/, "the shelf and the foreign page are dropped, order is kept");
   });
 
+  // Issue #315. The limit reaches the semantic search, capped at the twg
+  // maximum of 100, and a proposal set that filled the request says so.
+  test(`${broker.name} search passes --limit to the semantic search and finds more than 25`, async () => {
+    const { out, limits, injected } = harness(broker.env, plenty);
+    assert.equal(await broker.run(["search", "--space", "KB", "--query", "notes", "--limit", "40"], injected), 0);
+    assert.deepEqual(limits, [40]);
+    assert.equal(out.filter((line) => line.startsWith("hit\t")).length, 40);
+    assert.ok(out.includes("truncated: true"), "40 proposals for 40 asked can have been cut");
+    assert.ok(out.includes("count: 40"));
+  });
+
+  test(`${broker.name} search asks for at most 100 and reports a limit above it as truncated`, async () => {
+    const { out, limits, injected } = harness(broker.env, plenty);
+    assert.equal(await broker.run(["search", "--space", "KB", "--query", "notes", "--limit", "200"], injected), 0);
+    assert.deepEqual(limits, [100]);
+    assert.equal(out.filter((line) => line.startsWith("hit\t")).length, 100);
+    assert.ok(out.includes("truncated: true"));
+  });
+
+  test(`${broker.name} search below 25 still asks for 25 and is not truncated when fewer came back`, async () => {
+    const { out, limits, injected } = harness(broker.env, async () => ({ titles: NOTES.slice(0, 24) }));
+    assert.equal(await broker.run(["search", "--space", "KB", "--query", "notes", "--limit", "2"], injected), 0);
+    assert.deepEqual(limits, [25]);
+    assert.ok(out.includes("truncated: false"));
+    assert.ok(out.includes("count: 2"));
+  });
+
   test(`${broker.name} search reports a measured no match with exit 1`, async () => {
     const { out, err, injected } = harness(broker.env, proposing("Development", "Somewhere else entirely"));
     assert.equal(await broker.run(["search", "--space", "KB", "--query", "nothing here"], injected), 1);
-    assert.deepEqual(out, ["count: 0", "status: no match"]);
+    assert.deepEqual(out, ["truncated: false", "count: 0", "status: no match"]);
     assert.deepEqual(err, []);
   });
 
