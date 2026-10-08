@@ -14,13 +14,11 @@ import { pathToFileURL } from "node:url";
 import { CliArgsError, EN, helpText, isHelp, parseVerbArgs, type VerbTable } from "./atlassian-cli-args.mts";
 import { ConfluenceError } from "./confluence-contract.mts";
 import {
-  addLabels,
   createPage,
   deletePage,
   findSpace,
   getPage,
   purgePage,
-  removeLabels,
   representationFor,
   updatePage,
   type Page,
@@ -38,8 +36,8 @@ import {
   cmdStitch,
   type NeighbourCliContext,
 } from "./confluence-neighbour-cli.mts";
+import { cmdLabels, ensureRuntimeLabel } from "./confluence-label-cli.mts";
 import { requireResolvableAnchors } from "./confluence-related.mts";
-import { withRuntimeLabel } from "./confluence-runtime-label.mts";
 import { semanticProposals } from "./confluence-semantic.mts";
 import {
   authenticationReport,
@@ -91,7 +89,7 @@ export const FLAGS = {
   get: { required: { id: "<id>" }, optional: { format: "<storage|adf>" }, valueless: ["body-only"] },
   delete: { required: { id: "<id>" } },
   purge: { required: { id: "<id>" } },
-  labels: { required: { id: "<id>" }, optional: { labels: "<a,b>", remove: "<a,b>" } },
+  labels: { required: { id: "<id>" }, optional: { labels: "<a,b>", remove: "<a,b>", "keep-runtime": "<runtime-label>" } },
   move: { required: { id: "<id>", parent: "<id>" } },
   space: { required: { space: "<key>" } },
   children: { required: { id: "<id>" } },
@@ -145,12 +143,11 @@ async function cmdCreate(ctx: CliContext, args: Args): Promise<number> {
   });
   if (!page.id) fail("create returned no page id, so nothing about it can be verified.");
   printPage(ctx, page);
+  // Every page gets a runtime label, with or without --labels (issue #318).
+  const labelled = await ensureRuntimeLabel(session, page.id, (args.labels ?? "").split(","), CRED_ENV, ctx.env);
+  for (const line of labelled.lines) ctx.log(line);
   // Golden rule 13: the broker's own report is not evidence. The authorship
   // this broker exists to fix is proven by READING THE PAGE BACK.
-  if (args.labels) {
-    const wanted = withRuntimeLabel(args.labels.split(","), CRED_ENV, ctx.env);
-    ctx.log(`labels: ${(await addLabels(session, page.id, wanted)).join(", ") || UNKNOWN}`);
-  }
   const readback = await getPage(session, page.id);
   ctx.log(`readback authorId: ${readback.authorId || UNKNOWN}`);
   if (readback.authorId) return 0;
@@ -195,26 +192,6 @@ async function cmdDelete(ctx: CliContext, args: Args): Promise<number> {
 async function cmdPurge(ctx: CliContext, args: Args): Promise<number> {
   await purgePage(createSession(ctx), args.id ?? "");
   ctx.log("purged: the page is permanently removed.");
-  return 0;
-}
-
-async function cmdLabels(ctx: CliContext, args: Args): Promise<number> {
-  if (args.remove !== undefined) {
-    // The runtime label is computed by the broker; removing it by hand would
-    // make the page's author unattributable.
-    const unwanted = args.remove.split(",").map((name) => name.trim()).filter(Boolean);
-    if (unwanted.some((name) => name.startsWith("runtime-"))) fail("--remove cannot take the runtime label.");
-    const left = await removeLabels(createSession(ctx), args.id ?? "", unwanted);
-    ctx.log(`labels: ${left.join(", ")}`);
-    const stuck = unwanted.filter((name) => left.includes(name));
-    if (stuck.length > 0) fail(`still present: ${stuck.join(", ")}`);
-    if (args.labels === undefined) return 0;
-  }
-  // The runtime half is never taken from the caller, here either: the correcting
-  // verb is exactly where a wrong one would be introduced by hand.
-  const wanted = withRuntimeLabel((args.labels ?? "").split(","), CRED_ENV, ctx.env);
-  const added = await addLabels(createSession(ctx), args.id ?? "", wanted);
-  ctx.log(`labels: ${added.join(", ") || UNKNOWN}`);
   return 0;
 }
 

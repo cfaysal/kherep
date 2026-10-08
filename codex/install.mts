@@ -212,6 +212,7 @@ export function install(options: InstallOptions = {}) {
     confluenceNeighbours: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-neighbours.mts"),
     confluenceNeighbourCli: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-neighbour-cli.mts"),
     confluenceRuntimeLabel: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-runtime-label.mts"),
+    confluenceLabelCli: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-label-cli.mts"),
     codexConfluenceBroker: path.join(repoRoot, "modules", "atl-jira-brokers", "atl-confluence.mts"),
     claudeConfluenceBroker: path.join(repoRoot, "modules", "atl-jira-brokers", "atl-confluence-ccoder.mts"),
   };
@@ -252,6 +253,7 @@ export function install(options: InstallOptions = {}) {
     confluenceNeighbours: path.join(workspace, "tools", "confluence-neighbours.mts"),
     confluenceNeighbourCli: path.join(workspace, "tools", "confluence-neighbour-cli.mts"),
     confluenceRuntimeLabel: path.join(workspace, "tools", "confluence-runtime-label.mts"),
+    confluenceLabelCli: path.join(workspace, "tools", "confluence-label-cli.mts"),
     codexConfluenceBroker: path.join(workspace, "tools", "atl-confluence.mts"),
     claudeConfluenceBroker: path.join(workspace, "tools", "atl-confluence-ccoder.mts"),
     hook: contextHook,
@@ -352,6 +354,7 @@ export function install(options: InstallOptions = {}) {
       [sources.confluenceNeighbours, targets.confluenceNeighbours],
       [sources.confluenceNeighbourCli, targets.confluenceNeighbourCli],
       [sources.confluenceRuntimeLabel, targets.confluenceRuntimeLabel],
+      [sources.confluenceLabelCli, targets.confluenceLabelCli],
       [sources.codexConfluenceBroker, targets.codexConfluenceBroker],
     ] as const) workspaceTransaction.copyFile(source, target);
 
