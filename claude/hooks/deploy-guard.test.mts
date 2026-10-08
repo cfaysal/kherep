@@ -235,6 +235,23 @@ check("named site long flag", "forge install --site example.atlassian.net", true
 check("named site short flag", "forge install -s example.atlassian.net", true, "install on site");
 check("named site with auth", "KHEREP_DEPLOY_AUTH=approved forge install --site example.atlassian.net", false);
 
+// ---- Issue #328: rules 1 and 2 read the arguments of the forge command itself ----
+check("#328 FP: -e production in an echo after a dev deploy", 'forge deploy -e development && echo "-e production"', false);
+check("#328 FP: grep -e production after a dev deploy", "forge deploy -e development; grep -e production log.txt", false);
+check("#328 FP: issue body text after a dev deploy", 'forge deploy -e development && gh issue create --body "deployed -e production"', false);
+check("#328 FP: grep -s after an install without a site", "forge install --environment development && grep -s pattern file", false);
+check("#328 FP: rsync -s after an install without a site", "forge install -e development; rsync -s a b", false);
+check("#328 FP: install -e production next to a dev deploy", "forge deploy -e development && forge install -e production", false);
+check("#328 FN: quoted production", 'forge deploy -e "production"', true, "forge deploy --environment production blocked");
+check("#328 FN: single-quoted --environment", "forge deploy --environment 'production'", true, "forge deploy --environment production blocked");
+check("#328 FN: attached -eproduction", "forge deploy -eproduction", true, "forge deploy --environment production blocked");
+check("#328 FN: quoted site", 'forge install --site "example.atlassian.net"', true, 'install on site "example.atlassian.net"');
+check("#328 FN: forge.cmd", "forge.cmd deploy -e production", true, "forge deploy --environment production blocked");
+check("#328 FN: npx @forge/cli", "npx @forge/cli deploy -e production", true, "forge deploy --environment production blocked");
+check("#328 decision 1: prod alias", "forge deploy -e prod", true, "forge deploy --environment production blocked");
+check("#328 decision 4: install list is read-only", "forge install list --site example.atlassian.net", false);
+check("#328 unparseable command falls back to the legacy regexes", 'forge deploy -e production "unterminated', true, "forge deploy --environment production blocked");
+
 // ---- Fail-safe: non-Bash tool and malformed stdin allow ----
 (function nonBash() {
   const res = spawnSync("node", [HOOK], {

@@ -29,6 +29,7 @@ export interface GitInvocation {
 }
 
 export type ForcePushVerdict = "force" | "none" | "uncertain";
+export type SegmentVerdict = "match" | "none" | "uncertain";
 
 const SEPARATORS = new Set([";", "&", "|", "(", ")", "\n", "`"]);
 const WHITESPACE = /\s/;
@@ -220,28 +221,35 @@ function forcesInSegment(segment: string[]): boolean {
 
 const MAX_DEPTH = 3;
 
-function verdictAt(command: string, depth: number): ForcePushVerdict {
+function verdictAt(command: string, matches: (segment: string[]) => boolean, depth: number): SegmentVerdict {
   const parsed = shellSegments(command);
-  let verdict: ForcePushVerdict = parsed.uncertain ? "uncertain" : "none";
+  let verdict: SegmentVerdict = parsed.uncertain ? "uncertain" : "none";
   for (const segment of parsed.segments) {
-    if (forcesInSegment(segment)) return "force";
+    if (matches(segment)) return "match";
     for (const word of segment) {
       if (!WHITESPACE.test(word)) continue;
       if (depth >= MAX_DEPTH) { verdict = "uncertain"; continue; }
-      const inner = verdictAt(word, depth + 1);
-      if (inner === "force") return "force";
+      const inner = verdictAt(word, matches, depth + 1);
+      if (inner === "match") return "match";
       if (inner === "uncertain") verdict = "uncertain";
     }
   }
   return verdict;
 }
 
-export function forcePushVerdict(command: string): ForcePushVerdict {
+// The scan above for any check of one simple command (#328 reuses it for
+// forge). Never throws: a parser exception is uncertain.
+export function segmentVerdict(command: string, matches: (segment: string[]) => boolean): SegmentVerdict {
   try {
-    return verdictAt(command, 0);
+    return verdictAt(command, matches, 0);
   } catch {
     return "uncertain";
   }
+}
+
+export function forcePushVerdict(command: string): ForcePushVerdict {
+  const verdict = segmentVerdict(command, forcesInSegment);
+  return verdict === "match" ? "force" : verdict;
 }
 
 // The two regexes of rule 5 before #327, unchanged. Rule 5 asks them only when
