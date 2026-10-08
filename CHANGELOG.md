@@ -108,6 +108,22 @@ increments the minor version; every other release increments the patch version.
   given as a Windows 8.3 short name, or reached through a junction or
   symbolic link, is now guarded instead of passing unchecked. Both use the
   shared `isWithinWorkspace()` in `real-path-policy.mts` (issue #346).
+- Deploy guard: the Forge rules only count a flag in the arguments of the
+  same `forge deploy` or `forge install`. Before, they matched `forge deploy`
+  and `-e production`, or `forge install` and `-s`, anywhere in the command,
+  so `forge deploy -e development && grep -e production log.txt`, a dev
+  deploy followed by `forge install -e production`, and an install followed
+  by `rsync -s a b` were blocked. They now also block what they let through:
+  `-e "production"`, `--environment 'production'`, `-eproduction`,
+  `-e prod`, `--site "<site>"`, `forge.cmd`, `forge.exe` and
+  `npx @forge/cli`. A `production*` value still blocks, `forge install list`
+  is read-only, and an install without a site stays allowed. The new
+  `hooks/lib/forge-match.mts` reuses the segment scan of
+  `hooks/lib/git-push-match.mts`, now exported as `segmentVerdict`, so
+  quoted words are still scanned again as shell and quoted text that spells
+  a complete forge command stays blocked. When the command cannot be parsed
+  the old regexes decide, so both rules still fail closed. `forge tunnel`
+  keeps its whole-string rule (issue #328).
 - Control Plane worker: an npm override raises `sharp` from 0.35.4 to
   0.35.5 (CVE-2026-96889, Dependabot alert #12). `miniflare` pins
   `sharp` to exactly 0.35.4, also in its latest release, so Dependabot could
