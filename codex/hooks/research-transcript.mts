@@ -53,7 +53,8 @@ function callsFrom(entry: RecordLike): ToolCall[] {
   if (entry.type !== "response_item" || !["function_call", "custom_tool_call"].includes(String(payload.type))) return [];
   if (typeof payload.name !== "string") return [];
   const input = parsedInput(payload.arguments ?? payload.input ?? {});
-  if (payload.name === "functions.exec" && typeof input === "string") return nestedToolCalls(input);
+  const isExec = payload.name === "functions.exec" || (payload.name === "exec" && payload.namespace === "functions");
+  if (isExec && typeof input === "string") return nestedToolCalls(input);
   return [{ name: payload.name, input }];
 }
 

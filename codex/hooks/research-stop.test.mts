@@ -51,6 +51,19 @@ test("requires both Brain and graph attempts when a repository patch occurred", 
   assert.equal(decision(payload(transcript(started, brain, graph, patch, message("assistant", "done"))), env, exists, config), null);
 });
 
+test("accepts namespaced exec research and still requires research after code changes", () => {
+  const exec = (source: string) => line("response_item", {
+    type: "custom_tool_call", name: "exec", namespace: "functions", input: source,
+  });
+  const brain = 'await tools.exec_command({cmd: "node D:/Work/tools/atl-confluence.mts search --space KB --query hooks"});';
+  const graph = 'await tools.mcp__codebase_memory_mcp__search_graph({query: "hooks"});';
+  const patch = call("apply_patch", "*** Begin Patch\n*** Update File: src/a.mts\n*** End Patch");
+  assert.equal(decision(payload(transcript(started, exec(brain), message("assistant", "done"))), env, exists, config), null);
+  assert.equal(decision(payload(transcript(started, exec(brain + graph), patch, message("assistant", "done"))), env, exists, config), null);
+  assert.ok(decision(payload(transcript(started, exec(brain), patch, message("assistant", "done"))), env, exists, config));
+  assert.ok(decision(payload(transcript(started, exec(graph), patch, message("assistant", "done"))), env, exists, config));
+});
+
 test("accepts only a nonempty opt-out reason in the final assistant message", () => {
   const work = call("exec_command", { cmd: "npm test" });
   assert.equal(decision(payload(transcript(started, work, message("assistant", "[research: none - local mechanical check]"))), env, exists, config), null);
