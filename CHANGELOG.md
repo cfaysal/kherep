@@ -22,6 +22,16 @@ increments the minor version; every other release increments the patch version.
   Confluence or argument error, which prints no `total:`. The space index now
   stops on a cursor that adds no new page, not only on an empty page
   (issue #315).
+- Confluence brokers: `labels --id <page> --keep-runtime <runtime-label>`
+  repairs a page that carries two runtime labels. It deletes the other one,
+  reads the labels back and prints `runtime: kept`, `runtime: removed` and
+  `labels:`; it exits 1 when the removed label is still there. It cannot be
+  combined with `--labels` or `--remove`, and it refuses without writing when
+  the value is not a `runtime-` label, when the page carries one, none or more
+  than two runtime labels, or when the named label is not among them. The
+  `labels` verb now lives in the shared `confluence-label-cli.mts`, which the
+  installers, drift checks and smoke test project beside the brokers
+  (issue #318).
 
 ### Changed
 
@@ -56,6 +66,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Confluence brokers: `labels --id <page>` without `--labels` or `--remove`
+  is read-only. It sends one GET and prints `labels: a, b` or `labels: none`.
+  Before, it posted the computed runtime label, so reading a page from a
+  second host gave it a second runtime label. `labels --labels` reads the page
+  first: an existing runtime label is kept (`runtime: kept <label>`) and only a
+  page without one gets the computed label (`runtime: added <label>`); when
+  nothing but a runtime label would be added to such a page, it refuses with
+  exit 1 and writes nothing. `create` gives every new page the computed
+  runtime label, also without `--labels`; before, a page created without
+  `--labels` carried none (issue #318).
 - Confluence brokers: `search` passes `--limit` to the semantic search as
   `min(max(limit, 25), 100)`, where 100 is the `twg rovo search` maximum.
   Before, the limit never reached it and every search asked for the default

@@ -228,7 +228,7 @@ check_profile() {
   [ -e "$workspace/.claude/settings.local.json" ] || { note_fail "MISSING [$profile] project settings"; }
   [ -e "$workspace/CLAUDE.md" ] || { note_fail "MISSING [$profile] project CLAUDE.md"; }
   # OP-1432. The Confluence set ships with the observation agent: present by default.
-  local confluence_tools=(atlassian-credentials.mts atlassian-cli-args.mts atl-confluence.mts atl-confluence-ccoder.mts confluence-contract.mts confluence-content.mts confluence-session.mts confluence-related.mts confluence-semantic.mts confluence-neighbours.mts confluence-neighbour-cli.mts confluence-runtime-label.mts)
+  local confluence_tools=(atlassian-credentials.mts atlassian-cli-args.mts atl-confluence.mts atl-confluence-ccoder.mts confluence-contract.mts confluence-content.mts confluence-session.mts confluence-related.mts confluence-semantic.mts confluence-neighbours.mts confluence-neighbour-cli.mts confluence-runtime-label.mts confluence-label-cli.mts)
   for tool in "${confluence_tools[@]}"; do
     cmp -s "$TMP/repo/modules/atl-jira-brokers/$tool" "$workspace/tools/$tool" || {
       note_fail "CONFLUENCE BROKER [$profile]: default install did not project $tool";

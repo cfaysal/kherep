@@ -209,6 +209,8 @@ cmp_file "project/tools/confluence-neighbour-cli.mts" \
   "$HERE/../modules/atl-jira-brokers/confluence-neighbour-cli.mts" "$WS/tools/confluence-neighbour-cli.mts"
 cmp_file "project/tools/confluence-runtime-label.mts" \
   "$HERE/../modules/atl-jira-brokers/confluence-runtime-label.mts" "$WS/tools/confluence-runtime-label.mts"
+cmp_file "project/tools/confluence-label-cli.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-label-cli.mts" "$WS/tools/confluence-label-cli.mts"
 # Issue #302. The Jira set is optional, but presence decides: the flag adds it,
 # and a host that has any of its files is compared like a flagged one, so a stale
 # broker cannot hide behind a missing flag. Only these exact names count, never

@@ -640,6 +640,7 @@ test("default install projects observation delivery without optional Jira toolin
     "confluence-neighbours.mts",
     "confluence-neighbour-cli.mts",
     "confluence-runtime-label.mts",
+    "confluence-label-cli.mts",
   ]) {
     const target = path.join(workspace, "tools", name);
     const source = path.join(here, "..", "modules", "atl-jira-brokers", name);
@@ -824,6 +825,7 @@ test("rolls every managed target back when installation fails", (t) => {
     "atlassian-credentials", "atlassian-cli-args", "atl-confluence", "confluence-contract", "confluence-content",
     "confluence-session",
     "confluence-related", "confluence-semantic", "confluence-neighbours", "confluence-neighbour-cli", "confluence-runtime-label",
+    "confluence-label-cli",
   ];
   for (const name of brokerNames) {
     const target = path.join(workspace, "tools", `${name}.mts`);

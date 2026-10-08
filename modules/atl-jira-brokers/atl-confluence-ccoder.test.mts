@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { runCli, type Injected } from "./atl-confluence-ccoder.mts";
+import { runtimeLabel } from "./confluence-runtime-label.mts";
 import type { HttpResponse, RequestOptions } from "./confluence-session.mts";
 
 const BROKER = "atl-confluence-ccoder.mts";
@@ -265,6 +266,7 @@ test(`${BROKER} never prints the secret or the bearer token`, async () => {
     ["update", "--id", "5001", "--body", "x", "--format", "wiki"],
     ["delete", "--id", "5001"],
     ["labels", "--id", "5001", "--labels", "alpha"],
+    ["labels", "--id", "5001", "--keep-runtime", "runtime-claude-code-win"],
     ["move", "--id", "5001", "--parent", "7001"],
     ["space", "--space", "KB"],
     ["children", "--id", "5001"],
@@ -397,6 +399,146 @@ test(`${BROKER} refuses to remove the runtime label before sending anything`, as
   assert.equal(await runCli(["labels", "--id", "5001", "--remove", "runtime-claude-code-win"], injected), 1);
   assert.ok(!calls.some((call) => call.url.includes("/label")), "no label request may be sent");
   assert.match(err.join("\n"), /runtime label/);
+});
+
+// Issue #318. `labels --id` alone used to post the runtime label, so reading a
+// page's labels wrote one, and a page touched from two hosts ended up with two
+// runtime labels. Each test page here keeps its labels in a set that the
+// broker's own writes change, so a read-back sees what the site would show.
+const LABEL_ENV = { KHEREP_ATL_SITE: SITE, [OWN_ENV]: CRED_PATH, KHEREP_PROFILE: "win" };
+const HERE = runtimeLabel(OWN_ENV, { KHEREP_PROFILE: "win" });
+const THERE = runtimeLabel(OWN_ENV, { KHEREP_PROFILE: "mac" });
+
+function labelPage(initial: string[], options: { stuck?: string } = {}) {
+  const labels = new Set(initial);
+  const listed = () => response(200, { results: [...labels].map((name) => ({ name })) });
+  return (call: Call): HttpResponse => {
+    const method = call.options?.method;
+    const removed = /\/label\?name=([^&]+)$/.exec(call.url)?.[1];
+    if (method === "DELETE" && removed) {
+      const name = decodeURIComponent(removed);
+      if (name !== options.stuck) labels.delete(name);
+      return response(204, null);
+    }
+    if (method === "POST" && call.url.endsWith("/label")) {
+      for (const row of JSON.parse(String(call.options?.body)) as { name: string }[]) labels.add(row.name);
+      return listed();
+    }
+    if (call.url.includes("/pages/5001/labels")) return listed();
+    return defaultApi(call);
+  };
+}
+
+function labelWrites(calls: Call[]): Call[] {
+  return calls.filter((call) => (call.options?.method === "POST" || call.options?.method === "DELETE")
+    && call.url.includes("/label"));
+}
+
+function postedNames(calls: Call[]): string[] {
+  const posts = labelWrites(calls).filter((call) => call.options?.method === "POST");
+  assert.equal(posts.length, 1, "exactly one label write was expected");
+  return (JSON.parse(String(posts[0].options?.body)) as { name: string }[]).map((row) => row.name);
+}
+
+test(`${BROKER} labels --id alone reads the labels with one GET and writes nothing`, async () => {
+  for (const [initial, line] of [[["type-observation", HERE], `labels: type-observation, ${HERE}`], [[], "labels: none"]] as const) {
+    const { out, err, calls, injected } = harness({ env: LABEL_ENV, api: labelPage([...initial]) });
+    assert.equal(await runCli(["labels", "--id", "5001"], injected), 0);
+    assert.deepEqual(labelWrites(calls), [], "a read must not write a label");
+    assert.equal(calls.filter((call) => call.url.includes("/pages/5001/labels")).length, 1);
+    assert.deepEqual(out, [line]);
+    assert.deepEqual(err, []);
+  }
+});
+
+test(`${BROKER} labels --labels keeps an existing runtime label and does not add a second`, async () => {
+  const { out, calls, injected } = harness({ env: LABEL_ENV, api: labelPage(["type-observation", THERE]) });
+  assert.equal(await runCli(["labels", "--id", "5001", "--labels", `alpha,${HERE}`], injected), 0);
+  assert.deepEqual(postedNames(calls), ["alpha"], "the caller's runtime label is stripped, the computed one withheld");
+  const read = calls.findIndex((call) => call.url.includes("/pages/5001/labels"));
+  const write = calls.indexOf(labelWrites(calls)[0]);
+  assert.ok(read >= 0 && read < write, "the labels must be read before the write");
+  assert.ok(out.includes(`runtime: kept ${THERE}`), out.join("\n"));
+  assert.match(out.join("\n"), /^labels: .*\balpha\b/m);
+});
+
+test(`${BROKER} labels --labels adds the computed runtime label when the page has none`, async () => {
+  const { out, calls, injected } = harness({ env: LABEL_ENV, api: labelPage(["type-observation"]) });
+  assert.equal(await runCli(["labels", "--id", "5001", "--labels", "alpha,runtime-forged"], injected), 0);
+  assert.deepEqual(postedNames(calls), ["alpha", HERE]);
+  assert.ok(out.includes(`runtime: added ${HERE}`), out.join("\n"));
+});
+
+test(`${BROKER} labels --labels refuses when only a runtime label is left to add and one exists`, async () => {
+  const { err, calls, injected } = harness({ env: LABEL_ENV, api: labelPage([THERE]) });
+  assert.equal(await runCli(["labels", "--id", "5001", "--labels", HERE], injected), 1);
+  assert.deepEqual(labelWrites(calls), []);
+  assert.match(err.join("\n"), /nothing to add/);
+});
+
+test(`${BROKER} create without --labels still gets the computed runtime label`, async () => {
+  const { out, calls, injected } = harness({ env: LABEL_ENV, api: labelPage([]) });
+  const argv = ["create", "--space", "KB", "--title", "New page", "--body", "<p>x</p>", "--format", "storage"];
+  assert.equal(await runCli(argv, injected), 0);
+  assert.deepEqual(postedNames(calls), [HERE]);
+  assert.ok(out.includes(`runtime: added ${HERE}`), out.join("\n"));
+});
+
+test(`${BROKER} create with --labels posts them together with the computed runtime label`, async () => {
+  const { calls, injected } = harness({ env: LABEL_ENV, api: labelPage([]) });
+  const argv = ["create", "--space", "KB", "--title", "New page", "--body", "<p>x</p>", "--format", "storage",
+    "--labels", "alpha,runtime-forged"];
+  assert.equal(await runCli(argv, injected), 0);
+  assert.deepEqual(postedNames(calls), ["alpha", HERE]);
+});
+
+test(`${BROKER} --keep-runtime removes the other runtime label and proves it by reading back`, async () => {
+  const { out, err, calls, injected } = harness({ env: LABEL_ENV, api: labelPage(["type-observation", HERE, THERE]) });
+  assert.equal(await runCli(["labels", "--id", "5001", "--keep-runtime", THERE], injected), 0);
+  assert.deepEqual(labelWrites(calls).map((call) => `${call.options?.method} ${call.url.replace(/^.*\/wiki/, "/wiki")}`),
+    [`DELETE /wiki/rest/api/content/5001/label?name=${HERE}`]);
+  assert.deepEqual(out, [`runtime: kept ${THERE}`, `runtime: removed ${HERE}`, `labels: type-observation, ${THERE}`]);
+  assert.deepEqual(err, []);
+});
+
+test(`${BROKER} --keep-runtime fails when the removed runtime label is still there afterwards`, async () => {
+  const { out, err, injected } = harness({ env: LABEL_ENV, api: labelPage([HERE, THERE], { stuck: HERE }) });
+  assert.equal(await runCli(["labels", "--id", "5001", "--keep-runtime", THERE], injected), 1);
+  assert.match(err.join("\n"), new RegExp(`still present: ${HERE}`));
+  assert.ok(!out.includes(`runtime: removed ${HERE}`), "a label that is still there was not removed");
+});
+
+test(`${BROKER} --keep-runtime refuses every case that is not the known two-label fault`, async () => {
+  const cases: { name: string; initial: string[]; argv: string[]; error: RegExp; noRequest?: boolean }[] = [
+    { name: "one runtime label", initial: ["type-observation", HERE], argv: ["--keep-runtime", HERE],
+      error: /one runtime label: nothing to repair/ },
+    { name: "no runtime label", initial: ["type-observation"], argv: ["--keep-runtime", HERE],
+      error: /nothing to repair/ },
+    { name: "keep label absent", initial: [HERE, THERE], argv: ["--keep-runtime", "runtime-other-win"],
+      error: /runtime-other-win is not on the page/ },
+    { name: "more than two", initial: [HERE, THERE, "runtime-other-win"], argv: ["--keep-runtime", HERE],
+      error: /not the known fault/ },
+    { name: "non-runtime value", initial: [HERE, THERE], argv: ["--keep-runtime", "type-observation"],
+      error: /--keep-runtime takes a runtime- label/, noRequest: true },
+    { name: "with --labels", initial: [HERE, THERE], argv: ["--keep-runtime", HERE, "--labels", "alpha"],
+      error: /--keep-runtime cannot be combined/, noRequest: true },
+    { name: "with --remove", initial: [HERE, THERE], argv: ["--remove", "alpha", "--keep-runtime", HERE],
+      error: /--keep-runtime cannot be combined/, noRequest: true },
+  ];
+  for (const { name, initial, argv, error, noRequest } of cases) {
+    const { err, calls, injected } = harness({ env: LABEL_ENV, api: labelPage(initial) });
+    assert.equal(await runCli(["labels", "--id", "5001", ...argv], injected), 1, name);
+    assert.deepEqual(labelWrites(calls), [], `${name} wrote a label`);
+    if (noRequest) assert.deepEqual(calls, [], `${name} sent a request`);
+    assert.match(err.join("\n"), error, name);
+  }
+});
+
+test(`${BROKER} help names the --keep-runtime repair flag`, async () => {
+  const { out, injected } = harness();
+  assert.equal(await runCli(["help"], injected), 0);
+  assert.ok(out.includes("  labels --id <id> [--labels <a,b>] [--remove <a,b>] [--keep-runtime <runtime-label>]"),
+    out.join("\n"));
 });
 
 // get --body-only prints the page body and nothing else to stdout, so

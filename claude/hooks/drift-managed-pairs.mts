@@ -147,6 +147,10 @@ export function fixedPairs(home: string, workspace: string): ManagedPair[] {
       live: joinPathLike(workspace, "tools/confluence-runtime-label.mts"),
       source: "modules/atl-jira-brokers/confluence-runtime-label.mts",
     },
+    {
+      live: joinPathLike(workspace, "tools/confluence-label-cli.mts"),
+      source: "modules/atl-jira-brokers/confluence-label-cli.mts",
+    },
   ]);
 }
 
