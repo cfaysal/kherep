@@ -4,7 +4,7 @@
 //   - forge deploy --environment production / -e production
 //   - npm/pnpm/yarn production-deploy wrappers (for example deploy:jira:prod)
 //   - forge install on any named site
-//   - git force-push (--force / -f / --force-with-lease)
+//   - git force-push (--force / -f / --force-with-lease / +refspec)
 //   - kubectl apply (mutates the live cluster)
 //   - destructive kubectl verbs: delete, drain, cordon, uncordon, taint,
 //     replace, edit, patch, rollout undo (OP-1045; rollout restart stays allowed)
@@ -13,6 +13,7 @@
 // Rationale: CLAUDE.md (project-level) requires dev-deploy-first + explicit user OK for prod.
 
 import fs from 'node:fs';
+import { forcePushVerdict, legacyForcePush } from './lib/git-push-match.mts';
 
 // The fields this hook reads from a PreToolUse payload.
 interface ToolPayload {
@@ -145,17 +146,17 @@ function explicitlyApprovesProductionDeploy(text: string): boolean {
     violations.push('forge tunnel blocked. CLAUDE.md forbids it without explicit user request.');
   }
 
-  // 5. git force-push - rewrites shared remote history. Block --force / -f /
-  // --force-with-lease. Word-boundary on -f so --set-upstream, --follow-tags,
-  // -u etc. never match. Bypass via the same deploy-auth token.
-  if (/\bgit\s+push\b/.test(cmd)) {
-    const isForce =
-      /(^|\s)--force(-with-lease)?(=\S+)?(\s|$)/.test(cmd) || /(^|\s)-f(\s|$)/.test(cmd);
-    if (isForce && !hasDeployAuth) {
-      violations.push(
-        'git force-push blocked. Rewrites shared remote history. Bypass with KHEREP_DEPLOY_AUTH=approved once user approved.'
-      );
-    }
+  // 5. git force-push - rewrites shared remote history. Only a force flag in the
+  // arguments of the same `git push` counts (issue #327): --force,
+  // --force-with-lease, a short cluster with f, or a +refspec. Quoted words and
+  // heredoc bodies are scanned again as shell. When the parse is uncertain the
+  // pre-#327 regexes decide, so it fails closed. Bypass via the deploy-auth token.
+  const pushVerdict = forcePushVerdict(cmd);
+  const isForce = pushVerdict === 'force' || (pushVerdict === 'uncertain' && legacyForcePush(cmd));
+  if (isForce && !hasDeployAuth) {
+    violations.push(
+      'git force-push blocked. Rewrites shared remote history. Bypass with KHEREP_DEPLOY_AUTH=approved once user approved.'
+    );
   }
 
   // 6. kubectl apply - mutates the live cluster (also when ssh-wrapped, the

@@ -31,6 +31,8 @@ hooks/lib/dispatch-policy.mts
 hooks/lib/obs-brief-policy.mts
 hooks/lib/obs-brief-policy.test.mts
 hooks/lib/git-commit-match.mts
+hooks/lib/git-push-match.mts
+hooks/lib/git-push-match.test.mts
 hooks/lib/main-checkout.mts
 hooks/lib/main-checkout.test.mts
 hooks/lib/private-path-policy.mts
