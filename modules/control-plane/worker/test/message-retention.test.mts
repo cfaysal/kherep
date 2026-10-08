@@ -217,11 +217,12 @@ describe("rows stored before this version", () => {
     expect(await nextMessageStatus(back, { messageId: old, state: "delivered" })).toEqual({ messageId: old, state: "delivered" });
     ack(back, old, "delivered");
     await sync(back);
-    // The alarm expires the operator row without a fallback deadline, and does
-    // not sweep a deadline written by hand.
+    // The alarm expires the operator row without a fallback deadline, and clears
+    // a deadline written by hand instead of sweeping it or re-arming on it.
     await query((sql) => sql.exec("UPDATE messages SET delete_after = 1 WHERE id = ?", old));
     await runInDurableObject(registry(), (instance) => instance.alarm());
-    await query((sql) => sql.exec("UPDATE messages SET delete_after = NULL WHERE id = ?", old));
+    const rearmed = await runInDurableObject(registry(), (_i, state) => state.storage.getAlarm());
+    expect(rearmed === null || rearmed > Date.now() - 1000).toBe(true);
     expect(await row(queued)).toMatchObject({ state: "expired", delete_after: null, deletable: null });
     expect(await registry().revoke(a.nodeId, "test")).not.toBeNull();
     await runInDurableObject(registry(), (instance) => instance.alarm());
