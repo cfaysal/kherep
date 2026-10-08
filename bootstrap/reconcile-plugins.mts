@@ -23,6 +23,7 @@ import {
   verifyFinalState,
   type ClaudeState,
   type MarketplaceExpectation,
+  type PluginEntry,
 } from "./plugin-contract.mts";
 import { errorStatus, isArgvList, isRecord } from "./shape.mts";
 
@@ -118,13 +119,33 @@ function runClaudeJson(command: ClaudeCommand, args: string[], label: string): u
   return parsed;
 }
 
+// A plugin scope this installer does not manage is reported once per scope,
+// although the list is re-read after every mutator (issue #338). Scope and
+// ids passed the contract's safe-string checks; no path is printed.
+const reportedScopes = new Set<string>();
+
+function warnUnmanagedScopes(entries: PluginEntry[]): void {
+  const idsByScope = new Map<string, string[]>();
+  for (const entry of entries) {
+    idsByScope.set(entry.scope, [...(idsByScope.get(entry.scope) ?? []), entry.id]);
+  }
+  for (const [scope, ids] of idsByScope) {
+    if (reportedScopes.has(scope)) continue;
+    reportedScopes.add(scope);
+    process.stdout.write(`reconcile-plugins: skipping plugin scope ${scope}: ${ids.join(", ")} (not managed here)\n`);
+  }
+}
+
 function readState(command: ClaudeCommand): ClaudeState {
   const marketplaces = parseMarketplaceList(
     runClaudeJson(command, ["plugin", "marketplace", "list", "--json"], "marketplace list"),
   );
+  const unmanaged: PluginEntry[] = [];
   const plugins = parsePluginList(
     runClaudeJson(command, ["plugin", "list", "--json"], "plugin list"),
+    (entry) => unmanaged.push(entry),
   );
+  warnUnmanagedScopes(unmanaged);
   return { marketplaces, plugins };
 }
 
