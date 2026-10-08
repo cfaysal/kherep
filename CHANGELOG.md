@@ -86,6 +86,14 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane worker: an npm override raises `sharp` from 0.35.4 to
+  0.35.5 (CVE-2026-96889, Dependabot alert #12). `miniflare` pins
+  `sharp` to exactly 0.35.4, also in its latest release, so Dependabot could
+  not raise it on its own. The override can go once `miniflare` requires a
+  patched `sharp`. `sharp` is a development dependency only and is not part
+  of the deployed Worker. `@cloudflare/workers-types` moves to
+  5.20261008.1, the peer range `wrangler` 4.148.0 asks for; without it the
+  lockfile could not be regenerated (issue #343).
 - Deploy guard: the force-push rule only counts a force flag in the
   arguments of the same `git push`. Before, it matched `git push` and a force
   flag anywhere in the command, so `gh api … -f body=x && git push origin
