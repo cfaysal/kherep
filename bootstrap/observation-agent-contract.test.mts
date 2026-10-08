@@ -182,6 +182,14 @@ test("both routing files treat OBS-RESULT: failed as a failure, not an empty res
   }
 });
 
+// Issue #326. A SubagentStop hook checks the status line; both texts name it.
+test("the Claude text and the Claude routing name the hook that checks the status line", () => {
+  assert.match(CLAUDE_OBS, /SubagentStop hook `obs-result-check`/);
+  const routing = fs.readFileSync(path.join(REPO, "claude", "teams", "kherep", "ROUTING.md"), "utf8");
+  const section = routing.slice(routing.indexOf("## Session observations"), routing.indexOf("## Linking"));
+  assert.match(section, /SubagentStop hook\s+`obs-result-check`/);
+});
+
 // Issue #280. On Windows the agent wrote its body file to the backslash
 // scratchpad path from Bash; Bash ate the backslashes, MSYS mapped the colon
 // to U+F03A, and the page body landed in the caller's checkout. Every text

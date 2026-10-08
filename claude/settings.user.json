@@ -203,6 +203,17 @@
           }
         ]
       }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "claude-obs",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/obs-result-check.mts\""
+          }
+        ]
+      }
     ]
   },
   "attribution": {

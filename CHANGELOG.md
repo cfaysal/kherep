@@ -11,6 +11,17 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Observation result check: a new `SubagentStop` hook, `obs-result-check.mts`,
+  wired with matcher `claude-obs`, checks the agent's `OBS-RESULT` status line
+  through `claude/hooks/lib/obs-result-policy.mts`. The first non-empty line is
+  the only `OBS-RESULT` line; `wrote <n> <ids>` needs n positive and exactly n
+  numeric ids; `empty` and `failed` need a reason whose first word is no status
+  word, which catches `failed wrote 4 pages: ...`. A malformed line is sent
+  back to the agent once with a fixed instruction (`decision: "block"`); on the
+  continuation, and for a valid `failed`, the operator gets a `systemMessage`
+  instead. The message comes from `last_assistant_message`, else the agent
+  transcript. No message text reaches stdout, and any error is one
+  `systemMessage` with exit 0.
 - Attribution log: a new git `pre-push` hook beside `commit-msg` records one
   line per pushed ref in the node's local
   `<config root>/control-plane/attribution.jsonl` (mode `0600`) for
