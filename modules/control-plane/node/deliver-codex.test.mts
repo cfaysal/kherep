@@ -114,7 +114,13 @@ test("Stop confirms, then continues with the fixed text only while new messages 
   const late = inbox(paths, 2);
   const text = stop(paths);
   assert.equal(JSON.parse(text).decision, "block");
-  assert.equal(JSON.parse(text).reason, CODEX_STOP_REASON + "\n" + CLI + " msg inbox --from " + SELF + " --receive\n" + CODEX_ESCALATION_NOTE);
+  const reason: string = JSON.parse(text).reason;
+  assert.equal(reason, CODEX_STOP_REASON + "\n" + CLI + " msg inbox --from " + SELF + " --receive\n" + CODEX_ESCALATION_NOTE);
+  // The desktop app shows the reason under "Blocked · Stop · User · Feedback" (issue #359).
+  assert.ok(reason.split("\n")[0].startsWith("Kherep message delivery (not an error):"), "the first line names Kherep delivery");
+  assert.ok(reason.includes(`${CLI} msg inbox --from ${SELF} --receive`));
+  assert.ok(reason.includes(CODEX_ESCALATION_NOTE));
+  assert.ok(Buffer.byteLength(reason) <= CODEX_CONTEXT_BYTES);
   assert.doesNotMatch(text, new RegExp(SECRET));
   assert.doesNotMatch(text, new RegExp(late));
   assert.equal(getMessage(paths.inbox, late)?.state, "accepted", "retrieval or the next UserPromptSubmit offers it");
