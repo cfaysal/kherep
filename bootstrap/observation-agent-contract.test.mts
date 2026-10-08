@@ -49,6 +49,13 @@ test("the Claude text takes the broker only from confluence.json, verbatim", () 
   assert.match(CLAUDE_OBS, /`broker` but no\s+`spaceKey`[\s\S]{0,120}`OBS-RESULT: failed no space configured`/);
 });
 
+// Issue #363. A shell read of confluence.json was denied by the auto-mode
+// classifier; the host allows exactly a Read of that file.
+test("the Claude text reads confluence.json with the Read tool, never a shell command", () => {
+  assert.match(CLAUDE_OBS, /`<Claude home>\/kherep\/`/);
+  assert.match(CLAUDE_OBS, /with the Read tool at that fixed absolute path[\s\S]{0,120}never with `cat` or any other shell command/);
+});
+
 test("the Claude text mentions the Codex broker only to prohibit it", () => {
   const lines = CLAUDE_OBS.split(/\r?\n/).filter((line) => line.includes("atl-confluence.mts"));
   assert.ok(lines.length >= 1, "the prohibition of atl-confluence.mts is missing");
