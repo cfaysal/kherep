@@ -297,3 +297,54 @@ test("fresh final snapshot rejects a vanished or unusable installPath", (t) => {
   assert.match(output(result), /required plugin is not usable/);
   assert.deepEqual(mutations(ctx), []);
 });
+
+// Scopes Kherep does not manage (issue #338). `synced` rows come from claude.ai
+// and are read for duplicate detection only; an unknown scope is skipped with
+// one warning. Neither ever receives a mutator.
+function syncedRow(ctx: Fixture, id: string, scope = "synced"): Plugin {
+  return { ...ctx.plugin, id, scope, installPath: path.join(ctx.files.root, "synced", id) };
+}
+
+test("synced rows reconcile without FATAL, without a warning and without a mutator", (t) => {
+  const ctx = fixture(t);
+  ctx.state.plugins.push(syncedRow(ctx, "design@synced"), syncedRow(ctx, "forge-skills@synced"));
+  ctx.save();
+  const result = invoke(ctx);
+  assert.equal(result.status, 0, output(result));
+  assert.deepEqual(mutations(ctx), []);
+  assert.doesNotMatch(output(result), /malformed|not managed/);
+});
+
+test("an unknown future scope is skipped with one warning naming scope and id", (t) => {
+  const ctx = fixture(t);
+  ctx.state.plugins.push(syncedRow(ctx, "beta@org", "org"), syncedRow(ctx, "gamma@org", "org"));
+  ctx.save();
+  const result = invoke(ctx);
+  assert.equal(result.status, 0, output(result));
+  assert.deepEqual(mutations(ctx), []);
+  const warnings = output(result).split(/\r?\n/).filter((line) => /not managed/.test(line));
+  assert.equal(warnings.length, 1, output(result));
+  assert.match(warnings[0], /scope org: beta@org, gamma@org/);
+});
+
+test("a malformed row stays fatal before any mutator", (t) => {
+  const ctx = fixture(t);
+  ctx.state.plugins = [{ ...syncedRow(ctx, "design@synced"), scope: 42 as unknown as string }];
+  ctx.save();
+  const result = invoke(ctx);
+  assert.notEqual(result.status, 0);
+  assert.match(output(result), /malformed entry/);
+  assert.deepEqual(mutations(ctx), []);
+});
+
+test("a declared plugin present only as a synced row gets its own user-scope install; the synced row is untouched", (t) => {
+  const ctx = fixture(t);
+  const synced = syncedRow(ctx, "alpha@main");
+  ctx.state.plugins = [synced];
+  ctx.save();
+  const result = invoke(ctx);
+  assert.equal(result.status, 0, output(result));
+  assert.deepEqual(mutations(ctx), [["plugin", "install", "--scope", "user", "alpha@main"]]);
+  const final = JSON.parse(fs.readFileSync(ctx.files.state, "utf8")) as FakeState;
+  assert.deepEqual(final.plugins.filter((item) => item.scope === "synced"), [synced]);
+});

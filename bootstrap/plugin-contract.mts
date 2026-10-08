@@ -5,7 +5,14 @@ import { isRecord } from "./shape.mts";
 
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SAFE_REPO = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const VALID_SCOPES = new Set(["user", "project", "local"]);
+// Scopes Claude reports and this contract knows. Kherep mutates only `user`
+// (see userPluginEntry); `project`, `local` and `synced` rows are read for
+// duplicate detection and never installed, enabled or removed. `synced` is
+// written by claude.ai (issue #338). A declared plugin present only in one of
+// those scopes still gets its own user-scope copy: Kherep must not touch the
+// other row, so it cannot otherwise keep the plugin usable. A well-formed row
+// with any other scope is handed to the caller and skipped.
+const KNOWN_SCOPES = new Set(["user", "project", "local", "synced"]);
 
 export class ReconcileError extends Error {
   constructor(message: string) {
@@ -131,7 +138,7 @@ function isMarketplaceEntry(entry: unknown): entry is MarketplaceEntry {
 }
 
 function isPluginEntry(entry: unknown): entry is PluginEntry {
-  return isRecord(entry) && safeString(entry.id) && typeof entry.scope === "string" && VALID_SCOPES.has(entry.scope)
+  return isRecord(entry) && safeString(entry.id) && safeString(entry.scope) && SAFE_NAME.test(entry.scope)
     && typeof entry.enabled === "boolean" && safeString(entry.installPath);
 }
 
@@ -146,11 +153,20 @@ export function parseMarketplaceList(raw: unknown): Map<string, MarketplaceEntry
   return byName;
 }
 
-export function parsePluginList(raw: unknown): Map<string, PluginEntry> {
+// `onUnmanaged` receives each well-formed row whose scope is not known; the
+// row is left out of the result so no lookup can act on it.
+export function parsePluginList(
+  raw: unknown,
+  onUnmanaged: (entry: PluginEntry) => void = () => {},
+): Map<string, PluginEntry> {
   if (!Array.isArray(raw)) fail("Claude plugin list JSON must be an array");
   const byIdAndScope = new Map<string, PluginEntry>();
   for (const entry of raw as unknown[]) {
     if (!isPluginEntry(entry)) fail("Claude plugin list contains a malformed entry");
+    if (!KNOWN_SCOPES.has(entry.scope)) {
+      onUnmanaged(entry);
+      continue;
+    }
     const key = `${entry.id}\0${entry.scope}`;
     if (byIdAndScope.has(key)) fail("Claude plugin list contains a duplicate id/scope entry");
     byIdAndScope.set(key, entry);
