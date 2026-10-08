@@ -101,8 +101,7 @@ export async function cmdSearch(ctx: NeighbourCliContext, args: NeighbourArgs): 
     const limit = positive(args.limit, "--limit") ?? 3;
     const deps = await neighbourDeps(ctx, args);
     const index = await spaceIndex(deps.session, deps.spaceId);
-    // Issue #315. One ranked twg page of at most 100 proposals and no total, so
-    // a set that filled the request, or a limit above it, may have been cut.
+    // Issue #315: one ranked twg page of at most 100 proposals and no total.
     const asked = Math.min(Math.max(limit, 25), 100);
     const proposed = await deps.semantic(query, asked);
     if (proposed.error) {
@@ -110,10 +109,12 @@ export async function cmdSearch(ctx: NeighbourCliContext, args: NeighbourArgs): 
       throw new ConfluenceError("Nothing was searched, so nothing was found. This result is UNKNOWN, not zero.");
     }
     const hits = new Map<string, string>();
+    let more = false; // a further leaf page of the space matched beyond --limit
     for (const title of proposed.titles) {
-      if (hits.size >= limit) break;
       const page = index.byTitle.get(title.trim().toLowerCase());
-      if (page && !index.parents.has(page.id)) hits.set(page.id, page.title);
+      if (!page || index.parents.has(page.id) || hits.has(page.id)) continue;
+      if (hits.size >= limit) { more = true; break; }
+      hits.set(page.id, page.title);
     }
     const base = `${siteOrigin(ctx.env)}/wiki/spaces/${encodeURIComponent(deps.spaceKey)}/pages`;
     for (const [id, title] of hits) {
@@ -122,7 +123,7 @@ export async function cmdSearch(ctx: NeighbourCliContext, args: NeighbourArgs): 
         .catch(() => "evidence UNKNOWN - labels not readable");
       ctx.log(`hit\t${id}\t${title}\t${evidence}\t${base}/${id}`);
     }
-    ctx.log(`truncated: ${proposed.titles.length >= asked || limit > asked}`);
+    ctx.log(`truncated: ${more || proposed.titles.length >= asked || limit > asked}`);
     ctx.log(`count: ${hits.size}`);
     ctx.log(`status: ${hits.size ? "hit" : "no match"}`);
     return hits.size ? 0 : 1;
