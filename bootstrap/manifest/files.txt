@@ -28,6 +28,7 @@ hooks/research-stop.test.mts
 hooks/dispatch-contract-guard.mts
 hooks/dispatch-contract-guard.test.mts
 hooks/lib/dispatch-policy.mts
+hooks/lib/command-walk.mts
 hooks/lib/obs-brief-policy.mts
 hooks/lib/obs-brief-policy.test.mts
 hooks/lib/git-commit-match.mts
