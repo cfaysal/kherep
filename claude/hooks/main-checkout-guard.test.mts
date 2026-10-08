@@ -58,7 +58,8 @@ function run(command: string, { cwd = main, tool = "Bash", env = {} }:
 
 function assertBlocked(result: Run, label: string): void {
   assert.equal(result.status, 2, `${label} must be blocked; stderr: ${result.stderr}`);
-  assert.match(result.stderr, /^main-checkout-guard blocked this command:/, label);
+  // Line-anchored: Node 24.1 prints its type-stripping ExperimentalWarning first.
+  assert.match(result.stderr, /^main-checkout-guard blocked this command:/m, label);
   assert.match(result.stderr, /git worktree add <path> -b <branch>/, label);
 }
 
