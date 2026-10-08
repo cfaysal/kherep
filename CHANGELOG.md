@@ -86,6 +86,21 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Deploy guard: the force-push rule only counts a force flag in the
+  arguments of the same `git push`. Before, it matched `git push` and a force
+  flag anywhere in the command, so `gh api … -f body=x && git push origin
+  feat`, `git push origin main && npm cache clean --force`, `grep -f … && echo
+  'see git push docs'` and a broker call whose quoted page text mentioned
+  `git push` next to its own `-f` were blocked. It now also blocks force
+  pushes it let through: `git -C <dir> push -f`, `git -c k=v push -f`,
+  `git --git-dir … push -f`, `git push -fu`, `git push origin +main`,
+  `+HEAD:main` and `--force-with-lease=` with an empty value.
+  `--force-if-includes` alone and `-f` after `--` stay allowed. The new
+  `hooks/lib/git-push-match.mts` splits the command into simple commands in
+  one linear pass, scans quoted words and heredoc bodies again as shell down
+  to depth 3, and when it cannot parse the command it falls back to the old
+  regexes, so the rule still fails closed. The installer manifest lists the
+  new module (issue #327).
 - Confluence brokers: `labels --id <page>` without `--labels` or `--remove`
   is read-only. It sends one GET and prints `labels: a, b` or `labels: none`.
   Before, it posted the computed runtime label, so reading a page from a

@@ -66,6 +66,23 @@ check("git push --follow-tags", "git push --follow-tags", false);
 // ---- Rule A: bypass token (SHOULD ALLOW) ----
 check("git push --force WITH auth token", "KHEREP_DEPLOY_AUTH=approved git push --force origin main", false);
 
+// ---- Rule A: issue #327, the force flag must belong to the push itself ----
+for (const [name, command, block] of [
+  ["#327 case 4: gh api -f chained with a plain push", "gh api repos/o/r/issues/1/comments -f body=x && git push origin feat", false],
+  ["#327 case 5: git push as quoted page text", "node broker.mts create --body 'a session ran git push or gh pr create' -f", false],
+  ["#327 case 6: grep -f and quoted push docs", "grep -f patterns.txt notes.md && echo 'see git push docs'", false],
+  ["#327 case 7: quoted page text, no flag", "node broker.mts create --body 'a session ran git push' --labels a", false],
+  ["push chained with npm cache clean --force", "git push origin main && npm cache clean --force", false],
+  ["--force-if-includes alone", "git push --force-if-includes origin main", false],
+  ["git -C dir push -f", "git -C /tmp/x push -f origin main", true],
+  ["short cluster -fu", "git push -fu origin main", true],
+  ["+refspec", "git push origin +main", true],
+  ["--force-with-lease= with an empty value", "git push --force-with-lease= origin main", true],
+  ["force push inside ssh quotes", 'ssh example-host "cd repo && git push -f origin main"', true],
+  ["force push in a heredoc fed to bash", "bash <<EOF\ngit push -f origin main\nEOF", true],
+  ["unterminated quote falls back to the old regexes", 'git push origin "x -f', true],
+] as const) check(name, command, block, block ? "force-push blocked" : undefined);
+
 // ---- Rule B: kubectl apply (SHOULD BLOCK) ----
 check("kubectl apply -f deploy.yaml", "kubectl apply -f deploy.yaml", true, "kubectl apply blocked");
 check("ssh-wrapped kubectl apply -f -", 'ssh example-host "kubectl apply -f -"', true, "kubectl apply blocked");

@@ -29,6 +29,8 @@ hooks/dispatch-contract-guard.mts
 hooks/dispatch-contract-guard.test.mts
 hooks/lib/dispatch-policy.mts
 hooks/lib/git-commit-match.mts
+hooks/lib/git-push-match.mts
+hooks/lib/git-push-match.test.mts
 hooks/lib/main-checkout.mts
 hooks/lib/main-checkout.test.mts
 hooks/lib/private-path-policy.mts

@@ -219,9 +219,10 @@ check_profile() {
   if [ -e "$CLAUDE_HOME/kherep/githooks/post-checkout" ] && [ ! -x "$CLAUDE_HOME/kherep/githooks/post-checkout" ]; then
     note_fail "POST-CHECKOUT hook not executable [$profile]"
   fi
-  node -e 'require(process.argv[1]);require(process.argv[2]);require(process.argv[3]);require(process.argv[4])' \
+  node -e 'require(process.argv[1]);require(process.argv[2]);require(process.argv[3]);require(process.argv[4]);require(process.argv[5])' \
     "$CLAUDE_HOME/hooks/lib/workspace-scope.mts" "$CLAUDE_HOME/hooks/lib/private-path-policy.mts" \
-    "$CLAUDE_HOME/hooks/lib/git-commit-match.mts" "$CLAUDE_HOME/hooks/lib/main-checkout.mts" || {
+    "$CLAUDE_HOME/hooks/lib/git-commit-match.mts" "$CLAUDE_HOME/hooks/lib/main-checkout.mts" \
+    "$CLAUDE_HOME/hooks/lib/git-push-match.mts" || {
       note_fail "HOOK dependency resolution failed [$profile]";
     }
   printf '{}\n' | node "$CLAUDE_HOME/hooks/privacy-boundary-guard.mts" >/dev/null || {
