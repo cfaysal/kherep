@@ -86,6 +86,7 @@ export function shellSegments(command: string): ShellSegments {
   while (i < command.length) {
     const ch = command[i]!;
     const next = command[i + 1];
+    const crlf = next === "\r" && command[i + 2] === "\n";
     if (ch === "'") {
       const close = command.indexOf("'", i + 1);
       inToken = true;
@@ -104,12 +105,12 @@ export function shellSegments(command: string): ShellSegments {
       }
       if (k >= command.length) { uncertain = true; break; }
       i = k + 1;
-    } else if (ch === "\\" || (ch === "`" && (next === "\n" || (next === "\r" && command[i + 2] === "\n")))) {
+    } else if (ch === "\\" || (ch === "`" && (next === "\n" || crlf))) {
       // Line continuation (bash `\`, PowerShell backtick). An escaped space
       // stays a space, so the word is scanned again; any other escaped
       // character is kept with its backslash, so a Windows path stays whole.
       if (next === "\n") i += 2;
-      else if (next === "\r" && command[i + 2] === "\n") i += 3;
+      else if (crlf) i += 3;
       else if (next === undefined) { token += ch; inToken = true; i++; }
       else { token += WHITESPACE.test(next) ? next : ch + next; inToken = true; i += 2; }
     } else if ((ch === "<" || ch === ">") && next === "(") {
@@ -158,11 +159,15 @@ function bare(word: string): string {
   return word.replace(/\\/g, "");
 }
 
+function isGitName(form: string): boolean {
+  const name = form.slice(Math.max(form.lastIndexOf("/"), form.lastIndexOf("\\")) + 1).toLowerCase();
+  return name === "git" || name === "git.exe";
+}
+
+// The raw word keeps a Windows path whole (C:\...\git.exe); the bare one
+// reads a bash escape such as g\it.
 function isGit(word: string): boolean {
-  return [word, bare(word)].some((form) => {
-    const name = form.slice(Math.max(form.lastIndexOf("/"), form.lastIndexOf("\\")) + 1).toLowerCase();
-    return name === "git" || name === "git.exe";
-  });
+  return isGitName(word) || isGitName(bare(word));
 }
 
 // Global options whose value is the next word.

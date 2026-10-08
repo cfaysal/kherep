@@ -148,8 +148,8 @@ function explicitlyApprovesProductionDeploy(text: string): boolean {
 
   // 5. git force-push - rewrites shared remote history. Only a force flag in the
   // arguments of the same `git push` counts (issue #327): --force,
-  // --force-with-lease, a short cluster with f, or a +refspec. Quoted words and
-  // heredoc bodies are scanned again as shell. When the parse is uncertain the
+  // --force-with-lease, a short cluster with f, or a +refspec. Quoted words are
+  // scanned again as shell, heredoc body lines word by word. When the parse is uncertain the
   // pre-#327 regexes decide, so it fails closed. Bypass via the deploy-auth token.
   const pushVerdict = forcePushVerdict(cmd);
   const isForce = pushVerdict === 'force' || (pushVerdict === 'uncertain' && legacyForcePush(cmd));
