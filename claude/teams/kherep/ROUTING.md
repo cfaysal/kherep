@@ -147,10 +147,16 @@ names it yet - so the write lands on the neighbour. Without this step every obse
 page nothing points at, and the problem grows with every session.
 
 The same sweep runs over the whole space without `--id`, for the pages that were carried over before
-this rule existed. It has a self-trigger; a check that only runs when somebody remembers it is not a
-check (golden rule 16).
+this rule existed. Only the count has a self-trigger: on Claude, a SessionStart check counts the pages
+nothing links to, read-only, refreshes itself in the background when its report is older than a day,
+and reports a count it could not take as unknown, never as zero; a check that only runs when somebody
+remembers it is not a check (golden rule 16). The sweep itself writes into a live space, so it runs
+when the operator decides, not when a session starts. Codex has no such check yet.
 
-One observation is one page, and an attempt that was abandoned is removed by the run that made it.
+One observation is one page. An attempt that went wrong is not left behind in silence: the
+observation agent neither writes a second page beside it nor deletes it, because deleting is outside
+its permissions; on Claude it reports `OBS-RESULT: failed abandoned page <id>`, and the Maestro
+decides in the same turn whether the page is removed.
 Labels are written in the call that creates the page, never afterwards: a page that exists without
 them is either a draft nobody cleaned up or a page nobody can filter, and from the outside the two
 are the same thing. Measured on 2026-09-22, a single run left seventeen pages for nine findings -
