@@ -119,6 +119,15 @@ increments the minor version; every other release increments the patch version.
   given as a Windows 8.3 short name, or reached through a junction or
   symbolic link, is now guarded instead of passing unchecked. Both use the
   shared `isWithinWorkspace()` in `real-path-policy.mts` (issue #346).
+- Privacy boundary guard: a path given as a Windows 8.3 short name on one
+  side and as the long name on the other now meets. Before, a credentials or
+  local-inference root set long and a Read, Bash or Agent payload naming it
+  short, or the other way round, was allowed. Roots and candidate paths are
+  now compared in both canonical forms, the JS realpath that keeps short
+  names and the native one that expands them, through the new
+  `canonicalPathForms()` in `real-path-policy.mts` (issue #348). The check is
+  additive: nothing denied before is allowed now. The PowerShell tool is
+  still not classified by this guard; that is a separate gap.
 - Deploy guard: the Forge rules only count a flag in the arguments of the
   same `forge deploy` or `forge install`. Before, they matched `forge deploy`
   and `-e production`, or `forge install` and `-s`, anywhere in the command,

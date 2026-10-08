@@ -13,7 +13,7 @@ import {
   type EnvLike,
   type ScopePayload,
 } from "./workspace-scope.mts";
-import { canonicalPathLike } from "./real-path-policy.mts";
+import { canonicalPathForms, canonicalPathLike } from "./real-path-policy.mts";
 import { artifactRoots, credentialsRoots, expandHome, type RootContext } from "./private-path-rules.mts";
 
 // Der Tool-Input, so wie ein Hook ihn weiterreicht. Gelesen wird gezielt nur
@@ -121,13 +121,18 @@ function payloadCwd(payload: ScopePayload): string {
   return normalizePathLike(payload.cwd || workspaceForPayload(payload) || process.cwd());
 }
 
+// Issue #348. <value> or any canonical form of it (8.3 short or long) lies in a root.
+function withinRoots(value: string, roots: string[]): boolean {
+  return [value, ...canonicalPathForms(value)].some((form) => roots.some((root) => isWithinPath(form, root)));
+}
+
 function shellReferencesRoots(command: string, payload: ScopePayload, roots: string[], env: EnvLike): boolean {
   let cwd = payloadCwd(payload);
   cwd = canonicalPathLike(cwd) || cwd;
   for (const segment of shellSegments(expandKnownShellValues(command, payload, env))) {
     const words = shellWords(segment);
     if (!words.length) continue;
-    if (roots.some((root) => isWithinPath(cwd, root))) return true;
+    if (withinRoots(cwd, roots)) return true;
     const executable = (normalizePathLike(words[0]).split("/").pop() || "").toLowerCase();
     const isCd = ["cd", "chdir", "pushd", "set-location", "push-location"].includes(executable);
     if (isCd) {
@@ -135,14 +140,14 @@ function shellReferencesRoots(command: string, payload: ScopePayload, roots: str
       const unresolved = resolveShellPath(word, cwd);
       const target = canonicalPathLike(unresolved) || unresolved;
       if (target) {
-        if (roots.some((root) => isWithinPath(target, root))) return true;
+        if (withinRoots(target, roots)) return true;
         cwd = target;
       }
     } else {
       for (const item of words.slice(1)) {
         const unresolved = resolveShellPath(item, cwd);
         const candidate = canonicalPathLike(unresolved) || unresolved;
-        if (candidate && roots.some((root) => isWithinPath(candidate, root))) return true;
+        if (candidate && withinRoots(candidate, roots)) return true;
       }
     }
   }
@@ -150,22 +155,19 @@ function shellReferencesRoots(command: string, payload: ScopePayload, roots: str
 }
 
 function canonicalCandidates(value: unknown, payload: ScopePayload): string[] {
-  const candidates: string[] = [];
-  const direct = canonicalPathLike(expandHome(value));
-  if (direct) candidates.push(direct);
+  const candidates = canonicalPathForms(expandHome(value));
   const cwd = payloadCwd(payload);
   for (const word of shellWords(String(value))) {
     if (!/[\\/]/.test(word)) continue;
     const unresolved = resolveShellPath(word, cwd);
-    const canonical = canonicalPathLike(unresolved);
-    if (canonical) candidates.push(canonical);
+    candidates.push(...canonicalPathForms(unresolved));
   }
   return candidates;
 }
 
 function referencesRoots(input: PolicyInput, payload: ScopePayload, context: RootContext, env: EnvLike): boolean {
   const { workspace } = context;
-  const roots = context.roots.flatMap((root) => [root, canonicalPathLike(root)].filter(Boolean));
+  const roots = context.roots.flatMap((root) => [root, ...canonicalPathForms(root)].filter(Boolean));
   for (const value of allStrings(input)) {
     const normalized = normalizePathLike(value);
     const canonical = canonicalCandidates(value, payload);

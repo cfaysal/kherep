@@ -319,6 +319,41 @@ check("benign MCP request is untouched", {
 }, false, customMacCredentials);
 check("malformed nonclassifiable event stays silent", "not-json", false);
 
+// Issue #348. A Windows 8.3 short name on one side and the long name on the
+// other must still meet. Skipped where the volume generates no short names.
+function shortName(long: string): string {
+  return spawnSync("cmd", ["/d", "/s", "/c", `"for %I in ("${long}") do @echo %~sI"`],
+    { encoding: "utf8", windowsVerbatimArguments: true }).stdout.trim();
+}
+function shortOrSkip(long: string): string | null {
+  if (process.platform !== "win32") return null;
+  const short = shortName(long);
+  return !short || short.toLowerCase() === long.toLowerCase() || !fs.existsSync(short) ? null : short;
+}
+const vaultLong = path.join(fixture, "Private Vault Fixture Root");
+fs.mkdirSync(vaultLong);
+fs.writeFileSync(path.join(vaultLong, "plain-file"), "synthetic fixture\n");
+const vaultShort = shortOrSkip(vaultLong);
+function shortCase(name: string, root: string, payload: Record<string, unknown>): void {
+  if (!vaultShort) { console.log(`SKIP | ${name} | not win32, or this volume has no 8.3 short names`); return; }
+  check(name, { ...nativeScope, ...payload }, true, { KHEREP_WORKSPACE: nativeWorkspace, KHEREP_CREDENTIALS_ROOT: root });
+}
+const longFile = path.join(vaultLong, "plain-file");
+const shortRoot = vaultShort || "";
+const shortFile = vaultShort ? path.join(vaultShort, "plain-file") : "";
+shortCase("T1 root long, Read short", vaultLong, { tool_name: "Read", tool_input: { file_path: shortFile } });
+shortCase("T2 root short, Read long", shortRoot, { tool_name: "Read", tool_input: { file_path: longFile } });
+shortCase("T3 root long, Bash cat short", vaultLong, { tool_name: "Bash", tool_input: { command: `cat "${shortFile}"` } });
+shortCase("T4 root short, Bash cat long", shortRoot, { tool_name: "Bash", tool_input: { command: `cat "${longFile}"` } });
+shortCase("T5 root long, Agent prompt short", vaultLong, { tool_name: "Agent", tool_input: { prompt: `Review "${shortFile}"` } });
+// The PowerShell tool is not classified by this guard at all, a separate
+// known gap. Recorded, not counted, so the gap stays visible.
+if (vaultShort) {
+  const ps = run({ ...nativeScope, tool_name: "PowerShell", tool_input: { command: `Get-Content "${shortFile}"` } },
+    { KHEREP_WORKSPACE: nativeWorkspace, KHEREP_CREDENTIALS_ROOT: vaultLong });
+  console.log(`INFO | PowerShell root long, Get-Content short | got ${ps.denied ? "DENY" : "ALLOW"} (known separate gap, not counted)`);
+}
+
 try { fs.rmSync(fixture, { recursive: true, force: true }); } catch {}
 console.log(`\n=== ${pass} pass, ${fail} fail ===`);
 process.exit(fail === 0 ? 0 : 1);
