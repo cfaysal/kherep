@@ -14,6 +14,7 @@
 
 import fs from 'node:fs';
 import { forcePushVerdict, legacyForcePush } from './lib/git-push-match.mts';
+import { forgeDeployVerdict, forgeInstallVerdict, legacyForgeDeploy, legacyForgeInstall } from './lib/forge-match.mts';
 
 // The fields this hook reads from a PreToolUse payload.
 interface ToolPayload {
@@ -107,13 +108,15 @@ function explicitlyApprovesProductionDeploy(text: string): boolean {
   const transcriptDeployAuth = explicitlyApprovesProductionDeploy(lastUserText(payload.transcript_path));
   const hasDeployAuth = inlineDeployAuth || transcriptDeployAuth;
 
-  // 1. Direct Forge deploy to production.
-  if (/\bforge\s+deploy\b/.test(cmd)) {
-    if (/(--environment|-e)[=\s]+production/.test(cmd) && !hasDeployAuth) {
-      violations.push(
-        'forge deploy --environment production blocked. Bypass with KHEREP_DEPLOY_AUTH=approved prefix once user approved this session.'
-      );
-    }
+  // 1. Direct Forge deploy to production. Only an environment flag in the
+  // arguments of the same forge deploy counts (issue #328); an uncertain parse
+  // falls back to the pre-#328 regexes, so it fails closed.
+  const deployVerdict = forgeDeployVerdict(cmd);
+  const isProdDeploy = deployVerdict === 'match' || (deployVerdict === 'uncertain' && legacyForgeDeploy(cmd));
+  if (isProdDeploy && !hasDeployAuth) {
+    violations.push(
+      'forge deploy --environment production blocked. Bypass with KHEREP_DEPLOY_AUTH=approved prefix once user approved this session.'
+    );
   }
 
   // 1b. Production deploys are normally wrapped in package scripts. A
@@ -132,13 +135,14 @@ function explicitlyApprovesProductionDeploy(text: string): boolean {
 
 
   // 2. Forge install changes a remote site and always needs explicit approval.
-  if (/\bforge\s+install\b/.test(cmd)) {
-    const siteMatch = cmd.match(/(?:^|\s)(?:--site|-s)[=\s]+([^\s"']+)/);
-    if (siteMatch && !hasDeployAuth) {
-      violations.push(
-        `forge install on site "${siteMatch[1]}" blocked until explicitly approved.`
-      );
-    }
+  // Same scan and fallback as rule 1 (issue #328).
+  const install = forgeInstallVerdict(cmd);
+  let site = install.verdict === 'match' ? install.site : null;
+  if (install.verdict === 'uncertain') site = legacyForgeInstall(cmd);
+  if (site !== null && !hasDeployAuth) {
+    violations.push(
+      `forge install on site "${site}" blocked until explicitly approved.`
+    );
   }
 
   // 4. forge tunnel - explicitly forbidden by CLAUDE.md even in VOLLGAS mode
