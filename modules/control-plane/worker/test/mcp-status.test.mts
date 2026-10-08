@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 
 import { REMOTE_MCP_CAPABILITY, digestMcpArguments } from "../../protocol-mcp.mts";
 import {
-  ACCEPTED_SILENCE_MS, MESSAGING_CAPABILITY, type MessageProgress, type MessageProgressCode, type SenderState,
+  ACCEPTED_SILENCE_MS, MESSAGE_STATUS_ACK, MESSAGING_CAPABILITY, type MessageProgress, type MessageProgressCode, type SenderState,
 } from "../../protocol-messages.mts";
 import { handleMcp } from "../src/mcp-http.mts";
 import { MessageStore } from "../src/message-store.mts";
@@ -234,4 +234,22 @@ it("adds the reply column to an earlier messages table once and leaves migrated 
       .toEqual([{ id: "legacy", state: "replied", reply_message_id: null }]);
     expect(store.replyMessageIdOf("legacy")).toBeNull();
   });
+});
+
+it("answers from the tombstone once the sender acknowledged the final status (issue #308)", async () => {
+  const { source, target, messageId } = await message();
+  await registry().reportMessageStatus(target, { messageId, state: "accepted" });
+  const replyId = crypto.randomUUID();
+  expect((await registry().sendMessage({ messageId: replyId, from: { nodeId: target, session: TARGET },
+    to: { nodeId: source, session: SOURCE }, text: SENTINEL, inReplyTo: messageId }, "test")).ok).toBe(true);
+  await registry().ackMessageStatus(source, { name: MESSAGE_STATUS_ACK, messageId, state: "replied" });
+  expect((await registry().listMessages(source, 100)).map((record) => record.messageId)).not.toContain(messageId);
+
+  expect((await status(source, SOURCE, messageId)).structuredContent)
+    .toMatchObject({ ok: true, messageId, state: "replied", senderState: "replied", replyMessageId: replyId });
+  expect((await status(target, TARGET, messageId)).structuredContent).toMatchObject({ ok: true, messageId, state: "replied" });
+  const foreign = await enrolled("synthetic-foreign");
+  const hidden = await status(foreign, "synthetic-foreign", messageId);
+  expect(hidden.isError).toBe(true);
+  expect(hidden.structuredContent).toEqual({ ok: false, error: "message status is not available to this node" });
 });

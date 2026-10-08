@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 
 import type { NodeFacts, RuntimeInfo, SessionInfo } from "../../protocol.mts";
-import type { DirectoryBody, MessageStatusBody, NodeReportedState } from "../../protocol-messages.mts";
+import type { DirectoryBody, MessageStatusAckBody, MessageStatusBody, NodeReportedState } from "../../protocol-messages.mts";
 import type {
   TaskControlRegisterBody, TaskControlResultBody, TaskControlSubmitBody,
 } from "../../protocol-task-control.mts";
@@ -10,15 +10,15 @@ import type { Env } from "./env.mts";
 import { directoryBody } from "./directory.mts";
 import { routeEffects } from "./message-routing.mts";
 import { MessageStore, type MessageEffects, type MessageRecord, type NewMessage, type SendResult } from "./message-store.mts";
+import { earliest, type MessageStatusView } from "./message-retention.mts";
 import { TaskStore, type CreateResult, type NewTask, type TaskRow } from "./task-store.mts";
 import { TaskControlRegistry } from "./task-control-registry.mts";
 import { McpRegistry, type McpOutcome } from "./mcp-registry.mts";
 import { SqlMeter, type SqlRows } from "./sql-meter.mts";
 import {
-  CLAUDE_MCP_CAPABILITY, REMOTE_MCP_CAPABILITY, type McpIntentClaim, type McpIntentRegistration,
+  CLAUDE_MCP_CAPABILITY, REMOTE_MCP_CAPABILITY, type McpInboxItem, type McpIntentClaim, type McpIntentRegistration,
 } from "../../protocol-mcp.mts";
 import type { TaskReportBody } from "../../protocol-tasks.mts";
-import { MAX_REPLY_DEPTH } from "../../protocol-messages.mts";
 import {
   ENROLLMENT_TTL_DEFAULT_S, ENROLLMENT_TTL_MAX_S, ENROLLMENT_TTL_MIN_S, migrateRegistry, NODE_COLUMNS, REGISTRY_SCHEMA, toNodeRow,
   type NodeRow, type NodeStatus,
@@ -224,21 +224,21 @@ export class Registry extends DurableObject<Env> {
   // Revocation deletes the key binding (design section 2). The row stays, marked
   // revoked, so the audit trail keeps its target. Messages still queued for the
   // node are refused in the same transaction; the caller pushes the returned
-  // statuses to their senders. Returns null when there was nothing to revoke.
-  revoke(nodeId: string, actor: string): MessageEffects | null {
-    return this.metered("revoke", () => {
+  // statuses to their senders. The node's own final messages are due for
+  // deletion (#308). Returns null when there was nothing to revoke.
+  async revoke(nodeId: string, actor: string): Promise<MessageEffects | null> {
+    return this.messageTx("revoke", () => {
       const found = this.sql.exec("SELECT id FROM nodes WHERE id = ? AND revoked_at IS NULL", nodeId).toArray().length > 0;
       if (!found) return null;
-      return this.ctx.storage.transactionSync(() => {
-        const now = Date.now();
-        this.directoryRows = null;
-        this.sql.exec("UPDATE nodes SET public_key = NULL, status = 'revoked', revoked_at = ? WHERE id = ?", now, nodeId);
-        this.sql.exec("DELETE FROM runtimes WHERE node_id = ?", nodeId);
-        this.sql.exec("DELETE FROM sessions WHERE node_id = ?", nodeId);
-        this.mcp.removeNode(nodeId);
-        this.audit(actor, "node.revoke", nodeId);
-        return this.messages.refuseQueuedFor(nodeId, "target node revoked", actor, now);
-      });
+      const now = Date.now();
+      this.directoryRows = null;
+      this.sql.exec("UPDATE nodes SET public_key = NULL, status = 'revoked', revoked_at = ? WHERE id = ?", now, nodeId);
+      this.sql.exec("DELETE FROM runtimes WHERE node_id = ?", nodeId);
+      this.sql.exec("DELETE FROM sessions WHERE node_id = ?", nodeId);
+      this.mcp.removeNode(nodeId);
+      this.audit(actor, "node.revoke", nodeId);
+      this.messages.retention.senderRevoked(nodeId, now);
+      return this.messages.refuseQueuedFor(nodeId, "target node revoked", actor, now);
     });
   }
 
@@ -277,14 +277,20 @@ export class Registry extends DurableObject<Env> {
     this.tx("recordMcpOutcome", () => this.mcp.recordOutcome(nodeId, requestId, outcome));
   }
 
-  async replyMcpMessage(intent: McpIntentClaim, inReplyTo: string, text: string) {
+  // Without the parent row (deleted after its ack, #308) the first call asks
+  // for a lookup; the caller reads that inbox item from the replying node and
+  // calls again with it (null when the node did not return it). The second
+  // call recovers the same claim.
+  async replyMcpMessage(intent: McpIntentClaim, inReplyTo: string, text: string, item?: McpInboxItem | null) {
     return this.messageTx("replyMcpMessage", () => {
       const claim = this.mcp.claim(intent, Date.now());
       if (!claim.ok) return { ...claim, denied: true as const };
       const target = this.messages.replyTarget(inReplyTo, intent.nodeId, claim.sessionId);
-      if (!target || target.depth >= MAX_REPLY_DEPTH) return { ok: false as const, error: "reply relationship or depth is not allowed" };
+      if (target === "missing" && item === undefined) return { ok: false as const, lookup: claim.sessionId };
+      const to = target === "missing" ? this.messages.retention.inboxReplyTarget(intent.nodeId, inReplyTo, item ?? null) : target;
+      if (!to) return { ok: false as const, error: "reply relationship or depth is not allowed" };
       const sent = this.messages.send({ messageId: claim.effectId,
-        from: { nodeId: intent.nodeId, session: claim.sessionId }, to: target.to, text, inReplyTo }, `mcp:${intent.nodeId}`, Date.now());
+        from: { nodeId: intent.nodeId, session: claim.sessionId }, to, text, inReplyTo }, `mcp:${intent.nodeId}`, Date.now());
       this.mcp.recordOutcome(intent.nodeId, intent.requestId, sent.ok ? "succeeded" : "failed");
       return sent.ok ? { ...sent, claim } : sent;
     });
@@ -301,8 +307,13 @@ export class Registry extends DurableObject<Env> {
     });
   }
 
-  reportMessageStatus(nodeId: string, status: MessageStatusBody & { state: NodeReportedState }) {
-    return this.tx("reportMessageStatus", () => this.messages.report(nodeId, status, Date.now()));
+  async reportMessageStatus(nodeId: string, status: MessageStatusBody & { state: NodeReportedState }) {
+    return this.messageTx("reportMessageStatus", () => this.messages.report(nodeId, status, Date.now()));
+  }
+
+  // The sender acknowledged a final status: the row may go (#308).
+  async ackMessageStatus(nodeId: string, body: MessageStatusAckBody): Promise<void> {
+    await this.messageTx("ackMessageStatus", () => this.messages.retention.ack(nodeId, body, Date.now()));
   }
 
   pendingMessagesFor(nodeId: string): MessageEffects {
@@ -317,11 +328,13 @@ export class Registry extends DurableObject<Env> {
     return this.metered("listMessages", () => this.messages.list(nodeId, limit));
   }
 
-  // A replied message also names the reply that marked it (issue #200).
-  mcpMessageStatus(nodeId: string, messageId: string): (MessageRecord & { replyMessageId?: string }) | null {
+  // A replied message also names the reply that marked it (issue #200); a
+  // deleted message answers from its tombstone (#308).
+  mcpMessageStatus(nodeId: string, messageId: string): (MessageRecord & { replyMessageId?: string }) | MessageStatusView | null {
     return this.metered("mcpMessageStatus", () => {
       const record = this.messages.visibleTo(nodeId, messageId);
-      if (record?.state !== "replied") return record;
+      if (!record) return this.messages.retention.statusFor(nodeId, messageId);
+      if (record.state !== "replied") return record;
       const replyMessageId = this.messages.replyMessageIdOf(messageId);
       return replyMessageId ? { ...record, replyMessageId } : record;
     });
@@ -392,9 +405,16 @@ export class Registry extends DurableObject<Env> {
   }
   // Expiry is checked on every message access and, so that the text of an
   // expired message never waits for the next access, by an alarm set to the
-  // earliest expiry of a queued message.
+  // earliest expiry of a queued message, fallback deletion or tombstone
+  // expiry (#308). A full deletion batch re-arms it after one second.
   async alarm(): Promise<void> {
-    const effects = await this.messageTx("alarm", () => this.messages.expireDue(Date.now()));
+    const { effects, more } = await this.messageTx("alarm", () => {
+      const now = Date.now();
+      const effects = this.messages.expireDue(now);
+      const swept = this.messages.retention.sweepDue(now);
+      return { effects, more: this.messages.retention.pruneTombstones(now) || swept };
+    });
+    if (more) await this.ctx.storage.setAlarm(Date.now() + 1000);
     await routeEffects(this.env, effects);
   }
 
@@ -406,10 +426,13 @@ export class Registry extends DurableObject<Env> {
     return this.meter.measure(path, () => this.ctx.storage.transactionSync(run));
   }
 
-  // A message transaction and the earliest queued expiry, read in the same
-  // measured region; arming the alarm afterwards is storage, not SQL.
+  // A message transaction and the earliest queued expiry or retention deadline,
+  // read in the same measured region; arming the alarm afterwards is storage, not SQL.
   private async messageTx<T>(path: string, run: () => T): Promise<T> {
-    const { result, next } = this.metered(path, () => ({ result: this.ctx.storage.transactionSync(run), next: this.messages.nextExpiry() }));
+    const { result, next } = this.metered(path, () => {
+      const result = this.ctx.storage.transactionSync(run);
+      return { result, next: earliest(this.messages.nextExpiry(), this.messages.retention.nextDue()) };
+    });
     if (next !== null) {
       const current = await this.ctx.storage.getAlarm();
       if (current === null || current > next) await this.ctx.storage.setAlarm(next);

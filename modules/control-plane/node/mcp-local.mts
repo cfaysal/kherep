@@ -7,7 +7,7 @@ import {
 } from "../protocol-mcp.mts";
 import type { NodeClient } from "./client.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
-import { getMessage, listInbox, markOffered, writeJsonAtomic } from "./inbox.mts";
+import { getMessage, listInbox, markAnswered, markOffered, writeJsonAtomic } from "./inbox.mts";
 import { writePrivateWindowsMcpCredential, type CredentialPowerShellDeps } from "./mcp-credential-file.mts";
 import { publishSessionFrames } from "./session-publication.mts";
 
@@ -162,8 +162,10 @@ export function consumeMcpIntentReceipt(paths: NodePaths, requestId: string): Mc
   return body;
 }
 
-export function readMcpInbox(paths: NodePaths, sessionId: string, limit: number): McpInboxItem[] {
-  return listInbox(paths.inbox, sessionId).slice(-limit).map((record) => ({
+// messageId (issue #308): only that record, and only when it is addressed to sessionId.
+export function readMcpInbox(paths: NodePaths, sessionId: string, limit: number, messageId?: string): McpInboxItem[] {
+  return listInbox(paths.inbox, sessionId).filter((record) => messageId === undefined || record.messageId === messageId)
+    .slice(-limit).map((record) => ({
     messageId: record.messageId, from: { ...record.from }, createdAt: record.createdAt, text: record.text,
     ...(record.inReplyTo ? { inReplyTo: record.inReplyTo } : {}), depth: record.depth ?? 0,
   }));
@@ -176,4 +178,10 @@ export function readMcpInbox(paths: NodePaths, sessionId: string, limit: number)
 // stay as they are.
 export function offerMcpInbox(paths: NodePaths, messageIds: string[], now: number = Date.now()): void {
   for (const id of messageIds) if (getMessage(paths.inbox, id)?.state === "accepted") markOffered(paths.inbox, id, now);
+}
+
+// An MCP reply the Worker routes through this node (issue #308) answers the
+// record, as `msg send --reply-to` does.
+export function answerMcpInbox(paths: NodePaths, messageIds: string[]): void {
+  for (const id of messageIds) markAnswered(paths.inbox, id);
 }

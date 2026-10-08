@@ -5,7 +5,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 
 import { digestMcpArguments, REMOTE_MCP_CAPABILITY, type McpTool } from "../../protocol-mcp.mts";
-import { MESSAGING_CAPABILITY } from "../../protocol-messages.mts";
+import { MESSAGE_STATUS_ACK, MESSAGING_CAPABILITY } from "../../protocol-messages.mts";
 import { recordCodexSession } from "../../node/codex-sessions.mts";
 import { nodePaths } from "../../node/config.mts";
 import { getOutbox, writeLocalSessions } from "../../node/exchange.mts";
@@ -81,4 +81,30 @@ it("a native MCP sender can reply to a full-ID CLI response without relaxing pro
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+// Issue #308: once the parent row is deleted the Worker needs the replying
+// node's inbox item. Without a matching item it fails closed: an older node
+// that ignores the item lookup, an offline node, or an item that contradicts
+// the tombstone.
+it("fails an MCP reply to a deleted parent closed unless the node returns that item", async () => {
+  const a = await enrolled(SOURCE);
+  const b = await enrolled(TARGET);
+  const first = await intent(a, "send", { to: { nodeId: b.nodeId, session: TARGET }, text: "synthetic question" });
+  expect((await registry().sendMcpMessage(first, { nodeId: b.nodeId, session: TARGET }, "synthetic question")).ok).toBe(true);
+  await registry().reportMessageStatus(b.nodeId, { messageId: first.requestId, state: "delivered" });
+  await registry().ackMessageStatus(a.nodeId, { name: MESSAGE_STATUS_ACK, messageId: first.requestId, state: "delivered" });
+
+  const reply = await intent(b, "reply", { inReplyTo: first.requestId, text: "synthetic answer" });
+  const call = (item?: unknown) => registry().replyMcpMessage(reply, first.requestId, "synthetic answer", item as never);
+  expect(await call()).toEqual({ ok: false, lookup: TARGET });
+  const item = { messageId: first.requestId, from: { nodeId: a.nodeId, session: SOURCE }, createdAt: new Date().toISOString(),
+    text: "synthetic question", depth: 0 };
+  const denied = { ok: false, error: "reply relationship or depth is not allowed" };
+  expect(await call(null)).toEqual(denied);
+  expect(await call({ ...item, messageId: crypto.randomUUID() })).toEqual(denied);
+  expect(await call({ ...item, from: { nodeId: b.nodeId, session: SOURCE } })).toEqual(denied);
+  expect(await call(item)).toMatchObject({ ok: true, status: { messageId: reply.requestId, state: "queued" } });
+  expect((await registry().listMessages(a.nodeId, 100)).find((message) => message.messageId === reply.requestId))
+    .toMatchObject({ fromNode: b.nodeId, fromSession: TARGET, toNode: a.nodeId, toSession: SOURCE, inReplyTo: first.requestId });
 });

@@ -2,6 +2,8 @@ import {
   MAX_REPLY_DEPTH, MESSAGING_CAPABILITY, OPERATOR_NODE_ID, type MessageAddress, type MessageDeliverBody, type MessageProgress, type MessageReceiptBody, type MessageState,
   type MessageStatusBody, type NodeReportedState,
 } from "../../protocol-messages.mts";
+import { depthExceeded, DEPTH_QUERIES, REPLY_DEPTH_EXCEEDED, replyDepth } from "./message-depth.mts";
+import { MessageRetention, RETENTION_QUERIES } from "./message-retention.mts";
 
 // The Registry's `messages` table (issue #31). Additive: an existing Registry
 // gains the table on its next start. The message text is kept only while a
@@ -77,6 +79,7 @@ export const HOT_MESSAGE_QUERIES = {
   expireDue: { sql: EXPIRE_DUE, args: [0] },
   nextExpiry: { sql: NEXT_EXPIRY, args: [] },
   statusPage: { sql: STATUS_PAGE, args: ["node", 0, 128] },
+  ...DEPTH_QUERIES, ...RETENTION_QUERIES,
 } as const;
 
 function toRecord(row: Record<string, SqlStorageValue>): MessageRecord {
@@ -116,6 +119,8 @@ const none = (): MessageEffects => ({ deliveries: [], statuses: [] });
 
 // Synchronous SQL only; the Registry runs each call inside one transaction.
 export class MessageStore {
+  // Issue #308: tombstones and the deletion of acknowledged messages.
+  readonly retention: MessageRetention;
   private readonly sql: SqlStorage;
   private readonly audit: Audit;
   private readonly capabilities: Capabilities;
@@ -129,9 +134,11 @@ export class MessageStore {
     const columns = this.sql.exec("PRAGMA table_info(messages)").toArray().map((c) => String(c.name));
     if (!columns.includes("task_id")) this.sql.exec("ALTER TABLE messages ADD COLUMN task_id TEXT");
     for (const [name, type] of [["progress_phase", "TEXT"], ["progress_code", "TEXT"], ["progress_observed_at", "TEXT"],
-      ["progress_retry_at", "TEXT"], ["reply_message_id", "TEXT"]] as const) {
+      ["progress_retry_at", "TEXT"], ["reply_message_id", "TEXT"], ["depth", "INTEGER"], ["delete_after", "INTEGER"],
+      ["deletable", "INTEGER"]] as const) {
       if (!columns.includes(name)) this.sql.exec(`ALTER TABLE messages ADD COLUMN ${name} ${type}`);
     }
+    this.retention = new MessageRetention(sql, audit, capabilities);
   }
 
   // Records one message as queued, or as refused when the target cannot take
@@ -143,18 +150,24 @@ export class MessageStore {
       if (existing.fromNode !== message.from.nodeId) return { ok: false, error: "duplicate messageId" };
       return { ok: true, status: statusOf(existing), effects };
     }
+    const settled = this.retention.resend(message.messageId, message.from.nodeId);
+    if (settled) return settled.ok ? { ...settled, effects } : settled;
     const target = message.to.nodeId;
     const capabilities = this.capabilities(target);
+    const depth = replyDepth(this.sql, message.inReplyTo);
     let reason: string | null = null;
-    if (capabilities === null) reason = "unknown or revoked target node";
+    if (depthExceeded(depth)) reason = REPLY_DEPTH_EXCEEDED;
+    else if (capabilities === null) reason = "unknown or revoked target node";
     else if (!capabilities.includes(MESSAGING_CAPABILITY)) reason = `target node lacks ${MESSAGING_CAPABILITY}`;
     else if (this.queuedCount(target) >= MAX_QUEUED_PER_NODE) reason = `more than ${MAX_QUEUED_PER_NODE} queued messages for the target node`;
     const state: MessageState = reason === null ? "queued" : "refused";
 
+    // deletable = 1: a row this Worker version stored, which it may delete (#308).
     this.sql.exec(`INSERT INTO messages (id, from_node, from_session, to_node, to_session, in_reply_to, text, state, reason,
-      created_at, updated_at, expires_at, task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      created_at, updated_at, expires_at, task_id, depth, deletable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       message.messageId, message.from.nodeId, message.from.session, target, message.to.session, message.inReplyTo ?? null,
-      state === "queued" ? message.text : null, state, reason, now, now, now + MESSAGE_TTL_MS, message.taskId ?? null);
+      state === "queued" ? message.text : null, state, reason, now, now, now + MESSAGE_TTL_MS, message.taskId ?? null, depth);
+    this.retention.finalized(message.messageId, message.from.nodeId, state, now);
     this.audit(actor, "message.send", target, { messageId: message.messageId, toSession: message.to.session, state, reason });
     if (state === "queued") {
       effects.deliveries.push({ nodeId: target, body: {
@@ -173,7 +186,8 @@ export class MessageStore {
   report(nodeId: string, status: MessageStatusBody & { state: NodeReportedState }, now: number): MessageReportResult {
     const effects = this.expireDue(now);
     let record = this.get(status.messageId);
-    if (!record || record.toNode !== nodeId) return { effects, receipt: null };
+    if (!record) return { effects, receipt: this.retention.lateReceipt(nodeId, status) };
+    if (record.toNode !== nodeId) return { effects, receipt: null };
     if (this.mayAdvance(record.state, status.state)) {
       this.setState(record, status.state, status.reason ?? null, `node:${nodeId}`, now, effects, status.progress);
       record = this.get(status.messageId) ?? record;
@@ -192,7 +206,7 @@ export class MessageStore {
   // derives authority from the stored sender and target, never from a frame.
   taskControlSource(messageId: string): { ownerNodeId: string; targetNodeId: string } | null {
     const record = this.get(messageId);
-    return record ? { ownerNodeId: record.fromNode, targetNodeId: record.toNode } : null;
+    return record ? { ownerNodeId: record.fromNode, targetNodeId: record.toNode } : this.retention.source(messageId);
   }
   // Queued messages for a target that just authenticated. The existing queue
   // limit bounds this set independently of sender-status history.
@@ -255,9 +269,11 @@ export class MessageStore {
     return record && (record.fromNode === nodeId || record.toNode === nodeId) ? record : null;
   }
 
-  replyTarget(messageId: string, nodeId: string, session: string): { to: MessageAddress; depth: number } | null {
+  // "missing": no parent row (deleted after its ack, #308); the caller asks the node.
+  replyTarget(messageId: string, nodeId: string, session: string): MessageAddress | "missing" | null {
     let record = this.get(messageId);
-    if (!record || record.toNode !== nodeId || record.toSession !== session
+    if (!record) return "missing";
+    if (record.toNode !== nodeId || record.toSession !== session
       || !["accepted", "delivered", "replied"].includes(record.state)) return null;
     const to = { nodeId: record.fromNode, session: record.fromSession };
     let depth = 0;
@@ -266,12 +282,13 @@ export class MessageStore {
       if (seen.has(record.messageId) || depth >= MAX_REPLY_DEPTH) return null;
       seen.add(record.messageId);
       const parent = this.get(record.inReplyTo);
-      if (!parent || record.fromNode !== parent.toNode || record.fromSession !== parent.toSession
+      if (!parent) break; // deleted after its ack (#308); the depth column bounds the chain
+      if (record.fromNode !== parent.toNode || record.fromSession !== parent.toSession
         || record.toNode !== parent.fromNode || record.toSession !== parent.fromSession) return null;
       record = parent;
       depth++;
     }
-    return { to, depth };
+    return depth < MAX_REPLY_DEPTH && !depthExceeded(replyDepth(this.sql, messageId)) ? to : null;
   }
 
   private mayAdvance(from: MessageState, to: NodeReportedState | "replied"): boolean {
@@ -317,6 +334,7 @@ export class MessageStore {
       progress_observed_at = ?, progress_retry_at = ?, updated_at = ? WHERE id = ?`, state, reason, kept?.phase ?? null,
     kept?.code ?? null, kept?.observedAt ?? null, kept?.retryAt ?? null, now, record.messageId);
     this.audit(actor, "message.state", record.toNode, { messageId: record.messageId, state, reason, ...(kept ? { progress: kept } : {}) });
+    this.retention.finalized(record.messageId, record.fromNode, state, now);
     if (record.fromNode !== OPERATOR_NODE_ID) {
       effects.statuses.push({ nodeId: record.fromNode, body: statusBody(record.messageId, state, reason, kept) });
     }
