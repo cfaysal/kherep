@@ -86,6 +86,8 @@ test("an unparseable command is uncertain, and the legacy regexes decide it", ()
   assert.equal(legacyForcePush('git push origin "unterminated'), false);
   assert.equal(forcePushVerdict("git push origin main <<EOF\nno end"), "uncertain");
   assert.equal(forcePushVerdict("echo $(git status"), "uncertain");
+  // A parser exception is caught and reported as uncertain, never thrown.
+  assert.equal(forcePushVerdict(undefined as never), "uncertain");
 });
 
 test("quoted text is scanned again down to depth 3, deeper is uncertain", () => {
