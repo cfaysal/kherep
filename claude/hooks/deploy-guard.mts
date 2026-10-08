@@ -14,7 +14,9 @@
 
 import fs from 'node:fs';
 import { forcePushVerdict, legacyForcePush } from './lib/git-push-match.mts';
-import { forgeDeployVerdict, forgeInstallVerdict, legacyForgeDeploy, legacyForgeInstall } from './lib/forge-match.mts';
+import {
+  forgeDeployVerdict, forgeInstallVerdict, forgeTunnelVerdict, legacyForgeDeploy, legacyForgeInstall, legacyForgeTunnel,
+} from './lib/forge-match.mts';
 
 // The fields this hook reads from a PreToolUse payload.
 interface ToolPayload {
@@ -145,8 +147,11 @@ function explicitlyApprovesProductionDeploy(text: string): boolean {
     );
   }
 
-  // 4. forge tunnel - explicitly forbidden by CLAUDE.md even in VOLLGAS mode
-  if (/\bforge\s+tunnel\b/.test(cmd)) {
+  // 4. forge tunnel - explicitly forbidden by CLAUDE.md even in VOLLGAS mode.
+  // Only the verb of a forge invocation counts (issue #347), with the same
+  // fallback as rule 1. The deploy-auth token never disarms this rule.
+  const tunnelVerdict = forgeTunnelVerdict(cmd);
+  if (tunnelVerdict === 'match' || (tunnelVerdict === 'uncertain' && legacyForgeTunnel(cmd))) {
     violations.push('forge tunnel blocked. CLAUDE.md forbids it without explicit user request.');
   }
 
@@ -219,7 +224,7 @@ function explicitlyApprovesProductionDeploy(text: string): boolean {
 
   process.stderr.write(
     `deploy-guard blocked this command:\n  - ${violations.join('\n  - ')}\n\n` +
-      'If the user explicitly approves this action, re-run the same command with a visible per-command KHEREP_DEPLOY_AUTH=approved prefix. A persistent environment variable is intentionally ignored.\n'
+      'If the user explicitly approves this action, re-run the same command with a visible per-command KHEREP_DEPLOY_AUTH=approved prefix. The prefix never unblocks forge tunnel. A persistent environment variable is intentionally ignored.\n'
   );
   process.exit(2);
 })();
