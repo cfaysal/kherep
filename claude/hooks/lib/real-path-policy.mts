@@ -26,7 +26,11 @@ export function nativeAbsolutePath(value: unknown, platform: Platform = process.
 // This catches reads and writes through directory symlinks without requiring
 // the final target to exist. Non-native/test-only path formats return empty and
 // continue through the caller's provider-neutral lexical checks.
-export function canonicalPathLike(value: unknown, platform: Platform = process.platform): string {
+export function canonicalPathLike(
+  value: unknown,
+  platform: Platform = process.platform,
+  realpath: (target: string) => string = fs.realpathSync,
+): string {
   let candidate = nativeAbsolutePath(value, platform);
   if (!candidate) return "";
   const suffix: string[] = [];
@@ -37,10 +41,18 @@ export function canonicalPathLike(value: unknown, platform: Platform = process.p
       suffix.unshift(path.basename(candidate));
       candidate = parent;
     }
-    return normalizePathLike(path.join(fs.realpathSync(candidate), ...suffix));
+    return normalizePathLike(path.join(realpath(candidate), ...suffix));
   } catch {
     return "";
   }
+}
+
+// Issue #348. Both canonical forms of a path: the JS realpath keeps 8.3 short
+// names, the native one expands them. A comparison that tries both meets a
+// short name on one side and the long name on the other.
+export function canonicalPathForms(value: unknown, platform: Platform = process.platform): string[] {
+  const forms = [canonicalPathLike(value, platform), canonicalPathLike(value, platform, fs.realpathSync.native)];
+  return [...new Set(forms.filter(Boolean))];
 }
 
 // Issue #346. realpathSync.native expands Windows 8.3 short names
