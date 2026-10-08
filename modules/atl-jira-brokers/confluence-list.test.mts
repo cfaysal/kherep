@@ -66,7 +66,7 @@ function harness(env: string, route: Route) {
       return CRED_TEXT;
     },
     async fetch(url) {
-      if (url.startsWith("https://auth.atlassian.com")) return response(200, { access_token: "token", expires_in: 3600 });
+      if (new URL(url).origin === "https://auth.atlassian.com") return response(200, { access_token: "token", expires_in: 3600 });
       if (url.endsWith("/_edge/tenant_info")) return response(200, { cloudId: "cloud" });
       urls.push(url);
       return route(url) ?? response(404, { message: "not in this fake" });
