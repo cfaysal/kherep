@@ -32,7 +32,7 @@ function read(stream: NodeJS.ReadableStream): Promise<string> {
   let payload: ToolPayload | null = null;
   try { payload = JSON.parse(await read(process.stdin)) as ToolPayload | null; } catch { process.exit(0); }
   if (!payload || !["Bash", "PowerShell"].includes(payload.tool_name as string)) process.exit(0);
-  const command = payload.tool_input && payload.tool_input.command;
+  const command = payload.tool_input?.command;
   if (typeof command !== "string") process.exit(0);
   const cwd = typeof payload.cwd === "string" && payload.cwd ? payload.cwd : process.cwd();
   const violations: string[] = [];
