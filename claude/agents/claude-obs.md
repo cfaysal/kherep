@@ -27,7 +27,7 @@ The first line of your final message is exactly one status line, and there is ex
   A finding you could not file is `failed` too. If pages were already created before the failure,
   the reason names their ids.
 
-After the status line: one line per written page (id and title), then nothing else.
+After it: one line per written page (id, title), nothing else. The SubagentStop hook `obs-result-check` checks it.
 
 ## What an observation is
 

@@ -85,42 +85,42 @@ function runWired(
   };
 }
 
-// Both guards read the Stop payload (stop_hook_active, the finished turn), so
+// The two Stop guards read the Stop payload (stop_hook_active, the finished turn), so
 // Stop is the only event they may be wired to (#254): under PreToolUse the
 // CLQ gate would judge a turn that is still running and block a tool call.
+// obs-result-check (#326) judges the observation agent's final message instead.
 const GUARDS = [
   {
-    hook: "clq-accept-gate.mts",
-    event: "Stop",
-    blocking: () => transcript("clq", [
+    hook: "clq-accept-gate.mts", event: "Stop", matcher: "",
+    blocking: () => ({ transcript_path: transcript("clq", [
       user("baue das"),
       assistant("Dispatched: 1 agents\nOutcomes: kherep-builder[opus] -> added retry\nEvidence: npm test 3/3\nNext: ship"),
-    ]),
+    ]) }),
   },
-  {
-    hook: "maestro-banner-gate.mts",
-    event: "Stop",
-    blocking: () => transcript("banner", [user("wo stehen wir"), assistant("x".repeat(500))]),
-  },
+  { hook: "maestro-banner-gate.mts", event: "Stop", matcher: "",
+    blocking: () => ({ transcript_path: transcript("banner", [user("wo stehen wir"), assistant("x".repeat(500))]) }) },
+  { hook: "obs-result-check.mts", event: "SubagentStop", matcher: "claude-obs",
+    blocking: () => ({ agent_type: "claude-obs", stop_hook_active: false, last_assistant_message: "OBS-RESULT: failed wrote 4 pages" }) },
 ];
 
 for (const guard of GUARDS) {
   test(`${guard.hook} is wired under ${guard.event} as an .mts file that exists`, () => {
-    const { event, command } = wiredCommand(guard.hook);
+    const { event, matcher, command } = wiredCommand(guard.hook);
     assert.equal(event, guard.event, `${guard.hook} is wired under ${event}`);
+    assert.equal(matcher, guard.matcher);
     assert.match(command, new RegExp(`^node "__KHEREP_CLAUDE_HOME__/hooks/${guard.hook.replace(".", "\\.")}"$`));
     assert.ok(fs.existsSync(path.join(repo, "claude", "hooks", guard.hook)), `claude/hooks/${guard.hook} exists`);
   });
 
   test(`${guard.hook} still blocks a blocking turn through its wired command`, () => {
-    const { status, decision, stderr } = runWired(wiredCommand(guard.hook), { transcript_path: guard.blocking() });
+    const { status, decision, stderr } = runWired(wiredCommand(guard.hook), guard.blocking());
     assert.equal(status, 0, stderr);
     assert.equal(decision, "block", `no block decision; stderr: ${stderr}`);
   });
 
   test(`${guard.hook} does not block its own continuation through its wired command`, () => {
     const { status, decision } = runWired(wiredCommand(guard.hook), {
-      transcript_path: guard.blocking(),
+      ...guard.blocking(),
       stop_hook_active: true,
     });
     assert.equal(status, 0);

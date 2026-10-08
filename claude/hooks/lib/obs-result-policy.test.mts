@@ -1,0 +1,88 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { checkObsResult } from "./obs-result-policy.mts";
+
+function valid(message: string, status: string): void {
+  assert.deepEqual(checkObsResult(message), { status }, message);
+}
+
+function malformed(message: string, needle: RegExp): void {
+  const result = checkObsResult(message);
+  assert.ok("problem" in result, `accepted: ${message}`);
+  assert.match(result.problem, needle, message);
+}
+
+test("a wrote line with n equal to the number of numeric ids is valid", () => {
+  valid("OBS-RESULT: wrote 1 276858041", "wrote");
+  valid("OBS-RESULT: wrote 3 1,2,3", "wrote");
+  valid("OBS-RESULT: wrote 3 1, 2, 3\n1 First title\n2 Second\n3 Third", "wrote");
+  valid("\n  \r\nOBS-RESULT: wrote 2 11 22\r\n11 Title", "wrote");
+});
+
+test("empty and failed with a reason are valid", () => {
+  valid("OBS-RESULT: empty nothing new in this turn", "empty");
+  valid("OBS-RESULT: failed missing broker /home/x/.claude/kherep/confluence.json", "failed");
+  valid("OBS-RESULT: failed abandoned page 4711\n4711 Half-written page", "failed");
+});
+
+test("the observed mixed line is malformed", () => {
+  malformed("OBS-RESULT: failed wrote 4 pages: 1,2,3,4", /reason starts with a status word/);
+  malformed("OBS-RESULT: empty Empty turn", /reason starts with a status word/);
+  malformed("OBS-RESULT: failed (failed) twice", /reason starts with a status word/);
+});
+
+test("the first non-empty line has to be the status line", () => {
+  malformed("", /no OBS-RESULT status line/);
+  malformed("   \n\t\n", /no OBS-RESULT status line/);
+  malformed("Done.\nOBS-RESULT: wrote 1 5", /no OBS-RESULT status line/);
+  malformed("`OBS-RESULT: wrote 1 5`", /no OBS-RESULT status line/);
+  malformed("OBS-RESULT: written 1 5", /no OBS-RESULT status line/);
+  malformed("OBS-RESULT: wrote,1 5", /no OBS-RESULT status line/);
+  malformed("obs-result: wrote 1 5", /no OBS-RESULT status line/);
+});
+
+test("exactly one OBS-RESULT line may exist", () => {
+  malformed("OBS-RESULT: wrote 1 5\nOBS-RESULT: empty nothing", /more than one OBS-RESULT line/);
+  malformed("OBS-RESULT: empty nothing\nnote: OBS-RESULT was hard", /more than one OBS-RESULT line/);
+});
+
+test("wrote needs a positive integer count", () => {
+  malformed("OBS-RESULT: wrote", /positive count/);
+  malformed("OBS-RESULT: wrote 0", /positive count/);
+  malformed("OBS-RESULT: wrote 01 5", /positive count/);
+  malformed("OBS-RESULT: wrote two 5,6", /positive count/);
+  malformed("OBS-RESULT: wrote -1 5", /positive count/);
+});
+
+test("wrote needs numeric ids", () => {
+  malformed("OBS-RESULT: wrote 4 pages: 1,2,3,4", /ids are not numeric/);
+  malformed("OBS-RESULT: wrote 1 abc", /ids are not numeric/);
+  malformed("OBS-RESULT: wrote 1 5;", /ids are not numeric/);
+});
+
+test("wrote needs as many ids as its count", () => {
+  malformed("OBS-RESULT: wrote 1", /count differs from the number of ids/);
+  malformed("OBS-RESULT: wrote 2 5", /count differs from the number of ids/);
+  malformed("OBS-RESULT: wrote 1 5,6", /count differs from the number of ids/);
+  malformed("OBS-RESULT: wrote 2 5,,", /count differs from the number of ids/);
+});
+
+test("empty and failed need a reason", () => {
+  malformed("OBS-RESULT: empty", /empty needs a reason/);
+  malformed("OBS-RESULT: failed   ", /failed needs a reason/);
+});
+
+test("a problem never quotes the message", () => {
+  const secret = "Example Corp host.example.com 99999";
+  for (const message of [
+    `OBS-RESULT: failed wrote ${secret}`,
+    `OBS-RESULT: wrote 7 ${secret}`,
+    `${secret}\nOBS-RESULT: empty x`,
+    `OBS-RESULT: wrote 3 99999`,
+  ]) {
+    const result = checkObsResult(message);
+    assert.ok("problem" in result, message);
+    assert.doesNotMatch(result.problem, /Example|example\.com|99999|\b7\b|\b3\b/, result.problem);
+  }
+});

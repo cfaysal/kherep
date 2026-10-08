@@ -21,6 +21,8 @@ hooks/maestro-banner-gate.mts
 hooks/maestro-banner-gate.test.mts
 hooks/observation-stop.mts
 hooks/observation-stop.test.mts
+hooks/obs-result-check.mts
+hooks/obs-result-check.test.mts
 hooks/research-first.mts
 hooks/research-first.test.mts
 hooks/research-stop.mts
@@ -31,6 +33,8 @@ hooks/lib/dispatch-policy.mts
 hooks/lib/command-walk.mts
 hooks/lib/obs-brief-policy.mts
 hooks/lib/obs-brief-policy.test.mts
+hooks/lib/obs-result-policy.mts
+hooks/lib/obs-result-policy.test.mts
 hooks/lib/git-commit-match.mts
 hooks/lib/git-push-match.mts
 hooks/lib/git-push-match.test.mts
