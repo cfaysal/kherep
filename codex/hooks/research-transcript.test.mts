@@ -86,6 +86,29 @@ test("parses actual nested tools calls inside functions.exec", () => {
   assert.deepEqual(facts, { brain: true, codeGraph: true, codeWork: true, substantial: true });
 });
 
+test("recognizes exec when the functions namespace is recorded separately", () => {
+  const source = 'await tools.exec_command({cmd: "node D:/Work/tools/atl-confluence.mts search --space KB --query hooks"});';
+  for (const type of ["function_call", "custom_tool_call"]) {
+    const parsed = parseRollout(rollout(started("turn"), line("response_item", {
+      type, name: "exec", namespace: "functions", [type === "function_call" ? "arguments" : "input"]: source,
+    })), "turn");
+    assert.ok(parsed);
+    assert.equal(researchFacts(parsed, "D:/Work/repo", () => false).brain, true, type);
+    assert.deepEqual(parsed.calls.map(({ name }) => name), ["exec_command"]);
+  }
+});
+
+test("does not treat bare exec or another namespace as the functions wrapper", () => {
+  const source = 'await tools.exec_command({cmd: "node D:/Work/tools/atl-confluence.mts search --space KB --query hooks"});';
+  for (const namespace of [undefined, "other"]) {
+    const parsed = parseRollout(rollout(started("turn"), line("response_item", {
+      type: "custom_tool_call", name: "exec", namespace, input: source,
+    })), "turn");
+    assert.ok(parsed);
+    assert.equal(researchFacts(parsed, "D:/Work/repo", () => false).brain, false);
+  }
+});
+
 test("does not infer calls from user text, tool output, strings, or comments", () => {
   const source = [
     "const quoted = 'tools.mcp__codebase_memory_mcp__search_graph({})';",
