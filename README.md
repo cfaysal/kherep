@@ -24,6 +24,20 @@ Use Kherep to give your agents consistent working rules, reusable skills and a s
 
 Backends and integrations are configured separately. Installing an adapter does not provision a model, MCP service or Confluence space.
 
+## How it works
+
+### Central Brain
+
+[![Relief: scribes of Claude Code and Codex bring findings to one archive; a scale weighs the evidence, the broker seals each scroll, private matters stay in a locked shrine.](assets/illustrations/kherep-brain-relief.svg)](assets/illustrations/kherep-brain.svg)
+
+Sessions are reminded to search the space before answering, and the matching pages come back with their evidence status. After a substantial turn, the observation agent files what the turn established through the broker. See the [detailed diagram](assets/illustrations/kherep-brain.svg).
+
+### Control Plane
+
+[![Relief: two temples on opposite banks exchange sealed scrolls by boat through a central obelisk, where waiting messages are kept in jars.](assets/illustrations/kherep-control-plane-relief.svg)](assets/illustrations/kherep-control-plane.svg)
+
+Sessions on different nodes exchange messages through one Cloudflare Worker, and a session can ask another node to start a new intercom session. A peer message informs; it never approves. See the [detailed diagram](assets/illustrations/kherep-control-plane.svg).
+
 ## Get started
 
 Use Node.js 24, npm and Git. The Claude installer also needs Bash; on Windows use Git Bash.
