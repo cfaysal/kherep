@@ -107,12 +107,12 @@ test("an explicit alternate intercom requires sessions authority and process cap
 });
 
 
-test("Desktop waiting preserves wake guards and needs no process budget or working directory", async (t) => {
+test("Desktop queue preserves wake guards and budget without starting a task or using its working directory", async (t) => {
   const cases: { expected: string; mode?: string | null; cwd?: "outside" | "unknown"; exhaustBudget?: boolean }[] = [
     { expected: "disabled" }, { expected: "not-allowlisted" },
     { expected: "permission-mode", mode: "bypassPermissions" }, { expected: "permission-mode-unknown", mode: null },
-    { expected: "depth-limit" }, { expected: "awaiting-user-turn", exhaustBudget: true },
-    { expected: "awaiting-user-turn", cwd: "outside" }, { expected: "awaiting-user-turn", cwd: "unknown" },
+    { expected: "depth-limit" }, { expected: "budget", exhaustBudget: true },
+    { expected: "queue-failed", cwd: "outside" }, { expected: "queue-failed", cwd: "unknown" },
   ];
   for (const [index, item] of cases.entries()) {
     const { expected } = item;
@@ -141,7 +141,8 @@ test("Desktop waiting preserves wake guards and needs no process budget or worki
     await codexQueueIdle();
     assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted", expected);
     assert.equal(listTasks(node.paths).length, 0, expected);
-    if (expected === "awaiting-user-turn") assert.equal(getMessageProgress(node.paths.inbox, id)?.code, expected);
+    if (expected === "budget") assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "budget-exhausted");
+    if (expected === "queue-failed") assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "wake-failed");
     const audit = fs.readFileSync(path.join(node.paths.dir, "wake.jsonl"), "utf8");
     assert.ok(audit.includes('"action":"' + expected + '"'), expected);
     assert.ok(!audit.includes("private message"), expected);

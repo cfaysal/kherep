@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { bypassesPermissions, isPlainSessionId, listenerDir, takeTurn, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
-import { codexAppRollout, codexHome, currentCodexApp } from "./codex-app.mts";
-import { daemonSocket, loadedThreads, probesSettled, tuiReachability } from "./codex-daemon.mts";
+import { codexHome, currentCodexApp } from "./codex-app.mts";
+import { daemonSocket, loadedThreads, probesSettled, tuiMarker, tuiReachability } from "./codex-daemon.mts";
 import { codexSessionRefs, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { note, pruneNoted } from "./codex-wake.mts";
 import { queueArgs, runQueue } from "./codex-queue-run.mts";
@@ -18,20 +18,16 @@ import type { RunnerDeps } from "./session-runner.mts";
 import { listTasks } from "./task-records.mts";
 import { killSwitch } from "./wake-hook.mts";
 
-// Wakes an idle interactive Codex TUI session with `codex queue`. Desktop
-// sessions keep messages in their original mailbox until their next native
-// UserPromptSubmit or Stop hook. Queue cannot start a Desktop turn, and a
-// separate intercom task cannot confirm delivery in that chat (issue #156).
-// No second writer resumes the app's thread. Queue carries only the fixed
-// wake pointer and never peer text. A TUI whose rollout reads like a Desktop
-// chat is queued only when the shared app-server daemon has it loaded and its
-// TUI marker exists (codex-daemon.mts, issue #268); unknown means Desktop.
+// Queues a compact pointer for an authorized original Codex session (issue
+// #367). The existing owner consumes persistent queue input; this producer
+// never resumes the thread. Trusted hooks alone offer and confirm peer text
+// from the original mailbox. Queue success is not delivery confirmation.
 //
 // Candidates are recorded Codex sessions seen within 12 hours, except task
 // threads. Both paths use the kill switch, full-id allowlist or codexApp
-// grant, permission-mode check and reply-depth limit. Waiting in a Desktop
-// mailbox consumes no process slot or autonomous-turn budget. The TUI queue
-// uses the shared budget and records at most one wake attempt per message.
+// grant, permission-mode check and reply-depth limit. Queue attempts use the
+// shared budget and record at most one attempt per message. A TUI marker with
+// unknown reachability cannot authorize a queue through the app-only grant.
 
 const queuedFile = (paths: NodePaths, sessionId: string): string => path.join(listenerDir(paths), `${sessionId}.queued.json`);
 
@@ -148,20 +144,13 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: numb
   }
   let due = fresh.filter((r) => (r.depth ?? 0) < MAX_REPLY_DEPTH);
   if (due.length === 0) return;
-  // A recent hook registration is not proof that a Desktop chat is closed.
-  // Keep its address even when resumeClosed permits genuinely closed targets.
-  let tuiReachable = false;
-  try {
-    if (codexAppRollout(home, sessionId) === "ok") {
-      if (!reachable(sessionId)) {
-        progressRecords(paths, due, "waiting", "awaiting-user-turn", now);
-        return decide(due, "awaiting-user-turn");
-      }
-      tuiReachable = true;
-    }
-  } catch {
-    progressRecords(paths, due, "waiting", "wake-unconfirmed", now);
-    return decide(due, "queue-failed");
+  const tuiReachable = reachable(sessionId);
+  // Full policy authorization does not require the owner's loaded-thread
+  // probe. The automatic app grant must still wait while a marked TUI's
+  // classification is unresolved, before budget or attempt bookkeeping.
+  if (grant === "codexApp" && fs.existsSync(tuiMarker(home, sessionId)) && !tuiReachable) {
+    progressRecords(paths, due, "waiting", "awaiting-user-turn", now);
+    return decide(due, "awaiting-user-turn");
   }
   const queued = readQueued(paths, sessionId);
   const pending = due.filter((r) => queued[r.messageId] && now - Date.parse(queued[r.messageId]) < REOFFER_AFTER_MS);
