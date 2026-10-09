@@ -8,6 +8,8 @@
 
 **Tech Stack:** Node.js 24, erasable TypeScript `.mts`, `node:test`, GitHub Git Data API.
 
+**Current authorized phase:** Only this versioned plan and synthetic regression tests may be added now. Tasks 2 through 7 describe the later implementation and verification sequence; they must not be executed until the Director separately authorizes production changes.
+
 ---
 
 ### Task 1: Lock the dispatcher contract with failing tests
@@ -17,15 +19,19 @@
 - Create: `codex/hooks/post-edit-checks-output.test.mts`
 - Test: `codex/hooks/hook-adapter.test.mts`
 
-- [ ] **Step 1: Add routing fixtures before implementation**
+- [ ] **Step 1: Add existing-API RED assertions before implementation**
 
-Cover direct `Edit`/`Write`/`MultiEdit`/`apply_patch`, one-target and three-target patches, move destinations, paths containing shell metacharacters, a supported read-only `functions.exec` wrapper, a supported direct patch wrapper, mixed wrappers and unknown/dynamic wrappers. Assert child counts: routine read `4 -> 0`, one edit `4 -> 4`, three targets `12 -> 12`, and unknown wrapper `4 -> 4`.
+Use `renderHooks`, `render`, `prepareManagedConfig` and `decision` to show concrete current behavior: the edit group has four entries instead of one, no exact four-watcher predecessor renderer exists, and research-stop gives the same generic reason when only Brain or only graph evidence is missing. These failures establish missing behavior without depending on a missing module import.
 
-- [ ] **Step 2: Add output and failure fixtures before implementation**
+- [ ] **Step 2: Add dispatcher routing fixtures as executable test design**
+
+Cover direct `Edit`/`Write`/`MultiEdit`/`apply_patch`, one-target and three-target patches, paths containing shell metacharacters, a supported read-only `functions.exec` wrapper, a supported direct patch wrapper, mixed wrappers and unknown/dynamic wrappers. The baseline `patchPaths` recognizes Add/Update/Delete headers and does not emit `Move to` destinations; fixtures must preserve every recognized source path and must not claim destination coverage already exists. Assert child-count projections: routine read `4 -> 0`, one edit `4 -> 4`, three recognized targets `12 -> 12`, and unknown wrapper `4 -> 4`.
+
+- [ ] **Step 3: Add output and failure fixtures before implementation**
 
 Run synthetic watcher children that emit manifest/LOC/simplify plaintext, Umlaut JSON with `hookSpecificOutput.additionalContext` plus `systemMessage`, silence, and a non-zero failure. Assert one valid PostToolUse JSON document for simultaneous findings, empty stdout for success/no-op, retained `systemMessage`, and a visible non-zero child failure.
 
-- [ ] **Step 3: Run the focused tests and record RED**
+- [ ] **Step 4: Run the focused tests and record RED**
 
 Run:
 
@@ -33,24 +39,23 @@ Run:
 node --test codex/hooks/post-edit-checks-routing.test.mts codex/hooks/post-edit-checks-output.test.mts codex/hooks/hook-adapter.test.mts
 ```
 
-Expected: FAIL because `codex/hooks/post-edit-checks.mts` and its fixed dispatcher interface do not exist.
+Expected: FAIL for independent reasons: current renderer count `4 != 1`, missing evidence is not named specifically, the exact predecessor API is absent, and dispatcher runtime fixtures cannot yet run. Missing-module fixtures are supplementary test design rather than the sole RED signal.
 
 ### Task 2: Implement the fixed post-edit dispatcher
 
 **Files:**
 - Create: `codex/hooks/post-edit-checks.mts`
-- Modify: `codex/hooks/hook-adapter.mts`
 - Test: `codex/hooks/post-edit-checks-routing.test.mts`
 - Test: `codex/hooks/post-edit-checks-output.test.mts`
 - Test: `codex/hooks/hook-adapter.test.mts`
 
-- [ ] **Step 1: Export the existing post normalization seam without changing pre phases**
+- [ ] **Step 1: Reuse the existing exported post normalization seam**
 
-Reuse `normalizePayloads(payload, "post")` so apply-patch path extraction and multi-target behavior stay identical. Do not change `pre`, `pre-privacy`, `pre-no-transcript`, `shellCommandsFromExec` or deploy approval normalization.
+Call the already-exported `normalizePayloads(payload, "post")` unchanged so apply-patch Add/Update/Delete path extraction and multi-target behavior stay identical. No hook-adapter source edit is required. Do not change `pre`, `pre-privacy`, `pre-no-transcript`, `shellCommandsFromExec` or deploy approval normalization.
 
 - [ ] **Step 2: Implement bounded wrapper classification**
 
-Use the existing lexical nested-tool-call parser. Return zero watcher payloads only when every recognized call is in the explicit supported read-only set and parsing is complete. Route recognized direct edit/patch calls through existing post normalization. Any unknown, dynamic, malformed or mixed wrapper conservatively receives the old single normalized fallback. Do not add wildcard MCP exemptions, `fetch*` exemptions or shell-prefix heuristics.
+Use the existing lexical nested-tool-call parser. Return zero watcher payloads only when every recognized call is in the explicit supported read-only set and parsing is complete. Route recognized direct edit/patch calls through existing post normalization. Any unknown, dynamic, malformed or mixed wrapper conservatively receives every payload returned by the existing `normalizePayloads(payload, "post")` fallback. If it already recognizes multiple patch paths, all of those paths remain covered; only a wrapper with no recognized patch path falls back to the single Bash-shaped payload. Do not add wildcard MCP exemptions, `fetch*` exemptions or shell-prefix heuristics.
 
 - [ ] **Step 3: Run the four public watcher files with argv arrays**
 
@@ -146,7 +151,7 @@ Run the installer migration fixtures with custom hook groups, unrelated trust ap
 **Files:**
 - Modify: `codex/ARCHITECTURE.md`
 - Modify: `docs/CODEX.md`
-- Modify: `README.md` only if its architecture diagram needs a changed edge
+- Modify: `README.md` only if its architecture diagram needs a changed edge in the later authorized implementation
 
 - [ ] **Step 1: Document configured behavior**
 
