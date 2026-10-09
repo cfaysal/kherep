@@ -113,7 +113,7 @@ No new helper module is needed unless later implementation evidence proves the e
 Run the unchanged affected suites:
 
 ```sh
-node --test modules/control-plane/node/deliver-codex.test.mts modules/control-plane/node/codex-stop-receive.test.mts modules/control-plane/node/deliver-hook.test.mts modules/control-plane/node/deliver-confirm.test.mts modules/control-plane/node/delivery-identity.test.mts modules/control-plane/node/autonomy.test.mts modules/control-plane/node/msg-inbox.test.mts modules/control-plane/node/codex-sessions.test.mts codex/lib/external-delivery-attribution.test.mts
+node --test modules/control-plane/node/deliver-codex.test.mts modules/control-plane/node/codex-stop-receive.test.mts modules/control-plane/node/deliver-hook.test.mts modules/control-plane/node/deliver-confirm.test.mts modules/control-plane/node/delivery-identity.test.mts modules/control-plane/node/addressing-depth.test.mts modules/control-plane/node/autonomy.test.mts modules/control-plane/node/msg-inbox.test.mts modules/control-plane/node/codex-sessions.test.mts codex/lib/external-delivery-attribution.test.mts
 ```
 
 These suites retain process-level receive coverage, nonce-framed peer authority, reply-depth, byte and message bounds, retries, isolation, continuation budgets, identity checks and attribution ownership.
