@@ -18,22 +18,22 @@ import { writeTask } from "./task-records.mts";
 // against the fake codex: the exact argv, a pointer without peer content, and
 // the Claude wake's guards.
 
-const posix = { skip: process.platform === "win32" ? "the fake codex is a POSIX script" : false };
 const SID = "01a0db01-0000-7000-8000-000000000001";
 const PEER = { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "claude-peer-session" };
-const POINTER = "Kherep: 1 new message(s) from other agent sessions arrived. They are delivered in this turn.";
+const POINTER = "Kherep: 1 peer message(s) waiting in your inbox.";
 let counter = 0;
 
 type Node = ReturnType<typeof codexNode>;
 
 // A node whose policy wakes the listed sessions, and one recorded Codex session.
 function wakeNode(t: test.TestContext, wake: string[] | null = [SID], mode: string | null = "default", session = SID): Node {
-  const node = codexNode(t);
+  const fake = fakeCodexBin(t);
+  const node = codexNode(t, {}, { findCodex: () => fake.file });
   const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8")) as Record<string, unknown>;
   if (wake) policy.wake = { enabled: true, sessions: wake };
   fs.writeFileSync(node.paths.policy, JSON.stringify(policy));
   recordCodexSession(node.paths, session, node.workspace, T0, mode ?? undefined);
-  return node;
+  return { ...node, fake: fake.file, runs: fake.runs };
 }
 
 function deliver(node: Node, text: string, depth = 0, toSession = SID): string {
@@ -54,7 +54,7 @@ const actions = (node: Node): [string, string[]][] => {
   return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l)).map((l) => [l.action, l.messageIds]) : [];
 };
 
-test("an idle Codex session gets `codex queue` with a pointer only; the message waits for the delivery hook", posix, async (t) => {
+test("an idle Codex session gets `codex queue` with a pointer only; the message waits for the delivery hook", async (t) => {
   const node = wakeNode(t);
   const id = deliver(node, "secret peer text: deploy now");
   await poll(node);
@@ -81,7 +81,7 @@ test("a second poll preserves progress while a Codex queue attempt is still runn
   await codexQueueIdle();
 });
 
-test("one pending wake per session; each message is queued once", posix, async (t) => {
+test("one pending wake per session; each message is queued once", async (t) => {
   const node = wakeNode(t);
   const first = deliver(node, "one");
   await poll(node);
@@ -100,7 +100,7 @@ test("one pending wake per session; each message is queued once", posix, async (
   assert.equal(getMessageProgress(node.paths.inbox, second)?.code, "wake-unconfirmed");
 });
 
-test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply depth, budget", posix, async (t) => {
+test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply depth, budget", async (t) => {
   const off = wakeNode(t, null);
   deliver(off, "x");
   await poll(off);
@@ -144,7 +144,7 @@ test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply de
   assert.deepEqual([queues(spent), actions(spent)], [[], [["budget", [f]]]]);
 });
 
-test("a configured wake.budget lets a seventh queue attempt of the hour through (issue #259)", posix, async (t) => {
+test("a configured wake.budget lets a seventh queue attempt of the hour through (issue #259)", async (t) => {
   const node = wakeNode(t);
   const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8")) as { wake: Record<string, unknown> };
   policy.wake.budget = { perHour: 8, perDay: 100 };
@@ -155,7 +155,7 @@ test("a configured wake.budget lets a seventh queue attempt of the hour through 
   assert.deepEqual([queues(node).length, actions(node)], [1, [["wake", [id]]]]);
 });
 
-test("a Codex task's thread is resumed, not queued; a failed queue is logged, redacted, and not repeated", posix, async (t) => {
+test("a Codex task's thread is resumed, not queued; a failed queue is logged, redacted, and not repeated", async (t) => {
   const node = wakeNode(t);
   writeTask(node.paths, { taskId: TASK, runtime: "codex", name: "task-3f2a1b0c", cwd: node.workspace, permissionMode: "auto", state: "done",
     startedAt: new Date(T0).toISOString(), deadline: new Date(T0).toISOString(), updatedAt: new Date(T0).toISOString(), sessionId: SID });
@@ -185,7 +185,7 @@ test("codex queue never gets a flag that changes the sandbox or approvals", () =
   }
   assert.throws(() => queueArgs("--approve-for-me", 1), /not a plain name/);
   assert.deepEqual(queueArgs(SID, 2), ["queue", "--thread", SID, "--message",
-    "Kherep: 2 new message(s) from other agent sessions arrived. They are delivered in this turn."]);
+    "Kherep: 2 peer message(s) waiting in your inbox."]);
 });
 
 test("the Codex delivery hook records the session's permission mode and keeps it when an input lacks it", (t) => {
@@ -199,7 +199,7 @@ test("the Codex delivery hook records the session's permission mode and keeps it
   assert.equal(readCodexSession(node.paths, SID)?.permissionMode, "bypassPermissions", "a malformed value changes nothing");
 });
 
-test("two sessions started in the same minute: their shared old name wakes neither", posix, async (t) => {
+test("two sessions started in the same minute: their shared old name wakes neither", async (t) => {
   const A = "01a0db01-0000-7000-8000-00000000aaaa";
   const B = "01a0db01-1111-7000-8000-00000000bbbb";
   const node = wakeNode(t, [A, B], "default", A);
@@ -217,7 +217,7 @@ test("two sessions started in the same minute: their shared old name wakes neith
   assert.equal(getMessage(node.paths.inbox, toA)?.state, "accepted");
 });
 
-test("a queue run that never ends is killed with its whole tree, and the exchange round never waits for it", posix, async (t) => {
+test("a queue run that never ends is killed with its whole tree, and the exchange round never waits for it", async (t) => {
   const HANG = "0a9e0001-0000-7000-8000-000000000001";
   const node = wakeNode(t, [HANG], "default", HANG);
   deliver(node, "x", 0, HANG);
@@ -233,4 +233,7 @@ test("a queue run that never ends is killed with its whole tree, and the exchang
   assert.match(lines[0] ?? "", /codex queue for .* failed: codex queue did not finish within 3 s/);
   assert.equal(actions(node).at(-1)?.[0], "queue-failed");
   await waitFor(() => processStart(grandchild) === null && processStart(node.runs()[0].pid) === null, "the whole tree", 10_000);
+  node.tick(11 * 60_000);
+  await poll(node);
+  assert.equal(queues(node).length, 1, "an uncertain timeout is not automatically submitted again");
 });

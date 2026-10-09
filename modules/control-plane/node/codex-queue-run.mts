@@ -5,14 +5,13 @@ import { lastLine } from "./codex-output.mts";
 import { signalGroup } from "./codex-process.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
 import type { RunnerDeps } from "./session-runner.mts";
-import { wakeText } from "./wake-hook.mts";
 
 export const QUEUE_TIMEOUT_MS = 30_000;
 const FORBIDDEN = /^(--dangerously-|--approve-for-me$|--add-dir$|--sandbox$|-s$|-c$|--config$)/;
 
 export function queueArgs(thread: string, count: number): string[] {
   if (!isCodexSessionId(thread)) throw new Error("codex session id is not a plain name");
-  return guardQueue(["queue", "--thread", thread, "--message", wakeText(count)]);
+  return guardQueue(["queue", "--thread", thread, "--message", `Kherep: ${count} peer message(s) waiting in your inbox.`]);
 }
 
 export function guardQueue(args: string[]): string[] {

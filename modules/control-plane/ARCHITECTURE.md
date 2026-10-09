@@ -117,6 +117,8 @@ cumulative acknowledgement, but it does not refresh liveness or dispatch again.
 
 ## Accepted-message delivery progress
 
+Codex interactive wake uses the public persistent `codex queue` producer for an authorized original Desktop or Terminal session. The existing owner consumes the queued pointer; the producer never resumes the thread or marks its inbox delivered. `node/codex-queue.mts` retains authorization, kill switch, permissions, depth, budget and the per-message attempt ledger. A marked TUI with unknown reachability still cannot obtain a queue attempt from the automatic app grant. `node/codex-queue-run.mts` carries only a compact Codex-specific hint, leaving shared Claude wake text unchanged. Windows original-Desktop consumption is measured on CLI 0.160.1 and Desktop embedded CLI 0.162.0-alpha.17.2; Mac acceptance remains open (issue #367).
+
 Read-only `node/msg-inbox.mts` inspection resolves the caller's verified session references against both the current inbox target and the retained original `closedTo` address after fallback handover. It exposes the current destination and available delivery task/session identifiers. Hook delivery and `--receive` continue matching the current target exclusively, so inspection does not create a second delivery owner.
 
 The target node reports optional fixed progress on the existing authenticated `message.status` path while the canonical state remains `accepted`. The Registry accepts it only from the stored target node, persists strictly newer observations in additive columns, relays the metadata-only projection to the sender, and clears it on a forward state transition. A same-state duplicate changes neither audit nor sender traffic.

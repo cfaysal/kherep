@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { listenerDir, takeTurn } from "./autonomy.mts";
+import { fakeCodexBin } from "./codex-fixture.mts";
 import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { codexSessionName, recordCodexSession } from "./codex-sessions.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
@@ -38,23 +39,24 @@ function setup(t: test.TestContext, resumeClosed: boolean, address = APP, tui?: 
     fs.writeFileSync(path.join(home, "tui-thread-reference-capabilities", APP), "");
   }
   let launches = 0;
+  const fake = fakeCodexBin(t);
   const loadedThreads = async (): Promise<Set<string> | null> => (tui ? new Set([APP]) : null);
-  const deps = () => ({ ...node.deps(), codex: { home, loadedThreads, findCodex: () => { launches++; return null; } } });
+  const deps = () => ({ ...node.deps(), codex: { home, loadedThreads, findCodex: () => { launches++; return fake.file; } } });
   const poll = async () => { pollCodexQueue(deps()); await codexQueueIdle(); };
   return { ...node, poll, launches: () => launches };
 }
 
-test("a listed Desktop reply stays in its original mailbox and is confirmed by that chat's hook", async (t) => {
+test("a Desktop queue keeps the original mailbox and only that chat's hook confirms delivery", async (t) => {
   for (const resumeClosed of [true, false]) {
     const node = setup(t, resumeClosed);
     await node.poll();
     assert.equal(getMessage(node.paths.inbox, MESSAGE)?.state, "accepted");
     assert.equal(getMessage(node.paths.inbox, MESSAGE)?.toSession, APP);
     assert.equal(getMessage(node.paths.inbox, MESSAGE)?.closedTo, undefined);
-    assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, "awaiting-user-turn");
-    assert.equal(node.launches(), 0, "no queue or second writer is started for the Desktop thread");
+    assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, "wake-pending");
+    assert.equal(node.launches(), 1, "the public queue producer runs without resuming the thread");
     assert.deepEqual(listTasks(node.paths), []);
-    assert.equal(takeTurn(node.paths, APP, T0), "ok", "waiting consumes no autonomous-turn budget");
+    assert.equal(takeTurn(node.paths, APP, T0), "spacing", "queue admission consumes the shared turn budget");
     const input = { session_id: APP, cwd: node.workspace, permission_mode: "default" };
     const output = JSON.parse(deliverForCodex({ ...input, hook_event_name: "UserPromptSubmit" }, {
       paths: node.paths, now: () => T0 + 1000,
@@ -76,12 +78,12 @@ test("a Desktop alias remains readable after repeated polls without a confirming
   assert.equal(record.toSession, alias);
   assert.equal(record.offers, undefined);
   assert.equal(record.delivery, undefined);
-  assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, "awaiting-user-turn");
-  assert.equal(node.launches(), 0);
+  assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, "wake-unconfirmed");
+  assert.equal(node.launches(), 1, "an unconfirmed queue attempt is never repeated");
   assert.deepEqual(listTasks(node.paths), []);
 });
 
-test("queued metadata from an earlier Desktop attempt does not hide waiting for the original chat", async (t) => {
+test("a pending or unconfirmed Desktop attempt preserves the original message without retry", async (t) => {
   for (const queuedAt of [T0, T0 - 11 * 60_000]) {
     const node = setup(t, true);
     fs.mkdirSync(listenerDir(node.paths), { recursive: true });
@@ -90,7 +92,7 @@ test("queued metadata from an earlier Desktop attempt does not hide waiting for 
     await node.poll();
     assert.equal(getMessage(node.paths.inbox, MESSAGE)?.state, "accepted");
     assert.equal(getMessage(node.paths.inbox, MESSAGE)?.toSession, APP);
-    assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, "awaiting-user-turn");
+    assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, queuedAt === T0 ? "wake-pending" : "wake-unconfirmed");
     assert.equal(node.launches(), 0);
   }
 });
@@ -98,13 +100,35 @@ test("queued metadata from an earlier Desktop attempt does not hide waiting for 
 test("a TUI that reads as Desktop but is loaded on the daemon with its marker is queued once listed by full id", async (t) => {
   const listed = setup(t, false, APP, { wake: { sessions: [APP] } });
   await listed.poll();
-  assert.equal(getMessageProgress(listed.paths.inbox, MESSAGE)?.code, "awaiting-user-turn", "no probe result in the first round");
+  assert.equal(listed.launches(), 1, "an authorized queue does not require a loaded-thread probe");
   await listed.poll();
-  assert.equal(listed.launches(), 1, "the second round runs codex queue");
+  assert.equal(listed.launches(), 1, "the second round does not repeat the queue");
   assert.equal(getMessage(listed.paths.inbox, MESSAGE)?.toSession, APP);
   assert.deepEqual(listTasks(listed.paths), [], "no intercom task or second writer");
   const granted = setup(t, false, APP, { wake: { codexApp: true } });
   for (let round = 0; round < 3; round++) await granted.poll();
   assert.equal(granted.launches(), 0, "codexApp never grants a reachable TUI");
   assert.equal(getMessageProgress(granted.paths.inbox, MESSAGE)?.code, "wake-not-authorized");
+});
+
+test("an unresolved TUI marker cannot turn the automatic app grant into TUI authorization", async (t) => {
+  const node = setup(t, false, APP, { wake: { codexApp: true } });
+  await node.poll();
+  assert.equal(node.launches(), 0);
+  assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, "awaiting-user-turn");
+  assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${APP}.queued.json`)), false);
+  assert.equal(takeTurn(node.paths, APP, T0), "ok", "an unresolved grant consumes no budget");
+});
+
+test("a message arriving after prompt intake is not confirmed by another message's Stop", async (t) => {
+  const node = setup(t, false);
+  await node.poll();
+  const input = { session_id: APP, cwd: node.workspace, permission_mode: "default" };
+  deliverForCodex({ ...input, hook_event_name: "UserPromptSubmit" }, { paths: node.paths, now: () => T0 + 1000 });
+  const later = "a1560000-0000-4000-8000-000000000003";
+  storeMessage(node.paths.inbox, { messageId: later, from: PEER, toSession: APP, text: "later synthetic message",
+    createdAt: new Date(T0 + 1500).toISOString() }, T0 + 1500);
+  deliverForCodex({ ...input, hook_event_name: "Stop" }, { paths: node.paths, now: () => T0 + 2000 });
+  assert.equal(getMessage(node.paths.inbox, MESSAGE)?.state, "delivered");
+  assert.notEqual(getMessage(node.paths.inbox, later)?.state, "delivered", "only actually offered records are confirmed");
 });
