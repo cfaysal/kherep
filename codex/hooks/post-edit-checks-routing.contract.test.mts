@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 
-import type { HookPayload } from "./hook-adapter.mts";
+import { normalizePayloads, type HookPayload } from "./hook-adapter.mts";
 
 const DISPATCHER = path.join(import.meta.dirname, "post-edit-checks.mts");
 
@@ -19,65 +19,104 @@ async function dispatcher(): Promise<DispatcherModule> {
   return loaded as DispatcherModule;
 }
 
-test("plans no watcher children for an explicitly supported read-only wrapper", async () => {
-  const { planPostEditPayloads } = await dispatcher();
-  const payloads = planPostEditPayloads({
-    cwd: "/synthetic/work",
-    tool_name: "functions.exec",
-    tool_input: 'await tools.mcp__codebase_memory_mcp__search_graph({query:"hooks"});',
-  });
-  assert.deepEqual(payloads, []);
-});
+function filePaths(payloads: HookPayload[]): string[] {
+  return payloads.map((item) => String((item.tool_input as { file_path?: unknown })?.file_path || ""));
+}
 
-test("keeps direct edits and every currently recognized apply_patch source target as data", async () => {
-  const { planPostEditPayloads } = await dispatcher();
-  const direct = planPostEditPayloads({
-    tool_name: "Edit",
-    tool_input: { file_path: "/synthetic/work/direct.mts", new_string: "next" },
-  });
-  assert.equal(direct.length, 1);
-  assert.equal(direct[0]?.tool_name, "Edit");
+const THREE_TARGET_PATCH = [
+  "*** Begin Patch",
+  "*** Update File: src/one $(touch never).mts",
+  "*** Move to: src/moved ; still-data.mts",
+  "*** Add File: docs/two | data.md",
+  "*** Update File: manifest.yml",
+  "*** End Patch",
+].join("\n");
+
+test("locks the existing post normalization for Write, MultiEdit, patch sources and move text", () => {
+  for (const payload of [
+    { tool_name: "Write", tool_input: { file_path: "/work/a.mts", content: "next" } },
+    { tool_name: "MultiEdit", tool_input: { file_path: "/work/b.mts", edits: [{ new_string: "next" }] } },
+  ]) {
+    const normalized = normalizePayloads(payload, "post");
+    assert.equal(normalized.length, 1);
+    assert.equal(normalized[0]?.tool_name, payload.tool_name);
+  }
 
   const cwd = path.resolve("/synthetic/work");
-  const patch = [
-    "*** Begin Patch",
-    "*** Update File: src/one $(touch never).mts",
-    "*** Move to: src/moved ; still-data.mts",
-    "*** Add File: docs/two | data.md",
-    "*** Update File: manifest.yml",
-    "*** End Patch",
-  ].join("\n");
-  const planned = planPostEditPayloads({ cwd, tool_name: "apply_patch", tool_input: patch });
-  assert.deepEqual(planned.map((item) => (item.tool_input as { file_path: string }).file_path), [
+  const normalized = normalizePayloads({
+    cwd, tool_name: "apply_patch", tool_input: THREE_TARGET_PATCH,
+  }, "post");
+  assert.deepEqual(filePaths(normalized), [
     path.resolve(cwd, "src/one $(touch never).mts"),
     path.resolve(cwd, "docs/two | data.md"),
     path.resolve(cwd, "manifest.yml"),
   ]);
-  assert.doesNotMatch(JSON.stringify(planned), /moved ; still-data/, "Move to is not a baseline patchPaths target");
+  assert.match(
+    String((normalized[0]?.tool_input as { new_string?: unknown }).new_string),
+    /Move to: src\/moved ; still-data\.mts/,
+    "Move to stays in watcher text but is not a baseline patchPaths target",
+  );
 });
 
-test("keeps a recognized patch wrapper covered and unknown wrappers conservative", async () => {
+test("locks every recognized patch payload for mixed or unknown functions.exec wrappers", () => {
+  const cwd = path.resolve("/synthetic/work");
+  for (const source of [
+    `await tools.future_tool({}); await tools.apply_patch(${JSON.stringify(THREE_TARGET_PATCH)});`,
+    `await tools.mcp__codebase_memory_mcp__search_graph({query:"hooks"}); await tools.future_tool({}); ${THREE_TARGET_PATCH}`,
+  ]) {
+    const normalized = normalizePayloads({
+      cwd, tool_name: "functions.exec", tool_input: source,
+    }, "post");
+    assert.equal(normalized.length, 3, source);
+    assert.deepEqual(filePaths(normalized), [
+      path.resolve(cwd, "src/one $(touch never).mts"),
+      path.resolve(cwd, "docs/two | data.md"),
+      path.resolve(cwd, "manifest.yml"),
+    ]);
+  }
+});
+
+test("plans no watcher children for an explicitly supported read-only wrapper", async () => {
   const { planPostEditPayloads } = await dispatcher();
-  const patch = "*** Begin Patch\\n*** Update File: src/a.mts\\n*** End Patch";
-  const recognized = planPostEditPayloads({
+  assert.deepEqual(planPostEditPayloads({
     cwd: "/synthetic/work",
     tool_name: "functions.exec",
-    tool_input: [
-      'await tools.mcp__codebase_memory_mcp__search_graph({query:"hooks"});',
-      `await tools.apply_patch("${patch}");`,
-    ].join("\n"),
+    tool_input: 'await tools.mcp__codebase_memory_mcp__search_graph({query:"hooks"});',
+  }), []);
+});
+
+test("plans four watcher children per direct edit or currently recognized patch source", async () => {
+  const { planPostEditPayloads } = await dispatcher();
+  for (const payload of [
+    { tool_name: "Write", tool_input: { file_path: "/work/a.mts", content: "next" } },
+    { tool_name: "MultiEdit", tool_input: { file_path: "/work/b.mts", edits: [{ new_string: "next" }] } },
+  ]) assert.equal(planPostEditPayloads(payload).length, 1);
+
+  const cwd = path.resolve("/synthetic/work");
+  const planned = planPostEditPayloads({
+    cwd, tool_name: "apply_patch", tool_input: THREE_TARGET_PATCH,
   });
-  assert.equal(recognized.length, 1);
-  assert.equal(recognized[0]?.tool_name, "Edit");
+  assert.deepEqual(filePaths(planned), [
+    path.resolve(cwd, "src/one $(touch never).mts"),
+    path.resolve(cwd, "docs/two | data.md"),
+    path.resolve(cwd, "manifest.yml"),
+  ]);
+  assert.match(String((planned[0]?.tool_input as { new_string?: unknown }).new_string), /Move to:/);
+});
+
+test("keeps mixed and unknown wrappers conservative without dropping patch targets", async () => {
+  const { planPostEditPayloads } = await dispatcher();
+  const cwd = path.resolve("/synthetic/work");
+  const patchSource = `await tools.future_tool({}); await tools.apply_patch(${JSON.stringify(THREE_TARGET_PATCH)});`;
+  assert.equal(planPostEditPayloads({
+    cwd, tool_name: "functions.exec", tool_input: patchSource,
+  }).length, 3);
 
   for (const source of [
     'await tools.future_read({query:"hooks"});',
     'const name = "mcp__codebase_memory_mcp__search_graph"; await tools[name]({query:"hooks"});',
     'await tools.mcp__codebase_memory_mcp__search_graph({query:"hooks"}); await tools.future_read({});',
-  ]) {
-    const fallback = planPostEditPayloads({
-      cwd: "/synthetic/work", tool_name: "functions.exec", tool_input: source,
-    });
-    assert.equal(fallback.length, 1, source);
-  }
+  ]) assert.equal(planPostEditPayloads({
+    cwd, tool_name: "functions.exec", tool_input: source,
+  }).length, 1, source);
 });

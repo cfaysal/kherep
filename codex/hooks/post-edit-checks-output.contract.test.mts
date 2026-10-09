@@ -48,6 +48,7 @@ test("aggregates simultaneous real watcher findings into one PostToolUse JSON do
     `*** Update File: ${MANIFEST}`,
     `*** Update File: ${LARGE}`,
     `*** Update File: ${GERMAN}`,
+    "+Das ist fuer die naechste Pruefung.",
     "*** End Patch",
   ].join("\n");
   const result = run({

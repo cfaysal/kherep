@@ -15,9 +15,14 @@
 ### Task 1: Lock the dispatcher contract with failing tests
 
 **Files:**
-- Create: `codex/hooks/post-edit-checks-routing.test.mts`
-- Create: `codex/hooks/post-edit-checks-output.test.mts`
+- Create: `codex/hooks/post-edit-checks-routing.contract.test.mts`
+- Create: `codex/hooks/post-edit-checks-process.contract.test.mts`
+- Create: `codex/hooks/post-edit-checks-output.contract.test.mts`
+- Create: `codex/lib/post-edit-dispatcher-config.contract.test.mts`
+- Create: `codex/hooks/research-stop-specificity.contract.test.mts`
+- Create: `codex/hooks/research-thresholds.contract.test.mts`
 - Test: `codex/hooks/hook-adapter.test.mts`
+- Test: `codex/hooks/research-transcript.test.mts`
 
 - [ ] **Step 1: Add existing-API RED assertions before implementation**
 
@@ -25,7 +30,7 @@ Use `renderHooks`, `render`, `prepareManagedConfig` and `decision` to show concr
 
 - [ ] **Step 2: Add dispatcher routing fixtures as executable test design**
 
-Cover direct `Edit`/`Write`/`MultiEdit`/`apply_patch`, one-target and three-target patches, paths containing shell metacharacters, a supported read-only `functions.exec` wrapper, a supported direct patch wrapper, mixed wrappers and unknown/dynamic wrappers. The baseline `patchPaths` recognizes Add/Update/Delete headers and does not emit `Move to` destinations; fixtures must preserve every recognized source path and must not claim destination coverage already exists. Assert child-count projections: routine read `4 -> 0`, one edit `4 -> 4`, three recognized targets `12 -> 12`, and unknown wrapper `4 -> 4`.
+Cover direct `Edit`/`Write`/`MultiEdit`/`apply_patch`, one-target and three-target patches, paths containing shell metacharacters, a supported read-only `functions.exec` wrapper, a supported direct patch wrapper, mixed wrappers and unknown/dynamic wrappers. The baseline `patchPaths` recognizes Add/Update/Delete headers and does not emit `Move to` destinations; fixtures must preserve every recognized source path and must not claim destination coverage already exists. Assert dispatcher child-count projections: routine read `4 -> 0`, one edit `4 -> 4`, three recognized targets `4 -> 12`, and unknown wrapper `4 -> 4`. Baseline normalization contracts independently prove that Write/MultiEdit paths, all three recognized patch sources, and every recognized source in a mixed or unknown wrapper remain present. A `Move to` line remains inside `new_string`, but is not asserted as a normalized target because current `patchPaths` does not emit it.
 
 - [ ] **Step 3: Add output and failure fixtures before implementation**
 
@@ -36,17 +41,17 @@ Run synthetic watcher children that emit manifest/LOC/simplify plaintext, Umlaut
 Run:
 
 ```sh
-node --test codex/hooks/post-edit-checks-routing.test.mts codex/hooks/post-edit-checks-output.test.mts codex/hooks/hook-adapter.test.mts
+node --test codex/hooks/post-edit-checks-routing.contract.test.mts codex/hooks/post-edit-checks-process.contract.test.mts codex/hooks/post-edit-checks-output.contract.test.mts codex/lib/post-edit-dispatcher-config.contract.test.mts codex/hooks/research-stop-specificity.contract.test.mts codex/hooks/research-thresholds.contract.test.mts codex/hooks/hook-adapter.test.mts codex/hooks/research-transcript.test.mts
 ```
 
-Expected: FAIL for independent reasons: current renderer count `4 != 1`, missing evidence is not named specifically, the exact predecessor API is absent, and dispatcher runtime fixtures cannot yet run. Missing-module fixtures are supplementary test design rather than the sole RED signal.
+Expected in the current Plan/Tests-only phase: the baseline normalization and research-threshold contracts pass, while future renderer, dispatcher process/output, migration and evidence-specific reason assertions fail for independent missing behaviors. The process fixture copies the future dispatcher plus its dependencies into a metacharacter-containing temporary hook directory and uses four fixed no-shell watcher stubs to trace child inputs. Missing-module fixtures remain supplementary test design rather than the sole RED signal.
 
 ### Task 2: Implement the fixed post-edit dispatcher
 
 **Files:**
 - Create: `codex/hooks/post-edit-checks.mts`
-- Test: `codex/hooks/post-edit-checks-routing.test.mts`
-- Test: `codex/hooks/post-edit-checks-output.test.mts`
+- Test: `codex/hooks/post-edit-checks-routing.contract.test.mts`
+- Test: `codex/hooks/post-edit-checks-output.contract.test.mts`
 - Test: `codex/hooks/hook-adapter.test.mts`
 
 - [ ] **Step 1: Reuse the existing exported post normalization seam**
@@ -73,17 +78,17 @@ Run the Task 1 command. Expected: all dispatcher and existing adapter cases pass
 
 **Files:**
 - Modify: `codex/lib/parity-config.mts`
-- Create: `codex/lib/post-edit-dispatcher-upgrade.test.mts`
+- Test: `codex/lib/post-edit-dispatcher-config.contract.test.mts`
 - Modify: `codex/lib/parity-config.test.mts`
 - Modify: `codex/lib/retired-central-brain.mts`
 
 - [ ] **Step 1: Add failing projection and trust-position tests**
 
-Assert the current PostToolUse edit group has one dispatcher entry for matcher `Edit|Write|MultiEdit|apply_patch|functions\\.exec`; Windows rendering remains valid; attribution stays at PostToolUse group 1 entry 0 when enabled; custom groups and other events retain their positions. Assert the exact predecessor renderer has the old four watcher entries at group 0 entries 0 through 3.
+Assert the current PostToolUse edit group has one dispatcher entry for matcher `Edit|Write|MultiEdit|apply_patch|functions\\.exec`; POSIX and Windows rendering remain valid; attribution stays at PostToolUse group 1 entry 0 when enabled; custom groups and other events retain their positions. Build the exact predecessor fixture with the existing `command` and `hookGroup` helpers and assert its old four watcher entries at group 0 entries 0 through 3 match the current renderer with only that owned group substituted.
 
 - [ ] **Step 2: Add failing migration tests**
 
-Feed exact four-watcher current/historical variants into `prepareManagedConfig`; assert replacement, idempotence, preserved `hooks.state` keys using real `<file>:<event>:<group>:<entry>` forms, unchanged custom hooks/operator tables and rejection of one-line unknown drift.
+Feed exact POSIX and Windows four-watcher predecessor variants into `prepareManagedConfig`; assert replacement, idempotence, preserved `hooks.state` keys using real `<file>:<event>:<group>:<entry>` forms both inside and outside the owned split, unchanged custom groups and rejection of one-line unknown drift. Assert no approval or trusted hash is synthesized for the dispatcher and no old approval is copied to its new command.
 
 - [ ] **Step 3: Implement the current renderer and frozen predecessor**
 
@@ -98,7 +103,7 @@ Include the exact four-watcher variants in current and retired-Central-Brain rec
 Run:
 
 ```sh
-node --test codex/lib/parity-config.test.mts codex/lib/post-edit-dispatcher-upgrade.test.mts codex/lib/config-preservation.test.mts codex/lib/managed-block-split.test.mts codex/lib/retired-central-brain.test.mts codex/lib/attribution-hook-config.test.mts
+node --test codex/lib/parity-config.test.mts codex/lib/post-edit-dispatcher-config.contract.test.mts codex/lib/config-preservation.test.mts codex/lib/managed-block-split.test.mts codex/lib/retired-central-brain.test.mts codex/lib/attribution-hook-config.test.mts
 ```
 
 Expected: all pass; the four-watcher predecessor remains byte-exact and current trust positions match the required keys.
@@ -106,12 +111,15 @@ Expected: all pass; the four-watcher predecessor remains byte-exact and current 
 ### Task 4: Make research-stop feedback evidence-specific
 
 **Files:**
-- Modify: `codex/hooks/research-stop.mts`
-- Modify: `codex/hooks/research-stop.test.mts`
+- Modify later: `codex/hooks/research-stop.mts`
+- Modify later: `codex/hooks/research-stop.test.mts`
+- Test now: `codex/hooks/research-stop-specificity.contract.test.mts`
+- Test now: `codex/hooks/research-thresholds.contract.test.mts`
+- Test unchanged: `codex/hooks/research-transcript.test.mts`
 
 - [ ] **Step 1: Add the failing reason matrix**
 
-Add missing-Brain, missing-graph, missing-both and complete cases. Keep the existing negative fake-call fixture. Assert `stop_hook_active: true`, missing and wrong types produce no extra block while exactly `false` can block. Assert a nonempty opt-out marker remains required.
+Add missing-Brain, missing-graph, missing-both and complete cases. Keep the existing negative fake-call fixture. Assert `stop_hook_active: true`, missing and wrong types produce no extra block while exactly `false` can block. Assert a nonempty opt-out marker remains required. Lock the existing substantial-work thresholds with executable green contracts at 399/400 characters and two/three read-only calls. Keep unsupported and observation calls substantial.
 
 - [ ] **Step 2: Pass missing evidence into the fixed reason**
 
@@ -122,21 +130,21 @@ Build concise fixed text for Brain-only, graph-only or both missing. Keep the pr
 Run:
 
 ```sh
-node --test codex/hooks/research-stop.test.mts codex/hooks/research-transcript.test.mts codex/hooks/research-first.test.mts
+node --test codex/hooks/research-stop-specificity.contract.test.mts codex/hooks/research-thresholds.contract.test.mts codex/hooks/research-stop.test.mts codex/hooks/research-transcript.test.mts codex/hooks/research-first.test.mts
 ```
 
-Expected: all pass, including fake text/comment/string/regex/output/later-turn negatives already covered by the parser suite.
+Expected after later implementation: all pass. The new threshold contract locks 399/400 characters, two/three read-only calls, unsupported calls and observation calls. The unchanged parser suite supplies executable negatives for fake user text, tool output, comments, strings and regular expressions, plus later-turn isolation.
 
 ### Task 5: Install the dispatcher and test upgrade preservation
 
 **Files:**
 - Modify: `codex/install.mts`
 - Modify: `codex/install.test.mts`
-- Test: `codex/lib/post-edit-dispatcher-upgrade.test.mts`
+- Test: `codex/lib/post-edit-dispatcher-config.contract.test.mts`
 
 - [ ] **Step 1: Add failing installer copy tests**
 
-Assert an isolated install copies `post-edit-checks.mts`, `hook-adapter.mts`, `research-exec-parser.mts` and the four watcher dependencies, writes one current dispatcher command, upgrades the exact four-watcher block and settles byte-identically on reinstall.
+Later, extend `codex/install.test.mts` to assert an isolated install copies `post-edit-checks.mts`, `hook-adapter.mts`, `research-exec-parser.mts` and the four watcher dependencies, writes one current dispatcher command, upgrades the exact four-watcher block and settles byte-identically on reinstall. Reuse `codex/lib/post-edit-dispatcher-config.contract.test.mts` for the renderer/migration contract; no separate current runnable upgrade-test filename is claimed.
 
 - [ ] **Step 2: Add the dispatcher source and target**
 
