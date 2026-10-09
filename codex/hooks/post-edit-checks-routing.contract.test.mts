@@ -76,6 +76,23 @@ test("locks every recognized patch payload for mixed or unknown functions.exec w
   }
 });
 
+test("plans every target for a direct functions.exec apply_patch wrapper", async () => {
+  const { planPostEditPayloads } = await dispatcher();
+  const cwd = path.resolve("/synthetic/work");
+  const planned = planPostEditPayloads({
+    cwd,
+    tool_name: "functions.exec",
+    tool_input: `await tools.apply_patch(${JSON.stringify(THREE_TARGET_PATCH)});`,
+  });
+  assert.equal(planned.length, 3);
+  assert.deepEqual(new Set(planned.map(({ tool_name }) => tool_name)), new Set(["Edit"]));
+  assert.deepEqual(filePaths(planned), [
+    path.resolve(cwd, "src/one $(touch never).mts"),
+    path.resolve(cwd, "docs/two | data.md"),
+    path.resolve(cwd, "manifest.yml"),
+  ]);
+});
+
 test("plans no watcher children for an explicitly supported read-only wrapper", async () => {
   const { planPostEditPayloads } = await dispatcher();
   assert.deepEqual(planPostEditPayloads({

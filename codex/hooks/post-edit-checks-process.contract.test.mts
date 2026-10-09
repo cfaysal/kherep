@@ -70,6 +70,25 @@ test("measures the routine read and direct Write/MultiEdit child counts", () => 
   }
 });
 
+test("measures twelve children for a direct functions.exec apply_patch wrapper", () => {
+  const records = run({
+    cwd: ROOT,
+    tool_name: "functions.exec",
+    tool_input: `await tools.apply_patch(${JSON.stringify(PATCH)});`,
+  });
+  assert.equal(records.length, 12);
+  assert.deepEqual(new Set(records.map(({ tool_name }) => tool_name)), new Set(["Edit"]));
+  for (const target of [
+    path.resolve(ROOT, "src/one $(touch payload-sentinel).mts"),
+    path.resolve(ROOT, "src/two ; literal.mts"),
+    path.resolve(ROOT, "src/three | literal.mts"),
+  ]) {
+    assert.equal(records.filter(({ tool_input }) =>
+      (tool_input as { file_path?: unknown }).file_path === target).length, 4);
+  }
+  assert.equal(fs.existsSync(path.join(ROOT, "payload-sentinel")), false);
+});
+
 test("measures twelve children for three recognized patch targets and keeps paths as data", () => {
   const records = run({ cwd: ROOT, tool_name: "apply_patch", tool_input: PATCH });
   assert.equal(records.length, 12);

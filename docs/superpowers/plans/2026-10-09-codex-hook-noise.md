@@ -12,7 +12,7 @@
 
 ---
 
-### Task 1: Lock the dispatcher contract with failing tests
+### Task 1: Lock the dispatcher contract with failing tests (completed)
 
 **Files:**
 - Create: `codex/hooks/post-edit-checks-routing.contract.test.mts`
@@ -24,19 +24,19 @@
 - Test: `codex/hooks/hook-adapter.test.mts`
 - Test: `codex/hooks/research-transcript.test.mts`
 
-- [ ] **Step 1: Add existing-API RED assertions before implementation**
+- [x] **Step 1: Add existing-API RED assertions before implementation**
 
 Use `renderHooks`, `render`, `prepareManagedConfig` and `decision` to show concrete current behavior: the edit group has four entries instead of one, no exact four-watcher predecessor renderer exists, and research-stop gives the same generic reason when only Brain or only graph evidence is missing. These failures establish missing behavior without depending on a missing module import.
 
-- [ ] **Step 2: Add dispatcher routing fixtures as executable test design**
+- [x] **Step 2: Add dispatcher routing fixtures as executable test design**
 
-Cover direct `Edit`/`Write`/`MultiEdit`/`apply_patch`, one-target and three-target patches, paths containing shell metacharacters, a supported read-only `functions.exec` wrapper, a supported direct patch wrapper, mixed wrappers and unknown/dynamic wrappers. The baseline `patchPaths` recognizes Add/Update/Delete headers and does not emit `Move to` destinations; fixtures must preserve every recognized source path and must not claim destination coverage already exists. Assert dispatcher child-count projections: routine read `4 -> 0`, one edit `4 -> 4`, three recognized targets `4 -> 12`, and unknown wrapper `4 -> 4`. Baseline normalization contracts independently prove that Write/MultiEdit paths, all three recognized patch sources, and every recognized source in a mixed or unknown wrapper remain present. A `Move to` line remains inside `new_string`, but is not asserted as a normalized target because current `patchPaths` does not emit it.
+Cover direct `Edit`/`Write`/`MultiEdit`/`apply_patch`, one-target and three-target patches, paths containing shell metacharacters, a supported read-only `functions.exec` wrapper, a pure direct `functions.exec` call to `tools.apply_patch` with three targets, mixed wrappers and unknown/dynamic wrappers. The baseline `patchPaths` recognizes Add/Update/Delete headers and does not emit `Move to` destinations; fixtures must preserve every recognized source path and must not claim destination coverage already exists. Assert dispatcher child-count projections: routine read `4 -> 0`, one edit `4 -> 4`, three recognized targets `4 -> 12`, and unknown wrapper `4 -> 4`. Baseline normalization contracts independently prove that Write/MultiEdit paths, all three recognized patch sources, and every recognized source in a mixed or unknown wrapper remain present. A `Move to` line remains inside `new_string`, but is not asserted as a normalized target because current `patchPaths` does not emit it.
 
-- [ ] **Step 3: Add output and failure fixtures before implementation**
+- [x] **Step 3: Add output and failure fixtures before implementation**
 
 Run synthetic watcher children that emit manifest/LOC/simplify plaintext, Umlaut JSON with `hookSpecificOutput.additionalContext` plus `systemMessage`, silence, and a non-zero failure. Assert one valid PostToolUse JSON document for simultaneous findings, empty stdout for success/no-op, retained `systemMessage`, and a visible non-zero child failure.
 
-- [ ] **Step 4: Run the focused tests and record RED**
+- [x] **Step 4: Run the focused tests and record RED**
 
 Run:
 
@@ -46,7 +46,7 @@ node --test codex/hooks/post-edit-checks-routing.contract.test.mts codex/hooks/p
 
 Expected in the current Plan/Tests-only phase: the baseline normalization and research-threshold contracts pass, while future renderer, dispatcher process/output, migration and evidence-specific reason assertions fail for independent missing behaviors. The process fixture copies the future dispatcher plus its dependencies into a metacharacter-containing temporary hook directory and uses four fixed no-shell watcher stubs to trace child inputs. Missing-module fixtures remain supplementary test design rather than the sole RED signal.
 
-### Task 2: Implement the fixed post-edit dispatcher
+**Authorization gate for Tasks 2 through 7:** These tasks remain unexecuted and blocked until the Director separately authorizes production changes.\n\n### Task 2: Implement the fixed post-edit dispatcher
 
 **Files:**
 - Create: `codex/hooks/post-edit-checks.mts`
@@ -85,7 +85,7 @@ Run the Task 1 command. Expected: all dispatcher and existing adapter cases pass
 
 - [ ] **Step 1: Add failing projection and trust-position tests**
 
-Assert the current PostToolUse edit group has one dispatcher entry for matcher `Edit|Write|MultiEdit|apply_patch|functions\\.exec`; POSIX and Windows rendering remain valid; attribution stays at PostToolUse group 1 entry 0 when enabled; custom groups and other events retain their positions. Build the exact predecessor fixture with the existing `command` and `hookGroup` helpers and assert its old four watcher entries at group 0 entries 0 through 3 match the current renderer with only that owned group substituted.
+Assert the current PostToolUse edit group has one dispatcher entry for matcher `Edit|Write|MultiEdit|apply_patch|functions\\.exec`; POSIX and Windows rendering remain valid; attribution stays at PostToolUse group 1 entry 0 when enabled; custom groups and other events retain their positions. Pin the complete canonical POSIX and Windows predecessor renderings to immutable SHA-256 values generated from exact base `e29eaea0a57fb40757f1a4feeda53db9e3292544`. Use deterministic pin options whose empty `hookDir` makes every `path.join("", script)` byte-identical on POSIX and Windows hosts while explicit Node, context and control-plane paths retain the two command forms. Independently verify the recorded hashes. Also build the exact predecessor fixture with the existing `command` and `hookGroup` helpers, assert its old four watcher entries at group 0 entries 0 through 3, and keep the current-renderer group substitution only as an additional positional comparison.
 
 - [ ] **Step 2: Add failing migration tests**
 

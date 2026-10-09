@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { test } from "node:test";
 
@@ -26,6 +27,17 @@ const WINDOWS: RenderOptions = {
   mcpServers: [],
   controlPlaneHook: String.raw`C:\Synthetic\repo\modules\control-plane\node\deliver-hook.mts`,
 };
+
+// Full-render pins generated from exact base e29eaea0a57fb40757f1a4feeda53db9e3292544.
+// hookDir is empty so every path.join("", script) is identical under path.posix and
+// path.win32. POSIX and Windows command bytes still differ through the explicit paths.
+// The recorded SHA-256 values were independently verified with shasum -a 256.
+const PIN_POSIX: RenderOptions = { ...POSIX, hookDir: "" };
+const PIN_WINDOWS: RenderOptions = { ...WINDOWS, hookDir: "" };
+const BASE_PREDECESSOR_SHA256 = Object.freeze({
+  posix: "7bad5419ee0ba56bdec73e033c7cf33abec09de9d2374c565912dc6a8ef85105",
+  windows: "b4e065c91e99a39bfdaca823a1dd25b89552f85bf25fa7076f1a77f23471e104",
+});
 
 type Render = (options: RenderOptions) => string;
 
@@ -86,6 +98,22 @@ test("projects one dispatcher while preserving the matcher and attribution posit
     const attribution = entries(post[1]!);
     assert.equal(attribution.length - 1, 1);
     assert.match(attribution[1]!, /attribution-hook\.mts/);
+  }
+});
+
+test("pins the canonical POSIX and Windows predecessor bytes from base e29eaea", () => {
+  const predecessor = Reflect.get(parityConfig, "renderBeforePostEditDispatcher") as Render | undefined;
+  assert.equal(typeof predecessor, "function");
+  for (const [label, options] of [
+    ["posix", PIN_POSIX],
+    ["windows", PIN_WINDOWS],
+  ] as const) {
+    const bytes = predecessor!(options);
+    assert.equal(
+      createHash("sha256").update(bytes, "utf8").digest("hex"),
+      BASE_PREDECESSOR_SHA256[label],
+      `${label} predecessor must remain byte-identical to base e29eaea`,
+    );
   }
 });
 
