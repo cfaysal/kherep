@@ -34,7 +34,7 @@ Cover direct `Edit`/`Write`/`MultiEdit`/`apply_patch`, one-target and three-targ
 
 - [x] **Step 3: Add output and failure fixtures before implementation**
 
-Run synthetic watcher children that emit manifest/LOC/simplify plaintext, Umlaut JSON with `hookSpecificOutput.additionalContext` plus `systemMessage`, silence, and a non-zero failure. Assert one valid PostToolUse JSON document for simultaneous findings, empty stdout for success/no-op, retained `systemMessage`, and a visible non-zero child failure.
+Materialize the future dispatcher, its imports, the four byte-identical shared watcher sources and their public dependency in a synthetic flat installation directory. Use those real watchers for simultaneous manifest/LOC/simplify plaintext and Umlaut JSON findings. Use fixed synthetic children only for process tracing and a non-zero failure. Assert one valid PostToolUse JSON document for simultaneous findings, empty stdout for success/no-op, retained `systemMessage`, and a visible non-zero child failure.
 
 - [x] **Step 4: Run the focused tests and record RED**
 
@@ -46,7 +46,9 @@ node --test codex/hooks/post-edit-checks-routing.contract.test.mts codex/hooks/p
 
 Expected in the current Plan/Tests-only phase: the baseline normalization and research-threshold contracts pass, while future renderer, dispatcher process/output, migration and evidence-specific reason assertions fail for independent missing behaviors. The process fixture copies the future dispatcher plus its dependencies into a metacharacter-containing temporary hook directory and uses four fixed no-shell watcher stubs to trace child inputs. Missing-module fixtures remain supplementary test design rather than the sole RED signal.
 
-**Authorization gate for Tasks 2 through 7:** These tasks remain unexecuted and blocked until the Director separately authorizes production changes.\n\n### Task 2: Implement the fixed post-edit dispatcher
+**Authorization gate for Tasks 2 through 7:** These tasks remain unexecuted and blocked until the Director separately authorizes production changes.
+
+### Task 2: Implement the fixed post-edit dispatcher
 
 **Files:**
 - Create: `codex/hooks/post-edit-checks.mts`
