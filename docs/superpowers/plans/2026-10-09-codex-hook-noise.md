@@ -10,6 +10,8 @@
 
 **Current authorized phase:** Only this versioned plan and synthetic regression tests may be added now. Tasks 2 through 7 describe the later implementation and verification sequence; they must not be executed until the Director separately authorizes production changes.
 
+**Related delivery plan:** [Codex Delivery Feedback Noise Plan](2026-10-09-codex-delivery-feedback-noise.md) separately specifies concise Codex Stop feedback and preserved peer-message retrieval. It has the same Plan/Tests-only authorization boundary.
+
 ---
 
 ### Task 1: Lock the dispatcher contract with failing tests (completed)
@@ -202,3 +204,4 @@ Run the relevant privacy, commit, deploy, dispatch and acceptance test files fro
 - [ ] **Step 4: Inspect remote identity and scope**
 
 Compare the final remote branch SHA to its expected parent with the GitHub API, inspect every changed file and verify the four watcher blob SHAs plus historical artifact file SHA equal the base commit. Do not install, deploy, merge or change live configuration. Record Desktop envelopes and latency as UNKNOWN pending the later target probe.
+
