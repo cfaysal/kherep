@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { readCodexSession } from "./codex-sessions.mts";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
 import { REOFFER_AFTER_MS } from "./deliver-core.mts";
@@ -100,6 +101,17 @@ test("continued, denied, bypass-permission, and empty Stop calls remain silent",
 
   const empty = setup(t);
   assert.equal(empty.hook("Stop", { stop_hook_active: false }, () => true), "");
+});
+
+test("a valid unrecorded Codex id remains eligible and is recorded before receive", async t => {
+  const { paths, put, hook, receive } = setup(t);
+  put(1);
+  assert.equal(readCodexSession(paths, SELF), null);
+  assert.equal(JSON.parse(hook("Stop", {}, () => true)).decision, "block");
+  assert.equal(readCodexSession(paths, SELF)?.sessionId, SELF);
+  assert.equal(getMessage(paths.inbox, id(1))?.state, "accepted");
+  assert.match((await receive()).out, /synthetic peer update 1/);
+  assert.equal(getMessage(paths.inbox, id(1))?.state, "offered");
 });
 
 test("absent enrollment, invalid input or session, and unsupported events remain silent", t => {

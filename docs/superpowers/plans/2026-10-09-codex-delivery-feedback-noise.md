@@ -55,7 +55,7 @@ No hidden output channel, new hook event, MCP substitute, delivery-disable switc
 
 Delivery remains at least once with bounded reoffers. Do not claim exactly once.
 
-The Stop path keeps its current checks: enrollment, supported event, valid recorded session, arrivals, `continued === true`, continuation permission, bypass-permission refusal and shared continuation budget. Do not strengthen the continued check to require literal `false`.
+The Stop path keeps its current checks: enrollment, supported event, a valid Codex session id followed by the hook's session recording, arrivals, `continued === true`, continuation permission, bypass-permission refusal and shared continuation budget. Do not strengthen the continued check to require literal `false`.
 
 The receive path keeps session validation before state changes, `reofferOffered: false`, message and byte bounds, nonce framing, peer-content authority, reply-depth limits and session isolation. Attribution ownership remains unchanged.
 
