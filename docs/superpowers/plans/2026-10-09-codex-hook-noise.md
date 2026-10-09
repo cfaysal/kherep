@@ -204,4 +204,3 @@ Run the relevant privacy, commit, deploy, dispatch and acceptance test files fro
 - [ ] **Step 4: Inspect remote identity and scope**
 
 Compare the final remote branch SHA to its expected parent with the GitHub API, inspect every changed file and verify the four watcher blob SHAs plus historical artifact file SHA equal the base commit. Do not install, deploy, merge or change live configuration. Record Desktop envelopes and latency as UNKNOWN pending the later target probe.
-
