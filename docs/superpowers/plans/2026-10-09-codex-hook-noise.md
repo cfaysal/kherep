@@ -51,6 +51,7 @@ Expected in the current Plan/Tests-only phase: the baseline normalization and re
 **Files:**
 - Create: `codex/hooks/post-edit-checks.mts`
 - Test: `codex/hooks/post-edit-checks-routing.contract.test.mts`
+- Test: `codex/hooks/post-edit-checks-process.contract.test.mts`
 - Test: `codex/hooks/post-edit-checks-output.contract.test.mts`
 - Test: `codex/hooks/hook-adapter.test.mts`
 
