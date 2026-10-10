@@ -52,6 +52,8 @@ export interface RenderOptions extends McpRenderOptions {
   controlPlaneHook?: string;
   // Exact external delivery groups keep ownership; attribution still needs the checkout.
   omitDeliveryHooks?: boolean;
+  // Historical renders written before the busy hint existed.
+  omitBusyHint?: boolean;
   // Legacy renders only: true was the combined macOS Stop hook, false was the
   // separate Windows observation Stop hook. Omitted means quiet observations.
   observationStopHook?: boolean;
@@ -214,6 +216,11 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
       group("Stop", "", [deliver]),
     );
   }
+  if (options.controlPlaneHook && !options.omitBusyHint) {
+    // Independent of edit dispatch and the three externally owned intake hooks.
+    // Last PostToolUse group in this block; external positions are checked before installation.
+    groups.push(group("PostToolUse", ".*", [{ command: command(node, options.controlPlaneHook, "--runtime", "codex") }]));
+  }
   if (native(options.nativeHooks?.captureCli).length)
     groups.push(group("SessionEnd", "other", native(options.nativeHooks?.captureCli, 3)));
   // Issue #326, PR-B. The last group of the block: Codex trust keys are
@@ -323,16 +330,21 @@ export function render(options: RenderOptions): string {
     .join("\n\n");
 }
 
+// Exact predecessor of the busy-hint projection.
+export function renderBeforeBusyHint(options: RenderOptions): string {
+  return render({ ...options, omitBusyHint: true });
+}
+
 // Exact predecessor of the dispatcher projection. Historical renderers below
 // start from this byte shape before removing hooks that did not yet exist.
 export function renderBeforePostEditDispatcher(options: RenderOptions): string {
-  return withPreviousPostEditGroup(render(options), options);
+  return withPreviousPostEditGroup(renderBeforeBusyHint(options), options);
 }
 
 // The previous-native, previous-nudges and JavaScript-era renders reproduce
 // blocks written before issue #68, so none of them carries a commandWindows form.
 function beforeWindowsCommands(options: RenderOptions): RenderOptions {
-  return { ...options, windowsHookCommands: false };
+  return { ...options, windowsHookCommands: false, omitBusyHint: true };
 }
 
 export function renderWithoutNativeHooks(options: RenderOptions): string {

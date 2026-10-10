@@ -118,6 +118,22 @@ An eligible Desktop or Terminal session receives `codex queue --thread <full id>
 
 Each synchronous Codex queue round reads, parses and indexes the full Inbox once after it has found eligible non-task owners. Before it applies the queue guards, a decision rereads only the indexed message records for that owner's full id and aliases. Its existing attempt-ledger cleanup may still list Inbox filenames per owner, but it does not reparse unrelated records. A record already deleted, consumed or readdressed at that targeted read is excluded. This read is not an atomic lock against a later change during the same decision. Messages that arrive after the snapshot remain for the next eligible round. The index is discarded at the end of the round.
 
+After successful original-owner queue admission, a bounded metadata ticket allows
+the trusted native PostToolUse hook to notify the same owner during an active turn.
+It checks native owner/child identity before reading storage, rechecks current
+policy and permission mode, and reads only the admitted message IDs. One durable
+claim produces one short hint. Peer bodies and receive commands stay out of this
+hint; the existing receive context and confirmation flow remain responsible for
+processing and receipts. No tool boundary means no mid-reasoning injection, and
+the existing persistent queue remains the fallback.
+
+Reinstall projects this separate PostToolUse definition even when the three older
+intake hooks are externally owned. Review and trust the exact new definition in
+Codex, restart the original owner, and test active peer processing without Steer.
+The installer stops before writes if an operator-owned PostToolUse group would
+move to another positional trust key. It does not mint or move trust hashes.
+Source and fixture tests alone do not establish either host's native acceptance.
+
 An interactive Codex TUI on Codex 0.160 can write the same first rollout line as a Desktop chat (measured on macOS, issue #268). The TUI marker and cached shared-daemon probe still restrict the automatic `codexApp` grant: a positively reachable TUI is excluded, and a marked candidate with unknown reachability waits with `awaiting-user-turn`, without consuming budget or recording an attempt. Regular policy authorization permits queue independently of that probe. The probe remains bounded to two seconds and cached for ten seconds; Windows does not connect to that daemon socket. None of these observations is a delivery receipt.
 
 The kill switch, full-id authorization or `codexApp` grant, permission-mode check and reply-depth limit still apply. Queue attempts consume the shared turn budget and spacing. At most one attempt is recorded per message, including after failure or timeout; an uncertain submission is not automatically retried. Decisions made under the app grant are written to `wake.jsonl` with `"grant": "codexApp"`. Genuinely closed targets retain the separate closed-session policy. Claude's wake path is unchanged.

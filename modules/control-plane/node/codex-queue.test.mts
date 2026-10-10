@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
+import { listenerDir, takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
 import { codexNode, fakeCodexBin, waitFor } from "./codex-fixture.mts";
 import { processStart } from "./codex-process.mts";
 import { codexQueueIdle, guardQueue, pollCodexQueue, queueArgs } from "./codex-queue.mts";
@@ -232,6 +232,8 @@ test("a queue run that never ends is killed with its whole tree, and the exchang
   await codexQueueIdle();
   assert.match(lines[0] ?? "", /codex queue for .* failed: codex queue did not finish within 3 s/);
   assert.equal(actions(node).at(-1)?.[0], "queue-failed");
+  assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${HANG}.busy-hint.json`)), false,
+    "a timed-out queue cannot authorize a busy-turn hint");
   await waitFor(() => processStart(grandchild) === null && processStart(node.runs()[0].pid) === null, "the whole tree", 10_000);
   node.tick(11 * 60_000);
   await poll(node);

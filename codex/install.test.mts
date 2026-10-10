@@ -174,7 +174,7 @@ function beforePostEditDispatcher(config: string, hookDir: string): string {
     });
   const predecessor = config.replace(dispatcherGroup, hookGroup("PostToolUse", POST_EDIT_MATCHER, predecessorHooks));
   assert.notEqual(predecessor, config, "the current dispatcher group must be present exactly");
-  return predecessor;
+  return predecessor.replace(/\n\n\[\[hooks\.PostToolUse\]\]\nmatcher = "\.\*"\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = .*deliver-hook\.mts.*\n(?:commandWindows = .*\n)?timeout = 10(?=\n)/, "");
 }
 
 test("installs native Codex research hooks and every local dependency idempotently", (t) => {
@@ -246,7 +246,7 @@ test("installs the post-edit dispatcher and safely upgrades its exact four-hook 
       return { command: rendered, commandWindows: `& ${rendered}` };
     });
   const predecessorGroup = hookGroup("PostToolUse", POST_EDIT_MATCHER, predecessorHooks);
-  const predecessor = current.replace(dispatcherGroup, predecessorGroup);
+  const predecessor = beforePostEditDispatcher(current, hookDir);
   assert.notEqual(predecessor, current);
   const insideTrust = [
     "[hooks.state]",
@@ -266,7 +266,7 @@ test("installs the post-edit dispatcher and safely upgrades its exact four-hook 
     "timeout = 19",
   ].join("\n");
   fs.writeFileSync(first.targets.config,
-    predecessor.replace(CONFIG_END, `${insideTrust}\n${CONFIG_END}`) + `\n${outside}\n`);
+    `${outside}\n` + predecessor.replace(CONFIG_END, `${insideTrust}\n${CONFIG_END}`));
   const upgraded = install(installOptions);
   const upgradedConfig = fs.readFileSync(upgraded.targets.config, "utf8");
   assert.ok(upgradedConfig.includes(dispatcherGroup));
@@ -1464,7 +1464,7 @@ test("wires the control-plane delivery hook from the checkout and upgrades a blo
   const result = install(installOptions);
   const config = fs.readFileSync(result.targets.config, "utf8");
   assert.equal(occurrences(config, groups), 1);
-  assert.equal(occurrences(config, "deliver-hook.mts"), 6);
+  assert.equal(occurrences(config, "deliver-hook.mts"), 8);
   // Issue #325. The attribution hook beside it: a PreToolUse entry and a PostToolUse group.
   assert.equal(occurrences(config, "attribution-hook.mts"), 4);
   // The existing hooks are untouched: without the three groups, the attribution
@@ -1472,6 +1472,7 @@ test("wires the control-plane delivery hook from the checkout and upgrades a blo
   // block is the one the previous installer wrote, and a reinstall recognises and
   // upgrades it.
   const previous = config.replace(`\n\n${groups}`, "").replace(/^commandWindows = .*\n/gm, "")
+    .replace(/\n\n\[\[hooks\.PostToolUse\]\]\nmatcher = "\.\*"\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = .*deliver-hook\.mts.*\ntimeout = 10(?=\n)/, "")
     .replace(/^\[sandbox_workspace_write\]\nwritable_roots = .*\n\n/m, "")
     .replace(/\n\n\[\[hooks\.PostToolUse\]\]\nmatcher = "Bash[^\n]*\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = .*attribution-hook\.mts.*\ntimeout = 10(?=\n)/, "")
     .replace(/\n\n\[\[hooks\.PreToolUse\.hooks\]\]\ntype = "command"\ncommand = .*attribution-hook\.mts.*\ntimeout = 10(?=\n)/, "");
