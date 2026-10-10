@@ -35,6 +35,7 @@ import {
   verdictOf, writtenMessage,
 } from "./atl-credential-format.mts";
 import type { CredentialValues, VerificationOutcome } from "./atl-credential-format.mts";
+import { configurationProblem, misconfiguredMessage } from "./atl-credential-config.mts";
 
 function fail(message: string): never {
   process.stderr.write(`FATAL: ${message}\n`);
@@ -50,7 +51,7 @@ function argValue(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-interface Verdict { outcome: VerificationOutcome; verdict: string; exitCode: number }
+interface Verdict { outcome: VerificationOutcome; verdict: string; exitCode: number; problem?: string }
 
 // The broker's own output is not echoed. It is value-free by contract, but that
 // contract is the broker's and not this step's; the verdict is the only part
@@ -62,6 +63,9 @@ function verify(broker: string, envKey: string, credentialFile: string): Verdict
   });
   const verdict = run.error ? "NOT-RUN" : verdictOf(run.stdout ?? "");
   const exitCode = typeof run.status === "number" ? run.status : -1;
+  // Issue #379. Only the broker's fixed configuration message is kept, never other output.
+  const problem = run.error ? undefined : configurationProblem(run.stdout ?? "", run.stderr ?? "");
+  if (problem) return { outcome: "misconfigured", verdict, exitCode, problem };
   return { outcome: classifyVerdict(verdict, exitCode), verdict, exitCode };
 }
 
@@ -174,6 +178,7 @@ function main(): void {
     hint();
     return;
   }
+  if (source === "misconfigured") fail(misconfiguredMessage(target, first?.problem ?? ""));
   if (source === "fatal") {
     fail(`${runtime.envKey} names no verified credential file`
       + `${first ? ` (${target}: verdict ${first.verdict})` : ""}. `
@@ -205,6 +210,7 @@ function main(): void {
   if (checked.outcome !== "pass") {
     if (backup) { fs.copyFileSync(backup, target); fs.chmodSync(target, 0o600); }
     fail(rejectedMessage(target, checked.verdict, checked.exitCode)
+      + (checked.problem ? ` ${checked.problem}` : "")
       + (backup ? ` The previous file was restored from ${backup}.` : " Nothing was overwritten."));
   }
   say(writtenMessage(runtime.envKey, target, Buffer.byteLength(text, "utf8"), fieldLengths(values)));

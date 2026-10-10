@@ -19,6 +19,8 @@ Provide these environment variables to the runtime invoking the broker. Keep act
 
 For example, `{"Task":"10001"}` illustrates the type-map format. The name and ID must come from the configured site; the example is not a default. Jira's REST API retains `project` and `issue` terminology.
 
+The Jira brokers' `selftest` reads only `KHEREP_ATL_SITE` and the runtime's credential binding: it proves the service-account client and the site, never a project. Every other verb also needs the project values.
+
 The Atlassian MCP server is a separate path with a separate credential: each runtime reaches it with a service-account API key in `KHEREP_ATL_MCP_TOKEN_FILE_CLAUDE` or `KHEREP_ATL_MCP_TOKEN_FILE_CODEX`, never with the broker files above. See [Atlassian MCP server](../../docs/INSTALLATION.md#atlassian-mcp-server).
 
 ## Arguments and help

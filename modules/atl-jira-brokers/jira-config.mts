@@ -59,10 +59,16 @@ export interface JiraSeed {
   projectKey: string;
 }
 
+// Issue #379. All that selftest needs besides the credential: it proves the
+// OAuth client and the site, never a project.
+export function jiraSite(env: JiraEnv): string {
+  return site(required(env, "KHEREP_ATL_SITE"));
+}
+
 export function jiraSeed(env: JiraEnv): JiraSeed {
   const projectKey = required(env, "KHEREP_ATL_PROJECT_KEY").toUpperCase();
   if (!/^[A-Z][A-Z0-9_]*$/.test(projectKey)) throw new JiraConfigError("KHEREP_ATL_PROJECT_KEY ist ungültig.");
-  return { site: site(required(env, "KHEREP_ATL_SITE")), projectKey };
+  return { site: jiraSite(env), projectKey };
 }
 
 /**

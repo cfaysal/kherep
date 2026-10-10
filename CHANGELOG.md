@@ -175,6 +175,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Atlassian credential step: a host without `KHEREP_ATL_PROJECT_KEY` in the
+  installing shell could not prove a working broker credential. Both Jira
+  brokers validated the full project seed before `selftest`, although the check
+  proves only the OAuth client and the site; `selftest` now needs
+  `KHEREP_ATL_SITE` and nothing else. When a broker still stops on a
+  `KHEREP_ATL_*` configuration error, `bootstrap/atl-credential.mts` names that
+  variable, leaves the credential file untouched and asks nothing, instead of
+  reading the missing verdict as inconclusive and offering to replace a working
+  credential. A missing verdict now reads `NO-VERDICT`, no longer the word the
+  Codex broker uses for a check that ran and could not decide (issue #379).
 - atlassian-broker: the Claude agent wrote Confluence pages through
   `twg confluence content ...`, which runs as the operator's personal TWG
   login, against the rule that every Atlassian write runs as a service account.

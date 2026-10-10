@@ -92,7 +92,8 @@ export function resolveTarget(
 }
 
 /** What a broker's verdict proved about the file it was pointed at. */
-export type VerificationOutcome = "pass" | "fail" | "inconclusive";
+// "misconfigured": the broker stopped on its own configuration and ran no check (#379).
+export type VerificationOutcome = "pass" | "fail" | "inconclusive" | "misconfigured";
 
 /**
  * PASS with a zero exit proves the credential. FAIL - FEHLSCHLAG in the Claude
@@ -125,8 +126,10 @@ export function classifyVerdict(verdict: string, exitCode: number): Verification
 export function credentialSource(state: {
   /** The verdict on the file already there; absent when there is no file. */
   outcome?: VerificationOutcome; hasTerminal: boolean;
-}): "keep" | "prompt" | "confirm" | "fatal" {
+}): "keep" | "prompt" | "confirm" | "fatal" | "misconfigured" {
   if (state.outcome === "pass") return "keep";
+  // The credential is not in question, so nothing is asked, terminal or not.
+  if (state.outcome === "misconfigured") return "misconfigured";
   if (!state.hasTerminal) return "fatal";
   return state.outcome === "inconclusive" ? "confirm" : "prompt";
 }
@@ -189,8 +192,11 @@ export function childEnv(
 
 /**
  * The Claude broker ends with `verdikt: <word>`; the Codex broker prints one
- * JSON envelope carrying `verdict`. Anything else is UNKNOWN, which is no pass.
+ * JSON envelope carrying `verdict`. Anything else is NO-VERDICT, which is no
+ * pass - and not the Codex broker's own UNKNOWN, which is a check that ran.
  */
+export const NO_VERDICT = "NO-VERDICT";
+
 export function verdictOf(stdout: string): string {
   for (const line of stdout.split(/\r?\n/)) {
     const text = line.trim();
@@ -205,7 +211,7 @@ export function verdictOf(stdout: string): string {
     const match = /^verdi[kc]t:\s*(\S+)/i.exec(text);
     if (match) return match[1];
   }
-  return "UNKNOWN";
+  return NO_VERDICT;
 }
 
 export function unchangedMessage(envKey: string, target: string, bytes: number): string {

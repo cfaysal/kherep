@@ -18,6 +18,7 @@ import {
   bindingFromSeed,
   configuredBinding,
   jiraSeed,
+  jiraSite,
   type JiraBinding,
   type JiraSeed,
 } from "./jira-config.mts";
@@ -119,6 +120,8 @@ export interface BrokerDeps {
   fetch: FetchLike;
   jira?: JiraBinding;
   seed?: JiraSeed;
+  // The site tenant_info is read from; the only configuration selftest needs.
+  site?: string;
 }
 
 // Everything this broker reads out of a JSON payload, from the token endpoint,
@@ -345,7 +348,7 @@ function tokenStep(response: JsonResponse): TokenStep {
 }
 
 async function tenantInfo(deps: BrokerDeps): Promise<JsonResponse> {
-  return requestJson(deps, `${deps.seed!.site}/_edge/tenant_info`, bodyOptions("GET"));
+  return requestJson(deps, `${deps.site!}/_edge/tenant_info`, bodyOptions("GET"));
 }
 
 function plainStep(response: JsonResponse): CliOutput {
@@ -976,9 +979,13 @@ export async function runCli(argv: string[], injected: Partial<BrokerDeps> = {})
     const options = parseVerbArgs(verb, FLAGS[verb], rest, DE);
     // A misconfigured host fails on configuration, before any credential read
     // or network call. selftest needs the site it should prove itself against,
-    // and nothing else.
+    // and nothing else (issue #379: it used to require the project key too).
+    if (verb === "selftest") {
+      deps.site = jiraSite(deps.env);
+      return await selftest(deps);
+    }
     deps.seed = jiraSeed(deps.env);
-    if (verb === "selftest") return await selftest(deps);
+    deps.site = deps.seed.site;
     deps.jira = configuredBinding(deps.env) ?? await resolveBinding(deps);
     return await COMMANDS[verb](options, deps);
   } catch (error) {

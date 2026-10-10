@@ -232,6 +232,32 @@ test("selftest discriminates the real and tampered secret, then verifies the app
   assertNoPrivateOutput(result);
 });
 
+// Issue #379. selftest proves the client and the site, never a project, so a
+// host without the project values still gets a verdict; the site stays required.
+test("selftest needs the site but no project configuration", async () => {
+  let call = 0;
+  const fetchImpl: FetchLike = async () => {
+    call += 1;
+    if (call === 1) return jsonResponse(200, { access_token: ACCESS_TOKEN });
+    if (call === 2) return jsonResponse(401, { error: "access_denied" });
+    if (call === 3) return jsonResponse(200, { cloudId: CLOUD_ID });
+    return jsonResponse(200, { accountId: "account-id-private", accountType: "app", displayName: "codexAI" });
+  };
+  const siteOnly = { KHEREP_ATL_SITE: JIRA_ENV.KHEREP_ATL_SITE, KHEREP_ATL_CRED_FILE_CODEX: "injected-test-path" };
+  const passed = await runCli(["selftest"], { ...dependencies(fetchImpl), env: siteOnly });
+  assert.equal(passed.exitCode, 0);
+  assert.equal(passed.output.verdict, "PASS");
+
+  const { KHEREP_ATL_SITE: _site, ...withoutSite } = siteOnly;
+  const unsited = await runCli(["selftest"], { ...dependencies(async () => { throw new Error("no network"); }), env: withoutSite });
+  assert.equal(unsited.exitCode, 1);
+  assert.deepEqual(unsited.output, { status: 0, error: "KHEREP_ATL_SITE ist nicht gesetzt." });
+
+  // Every other verb still validates the whole seed.
+  const get = await runCli(["get", "--key", "OP-1"], { ...dependencies(async () => { throw new Error("no network"); }), env: siteOnly });
+  assert.deepEqual(get.output, { status: 0, error: "KHEREP_ATL_PROJECT_KEY ist nicht gesetzt." });
+});
+
 test("selftest returns UNKNOWN when the control request does not discriminate", async () => {
   let call = 0;
   const result = await runCli(["selftest"], dependencies(async () => {
