@@ -54,12 +54,13 @@ export function loadPolicy(file: string): NodePolicy {
 
 // The policy, or null for an unreadable or malformed file; a running wake
 // listener keeps its last good policy then (wake-hook.mts, issue #213).
-export function readPolicy(file: string): NodePolicy | null {
+// required refuses a missing file as well, for stable-policy admission windows.
+export function readPolicy(file: string, required = false): NodePolicy | null {
   let text: string;
   try {
     text = fs.readFileSync(file, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_POLICY;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" && !required) return DEFAULT_POLICY;
     return null;
   }
   try {
