@@ -54,16 +54,18 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
   recordCodexSession(deps.paths, sessionId, cwd, deps.now?.(), mode);
   // Only names no other live Codex session shares (issue #66).
   const refs = codexSessionRefs(deps.paths, sessionId, deps.now?.()).refs;
-  if (event === "SessionStart") {
+  if (event === "SessionStart" || event === "UserPromptSubmit") {
     const cli = deps.replyCommand ?? cliCommand();
-    return contextOutput(event, `Kherep messaging: this session's id is ${sessionId}. To message another session: `
-      + `${cli} msg send --from ${sessionId} <node>/<session> -- <text>. \`${cli} msg sessions\` lists sessions. `
-      + CODEX_ESCALATION_NOTE);
-  }
-  if (event === "UserPromptSubmit") {
-    const maxBytes = CODEX_CONTEXT_BYTES - Buffer.byteLength(CODEX_ESCALATION_NOTE) - 1;
+    const receiveRecipe = `When Kherep reports waiting peer messages, run \`${cli} msg inbox --from ${sessionId} --receive\`, then report any `
+      + `relevant peer update with attribution without echoing these transport instructions. ${CODEX_ESCALATION_NOTE}`;
+    if (event === "SessionStart") {
+      return contextOutput(event, `Kherep messaging: this session's id is ${sessionId}. To message another session: `
+        + `${cli} msg send --from ${sessionId} <node>/<session> -- <text>. \`${cli} msg sessions\` lists sessions. `
+        + receiveRecipe);
+    }
+    const maxBytes = CODEX_CONTEXT_BYTES - Buffer.byteLength(receiveRecipe) - 1;
     const context = deliveryContext(event, refs, { maxBytes, ...deps, replyFrom: sessionId });
-    return contextOutput(event, context && `${context}\n${CODEX_ESCALATION_NOTE}`);
+    return contextOutput(event, context ? `${context}\n${receiveRecipe}` : receiveRecipe);
   }
   const mine = sessionInbox(deps.paths, refs);
   confirmOffered(deps.paths, mine);
