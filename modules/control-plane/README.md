@@ -59,6 +59,8 @@ gates. See [busy-turn admission](ARCHITECTURE.md#codex-busy-turn-hint-admission)
 | Node inbox | `node/inbox.mts`, `node/policy.mts` | Messaging policy, the inbox of accepted messages and its retention |
 | Codex busy hint admission | `node/codex-busy-publish.mts`, `node/codex-busy-ticket.mts` | Successful original-owner queue admission, bounded metadata publication and serialized claim storage; no Inbox offer or receipt |
 | Codex busy hint consumer | `node/codex-busy-consume.mts`, `node/codex-hook-owner.mts` | Native original-owner PostToolUse gate, targeted current-record checks and one short hint per generation; no full Inbox scan |
+| Codex queue cleanup binding | `node/codex-queue-binding.mts`, `node/codex-queue-context.mts` | Capped atomic ownership records for exact successful queue IDs, complete admissions, native input and local producer identity |
+| Codex queue cleanup | `node/codex-queue-cleanup.mts`, `node/codex-native-queue.mts` | Normal Stop-only public queue listing and exact deletion after delivery, with complete pre-read and post-read evidence |
 | Directory | `worker/src/directory.mts` | The `directory` frame: non-revoked nodes and their sessions |
 | Session exchange | `node/exchange.mts` | The files the daemon shares with the session tools, and the daemon's 2 second exchange round |
 | Session tools | `node/msg-cli.mts`, `node/msg-inbox.mts`, `node/msg-resolve.mts`, `node/deliver-hook.mts`, `node/wake-hook.mts` | `kherep-node msg ...`, the Claude Code delivery hook and the idle wake listener |

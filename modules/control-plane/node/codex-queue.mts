@@ -4,6 +4,7 @@ import path from "node:path";
 import { bypassesPermissions, isPlainSessionId, listenerDir, takeTurn, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
 import { codexHome, currentCodexApp } from "./codex-app.mts";
 import { captureBusyHint, publishAdmittedBusyHint } from "./codex-busy-publish.mts";
+import { saveQueueBinding } from "./codex-queue-binding.mts";
 import { daemonSocket, loadedThreads, probesSettled, tuiMarker, tuiReachability } from "./codex-daemon.mts";
 import { codexInboxRound, type CodexInboxSelector } from "./codex-queue-inbox.mts";
 import { codexSessionRefs, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
@@ -193,7 +194,19 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], selectInb
   const busyHint = captureBusyHint(deps, sessionId, due, now);
   inFlight.add(sessionId);
   lane = lane.then(() => runQueue(deps, args)).then(
-    () => {
+    (admission) => {
+      if (admission.queueId && admission.producer.route === "local") {
+        try {
+          const stored = saveQueueBinding(paths, {
+            version: 1, owner: admission.owner, queuedSubmissionId: admission.queueId,
+            admissionComplete: true, admissionMessageIds: ids(due), expectedInput: admission.expectedInput,
+            producer: admission.producer,
+          });
+          if (stored === "full") log("kherep-node: Codex queue binding store is full; native queue remains accepted");
+        } catch {
+          log("kherep-node: Codex queue binding persistence failed; native queue remains accepted");
+        }
+      }
       if (busyHint && publishAdmittedBusyHint(deps, busyHint) === "failed") {
         log("kherep-node: Codex busy hint persistence failed; native queue remains accepted");
       }
