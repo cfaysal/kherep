@@ -7,6 +7,7 @@ import { codexHome } from "./codex-app.mts";
 import { forgetCodexSession } from "./codex-sessions.mts";
 import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
+import { codexIntakeWindow } from "./codex-intake-window.mts";
 import { connectUrl, ensureDir, type NodeConfig, type NodePaths } from "./config.mts";
 import { recordDaemonState, withVerdict, type DaemonState } from "./daemon-state.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
@@ -160,6 +161,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     let exchange: NodeJS.Timeout | null = null;
     let directory: NodeJS.Timeout | null = null;
     let exchangePending = false;
+    let intakeWindow: ReturnType<typeof codexIntakeWindow> | null = null;
     // Outbox records sent on this connection, with their send time; an
     // unanswered one is sent again with backoff (send-schedule.mts), or at
     // once after a reconnect, which starts with a new map.
@@ -204,13 +206,15 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         }).finally(() => { if (periodicDiscovery === controller) periodicDiscovery = null; });
       }, SESSIONS_INTERVAL_MS);
       exchange = setInterval(() => {
+        if (intakeWindow) { intakeWindow.tick(); return; }
         // Coalesce ticks while one round waits or runs so inbound receipts
         // cannot accumulate behind redundant periodic exchange work.
         if (exchangePending) return;
         exchangePending = true;
         chain = chain.then(async () => {
           const current = loadPolicy(config.policyFile);
-          publishRegistration(await client.refreshPolicy(current));
+          let applied = current;
+          let published = publishRegistration(await client.refreshPolicy(applied));
           observeClaudeDeliveryProgress({ ...runner, policy: current });
           observeCodexTaskProgress(runner);
           pollExchange(client, paths, inflight, send);
@@ -218,10 +222,23 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           const enabled = current.sessions?.enabled === true && current.sessions.ownTaskControl === true
             && current.sessions.runtimes.length > 0;
           pollTaskControl(client, paths, taskControlInflight, send, Date.now(), enabled);
-          await pollMcpIntents(client, paths, mcpInflight, send,
-            async () => publishRegistration(await client.refreshPolicy(loadPolicy(config.policyFile))));
+          await pollMcpIntents(client, paths, mcpInflight, send, async () => {
+            applied = loadPolicy(config.policyFile);
+            const sent = publishRegistration(await client.refreshPolicy(applied));
+            published = published && sent;
+            return sent;
+          });
           // Peer messages for ended Codex task sessions resume them (issue #63).
-          await pollCodexInbound(runner, log);
+          // Keep runtime mutation serialized while the existing queue lane and
+          // admitted Codex peer transport can progress (issue #369).
+          const window = published ? codexIntakeWindow({ client, paths, policyFile: config.policyFile, policy: applied,
+            connected: () => !stopped && socket === ws && ws.readyState === WebSocket.OPEN,
+            send: frame => !stopped && socket === ws && send(frame),
+            exchange: () => pollExchange(client, paths, inflight, send),
+            queue: () => pollCodexQueue({ ...runner, policy: applied }, log), defer: handleFrame, log }) : null;
+          intakeWindow = window;
+          try { await pollCodexInbound(runner, log); }
+          finally { await window?.drain(); intakeWindow = null; }
           // ... and wake idle interactive Codex sessions with a pointer (issue #66).
           // Not awaited: queue runs have their own lane and never block this chain.
           pollCodexQueue(runner, log);
@@ -236,6 +253,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     ws.addEventListener("message", (event) => {
       if (typeof event.data !== "string") return;
       const data = event.data;
+      if (intakeWindow?.frame(data)) return;
       const route = routeFrame(data, paths);
       if (!route.command) handleFrame(data);
       else {
@@ -266,6 +284,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
       }).catch((error: unknown) => log(`kherep-node: frame handling failed: ${String(error)}`));
     };
     ws.addEventListener("close", (event) => {
+      intakeWindow?.close();
       for (const timer of [ping, snapshots, exchange, directory]) if (timer) clearInterval(timer);
       periodicDiscovery?.abort();
       periodicDiscovery = null;

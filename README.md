@@ -74,6 +74,7 @@ flowchart LR
   runtimes --> bridge --> mcp
   nodeDaemon <--> worker <--> peers
   nodeDaemon -.->|delivers peer messages| runtimes
+  nodeDaemon -.->|Codex intake peer window and existing queue| codex
 ```
 
 | Component | Directory | Responsibility |

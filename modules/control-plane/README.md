@@ -20,7 +20,16 @@ verified MCP client --stateless HTTPS, disabled by default--> Worker --> Registr
 trusted Codex or Claude hook --> node --> prior intent with actual source session and call
 native HTTP claim --> Registry: Codex session/thread/call, or Claude tool-use ID joined to prior intent
 new native caller --> node sessions.snapshot --> Registry --> subsequent native intent registration
+held Codex task intake --> bounded peer window --> known Codex inbox --> existing queue lane
 ```
+
+While a Codex task intake waits, a bounded window keeps receipts, sender status,
+outbox sends and incoming messages addressed by a recorded full Codex ID moving.
+The existing queue lane may wake eligible interactive Codex targets; task threads
+remain excluded. Commands, Claude delivery admission, new native intents and
+authentication/reconnect stay on the original lane. Policy drift, unreadable or
+missing policy, socket replacement and stop close this window. Already admitted
+queue work retains its existing completion semantics. See [architecture](ARCHITECTURE.md).
 
 | Part | Path | Role |
 | --- | --- | --- |

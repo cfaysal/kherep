@@ -1,5 +1,31 @@
 # Control Plane architecture
 
+## Codex intake peer progress
+
+The daemon retains one runtime-mutation lane. Only around its awaited
+`pollCodexInbound`, after preceding MCP polling and registration publication,
+`node/codex-intake-window.mts` admits validated message receipts, sender statuses,
+MCP intent receipts and deliveries to positively recorded full Codex IDs. Its
+serialized jobs use the real client callbacks and the existing exchange/queue
+paths. Task threads remain excluded from the queue; the queue records an attempt,
+not an offer or delivery. Claude targets, aliases, unknown targets, commands,
+task control, MCP inbox requests and authentication remain on the original lane.
+
+The window pins the socket and the policy actually applied by the last client
+refresh, including a refresh inside MCP polling. Its queue runner copy uses that
+same policy; the existing task intake runner is not changed. A required policy
+read must still match before admission. Missing, invalid or unreadable policy,
+drift, lost authentication, socket close/replacement or daemon stop permanently
+closes that window. Unprocessed frames return to the original lane; an unaccepted
+delivery on a closed socket receives no ACK and remains the Worker's obligation.
+
+The main lane drains admitted callback publication before another frame allocator
+can run. A callback already admitted may finish its response after policy drift,
+but cannot admit another queue attempt. Queue attempts already handed to the
+existing queue lane may complete after the window closes. This does not add queue
+revocation or fix waits in authentication, new MCP-intent registration, commands
+or other daemon phases. It does not identify the cause of a particular live stall.
+
 The Worker authenticates enrolled nodes over outbound WebSockets. `NodeSession`
 terminates each connection; `Registry` owns shared identities, messages, task
 requests and owner-control records in SQLite. Local node policy remains an
