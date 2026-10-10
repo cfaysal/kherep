@@ -172,6 +172,8 @@ export function install(options: InstallOptions = {}) {
     observationStopHook: path.join(sourceRoot, "hooks", "observation-stop.mts"),
     observationHook: path.join(sourceRoot, "hooks", "observation-turn-completion.mts"),
     hookAdapter: path.join(sourceRoot, "hooks", "hook-adapter.mts"),
+    postEditDispatcher: path.join(sourceRoot, "hooks", "post-edit-checks.mts"),
+    postEditToolCalls: path.join(sourceRoot, "hooks", "post-edit-tool-calls.mts"),
     privacyHook: path.join(sourceRoot, "hooks", "privacy-boundary-guard.mts"),
     confluenceDeliveryHook: path.join(sourceRoot, "hooks", "confluence-delivery-check.mts"),
     integrityHook: path.join(sourceRoot, "hooks", "hook-integrity.mts"),
@@ -417,6 +419,9 @@ export function install(options: InstallOptions = {}) {
       renderObservationHook(fs.readFileSync(sources.observationHook, "utf8"), workspace),
     );
     transaction.copyFile(sources.hookAdapter, path.join(targets.hookDir, "codex-hook-adapter.mts"));
+    transaction.copyFile(sources.hookAdapter, path.join(targets.hookDir, "hook-adapter.mts"));
+    transaction.copyFile(sources.postEditDispatcher, path.join(targets.hookDir, "codex-post-edit-checks.mts"));
+    transaction.copyFile(sources.postEditToolCalls, path.join(targets.hookDir, "post-edit-tool-calls.mts"));
     transaction.copyFile(sources.privacyHook, path.join(targets.hookDir, "codex-privacy-boundary-guard.mts"));
     transaction.copyFile(sources.confluenceDeliveryHook, path.join(targets.hookDir, "codex-confluence-delivery-check.mts"));
     // Issue #275. Its libs are the claude/hooks/lib copy installed above.

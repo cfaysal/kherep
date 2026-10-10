@@ -5,7 +5,7 @@ import { prepareManagedConfig } from "./config-preservation.mts";
 import * as parityConfigApi from "./parity-config.mts";
 import {
   render, renderBeforeHookIntegrity, renderBeforeMainCheckoutGuard, renderBeforePostLegacyHooks,
-  renderBeforeResearchHooks, renderLegacyJavaScript, renderPreviousNudges,
+  renderBeforePostEditDispatcher, renderBeforeResearchHooks, renderLegacyJavaScript, renderPreviousNudges,
 } from "./parity-config.mts";
 
 // Issue #325, PR-A. The attribution hook runs from the checkout, like the
@@ -49,8 +49,19 @@ test("the attribution hook ends the shell PreToolUse group and a new last PostTo
     assert.match(pre[shell]!.at(-1)!, ATTRIBUTION);
     pre.forEach((group, index) => index === shell || assert.deepEqual(group, prePrevious[index]));
     const postGroups = groups(current, "PostToolUse");
-    assert.deepEqual(postGroups.slice(0, -1), groups(previous, "PostToolUse"), "earlier PostToolUse groups keep their index");
+    const predecessorGroups = groups(previous, "PostToolUse");
+    const attributedPredecessorGroups = groups(renderBeforePostEditDispatcher(options), "PostToolUse");
+    assert.deepEqual(attributedPredecessorGroups.slice(0, -1), predecessorGroups,
+      "the historical renderer keeps the exact four-watcher predecessor at group zero");
+    assert.equal(predecessorGroups[0]!.length, 5, "the predecessor group contains its header and four watcher entries");
+    for (const watcher of ["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"]) {
+      assert.match(predecessorGroups[0]!.join("\n"), new RegExp(`${watcher}\\.mts`));
+    }
+    assert.equal(postGroups.length, attributedPredecessorGroups.length, "the dispatcher does not move the attribution group");
+    assert.equal(postGroups[0]!.length, 2, "the current group zero has one dispatcher entry");
+    assert.match(postGroups[0]![1]!, /codex-post-edit-checks\.mts/);
     const last = postGroups.at(-1)!;
+    assert.deepEqual(last, attributedPredecessorGroups.at(-1), "attribution remains group one, entry zero");
     assert.equal(last.length, 2, "one hook in the new group");
     assert.equal(last[0], `[[hooks.PostToolUse]]\n${SHELL_MATCHER}`);
     assert.match(last[1]!, ATTRIBUTION);

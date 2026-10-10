@@ -23,7 +23,12 @@ const base = { contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks
   mcpServers: [], controlPlaneHook: "/synthetic/checkout/modules/control-plane/node/deliver-hook.mts" };
 const native = { ...base, memoryProvider: "central-brain" as const,
   nativeHooks: { contextCli: "/synthetic/context.js", captureCli: "/synthetic/capture.mjs", profile: "/synthetic/profile.json" } };
-const HOOK = /^command = "\\"\/synthetic\/node\\" \\"\/synthetic\/hooks\/codex-obs-result-check\.mts\\""$/m;
+function assertObsCommand(config: string): void {
+  const line = /^command = (".*codex-obs-result-check\.mts.*")$/m.exec(config);
+  assert.ok(line, "the obs-result command is present");
+  assert.equal((JSON.parse(line[1]!) as string).replace(/\\/g, "/"),
+    '"/synthetic/node" "/synthetic/hooks/codex-obs-result-check.mts"');
+}
 
 function hookGroups(config: string): string[][] {
   return config.split("\n\n[mcp_servers.")[0]!.split(/^(?=\[\[hooks\.[A-Za-z]+\]\]$)/m).slice(1)
@@ -35,11 +40,25 @@ test("the obs-result check is one trailing SubagentStop group and moves no other
   for (const options of [base, native, { ...base, controlPlaneHook: undefined }]) {
     const current = hookGroups(render(options));
     const previous = hookGroups(renderBeforeObsResultCheck!(options));
-    assert.deepEqual(current.slice(0, -1), previous, "every earlier group and entry keeps its index");
+    assert.equal(current.length, previous.length + 1);
+    previous.forEach((group, index) => {
+      const next = current[index]!;
+      if (!group[0]!.startsWith("[[hooks.PostToolUse]]") || !group[0]!.includes("Edit|Write")) {
+        assert.deepEqual(next, group, "unaffected earlier groups and entries keep their index");
+        return;
+      }
+      assert.equal(next[0], group[0], "the edit group keeps its position and matcher");
+      assert.equal(group.length, 5, "the historical group has four watchers");
+      ["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"].forEach((name, entry) => {
+        assert.match(group[entry + 1]!, new RegExp(`${name}\\.mts`));
+      });
+      assert.equal(next.length, 2, "one dispatcher replaces the historical watcher entries");
+      assert.match(next[1]!, /codex-post-edit-checks\.mts/);
+    });
     const last = current.at(-1)!;
     assert.equal(last.length, 2, "one hook in the new group");
     assert.equal(last[0], '[[hooks.SubagentStop]]\nmatcher = "codex-obs"');
-    assert.match(last[1]!, HOOK);
+    assertObsCommand(last[1]!);
     assert.match(last[1]!, /^timeout = 10$/m);
     assert.equal(current.filter((group) => group[0]!.startsWith("[[hooks.SubagentStop]]")).length, 1);
   }
@@ -56,7 +75,7 @@ test("upgrades the exact pre-obs-result-check managed block and then settles", (
     assert.doesNotMatch(previous, /codex-obs-result-check|SubagentStop/);
     const upgraded = prepareManagedConfig(`${managed.startMarker}\n${previous}${managed.endMarker}`, managed);
     assert.equal(upgraded.managedFragment, "replaced");
-    assert.match(upgraded.config, HOOK);
+    assertObsCommand(upgraded.config);
     assert.equal(prepareManagedConfig(upgraded.config, managed).config, upgraded.config);
   }
 });

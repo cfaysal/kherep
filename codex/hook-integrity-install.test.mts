@@ -133,6 +133,14 @@ test("2c. a 0-byte lib the dispatch guard loads through a computed require is re
   assertRestored(ctx, result, "lib/obs-brief-policy.mts", "claude/hooks/lib/obs-brief-policy.mts");
 });
 
+test("2d. the raw adapter imported by the dispatcher is restored from codex/hooks", (t) => {
+  const ctx = fixture(t);
+  fs.writeFileSync(path.join(ctx.hookDir, "hook-adapter.mts"), "");
+  const result = run(ctx);
+  assert.match(String(result.context), /hook-adapter\.mts \(imported by [^)]*codex-post-edit-checks\.mts/);
+  assertRestored(ctx, result, "hook-adapter.mts", "codex/hooks/hook-adapter.mts");
+});
+
 test("3. a missing commit-guard.mts is restored", (t) => {
   const ctx = fixture(t);
   fs.rmSync(path.join(ctx.hookDir, "commit-guard.mts"));

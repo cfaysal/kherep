@@ -4,9 +4,9 @@
 
 **Goal:** Keep Codex peer-message delivery reliable while replacing transport-heavy Stop feedback with one fixed concise cue.
 
-**Architecture:** Keep the existing delivery state machine and `msg inbox --receive` path. SessionStart developer context owns the exact session-bound receive recipe. Stop owns only the fixed cue that starts one bounded continuation. The continuation retrieves framed peer context through the existing CLI, and its next Stop confirms what was offered.
+**Architecture:** Keep the existing delivery state machine and `msg inbox --receive` path. SessionStart and every UserPromptSubmit developer context own the exact session-bound receive recipe, including when the inbox is empty. Stop owns only the fixed cue that starts one bounded continuation. The continuation retrieves framed peer context through the existing CLI, and its next Stop confirms what was offered.
 
-**Current authorized phase:** Plan and synthetic regression tests only. No production hook, renderer, installer, permission, guard, merge, live configuration or installation change is authorized.
+**Current authorized phase:** Codex-only source implementation, functional verification and merge after green acceptance are now authorized. [Authority record at #365](https://github.com/cfaysal/kherep/issues/365#issuecomment-6095123268). Live installation and activation remain excluded. The [existing-owner addendum](2026-10-10-codex-quiet-owner-cutover.md) governs the separate A/B artifacts and target cutover.
 
 **Related plan:** [Codex Hook Noise Implementation Plan](2026-10-09-codex-hook-noise.md) covers the separate PostToolUse and research-feedback work in the same draft PR.
 
@@ -25,7 +25,7 @@ Installed source and repository tests establish configured behavior only. Actual
 
 ## Delivery contract
 
-The future Stop output is exactly:
+The stage-B Stop output is exactly:
 
 ```text
 Kherep: New peer messages are waiting. Check this session's inbox and report any relevant update.
@@ -39,7 +39,7 @@ SessionStart keeps the current identity, send command, session-list command and 
 <cli> msg inbox --from <session-id> --receive
 ```
 
-The developer context tells the agent to report relevant peer content with attribution without echoing transport instructions.
+Every UserPromptSubmit carries the same receive recipe and reporting instruction, even for an empty or foreign-only inbox. The recipe is deducted from the existing context-byte budget before peer framing. SessionStart alone does not offer messages. The developer context tells the agent to report relevant peer content with attribution without echoing transport instructions.
 
 No hidden output channel, new hook event, MCP substitute, delivery-disable switch or `wake.enabled` interpretation is introduced.
 
@@ -61,7 +61,7 @@ The receive path keeps session validation before state changes, `reofferOffered:
 
 ---
 
-### Task 1: Add test-only contracts (current authorized phase)
+### Task 1: Add test-only contracts (original completed phase)
 
 **Files:**
 
@@ -90,9 +90,9 @@ Run the future presentation contract separately:
 node --test modules/control-plane/node/deliver-codex-feedback.contract.test.mts
 ```
 
-Expected now: the adversarial peer-field check passes; the concise Stop and four SessionStart recipe checks fail for the intended absent behavior. The transport-hygiene check also fails because current Stop feedback contains the recipe and escalation note.
+Original RED baseline: the adversarial peer-field check passed; the concise Stop and four SessionStart recipe checks failed for the intended absent behavior. The transport-hygiene check also failed because the old Stop feedback contained the recipe and escalation note. Stage-B source makes all seven contracts green.
 
-### Task 2: Move the recipe to SessionStart (future authorization required)
+### Task 2: Supply the recipe before shortening Stop (authorized source implementation)
 
 **Files later:**
 
@@ -100,15 +100,15 @@ Expected now: the adversarial peer-field check passes; the concise Stop and four
 - Modify display assertions only: `modules/control-plane/node/deliver-codex.test.mts`
 - Modify display assertions only: `modules/control-plane/node/codex-stop-receive.test.mts`
 
-- [ ] Replace the current Stop reason plus appended recipe with the exact fixed cue.
-- [ ] Extend SessionStart context with the exact session-bound receive command and reporting instruction.
-- [ ] Keep `deliver-core.mts`, `msg-inbox.mts`, autonomy, framing, state transitions and attribution unchanged.
-- [ ] Update old verbose-presentation assertions while retaining all existing process and state assertions.
-- [ ] Make both new contract files green.
+- [x] Pin stage A with receive context at SessionStart and every UserPromptSubmit, while preserving the verbose Stop presentation.
+- [x] Pin stage B separately with the exact fixed Stop cue.
+- [x] Keep `deliver-core.mts`, `msg-inbox.mts`, autonomy, framing, state transitions and attribution unchanged.
+- [x] Update old verbose-presentation assertions while retaining all existing process and state assertions.
+- [x] Make both new contract files green.
 
 No new helper module is needed unless later implementation evidence proves the existing seam insufficient.
 
-### Task 3: Verify preserved behavior (future implementation phase)
+### Task 3: Verify preserved behavior (authorized source phase)
 
 Run the unchanged affected suites:
 
@@ -128,9 +128,10 @@ npm run test:control-plane
 
 Report pass, fail and skip counts separately. Inspect the final remote diff and verify production changes are limited to the separately authorized implementation files.
 
-### Task 4: Synthetic runtime acceptance (later, separately authorized)
+### Task 4: Same-owner runtime acceptance (later, separately authorized activation)
 
-- [ ] Start an isolated synthetic Codex runtime and capture SessionStart context for startup and resume.
+- [ ] Use the same isolated original Codex owner across both stages, with an old-context turn before stage A; a newly created chat alone cannot establish cutover.
+- [ ] Capture the actual owner's stage-A SessionStart or UserPromptSubmit recipe and finish any pre-A running turn before stage B.
 - [ ] Exercise clear and compaction, then prove the receive recipe remains available through documented SessionStart developer context.
 - [ ] Deliver a synthetic peer message, observe the concise Stop cue, and verify the model executes the recipe from developer context.
 - [ ] Verify the response presents relevant peer content with attribution and does not echo transport instructions.
