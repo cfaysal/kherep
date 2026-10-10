@@ -17,11 +17,20 @@ interface StopInput {
 }
 export interface Continuation { decision: "block"; reason: string }
 
-export function researchReason(workspace: string, configPath: string): string {
+export function researchReason(
+  workspace: string,
+  configPath: string,
+  missingBrain = true,
+  missingGraph = true,
+): string {
+  const missing = missingBrain && missingGraph ? "Central Brain and code-graph research attempts"
+    : missingBrain ? "a Central Brain research attempt" : "a code-graph research attempt";
+  const brain = `look up the Central Brain with ${brainSearchCommand(workspace, configPath)}`;
+  const graph = "query codebase-memory through an MCP graph tool";
+  const action = missingBrain && missingGraph ? `${brain} and ${graph}` : missingBrain ? brain : graph;
   return [
-    "Evidence first (ROUTING.md): this substantial turn shows no required research attempt.",
-    `Before ending, look up the Central Brain with ${brainSearchCommand(workspace, configPath)}`,
-    "and, if this turn changed code in a repository, query codebase-memory through an MCP graph tool.",
+    `Evidence first (ROUTING.md): missing ${missing}.`,
+    `Before ending, ${action}.`,
     "Search terms follow the privacy classification; private content never goes to Atlassian.",
     "A tool call records an attempted lookup only; inspect its result before relying on it.",
     "If research is not relevant, end the final response with [research: none - <reason>].",
@@ -52,7 +61,7 @@ export function decision(
     ? input.last_assistant_message : turn.finalAssistantText;
   if (RESEARCH_OPT_OUT.test(final)) return null;
   if (facts.brain && (!facts.codeWork || facts.codeGraph)) return null;
-  return { decision: "block", reason: researchReason(workspace, configPath) };
+  return { decision: "block", reason: researchReason(workspace, configPath, !facts.brain, facts.codeWork && !facts.codeGraph) };
 }
 
 function main(): void {
