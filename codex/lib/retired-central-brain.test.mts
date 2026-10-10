@@ -7,7 +7,7 @@ import { test } from "node:test";
 
 import { prepareManagedConfig } from "./config-preservation.mts";
 import type { McpProjection } from "./contracts.mts";
-import { render, renderBeforeHookIntegrity, type RenderOptions } from "./parity-config.mts";
+import { render, renderBeforeHookIntegrity, renderBeforePostEditDispatcher, type RenderOptions } from "./parity-config.mts";
 import { retiredCentralBrainRender } from "./retired-central-brain.mts";
 import { withoutRetiredTable, withRetiredCentralBrain } from "./retired-central-brain-fixture.mts";
 
@@ -43,7 +43,7 @@ test("the retired render is the MCP table plus native hooks the old installer de
 test("the installer-test fixture equals the historical renderer", () => {
   for (const pluginMcpServers of [plugins, {}]) for (const observationStopHook of [false, true]) {
     const options = { ...MANAGED, mcpServers: projections, pluginMcpServers, observationStopHook };
-    assert.equal(withRetiredCentralBrain(render(options), retired, NODE, Object.keys(pluginMcpServers)),
+    assert.equal(withRetiredCentralBrain(renderBeforePostEditDispatcher(options), retired, NODE, Object.keys(pluginMcpServers)),
       renderBeforeHookIntegrity(written(options)));
   }
 });

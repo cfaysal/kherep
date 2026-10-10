@@ -236,9 +236,9 @@ test("accepts the previous Kherep projection and still refuses an unknown manage
   const result = prepareManagedConfig(config, MANAGED_OPTIONS);
 
   assert.equal(result.managedFragment, "replaced");
+  assert.match(result.config, /codex-post-edit-checks\.mts/);
   for (const name of ["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"]) {
-    assert.match(result.config, new RegExp(`${name}\\.mts`));
-    assert.doesNotMatch(result.config, new RegExp(`${name}\\.js`));
+    assert.doesNotMatch(result.config, new RegExp(`${name}\\.(?:js|mts)`), "the current config invokes only the dispatcher");
   }
   assert.equal((result.config.match(/\[mcp_servers\.fixture_service\]/g) || []).length, 1);
   assert.equal(prepareManagedConfig(result.config, MANAGED_OPTIONS).managedFragment, "current");

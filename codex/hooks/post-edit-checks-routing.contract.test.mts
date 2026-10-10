@@ -95,11 +95,15 @@ test("plans every target for a direct functions.exec apply_patch wrapper", async
 
 test("plans no watcher children for an explicitly supported read-only wrapper", async () => {
   const { planPostEditPayloads } = await dispatcher();
-  assert.deepEqual(planPostEditPayloads({
-    cwd: "/synthetic/work",
-    tool_name: "functions.exec",
-    tool_input: 'await tools.mcp__codebase_memory_mcp__search_graph({query:"hooks"});',
-  }), []);
+  for (const source of [
+    'await tools.mcp__codebase_memory_mcp__search_graph({query:"hooks"});',
+    [
+      'tools.mcp__codebase_memory_mcp__search_graph({query:"hooks", filters:["codex", {exact:true}]});',
+      'await tools.mcp__codebase_memory_mcp__get_architecture({project:"synthetic"});',
+    ].join("\n"),
+  ]) assert.deepEqual(planPostEditPayloads({
+    cwd: "/synthetic/work", tool_name: "functions.exec", tool_input: source,
+  }), [], source);
 });
 
 test("plans four watcher children per direct edit or currently recognized patch source", async () => {
@@ -129,11 +133,30 @@ test("keeps mixed and unknown wrappers conservative without dropping patch targe
     cwd, tool_name: "functions.exec", tool_input: patchSource,
   }).length, 3);
 
-  for (const source of [
+  const unsafe = [
     'await tools.future_read({query:"hooks"});',
     'const name = "mcp__codebase_memory_mcp__search_graph"; await tools[name]({query:"hooks"});',
     'await tools.mcp__codebase_memory_mcp__search_graph({query:"hooks"}); await tools.future_read({});',
-  ]) assert.equal(planPostEditPayloads({
-    cwd, tool_name: "functions.exec", tool_input: source,
-  }).length, 1, source);
+    'await tools.mcp__codebase_memory_mcp__search_graph({query:"hooks"}); await tools[name]({});',
+    'await tools.mcp__codebase_memory_mcp__search_graph({query:"hooks"}); await tools.mcp__codebase_memory_mcp__get_architecture(',
+    'await tools.mcp__codebase_memory_mcp__search_graph({query: mutable()});',
+    'await tools.mcp__codebase_memory_mcp__search_graph({...query});',
+    'await tools.mcp__codebase_memory_mcp__search_graph({get query(){ return "hooks"; }});',
+    'await tools.mcp__codebase_memory_mcp__search_graph({`query`:"hooks"});',
+    'await tools.mcp__codebase_memory_mcp__search_graph({query:`${name}`});',
+    String.raw`await tools.mcp__codebase_memory_mcp__search_graph({query:"\x"});`,
+    String.raw`await tools.mcp__codebase_memory_mcp__search_graph({query:"\uZZZZ"});`,
+    'await tools.mcp__future__fetch_records({query:"hooks"});',
+    '',
+    '/* comment only */',
+  ];
+  for (const source of unsafe) {
+    assert.equal(planPostEditPayloads({
+      cwd, tool_name: "functions.exec", tool_input: source,
+    }).length, 1, source || "empty wrapper");
+    assert.equal(planPostEditPayloads({
+      cwd, tool_name: "functions.exec", tool_input: `${source}\n${THREE_TARGET_PATCH}`,
+    }).length, 3, `patch targets retained: ${source || "empty wrapper"}`);
+  }
+
 });

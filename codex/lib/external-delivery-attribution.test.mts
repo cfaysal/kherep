@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { prepareManagedConfig, type ManagedConfigOptions } from "./config-preservation.mts";
-import { command, hookGroup, renderBeforeAttributionHook } from "./parity-config.mts";
+import { command, hookGroup, render, renderBeforeAttributionHook } from "./parity-config.mts";
 
 const START = "# >>> Kherep Codex Maestro >>>";
 const END = "# <<< Kherep Codex Maestro <<<";
@@ -70,7 +70,16 @@ for (const windows of [false, true]) {
     });
     assert.match(afterPre[shellIndex]!.at(-1)!, /attribution-hook\.mts/);
     const afterPost = groups(result.config, "PostToolUse");
-    assert.deepEqual(afterPost.slice(0, -1), groups(input, "PostToolUse"));
+    const beforePost = groups(input, "PostToolUse");
+    assert.equal(beforePost.length, 1);
+    assert.equal(beforePost[0]!.length, 5, "the historical group has four watchers");
+    ["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"].forEach((name, index) => {
+      assert.match(beforePost[0]![index + 1]!, new RegExp(`${name}\\.mts`));
+    });
+    assert.equal(afterPost.length, 2);
+    assert.equal(afterPost[0]![0], beforePost[0]![0], "the edit group keeps its position and matcher");
+    assert.equal(afterPost[0]!.length, 2, "one dispatcher replaces the four watcher entries");
+    assert.deepEqual(afterPost[0], groups(render({ ...o, mcpServers: [], controlPlaneHook: undefined }), "PostToolUse")[0]);
     assert.ok(afterPost.at(-1)![0]!.includes(JSON.stringify(SHELL)));
     assert.match(afterPost.at(-1)!.at(-1)!, /attribution-hook\.mts/);
     assert.equal(prepareManagedConfig(result.config, o).config, result.config);

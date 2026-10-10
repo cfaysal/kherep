@@ -20,7 +20,9 @@ after(() => fs.rmSync(TEMP, { recursive: true, force: true }));
 function materialize(destination = INSTALLED): string {
   assert.ok(fs.existsSync(SOURCE), "the fixed post-edit dispatcher must exist");
   fs.mkdirSync(path.join(destination, "lib"), { recursive: true });
-  for (const dependency of ["post-edit-checks.mts", "hook-adapter.mts", "research-exec-parser.mts"]) {
+  for (const dependency of [
+    "post-edit-checks.mts", "post-edit-tool-calls.mts", "hook-adapter.mts", "research-exec-parser.mts",
+  ]) {
     fs.copyFileSync(path.join(HERE, dependency), path.join(destination, dependency));
   }
   for (const watcher of WATCHERS) {
@@ -51,6 +53,8 @@ fs.mkdirSync(REPO, { recursive: true });
 git(["init", "-q"]);
 git(["config", "user.name", "Synthetic"]);
 git(["config", "user.email", "synthetic@example.invalid"]);
+fs.mkdirSync(path.join(REPO, ".git", "no-hooks"), { recursive: true });
+git(["config", "core.hooksPath", ".git/no-hooks"]);
 fs.writeFileSync(MANIFEST, "permissions:\n  scopes:\n    - read:jira-work\n");
 fs.writeFileSync(LARGE, "export const value = 1;\n");
 fs.writeFileSync(GERMAN, "Das ist ein Hinweis.\n");
@@ -84,7 +88,7 @@ test("aggregates simultaneous real watcher findings into one PostToolUse JSON do
   };
   assert.equal(parsed.hookSpecificOutput.hookEventName, "PostToolUse");
   for (const marker of ["[manifest-watch]", "[loc-watch]", "[umlaut-translit-watch]", "[simplify-watch]"]) {
-    assert.match(parsed.hookSpecificOutput.additionalContext, new RegExp(marker.replace(/[\[\]]/g, "\\$&")));
+    assert.ok(parsed.hookSpecificOutput.additionalContext.includes(marker), `literal watcher marker missing: ${marker}`);
   }
   assert.match(parsed.systemMessage, /Umlaut-Transliteration/);
   assert.equal(result.stdout.trim().split("\n").length, 1, "exactly one JSON document");
@@ -117,4 +121,23 @@ test("does not hide a child failure as an all-green result", () => {
   }, hook);
   assert.equal(result.status, 7);
   assert.match(result.stderr, /synthetic watcher failure/);
+});
+
+test("treats malformed watcher JSON as a visible dispatcher failure", () => {
+  const hooks = path.join(TEMP, "malformed-hooks");
+  const hook = materialize(hooks);
+  for (const name of WATCHERS) {
+    const body = name === "manifest-watch"
+      ? "process.stdin.resume(); process.stdout.write('{malformed');"
+      : "process.stdin.resume();";
+    fs.writeFileSync(path.join(hooks, `${name}.mts`), body);
+  }
+  const result = run({
+    hook_event_name: "PostToolUse",
+    tool_name: "Edit",
+    tool_input: { file_path: LARGE, new_string: "changed" },
+  }, hook);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /malformed structured output/);
 });

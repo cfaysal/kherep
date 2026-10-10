@@ -111,6 +111,25 @@ function withWindowsCommand(hook: HookSpec): HookSpec {
 }
 
 const SHELL_MATCHER = "Bash|shell_command|exec_command|functions\\.exec";
+const POST_EDIT_MATCHER = "Edit|Write|MultiEdit|apply_patch|functions\\.exec";
+
+function postEditGroup(options: RenderOptions, predecessor = false): string {
+  const hooks = predecessor
+    ? ["manifest-watch.mts", "loc-watch.mts", "umlaut-translit-watch.mts", "simplify-nudge.mts"]
+      .map((script) => adaptedHook(options.node, options.hookDir, script, "post"))
+    : [scriptHook(options.node, options.hookDir, "codex-post-edit-checks.mts")];
+  return hookGroup(
+    "PostToolUse",
+    POST_EDIT_MATCHER,
+    options.windowsHookCommands === false ? hooks : hooks.map(withWindowsCommand),
+  );
+}
+
+function withPreviousPostEditGroup(config: string, options: RenderOptions): string {
+  const current = postEditGroup(options);
+  if (!config.includes(current)) throw new Error("Current post-edit group is missing from rendered config");
+  return config.replace(current, postEditGroup(options, true));
+}
 
 // Issue #325, PR-A. The attribution hook lives next to the deliver hook in the
 // checkout; the path is spelled with whatever separator the deliver hook uses.
@@ -156,12 +175,7 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
       hook("codex-research-first.mts"),
       ...native(options.nativeHooks?.contextCli),
     ]),
-    group("PostToolUse", "Edit|Write|MultiEdit|apply_patch|functions\\.exec", [
-      adapted("manifest-watch.mts", "post"),
-      adapted("loc-watch.mts", "post"),
-      adapted("umlaut-translit-watch.mts", "post"),
-      adapted("simplify-nudge.mts", "post"),
-    ]),
+    postEditGroup(options),
     ...(attribution.length ? [group("PostToolUse", SHELL_MATCHER, attribution)] : []),
     group("SessionStart", "startup|resume|clear|compact", [
       { command: command(node, contextHook), status: "Loading Kherep Maestro" },
@@ -309,6 +323,12 @@ export function render(options: RenderOptions): string {
     .join("\n\n");
 }
 
+// Exact predecessor of the dispatcher projection. Historical renderers below
+// start from this byte shape before removing hooks that did not yet exist.
+export function renderBeforePostEditDispatcher(options: RenderOptions): string {
+  return withPreviousPostEditGroup(render(options), options);
+}
+
 // The previous-native, previous-nudges and JavaScript-era renders reproduce
 // blocks written before issue #68, so none of them carries a commandWindows form.
 function beforeWindowsCommands(options: RenderOptions): RenderOptions {
@@ -320,7 +340,10 @@ export function renderWithoutNativeHooks(options: RenderOptions): string {
 }
 export function renderPreviousNativeHooks(current: RenderOptions): string {
   const options = beforeWindowsCommands(current);
-  const hooks = withoutHooks(renderHooks(options, true), [...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
+  const hooks = withoutHooks(
+    withPreviousPostEditGroup(renderHooks(options, true), options),
+    [...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS],
+  );
   return ["# Managed Kherep Codex Maestro parity projection.", hooks, renderMcp(options), renderPluginMcp(options), ""].join("\n\n");
 }
 
@@ -397,11 +420,15 @@ export function withLegacySharedGuards(config: string): string {
 
 // Recognize the previous Kherep projection whose shared nudges still used .js.
 export function renderPreviousNudgesPrefix(options: RenderOptions): string {
-  return withLegacySharedNudges(withoutPostLegacyHooks(renderPrefix({ ...beforeWindowsCommands(options), nativeHooks: undefined })));
+  const previous = { ...beforeWindowsCommands(options), nativeHooks: undefined };
+  return withLegacySharedNudges(withoutPostLegacyHooks(
+    withPreviousPostEditGroup(renderPrefix(previous), previous),
+  ));
 }
 
 export function renderPreviousNudges(options: RenderOptions): string {
-  return withLegacySharedNudges(withoutPostLegacyHooks(renderWithoutNativeHooks(beforeWindowsCommands(options))));
+  const previous = { ...beforeWindowsCommands(options), nativeHooks: undefined };
+  return withLegacySharedNudges(withoutPostLegacyHooks(renderBeforePostEditDispatcher(previous)));
 }
 
 // The projection as it stood BEFORE the post-legacy hooks existed. An installer
@@ -414,67 +441,76 @@ export function renderPreviousNudges(options: RenderOptions): string {
 // was not. Adding a hook means adding its name to POST_LEGACY_HOOKS, and these
 // two functions then cover it without further thought.
 export function renderBeforePostLegacyHooks(options: RenderOptions): string {
-  return withoutPostLegacyHooks(render(options));
+  return withoutPostLegacyHooks(renderBeforePostEditDispatcher(options));
 }
 
 export function renderBeforePostLegacyHooksWithoutNativeHooks(options: RenderOptions): string {
-  return withoutPostLegacyHooks(renderWithoutNativeHooks(options));
+  return withoutPostLegacyHooks(renderBeforePostEditDispatcher({ ...options, nativeHooks: undefined }));
 }
 
 export function renderBeforeObservationHook(options: RenderOptions): string {
-  return withoutHooks(render(options), [...PRE_OBSERVATION_HOOKS, ...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
+  return withoutHooks(renderBeforePostEditDispatcher(options),
+    [...PRE_OBSERVATION_HOOKS, ...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
 }
 
 export function renderBeforeObservationHookWithoutNativeHooks(options: RenderOptions): string {
-  return withoutHooks(renderWithoutNativeHooks(options), [...PRE_OBSERVATION_HOOKS, ...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
+  return withoutHooks(renderBeforePostEditDispatcher({ ...options, nativeHooks: undefined }),
+    [...PRE_OBSERVATION_HOOKS, ...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
 }
 
 export function renderBeforeResearchHooks(options: RenderOptions): string {
-  return withoutHooks(render(options), [...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
+  return withoutHooks(renderBeforePostEditDispatcher(options), [...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
 }
 
 export function renderBeforeResearchHooksWithoutNativeHooks(options: RenderOptions): string {
-  return withoutHooks(renderWithoutNativeHooks(options), [...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
+  return withoutHooks(renderBeforePostEditDispatcher({ ...options, nativeHooks: undefined }),
+    [...PRE_RESEARCH_HOOKS, ...PRE_INTEGRITY_HOOKS]);
 }
 
 // Issue #275. The projection immediately before the Codex hook-integrity hook.
 export function renderBeforeHookIntegrity(options: RenderOptions): string {
-  return withoutHooks(render(options), PRE_INTEGRITY_HOOKS);
+  return withoutHooks(renderBeforePostEditDispatcher(options), PRE_INTEGRITY_HOOKS);
 }
 
 export function renderBeforeHookIntegrityWithoutNativeHooks(options: RenderOptions): string {
-  return withoutHooks(renderWithoutNativeHooks(options), PRE_INTEGRITY_HOOKS);
+  return withoutHooks(renderBeforePostEditDispatcher({ ...options, nativeHooks: undefined }), PRE_INTEGRITY_HOOKS);
 }
 
 // Issue #325. The projection immediately before the main-checkout guard.
 export function renderBeforeMainCheckoutGuard(options: RenderOptions): string {
-  return withoutHooks(render(options), PRE_MAIN_CHECKOUT_HOOKS);
+  return withoutHooks(renderBeforePostEditDispatcher(options), PRE_MAIN_CHECKOUT_HOOKS);
 }
 
 export function renderBeforeMainCheckoutGuardWithoutNativeHooks(options: RenderOptions): string {
-  return withoutHooks(renderWithoutNativeHooks(options), PRE_MAIN_CHECKOUT_HOOKS);
+  return withoutHooks(renderBeforePostEditDispatcher({ ...options, nativeHooks: undefined }),
+    PRE_MAIN_CHECKOUT_HOOKS);
 }
 
 // Issue #325, PR-A. The projection immediately before the attribution hook.
 export function renderBeforeAttributionHook(options: RenderOptions): string {
-  return withoutHooks(render(options), PRE_ATTRIBUTION_HOOKS);
+  return withoutHooks(renderBeforePostEditDispatcher(options), PRE_ATTRIBUTION_HOOKS);
 }
 
 export function renderBeforeAttributionHookWithoutNativeHooks(options: RenderOptions): string {
-  return withoutHooks(renderWithoutNativeHooks(options), PRE_ATTRIBUTION_HOOKS);
+  return withoutHooks(renderBeforePostEditDispatcher({ ...options, nativeHooks: undefined }),
+    PRE_ATTRIBUTION_HOOKS);
 }
 
 // Issue #326, PR-B. The projection immediately before the obs-result check.
 export function renderBeforeObsResultCheck(options: RenderOptions): string {
-  return withoutHooks(render(options), PRE_OBS_RESULT_HOOKS);
+  return withoutHooks(renderBeforePostEditDispatcher(options), PRE_OBS_RESULT_HOOKS);
 }
 
 export function renderBeforeObsResultCheckWithoutNativeHooks(options: RenderOptions): string {
-  return withoutHooks(renderWithoutNativeHooks(options), PRE_OBS_RESULT_HOOKS);
+  return withoutHooks(renderBeforePostEditDispatcher({ ...options, nativeHooks: undefined }),
+    PRE_OBS_RESULT_HOOKS);
 }
 
 export function renderLegacyJavaScriptPrefix(options: RenderOptions): string {
-  let hooks = withoutPostLegacyHooks(withLegacySharedNudges(renderHooks({ ...beforeWindowsCommands(options), nativeHooks: undefined })));
+  const previous = { ...beforeWindowsCommands(options), nativeHooks: undefined };
+  let hooks = withoutPostLegacyHooks(withLegacySharedNudges(
+    withPreviousPostEditGroup(renderHooks(previous), previous),
+  ));
   for (const name of LEGACY_JAVASCRIPT_HOOKS) {
     hooks = hooks.replaceAll(`${name}.mts`, `${name}.js`);
   }

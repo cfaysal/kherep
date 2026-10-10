@@ -1,6 +1,6 @@
 # Codex quiet delivery: existing-owner cutover addendum
 
-This addendum supplies plan and synthetic contracts for #365/#366. It does not implement production hooks, alter projection/configuration or authorize a live installation. The separate original-owner wake prerequisite was accepted in #367/#368. Intake reliability is separately merged in #369/#370.
+This addendum governs the A/B source implementation and synthetic contracts for #365/#366. Source implementation, verification and green merge are now authorized; live installation and activation remain excluded. Original-owner wake source is accepted in #367/#368, intake reliability in #369/#370, and the measured repeated Inbox-scan fix in #371/#372. Windows accepted-source wake is verified; fresh Mac acceptance of that scan fix remains pending.
 
 ## Verified event boundary
 
@@ -71,7 +71,7 @@ Use the same isolated original owner across both stages; a newly created chat al
 
 Model and UI evidence must be inspected at the actual target. Keep test data synthetic; do not export private sessions, configuration, credentials, endpoints or infrastructure inventories. Record failing, skipped and untestable checks separately. Any rollout population or installed-artifact fact that is only indirectly supported remains UNKNOWN.
 
-## Acceptance status
+## Original plan/test baseline
 
 Verified on `test/codex-existing-owner-cutover`, based on accepted main `bfb8a8682ffb69842ff91bfc8b73a9a5ee51418c`:
 
@@ -81,4 +81,13 @@ Verified on `test/codex-existing-owner-cutover`, based on accepted main `bfb8a86
 - `npm run test:bootstrap` through Git Bash: 477 total, 464 PASS, 3 FAIL, 10 skipped. The failures are Windows symlink `EPERM` in installer fixtures, previously reproduced on the accepted #368 source. The affected fixture and installer sources remain byte-identical through the current base. Bootstrap is not reported as green.
 - Independent read-only review: the framing and second-owner coverage findings were corrected and re-reviewed; no further relevant findings.
 
-Source trace is verified. Full local proof logs remain outside the checkout; the deciding counts and source identity are recorded at #365/#366. No hosted checks or native model execution are claimed for this plan/test artifact. Stage-A/B implementation, same-owner Desktop runtime acceptance and global cutover are not established by this addendum.
+Source trace is verified. Full local proof logs remain outside the checkout; the deciding counts and source identity are recorded at #365/#366. No hosted checks or native model execution are claimed for this original plan/test artifact.
+
+## Current source stages
+
+- Stage A: `53b03196315da036cc482cd12f1a3c13ce7fe960` supplies receive context before changing Stop. Source blob `f52cb7c4b422d039d3a86dafe3d5d23395456e87`, SHA-256 `40c27458a8b94ed9ff8660d67efcaf892ca067428fec37cafb6d58ea1c489e38`. Independent owner-context contracts: 11 PASS. Existing affected preservation tests: 80 PASS. Specification and quality reviews: PASS.
+- Stage B: `2eb174008465cd89bec22ea267ec00452da90dde` changes only Stop presentation and its display assertions. Source blob `cf1c82016d00093d1360e203a008141dd3729199`, SHA-256 `ed4f81e2cbedaa764eae9b2d89759596cd8b7a7e6984360eb33915f4bf149cc4`. Independent combined owner-context and feedback contracts: 18 PASS. Affected process/state suite: 87 PASS. Specification and quality reviews: PASS.
+
+The blob hashes independently identify both source artifacts even after a rebase merge. Neither source pin establishes installation, an original owner's actual context boundary, model follow-through or global stage-B activation. Those target facts remain UNKNOWN.
+
+The final combined local Codex source gate passed 420 tests with four skips, and the separate deny suites passed 31 tests. Typecheck, independent specification review, quality review and behavior-preserving simplification passed. Full local bootstrap and Control Plane runs retain the explicitly recorded Windows symlink privilege failures in the main hook plan. Hosted checks and final remote artifact identity are recorded at the implementation PR before merge. None of these source results is a live A/B cutover measurement.

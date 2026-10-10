@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { prepareManagedConfig, type ManagedConfigOptions } from "./config-preservation.mts";
-import { render } from "./parity-config.mts";
+import { renderBeforePostEditDispatcher } from "./parity-config.mts";
 
 const START = "# >>> Kherep Codex Maestro >>>";
 const END = "# <<< Kherep Codex Maestro <<<";
@@ -33,7 +33,7 @@ const OPTIONS: ManagedConfigOptions = {
 };
 
 function exactWindowsPredecessor(): string {
-  return render({
+  return renderBeforePostEditDispatcher({
     ...OPTIONS,
     mcpServers: [],
     controlPlaneHook: undefined,
@@ -45,6 +45,7 @@ function exactWindowsPredecessor(): string {
 
 test("enables messaging from the exact Windows predecessor without replacing operator MCP tables", () => {
   const predecessor = exactWindowsPredecessor();
+  assert.match(predecessor, /loc-watch\.mts/, "the drift probe must mutate a historical watcher");
   const operatorMcp = [
     "[mcp_servers.operator_fixture]",
     'command = "operator-owned"',

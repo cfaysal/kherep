@@ -17,7 +17,9 @@ after(() => fs.rmSync(ROOT, { recursive: true, force: true }));
 function materialize(): string {
   assert.ok(fs.existsSync(SOURCE), "the fixed post-edit dispatcher must exist");
   fs.mkdirSync(HOOKS, { recursive: true });
-  for (const dependency of ["post-edit-checks.mts", "hook-adapter.mts", "research-exec-parser.mts"]) {
+  for (const dependency of [
+    "post-edit-checks.mts", "post-edit-tool-calls.mts", "hook-adapter.mts", "research-exec-parser.mts",
+  ]) {
     fs.copyFileSync(path.join(HERE, dependency), path.join(HOOKS, dependency));
   }
   for (const watcher of WATCHERS) {
@@ -117,4 +119,14 @@ test("measures four children for an unknown wrapper and twelve when its patch ha
   });
   assert.equal(mixed.length, 12);
   assert.deepEqual(new Set(mixed.map(({ tool_name }) => tool_name)), new Set(["Edit"]));
+
+  for (const malformed of [
+    String.raw`await tools.mcp__codebase_memory_mcp__search_graph({query:"\x"});`,
+    String.raw`await tools.mcp__codebase_memory_mcp__search_graph({query:"\uZZZZ"});`,
+    'await tools.mcp__codebase_memory_mcp__search_graph({`query`:"hooks"});',
+  ]) {
+    const records = run({ cwd: ROOT, tool_name: "functions.exec", tool_input: malformed });
+    assert.equal(records.length, 4, malformed);
+    assert.ok(records.every(({ tool_name }) => tool_name === "Bash"));
+  }
 });

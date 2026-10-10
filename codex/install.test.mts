@@ -39,6 +39,7 @@ const CAPABILITIES = JSON.parse(fs.readFileSync(path.join(here, "parity", "capab
 const FIXTURE_AUTHORIZATION = `Bearer ${"fixture".repeat(8)}`;
 const AGENTS_END = "<!-- kherep:end -->";
 const CONFIG_END = "# <<< Kherep Codex Maestro <<<";
+const POST_EDIT_MATCHER = "Edit|Write|MultiEdit|apply_patch|functions\\.exec";
 
 function renderedObservationHook(workspace: string): string {
   return renderObservationHook(
@@ -160,6 +161,22 @@ function occurrences(text: string, value: string): number {
   return text.split(value).length - 1;
 }
 
+function beforePostEditDispatcher(config: string, hookDir: string): string {
+  const dispatcherCommand = command(process.execPath, path.join(hookDir, "codex-post-edit-checks.mts"));
+  const dispatcherGroup = hookGroup("PostToolUse", POST_EDIT_MATCHER, [{
+    command: dispatcherCommand, commandWindows: `& ${dispatcherCommand}`,
+  }]);
+  const predecessorHooks = ["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"]
+    .map((name) => {
+      const rendered = command(process.execPath, path.join(hookDir, "codex-hook-adapter.mts"),
+        path.join(hookDir, `${name}.mts`), "post");
+      return { command: rendered, commandWindows: `& ${rendered}` };
+    });
+  const predecessor = config.replace(dispatcherGroup, hookGroup("PostToolUse", POST_EDIT_MATCHER, predecessorHooks));
+  assert.notEqual(predecessor, config, "the current dispatcher group must be present exactly");
+  return predecessor;
+}
+
 test("installs native Codex research hooks and every local dependency idempotently", (t) => {
   const { root, codexHome, installOptions } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -180,6 +197,86 @@ test("installs native Codex research hooks and every local dependency idempotent
   assert.match(renderedHookGroup(config, "UserPromptSubmit"), /codex-research-first\.mts/);
   assert.match(renderedHookGroup(config, "Stop"), /codex-research-stop\.mts/);
   assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), config);
+});
+
+test("installs the post-edit dispatcher and safely upgrades its exact four-hook predecessor", (t) => {
+  const { root, codexHome, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const first = install(installOptions);
+  const hookDir = path.join(codexHome, "hooks", "kherep-maestro");
+  const sources = new Map([
+    ["codex-post-edit-checks.mts", path.join(here, "hooks", "post-edit-checks.mts")],
+    ["post-edit-tool-calls.mts", path.join(here, "hooks", "post-edit-tool-calls.mts")],
+    ["codex-hook-adapter.mts", path.join(here, "hooks", "hook-adapter.mts")],
+    ["hook-adapter.mts", path.join(here, "hooks", "hook-adapter.mts")],
+    ["research-exec-parser.mts", path.join(here, "hooks", "research-exec-parser.mts")],
+    ...["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"]
+      .map((name) => [`${name}.mts`, path.join(here, "..", "claude", "hooks", `${name}.mts`)] as const),
+  ]);
+  for (const [target, source] of sources) {
+    assert.equal(fs.readFileSync(path.join(hookDir, target), "utf8"), fs.readFileSync(source, "utf8"), target);
+  }
+  const installedDispatcher = path.join(hookDir, "codex-post-edit-checks.mts");
+  const probe = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", installedDispatcher], {
+    cwd: root,
+    input: JSON.stringify({ tool_name: "functions.exec",
+      tool_input: 'await tools.mcp__codebase_memory_mcp__search_graph({query:"hooks"});' }),
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  assert.equal(probe.status, 0, `${installedDispatcher}\n${probe.stderr}`);
+  assert.equal(probe.stdout, "", "a fresh installed read-only dispatch stays silent");
+
+  const current = fs.readFileSync(first.targets.config, "utf8");
+  const dispatcherCommand = command(process.execPath, path.join(hookDir, "codex-post-edit-checks.mts"));
+  const dispatcherGroup = hookGroup("PostToolUse", POST_EDIT_MATCHER, [{
+    command: dispatcherCommand, commandWindows: `& ${dispatcherCommand}`,
+  }]);
+  assert.ok(current.includes(dispatcherGroup));
+  assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), current);
+
+  const predecessorHooks = ["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"]
+    .map((name) => {
+      const rendered = command(
+        process.execPath,
+        path.join(hookDir, "codex-hook-adapter.mts"),
+        path.join(hookDir, `${name}.mts`),
+        "post",
+      );
+      return { command: rendered, commandWindows: `& ${rendered}` };
+    });
+  const predecessorGroup = hookGroup("PostToolUse", POST_EDIT_MATCHER, predecessorHooks);
+  const predecessor = current.replace(dispatcherGroup, predecessorGroup);
+  assert.notEqual(predecessor, current);
+  const insideTrust = [
+    "[hooks.state]",
+    "[hooks.state.'config.toml:post_tool_use:0:0']",
+    'trusted_hash = "sha256:old-0"',
+    "[hooks.state.'config.toml:post_tool_use:0:3']",
+    'trusted_hash = "sha256:old-3"',
+  ].join("\n");
+  const outside = [
+    "[hooks.state.'operator.toml:post_tool_use:1:0']",
+    'trusted_hash = "sha256:attribution"',
+    "[[hooks.PostToolUse]]",
+    'matcher = "custom"',
+    "[[hooks.PostToolUse.hooks]]",
+    'type = "command"',
+    'command = "keep-custom"',
+    "timeout = 19",
+  ].join("\n");
+  fs.writeFileSync(first.targets.config,
+    predecessor.replace(CONFIG_END, `${insideTrust}\n${CONFIG_END}`) + `\n${outside}\n`);
+  const upgraded = install(installOptions);
+  const upgradedConfig = fs.readFileSync(upgraded.targets.config, "utf8");
+  assert.ok(upgradedConfig.includes(dispatcherGroup));
+  assert.ok(upgradedConfig.includes(insideTrust));
+  assert.ok(upgradedConfig.includes(outside));
+  assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), upgradedConfig);
+
+  const drifted = predecessor.replace(predecessorGroup, predecessorGroup.replace("timeout = 10", "timeout = 11"));
+  fs.writeFileSync(first.targets.config, drifted);
+  assert.throws(() => install(installOptions), /without an exact known managed fragment/);
 });
 
 // Issue #275. The integrity hook is installed byte-identical, wired once as the
@@ -230,7 +327,9 @@ function macShapedCentralBrain(root: string, codexHome: string, config: string) 
   fs.writeFileSync(selectionFile, `${JSON.stringify(selection, null, 2)}\n`);
   const retired = retiredCentralBrainRender(
     { mcpCli: selection.mcpCli, profile: selection.profile, nativeHooks: selection.nativeHooks }, process.execPath);
-  const block = withRetiredCentralBrain(config, retired, process.execPath, Object.keys(CAPABILITIES.pluginMcpServers || {}));
+  const predecessor = beforePostEditDispatcher(config, path.join(codexHome, "hooks", "kherep-maestro"));
+  const block = withRetiredCentralBrain(predecessor, retired, process.execPath,
+    Object.keys(CAPABILITIES.pluginMcpServers || {}));
   return { selection, selectionFile, block, retired };
 }
 

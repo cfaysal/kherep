@@ -40,7 +40,7 @@ const computedImports = (rel: string): string => (COMPUTED[rel] || []).map((name
 const RENDERED = new Set(["kherep-maestro/codex-observation-stop.mts", "kherep-maestro/codex-observation-turn-completion.mts"]);
 // Copied from codex/hooks under their own name; every other plain name is a shared Claude guard.
 const CODEX_HELPERS = new Set(["acceptance-policy.mts", "obs-candidate-policy.mts", "research-common.mts", "research-exec-parser.mts",
-  "research-transcript.mts"]);
+  "research-transcript.mts", "post-edit-tool-calls.mts", "hook-adapter.mts"]);
 const DELIVER_HOOK = "/modules/control-plane/node/deliver-hook.mts";
 
 const sha256 = (buf: Buffer): string => crypto.createHash("sha256").update(buf).digest("hex");

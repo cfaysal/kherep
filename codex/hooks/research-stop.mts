@@ -23,11 +23,20 @@ export function researchReason(
   missingBrain = true,
   missingGraph = true,
 ): string {
-  const missing = missingBrain && missingGraph ? "Central Brain and code-graph research attempts"
-    : missingBrain ? "a Central Brain research attempt" : "a code-graph research attempt";
   const brain = `look up the Central Brain with ${brainSearchCommand(workspace, configPath)}`;
   const graph = "query codebase-memory through an MCP graph tool";
-  const action = missingBrain && missingGraph ? `${brain} and ${graph}` : missingBrain ? brain : graph;
+  let missing: string;
+  let action: string;
+  if (missingBrain && missingGraph) {
+    missing = "Central Brain and code-graph research attempts";
+    action = `${brain} and ${graph}`;
+  } else if (missingBrain) {
+    missing = "a Central Brain research attempt";
+    action = brain;
+  } else {
+    missing = "a code-graph research attempt";
+    action = graph;
+  }
   return [
     `Evidence first (ROUTING.md): missing ${missing}.`,
     `Before ending, ${action}.`,

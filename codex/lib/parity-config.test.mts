@@ -17,6 +17,7 @@ import {
   renderBeforeResearchHooksWithoutNativeHooks,
   renderBeforePostLegacyHooks,
   renderBeforePostLegacyHooksWithoutNativeHooks,
+  renderBeforePostEditDispatcher,
   renderLegacyJavaScript,
   renderLegacyJavaScriptPrefix,
   renderMcp,
@@ -486,7 +487,7 @@ test('an installation predating every post-legacy hook is still recognised as ma
     retiredMcpServerNames: [], registryProjections: [], pluginMcpServers: {}, registry: '/synthetic/registry.json',
     registryBridge: '/synthetic/bridge.mts', registryRuntime: '/synthetic/runtime.mts', memoryNotifyHook: '/synthetic/notify.mts' };
 
-  const current = render(options);
+  const current = renderBeforePostEditDispatcher(options);
   const names = Reflect.get(parityConfigApi, 'POST_LEGACY_HOOKS') as string[];
   assert.ok(Array.isArray(names) && names.length > 0, 'without a post-legacy hook this test measures nothing');
 
@@ -498,6 +499,7 @@ test('an installation predating every post-legacy hook is still recognised as ma
   const old = `${managed.startMarker}\n${previous}\n${managed.endMarker}`;
   const upgraded = prepareManagedConfig(old, managed).config;
   assert.match(upgraded, /codex-confluence-delivery-check\.mts/);
+  assert.match(upgraded, /codex-post-edit-checks\.mts/);
   assert.doesNotMatch(upgraded, /codex-observation-turn-completion\.mts/);
   assert.equal(prepareManagedConfig(upgraded, managed).config, upgraded, 'the upgrade has to settle');
 });
