@@ -1,17 +1,13 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 
 import { bypassesPermissions, listenerDir } from "./autonomy.mts";
+import { busyPolicyFingerprint, busyWakeDisabled } from "./codex-busy-policy.mts";
+export { busyPolicyFingerprint } from "./codex-busy-policy.mts";
 import { publishBusyHint, type BusyHintAdmission } from "./codex-busy-ticket.mts";
 import { CODEX_ACTIVE_MS, codexSessionRefs, readCodexSession } from "./codex-sessions.mts";
 import { getMessage, MAX_REPLY_DEPTH, type InboxRecord } from "./inbox.mts";
-import { explicitlyListed, readPolicy, type NodePolicy } from "./policy.mts";
+import { explicitlyListed, readPolicy } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
-import { killSwitch } from "./wake-hook.mts";
-
-export function busyPolicyFingerprint(policy: NodePolicy): string {
-  return crypto.createHash("sha256").update(JSON.stringify(policy)).digest("hex");
-}
 
 // Called only after the existing queue guards and budget have admitted this
 // owner. Copy addresses before the asynchronous queue lane; never retarget them.
@@ -30,7 +26,7 @@ export function publishAdmittedBusyHint(deps: RunnerDeps, ticket: BusyHintAdmiss
   try {
     const now = deps.now?.() ?? Date.now();
     const policy = readPolicy(deps.paths.policy, true);
-    if (!policy || busyPolicyFingerprint(policy) !== ticket.policyFingerprint || fs.existsSync(killSwitch(deps.paths))) return "invalid";
+    if (!policy || busyPolicyFingerprint(policy) !== ticket.policyFingerprint || busyWakeDisabled(deps.paths)) return "invalid";
     const mode = readCodexSession(deps.paths, ticket.owner)?.permissionMode;
     if (bypassesPermissions(mode) || (mode === undefined && !explicitlyListed(policy, [ticket.owner]))) return "invalid";
     const refs = new Set(ticket.messages.some((record) => record.toSession !== ticket.owner)
