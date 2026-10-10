@@ -126,8 +126,12 @@ home. Binding storage is capped. A full or failed store does not change queue
 success or erase another binding.
 
 After the normal Codex `Stop` hook has run the existing delivery confirmation,
-the wrapper awaits a bounded cleanup attempt for that owner. It uses one public
-stdio app-server connection and only the paginated `thread/queue/list` and exact
+the wrapper awaits a bounded cleanup attempt for that owner. It selects the
+executable from fully delivered owner bindings rather than resolving Codex again
+through the hook's PATH. Each distinct producer identity is revalidated against
+the current environment and Codex home before opening a public stdio app-server
+connection. All identities share one five-second work deadline. The connection
+uses only the paginated `thread/queue/list` and exact
 `thread/queue/delete` methods. Every admitted Inbox record must still be directed
 to that owner and delivered. The current executable, launcher and Codex home
 must match the producer; a different hook working directory is allowed. Remote,

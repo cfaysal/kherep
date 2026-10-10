@@ -23,7 +23,7 @@ interface CleanupOptions { timeoutMs?: number; maxPages?: number; owner?: string
 interface CompleteList { complete: boolean; rows: QueueRow[] }
 type OpenQueueClient = (opened: (client: NativeQueueClient) => void) => Promise<NativeQueueClient>;
 
-function sameIdentity(expected: QueueProducerIdentity, actual: QueueProducerIdentity): boolean {
+export function sameIdentity(expected: QueueProducerIdentity, actual: QueueProducerIdentity): boolean {
   return expected.route === "local" && actual.route === "local"
     && expected.codexExecutable === actual.codexExecutable && expected.launchFile === actual.launchFile
     && expected.resolvedCodexHome === actual.resolvedCodexHome
@@ -50,6 +50,10 @@ function delivered(paths: NodePaths, binding: QueueBinding): boolean {
     const record = getMessage(paths.inbox, id);
     return record?.toSession === binding.owner && record.state === "delivered";
   });
+}
+
+export function deliveredQueueBindings(paths: NodePaths, owner: string): QueueBinding[] {
+  return listQueueBindings(paths).filter((binding) => binding.owner === owner && delivered(paths, binding));
 }
 
 async function completeList(client: NativeQueueClient, owner: string, maxPages: number,

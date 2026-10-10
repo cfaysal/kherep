@@ -1,8 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from "node:child_process";
 
-import { findCodex } from "./codex-binary.mts";
 import type { NodePaths } from "./config.mts";
-import { cleanupOwnedQueues, NativeQueueShutdownError, type NativeQueueClient, type QueuePage } from "./codex-queue-cleanup.mts";
+import {
+  cleanupOwnedQueues, deliveredQueueBindings, sameIdentity, NativeQueueShutdownError,
+  type NativeQueueClient, type QueuePage,
+} from "./codex-queue-cleanup.mts";
 import { isDirectNativeQueueIdentity, queueProducerIdentity } from "./codex-queue-context.mts";
 import type { QueueProducerIdentity } from "./codex-queue-binding.mts";
 
@@ -152,16 +154,22 @@ export async function connectNativeQueue(identity: QueueProducerIdentity, option
   }
 }
 
-export async function cleanupNativeOwnedQueues(paths: NodePaths, owner: string): Promise<void> {
-  const file = findCodex();
-  if (!file) return;
-  const started = Date.now();
-  const deadlineAt = started + 5_000;
-  const identity = queueProducerIdentity(file, ["app-server", "--listen", "stdio://"], {}, process.env, deadlineAt);
-  if (!isDirectNativeQueueIdentity(identity)) return;
-  const remaining = deadlineAt - Date.now();
-  if (remaining <= 0) return;
-  await cleanupOwnedQueues(paths, identity,
-    (opened) => connectNativeQueue(identity, { requestTimeoutMs: Math.min(2_000, remaining), opened }),
-    { owner, timeoutMs: remaining });
+export async function cleanupNativeOwnedQueues(paths: NodePaths, owner: string,
+  options: { open?: typeof connectNativeQueue } = {}): Promise<void> {
+  const deadlineAt = Date.now() + 5_000;
+  const checked = new Set<string>();
+  for (const binding of deliveredQueueBindings(paths, owner)) {
+    if (Date.now() >= deadlineAt) return;
+    const key = JSON.stringify(binding.producer);
+    if (checked.has(key)) continue;
+    checked.add(key);
+    const identity = queueProducerIdentity(binding.producer.codexExecutable,
+      ["app-server", "--listen", "stdio://"], {}, process.env, deadlineAt);
+    if (!isDirectNativeQueueIdentity(identity) || !sameIdentity(binding.producer, identity)) continue;
+    const remaining = deadlineAt - Date.now();
+    if (remaining <= 0) return;
+    await cleanupOwnedQueues(paths, identity,
+      (opened) => (options.open ?? connectNativeQueue)(identity, { requestTimeoutMs: Math.min(2_000, remaining), opened }),
+      { owner, timeoutMs: remaining });
+  }
 }
