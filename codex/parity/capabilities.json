@@ -95,6 +95,7 @@
       "sandbox": "read-only"
     },
     "atlassian-broker": {
+      "source": "codex/agents/atlassian-broker.md",
       "model": "gpt-5.6-luna",
       "reasoning": "low"
     }
@@ -109,9 +110,6 @@
     "rovo"
   ],
   "pluginMcpServers": {
-    "atlassian": {
-      "url": "https://mcp.atlassian.com/v2/mcp"
-    },
     "context7": {
       "command": "npx",
       "args": [

@@ -54,6 +54,8 @@ export interface RenderOptions extends McpRenderOptions {
   omitDeliveryHooks?: boolean;
   // Historical renders written before the busy hint existed.
   omitBusyHint?: boolean;
+  // Historical renders written before the Atlassian destructive guard (#376).
+  omitAtlassianDestructiveGuard?: boolean;
   // Legacy renders only: true was the combined macOS Stop hook, false was the
   // separate Windows observation Stop hook. Omitted means quiet observations.
   observationStopHook?: boolean;
@@ -139,6 +141,10 @@ export function attributionHookPath(controlPlaneHook: string): string {
   return controlPlaneHook.replace(/deliver-hook\.mts$/, "attribution-hook.mts");
 }
 
+export function atlassianDestructiveGuard(node: string, hookDir: string): HookSpec {
+  return { command: command(node, path.join(hookDir, "atlassian-destructive-guard.mts"), "--runtime", "codex") };
+}
+
 export function renderHooks(options: RenderOptions, previousNative = false): string {
   const { contextHook, hookDir, node } = options;
   const group = (event: string, matcher: string, hooks: HookSpec[]): string =>
@@ -159,7 +165,11 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
     ? [{ command: command(node, attributionHookPath(options.controlPlaneHook), "--runtime", "codex") }] : [];
   const groups = [
     group("PreToolUse", "Read|Grep|Glob|Edit|Write|MultiEdit|apply_patch|Bash|shell_command|exec_command|functions\\.exec", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
-    group("PreToolUse", "Agent|spawn_agent|Task|Workflow|WebSearch|WebFetch|mcp__.*", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
+    group("PreToolUse", "Agent|spawn_agent|Task|Workflow|WebSearch|WebFetch|mcp__.*", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy"),
+      // Issue #376. Appended last: Codex trust keys are positional, and a new
+      // group would move the key of every operator PreToolUse group after the
+      // block. The guard denies through JSON on stdout itself, on Windows too.
+      ...(options.omitAtlassianDestructiveGuard ? [] : [atlassianDestructiveGuard(node, hookDir)])]),
     group("PreToolUse", SHELL_MATCHER, [adapted("commit-guard.mts", "pre"), adapted("deploy-guard.mts", "pre-no-transcript"),
       // Issue #325. Appended last: Codex trust keys are positional.
       adapted("main-checkout-guard.mts", "pre"), ...attribution]),
@@ -296,8 +306,16 @@ export function renderPluginMcp(options: McpRenderOptions): string {
     else {
       lines.push(`command = ${tomlString(server.command)}`);
       lines.push(`args = [${(server.args || []).map(tomlString).join(", ")}]`);
+      if (server.env) {
+        const env = Object.entries(server.env)
+          .map(([key, value]) => `${key} = ${tomlString(value)}`).join(", ");
+        lines.push(`env = { ${env} }`);
+      }
     }
     lines.push("startup_timeout_sec = 30.0", "tool_timeout_sec = 60.0");
+    for (const tool of server.promptTools || []) {
+      lines.push("", `[mcp_servers.${name}.tools.${tool}]`, 'approval_mode = "prompt"');
+    }
     return lines.join("\n");
   }).join("\n\n");
 }
@@ -330,9 +348,14 @@ export function render(options: RenderOptions): string {
     .join("\n\n");
 }
 
-// Exact predecessor of the busy-hint projection.
+// Exact predecessor of the Atlassian destructive guard (issue #376).
+export function renderBeforeAtlassianDestructiveGuard(options: RenderOptions): string {
+  return render({ ...options, omitAtlassianDestructiveGuard: true });
+}
+
+// Exact predecessor of the busy-hint projection, which also predates the guard.
 export function renderBeforeBusyHint(options: RenderOptions): string {
-  return render({ ...options, omitBusyHint: true });
+  return render({ ...options, omitBusyHint: true, omitAtlassianDestructiveGuard: true });
 }
 
 // Exact predecessor of the dispatcher projection. Historical renderers below
@@ -344,7 +367,7 @@ export function renderBeforePostEditDispatcher(options: RenderOptions): string {
 // The previous-native, previous-nudges and JavaScript-era renders reproduce
 // blocks written before issue #68, so none of them carries a commandWindows form.
 function beforeWindowsCommands(options: RenderOptions): RenderOptions {
-  return { ...options, windowsHookCommands: false, omitBusyHint: true };
+  return { ...options, windowsHookCommands: false, omitBusyHint: true, omitAtlassianDestructiveGuard: true };
 }
 
 export function renderWithoutNativeHooks(options: RenderOptions): string {

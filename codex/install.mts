@@ -9,9 +9,11 @@ import { pathToFileURL } from "node:url";
 import { productEnv } from "../lib/product-env.mts";
 import { nativeWorkspacePath } from "../lib/workspace-path.mts";
 import { resolveTarget as resolveCredentialTarget } from "../bootstrap/atl-credential-format.mts";
+import { ATLASSIAN_MCP_SERVER, resolveTokenBinding, tokenBindingProblem } from "../lib/atlassian-mcp-binding.mts";
 import { mergeLocalInferenceConfig } from "../bootstrap/render-profile.mts";
 import * as registryBridgeModule from "../modules/mcp-auth-bridge/registry-http-wrapper.mts";
 import { setPluginEnabled } from "./lib/plugin-config.mts";
+import { atlassianMcpServer, managedAtlassianTokenFile, PREDECESSOR_NATIVE_ATLASSIAN } from "./lib/atlassian-mcp.mts";
 import { componentHash } from "./lib/component-hash.mts";
 import { prepareManagedConfig } from "./lib/config-preservation.mts";
 import type { Capabilities, McpCompatibilityOptions, PluginMcpServer, RunCodex } from "./lib/contracts.mts";
@@ -39,13 +41,15 @@ const USER_END = "<!-- kherep-user-parity:end -->";
 export const CONFIG_START = "# >>> Kherep Codex Maestro >>>";
 const CONFIG_END = "# <<< Kherep Codex Maestro <<<";
 export const LOCAL_PLUGIN_ID = "kherep-maestro@kherep";
-// The v2 Atlassian remote MCP server, rendered only with the optional Atlassian tool set.
-export const ATLASSIAN_MCP_SERVER = "atlassian";
+// The v2 Atlassian remote MCP server, rendered only with the optional Atlassian
+// tool set, through the Codex service account (issue #376).
+export { ATLASSIAN_MCP_SERVER };
 const OBSERVATION_WORKSPACE_SENTINEL =
   'const SELECTED_WORKSPACE = "__KHEREP_SELECTED_WORKSPACE__";';
 const RETIRED_MCP_SERVERS = ["claude-baton"];
 const SHARED_HOOKS = [
   "commit-guard.mts", "deploy-guard.mts", "playwright-file-guard.mts", "main-checkout-guard.mts",
+  "atlassian-destructive-guard.mts",
   "manifest-watch.mts", "loc-watch.mts", "umlaut-translit-watch.mts", "simplify-nudge.mts",
 ];
 
@@ -94,6 +98,9 @@ export interface InstallOptions {
   nodePath?: string;
   skipPluginRegistration?: boolean;
   installAtlassianTools?: boolean;
+  // The Codex service account's Atlassian MCP API key file; by default
+  // KHEREP_ATL_MCP_TOKEN_FILE_CODEX, else <CODEX_HOME>/kherep/atl-mcp-credential-codex.txt.
+  atlassianMcpTokenFile?: string;
   authorizeObservationPublishing?: boolean;
   runCodex?: RunCodex;
   resolveRegistryRuntime?: () => unknown;
@@ -288,9 +295,21 @@ export function install(options: InstallOptions = {}) {
     ...RETIRED_MCP_SERVERS,
     ...(capabilities.retiredMcpServers || []),
   ])];
-  const { [ATLASSIAN_MCP_SERVER]: atlassianMcp, ...basePluginMcpServers } = capabilities.pluginMcpServers || {};
-  const optionalPluginMcpServers: Record<string, PluginMcpServer> =
-    atlassianMcp ? { [ATLASSIAN_MCP_SERVER]: atlassianMcp } : {};
+  const basePluginMcpServers = capabilities.pluginMcpServers || {};
+  // Issue #376. The Atlassian server runs as the Codex service account or not
+  // at all: without a usable key file nothing falls back to a personal login.
+  const atlassianTable = { node: mcp.node, runtime: targets.registryRuntime };
+  const atlassianToken = installAtlassianTools
+    ? resolveTokenBinding("codex", { claude: claudeHome, codex: codexHome }, process.env, options.atlassianMcpTokenFile)
+    : undefined;
+  const optionalPluginMcpServers: Record<string, PluginMcpServer> = atlassianToken?.status === "ok"
+    ? { [ATLASSIAN_MCP_SERVER]: atlassianMcpServer(atlassianToken.file, atlassianTable) } : {};
+  const previousAtlassianToken = managedAtlassianTokenFile(existingConfig, { start: CONFIG_START, end: CONFIG_END });
+  const predecessorOptionalPluginMcpServers = [
+    { [ATLASSIAN_MCP_SERVER]: PREDECESSOR_NATIVE_ATLASSIAN },
+    ...(previousAtlassianToken
+      ? [{ [ATLASSIAN_MCP_SERVER]: atlassianMcpServer(previousAtlassianToken, atlassianTable) }] : []),
+  ];
   const controlPlaneOutboxPath = path.resolve(options.controlPlaneOutbox || controlPlaneOutbox(process.env, platform));
   const messagingClient = {
     enabled: options.messagingClient === true,
@@ -308,9 +327,9 @@ export function install(options: InstallOptions = {}) {
     endMarker: CONFIG_END,
     retiredMcpServerNames,
     registryProjections,
-    pluginMcpServers: installAtlassianTools
-      ? { ...optionalPluginMcpServers, ...basePluginMcpServers } : basePluginMcpServers,
+    pluginMcpServers: { ...optionalPluginMcpServers, ...basePluginMcpServers },
     optionalPluginMcpServers,
+    predecessorOptionalPluginMcpServers,
     contextHook: targets.contextHook,
     hookDir: targets.hookDir,
     node: mcp.node,
@@ -512,6 +531,14 @@ export function install(options: InstallOptions = {}) {
         name,
         status: Object.hasOwn(pluginMcpServers, name) ? "configured" : "preserved-existing",
       })),
+      // Issue #376. Where the key file came from, never its path or content.
+      atlassianMcp: atlassianToken ? {
+        status: managedConfig.hasUnmanagedMcp(latestPlugin.config, ATLASSIAN_MCP_SERVER, CONFIG_START, CONFIG_END)
+          ? "preserved-existing"
+          : atlassianToken.status === "ok" ? "configured" : `skipped-token-file-${atlassianToken.status}`,
+        authentication: "secret-file-bearer",
+        tokenSource: atlassianToken.source,
+      } : { status: "not-requested" },
       retiredMcpServers,
       // Issue #72: where the outbox writable root landed, or why it did not.
       controlPlaneOutbox: { status: preparedConfig.outboxWritableRoot },
@@ -539,6 +566,8 @@ export function install(options: InstallOptions = {}) {
     return {
       backupRoot, codexHome, localMarketplace,
       cacheRepair, receipt, targets,
+      atlassianMcpProblem: receipt.atlassianMcp.status.startsWith("skipped-") && atlassianToken
+        ? tokenBindingProblem(atlassianToken) : undefined,
     };
   } catch (error) {
     transaction.rollback();
@@ -606,6 +635,14 @@ if (isMainModule()) {
       "Restart Codex and run the kherep-maestro-parity skill in a fresh task.",
       "",
     ].join("\n"));
+    if (result.atlassianMcpProblem) {
+      process.stderr.write(`install: WARNING no Atlassian MCP server for Codex: ${result.atlassianMcpProblem}.`
+        + " Nothing falls back to a personal login. The parity installation above stands.\n");
+      process.exitCode = 1;
+    } else if (result.receipt.atlassianMcp.status === "preserved-existing") {
+      process.stderr.write("install: NOTE mcp_servers.atlassian outside the Kherep block is the operator's own"
+        + " and stays as it is; the Codex service-account server is not rendered.\n");
+    }
     // Both per-host setup steps stay outside install(), which tests call without
     // a terminal. Resolve the Codex credential before reading the space and
     // placement nodes with that same service-account identity.

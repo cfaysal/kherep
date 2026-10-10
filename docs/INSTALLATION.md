@@ -107,21 +107,41 @@ Connection profiles ship unconfigured. Kherep does not provision a Confluence sp
 | `KHEREP_PROFILE` | Explicit `win` or `mac` host profile |
 | `KHEREP_CREDENTIALS_ROOT` | External integration-configuration root |
 | `KHEREP_LOCAL_CONFIG` | Local-inference configuration |
-| `KHEREP_INSTALL_PREVIEW` | Candidate preview: implies `KHEREP_INSTALL_SKIP_GITCONFIG`, `_SKIP_RUNTIME_AGENT`, `_SKIP_ATL_CREDENTIAL` and `_SKIP_KNOWLEDGE_SPACE` for any `CLAUDE_HOME` and wins over the `ALLOW` switches; only `1` counts |
+| `KHEREP_INSTALL_PREVIEW` | Candidate preview: implies `KHEREP_INSTALL_SKIP_GITCONFIG`, `_SKIP_RUNTIME_AGENT`, `_SKIP_ATL_CREDENTIAL`, `_SKIP_ATL_MCP` and `_SKIP_KNOWLEDGE_SPACE` for any `CLAUDE_HOME` and wins over the `ALLOW` switches; only `1` counts |
 | `KHEREP_INSTALL_SKIP_GITCONFIG` | Skip Git configuration during a preview |
 | `KHEREP_INSTALL_ALLOW_GITCONFIG` | With a `CLAUDE_HOME` other than `<HOME>/.claude`, set global (and opted-in system) and repo-local `core.hooksPath` anyway; without it that step is skipped. Only `1` allows; the default home needs no switch |
 | `KHEREP_INSTALL_ALLOW_ATL_CREDENTIAL` | With a `CLAUDE_HOME` other than `<HOME>/.claude`, run the credential step anyway, which reads the file named by `KHEREP_ATL_CRED_FILE_CLAUDE` and checks it live; without it that step is skipped. Only `1` allows; the default home needs no switch |
+| `KHEREP_INSTALL_ALLOW_ATL_MCP` | With a `CLAUDE_HOME` other than `<HOME>/.claude`, run the Atlassian MCP step anyway, which writes the user-scope `~/.claude.json` and disables `atlassian@claude-plugins-official`; without it that step is skipped. Only `1` allows; the default home needs no switch |
 | `KHEREP_INSTALL_SYSTEM_HOOKSPATH` | Opt into setting the system-wide `core.hooksPath`, which binds every account on the host; only `1` opts in. Without it a differing system value is reported and left unchanged |
 | `KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE` | Skip resolving the Confluence knowledge space (throwaway installs such as the smoke test); only `1` skips |
 | `KHEREP_INSTALL_SKIP_ATL_CREDENTIAL` | Skip reading and live-verifying the Atlassian service-account credential (throwaway installs such as the smoke test); only `1` skips |
+| `KHEREP_INSTALL_SKIP_ATL_MCP` | Skip registering the Atlassian MCP server for Claude; only `1` skips |
 | `KHEREP_INSTALL_SKIP_RUNTIME_AGENT` | Leave the memory runtime agent untouched |
-| `KHEREP_INSTALL_ATLASSIAN_TOOLS` | Opt into the Jira helpers. The two Confluence brokers and the modules they import are installed without it, because the observation agent needs them. `drift-check.sh` compares the Jira helpers when this is `1` or when any of them is present in `<workspace>/tools/`, so the switch is not needed to check an existing set |
+| `KHEREP_INSTALL_ATLASSIAN_TOOLS` | Opt into the Jira helpers and the Atlassian MCP server, which each runtime reaches as its own service account (see [Atlassian MCP server](#atlassian-mcp-server)). The two Confluence brokers and the modules they import are installed without it, because the observation agent needs them. `drift-check.sh` compares the Jira helpers when this is `1` or when any of them is present in `<workspace>/tools/`, so the switch is not needed to check an existing set |
+| `KHEREP_ATL_MCP_TOKEN_FILE_CLAUDE` | The Claude service account's Atlassian MCP API key file; default `<CLAUDE_HOME>/kherep/atl-mcp-credential-claude.txt` |
+| `KHEREP_ATL_MCP_TOKEN_FILE_CODEX` | The Codex service account's Atlassian MCP API key file; default `<CODEX_HOME>/kherep/atl-mcp-credential-codex.txt` |
 | `KHEREP_EXISTING_USER_SETTINGS` | Read-only settings fixture for candidate review |
 | `KHEREP_EXISTING_PROJECT_SETTINGS` | Read-only project-settings fixture |
 | `KHEREP_WORK_ITEM_REQUIRED` | `1` enforces work-item keys under `KHEREP_WORKSPACE`, `0` turns it off. Persisted into the commit policy file; without it an upgrade keeps the installed value, a fresh install uses `0` |
 | `KHEREP_WORK_ITEM_PATTERN` | Extended regex for the accepted key. Persisted into the commit policy file; without it an upgrade keeps the installed pattern |
 
 The Central Brain is the knowledge space the installer resolves for this host; the observation agents write to it through the [Atlassian brokers](../modules/atl-jira-brokers/README.md), which also cover Jira operations. Keep private configuration outside Git.
+
+### Atlassian MCP server
+
+With `KHEREP_INSTALL_ATLASSIAN_TOOLS=1` both runtimes reach the Atlassian remote MCP server v2 (`https://mcp.atlassian.com/v2/mcp`) as their own Atlassian service account, never as the operator's personal login. Prepare it once per site:
+
+1. An organization admin allows API token authentication for the Atlassian MCP server in Atlassian Administration.
+2. For each runtime's service account, create an API key with the scopes its tools need. This key is a different credential from the OAuth client the brokers use.
+3. Store each key alone in a file that only the installing user can read, outside the repository. On macOS the installer and the wrapper refuse a file that grants any group or other access or belongs to another user; on Windows they do not check the ACL, so restrict the file to your account yourself. Put the Claude key in `KHEREP_ATL_MCP_TOKEN_FILE_CLAUDE`, the Codex key in `KHEREP_ATL_MCP_TOKEN_FILE_CODEX`, or at their default paths. A file that is also the other runtime's key file or a broker credential file is refused.
+
+The key reaches only the secret-file wrapper `kherep/mcp-auth-bridge/supergateway-secret-wrapper.mts`, which runs the pinned `supergateway` from the npm globals and sends it as `Authorization: Bearer`. Configuration files and receipts name the file at most, never the key.
+
+- **Claude:** the installer registers the user-scope stdio server `atlassian` in `~/.claude.json` through `claude mcp add-json`, reads it back, and only then disables `atlassian@claude-plugins-official`, whose server ran as the personal OAuth login. Its five skills go with the plugin. An `atlassian` entry the installer did not write stays, and so does the plugin.
+- **Codex:** the managed `atlassian` table runs the same wrapper with the Codex key file. A block written with the earlier native OAuth table is replaced.
+- **Destructive operations:** `executeDestructive` asks for confirmation in Claude. Codex hooks cannot ask, so Codex denies it, and the managed table also sets `approval_mode = "prompt"` for it.
+
+Without a usable key file no Atlassian server is written on that runtime and nothing falls back to OAuth. The rest of the installation stands, and the installer warns and exits 1. A passing installation does not prove access: open a session and call a harmless Atlassian read, such as `atlassianUserInfo`, before relying on the server. A claude.ai account connector for Atlassian is outside Kherep and keeps its own login.
 
 Every Claude install writes `broker` into `<claude-home>/kherep/confluence.json`, before and independent of the credential and space steps, inside the install transaction: the absolute Claude broker command, rendered from the `KHEREP_PROFILE` and `KHEREP_WORKSPACE` values the permission rules are rendered from, so it is their exact prefix. On Windows both name the workspace with forward slashes (`node D:/ws/tools/...`), because Git Bash consumes the backslashes of a native path; the rendered merge drops an existing backslash form of a rule whose forward-slash twin it adds, and every other allow rule and the `additionalDirectories` grant keep their form. `claude-obs` runs that stored command and never composes a broker path. Only `broker` changes in that step: every other key is kept, and a missing file is created with `broker` alone. The space step then merges the space keys into the same file and keeps every key it does not own; a file without `spaceKey` means no knowledge space is configured, so `claude-obs` writes nothing and the orphan check skips.
 

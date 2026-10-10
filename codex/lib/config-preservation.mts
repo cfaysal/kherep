@@ -45,6 +45,10 @@ export interface ManagedConfigOptions {
   // Plugin servers an install renders only on request. A block with or without
   // them is the installer's own; every older block lacks them.
   optionalPluginMcpServers?: Record<string, PluginMcpServer>;
+  // Earlier renders of those optional servers (issue #376: the native OAuth
+  // Atlassian table, or a service-account table for another token file). A
+  // block carrying one of them is the installer's own as well.
+  predecessorOptionalPluginMcpServers?: Record<string, PluginMcpServer>[];
   contextHook: string;
   hookDir: string;
   node: string;
@@ -251,18 +255,19 @@ function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
       config, name, options.startMarker, options.endMarker,
     )));
   // Optional servers render first, so neither block form is a substring of the other.
-  const optionalServers = options.optionalPluginMcpServers || {};
+  const optionalVariants = [options.optionalPluginMcpServers || {}, ...(options.predecessorOptionalPluginMcpServers || [])];
+  const optionalNames = new Set(optionalVariants.flatMap((servers) => Object.keys(servers)));
   const withoutOptional = (servers: Record<string, PluginMcpServer>) =>
-    Object.fromEntries(Object.entries(servers).filter(([name]) => !Object.hasOwn(optionalServers, name)));
-  const optional = Object.fromEntries(Object.entries(optionalServers)
-    .filter(([name]) => !managedConfig.hasUnmanagedMcp(config, name, options.startMarker, options.endMarker)));
+    Object.fromEntries(Object.entries(servers).filter(([name]) => !optionalNames.has(name)));
   const base: PluginSet = {
     plugins: withoutOptional(pluginMcpServers), predecessorPlugins: withoutOptional(options.pluginMcpServers),
   };
-  const pluginSets: PluginSet[] = Object.keys(optional).length
-    ? [base, { plugins: { ...optional, ...base.plugins },
-      predecessorPlugins: { ...optional, ...base.predecessorPlugins } }]
-    : [base];
+  const pluginSets: PluginSet[] = [base, ...optionalVariants
+    .map((servers) => Object.fromEntries(Object.entries(servers)
+      .filter(([name]) => !managedConfig.hasUnmanagedMcp(config, name, options.startMarker, options.endMarker))))
+    .filter((optional) => Object.keys(optional).length)
+    .map((optional) => ({ plugins: { ...optional, ...base.plugins },
+      predecessorPlugins: { ...optional, ...base.predecessorPlugins } }))];
   const operatorEffort = topLevelSetting(migrated, "model_reasoning_effort");
   let reasoningEffort: ReasoningEffortReport;
   let next = migrated;

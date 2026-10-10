@@ -62,6 +62,7 @@ const BROKER_AGENT = "atlassian-broker";
 // "searchConfluenceUsingCql" and drops "research", which is not a lookup.
 const BROKER_READ_INTENT = /\bsearch|related|\sget\s|cql/i;
 const CODE_GRAPH_SERVER = "codebase-memory-mcp";
+const CONFLUENCE_SEARCH_TOOLS = ["searchConfluenceUsingCql", "searchConfluence"];
 
 // mcp__<server>__<tool>. The server part may itself carry underscores (plugin
 // namespaces), so the tool is whatever follows the LAST double underscore.
@@ -105,8 +106,10 @@ export function isBrainLookup(block: ContentBlock, extraSkills: ReadonlySet<stri
   if (!mcp) return false;
   // A bare "search" tool is only an Atlassian search when the server says so.
   // The v1 CQL search and the v2 "searchConfluence" are unambiguous under any
-  // server name, including a claude.ai connector named by a UUID.
-  return ["searchConfluenceUsingCql", "searchConfluence"].includes(mcp.tool)
+  // server name, including a claude.ai connector named by a UUID. The v2 server
+  // also runs them through executeRead with the operation in input.name (#376).
+  return CONFLUENCE_SEARCH_TOOLS.includes(mcp.tool)
+    || (mcp.tool === "executeRead" && CONFLUENCE_SEARCH_TOOLS.includes(String(input.name)))
     || (mcp.tool === "search" && /rovo|atlassian/i.test(mcp.server));
 }
 

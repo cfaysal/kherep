@@ -3,7 +3,6 @@
   "plugins": [
     "ai-plugins@claude-plugins-official",
     "andrej-karpathy-skills@karpathy-skills",
-    "atlassian@claude-plugins-official",
     "caveman@caveman",
     "claude-code-setup@claude-plugins-official",
     "claude-md-management@claude-plugins-official",
@@ -22,6 +21,7 @@
     "superpowers@claude-plugins-official"
   ],
   "mcpServers": [
+    "atlassian",
     "kherep-linkedin-cli",
     "claude-baton",
     "codebase-memory-mcp",
@@ -69,6 +69,7 @@
     "deploy-guard.mts",
     "dispatch-contract-guard.mts",
     "privacy-boundary-guard.mts",
+    "atlassian-destructive-guard.mts",
     "clq-accept-gate.mts",
     "runtime-capability-snapshot.mts",
     "maestro-discipline.mts",
@@ -115,6 +116,9 @@
     "win": {
       "plugins": [],
       "mcpServers": [],
+      "optionalManagedMcpServers": [
+        "atlassian"
+      ],
       "agents": [],
       "skills": [
         "gepeto",
@@ -127,6 +131,9 @@
     "mac": {
       "plugins": [],
       "mcpServers": [],
+      "optionalManagedMcpServers": [
+        "atlassian"
+      ],
       "agents": [],
       "skills": [
         "gepeto",

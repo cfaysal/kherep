@@ -30,6 +30,9 @@ export interface PluginMcpServer {
   command?: string;
   args?: string[];
   url?: string;
+  env?: Record<string, string>;
+  // Tools Codex runs only after the operator approves the call (issue #376).
+  promptTools?: string[];
 }
 
 export interface Capabilities {

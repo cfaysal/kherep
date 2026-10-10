@@ -13,7 +13,9 @@ function productEnv(env: NodeJS.ProcessEnv, suffix: string): string | undefined 
 export interface NpmInvocation { command: string; args: string[] }
 export interface TlsTrust { mode: "system" | "operator-ca" | "legacy-disabled" }
 
-export function readToken(file: unknown): string {
+// Opens the token file only after the path checks and hands the descriptor to
+// read once its ownership and mode passed; the descriptor is always closed.
+function withPrivateTokenFile<T>(file: unknown, read: (descriptor: number) => T): T {
   if (!path.isAbsolute(String(file || ""))) throw new Error("auth file path must be absolute");
   const resolved = path.resolve(String(file));
   if (process.platform !== "win32" && fs.realpathSync(resolved) !== resolved) {
@@ -27,11 +29,31 @@ export function readToken(file: unknown): string {
     if (!stat.isFile() || stat.size > 16_384) throw new Error("auth file is invalid");
     if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) throw new Error("auth file is not private");
     if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error("auth file owner is invalid");
+    return read(descriptor);
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
+export function readToken(file: unknown): string {
+  return withPrivateTokenFile(file, (descriptor) => {
     const token = fs.readFileSync(descriptor, "utf8").trim();
     if (token.length < 32 || /\s/.test(token)) throw new Error("auth token is invalid");
     return token;
-  } finally {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
+  });
+}
+
+export type TokenFileStatus = "ok" | "missing" | "invalid";
+
+// The installer's view of a token file: the same path, type, size, mode and
+// owner checks as readToken, without reading the token itself.
+export function tokenFileStatus(file: unknown): TokenFileStatus {
+  if (path.isAbsolute(String(file || "")) && !fs.existsSync(path.resolve(String(file)))) return "missing";
+  try {
+    withPrivateTokenFile(file, () => undefined);
+    return "ok";
+  } catch {
+    return "invalid";
   }
 }
 
@@ -124,7 +146,7 @@ function isMainModule(): boolean {
 
 if (isMainModule()) {
   main().catch(() => {
-    process.stderr.write("n8n MCP wrapper failed safely\n");
+    process.stderr.write("MCP secret wrapper failed safely\n");
     process.exitCode = 1;
   });
 }

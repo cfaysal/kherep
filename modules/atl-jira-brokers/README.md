@@ -19,6 +19,8 @@ Provide these environment variables to the runtime invoking the broker. Keep act
 
 For example, `{"Task":"10001"}` illustrates the type-map format. The name and ID must come from the configured site; the example is not a default. Jira's REST API retains `project` and `issue` terminology.
 
+The Atlassian MCP server is a separate path with a separate credential: each runtime reaches it with a service-account API key in `KHEREP_ATL_MCP_TOKEN_FILE_CLAUDE` or `KHEREP_ATL_MCP_TOKEN_FILE_CODEX`, never with the broker files above. See [Atlassian MCP server](../../docs/INSTALLATION.md#atlassian-mcp-server).
+
 ## Arguments and help
 
 All four brokers take `help` (also `--help` or `-h`) and list every verb with its required flags, alternatives in `( | )` and `[optional]` flags, with exit 0 and without reading configuration or credentials. The Codex Jira broker keeps its JSON-only stdout and returns the list as `{"usage": [...]}`.

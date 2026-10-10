@@ -110,6 +110,7 @@ Each integration is optional unless a component's guide says otherwise, and each
 | Codex | Runtime adapter with rules, skills, agents, hooks and MCP projection | [Codex integration](docs/CODEX.md) |
 | Confluence | Central Brain knowledge space, written through service-account brokers | [Atlassian brokers](modules/atl-jira-brokers/README.md) |
 | Jira | Optional service-account helpers | [Atlassian brokers](modules/atl-jira-brokers/README.md) |
+| Atlassian MCP server | Optional v2 remote server, reached as each runtime's own service account; destructive operations need the operator | [Atlassian MCP server](docs/INSTALLATION.md#atlassian-mcp-server) |
 | Atlassian Teamwork Graph | Read-only lookups | [Teamwork Graph](modules/twg/README.md) |
 | MCP servers | Transport and authentication adapters for servers you configure | [Codex adapter architecture](codex/ARCHITECTURE.md#mcp-projection) |
 | Local model server | Local inference, including the private-input route | [Installation](docs/INSTALLATION.md#5-configure-integrations) |

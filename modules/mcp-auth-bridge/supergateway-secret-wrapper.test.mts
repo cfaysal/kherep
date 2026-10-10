@@ -9,6 +9,7 @@ import {
   npmRootInvocation,
   readToken,
   resolveSupergatewayEntry,
+  tokenFileStatus,
   validateTlsTrust,
   validateEndpoint,
 } from "./supergateway-secret-wrapper.mts";
@@ -96,6 +97,30 @@ test("resolves only the pinned global supergateway package entry", () => {
     manifest.version = "0.0.0";
     fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify(manifest));
     assert.throws(() => resolveSupergatewayEntry(root), /pinned supergateway/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reports a token file's status without reading the token", () => {
+  const root = fs.mkdtempSync(path.join(TEMP_ROOT, "mcp-wrapper-status-"));
+  try {
+    const file = path.join(root, "token");
+    assert.equal(tokenFileStatus(file), "missing");
+    assert.equal(tokenFileStatus("relative/token"), "invalid");
+    assert.equal(tokenFileStatus(""), "invalid");
+    fs.writeFileSync(file, "short", { mode: 0o600 });
+    // The content is not the installer's to judge; the wrapper checks it at start.
+    assert.equal(tokenFileStatus(file), "ok");
+    assert.equal(tokenFileStatus(root), "invalid");
+    if (process.platform !== "win32") {
+      fs.chmodSync(file, 0o640);
+      assert.equal(tokenFileStatus(file), "invalid");
+      fs.chmodSync(file, 0o600);
+      const link = path.join(root, "token-link");
+      fs.symlinkSync(file, link);
+      assert.equal(tokenFileStatus(link), "invalid");
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -132,7 +132,7 @@ for (const guard of GUARDS) {
 // issue #325. Four block with exit 2 and a stderr reason, three with a JSON deny
 // on exit 0. Each case names a tool its wired matcher has to cover, including
 // the tools of the legacy groups hosts still carry (see guard-matcher-coverage.test.mts).
-type Mode = "exit2" | "deny";
+type Mode = "exit2" | "deny" | "ask";
 interface ToolCase { tool: string; input: Record<string, unknown> }
 const bash = (command: string, tool = "Bash"): ToolCase => ({ tool, input: { command } });
 // Issue #325. main-checkout-guard judges a real repository: a main checkout in
@@ -170,6 +170,10 @@ const PRETOOL_GUARDS: { hook: string; matcher: string; mode: Mode; blocking: Too
   { hook: "playwright-file-guard.mts", matcher: "", mode: "deny",
     blocking: [{ tool: "mcp__plugin_playwright_playwright__browser_navigate", input: { url: "file:///C:/report/index.html" } }],
     benign: { tool: "mcp__plugin_playwright_playwright__browser_navigate", input: { url: "http://localhost:8080/" } } },
+  // Issue #376. Not a block: Claude asks the operator to confirm the call.
+  { hook: "atlassian-destructive-guard.mts", matcher: "mcp__.*__executeDestructive", mode: "ask",
+    blocking: [{ tool: "mcp__atlassian__executeDestructive", input: { name: "deleteJiraIssue", cloudId: "x", inputs: {} } }],
+    benign: { tool: "mcp__atlassian__executeDestructiveProbe", input: {} } },
 ];
 
 // The host's own policy settings must not decide these cases.
@@ -182,7 +186,7 @@ function runCase(wired: Wired, item: ToolCase, claudeHome?: string): Run {
 function blocked(run: Run, mode: Mode, hook: string): boolean {
   return mode === "exit2"
     ? run.status === 2 && run.stderr.includes(hook.replace(".mts", ""))
-    : run.status === 0 && run.permission === "deny";
+    : run.status === 0 && run.permission === mode;
 }
 
 // Asserts that the guard blocks every blocking case and lets the benign one pass.

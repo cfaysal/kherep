@@ -135,9 +135,11 @@ function fixture() {
   fs.mkdirSync(path.dirname(n8nAuthFile), { recursive: true });
   fs.writeFileSync(n8nAuthFile, "synthetic auth fixture\n", { mode: 0o600 });
   fs.writeFileSync(n8nCaFile, "synthetic CA fixture\n", { mode: 0o600 });
+  const atlassianMcpTokenFile = path.join(root, "operator", "atl-mcp-credential-codex.txt");
+  fs.writeFileSync(atlassianMcpTokenFile, `${"a".repeat(48)}\n`, { mode: 0o600 });
   const installOptions = {
     claudeConfigDir, claudeRegistryFile, codexHome,
-    workspace, installAtlassianTools: true,
+    workspace, installAtlassianTools: true, atlassianMcpTokenFile,
     nodePath: process.execPath, log: (): void => {},
     resolveRegistryRuntime: () => "fixture", runCodex,
     controlPlaneOutbox: path.join(root, "kherep config", "control-plane", "outbox"),
@@ -161,6 +163,16 @@ function occurrences(text: string, value: string): number {
   return text.split(value).length - 1;
 }
 
+// Issue #376. Every block before this guard lacks its entry, the last one of
+// the Agent, web and MCP PreToolUse group.
+function withoutAtlassianDestructiveGuard(config: string, hookDir: string): string {
+  const guard = command(process.execPath, path.join(hookDir, "atlassian-destructive-guard.mts"), "--runtime", "codex");
+  const entry = hookGroup("PreToolUse", "", [{ command: guard, commandWindows: `& ${guard}` }])
+    .slice("[[hooks.PreToolUse]]".length);
+  assert.equal(config.split(entry).length, 2, "the current destructive guard entry must be present exactly once");
+  return config.replace(entry, "");
+}
+
 function beforePostEditDispatcher(config: string, hookDir: string): string {
   const dispatcherCommand = command(process.execPath, path.join(hookDir, "codex-post-edit-checks.mts"));
   const dispatcherGroup = hookGroup("PostToolUse", POST_EDIT_MATCHER, [{
@@ -174,7 +186,7 @@ function beforePostEditDispatcher(config: string, hookDir: string): string {
     });
   const predecessor = config.replace(dispatcherGroup, hookGroup("PostToolUse", POST_EDIT_MATCHER, predecessorHooks));
   assert.notEqual(predecessor, config, "the current dispatcher group must be present exactly");
-  return predecessor.replace(/\n\n\[\[hooks\.PostToolUse\]\]\nmatcher = "\.\*"\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = .*deliver-hook\.mts.*\n(?:commandWindows = .*\n)?timeout = 10(?=\n)/, "");
+  return withoutAtlassianDestructiveGuard(predecessor, hookDir).replace(/\n\n\[\[hooks\.PostToolUse\]\]\nmatcher = "\.\*"\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = .*deliver-hook\.mts.*\n(?:commandWindows = .*\n)?timeout = 10(?=\n)/, "");
 }
 
 test("installs native Codex research hooks and every local dependency idempotently", (t) => {
@@ -328,8 +340,9 @@ function macShapedCentralBrain(root: string, codexHome: string, config: string) 
   const retired = retiredCentralBrainRender(
     { mcpCli: selection.mcpCli, profile: selection.profile, nativeHooks: selection.nativeHooks }, process.execPath);
   const predecessor = beforePostEditDispatcher(config, path.join(codexHome, "hooks", "kherep-maestro"));
+  // The Central Brain table preceded every plugin table, the Atlassian one first.
   const block = withRetiredCentralBrain(predecessor, retired, process.execPath,
-    Object.keys(CAPABILITIES.pluginMcpServers || {}));
+    [ATLASSIAN_MCP_SERVER, ...Object.keys(CAPABILITIES.pluginMcpServers || {})]);
   return { selection, selectionFile, block, retired };
 }
 
@@ -438,7 +451,10 @@ test("Windows entrypoint delegates to the shared Node installer", () => {
   assert.doesNotMatch(entrypoint, /Set-MarkedBlock/);
 });
 test("targets the v2 Atlassian MCP server and retires v1 rovo", () => {
-  assert.deepEqual(CAPABILITIES.pluginMcpServers?.[ATLASSIAN_MCP_SERVER], { url: "https://mcp.atlassian.com/v2/mcp" });
+  // Issue #376. The server is no plugin table any more and never comes from the
+  // Claude registry: Codex reaches it as its own service account only.
+  assert.equal(Object.hasOwn(CAPABILITIES.pluginMcpServers || {}, ATLASSIAN_MCP_SERVER), false);
+  assert.equal(CAPABILITIES.mcpServers.includes(ATLASSIAN_MCP_SERVER), false);
   assert.deepEqual(CAPABILITIES.retiredMcpServers, ["rovo"]);
   assert.equal(CAPABILITIES.mcpServers.includes("rovo"), false);
   assert.equal(JSON.stringify(CAPABILITIES).includes("atlassian-rovo@openai-curated"), false);
@@ -619,6 +635,7 @@ test("installs the Mac-compatible projection without replacing user state", asyn
   assert.equal(result.receipt.projection.agents.find((entry) => entry.name === "win-agent")?.status, "replaced-with-backup");
   assert.equal(result.receipt.pluginMcpServers.find((entry) => entry.name === "context7")?.status, "preserved-existing");
   assert.equal(result.receipt.pluginMcpServers.find((entry) => entry.name === "atlassian")?.status, "preserved-existing");
+  assert.equal(result.receipt.atlassianMcp.status, "preserved-existing");
   assert.deepEqual(
     result.receipt.retiredMcpServers.find((entry) => entry.name === "rovo"),
     { name: "rovo", status: "absent" },
@@ -679,9 +696,11 @@ for (const rovo of ["removed by the host", "still in the block"]) {
     assert.equal(occurrences(config, foreign), 1);
     assert.equal(outside(config), outside(seeded), "everything after the managed block, the app table included, is unchanged");
     assert.equal(config.includes("[mcp_servers.rovo]"), false);
-    assert.match(mcpTable(config, "atlassian"), /^url = "https:\/\/mcp\.atlassian\.com\/v2\/mcp"$/m);
+    assertServiceAccountAtlassian(config, result.targets.registryRuntime, installOptions.atlassianMcpTokenFile);
     assert.ok(config.indexOf("[mcp_servers.atlassian]") < config.indexOf(end));
     assert.equal(result.receipt.pluginMcpServers.find((entry) => entry.name === "atlassian")?.status, "configured");
+    assert.deepEqual(result.receipt.atlassianMcp,
+      { status: "configured", authentication: "secret-file-bearer", tokenSource: "option" });
     assert.deepEqual(result.receipt.retiredMcpServers.find((entry) => entry.name === "rovo"),
       { name: "rovo", status: rovo === "still in the block" ? "removed" : "absent" });
     assert.equal(codexCalls.some(({ args }) => args.join(" ").includes("atlassian-rovo")), false);
@@ -693,6 +712,132 @@ for (const rovo of ["removed by the host", "still in the block"]) {
     assert.equal(outside(without), outside(seeded));
   });
 }
+
+// Issue #376. The managed Atlassian table: the secret-file wrapper with the
+// Codex service account's key file, and executeDestructive behind a prompt.
+function assertServiceAccountAtlassian(config: string, runtime: string, tokenFile: string): void {
+  const table = mcpTable(config, "atlassian");
+  assert.ok(table.includes(`command = ${JSON.stringify(process.execPath)}`), table);
+  assert.ok(table.includes(`args = [${JSON.stringify(runtime)}]`), table);
+  assert.ok(table.includes(`env = { KHEREP_MCP_AUTH_FILE = ${JSON.stringify(tokenFile)}, `
+    + 'KHEREP_MCP_ENDPOINT = "https://mcp.atlassian.com/v2/mcp" }'), table);
+  assert.doesNotMatch(table, /^url = /m);
+  assert.ok(config.includes('[mcp_servers.atlassian.tools.executeDestructive]\napproval_mode = "prompt"'));
+}
+
+// The block an install before issue #376 wrote: the native OAuth url table.
+function withNativeAtlassianTable(config: string, tokenFile: string, runtime: string): string {
+  const table = mcpTable(config, "atlassian");
+  const native = '[mcp_servers.atlassian]\nenabled = true\nrequired = false\nurl = "https://mcp.atlassian.com/v2/mcp"\n'
+    + "startup_timeout_sec = 30.0\ntool_timeout_sec = 60.0";
+  const prompt = '\n\n[mcp_servers.atlassian.tools.executeDestructive]\napproval_mode = "prompt"';
+  assert.ok(table.includes(JSON.stringify(tokenFile)) && table.includes(JSON.stringify(runtime)));
+  const replaced = config.replace(`${table.trimEnd()}${prompt}`, native);
+  assert.notEqual(replaced, config);
+  return replaced;
+}
+
+test("replaces the native OAuth Atlassian table with the service-account table", (t) => {
+  const { root, codexHome, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const first = install(installOptions);
+  const current = fs.readFileSync(first.targets.config, "utf8");
+  const operator = '\n[mcp_servers.keep]\ncommand = "keep"\n';
+  const old = `${withNativeAtlassianTable(current, installOptions.atlassianMcpTokenFile, first.targets.registryRuntime)}${operator}`;
+  assert.match(old, /^url = "https:\/\/mcp\.atlassian\.com\/v2\/mcp"$/m);
+  fs.writeFileSync(path.join(codexHome, "config.toml"), old);
+
+  const result = install(installOptions);
+  const config = fs.readFileSync(result.targets.config, "utf8");
+  assertServiceAccountAtlassian(config, result.targets.registryRuntime, installOptions.atlassianMcpTokenFile);
+  assert.equal(occurrences(config, "[mcp_servers.atlassian]"), 1);
+  assert.ok(config.endsWith(operator));
+  assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), config, "a reinstall is idempotent");
+});
+
+test("without a usable key file no Atlassian table is written and nothing falls back to OAuth", (t) => {
+  const { root, codexHome, installOptions, workspace } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const first = install(installOptions);
+  const old = withNativeAtlassianTable(fs.readFileSync(first.targets.config, "utf8"),
+    installOptions.atlassianMcpTokenFile, first.targets.registryRuntime);
+  fs.writeFileSync(path.join(codexHome, "config.toml"), old);
+
+  const missing = path.join(root, "operator", "absent.txt");
+  const result = install({ ...installOptions, atlassianMcpTokenFile: missing });
+  const config = fs.readFileSync(result.targets.config, "utf8");
+  assert.equal(config.includes("[mcp_servers.atlassian"), false, "neither the OAuth table nor a service-account table");
+  assert.deepEqual(result.receipt.atlassianMcp,
+    { status: "skipped-token-file-missing", authentication: "secret-file-bearer", tokenSource: "option" });
+  assert.match(String(result.atlassianMcpProblem), /KHEREP_ATL_MCP_TOKEN_FILE_CODEX|absent\.txt/);
+  assert.equal(result.receipt.pluginMcpServers.some((entry) => entry.name === "atlassian"), false);
+  // The Jira broker of the tool set still installs.
+  assert.ok(fs.existsSync(path.join(workspace, "tools", "atl-jira.mts")));
+
+  if (process.platform !== "win32") {
+    fs.chmodSync(installOptions.atlassianMcpTokenFile, 0o644);
+    const loose = install(installOptions);
+    assert.equal(loose.receipt.atlassianMcp.status, "skipped-token-file-invalid");
+    assert.equal(fs.readFileSync(loose.targets.config, "utf8").includes("[mcp_servers.atlassian"), false);
+    fs.chmodSync(installOptions.atlassianMcpTokenFile, 0o600);
+  }
+  const restored = install(installOptions);
+  assertServiceAccountAtlassian(fs.readFileSync(restored.targets.config, "utf8"),
+    restored.targets.registryRuntime, installOptions.atlassianMcpTokenFile);
+});
+
+test("a key file that moved between installs is still the installer's own table", (t) => {
+  const { root, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  install(installOptions);
+  const moved = path.join(root, "operator", "rotated", "atl-mcp-credential-codex.txt");
+  fs.mkdirSync(path.dirname(moved), { recursive: true });
+  fs.writeFileSync(moved, `${"b".repeat(48)}\n`, { mode: 0o600 });
+  const result = install({ ...installOptions, atlassianMcpTokenFile: moved });
+  const config = fs.readFileSync(result.targets.config, "utf8");
+  assertServiceAccountAtlassian(config, result.targets.registryRuntime, moved);
+  assert.equal(config.includes(JSON.stringify(installOptions.atlassianMcpTokenFile)), false);
+});
+
+test("Codex reads only its own key file variable and refuses another identity's file", (t) => {
+  const { root, codexHome, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { atlassianMcpTokenFile: _option, ...options } = installOptions;
+  const keys = ["KHEREP_ATL_MCP_TOKEN_FILE_CODEX", "KHEREP_ATL_MCP_TOKEN_FILE_CLAUDE",
+    "KHEREP_ATL_CRED_FILE_CODEX", "KHEREP_ATL_CRED_FILE_CLAUDE"];
+  const before = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) delete process.env[key];
+    process.env.KHEREP_ATL_MCP_TOKEN_FILE_CLAUDE = installOptions.atlassianMcpTokenFile;
+    const ignored = install(options);
+    assert.equal(ignored.receipt.atlassianMcp.status, "skipped-token-file-missing");
+    assert.equal(ignored.receipt.atlassianMcp.tokenSource, "default");
+    assert.match(String(ignored.atlassianMcpProblem), new RegExp(
+      path.join(codexHome, "kherep", "atl-mcp-credential-codex.txt").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+    process.env.KHEREP_ATL_MCP_TOKEN_FILE_CODEX = installOptions.atlassianMcpTokenFile;
+    const shared = install(options);
+    assert.equal(shared.receipt.atlassianMcp.status, "skipped-token-file-shared");
+    assert.equal(shared.receipt.atlassianMcp.tokenSource, "env");
+
+    delete process.env.KHEREP_ATL_MCP_TOKEN_FILE_CLAUDE;
+    process.env.KHEREP_ATL_CRED_FILE_CODEX = installOptions.atlassianMcpTokenFile;
+    assert.equal(install(options).receipt.atlassianMcp.status, "skipped-token-file-shared");
+
+    delete process.env.KHEREP_ATL_CRED_FILE_CODEX;
+    const configured = install(options);
+    assert.equal(configured.receipt.atlassianMcp.status, "configured");
+    assert.equal(configured.receipt.atlassianMcp.tokenSource, "env");
+    const receipt = JSON.stringify(configured.receipt);
+    assert.equal(receipt.includes(installOptions.atlassianMcpTokenFile), false, "the receipt names no key file");
+    assert.equal(receipt.includes("a".repeat(48)), false, "the receipt never holds the key");
+  } finally {
+    for (const key of keys) {
+      if (before[key] === undefined) delete process.env[key];
+      else process.env[key] = before[key];
+    }
+  }
+});
 test("default install projects observation delivery without optional Jira tooling", async (t) => {
   const { root, codexCalls, codexHome, installOptions, workspace } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
