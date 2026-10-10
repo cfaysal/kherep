@@ -38,7 +38,7 @@ const exists = (candidate: string) => candidate === `${cwd}/.git`;
 test("blocks a substantial main turn with a fixed reason when Brain research is absent", () => {
   const file = transcript(started, message("user", "SENSITIVE-MARKER Example Corp"), call("exec_command", { cmd: "npm test" }), message("assistant", "done"));
   const result = decision(payload(file), env, exists, config);
-  assert.deepEqual(result, { decision: "block", reason: researchReason(workspace, config) });
+  assert.deepEqual(result, { decision: "block", reason: researchReason(workspace, config, true, false) });
   assert.doesNotMatch(result!.reason, /Example Corp|SENSITIVE-MARKER/);
 });
 
