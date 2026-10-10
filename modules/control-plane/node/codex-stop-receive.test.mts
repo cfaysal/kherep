@@ -8,7 +8,7 @@ import test from "node:test";
 
 import { recordCodexSession } from "./codex-sessions.mts";
 import { nodePaths, writeConfig } from "./config.mts";
-import { deliverForCodex } from "./deliver-codex.mts";
+import { CODEX_STOP_REASON, deliverForCodex } from "./deliver-codex.mts";
 import { getOutbox, writeDirectory } from "./exchange.mts";
 import { getMessage, storeMessage } from "./inbox.mts";
 import { runMsg } from "./msg-cli.mts";
@@ -48,7 +48,7 @@ test("Stop continuation receives and confirms a peer reply without another UserP
   put();
   const stop = JSON.parse(hook("Stop"));
   assert.equal(stop.decision, "block");
-  assert.ok(stop.reason.includes(CLI + " msg inbox --from " + SELF + " --receive"), "Stop must tell the continuation how to retrieve its context");
+  assert.equal(stop.reason, CODEX_STOP_REASON);
   assert.ok(!stop.reason.includes(TEXT), "peer text must not enter the continuation user prompt");
   assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "accepted");
 
@@ -141,7 +141,7 @@ test("hook and CLI processes deliver the Stop continuation without a prompt hook
   });
   const continuation = stop(false);
   assert.equal(continuation.status, 0, continuation.stderr);
-  assert.ok(JSON.parse(continuation.stdout).reason.includes(cliPath));
+  assert.equal(JSON.parse(continuation.stdout).reason, CODEX_STOP_REASON);
   assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "accepted");
   const received = spawnSync(process.execPath, [cliPath, "msg", "inbox", "--from", SELF, "--receive"], {
     env, windowsHide: true, encoding: "utf8",
@@ -170,7 +170,7 @@ test("hook-emitted commands work in a Codex that inherited a Claude Code session
   const cli = (...args: string[]) => spawnSync(process.execPath, [cliPath, "msg", ...args], { env, windowsHide: true, encoding: "utf8" });
   const continuation = hook({ hook_event_name: "Stop", stop_hook_active: false });
   assert.equal(continuation.status, 0, continuation.stderr);
-  assert.ok(JSON.parse(continuation.stdout).reason.includes(`msg inbox --from ${SELF} --receive`));
+  assert.equal(JSON.parse(continuation.stdout).reason, CODEX_STOP_REASON);
   const received = cli("inbox", "--from", SELF, "--receive");
   assert.equal(received.status, 0, received.stderr);
   assert.ok(received.stdout.includes(TEXT));

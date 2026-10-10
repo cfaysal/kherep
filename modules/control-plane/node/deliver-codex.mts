@@ -38,8 +38,7 @@ import { nodeWakeBudget } from "./policy.mts";
 
 export const CODEX_CONTEXT_BYTES = 6 * 1024;
 export const CODEX_STOP_MARKER = "Kherep message delivery (not an error):";
-export const CODEX_STOP_REASON = CODEX_STOP_MARKER + " new messages from other agent sessions arrived for this session. "
-  + "Retrieve them with the command below, then decide whether they need an answer; otherwise stop.";
+export const CODEX_STOP_REASON = "Kherep: New peer messages are waiting. Check this session's inbox and report any relevant update.";
 export const CODEX_ESCALATION_NOTE = "Run the msg command on its own, not in a pipeline or script, and request escalated "
   + "permissions (sandbox_permissions \"require_escalated\") on the first attempt: it writes outside the sandbox, and the "
   + "installed Kherep rule approves msg send, sessions, inbox and status without asking the user.";
@@ -76,6 +75,5 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
   const allowed = deps.mayContinue ?? ((ids: string[]) => mayContinue(deps.paths, sessionId, mode, ids, deps.now?.() ?? Date.now(),
     nodeWakeBudget(deps.paths)));
   if (!allowed(arrived)) return "";
-  const receive = (deps.replyCommand ?? cliCommand()) + " msg inbox --from " + sessionId + " --receive";
-  return JSON.stringify({ decision: "block", reason: CODEX_STOP_REASON + "\n" + receive + "\n" + CODEX_ESCALATION_NOTE });
+  return JSON.stringify({ decision: "block", reason: CODEX_STOP_REASON });
 }
