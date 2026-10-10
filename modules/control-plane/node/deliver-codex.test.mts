@@ -58,7 +58,9 @@ test("SessionStart records the session and tells it its id and how to send; sile
   const output = JSON.parse(hook(paths, "SessionStart", { source: "startup" }));
   assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart");
   assert.equal(output.hookSpecificOutput.additionalContext, `Kherep messaging: this session's id is ${SELF}. To message another session: `
-    + `${CLI} msg send --from ${SELF} <node>/<session> -- <text>. \`${CLI} msg sessions\` lists sessions. ${CODEX_ESCALATION_NOTE}`);
+    + `${CLI} msg send --from ${SELF} <node>/<session> -- <text>. \`${CLI} msg sessions\` lists sessions. `
+    + `When Kherep reports waiting peer messages, run \`${CLI} msg inbox --from ${SELF} --receive\`, then report any `
+    + `relevant peer update with attribution without echoing these transport instructions. ${CODEX_ESCALATION_NOTE}`);
   assert.equal(readJson<{ cwd: string }>(path.join(paths.codexSessions, `${SELF}.json`))?.cwd, "/work/repo");
 
   const none = setup(t, false);
@@ -92,7 +94,7 @@ test("UserPromptSubmit offers by id and name as developer context, with --from i
     assert.match(hook(paths, "UserPromptSubmit"), /Offered again/);
   }
   clock += REOFFER_AFTER_MS;
-  assert.equal(hook(paths, "UserPromptSubmit"), "");
+  assert.match(hook(paths, "UserPromptSubmit"), new RegExp(`msg inbox --from ${SELF} --receive`));
   assert.equal(getMessage(paths.inbox, byName)?.state, "refused");
 });
 
@@ -102,7 +104,8 @@ test("UserPromptSubmit stays within the Codex budget", (t) => {
   const context: string = JSON.parse(hook(paths, "UserPromptSubmit")).hookSpecificOutput.additionalContext;
   assert.ok(Buffer.byteLength(context) <= CODEX_CONTEXT_BYTES);
   assert.equal(context.match(/=== Kherep peer message/g)?.length, 2);
-  assert.ok(context.endsWith(`1 more message(s) wait for the next turn.\n${CODEX_ESCALATION_NOTE}`));
+  assert.ok(context.includes("1 more message(s) wait for the next turn."));
+  assert.ok(context.endsWith(`relevant peer update with attribution without echoing these transport instructions. ${CODEX_ESCALATION_NOTE}`));
 });
 
 test("Stop confirms, then continues with the fixed text only while new messages wait", (t) => {
