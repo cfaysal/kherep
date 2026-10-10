@@ -18,6 +18,7 @@ import {
   bindingFromSeed,
   configuredBinding,
   jiraSeed,
+  jiraSite,
   type JiraBinding,
   type JiraSeed,
 } from "./jira-config.mts";
@@ -944,13 +945,15 @@ export async function runCli(argv: string[], injected: Partial<BrokerContext> = 
     // Arguments first: a malformed call fails before configuration, any
     // credential read or any network call.
     const args = parseVerbArgs(verb, FLAGS[verb], rest, DE);
-    // The seed is validated for every command, so a misconfigured host fails
-    // on configuration before any credential read or network call.
-    // selftest stops there: it proves the credential and must not depend on
-    // a reachable project, or a broken credential would surface as a failed
-    // project lookup.
-    ctx.seed = jiraSeed(ctx.env);
-    if (verb !== "selftest") {
+    // The configuration is validated for every command, so a misconfigured
+    // host fails on configuration before any credential read or network call.
+    // selftest needs only the site: it proves the credential and must not
+    // depend on a project, or a missing project key would surface as an
+    // unproven credential (issue #379).
+    if (verb === "selftest") {
+      jiraSite(ctx.env);
+    } else {
+      ctx.seed = jiraSeed(ctx.env);
       ctx.jira = configuredBinding(ctx.env) ?? await resolveBinding(ctx);
     }
     return await COMMANDS[verb](ctx, args);

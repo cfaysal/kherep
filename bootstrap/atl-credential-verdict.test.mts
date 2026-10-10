@@ -78,7 +78,7 @@ test("an inconclusive verdict over an existing file never overwrites on its own"
   assert.equal(credentialSource({ outcome: "inconclusive", hasTerminal: false }), "fatal");
   // Restated as the property rather than the table: of the four states an
   // existing file can be in, exactly one reaches the capture unasked.
-  const silent = (["pass", "fail", "inconclusive"] as const)
+  const silent = (["pass", "fail", "inconclusive", "misconfigured"] as const)
     .filter((outcome) => credentialSource({ outcome, hasTerminal: true }) === "prompt");
   assert.deepEqual(silent, ["fail"], "only a disproven file is replaced without asking");
 });
@@ -127,8 +127,10 @@ test("the capture is unreachable from an inconclusive verdict without an answer"
 // terminal: the file on disk is not a credential, so the broker refuses it
 // before any request and prints no verdict at all - the same "nothing is known"
 // shape a transient failure of the live token request produces.
+// The site is set, so the broker gets past its configuration and refuses the
+// file itself; whatever the host running the tests has configured does not count.
 function runStep(args: string[]): { status: number | null; stderr: string } {
-  const env = { ...process.env };
+  const env: NodeJS.ProcessEnv = { ...process.env, KHEREP_ATL_SITE: "https://jira.example.invalid" };
   for (const key of Object.keys(env)) {
     if (key.toUpperCase().startsWith("KHEREP_ATL_CRED_FILE")) delete env[key];
   }
@@ -145,7 +147,7 @@ test("without a terminal an inconclusive verdict is fatal, names it, and touches
   const before = fs.readFileSync(target);
   const run = runStep(["--runtime", "claude", "--out", target]);
   assert.equal(run.status, 1);
-  assert.match(run.stderr, /verdict UNKNOWN/, "the verdict is named");
+  assert.match(run.stderr, /verdict NO-VERDICT/, "the verdict is named");
   assert.match(run.stderr, /does not say the file is wrong/, "and not reported as a proven rejection");
   assert.deepEqual(fs.readFileSync(target), before, "a refused run overwrites nothing");
   assert.equal(fs.existsSync(path.join(dir, "_deprecated")), false, "and backs nothing up");

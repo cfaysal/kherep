@@ -575,6 +575,32 @@ test("selftest passes only when a tampered secret is actually rejected", async (
   assert.match(blind.out.join("\n"), /verdikt: UNBEKANNT/);
 });
 
+// Issue #379. Der Selbsttest prueft Client und Site, nie ein Projekt: ohne
+// Projektwerte gibt es trotzdem ein Verdikt, ohne Site nicht.
+test("selftest braucht die Site, aber keine Projektkonfiguration", async () => {
+  const handler = {
+    api: () => jsonResponse(200, {}),
+    token: (tampered: boolean) => (tampered
+      ? jsonResponse(401, { error: "access_denied" })
+      : jsonResponse(200, { access_token: ACCESS_TOKEN })),
+  };
+  const siteOnly = harness(handler, {
+    KHEREP_ATL_CRED_FILE_CLAUDE: CRED_PATH,
+    KHEREP_ATL_PROJECT_ID: undefined, KHEREP_ATL_PROJECT_KEY: undefined, KHEREP_ATL_ISSUE_TYPES: undefined,
+  });
+  assert.equal(await runCli(["selftest"], siteOnly.injected), 0);
+  assert.match(siteOnly.out.join("\n"), /verdikt: PASS/);
+
+  const unsited = harness(handler, { KHEREP_ATL_CRED_FILE_CLAUDE: CRED_PATH, KHEREP_ATL_SITE: undefined });
+  assert.equal(await runCli(["selftest"], unsited.injected), 1);
+  assert.deepEqual(unsited.err, ["KHEREP_ATL_SITE ist nicht gesetzt."]);
+  assert.equal(unsited.calls.length, 0, "a misconfigured host fails before any network call");
+
+  const get = harness(handler, { KHEREP_ATL_CRED_FILE_CLAUDE: CRED_PATH, KHEREP_ATL_PROJECT_KEY: undefined });
+  assert.equal(await runCli(["get", "--key", "OP-1"], get.injected), 1);
+  assert.deepEqual(get.err, ["KHEREP_ATL_PROJECT_KEY ist nicht gesetzt."]);
+});
+
 // OP-1415. Paritaet mit dem Codex-Broker. "Diskriminiert nicht" hat zwei sehr
 // verschiedene Gruende, und nur einer davon ist unentschieden. Wer beide in ein
 // UNBEKANNT wirft, meldet ein bewiesenes Nein als "nichts gewusst".

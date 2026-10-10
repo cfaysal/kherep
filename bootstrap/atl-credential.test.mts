@@ -140,12 +140,13 @@ test("only the discriminating verdict counts, in either broker's dialect", () =>
   assert.equal(verdictOf('{"token":{"status":200},"control":{"status":401},"verdict":"PASS"}\n'), "PASS");
   assert.equal(verdictOf('{"token":{"status":200},"verdict":"UNKNOWN"}\n'), "UNKNOWN");
   assert.equal(verdictOf('{"token":{"status":401},"verdict":"FAIL"}\n'), "FAIL");
-  // Silence and noise are UNKNOWN. A broker that said nothing proved nothing.
-  assert.equal(verdictOf(""), "UNKNOWN");
-  assert.equal(verdictOf("\n   \n"), "UNKNOWN");
-  assert.equal(verdictOf("{ truncated json"), "UNKNOWN");
-  assert.equal(verdictOf("status: 200\nall good\n"), "UNKNOWN");
-  assert.equal(verdictOf('{"status":0,"error":"Interner Fehler."}\n'), "UNKNOWN");
+  // Silence and noise are NO-VERDICT. A broker that said nothing proved nothing,
+  // and it is not the Codex broker's UNKNOWN above, which is a check that ran.
+  assert.equal(verdictOf(""), "NO-VERDICT");
+  assert.equal(verdictOf("\n   \n"), "NO-VERDICT");
+  assert.equal(verdictOf("{ truncated json"), "NO-VERDICT");
+  assert.equal(verdictOf("status: 200\nall good\n"), "NO-VERDICT");
+  assert.equal(verdictOf('{"status":0,"error":"Interner Fehler."}\n'), "NO-VERDICT");
 });
 
 test("the written summary carries lengths, never the values", () => {
