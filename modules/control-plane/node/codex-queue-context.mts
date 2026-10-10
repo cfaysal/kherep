@@ -80,7 +80,7 @@ export function isDirectNativeQueueIdentity(identity: QueueProducerIdentity,
   if (identity.route !== "local" || identity.launchPrefix.length !== 0
     || identity.codexExecutable !== identity.launchFile || identity.approvedFiles.length !== 1) return false;
   let magic: string;
-  try { magic = readMagic(identity.launchFile).toString("hex"); } catch { return false; }
+  try { magic = Array.from(readMagic(identity.launchFile), (byte) => byte.toString(16).padStart(2, "0")).join(""); } catch { return false; }
   return magic.startsWith("4d5a") || magic === "7f454c46"
     || ["feedface", "feedfacf", "cefaedfe", "cffaedfe", "cafebabe", "bebafeca"].includes(magic);
 }

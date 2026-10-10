@@ -55,7 +55,7 @@ class StdioQueueClient implements NativeQueueClient {
   }
 
   private read(chunk: Buffer): void {
-    this.buffer += chunk.toString("utf8");
+    this.buffer += chunk.toString();
     if (Buffer.byteLength(this.buffer, "utf8") > MAX_NATIVE_QUEUE_LINE_BYTES) {
       return this.fail(new Error("Codex app server response is too large"));
     }
