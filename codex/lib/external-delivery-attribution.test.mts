@@ -65,8 +65,12 @@ for (const windows of [false, true]) {
     assert.equal(afterPre.length, beforePre.length);
     const shellIndex = beforePre.findIndex(([header]) => header!.includes(JSON.stringify(SHELL)));
     assert.ok(shellIndex >= 0);
+    // Issue #376. The destructive guard ends the Agent, web and MCP group.
+    const mcpIndex = beforePre.findIndex(([header]) => header!.includes("|mcp__.*"));
+    assert.ok(mcpIndex >= 0);
+    assert.match(afterPre[mcpIndex]!.at(-1)!, /atlassian-destructive-guard\.mts/);
     afterPre.forEach((group, index) => {
-      assert.deepEqual(index === shellIndex ? group.slice(0, -1) : group, beforePre[index]);
+      assert.deepEqual([shellIndex, mcpIndex].includes(index) ? group.slice(0, -1) : group, beforePre[index]);
     });
     assert.match(afterPre[shellIndex]!.at(-1)!, /attribution-hook\.mts/);
     const afterPost = groups(result.config, "PostToolUse");

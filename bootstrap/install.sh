@@ -343,7 +343,21 @@ if [ "$SKIP_DEPS" = "0" ]; then
   else
     echo "install: WARNING deps phase incomplete (npm globals and/or plugins) - managed files stay committed"
   fi
-  echo "install: MCP -> review 'claude mcp list'. Atlassian (v2 server 'atlassian', https://mcp.atlassian.com/v2/mcp; forge-knowledge) need interactive OAuth re-consent."
+  # Issue #376. The Atlassian MCP server v2 as the Claude service account: its
+  # API key file, never the operator's OAuth login. It writes the user-scope
+  # registry (~/.claude.json), live host state outside CLAUDE_HOME, so it has
+  # the same skip rules as the credential step. The OAuth plugin is disabled
+  # only after the server reads back as registered.
+  if [ "$INSTALL_ATLASSIAN_TOOLS" = "1" ]; then
+    SKIP_ATL_MCP="$(kherep_install_skip_reason ATL_MCP)"
+    if [ -n "$SKIP_ATL_MCP" ]; then
+      echo "install: SKIP_ATL_MCP=1 (by $SKIP_ATL_MCP; Atlassian MCP server not registered, ~/.claude.json untouched)"
+    elif ! node "$REPO_ROOT/bootstrap/atl-mcp-claude.mts" --claude-home "$CLAUDE_HOME"; then
+      post_rc=1
+      echo "install: WARNING no Atlassian MCP server for Claude - nothing falls back to a personal login"
+    fi
+  fi
+  echo "install: MCP -> review 'claude mcp list'. forge-knowledge needs interactive OAuth re-consent."
 else
   echo "install: SKIP_DEPS=1 (no npm/plugins/mcp)"
 fi

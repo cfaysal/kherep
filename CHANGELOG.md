@@ -91,9 +91,53 @@ increments the minor version; every other release increments the patch version.
   `labels` verb now lives in the shared `confluence-label-cli.mts`, which the
   installers, drift checks and smoke test project beside the brokers
   (issue #318).
+- Atlassian destructive guard: a new `PreToolUse` hook,
+  `atlassian-destructive-guard.mts`, stops every `mcp__<server>__executeDestructive`
+  call, under any server name, the managed `atlassian` server, a plugin
+  namespace and a claude.ai connector named by a UUID included. Claude asks the
+  operator to confirm the call (`permissionDecision: "ask"`), wired with
+  matcher `mcp__.*__executeDestructive`. Codex hooks cannot ask, so Codex denies
+  it with `--runtime codex`; the guard is the last entry of the existing
+  Agent, web and MCP `PreToolUse` group, because a new group would move the
+  positional trust key of every operator `PreToolUse` group after the managed
+  block. The installer recognises the exact block from immediately before the
+  guard and replaces it; Codex asks to review that one entry. Read and write
+  calls pass (issue #376).
 
 ### Changed
 
+- Atlassian MCP: with the optional Atlassian tool set, both runtimes reach the
+  v2 Atlassian remote MCP server (`https://mcp.atlassian.com/v2/mcp`) as their
+  own Atlassian service account instead of the operator's personal OAuth login.
+  The service account's API key lives in a private file, read only by the
+  secret-file wrapper `supergateway-secret-wrapper.mts`, which sends it as
+  `Authorization: Bearer`. The file is `KHEREP_ATL_MCP_TOKEN_FILE_CLAUDE` or
+  `KHEREP_ATL_MCP_TOKEN_FILE_CODEX`, by default
+  `<runtime home>/kherep/atl-mcp-credential-<runtime>.txt`. A file that is also
+  the other runtime's key file or a broker credential file is refused, and so is
+  one that is not absolute, regular, private and owned by the installing user.
+  Codex: the managed `atlassian` table runs the wrapper and sets
+  `approval_mode = "prompt"` for `executeDestructive`; a block with the
+  previous native url table, or with a table for another key file, is
+  recognised and replaced, and the receipt reports `atlassianMcp` with its
+  status and `tokenSource`, never the path or the key. Claude: the installer
+  registers the user-scope stdio server `atlassian` through `claude mcp
+  add-json`, reads it back from `~/.claude.json`, and only then disables
+  `atlassian@claude-plugins-official`, whose server ran as the personal login;
+  the plugin's five skills go with it. The plugin manifest no longer enables
+  it. An `atlassian` entry the installer did not write stays, and so does the
+  plugin. Without a usable key file no Atlassian server is written on either
+  runtime, nothing falls back to OAuth, the rest of the installation stands and
+  the installer exits 1 with a warning. The Claude step has the skip rules of
+  the credential step: `KHEREP_INSTALL_SKIP_ATL_MCP=1`,
+  `KHEREP_INSTALL_PREVIEW=1`, and a non-default `CLAUDE_HOME` without
+  `KHEREP_INSTALL_ALLOW_ATL_MCP=1` (issue #376).
+- Research evidence: a v2 `executeRead` whose operation is `searchConfluence`
+  or `searchConfluenceUsingCql` counts as a Central Brain lookup on both
+  runtimes (issue #376).
+- The secret-file wrapper reports a failure as `MCP secret wrapper failed
+  safely` instead of naming n8n, since it now also carries the Atlassian
+  server (issue #376).
 - Control plane Worker: a message is deleted once its sender acknowledged the
   final status (`message.status.ack`, `delivered`, `replied`, `refused` or
   `expired`). The acknowledgement must come from the sending node and name the
@@ -131,6 +175,13 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- atlassian-broker: the Claude agent wrote Confluence pages through
+  `twg confluence content ...`, which runs as the operator's personal TWG
+  login, against the rule that every Atlassian write runs as a service account.
+  It now uses the Claude Confluence broker `atl-confluence-ccoder.mts`. The
+  Codex agent was rendered from the Claude definition and named the Claude Jira
+  broker; it has its own definition, `codex/agents/atlassian-broker.md`, with
+  the Codex brokers `atl-jira.mts` and `atl-confluence.mts` (issue #376).
 - claude-obs reads its host configuration `<Claude home>/kherep/confluence.json`
   with the Read tool instead of `cat`, which the auto-mode classifier denied.
   The user settings allow exactly that one file with a new rule,

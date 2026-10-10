@@ -106,9 +106,14 @@ test("every accepted Brain lookup form passes, a foreign search tool does not", 
     tool("mcp__atlassian__searchConfluence", { query: "x" }),
     tool("mcp__plugin_atlassian_atlassian__searchConfluence", { query: "x" }),
     tool("mcp__1cecfb42-00ea-4453-a5ff-9da9581aab32__searchConfluence", { query: "x" }),
+    tool("mcp__atlassian__executeRead", { name: "searchConfluence", cloudId: "x", inputs: { cql: "text ~ x" } }),
+    tool("mcp__Atlassian_MCP__executeRead", { name: "searchConfluenceUsingCql", cloudId: "x", inputs: {} }),
   ];
   for (const form of forms) assert.equal(decide([user("q"), WORK, form]), null, JSON.stringify(form));
-  for (const form of [tool("mcp__bexio__search", {}), bash("node C:/Kherep/tools/atl-confluence-ccoder.mts create --space KB")]) {
+  for (const form of [tool("mcp__bexio__search", {}), bash("node C:/Kherep/tools/atl-confluence-ccoder.mts create --space KB"),
+    tool("mcp__atlassian__executeRead", { name: "searchJiraIssuesUsingJql", cloudId: "x", inputs: {} }),
+    tool("mcp__atlassian__executeRead", {}),
+    tool("mcp__atlassian__executeWrite", { name: "searchConfluence", cloudId: "x", inputs: {} })]) {
     assert.ok(decide([user("q"), WORK, form]), `${JSON.stringify(form)} must not count as research`);
   }
 });

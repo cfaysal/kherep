@@ -72,6 +72,19 @@ test("counts the v2 Confluence search under any server, a bare search only on an
   assert.equal(brain("mcp__bexio__search"), false);
 });
 
+test("counts a v2 executeRead only when it runs a Confluence search", () => {
+  const brain = (name: string, args: unknown): boolean => {
+    const parsed = parseRollout(rollout(started("turn"), call(name, args)), "turn");
+    assert.ok(parsed);
+    return researchFacts(parsed, "D:/Work/repo", () => false).brain;
+  };
+  assert.equal(brain("mcp__atlassian__executeRead", { name: "searchConfluence", cloudId: "x", inputs: {} }), true);
+  assert.equal(brain("mcp__atlassian__executeRead", { name: "searchConfluenceUsingCql", cloudId: "x", inputs: {} }), true);
+  assert.equal(brain("mcp__atlassian__executeRead", { name: "searchJiraIssuesUsingJql", cloudId: "x", inputs: {} }), false);
+  assert.equal(brain("mcp__atlassian__executeRead", {}), false);
+  assert.equal(brain("mcp__atlassian__executeWrite", { name: "searchConfluence", cloudId: "x", inputs: {} }), false);
+});
+
 test("parses actual nested tools calls inside functions.exec", () => {
   const source = [
     "const results = await Promise.all([",

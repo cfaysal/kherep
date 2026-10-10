@@ -22,7 +22,9 @@ test("a supported read-only tool boundary has one independent native PostToolUse
 
 test("every historical renderer stays free of the new busy consumer", () => {
   for (const [name, value] of Object.entries(parity)) {
-    if (/^render(Before|Previous|Legacy)/.test(name) && typeof value === "function") {
+    // Issue #376. The block right before the destructive guard already had the busy hint.
+    if (/^render(Before|Previous|Legacy)/.test(name) && name !== "renderBeforeAtlassianDestructiveGuard"
+        && typeof value === "function") {
       assert.equal(busyGroups((value as typeof parity.render)(renderOptions)).length, 0, name);
     }
   }

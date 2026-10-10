@@ -37,7 +37,8 @@ function groups(config: string, event: string): string[][] {
 test("the attribution hook ends the shell PreToolUse group and a new last PostToolUse group", () => {
   assert.equal(typeof renderBeforeAttributionHook, "function");
   for (const options of [base, native]) {
-    const current = render(options);
+    // Issue #376 appended the destructive guard to the MCP group afterwards.
+    const current = parityConfigApi.renderBeforeAtlassianDestructiveGuard(options);
     const previous = renderBeforeAttributionHook!(options);
     const pre = groups(current, "PreToolUse");
     const prePrevious = groups(previous, "PreToolUse");

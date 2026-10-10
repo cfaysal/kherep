@@ -61,6 +61,8 @@ hooks/lib/restore-write.mts
 hooks/lib/restore-write.test.mts
 hooks/cbm-code-discovery-gate
 hooks/playwright-file-guard.mts
+hooks/atlassian-destructive-guard.mts
+hooks/atlassian-destructive-guard.test.mts
 hooks/simplify-nudge.mts
 hooks/simplify-nudge.test.mts
 hooks/cbm-session-reminder

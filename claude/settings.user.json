@@ -61,6 +61,15 @@
             "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/main-checkout-guard.mts\""
           }
         ]
+      },
+      {
+        "matcher": "mcp__.*__executeDestructive",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/atlassian-destructive-guard.mts\""
+          }
+        ]
       }
     ],
     "PostToolUse": [
