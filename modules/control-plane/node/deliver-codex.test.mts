@@ -118,11 +118,9 @@ test("Stop confirms, then continues with the fixed text only while new messages 
   const text = stop(paths);
   assert.equal(JSON.parse(text).decision, "block");
   const reason: string = JSON.parse(text).reason;
-  assert.equal(reason, CODEX_STOP_REASON + "\n" + CLI + " msg inbox --from " + SELF + " --receive\n" + CODEX_ESCALATION_NOTE);
+  assert.equal(reason, CODEX_STOP_REASON);
   // The desktop app shows the reason under "Blocked · Stop · User · Feedback" (issue #359).
-  assert.ok(reason.split("\n")[0].startsWith("Kherep message delivery (not an error):"), "the first line names Kherep delivery");
-  assert.ok(reason.includes(`${CLI} msg inbox --from ${SELF} --receive`));
-  assert.ok(reason.includes(CODEX_ESCALATION_NOTE));
+  assert.doesNotMatch(reason, /msg inbox|--receive|--from|sandbox_permissions|escalat/i);
   assert.ok(Buffer.byteLength(reason) <= CODEX_CONTEXT_BYTES);
   assert.doesNotMatch(text, new RegExp(SECRET));
   assert.doesNotMatch(text, new RegExp(late));
@@ -141,8 +139,7 @@ test("the entry point serves Codex only with --runtime codex and prints valid JS
   const run = (event: string, args = ["--runtime", "codex"]) => spawnSync(process.execPath, [HOOK, ...args],
     { input: JSON.stringify({ session_id: SELF, cwd: "/w", hook_event_name: event, stop_hook_active: false }), env, encoding: "utf8" });
   const blocked = run("Stop");
-  assert.ok(JSON.parse(blocked.stdout).reason.startsWith(CODEX_STOP_REASON));
-  assert.ok(JSON.parse(blocked.stdout).reason.includes(" msg inbox --from " + SELF + " --receive"));
+  assert.equal(JSON.parse(blocked.stdout).reason, CODEX_STOP_REASON);
   assert.deepEqual([blocked.status, JSON.parse(blocked.stdout).decision, withoutTypeStrippingWarning(blocked.stderr)],
     [0, "block", ""]);
   const prompt = run("UserPromptSubmit");
