@@ -46,7 +46,8 @@ if (argv[0] === "queue") {
     return;
   }
   if (argv[2].startsWith("fa11")) { process.stderr.write("Error: no app server owns this thread (token sk-live_Secret1)\\n"); process.exit(1); }
-  process.stdout.write("Queued message 01a0db08 for thread " + argv[2] + "\\n");
+  if (argv[2].startsWith("beef")) { process.stdout.write("Queue accepted\\n"); process.exit(0); }
+  process.stdout.write("Queued message " + require("node:crypto").randomUUID() + " for thread " + argv[2] + ".\\n");
   process.exit(0);
 }
 const prompt = argv[argv.length - 1] === "-" ? stdin : argv[argv.length - 1];

@@ -184,7 +184,28 @@ at each host separately. Claude uses its existing path without changes.
 
 ## Accepted-message delivery progress
 
-Codex interactive wake uses the public persistent `codex queue` producer for an authorized original Desktop or Terminal session. The existing owner consumes the queued pointer; the producer never resumes the thread or marks its inbox delivered. `node/codex-queue.mts` retains authorization, kill switch, permissions, depth, budget and the per-message attempt ledger. A marked TUI with unknown reachability still cannot obtain a queue attempt from the automatic app grant. `node/codex-queue-run.mts` carries only a compact Codex-specific hint, leaving shared Claude wake text unchanged. Windows original-Desktop consumption is measured on CLI 0.160.1 and Desktop embedded CLI 0.162.0-alpha.17.2; Mac acceptance remains open (issue #367).
+Codex interactive wake uses the public persistent `codex queue` producer for an authorized original Desktop or Terminal session. The existing owner consumes the queued pointer; the producer never resumes the thread or marks its inbox delivered. `node/codex-queue.mts` retains authorization, kill switch, permissions, depth, budget and the per-message attempt ledger. A marked TUI with unknown reachability still cannot obtain a queue attempt from the automatic app grant. `node/codex-queue-run.mts` carries only a compact Codex-specific hint, leaving shared Claude wake text unchanged. Original-owner Desktop intake is verified on Windows and macOS; active-turn and remaining fallback-cleanup acceptance evidence is recorded in issue #374.
+
+A successful queue process captures bounded stdout. One exact owner and queue-id
+success line persists a capped `node/codex-queue-binding.mts` record with the
+complete admission, full public native input and producer executable and launcher
+real paths and SHA-256 identities, route and Codex home. Success without this
+proof remains admitted but cannot authorize cleanup. The Codex-only normal Stop
+wrapper first executes the unchanged synchronous delivery confirmation, then
+loads `node/codex-native-queue.mts`.
+On one bounded public app-server connection, `node/codex-queue-cleanup.mts`
+requires every bound Inbox record to remain delivered to the owner, a complete
+paginated exact-id and full-input match, an exact delete, and a complete
+post-delete absence read before closing the binding. A complete pre-delete
+absence also closes it. Incomplete reads, route or binary drift, timeouts and
+errors retain the binding. The cleanup excludes known remote, executor,
+workload-identity, alternate SQLite-home and environment-selected routes from
+environment marker presence, without reading marker values or private
+configuration; producer and hook working directories may differ. Script and npm
+launchers are conservatively excluded; only a directly launched native
+executable with the recorded byte identity is eligible. This local best-effort
+positive match proves ownership of the queue operation, not an atomic lock
+against dispatch by the existing owner.
 
 Read-only `node/msg-inbox.mts` inspection resolves the caller's verified session references against both the current inbox target and the retained original `closedTo` address after fallback handover. It exposes the current destination and available delivery task/session identifiers. Hook delivery and `--receive` continue matching the current target exclusively, so inspection does not create a second delivery owner.
 

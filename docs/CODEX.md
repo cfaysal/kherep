@@ -116,6 +116,44 @@ With `codexApp: true` the list may be empty or absent. Any non-boolean value tur
 
 An eligible Desktop or Terminal session receives `codex queue --thread <full id> --message "Kherep: <n> peer message(s) waiting in your inbox."`. The existing runtime consumes the persistent queue; the producer never resumes its thread. Peer text stays in the original inbox until trusted `UserPromptSubmit`, `Stop` or explicit receive processing offers it. Only the existing confirming turn or threaded-reply path confirms delivery. Even with `messaging.resumeClosed: true`, this path does not redirect the message to an intercom task. A successful queue command alone is not a wake or delivery confirmation. An unloaded owner may leave the input pending.
 
+The producer captures at most 8 KiB of successful queue stdout. Exactly one
+`Queued message <id> for thread <owner>.` line for the intended owner creates a
+bounded, atomic cleanup binding. A successful command without that exact proof
+remains admitted and is never retried, but has no cleanup binding. Each binding
+records the exact queue id, complete admission message IDs, full native input,
+and the executable and launcher real paths and SHA-256 identities with the Codex
+home. Binding storage is capped. A full or failed store does not change queue
+success or erase another binding.
+
+After the normal Codex `Stop` hook has run the existing delivery confirmation,
+the wrapper awaits a bounded cleanup attempt for that owner. It uses one public
+stdio app-server connection and only the paginated `thread/queue/list` and exact
+`thread/queue/delete` methods. Every admitted Inbox record must still be directed
+to that owner and delivered. The current executable, launcher and Codex home
+must match the producer; a different hook working directory is allowed. Remote,
+executor, workload-identity, alternate SQLite-home and environment-selected
+routes are excluded. Marker presence excludes cleanup even when its value is
+empty; marker values and private configuration are never read or logged.
+Cleanup is also limited to a directly launched native executable whose bytes
+match the stored identity. npm and script launchers retain the fallback queue.
+Deletion requires one exact queue id whose complete structured input matches,
+then a complete post-delete listing must prove that id absent. A complete first
+listing that already proves exact absence closes the binding without a delete.
+Partial reads, errors, timeouts, false responses, identity drift and changed
+records retain the binding and do not alter receipts or submit another queue.
+Foreign queue cards are never selected by text or time.
+
+This is a bounded local best-effort operation. An exact hit proves ownership of
+this queue operation only. The public API has no cross-process lock that can
+prevent the owner from dispatching the pointer between list and delete. Starting
+the app server can also initialize its normal configuration, authentication and
+cloud services, so this cleanup makes no broader filesystem-side-effect claim.
+Each host requires native acceptance with the installed producer and Stop
+wrapper: verify the newly admitted exact queue ID, complete delivery, its
+subsequent absence and no redundant follow-up turn. A separate script-wrapper
+probe does not establish the running daemon's route or cleanup capability.
+Runtime acceptance evidence is tracked in issue #374.
+
 Each synchronous Codex queue round reads, parses and indexes the full Inbox once after it has found eligible non-task owners. Before it applies the queue guards, a decision rereads only the indexed message records for that owner's full id and aliases. Its existing attempt-ledger cleanup may still list Inbox filenames per owner, but it does not reparse unrelated records. A record already deleted, consumed or readdressed at that targeted read is excluded. This read is not an atomic lock against a later change during the same decision. Messages that arrive after the snapshot remain for the next eligible round. The index is discarded at the end of the round.
 
 After successful original-owner queue admission, a bounded metadata ticket allows
