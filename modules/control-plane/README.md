@@ -21,6 +21,8 @@ trusted Codex or Claude hook --> node --> prior intent with actual source sessio
 native HTTP claim --> Registry: Codex session/thread/call, or Claude tool-use ID joined to prior intent
 new native caller --> node sessions.snapshot --> Registry --> subsequent native intent registration
 held Codex task intake --> bounded peer window --> known Codex inbox --> existing queue lane
+successful original-owner Codex queue --> bounded metadata ticket --> serialized claim storage
+trusted original-owner PostToolUse --> targeted ticket validation --> short hint --> existing Inbox receive
 ```
 
 While a Codex task intake waits, a bounded window keeps receipts, sender status,
@@ -30,6 +32,18 @@ remain excluded. Commands, Claude delivery admission, new native intents and
 authentication/reconnect stay on the original lane. Policy drift, unreadable or
 missing policy, socket replacement and stop close this window. Already admitted
 queue work retains its existing completion semantics. See [architecture](ARCHITECTURE.md).
+
+The successful Codex queue path also publishes a bounded local metadata ticket
+after rechecking policy, permissions, selected record addresses and depth.
+Tickets carry at most eight message references and no peer content. Storage
+serializes publication and claims; neither operation offers a message or creates
+a delivery/read receipt. The Codex installer also projects an independent native
+PostToolUse consumer for tool boundaries. It verifies the original owner and
+excludes child agents before accessing storage, then validates only admitted IDs
+against fresh policy and current records. One claimed generation emits one short
+hint; the existing Inbox receive and confirming turn still own delivery state.
+Actual active-turn Desktop and cross-host delivery remain separate acceptance
+gates. See [busy-turn admission](ARCHITECTURE.md#codex-busy-turn-hint-admission).
 
 | Part | Path | Role |
 | --- | --- | --- |
@@ -43,6 +57,8 @@ queue work retains its existing completion semantics. See [architecture](ARCHITE
 | Doctor | `node/doctor.mts`, `node/doctor-local.mts`, `node/doctor-host.mts`, `node/doctor-hooks.mts`, `node/daemon-state.mts` | `kherep-node doctor`: whether this host can take part, see [Doctor](#doctor) |
 | Node sessions | `node/sessions.mts` | Claude Code session discovery for `session.list` and `sessions.snapshot` |
 | Node inbox | `node/inbox.mts`, `node/policy.mts` | Messaging policy, the inbox of accepted messages and its retention |
+| Codex busy hint admission | `node/codex-busy-publish.mts`, `node/codex-busy-ticket.mts` | Successful original-owner queue admission, bounded metadata publication and serialized claim storage; no Inbox offer or receipt |
+| Codex busy hint consumer | `node/codex-busy-consume.mts`, `node/codex-hook-owner.mts` | Native original-owner PostToolUse gate, targeted current-record checks and one short hint per generation; no full Inbox scan |
 | Directory | `worker/src/directory.mts` | The `directory` frame: non-revoked nodes and their sessions |
 | Session exchange | `node/exchange.mts` | The files the daemon shares with the session tools, and the daemon's 2 second exchange round |
 | Session tools | `node/msg-cli.mts`, `node/msg-inbox.mts`, `node/msg-resolve.mts`, `node/deliver-hook.mts`, `node/wake-hook.mts` | `kherep-node msg ...`, the Claude Code delivery hook and the idle wake listener |

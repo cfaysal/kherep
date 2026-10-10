@@ -57,7 +57,7 @@ for (const windows of [false, true]) {
     const result = prepareManagedConfig(input, o);
     assert.equal(attributionCount(result.config), 2);
     assert.equal(result.managedFragment, "replaced");
-    assert.equal(deliveryCount(result.config), 3);
+    assert.equal(deliveryCount(result.config), 4);
     assert.ok(result.config.includes(tail));
 
     const beforePre = groups(input, "PreToolUse");
@@ -76,12 +76,14 @@ for (const windows of [false, true]) {
     ["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"].forEach((name, index) => {
       assert.match(beforePost[0]![index + 1]!, new RegExp(`${name}\\.mts`));
     });
-    assert.equal(afterPost.length, 2);
+    assert.equal(afterPost.length, 3);
     assert.equal(afterPost[0]![0], beforePost[0]![0], "the edit group keeps its position and matcher");
     assert.equal(afterPost[0]!.length, 2, "one dispatcher replaces the four watcher entries");
     assert.deepEqual(afterPost[0], groups(render({ ...o, mcpServers: [], controlPlaneHook: undefined }), "PostToolUse")[0]);
-    assert.ok(afterPost.at(-1)![0]!.includes(JSON.stringify(SHELL)));
-    assert.match(afterPost.at(-1)!.at(-1)!, /attribution-hook\.mts/);
+    assert.ok(afterPost[1]![0]!.includes(JSON.stringify(SHELL)));
+    assert.match(afterPost[1]!.at(-1)!, /attribution-hook\.mts/);
+    assert.match(afterPost[2]![0]!, /matcher = "\.\*"/);
+    assert.match(afterPost[2]![1]!, /deliver-hook\.mts/);
     assert.equal(prepareManagedConfig(result.config, o).config, result.config);
   });
 
@@ -93,7 +95,7 @@ for (const windows of [false, true]) {
     ]) {
       const changed = prepareManagedConfig(upgraded, next).config;
       assert.equal(attributionCount(changed), 2);
-      assert.equal(deliveryCount(changed), 3);
+      assert.equal(deliveryCount(changed), 4);
       assert.ok(changed.includes(tail));
       assert.equal(prepareManagedConfig(changed, next).config, changed);
       const restored = prepareManagedConfig(changed, o).config;

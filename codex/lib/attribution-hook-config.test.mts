@@ -57,14 +57,15 @@ test("the attribution hook ends the shell PreToolUse group and a new last PostTo
     for (const watcher of ["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"]) {
       assert.match(predecessorGroups[0]!.join("\n"), new RegExp(`${watcher}\\.mts`));
     }
-    assert.equal(postGroups.length, attributedPredecessorGroups.length, "the dispatcher does not move the attribution group");
+    assert.equal(postGroups.length, attributedPredecessorGroups.length + 1, "busy delivery adds one trailing PostToolUse group");
     assert.equal(postGroups[0]!.length, 2, "the current group zero has one dispatcher entry");
     assert.match(postGroups[0]![1]!, /codex-post-edit-checks\.mts/);
-    const last = postGroups.at(-1)!;
+    const last = postGroups[1]!;
     assert.deepEqual(last, attributedPredecessorGroups.at(-1), "attribution remains group one, entry zero");
     assert.equal(last.length, 2, "one hook in the new group");
     assert.equal(last[0], `[[hooks.PostToolUse]]\n${SHELL_MATCHER}`);
     assert.match(last[1]!, ATTRIBUTION);
+    assert.match(postGroups[2]![1]!, /deliver-hook\.mts/);
     assert.doesNotMatch(previous, /attribution-hook/);
   }
 });

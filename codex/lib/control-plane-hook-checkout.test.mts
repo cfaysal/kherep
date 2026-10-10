@@ -46,12 +46,12 @@ for (const withMcp of [true, false]) {
     test(`an install from another checkout replaces the deliver hooks (${withMcp ? "with" : "without"} MCP, ${windowsHookCommands ? "with" : "before"} Windows commands)`, () => {
       const current = prepareManagedConfig("", A).config;
       const written = current.replace(render(renderA).trim(), render({ ...renderA, windowsHookCommands }).trim());
-      assert.equal(deliverCommands(written).length, 3);
+      assert.equal(deliverCommands(written).length, 4);
 
       const result = prepareManagedConfig(written, B);
 
       const commands = deliverCommands(result.config);
-      assert.equal(commands.length, 3);
+      assert.equal(commands.length, 4);
       for (const command of commands) assert.ok(command.includes(`"${B.controlPlaneHook}"`));
       assert.equal(result.managedFragment, "replaced");
       assert.equal(result.config, prepareManagedConfig("", B).config);
@@ -67,7 +67,7 @@ test("an install from another POSIX checkout replaces the deliver hooks", () => 
   const result = prepareManagedConfig(written, posix("/tmp/kherep-worktree"));
 
   assert.deepEqual(new Set(deliverCommands(result.config).map((command) => command.split('" "')[1])), new Set(["/tmp/kherep-worktree/modules/control-plane/node/deliver-hook.mts"]));
-  assert.equal(deliverCommands(result.config).length, 3);
+  assert.equal(deliverCommands(result.config).length, 4);
   assert.equal(result.managedFragment, "replaced");
 });
 
@@ -79,13 +79,13 @@ const fragmentB = render(renderB).trim();
 
 const TRUST = ["[hooks.state]", "", '[hooks.state."fixture:stop:0:0"]', 'trusted_hash = "sha256:fixture"', ""].join("\n");
 
-// The three deliver-hook groups of a rendered fragment. Only the SubagentStop
-// group (issue #326) follows them, and it is no deliver group.
+// The three legacy intake groups, excluding the separate busy consumer.
 function deliverGroups(rendered: string): string {
   const hooks = rendered.trim().split("\n\n[mcp_servers.")[0];
   const start = hooks.lastIndexOf("[[hooks.SessionStart]]", hooks.indexOf("deliver-hook.mts"));
-  const end = hooks.indexOf("\n\n[[hooks.SubagentStop]]", start);
-  return hooks.slice(start, end < 0 ? undefined : end);
+  const end = hooks.indexOf('\n\n[[hooks.PostToolUse]]\nmatcher = ".*"', start);
+  const fallback = hooks.indexOf("\n\n[[hooks.SubagentStop]]", start);
+  return hooks.slice(start, end >= 0 ? end : fallback < 0 ? undefined : fallback);
 }
 
 function deliverEvents(config: string): string[] {
@@ -104,11 +104,11 @@ for (const [origin, surplus] of [["another checkout", renderA], ["the same check
         const block = place === "hooks" ? fragment.replace(own, `${own}\n\n${extra}`) : `${fragment}\n\n${extra}`;
         const written = prepareManagedConfig("", B).config
           .replace(`${fragmentB}\n`, `${block}\n${trust ? `\n${TRUST}` : ""}`);
-        assert.equal(deliverCommands(written).length, 6);
+        assert.equal(deliverCommands(written).length, 7);
 
         const result = prepareManagedConfig(written, B);
 
-        assert.deepEqual(deliverEvents(result.config), ["SessionStart", "UserPromptSubmit", "Stop"]);
+        assert.deepEqual(deliverEvents(result.config), ["SessionStart", "UserPromptSubmit", "Stop", "PostToolUse"]);
         for (const command of deliverCommands(result.config)) assert.ok(command.includes(`"${B.controlPlaneHook}"`));
         const fresh = prepareManagedConfig("", B).config;
         assert.equal(result.config, trust ? fresh.replace(`${fragmentB}\n`, `${fragmentB}\n\n${TRUST}`) : fresh);
@@ -130,7 +130,7 @@ test("deliver hooks outside the managed block and mixed groups are left alone", 
 
   assert.ok(config.endsWith(`${END}\n\n${outside}\n`));
   assert.ok(config.includes(mixed));
-  assert.equal(deliverCommands(config).length, 7);
+  assert.equal(deliverCommands(config).length, 8);
 });
 
 test("exact external delivery groups remain the single owner during a managed predecessor upgrade", () => {
@@ -148,8 +148,8 @@ test("exact external delivery groups remain the single owner during a managed pr
 
   const result = prepareManagedConfig(written, B);
 
-  assert.deepEqual(deliverEvents(result.config), ["SessionStart", "UserPromptSubmit", "Stop"]);
-  assert.equal(deliverCommands(result.config).length, 3);
+  assert.deepEqual(deliverEvents(result.config), ["PostToolUse", "SessionStart", "UserPromptSubmit", "Stop"]);
+  assert.equal(deliverCommands(result.config).length, 4);
   assert.ok(result.config.endsWith(`\n\n${operatorTail}\n`));
   assert.equal(prepareManagedConfig(result.config, B).config, result.config);
 });
@@ -160,7 +160,7 @@ test("an install from another checkout keeps the Codex trust tables", () => {
 
   const result = prepareManagedConfig(written, B);
 
-  assert.equal(deliverCommands(result.config).length, 3);
+  assert.equal(deliverCommands(result.config).length, 4);
   assert.ok(result.config.includes(trust));
   assert.equal(prepareManagedConfig(result.config, B).managedFragment, "current");
 });

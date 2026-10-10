@@ -27,6 +27,8 @@ export function managedFragmentFamily(current: RenderOptions, previousStop: Rend
     { ...current, observationStopHook: undefined }].flatMap((options) => [
     parityConfig.render(options),
     parityConfig.renderWithoutNativeHooks(options),
+    parityConfig.renderBeforeBusyHint(options),
+    parityConfig.renderBeforeBusyHint({ ...options, nativeHooks: undefined }),
     parityConfig.renderBeforePostEditDispatcher(options),
     parityConfig.renderBeforePostEditDispatcher({ ...options, nativeHooks: undefined }),
     parityConfig.renderPreviousNativeHooks(options),

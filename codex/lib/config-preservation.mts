@@ -6,6 +6,7 @@ import * as managedConfig from "./managed-config.mts";
 import { repairManagedMcp } from "./mcp-config-repair.mts";
 import { recoverManagedMcpProjection } from "./mcp-operator-binding.mts";
 import * as parityConfig from "./parity-config.mts";
+import { preserveExternalPostToolPositions } from "./post-tool-trust-position.mts";
 import { recognizeHistoricalManagedConfig } from "./historical-managed-artifacts.mts";
 import { configureMemoryNotify } from "./memory-provider.mts";
 import { reanchorSplitManagedBlock, UnknownManagedFragmentError } from "./managed-block-split.mts";
@@ -203,16 +204,21 @@ function reportedValue(raw: string): string {
 }
 
 export function prepareManagedConfig(config: string, options: ManagedConfigOptions) {
+  let baseline = config;
+  let result: ReturnType<typeof prepareAnchoredConfig>;
   try {
-    return prepareAnchoredConfig(config, options);
+    result = prepareAnchoredConfig(config, options);
   } catch (error) {
     // Issue #274. A block the Codex app split around its trust tables is matched
     // again once the split is undone; any other unknown block still refuses.
     if (!(error instanceof UnknownManagedFragmentError)) throw error;
     const anchored = reanchorSplitManagedBlock(config, options.startMarker, options.endMarker, error.knownFragments);
     if (!anchored) throw error;
-    return { ...prepareAnchoredConfig(anchored, options), managedFragment: "replaced" as const };
+    baseline = anchored;
+    result = { ...prepareAnchoredConfig(anchored, options), managedFragment: "replaced" as const };
   }
+  preserveExternalPostToolPositions(baseline, result.config, options.startMarker, options.endMarker);
+  return result;
 }
 
 function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
@@ -295,6 +301,7 @@ function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
         ? [value, { ...value, messagingClient: { ...value.messagingClient, enabled: !value.messagingClient.enabled } }]
         : [value])
       .flatMap((value) => value.controlPlaneHook ? [value, { ...value, omitDeliveryHooks: true }] : [value])
+      .flatMap((value) => [value, { ...value, windowsHookCommands: false }])
       .map((value) => ({ ...value, pluginMcpServers: plugins }));
     const beforeControlPlaneWindowsVariants = currentVariants
       .map((value) => ({ ...value, controlPlaneHook: undefined }));

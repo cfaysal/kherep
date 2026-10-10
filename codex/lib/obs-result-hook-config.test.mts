@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { prepareManagedConfig } from "./config-preservation.mts";
 import * as parityConfigApi from "./parity-config.mts";
 import {
-  render, renderBeforeAttributionHook, renderBeforeHookIntegrity, renderBeforeMainCheckoutGuard,
+  renderBeforeBusyHint, renderBeforeAttributionHook, renderBeforeHookIntegrity, renderBeforeMainCheckoutGuard,
   renderBeforePostLegacyHooks, renderBeforeResearchHooks, renderLegacyJavaScript, renderPreviousNativeHooks,
   renderPreviousNudges,
 } from "./parity-config.mts";
@@ -14,7 +14,7 @@ import {
 // keys are <file>:<event>:<group>:<entry>, so no existing key moves. Read
 // through the module namespace: the renderers are new, and a missing export
 // must fail these tests, not the file.
-type Render = (options: Parameters<typeof render>[0]) => string;
+type Render = (options: Parameters<typeof renderBeforeBusyHint>[0]) => string;
 const renderBeforeObsResultCheck = Reflect.get(parityConfigApi, "renderBeforeObsResultCheck") as Render | undefined;
 const renderBeforeObsResultCheckWithoutNativeHooks =
   Reflect.get(parityConfigApi, "renderBeforeObsResultCheckWithoutNativeHooks") as Render | undefined;
@@ -38,7 +38,7 @@ function hookGroups(config: string): string[][] {
 test("the obs-result check is one trailing SubagentStop group and moves no other entry", () => {
   assert.equal(typeof renderBeforeObsResultCheck, "function");
   for (const options of [base, native, { ...base, controlPlaneHook: undefined }]) {
-    const current = hookGroups(render(options));
+    const current = hookGroups(renderBeforeBusyHint(options));
     const previous = hookGroups(renderBeforeObsResultCheck!(options));
     assert.equal(current.length, previous.length + 1);
     previous.forEach((group, index) => {

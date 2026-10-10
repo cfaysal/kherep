@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { prepareManagedConfig, type ManagedConfigOptions } from "./config-preservation.mts";
 import * as parityConfig from "./parity-config.mts";
 import {
-  command, hookGroup, render, renderHooks, type HookSpec, type RenderOptions,
+  command, hookGroup, renderBeforeBusyHint, renderHooks, type HookSpec, type RenderOptions,
 } from "./parity-config.mts";
 
 const START = "# >>> Kherep Codex Maestro >>>";
@@ -130,7 +130,7 @@ test("freezes the exact four-watcher predecessor group and changes no other rend
     );
     assert.equal((oldGroup.match(/commandWindows = /g) || []).length, options.windowsHookCommands === false ? 0 : 4);
 
-    const current = render(options);
+    const current = renderBeforeBusyHint(options);
     const currentGroup = groups(current, "PostToolUse")[0]!;
     assert.equal(old, current.replace(currentGroup, oldGroup));
   }
@@ -160,7 +160,9 @@ test("upgrades exact POSIX and Windows predecessors without minting or rewriting
       'command = "operator-hook"',
       "timeout = 11",
     ].join("\n");
-    const input = [START, old, insideTrust, END, outsideTrust, custom, ""].join("\n");
+    assert.throws(() => prepareManagedConfig([START, old, insideTrust, END, outsideTrust, custom, ""].join("\n"),
+      managed(options)), /external PostToolUse.*position/);
+    const input = [outsideTrust, custom, START, old, insideTrust, END, ""].join("\n");
 
     const upgraded = prepareManagedConfig(input, managed(options));
     assert.equal(upgraded.managedFragment, "replaced");

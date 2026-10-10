@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 import { mayContinue } from "./autonomy.mts";
+import { consumeBusyHint } from "./codex-busy-consume.mts";
 import { codexSessionRefs, isCodexSessionId, recordCodexSession } from "./codex-sessions.mts";
 import { confirmOffered, contextOutput, deliveryContext, sessionInbox, type HookDeps } from "./deliver-core.mts";
 import { cliCommand } from "./msg-cli.mts";
@@ -48,6 +49,7 @@ export const CODEX_ESCALATION_NOTE = "Run the msg command on its own, not in a p
 export function deliverForCodex(input: unknown, deps: HookDeps): string {
   if (typeof input !== "object" || input === null) return "";
   const { hook_event_name: event, session_id: sessionId, cwd, stop_hook_active: continued, permission_mode: mode } = input as Record<string, unknown>;
+  if (event === "PostToolUse") return consumeBusyHint(input, deps);
   if (event !== "SessionStart" && event !== "UserPromptSubmit" && event !== "Stop") return "";
   if (!isCodexSessionId(sessionId) || !fs.existsSync(deps.paths.config)) return "";
   recordCodexSession(deps.paths, sessionId, cwd, deps.now?.(), mode);

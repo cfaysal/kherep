@@ -40,6 +40,20 @@ The installer copies the dispatcher, its literal classifier, the existing hook a
 
 ## Quiet peer-message feedback
 
+The installer also projects an independent native `PostToolUse` delivery group
+for busy original-owner turns. A successful authorized queue submission publishes
+a bounded metadata ticket; the native owner gate excludes children before local
+storage reads, and fresh policy plus at most eight current records control its
+claim. A persisted claim emits one compact developer-context hint. No peer body,
+path or receive command appears in it. Existing receive/confirmation paths still
+own offers and receipts; the persistent queue remains the fallback without a tool
+boundary or on a quiet failure. See the [Control Plane contract](../modules/control-plane/ARCHITECTURE.md#codex-busy-turn-hint-admission).
+
+Exact predecessor renders retain their bytes. The upgrade checks external
+PostToolUse group positions after verified managed-tail reanchoring and refuses
+an index shift before writes. It never generates trust hashes. Each host must
+review the new native definition and establish actual active-turn acceptance.
+
 The Codex delivery adapter supplies the exact session-bound receive recipe at SessionStart and every UserPromptSubmit, including empty and foreign-only inboxes. Recipe bytes share the existing bounded developer context with framed peer content. SessionStart recipe output alone does not offer a message. The Stop reason is one fixed short cue, without CLI commands, paths, identifiers, escalation text or peer content. Explicit receive and the following confirming turn retain the existing accepted, offered and delivered transitions; continuation, permission and budget guards are unchanged.
 
 Receive context and short Stop presentation are pinned as separate A/B source artifacts. Updating a checkout referenced by a live hook can change its behavior without an installer. Before stage B is activated, every affected running owner must cross an actual stage-A context boundary and finish any pre-A turn. Source merge and component tests do not establish that target cutover. See the [existing-owner acceptance plan](../docs/superpowers/plans/2026-10-10-codex-quiet-owner-cutover.md).

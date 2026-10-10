@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { bypassesPermissions, isPlainSessionId, listenerDir, takeTurn, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
 import { codexHome, currentCodexApp } from "./codex-app.mts";
+import { captureBusyHint, publishAdmittedBusyHint } from "./codex-busy-publish.mts";
 import { daemonSocket, loadedThreads, probesSettled, tuiMarker, tuiReachability } from "./codex-daemon.mts";
 import { codexInboxRound, type CodexInboxSelector } from "./codex-queue-inbox.mts";
 import { codexSessionRefs, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
@@ -189,9 +190,15 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], selectInb
     { queued: { ...queued, ...Object.fromEntries(due.map((r) => [r.messageId, new Date(now).toISOString()])) } });
   progressRecords(paths, due, "waking", "wake-pending", now);
   const args = queueArgs(sessionId, due.length);
+  const busyHint = captureBusyHint(deps, sessionId, due, now);
   inFlight.add(sessionId);
   lane = lane.then(() => runQueue(deps, args)).then(
-    () => decide(due, "wake"),
+    () => {
+      if (busyHint && publishAdmittedBusyHint(deps, busyHint) === "failed") {
+        log("kherep-node: Codex busy hint persistence failed; native queue remains accepted");
+      }
+      decide(due, "wake");
+    },
     (error: unknown) => {
       progressRecords(paths, due, "failed", "wake-failed", deps.now?.() ?? Date.now());
       decide(due, "queue-failed");

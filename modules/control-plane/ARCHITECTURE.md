@@ -141,6 +141,47 @@ Session `updated_at` is the last metadata change, while directory `fetchedAt`
 records response freshness. A duplicate sequenced node frame may advance its
 cumulative acknowledgement, but it does not refresh liveness or dispatch again.
 
+## Codex busy-turn hint admission
+
+After the existing queue guards and budget decision, `node/codex-busy-publish.mts`
+copies at most eight admitted message ID/address pairs and binds them to the
+exact owner, a generation, time and applied-policy fingerprint. Only actual
+`runQueue` success can publish that ticket. The success continuation rereads
+required policy, checks the kill switch and permission mode, and reads only the
+selected current message records. Consumed, removed, readdressed, excessive-depth
+or newly ambiguous alias records are excluded. Later arrivals are not added to
+that admission. The existing `codexApp` selection grants admission to its exact
+owner; a later app-session selection does not retarget accepted queue work.
+
+`node/codex-busy-ticket.mts` retains one versioned record per owner. Exclusive
+owner locks serialize publication and claims without stealing old locks. A
+generation is immutable; only a strictly newer admission can replace the retained
+high-watermark. Policy/time checks precede bounded current-record validation, and
+the claim is persisted atomically before a hint can be returned. Failed reads,
+lock contention and metadata write failures produce no hint. They neither alter
+successful native queue admission nor authorize a second queue attempt.
+
+Tickets contain no peer bodies or command recipes. Publication and storage do
+not offer Inbox messages, alter receipts or spend another autonomous-turn budget.
+`node/codex-busy-consume.mts` handles native PostToolUse before ordinary session
+recording or alias discovery. `node/codex-hook-owner.mts` requires matching native
+session/transcript identities and absent child-agent fields, without opening the
+transcript. The consumer requires enrollment, fresh authorized policy, an unset
+kill switch and permitted current permission mode. It rereads at most the eight
+admitted message records; it does not scan Inbox or select another app owner.
+
+A durable claim emits one compact additionalContext hint, containing no bodies,
+IDs, paths or command recipe. The session then uses its existing receive context;
+only existing receive/confirmation paths change message delivery state. Failure,
+contention or interruption retains the existing persistent-queue fallback. A turn
+without another tool boundary cannot consume this hint during reasoning alone.
+
+The Codex installer appends an independent PostToolUse group. Exact pre-busy
+renderers retain their historical bytes. Automatic migration refuses to shift an
+external PostToolUse group's positional trust key and never creates trust hashes.
+Native review, activation and active-turn cross-host acceptance must be measured
+at each host separately. Claude uses its existing path without changes.
+
 ## Accepted-message delivery progress
 
 Codex interactive wake uses the public persistent `codex queue` producer for an authorized original Desktop or Terminal session. The existing owner consumes the queued pointer; the producer never resumes the thread or marks its inbox delivered. `node/codex-queue.mts` retains authorization, kill switch, permissions, depth, budget and the per-message attempt ledger. A marked TUI with unknown reachability still cannot obtain a queue attempt from the automatic app grant. `node/codex-queue-run.mts` carries only a compact Codex-specific hint, leaving shared Claude wake text unchanged. Windows original-Desktop consumption is measured on CLI 0.160.1 and Desktop embedded CLI 0.162.0-alpha.17.2; Mac acceptance remains open (issue #367).
