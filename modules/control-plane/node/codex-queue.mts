@@ -4,13 +4,14 @@ import path from "node:path";
 import { bypassesPermissions, isPlainSessionId, listenerDir, takeTurn, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
 import { codexHome, currentCodexApp } from "./codex-app.mts";
 import { daemonSocket, loadedThreads, probesSettled, tuiMarker, tuiReachability } from "./codex-daemon.mts";
+import { codexInboxRound, type CodexInboxSelector } from "./codex-queue-inbox.mts";
 import { codexSessionRefs, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { note, pruneNoted } from "./codex-wake.mts";
 import { queueArgs, runQueue } from "./codex-queue-run.mts";
 export { guardQueue, QUEUE_TIMEOUT_MS, queueArgs } from "./codex-queue-run.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { progressRecords } from "./delivery-progress.mts";
-import { REOFFER_AFTER_MS, sessionInbox } from "./deliver-core.mts";
+import { REOFFER_AFTER_MS } from "./deliver-core.mts";
 import { getMessageProgress, messageIds, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
 import type { NodePolicy } from "./policy.mts";
 import { explicitlyListed, wakeAllowed, wakeBudget } from "./policy.mts";
@@ -65,6 +66,14 @@ export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = (
     return;
   }
   const candidates = live.filter((id) => !tasks.has(id) && isPlainSessionId(id));
+  if (candidates.length === 0) return;
+  let selectInbox: CodexInboxSelector;
+  try {
+    selectInbox = codexInboxRound(deps.paths);
+  } catch (error) {
+    log(`kherep-node: could not scan Codex Inbox: ${String((error as Error).message ?? error)}`);
+    return;
+  }
   const home = deps.codex?.home ?? codexHome();
   const probe = deps.codex?.loadedThreads ?? (() => loadedThreads(daemonSocket(home), { platform: deps.codex?.platform }));
   const reachable = tuiReachability(home, probe, now);
@@ -84,25 +93,26 @@ export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = (
   };
   for (const sessionId of candidates) {
     try {
-      queueFor(deps, sessionId, live, now, log, appSession, home, reachable);
+      queueFor(deps, sessionId, live, selectInbox, now, log, appSession, home, reachable);
     } catch (error) {
       log(`kherep-node: could not wake Codex session ${sessionId}: ${String((error as Error).message ?? error)}`);
     }
   }
 }
 
-function queueFor(deps: RunnerDeps, sessionId: string, live: string[], now: number, log: (line: string) => void,
-  appSession: () => string | null, home: string, reachable: (sessionId: string) => boolean): void {
+function queueFor(deps: RunnerDeps, sessionId: string, live: string[], selectInbox: CodexInboxSelector,
+  now: number, log: (line: string) => void, appSession: () => string | null,
+  home: string, reachable: (sessionId: string) => boolean): void {
   const { paths, policy } = deps;
   // A name another live session shares addresses neither: the message waits
   // for its sender to use the full id (codex-<8> names, issue #66).
   const { refs, ambiguous } = codexSessionRefs(paths, sessionId, now, live);
-  const shared = sessionInbox(paths, ambiguous).filter((r) => r.state === "accepted");
+  const shared = selectInbox(ambiguous).filter((r) => r.state === "accepted");
   if (shared.length > 0) {
     progressRecords(paths, shared, "waiting", "ambiguous-target", now);
     note(paths, now, sessionId, shared.map((r) => r.messageId), "ambiguous-name");
   }
-  const mine = sessionInbox(paths, refs);
+  const mine = selectInbox(refs);
   if (inFlight.has(sessionId)) return;
   progressRecords(paths, mine.filter((record) => record.state === "offered"
     && getMessageProgress(paths.inbox, record.messageId)?.phase !== "failed"),
