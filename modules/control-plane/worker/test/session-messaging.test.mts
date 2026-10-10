@@ -74,7 +74,12 @@ describe("session messaging across two nodes", () => {
     if (runtime === "codex") {
       writeConfig(pathsB.config, { version: 1, controlUrl: "https://control.example.com", nodeId: b.nodeId, name: bName,
         publicKey: "test", privateKeyFile: pathsB.privateKey, policyFile: pathsB.policy, enrolledAt: new Date().toISOString() });
-      expect(codexHook("UserPromptSubmit")).toBe("");
+      const prompt = JSON.parse(codexHook("UserPromptSubmit"));
+      expect(prompt).toMatchObject({ hookSpecificOutput: {
+        hookEventName: "UserPromptSubmit",
+        additionalContext: expect.stringContaining("msg inbox --from s-b --receive"),
+      } });
+      expect(prompt.hookSpecificOutput.additionalContext).not.toContain("please check the build");
     }
     await vi.waitFor(() => expect(readDirectory(pathsA)?.sessions)
       .toEqual(expect.arrayContaining([expect.objectContaining({ nodeId: b.nodeId, name: "review" })])), WAIT);
@@ -100,8 +105,9 @@ describe("session messaging across two nodes", () => {
     let context: string;
     if (runtime === "codex") {
       const continuation = JSON.parse(codexHook("Stop"));
-      expect(continuation.reason).toContain("msg inbox --from s-b --receive");
-      expect(continuation.reason).not.toContain("please check the build");
+      expect(continuation).toEqual({ decision: "block",
+        reason: "Kherep: New peer messages are waiting. Check this session's inbox and report any relevant update.",
+      });
       const received: string[] = [], errors: string[] = [];
       const code = await runMsgArgs({ positionals: ["inbox"], values: { from: "s-b", receive: true } },
         { paths: pathsB, env: {}, out: line => received.push(line), err: line => errors.push(line) });
