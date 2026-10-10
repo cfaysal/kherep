@@ -29,7 +29,8 @@ test("real hook stdout is compact; only the owner's Receive and existing Stop of
   const { hook, receive } = commands(node);
   const hinted = hook(node.input);
   assert.equal(hinted.status, 0, hinted.stderr);
-  assert.equal(hinted.stderr, "");
+  // Node 24.1 emits this runtime warning before running the hook's .mts source.
+  assert.match(hinted.stderr, /^(?:\(node:\d+\) ExperimentalWarning: Type Stripping is an experimental feature and might change at any time\r?\n\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)\r?\n)?$/);
   assert.deepEqual(JSON.parse(hinted.stdout), { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: BUSY_CONTEXT } });
   assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "accepted");
   const received = receive();
