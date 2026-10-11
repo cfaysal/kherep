@@ -146,12 +146,14 @@ cumulative acknowledgement, but it does not refresh liveness or dispatch again.
 `node/codex-queue.mts` retains its existing public poll and serial-lane interface,
 but admits CP hints directly after enrollment, wake policy, kill switch, full-id
 or app grant, permissions, alias uniqueness, reply depth, task exclusion, TUI
-classification and the shared budget. It never invokes the native queue or
+classification. Hint admission creates no autonomous turn and neither checks nor
+spends the shared turn budget; actual listener wakes and Stop continuations keep
+their existing budget gates. It never invokes the native queue or
 creates a queue binding. Composer Queue/Steer preferences are independent.
 
 ```mermaid
 flowchart LR
-  accepted[CP Inbox accepted] --> admission[Guarded and budgeted CP admission]
+  accepted[CP Inbox accepted] --> admission[Guarded CP admission]
   admission --> ticket[Bounded immutable hint ticket]
   ticket --> hook[Originalowner PostToolUse additionalContext]
   hook --> receive[Actual Receive: returned messages offered]
@@ -167,11 +169,11 @@ app selection does not retarget it.
 
 `node/codex-busy-admission.mts` keeps separate CP metadata. A successful publication
 suppresses readmission for `REOFFER_AFTER_MS`, then still-accepted messages require
-fresh guards and budget. Publication failure or contention retries the same
-budgeted generation during its TTL and unchanged policy on existing polls. Policy
+fresh guards. Publication failure or contention retries the same
+authorized generation during its TTL and unchanged policy on existing polls. Policy
 drift or expiry invalidates retry. Restart can recover valid CP metadata; losing
-it requires a new budgeted admission. Native `.queued.json`, bindings and cards
-are neither read as CP success nor changed. Progress uses existing waiting codes:
+it requires a fresh authorized admission. These hint paths never book a real turn.
+Native `.queued.json`, bindings and cards are neither read as CP success nor changed. Progress uses existing waiting codes:
 `awaiting-user-turn`, `retry-pending` or, after actual offer,
 `awaiting-turn-confirmation`. No turn-start claim or new wire code is introduced.
 

@@ -4,7 +4,7 @@ import path from "node:path";
 import { isSessionRef } from "../protocol-messages.mts";
 import { CODEX_ACTIVE_MS } from "./codex-sessions.mts";
 
-// Busy-hint storage for issue #374. Only a budgeted, authorized original-owner
+// Busy-hint storage for issue #374. Only an authorized original-owner
 // CP admission may publish. This module never reads, offers or confirms Inbox
 // messages. The consumer claims metadata only, before returning a short hint.
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

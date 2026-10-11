@@ -56,7 +56,7 @@ test("a Desktop queue keeps the original mailbox and only that chat's hook confi
     assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, "awaiting-user-turn");
     assert.equal(node.launches(), 0, "the public queue producer runs without resuming the thread");
     assert.deepEqual(listTasks(node.paths), []);
-    assert.equal(takeTurn(node.paths, APP, T0), "spacing", "queue admission consumes the shared turn budget");
+    assert.equal(takeTurn(node.paths, APP, T0), "ok", "CP hint admission leaves the shared turn budget untouched");
     const input = { session_id: APP, cwd: node.workspace, permission_mode: "default" };
     const output = JSON.parse(deliverForCodex({ ...input, hook_event_name: "UserPromptSubmit" }, {
       paths: node.paths, now: () => T0 + 1000,

@@ -3,11 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
+import { listenerDir, takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
 import { planAppDelivery, startAppDelivery } from "./codex-app-delivery.mts";
 import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { SCRIPT, waitFor, type FakeRun } from "./codex-fixture.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
+import { deliverForCodex } from "./deliver-codex.mts";
 import { getMessage, getMessageProgress, messageIds, storeMessage } from "./inbox.mts";
 import { loadPolicy } from "./policy.mts";
 import { T0, taskNode } from "./task-fixture.mts";
@@ -107,11 +108,11 @@ test("an explicit alternate intercom requires sessions authority and process cap
 });
 
 
-test("Desktop CP admission preserves wake guards and budget without starting a task or using its working directory", async (t) => {
+test("Desktop CP admission preserves wake guards and leaves turn budget untouched without starting a task", async (t) => {
   const cases: { expected: string; mode?: string | null; cwd?: "outside" | "unknown"; exhaustBudget?: boolean }[] = [
     { expected: "disabled" }, { expected: "not-allowlisted" },
     { expected: "permission-mode", mode: "bypassPermissions" }, { expected: "permission-mode-unknown", mode: null },
-    { expected: "depth-limit" }, { expected: "budget", exhaustBudget: true },
+    { expected: "depth-limit" }, { expected: "wake", exhaustBudget: true },
     { expected: "wake", cwd: "outside" }, { expected: "wake", cwd: "unknown" },
   ];
   for (const [index, item] of cases.entries()) {
@@ -137,11 +138,20 @@ test("Desktop CP admission preserves wake guards and budget without starting a t
     if (item.exhaustBudget) for (let n = 0; n < 6; n++) {
       assert.equal(takeTurn(node.paths, APP, T0 - 50 * 60_000 + n * 2 * TURN_SPACING_MS), "ok");
     }
+    const ledger = path.join(listenerDir(node.paths), `${APP}.turns.json`);
+    const turnsBefore = item.exhaustBudget ? fs.readFileSync(ledger) : undefined;
     pollCodexQueue({ ...node.deps(), policy: loadPolicy(node.paths.policy), codex: { findCodex: () => null, home } });
     await codexQueueIdle();
     assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted", expected);
     assert.equal(listTasks(node.paths).length, 0, expected);
-    if (expected === "budget") assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "budget-exhausted");
+    if (turnsBefore) {
+      assert.deepEqual(fs.readFileSync(ledger), turnsBefore);
+      assert.equal(deliverForCodex({ hook_event_name: "Stop", session_id: APP,
+        permission_mode: "default", stop_hook_active: false }, { paths: node.paths, now: () => T0 }), "",
+      "budget-exhausted: the same real-turn ledger still denies a genuine Desktop Stop continuation");
+      assert.deepEqual(fs.readFileSync(ledger), turnsBefore);
+      assert.match(fs.readFileSync(path.join(node.paths.dir, "wake.jsonl"), "utf8"), /"action":"continue-budget"/);
+    }
     if (expected === "wake") assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "awaiting-user-turn");
     const audit = fs.readFileSync(path.join(node.paths.dir, "wake.jsonl"), "utf8");
     assert.ok(audit.includes('"action":"' + expected + '"'), expected);

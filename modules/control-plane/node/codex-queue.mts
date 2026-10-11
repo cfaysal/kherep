@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import { bypassesPermissions, isPlainSessionId, takeTurn, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
+import { bypassesPermissions, isPlainSessionId, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
 import { codexHome, currentCodexApp } from "./codex-app.mts";
 import { captureBusyHint, publishAdmittedBusyHint } from "./codex-busy-publish.mts";
 import { readBusyAdmission, saveBusyAdmission, type BusyAdmission } from "./codex-busy-admission.mts";
@@ -13,7 +13,7 @@ export { guardQueue, QUEUE_TIMEOUT_MS, queueArgs } from "./codex-queue-run.mts";
 import { progressRecords } from "./delivery-progress.mts";
 import { REOFFER_AFTER_MS } from "./deliver-core.mts";
 import { getMessageProgress, MAX_REPLY_DEPTH, type InboxRecord } from "./inbox.mts";
-import { explicitlyListed, wakeAllowed, wakeBudget } from "./policy.mts";
+import { explicitlyListed, wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { listTasks } from "./task-records.mts";
 import { killSwitch } from "./wake-hook.mts";
@@ -22,6 +22,7 @@ import { killSwitch } from "./wake-hook.mts";
 // synchronous original-owner hook consumes it at a supported tool boundary;
 // no native queue, thread resume or replacement owner is started. Admission
 // and metadata claims never offer or confirm the persistent Inbox content.
+// No autonomous turn is created, so admission never spends the shared turn budget.
 // Keep the public poll/lane interface for existing intake-window callers.
 let lane: Promise<void> = Promise.resolve();
 const inFlight = new Set<string>();
@@ -145,7 +146,7 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], selectInb
   const tuiReachable = reachable(sessionId);
   // Full policy authorization does not require the owner's loaded-thread
   // probe. The automatic app grant must still wait while a marked TUI's
-  // classification is unresolved, before budget or attempt bookkeeping.
+  // classification is unresolved, before admission or attempt bookkeeping.
   if (grant === "codexApp" && fs.existsSync(tuiMarker(home, sessionId)) && !tuiReachable) {
     progressRecords(paths, due, "waiting", "awaiting-user-turn", now);
     return decide(due, "awaiting-user-turn");
@@ -159,7 +160,7 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], selectInb
     progressRecords(paths, due, "waiting", "awaiting-user-turn", now);
     return;
   }
-  // Failed publication retries the same budgeted generation. Policy/TTL drift
+  // Failed publication retries the same authorized generation. Policy/TTL drift
   // requires fresh admission; native queue history cannot authorize a retry.
   let admission: BusyAdmission;
   if (valid && previous.publishedAt === undefined
@@ -167,15 +168,6 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], selectInb
     admission = previous;
   } else {
     if (tuiReachable) decide(due, "tui-reachable");
-    const budget = takeTurn(paths, sessionId, now, wakeBudget(policy));
-    if (budget === "spacing" || budget === "locked") {
-      progressRecords(paths, due, "waiting", "retry-pending", now);
-      return;
-    }
-    if (budget === "exhausted") {
-      progressRecords(paths, due, "waiting", "budget-exhausted", now);
-      return decide(due, "budget");
-    }
     const ticket = captureBusyHint(deps, sessionId, due, now);
     if (!ticket) {
       progressRecords(paths, due, "waiting", "retry-pending", now);

@@ -11,7 +11,7 @@ import { listTasks } from "./task-records.mts";
 import { explicitlyListed, readPolicy } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 
-// Called only after the existing CP guards and budget have admitted this
+// Called only after the existing CP guards have admitted this
 // owner. Copy addresses before the asynchronous publication lane; never retarget them.
 export function captureBusyHint(deps: RunnerDeps, owner: string, due: InboxRecord[], now: number): BusyHintAdmission | null {
   try {
@@ -21,7 +21,7 @@ export function captureBusyHint(deps: RunnerDeps, owner: string, due: InboxRecor
   } catch { return null; }
 }
 
-// A budgeted CP admission is never an offer or receipt. Publication failure
+// An authorized CP admission is never an offer or receipt. Publication failure
 // leaves persistent Inbox content accepted for the next original-owner intake.
 export function publishAdmittedBusyHint(deps: RunnerDeps, ticket: BusyHintAdmission):
   ReturnType<typeof publishBusyHint> {

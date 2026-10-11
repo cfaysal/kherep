@@ -36,11 +36,20 @@ function fixture(t: test.TestContext, owner = OWNER, count = 1, toSession = owne
 
 test("CP admission publishes a bounded hint without a native queue", async (t) => {
   const node = fixture(t, OWNER, 12);
+  const directory = listenerDir(node.paths);
+  const metadata = path.join(directory, `${OWNER}.busy-admission.json`);
+  const ledger = path.join(directory, `${OWNER}.turns.json`);
+  assert.equal(fs.existsSync(directory), false, "fresh admission has no listener directory or turn ledger");
   pollCodexQueue(node.deps());
+  assert.equal(fs.existsSync(metadata), true, "admission is persistent before the publication lane runs");
+  assert.equal(JSON.parse(fs.readFileSync(metadata, "utf8")).publishedAt, undefined);
+  if (process.platform !== "win32") assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+  assert.equal(fs.existsSync(ledger), false, "synchronous CP admission creates no real-turn ledger");
   assert.equal(fs.existsSync(node.ticket), false, "publication waits for the serial lane");
   await codexQueueIdle();
 
   assert.deepEqual(node.runs(), [], "no native queue or replacement process");
+  assert.equal(fs.existsSync(ledger), false, "asynchronous hint publication creates no real-turn ledger");
   assert.equal(fs.existsSync(node.ticket), true, "CP admission publishes the original-owner hint ticket");
   const raw = fs.readFileSync(node.ticket, "utf8");
   const ticket = JSON.parse(raw) as {
@@ -159,9 +168,10 @@ test("an unchanged unique alias remains supported but an alias collision during 
   }
 });
 
-test("ticket persistence failure retries its CP admission without extra budget", async (t) => {
+test("ticket persistence failure retries its CP admission without booking a real turn", async (t) => {
   const node = fixture(t);
   pollCodexQueue(node.deps());
+  assert.equal(fs.existsSync(path.dirname(node.ticket)), true, "CP admission persists before its asynchronous publication");
   fs.writeFileSync(node.ticket, "{invalid-stored-metadata");
   await codexQueueIdle();
   assert.equal(fs.readFileSync(node.ticket, "utf8"), "{invalid-stored-metadata");

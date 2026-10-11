@@ -41,8 +41,9 @@ The installer copies the dispatcher, its literal classifier, the existing hook a
 ## Quiet peer-message feedback
 
 The installer also projects an independent synchronous native `PostToolUse`
-delivery group for busy original-owner turns. Authorized, budgeted CP admission
-publishes a bounded metadata ticket directly, without a native queue submission.
+delivery group for busy original-owner turns. Authorized CP admission
+publishes a bounded metadata ticket directly, without a native queue submission
+or spending autonomous-turn budget.
 The native owner gate excludes children before local storage reads, and fresh
 policy plus at most eight current records control its claim. A persisted claim
 emits one compact `additionalContext` hint in the original owner's running turn
