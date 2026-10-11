@@ -4,8 +4,8 @@ import path from "node:path";
 import { isSessionRef } from "../protocol-messages.mts";
 import { CODEX_ACTIVE_MS } from "./codex-sessions.mts";
 
-// Busy-hint storage for issue #374. Only a successful, authorized original-owner
-// queue admission may publish. This module never reads, offers or confirms Inbox
+// Busy-hint storage for issue #374. Only a budgeted, authorized original-owner
+// CP admission may publish. This module never reads, offers or confirms Inbox
 // messages. The consumer claims metadata only, before returning a short hint.
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const FINGERPRINT = /^[0-9a-f]{64}$/;
@@ -46,6 +46,8 @@ function admission(value: unknown): BusyHintAdmission | null {
   return { owner: value.owner, generation: value.generation, admittedAt: value.admittedAt as number,
     expiresAt: value.expiresAt as number, policyFingerprint: value.policyFingerprint, messages };
 }
+
+export const isBusyHintAdmission = (value: unknown): value is BusyHintAdmission => admission(value) !== null;
 
 function readTicket(file: string): Ticket | null {
   let fd: number;

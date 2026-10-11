@@ -6,13 +6,13 @@ The daemon retains one runtime-mutation lane. Only around its awaited
 `pollCodexInbound`, after preceding MCP polling and registration publication,
 `node/codex-intake-window.mts` admits validated message receipts, sender statuses,
 MCP intent receipts and deliveries to positively recorded full Codex IDs. Its
-serialized jobs use the real client callbacks and the existing exchange/queue
-paths. Task threads remain excluded from the queue; the queue records an attempt,
+serialized jobs use the real client callbacks and the existing exchange/CP admission
+paths. Task threads remain excluded from interactive hint admission; CP records admission,
 not an offer or delivery. Claude targets, aliases, unknown targets, commands,
 task control, MCP inbox requests and authentication remain on the original lane.
 
 The window pins the socket and the policy actually applied by the last client
-refresh, including a refresh inside MCP polling. Its queue runner copy uses that
+refresh, including a refresh inside MCP polling. Its CP admission runner copy uses that
 same policy; the existing task intake runner is not changed. A required policy
 read must still match before admission. Missing, invalid or unreadable policy,
 drift, lost authentication, socket close/replacement or daemon stop permanently
@@ -21,8 +21,8 @@ delivery on a closed socket receives no ACK and remains the Worker's obligation.
 
 The main lane drains admitted callback publication before another frame allocator
 can run. A callback already admitted may finish its response after policy drift,
-but cannot admit another queue attempt. Queue attempts already handed to the
-existing queue lane may complete after the window closes. This does not add queue
+but cannot admit another CP hint. Admissions already handed to the
+existing serial lane may complete after the window closes, with fresh guards. This does not add queue
 revocation or fix waits in authentication, new MCP-intent registration, commands
 or other daemon phases. It does not identify the cause of a particular live stall.
 
@@ -143,69 +143,61 @@ cumulative acknowledgement, but it does not refresh liveness or dispatch again.
 
 ## Codex busy-turn hint admission
 
-After the existing queue guards and budget decision, `node/codex-busy-publish.mts`
-copies at most eight admitted message ID/address pairs and binds them to the
-exact owner, a generation, time and applied-policy fingerprint. Only actual
-`runQueue` success can publish that ticket. The success continuation rereads
-required policy, checks the kill switch and permission mode, and reads only the
-selected current message records. Consumed, removed, readdressed, excessive-depth
-or newly ambiguous alias records are excluded. Later arrivals are not added to
-that admission. The existing `codexApp` selection grants admission to its exact
-owner; a later app-session selection does not retarget accepted queue work.
+`node/codex-queue.mts` retains its existing public poll and serial-lane interface,
+but admits CP hints directly after enrollment, wake policy, kill switch, full-id
+or app grant, permissions, alias uniqueness, reply depth, task exclusion, TUI
+classification and the shared budget. It never invokes the native queue or
+creates a queue binding. Composer Queue/Steer preferences are independent.
 
-`node/codex-busy-ticket.mts` retains one versioned record per owner. Exclusive
-owner locks serialize publication and claims without stealing old locks. A
-generation is immutable; only a strictly newer admission can replace the retained
-high-watermark. Policy/time checks precede bounded current-record validation, and
-the claim is persisted atomically before a hint can be returned. Failed reads,
-lock contention and metadata write failures produce no hint. They neither alter
-successful native queue admission nor authorize a second queue attempt.
+```mermaid
+flowchart LR
+  accepted[CP Inbox accepted] --> admission[Guarded and budgeted CP admission]
+  admission --> ticket[Bounded immutable hint ticket]
+  ticket --> hook[Originalowner PostToolUse additionalContext]
+  hook --> receive[Actual Receive: returned messages offered]
+  receive --> stop[Confirming Stop: delivered]
+```
 
-Tickets contain no peer bodies or command recipes. Publication and storage do
-not offer Inbox messages, alter receipts or spend another autonomous-turn budget.
-`node/codex-busy-consume.mts` handles native PostToolUse before ordinary session
-recording or alias discovery. `node/codex-hook-owner.mts` requires matching native
-session/transcript identities and absent child-agent fields, without opening the
-transcript. The consumer requires enrollment, fresh authorized policy, an unset
-kill switch and permitted current permission mode. It rereads at most the eight
-admitted message records; it does not scan Inbox or select another app owner.
+`node/codex-busy-publish.mts` captures at most eight message ID/address pairs,
+exact owner, generation, TTL and policy fingerprint. Publication rechecks required
+policy, enrollment, kill switch, permissions, task exclusion and those current
+records. Removed, consumed, readdressed, excessive-depth and ambiguous alias
+records are excluded; later arrivals cannot join an existing admission. A later
+app selection does not retarget it.
 
-A durable claim emits one compact additionalContext hint, containing no bodies,
-IDs, paths or command recipe. The session then uses its existing receive context;
-only existing receive/confirmation paths change message delivery state. Failure,
-contention or interruption retains the existing persistent-queue fallback. A turn
-without another tool boundary cannot consume this hint during reasoning alone.
+`node/codex-busy-admission.mts` keeps separate CP metadata. A successful publication
+suppresses readmission for `REOFFER_AFTER_MS`, then still-accepted messages require
+fresh guards and budget. Publication failure or contention retries the same
+budgeted generation during its TTL and unchanged policy on existing polls. Policy
+drift or expiry invalidates retry. Restart can recover valid CP metadata; losing
+it requires a new budgeted admission. Native `.queued.json`, bindings and cards
+are neither read as CP success nor changed. Progress uses existing waiting codes:
+`awaiting-user-turn`, `retry-pending` or, after actual offer,
+`awaiting-turn-confirmation`. No turn-start claim or new wire code is introduced.
 
-The Codex installer appends an independent PostToolUse group. Exact pre-busy
-renderers retain their historical bytes. Automatic migration refuses to shift an
-external PostToolUse group's positional trust key and never creates trust hashes.
-Native review, activation and active-turn cross-host acceptance must be measured
-at each host separately. Claude uses its existing path without changes.
+`node/codex-busy-ticket.mts` uses exclusive owner locks and atomic writes. The
+retained generation is immutable; a strictly newer admission may replace it.
+`node/codex-hook-owner.mts` validates matching native session/transcript-basename
+identities and rejects child contexts without opening the transcript.
+`node/codex-busy-consume.mts` checks current policy and permissions and reads only
+the admitted references, at most eight, without Inbox discovery or state changes.
+A durable claim emits one fixed additionalContext hint with no peer content,
+IDs, paths or command recipe. Admission and claim do not offer or confirm.
+
+The synchronous hook feeds the same running turn at its next supported tool
+boundary. It does not interrupt sampling or invoke literal `turn/steer`. Idle or
+reasoning without another boundary waits for original-owner intake. Explicit
+Receive offers only the returned framed messages, and confirming Stop alone
+confirms those offered records. Interrupt and missing Receive retain CP data.
+The existing guarded Stop continuation for accepted messages remains available.
+Codex Stop no longer imports native cleanup; old native artifacts remain intact.
+
+The independent synchronous PostToolUse projection is unchanged by this change.
+Native hook trust, activation and actual owner-turn processing need acceptance
+at each host, tracked in issue #374. Source fixtures prove the portable flow,
+not an installed Desktop result. Claude keeps its existing delivery path.
 
 ## Accepted-message delivery progress
-
-Codex interactive wake uses the public persistent `codex queue` producer for an authorized original Desktop or Terminal session. The existing owner consumes the queued pointer; the producer never resumes the thread or marks its inbox delivered. `node/codex-queue.mts` retains authorization, kill switch, permissions, depth, budget and the per-message attempt ledger. A marked TUI with unknown reachability still cannot obtain a queue attempt from the automatic app grant. `node/codex-queue-run.mts` carries only a compact Codex-specific hint, leaving shared Claude wake text unchanged. Original-owner Desktop intake is verified on Windows and macOS; active-turn and remaining fallback-cleanup acceptance evidence is recorded in issue #374.
-
-A successful queue process captures bounded stdout. One exact owner and queue-id
-success line persists a capped `node/codex-queue-binding.mts` record with the
-complete admission, full public native input and producer executable and launcher
-real paths and SHA-256 identities, route and Codex home. Success without this
-proof remains admitted but cannot authorize cleanup. The Codex-only normal Stop
-wrapper first executes the unchanged synchronous delivery confirmation, then
-loads `node/codex-native-queue.mts`.
-On one bounded public app-server connection, `node/codex-queue-cleanup.mts`
-requires every bound Inbox record to remain delivered to the owner, a complete
-paginated exact-id and full-input match, an exact delete, and a complete
-post-delete absence read before closing the binding. A complete pre-delete
-absence also closes it. Incomplete reads, route or binary drift, timeouts and
-errors retain the binding. The cleanup excludes known remote, executor,
-workload-identity, alternate SQLite-home and environment-selected routes from
-environment marker presence, without reading marker values or private
-configuration; producer and hook working directories may differ. Script and npm
-launchers are conservatively excluded; only a directly launched native
-executable with the recorded byte identity is eligible. This local best-effort
-positive match proves ownership of the queue operation, not an atomic lock
-against dispatch by the existing owner.
 
 Read-only `node/msg-inbox.mts` inspection resolves the caller's verified session references against both the current inbox target and the retained original `closedTo` address after fallback handover. It exposes the current destination and available delivery task/session identifiers. Hook delivery and `--receive` continue matching the current target exclusively, so inspection does not create a second delivery owner.
 
@@ -215,7 +207,7 @@ Delivery hooks own `inbox/<messageId>.json`; the daemon owns `inbox/progress/<me
 
 Senders read `running` and `stopped` as refinements of `accepted`, derived from those progress codes by one shared function (`senderState`). No new wire state exists, because an older Worker rejects an unknown state in `isNodeMessageStatusBody` and would leave a newer node retrying forever. An accepted message without progress for 5 minutes is shown with a fixed actionable reason instead of a bare `accepted`; the bound is evaluated on the sender, so it also covers an offline or older target node. The MCP `status` tool applies the same two functions to the Worker's stored state, progress and `updated_at` against the Worker's clock and adds `senderState` and a fixed `hint` beside the unchanged canonical `state`. `running` is not a liveness signal: progress is written on change only, so it reports the last observation and its `observedAt`.
 
-Claude progress comes from the current successful session snapshot and freshly loaded node policy. Each accepted message resolves once: an exact session id precedes names, a unique name resolves to one session, and a shared name produces one stable `ambiguous-target` observation. An already offered message remains `awaiting-turn-confirmation`. An idle authorized Claude session reports `waking`/`wake-pending` only for messages the live listener covers: its scope file (`listeners/<session_id>.scope.json`, valid while its token matches the lock) says whether it is listed, which task grant it uses, and whether it wakes for replies; a listener without one, from an older node version, covers only task-granted messages. With `wake.replies` a reply to an unlisted session's own recent message, or a message of a task it requested from the node that runs it, counts as authorized (the reply and task message grants, `node/wake-reply.mts`, issues #253 and #264) and reports `waking`/`wake-pending` only under a scope with `replies`. Every other authorized message reports `waiting`/`awaiting-user-turn` (issue #213). That existing code is reused on purpose: a new code would make an older Worker reject the whole `message.status` in `isNodeMessageStatusBody`. Codex progress annotates the existing single queue or app-delivery attempt. For Codex task sessions, the message resume records the code of the guard that holds it, `wake-failed` for a failed start and `awaiting-turn-confirmation` for the messages a run carries, while a separate observer marks messages for active tasks `target-busy` and for operator-stopped tasks `operator-stopped`. Closed-session fallback annotates its existing start or resume path; each of its refusals names the existing code of its guard at the call site, and `fallback-failed` is reserved for a start or resume that failed (issue #230), so a policy refusal is never reported as a failed launch. These observations add no wake attempt, permission, transcript read, or message-body persistence.
+Claude progress comes from the current successful session snapshot and freshly loaded node policy. Each accepted message resolves once: an exact session id precedes names, a unique name resolves to one session, and a shared name produces one stable `ambiguous-target` observation. An already offered message remains `awaiting-turn-confirmation`. An idle authorized Claude session reports `waking`/`wake-pending` only for messages the live listener covers: its scope file (`listeners/<session_id>.scope.json`, valid while its token matches the lock) says whether it is listed, which task grant it uses, and whether it wakes for replies; a listener without one, from an older node version, covers only task-granted messages. With `wake.replies` a reply to an unlisted session's own recent message, or a message of a task it requested from the node that runs it, counts as authorized (the reply and task message grants, `node/wake-reply.mts`, issues #253 and #264) and reports `waking`/`wake-pending` only under a scope with `replies`. Every other authorized message reports `waiting`/`awaiting-user-turn` (issue #213). That existing code is reused on purpose: a new code would make an older Worker reject the whole `message.status` in `isNodeMessageStatusBody`. Codex interactive progress annotates CP admission and original-owner intake. For Codex task sessions, the message resume records the code of the guard that holds it, `wake-failed` for a failed start and `awaiting-turn-confirmation` for the messages a run carries, while a separate observer marks messages for active tasks `target-busy` and for operator-stopped tasks `operator-stopped`. Closed-session fallback annotates its existing start or resume path; each of its refusals names the existing code of its guard at the call site, and `fallback-failed` is reserved for a start or resume that failed (issue #230), so a policy refusal is never reported as a failed launch. These observations add no wake attempt, permission, transcript read, or message-body persistence.
 ## Runtime readiness and inactivity
 
 A delivery is not a turn. Live finding of issue #197: a background Claude session whose login had expired went idle without a turn while its sender read `delivered`, and `claude auth status` still reported `loggedIn: true`. The node therefore decides from a real minimal call, not from local credential state, whether a runtime can run a turn (`node/runtime-probe.mts`), and caches the verdict (`node/runtime-readiness.mts`): one probe per enabled runtime at daemon start; afterwards the last verdict is used stale while a background probe revalidates it once aged (ready 10 minutes, otherwise 2), and the session round revalidates a runtime that is not ready. Probes are shared by concurrent callers and never run on the daemon's frame lane: a native MCP intent waits at most 8 seconds for its acknowledgement there, a probe up to 45. Only a session command for a runtime without any verdict waits, before it enters the lane, on a command lane that keeps command order (`node/readiness-lane.mts`); daemon rounds never wait. Only a sign-in failure blocks: a task reports `failed` and a message is `refused`, each with the fixed reason `target runtime <runtime> not ready (sign-in required)`. After a probe that timed out or failed otherwise, tasks run as before and messages wait with `retry-pending`. CLI output never reaches a message or report; the daemon log carries one redacted line.

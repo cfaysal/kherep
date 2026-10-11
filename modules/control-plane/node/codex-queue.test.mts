@@ -4,8 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { listenerDir, takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
-import { codexNode, fakeCodexBin, waitFor } from "./codex-fixture.mts";
-import { processStart } from "./codex-process.mts";
+import { codexNode, fakeCodexBin } from "./codex-fixture.mts";
 import { codexQueueIdle, guardQueue, pollCodexQueue, queueArgs } from "./codex-queue.mts";
 import { codexSessionName, legacyCodexSessionName, readCodexSession, recordCodexSession } from "./codex-sessions.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
@@ -14,13 +13,10 @@ import { getMessage, getMessageProgress, markOffered, storeMessage } from "./inb
 import { T0, TASK } from "./task-fixture.mts";
 import { writeTask } from "./task-records.mts";
 
-// Waking an idle interactive Codex session with `codex queue` (issue #66),
-// against the fake codex: the exact argv, a pointer without peer content, and
-// the Claude wake's guards.
+// Budgeted CP hint publication with the original admission guards.
 
 const SID = "01a0db01-0000-7000-8000-000000000001";
 const PEER = { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "claude-peer-session" };
-const POINTER = "Kherep: 1 peer message(s) waiting in your inbox.";
 let counter = 0;
 
 type Node = ReturnType<typeof codexNode>;
@@ -48,56 +44,61 @@ async function poll(node: Node): Promise<void> {
   await codexQueueIdle();
 }
 
-const queues = (node: Node): string[][] => node.runs().filter((r) => r.argv[0] === "queue").map((r) => r.argv);
+const queues = (node: Node): string[][] => {
+  assert.deepEqual(node.runs(), [], "CP publication starts no native process");
+  return [];
+};
+const hints = (node: Node): number => fs.readdirSync(listenerDir(node.paths)).filter((file) => file.endsWith(".turns.json")).reduce((count, file) => count + JSON.parse(fs.readFileSync(path.join(listenerDir(node.paths), file), "utf8")).turns.length, 0);
 const actions = (node: Node): [string, string[]][] => {
   const file = path.join(node.paths.dir, "wake.jsonl");
   return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l)).map((l) => [l.action, l.messageIds]) : [];
 };
 
-test("an idle Codex session gets `codex queue` with a pointer only; the message waits for the delivery hook", async (t) => {
+test("an idle Codex session gets a CP hint; the message waits for original-owner intake", async (t) => {
   const node = wakeNode(t);
   const id = deliver(node, "secret peer text: deploy now");
   await poll(node);
-  assert.deepEqual(queues(node), [["queue", "--thread", SID, "--message", POINTER]]);
+  assert.deepEqual(queues(node), []);
+  assert.equal(hints(node), 1);
   const all = JSON.stringify(node.runs());
   assert.ok(!all.includes("secret peer text") && !all.includes(PEER.session) && !all.includes(PEER.nodeId), "no peer text or names");
   assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted", "offered only by the hook in the woken turn");
   assert.deepEqual(actions(node), [["wake", [id]]]);
-  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "wake-pending");
+  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "awaiting-user-turn");
   assert.ok(!fs.readFileSync(path.join(node.paths.dir, "wake.jsonl"), "utf8").includes("secret"), "the audit carries no text");
 });
 
-test("a second poll preserves progress while a Codex queue attempt is still running", async (t) => {
+test("a second poll preserves progress while a CP hint waits for intake", async (t) => {
   const session = "5eec0001-0000-7000-8000-000000000002";
   const node = wakeNode(t, [session], "default", session);
   const fake = fakeCodexBin(t);
   const id = deliver(node, "x", 0, session);
   const deps = node.deps({ findCodex: () => fake.file, queueTimeoutMs: 2_000 });
   pollCodexQueue(deps);
-  await waitFor(() => fake.runs().length > 0, "the in-flight queue attempt");
-  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "wake-pending");
+  await codexQueueIdle();
+  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "awaiting-user-turn");
   pollCodexQueue(deps);
-  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "wake-pending");
+  assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "awaiting-user-turn");
   await codexQueueIdle();
 });
 
-test("one pending wake per session; each message is queued once", async (t) => {
+test("one pending hint per session; accepted content can be admitted again later", async (t) => {
   const node = wakeNode(t);
   const first = deliver(node, "one");
   await poll(node);
   const second = deliver(node, "two");
   node.tick(TURN_SPACING_MS + 1);
   await poll(node);
-  assert.equal(queues(node).length, 1, "the first wake is still unconfirmed");
+  assert.equal(hints(node), 1, "the first wake is still unconfirmed");
   markOffered(node.paths.inbox, first, T0);
   await poll(node);
-  assert.equal(queues(node).length, 2, "offered: the next message may wake");
+  assert.equal(hints(node), 2, "offered: the next message may wake");
   // Never offered within 10 minutes (no hook): not queued again, it waits for the next prompt.
   node.tick(11 * 60_000);
   await poll(node);
-  assert.equal(queues(node).length, 2);
+  assert.equal(hints(node), 3, "accepted messages need fresh budgeted admission after ten minutes");
   assert.equal(getMessage(node.paths.inbox, second)?.state, "accepted");
-  assert.equal(getMessageProgress(node.paths.inbox, second)?.code, "wake-unconfirmed");
+  assert.equal(getMessageProgress(node.paths.inbox, second)?.code, "awaiting-user-turn");
 });
 
 test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply depth, budget", async (t) => {
@@ -130,7 +131,7 @@ test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply de
   const named = wakeNode(t, [SID], null);
   deliver(named, "x");
   await poll(named);
-  assert.equal(queues(named).length, 1);
+  assert.equal(hints(named), 1);
   // A codex- name never authorizes: names can be shared.
   const byName = wakeNode(t, [codexSessionName(SID)]);
   const g = deliver(byName, "x");
@@ -152,30 +153,28 @@ test("a configured wake.budget lets a seventh queue attempt of the hour through 
   for (let n = 0; n < 6; n++) assert.equal(takeTurn(node.paths, SID, T0 - 50 * 60_000 + n * 2 * TURN_SPACING_MS), "ok");
   const id = deliver(node, "x");
   await poll(node);
-  assert.deepEqual([queues(node).length, actions(node)], [1, [["wake", [id]]]]);
+  assert.deepEqual([hints(node), actions(node)], [7, [["wake", [id]]]]);
 });
 
-test("a Codex task's thread is resumed, not queued; a failed queue is logged, redacted, and not repeated", async (t) => {
+test("task sessions are excluded; original owners do not depend on a working CLI", async (t) => {
   const node = wakeNode(t);
   writeTask(node.paths, { taskId: TASK, runtime: "codex", name: "task-3f2a1b0c", cwd: node.workspace, permissionMode: "auto", state: "done",
     startedAt: new Date(T0).toISOString(), deadline: new Date(T0).toISOString(), updatedAt: new Date(T0).toISOString(), sessionId: SID });
   deliver(node, "x");
   await poll(node);
   assert.deepEqual(queues(node), []);
+  assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${SID}.busy-hint.json`)), false);
+  assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${SID}.busy-admission.json`)), false);
 
   const FAIL = "fa11db01-0000-7000-8000-000000000001";
   const failing = wakeNode(t, [FAIL], "default", FAIL);
   const id = deliver(failing, "x", 0, FAIL);
-  const lines: string[] = [];
-  pollCodexQueue(failing.deps(), (line) => lines.push(line));
+  pollCodexQueue(failing.deps({ findCodex: () => { throw new Error("missing CLI"); } }));
   await codexQueueIdle();
-  assert.deepEqual(actions(failing), [["queue-failed", [id]]]);
-  assert.equal(getMessageProgress(failing.paths.inbox, id)?.code, "wake-failed");
-  assert.deepEqual(lines, [`kherep-node: codex queue for ${FAIL} failed: Error: no app server owns this thread (token sk-<redacted>)`]);
-  failing.tick(TURN_SPACING_MS + 1);
-  await poll(failing);
-  assert.equal(queues(failing).length, 1, "not repeated");
-  assert.equal(getMessageProgress(failing.paths.inbox, id)?.code, "wake-failed", "polling preserves the failed attempt");
+  assert.deepEqual(actions(failing), [["wake", [id]]]);
+  assert.equal(getMessageProgress(failing.paths.inbox, id)?.code, "awaiting-user-turn");
+  assert.deepEqual(queues(failing), []);
+
 });
 
 test("codex queue never gets a flag that changes the sandbox or approvals", () => {
@@ -213,29 +212,22 @@ test("two sessions started in the same minute: their shared old name wakes neith
   assert.deepEqual(actions(node), [["ambiguous-name", [shared]]]);
   const toA = deliver(node, "y", 0, codexSessionName(A));
   await poll(node);
-  assert.deepEqual(queues(node), [["queue", "--thread", A, "--message", POINTER]]);
+  assert.deepEqual(queues(node), []);
+  assert.equal(hints(node), 1);
   assert.equal(getMessage(node.paths.inbox, toA)?.state, "accepted");
 });
 
-test("a queue run that never ends is killed with its whole tree, and the exchange round never waits for it", async (t) => {
+test("CP admission returns at once and never starts even a hanging native queue", async (t) => {
   const HANG = "0a9e0001-0000-7000-8000-000000000001";
   const node = wakeNode(t, [HANG], "default", HANG);
   deliver(node, "x", 0, HANG);
-  const lines: string[] = [];
   const began = Date.now();
-  pollCodexQueue(node.deps({ queueTimeoutMs: 3_000 }), (line) => lines.push(line));
+  pollCodexQueue(node.deps({ queueTimeoutMs: 1 }));
   assert.ok(Date.now() - began < 300, "the round returns at once");
-  const marker = path.join(path.dirname(node.fake), "runs.jsonl.child");
-  await waitFor(() => fs.existsSync(marker), "the grandchild", 10_000);
-  const grandchild = Number(fs.readFileSync(marker, "utf8"));
-  t.after(() => { try { process.kill(grandchild, "SIGKILL"); } catch { /* ended */ } });
   await codexQueueIdle();
-  assert.match(lines[0] ?? "", /codex queue for .* failed: codex queue did not finish within 3 s/);
-  assert.equal(actions(node).at(-1)?.[0], "queue-failed");
-  assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${HANG}.busy-hint.json`)), false,
-    "a timed-out queue cannot authorize a busy-turn hint");
-  await waitFor(() => processStart(grandchild) === null && processStart(node.runs()[0].pid) === null, "the whole tree", 10_000);
+  assert.deepEqual(queues(node), []);
+  assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${HANG}.busy-hint.json`)), true);
   node.tick(11 * 60_000);
   await poll(node);
-  assert.equal(queues(node).length, 1, "an uncertain timeout is not automatically submitted again");
+  assert.equal(hints(node), 2, "later CP admission uses fresh guards and budget");
 });

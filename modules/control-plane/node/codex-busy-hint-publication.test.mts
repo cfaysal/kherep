@@ -11,7 +11,8 @@ import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { codexSessionName, legacyCodexSessionName, recordCodexSession } from "./codex-sessions.mts";
 import { writeLocalSessions } from "./exchange.mts";
 import { getMessage, MAX_REPLY_DEPTH, storeMessage } from "./inbox.mts";
-import { T0 } from "./task-fixture.mts";
+import { T0, TASK } from "./task-fixture.mts";
+import { writeTask } from "./task-records.mts";
 
 const OWNER = "01a0db74-0000-7000-8000-000000000001";
 const FAIL = "fa11db74-0000-7000-8000-000000000001";
@@ -33,14 +34,14 @@ function fixture(t: test.TestContext, owner = OWNER, count = 1, toSession = owne
     ticket: path.join(listenerDir(node.paths), `${owner}.busy-hint.json`) };
 }
 
-test("a successful queue publishes a bounded hint only after admission completes", async (t) => {
+test("CP admission publishes a bounded hint without a native queue", async (t) => {
   const node = fixture(t, OWNER, 12);
   pollCodexQueue(node.deps());
-  assert.equal(fs.existsSync(node.ticket), false, "an attempted queue is not a successful admission");
+  assert.equal(fs.existsSync(node.ticket), false, "publication waits for the serial lane");
   await codexQueueIdle();
 
-  assert.equal(node.runs().filter((run) => run.argv[0] === "queue").length, 1);
-  assert.equal(fs.existsSync(node.ticket), true, "successful queue must publish the original-owner hint ticket");
+  assert.deepEqual(node.runs(), [], "no native queue or replacement process");
+  assert.equal(fs.existsSync(node.ticket), true, "CP admission publishes the original-owner hint ticket");
   const raw = fs.readFileSync(node.ticket, "utf8");
   const ticket = JSON.parse(raw) as {
     version: number; owner: string; generation: string;
@@ -55,16 +56,15 @@ test("a successful queue publishes a bounded hint only after admission completes
   assert.equal(raw.includes("msg inbox"), false, "the ticket carries no command recipe");
   assert.ok(node.ids.every((id) => getMessage(node.paths.inbox, id)?.state === "accepted"),
     "publication must not offer messages or confirm delivery");
-  assert.equal(node.runs()[0].argv.at(-1), "Kherep: 12 peer message(s) waiting in your inbox.",
-    "the existing native queue remains intact");
+  assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${OWNER}.queued.json`)), false);
 });
 
-test("a failed queue attempt cannot authorize a busy-turn hint", async (t) => {
+test("CP publication works without any Codex CLI", async (t) => {
   const node = fixture(t, FAIL);
-  pollCodexQueue(node.deps());
+  pollCodexQueue(node.deps({ findCodex: () => { throw new Error("no CLI"); } }));
   await codexQueueIdle();
-  assert.equal(node.runs().filter((run) => run.argv[0] === "queue").length, 1);
-  assert.equal(fs.existsSync(node.ticket), false);
+  assert.deepEqual(node.runs(), [], "no native queue or replacement process");
+  assert.equal(fs.existsSync(node.ticket), true);
   assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "accepted");
 });
 
@@ -85,15 +85,15 @@ test("an automatic App grant stays with the admitted owner when another App beco
   recordCodexSession(node.paths, other, node.workspace, T0 + 1000, "default");
   assert.equal(currentCodexApp(node.paths, [OWNER, other], home), other);
   await codexQueueIdle();
-  assert.equal(node.runs().length, 1);
-  assert.ok(node.runs()[0].argv.includes(OWNER), "the queue never retargets its admitted owner");
+  assert.deepEqual(node.runs(), []);
+
   assert.equal(JSON.parse(fs.readFileSync(node.ticket, "utf8")).owner, OWNER);
   assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${other}.busy-hint.json`)), false);
   assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "accepted");
 });
 
-test("policy drift, missing policy and a kill switch during queue admission publish no ticket", async (t) => {
-  for (const change of ["drift", "missing", "malformed", "kill", "permissions"]) {
+test("publication rechecks policy, enrollment, kill, permissions and task exclusion", async (t) => {
+  for (const change of ["drift", "missing", "malformed", "kill", "permissions", "unenrolled", "config-malformed", "task", "expired"]) {
     const node = fixture(t);
     pollCodexQueue(node.deps());
     if (change === "drift") fs.writeFileSync(node.paths.policy, JSON.stringify({ version: 1, allowedCommands: [] }));
@@ -101,8 +101,14 @@ test("policy drift, missing policy and a kill switch during queue admission publ
     if (change === "malformed") fs.writeFileSync(node.paths.policy, "{invalid");
     if (change === "kill") fs.writeFileSync(path.join(node.paths.dir, "wake.disabled"), "");
     if (change === "permissions") recordCodexSession(node.paths, OWNER, node.workspace, T0, "bypassPermissions");
+    if (change === "unenrolled") fs.unlinkSync(node.paths.config);
+    if (change === "config-malformed") fs.writeFileSync(node.paths.config, "{}");
+    if (change === "task") writeTask(node.paths, { taskId: TASK, runtime: "codex", sessionId: OWNER,
+      name: "synthetic-task", cwd: node.workspace, permissionMode: "default", state: "done",
+      startedAt: new Date(T0).toISOString(), deadline: new Date(T0).toISOString(), updatedAt: new Date(T0).toISOString() });
+    if (change === "expired") node.tick(12 * 60 * 60_000);
     await codexQueueIdle();
-    assert.equal(node.runs().filter((run) => run.argv[0] === "queue").length, 1, change);
+    assert.deepEqual(node.runs(), [], change);
     assert.equal(fs.existsSync(node.ticket), false, change);
     assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "accepted", change);
   }
@@ -126,7 +132,7 @@ test("publication rechecks only its admitted references and excludes changed or 
   const ticket = JSON.parse(fs.readFileSync(node.ticket, "utf8"));
   assert.deepEqual(ticket.messages, [{ messageId: node.ids[4], toSession: OWNER }]);
   assert.equal(getMessage(node.paths.inbox, late)?.state, "accepted");
-  assert.equal(node.runs().length, 1, "no extra queue or receipt for newly arriving records");
+  assert.deepEqual(node.runs(), [], "no process or receipt for newly arriving records");
 });
 
 test("an unchanged unique alias remains supported but an alias collision during admission does not publish", async (t) => {
@@ -145,7 +151,7 @@ test("an unchanged unique alias remains supported but an alias collision during 
       snapshot();
     }
     await codexQueueIdle();
-    assert.equal(node.runs().length, 1);
+    assert.deepEqual(node.runs(), []);
     assert.equal(fs.existsSync(node.ticket), !collision);
     if (!collision) assert.deepEqual(JSON.parse(fs.readFileSync(node.ticket, "utf8")).messages,
       [{ messageId: node.ids[0], toSession: target }]);
@@ -153,16 +159,17 @@ test("an unchanged unique alias remains supported but an alias collision during 
   }
 });
 
-test("ticket persistence failure preserves queue success and the existing attempt ledger", async (t) => {
+test("ticket persistence failure retries its CP admission without extra budget", async (t) => {
   const node = fixture(t);
   pollCodexQueue(node.deps());
   fs.writeFileSync(node.ticket, "{invalid-stored-metadata");
   await codexQueueIdle();
   assert.equal(fs.readFileSync(node.ticket, "utf8"), "{invalid-stored-metadata");
-  const audit = fs.readFileSync(path.join(node.paths.dir, "wake.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
-  assert.equal(audit.at(-1).action, "wake", "hint failure must not be classified as a failed native queue");
+  const auditFile = path.join(node.paths.dir, "wake.jsonl");
+  const audit = fs.existsSync(auditFile) ? fs.readFileSync(auditFile, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
+  assert.equal(audit.some((line) => line.action === "wake"), false, "failed publication is no successful hint");
   pollCodexQueue(node.deps());
   await codexQueueIdle();
-  assert.equal(node.runs().length, 1, "metadata failure must not requeue or consume another budget");
+  assert.deepEqual(node.runs(), [], "metadata failure must never queue");
   assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "accepted");
 });

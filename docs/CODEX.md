@@ -114,75 +114,74 @@ A Codex desktop app restart starts a new session with a new id, so a `wake.sessi
 
 With `codexApp: true` the list may be empty or absent. Any non-boolean value turns waking off, as a malformed list does. The grant selects exactly one Codex session that the list does not name: the most recently seen session recorded by the delivery hook whose rollout, `<CODEX_HOME or ~/.codex>/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl`, begins with a `session_meta` line for that id with `originator` `"Codex Desktop"` and `source` `"vscode"`, and no parent thread. The node reads that line itself. It searches the newest 62 date directories, reads at most 256 KiB, follows no links and refuses a missing, unreadable or garbled file or any other value. Exec runs, Codex tasks and app subagent threads are never granted. If two app sessions share the latest time, neither is granted. A TUI reachable on the shared app-server daemon (below) is never granted and is skipped when the newest app session is chosen.
 
-An eligible Desktop or Terminal session receives `codex queue --thread <full id> --message "Kherep: <n> peer message(s) waiting in your inbox."`. The existing runtime consumes the persistent queue; the producer never resumes its thread. Peer text stays in the original inbox until trusted `UserPromptSubmit`, `Stop` or explicit receive processing offers it. Only the existing confirming turn or threaded-reply path confirms delivery. Even with `messaging.resumeClosed: true`, this path does not redirect the message to an intercom task. A successful queue command alone is not a wake or delivery confirmation. An unloaded owner may leave the input pending.
+An eligible Desktop or Terminal session receives a CP hint admission. The node
+publishes metadata directly after the existing guards and shared budget decision;
+it does not invoke `codex queue`, create a native queue binding, resume the thread
+or start another owner. Peer text remains in the persistent CP Inbox. Existing
+native queue cards, ledgers and bindings stay unchanged, including at Codex Stop.
+The Composer's Queue or Steer default is an independent user preference and does
+not control this route. Kherep does not change that setting.
 
-The producer captures at most 8 KiB of successful queue stdout. Exactly one
-`Queued message <id> for thread <owner>.` line for the intended owner creates a
-bounded, atomic cleanup binding. A successful command without that exact proof
-remains admitted and is never retried, but has no cleanup binding. Each binding
-records the exact queue id, complete admission message IDs, full native input,
-and the executable and launcher real paths and SHA-256 identities with the Codex
-home. Binding storage is capped. A full or failed store does not change queue
-success or erase another binding.
+Each synchronous Codex admission round reads, parses and indexes the Inbox once
+after finding eligible non-task owners. Decisions reread only indexed records for
+that owner's full id and unique aliases. Records already consumed, removed or
+readdressed are excluded; arrivals after the snapshot wait for the next round.
+The index is discarded at the end of the round. Publication rechecks required
+policy, enrollment, kill switch, permissions, task exclusion and the admitted
+references. It does not add newly arriving records.
 
-After the normal Codex `Stop` hook has run the existing delivery confirmation,
-the wrapper awaits a bounded cleanup attempt for that owner. It selects the
-executable from fully delivered owner bindings rather than resolving Codex again
-through the hook's PATH. Each distinct producer identity is revalidated against
-the current environment and Codex home before opening a public stdio app-server
-connection. All identities share one five-second work deadline. The connection
-uses only the paginated `thread/queue/list` and exact
-`thread/queue/delete` methods. Every admitted Inbox record must still be directed
-to that owner and delivered. The current executable, launcher and Codex home
-must match the producer; a different hook working directory is allowed. Remote,
-executor, workload-identity, alternate SQLite-home and environment-selected
-routes are excluded. Marker presence excludes cleanup even when its value is
-empty; marker values and private configuration are never read or logged.
-Cleanup is also limited to a directly launched native executable whose bytes
-match the stored identity. npm and script launchers retain the fallback queue.
-Deletion requires one exact queue id whose complete structured input matches,
-then a complete post-delete listing must prove that id absent. A complete first
-listing that already proves exact absence closes the binding without a delete.
-Partial reads, errors, timeouts, false responses, identity drift and changed
-records retain the binding and do not alter receipts or submit another queue.
-Foreign queue cards are never selected by text or time.
+A ticket carries at most eight admitted ID/address pairs, its exact owner, an
+immutable generation, TTL and policy fingerprint. The trusted synchronous native
+PostToolUse hook validates original-owner identity from the native session and
+transcript basename without opening the transcript. It checks current policy and
+permissions and reads only those bounded references. A durable claim produces
+one fixed additionalContext hint in the same running turn at the next supported
+tool boundary. The hint contains no peer bodies, IDs, paths or receive command.
+This does not interrupt sampling or send a literal `turn/steer` RPC. Without a
+tool boundary, idle or reasoning-only work waits for the next original-owner
+intake. The existing Stop continuation remains available for accepted messages
+under its existing budget and permissions.
 
-This is a bounded local best-effort operation. An exact hit proves ownership of
-this queue operation only. The public API has no cross-process lock that can
-prevent the owner from dispatching the pointer between list and delete. Starting
-the app server can also initialize its normal configuration, authentication and
-cloud services, so this cleanup makes no broader filesystem-side-effect claim.
-Each host requires native acceptance with the installed producer and Stop
-wrapper: verify the newly admitted exact queue ID, complete delivery, its
-subsequent absence and no redundant follow-up turn. A separate script-wrapper
-probe does not establish the running daemon's route or cleanup capability.
-Runtime acceptance evidence is tracked in issue #374.
+Admission and a metadata claim leave messages `accepted`. Explicit
+`msg inbox --receive` offers only the messages actually returned; normal confirming
+Stop marks those `offered` records `delivered`. An interrupt does not confirm them.
+Messages outside the ticket or a limited Receive remain in the CP Inbox under
+its existing retention contract. The normal prompt/Stop intake remains available.
 
-Each synchronous Codex queue round reads, parses and indexes the full Inbox once after it has found eligible non-task owners. Before it applies the queue guards, a decision rereads only the indexed message records for that owner's full id and aliases. Its existing attempt-ledger cleanup may still list Inbox filenames per owner, but it does not reparse unrelated records. A record already deleted, consumed or readdressed at that targeted read is excluded. This read is not an atomic lock against a later change during the same decision. Messages that arrive after the snapshot remain for the next eligible round. The index is discarded at the end of the round.
-
-After successful original-owner queue admission, a bounded metadata ticket allows
-the trusted native PostToolUse hook to notify the same owner during an active turn.
-It checks native owner/child identity before reading storage, rechecks current
-policy and permission mode, and reads only the admitted message IDs. One durable
-claim produces one short hint. Peer bodies and receive commands stay out of this
-hint; the existing receive context and confirmation flow remain responsible for
-processing and receipts. No tool boundary means no mid-reasoning injection, and
-the existing persistent queue remains the fallback.
+Separate `.busy-admission.json` metadata records the budgeted generation and
+publication time; old `.queued.json` history never authorizes or blocks CP hints.
+Successful publication waits up to ten minutes for intake. If still accepted
+then, fresh admission rechecks guards and spends the budget again. Claim alone
+is no Receive. Publication failure or contention retries the same generation on
+existing poll rounds without extra budget while its TTL and policy are valid.
+Policy drift or expiry invalidates that retry. Restart recovers valid CP metadata;
+missing or unreadable metadata requires a fresh budgeted admission. There is no
+native queue fallback. Progress is `waiting/awaiting-user-turn` while intake is
+pending, `waiting/retry-pending` after publication failure and
+`waiting/awaiting-turn-confirmation` after an actual offer.
 
 Reinstall projects this separate PostToolUse definition even when the three older
 intake hooks are externally owned. Review and trust the exact new definition in
-Codex, restart the original owner, and test active peer processing without Steer.
+Codex, restart the original owner, and test active peer processing at a supported tool boundary.
 The installer stops before writes if an operator-owned PostToolUse group would
 move to another positional trust key. It does not mint or move trust hashes.
 Source and fixture tests alone do not establish either host's native acceptance.
 
-An interactive Codex TUI on Codex 0.160 can write the same first rollout line as a Desktop chat (measured on macOS, issue #268). The TUI marker and cached shared-daemon probe still restrict the automatic `codexApp` grant: a positively reachable TUI is excluded, and a marked candidate with unknown reachability waits with `awaiting-user-turn`, without consuming budget or recording an attempt. Regular policy authorization permits queue independently of that probe. The probe remains bounded to two seconds and cached for ten seconds; Windows does not connect to that daemon socket. None of these observations is a delivery receipt.
+An interactive Codex TUI on Codex 0.160 can write the same first rollout line as a
+Desktop chat (measured on macOS, issue #268). The TUI marker and cached
+shared-daemon probe still restrict the automatic `codexApp` grant: a positively
+reachable TUI is excluded, and a marked candidate with unknown reachability waits
+without spending budget. Full-id policy authorization permits CP admission
+independently of that probe. The probe remains bounded to two seconds and cached
+for ten seconds; Windows does not connect to that daemon socket.
 
-The kill switch, full-id authorization or `codexApp` grant, permission-mode check and reply-depth limit still apply. Queue attempts consume the shared turn budget and spacing. At most one attempt is recorded per message, including after failure or timeout; an uncertain submission is not automatically retried. Decisions made under the app grant are written to `wake.jsonl` with `"grant": "codexApp"`. Genuinely closed targets retain the separate closed-session policy. Claude's wake path is unchanged.
-
-Issue #367 independently verified original Windows Desktop wake with CLI 0.160.1 and the Desktop embedded CLI 0.162.0-alpha.17.2. These are tested versions, not a universal minimum-version guarantee. The producer must share the owner's Codex home and persistent store, and the owner must support consuming externally queued input. Older CLI 0.157.1 only produced a pending Steer item in the earlier measurement. macOS original-Desktop acceptance remains open; a headless probe was denied before submission and therefore did not test the consumer. See the [runtime evidence](https://github.com/cfaysal/kherep/issues/367#issuecomment-6089997175).
-
-A Codex intercom fallback that fails because its configured model is unavailable for the account refuses its linked message with a fixed reason instead of retrying the same failure three times. Other failures retain bounded retries. The status identifies an exhausted fallback separately from a missing confirmation in the original session; raw CLI error text is not copied into message status.
+The kill switch, full-id authorization or `codexApp` grant, permission-mode check
+and reply-depth limit remain. Admission uses the shared turn budget and spacing.
+App-grant decisions retain `"grant": "codexApp"` in the metadata-only wake audit.
+Codex background tasks and genuinely closed targets retain their separate policy
+paths; Claude delivery is unchanged. Source and synthetic tests do not establish
+installation, hook trust or processing on either Desktop host. Actual owner-turn
+acceptance is tracked in [issue #374](https://github.com/cfaysal/kherep/issues/374).
 
 ## Retired memory backend
 

@@ -28,20 +28,23 @@ async function admitted(t: test.TestContext, owner: string) {
   return { node, messageId };
 }
 
-test("an exact successful queue result binds its complete admission without changing delivery state", async (t) => {
+test("CP admission keeps complete IDs without creating native bindings", async (t) => {
   const { node, messageId } = await admitted(t, OWNER);
   const bindings = listQueueBindings(node.paths);
-  assert.equal(bindings.length, 1);
-  assert.deepEqual(bindings[0]?.admissionMessageIds, [messageId]);
+  assert.deepEqual(bindings, []);
+  const admission = JSON.parse(fs.readFileSync(`${listenerDir(node.paths)}/${OWNER}.busy-admission.json`, "utf8"));
+  assert.deepEqual(admission.messageIds, [messageId]);
+  assert.deepEqual(node.runs(), []);
   assert.equal(getMessage(node.paths.inbox, messageId)?.state, "accepted");
 });
 
-test("exit zero without an exact id is admitted once and never becomes queue failure or retry", async (t) => {
+test("CP publication is admitted once without any native queue id", async (t) => {
   const { node, messageId } = await admitted(t, NO_ID_OWNER);
   assert.deepEqual(listQueueBindings(node.paths), []);
   assert.equal(getMessage(node.paths.inbox, messageId)?.state, "accepted");
-  const queued = JSON.parse(fs.readFileSync(`${listenerDir(node.paths)}/${NO_ID_OWNER}.queued.json`, "utf8"));
-  assert.ok(queued.queued[messageId]);
+  const admission = JSON.parse(fs.readFileSync(`${listenerDir(node.paths)}/${NO_ID_OWNER}.busy-admission.json`, "utf8"));
+  assert.ok(admission.messageIds.includes(messageId));
+  assert.equal(fs.existsSync(`${listenerDir(node.paths)}/${NO_ID_OWNER}.queued.json`), false);
   pollCodexQueue(node.deps());
   await codexQueueIdle();
   assert.equal(getMessage(node.paths.inbox, messageId)?.state, "accepted");

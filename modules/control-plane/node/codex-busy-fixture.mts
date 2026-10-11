@@ -16,7 +16,7 @@ export const BUSY_OWNER = "01a0db74-0000-7000-8000-000000000001";
 export const BUSY_BODY = "synthetic peer body must not appear in a busy hint";
 export const BUSY_CONTEXT = "Kherep: New peer messages are waiting. Check this session's inbox and report any relevant update.";
 
-export function busyFixture(t: test.TestContext, count = 1, now = T0) {
+export function busyFixture(t: test.TestContext, count = 1, now = T0, publish = true) {
   const node = taskNode(t, { runtimes: ["codex"] }, { wake: { enabled: true, sessions: [BUSY_OWNER] } });
   recordCodexSession(node.paths, BUSY_OWNER, node.workspace, now, "default");
   const ids = Array.from({ length: count }, () => crypto.randomUUID());
@@ -27,7 +27,7 @@ export function busyFixture(t: test.TestContext, count = 1, now = T0) {
   const admission = { owner: BUSY_OWNER, generation: crypto.randomUUID(), admittedAt: now, expiresAt: now + 60_000,
     policyFingerprint: busyPolicyFingerprint(loadPolicy(node.paths.policy)),
     messages: ids.slice(0, 8).map((messageId) => ({ messageId, toSession: BUSY_OWNER })) };
-  assert.equal(publishBusyHint(listenerDir(node.paths), admission, now), "published");
+  if (publish) assert.equal(publishBusyHint(listenerDir(node.paths), admission, now), "published");
   const input = { hook_event_name: "PostToolUse", session_id: BUSY_OWNER, permission_mode: "default",
     transcript_path: `C:/synthetic/sessions/rollout-2026-10-10T10-00-00-${BUSY_OWNER}.jsonl`,
     tool_name: "Bash", cwd: node.workspace };

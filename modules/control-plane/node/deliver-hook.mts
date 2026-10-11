@@ -4,9 +4,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { markListenerIdle, mayContinue } from "./autonomy.mts";
-import { nodePaths, readConfig } from "./config.mts";
+import { nodePaths } from "./config.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
-import { isCodexSessionId } from "./codex-sessions.mts";
 import { contextOutput, deliveryContext, retryOffered, sessionInbox, type HookDeps } from "./deliver-core.mts";
 import { localSessionName } from "./exchange.mts";
 import { nodeWakeBudget } from "./policy.mts";
@@ -82,38 +81,11 @@ export function runHook(stdin: string, deps: HookDeps, write: (text: string) => 
   }
 }
 
-function hasEnrolledNode(config: string): boolean {
-  try {
-    return readConfig(config) !== null;
-  } catch {
-    return false;
-  }
-}
-
-// The real Codex command wrapper alone loads the native cleanup leaf. The
-// shared delivery core and deliverForCodex remain synchronous and import no
-// child_process code, including when Worker tests import them.
+// Codex Stop retains synchronous offer/confirmation. Native queue cards and
+// bindings predate CP hint admission and remain untouched by this hook.
 export async function runCodexHook(stdin: string, deps: HookDeps, write: (text: string) => void,
-  warn: (line: string) => void, cleanup?: (owner: string) => Promise<void>): Promise<void> {
-  try {
-    const input: unknown = JSON.parse(stdin);
-    const output = deliverForCodex(input, deps);
-    if (typeof input === "object" && input !== null) {
-      const { hook_event_name: event, session_id: owner } = input as Record<string, unknown>;
-      if (event === "Stop" && isCodexSessionId(owner) && hasEnrolledNode(deps.paths.config)) {
-        const withdraw = cleanup ?? (async (sessionId: string) => {
-          const native = await import("./codex-native-queue.mts");
-          await native.cleanupNativeOwnedQueues(deps.paths, sessionId);
-        });
-        try { await withdraw(owner); } catch {
-          warn("kherep deliver-hook: Codex queue cleanup failed");
-        }
-      }
-    }
-    if (output) write(output);
-  } catch (error) {
-    warn(`kherep deliver-hook: ${String((error as Error).message ?? error)}`);
-  }
+  warn: (line: string) => void, _legacyCleanup?: (owner: string) => Promise<void>): Promise<void> {
+  runHook(stdin, deps, write, warn, "codex");
 }
 
 // Node loads the main module from its real path, so a script started through a

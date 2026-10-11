@@ -13,7 +13,7 @@ import { T0 } from "./task-fixture.mts";
 
 // Issue #268: a Codex TUI's rollout starts like a Desktop chat's. The marker
 // and loaded-thread probe restrict the automatic app grant, while regular
-// policy authorization can use persistent queue independently (issue #367).
+// policy authorization can publish CP hints independently (issue #367).
 // Fixture rollouts and a stand-in probe only; no real Codex home or daemon.
 
 const APP = "01a0db01-0000-7000-8000-00000000a001";
@@ -45,7 +45,7 @@ function tuiMarker(home: string, sessionId: string): void {
 type Node = ReturnType<typeof codexNode>;
 
 // A node with the given wake section and no codex binary: an authorized
-// Desktop or TUI queue attempt ends as queue-failed.
+// Desktop or TUI admission publishes without a CLI.
 // loaded stands in for the daemon probe (codex-daemon.mts); none answers null.
 function appNode(t: test.TestContext, wake: Record<string, unknown>, loaded: string[] | null = null):
   { node: Node; home: string; poll: () => Promise<void> } {
@@ -68,7 +68,7 @@ const decisions = (node: Node): [unknown, unknown, unknown][] => {
   return lines.map((l) => [l.sessionId, l.action, l.grant]);
 };
 
-test("full policy authorization permits persistent queue despite an unknown or missing TUI probe", async (t) => {
+test("full policy authorization permits CP admission despite an unknown or missing TUI probe", async (t) => {
   for (const [label, loaded, marked] of [
     ["loaded and marker", [APP], true],
     ["loaded without marker", [APP], false],
@@ -82,7 +82,7 @@ test("full policy authorization permits persistent queue despite an unknown or m
     deliver(node, APP);
     await poll();
     await poll();
-    assert.deepEqual(decisions(node), [[APP, "queue-failed", undefined]], label);
+    assert.deepEqual(decisions(node), [[APP, "wake", undefined]], label);
   }
 });
 
@@ -98,11 +98,11 @@ test("codexApp never grants a reachable TUI and picks the older Desktop chat ins
   await poll();
   const first = decisions(node).length;
   await poll();
-  assert.deepEqual(decisions(node).slice(first).sort(), [[APP, "not-allowlisted", undefined], [APP_OLD, "queue-failed", "codexApp"]]);
-  assert.ok(decisions(node).some(([id, action, grant]) => id === APP_OLD && action === "queue-failed" && grant === "codexApp"));
+  assert.deepEqual(decisions(node).slice(first).sort(), [[APP, "not-allowlisted", undefined], [APP_OLD, "wake", "codexApp"]]);
+  assert.ok(decisions(node).some(([id, action, grant]) => id === APP_OLD && action === "wake" && grant === "codexApp"));
 });
 
-test("a queued TUI message is audited as tui-reachable once, not again while it waits", async (t) => {
+test("an admitted TUI message is audited as tui-reachable once, not again while it waits", async (t) => {
   const { node, home, poll } = appNode(t, { sessions: [APP] }, [APP]);
   rollout(home, APP, APP_META);
   tuiMarker(home, APP);
@@ -111,5 +111,5 @@ test("a queued TUI message is audited as tui-reachable once, not again while it 
   recordCodexSession(node.paths, APP, node.workspace, T0, "default");
   deliver(node, APP);
   for (let round = 0; round < 3; round++) await poll();
-  assert.deepEqual(decisions(node), [[APP, "tui-reachable", undefined], [APP, "queue-failed", undefined]]);
+  assert.deepEqual(decisions(node), [[APP, "tui-reachable", undefined], [APP, "wake", undefined]]);
 });
