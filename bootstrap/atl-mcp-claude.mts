@@ -9,6 +9,10 @@
 // is registered and read back, so a failure never leaves the operator without
 // Atlassian. An `atlassian` entry Kherep did not write is the operator's and
 // stays, and the plugin then stays as it is too.
+//
+// Issue #382. A local-scope `atlassian` entry (projects.<dir>.mcpServers in the
+// same registry) takes precedence in that directory, so a session there does
+// not reach the service account. Such entries are named, never removed.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -77,6 +81,19 @@ export function userEntry(registryFile: string): unknown {
   return isRecord(servers) ? servers[ATLASSIAN_MCP_SERVER] : undefined;
 }
 
+// The project directories whose local-scope `atlassian` entry shadows the user-scope server.
+export function shadowingProjects(registryFile: string): string[] {
+  if (!fs.existsSync(registryFile)) return [];
+  const registry: unknown = JSON.parse(fs.readFileSync(registryFile, "utf8"));
+  const projects = isRecord(registry) ? registry.projects : undefined;
+  if (!isRecord(projects)) return [];
+  return Object.entries(projects)
+    .filter(([, project]) => isRecord(project) && isRecord(project.mcpServers)
+      && Object.hasOwn(project.mcpServers, ATLASSIAN_MCP_SERVER))
+    .map(([directory]) => directory)
+    .sort();
+}
+
 export interface ClaudeRun { ok: boolean; stdout: string }
 export type RunClaude = (args: string[]) => ClaudeRun;
 
@@ -93,6 +110,8 @@ export interface RegisterResult {
   binding: TokenBinding;
   message: string;
   plugin?: "disabled" | "already-disabled" | "absent" | "disable-failed";
+  /** Project directories whose local-scope entry shadows the managed server there. */
+  shadowedIn?: string[];
 }
 
 function pluginEnabled(run: RunClaude): boolean | undefined {
@@ -111,6 +130,12 @@ function disablePlugin(run: RunClaude): RegisterResult["plugin"] {
 }
 
 export function registerAtlassianMcp(options: RegisterOptions): RegisterResult {
+  const result = registerUserServer(options);
+  const shadowedIn = result.status === "skipped" ? [] : shadowingProjects(options.registryFile);
+  return shadowedIn.length ? { ...result, shadowedIn } : result;
+}
+
+function registerUserServer(options: RegisterOptions): RegisterResult {
   const binding = resolveTokenBinding("claude",
     { claude: options.claudeHome, codex: options.codexHome }, options.env);
   const problem = tokenBindingProblem(binding);
@@ -166,7 +191,12 @@ function cli(): void {
   });
   const ok = ["configured", "current", "preserved-existing"].includes(result.status);
   process.stdout.write(`atl-mcp-claude: ${ok ? "" : "WARNING "}${result.status}: ${result.message}\n`);
-  if (!ok) process.exitCode = 1;
+  for (const directory of result.shadowedIn ?? []) {
+    process.stdout.write(`atl-mcp-claude: WARNING a local-scope '${ATLASSIAN_MCP_SERVER}' entry for ${directory} `
+      + "shadows the service-account server in that directory and is left as it is; remove it with: "
+      + `cd ${JSON.stringify(directory)} && claude mcp remove ${ATLASSIAN_MCP_SERVER} -s local\n`);
+  }
+  if (!ok || result.shadowedIn?.length) process.exitCode = 1;
 }
 
 function isMainModule(): boolean {

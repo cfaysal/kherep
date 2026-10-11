@@ -175,6 +175,14 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Atlassian MCP: the Claude step reports every local-scope `atlassian` entry in
+  `~/.claude.json` that takes precedence over the managed service-account server
+  in its directory, with the removal command, leaves it as it is and exits 1.
+  Before, it reported the installation as configured while sessions in that
+  directory reached a personal OAuth connection. The installation guide lists
+  the agent-interface scopes the v2 server requires per tool group; keys with
+  only the classic product scopes authenticate but every tool call answers 403
+  (issue #382).
 - Atlassian credential step: a host without `KHEREP_ATL_PROJECT_KEY` in the
   installing shell could not prove a working broker credential. Both Jira
   brokers validated the full project seed before `selftest`, although the check
