@@ -115,7 +115,7 @@ A Codex desktop app restart starts a new session with a new id, so a `wake.sessi
 With `codexApp: true` the list may be empty or absent. Any non-boolean value turns waking off, as a malformed list does. The grant selects exactly one Codex session that the list does not name: the most recently seen session recorded by the delivery hook whose rollout, `<CODEX_HOME or ~/.codex>/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl`, begins with a `session_meta` line for that id with `originator` `"Codex Desktop"` and `source` `"vscode"`, and no parent thread. The node reads that line itself. It searches the newest 62 date directories, reads at most 256 KiB, follows no links and refuses a missing, unreadable or garbled file or any other value. Exec runs, Codex tasks and app subagent threads are never granted. If two app sessions share the latest time, neither is granted. A TUI reachable on the shared app-server daemon (below) is never granted and is skipped when the newest app session is chosen.
 
 An eligible Desktop or Terminal session receives a CP hint admission. The node
-publishes metadata directly after the existing guards and shared budget decision;
+publishes metadata directly after the existing authorization guards;
 it does not invoke `codex queue`, create a native queue binding, resume the thread
 or start another owner. Peer text remains in the persistent CP Inbox. Existing
 native queue cards, ledgers and bindings stay unchanged, including at Codex Stop.
@@ -148,14 +148,14 @@ Stop marks those `offered` records `delivered`. An interrupt does not confirm th
 Messages outside the ticket or a limited Receive remain in the CP Inbox under
 its existing retention contract. The normal prompt/Stop intake remains available.
 
-Separate `.busy-admission.json` metadata records the budgeted generation and
+Separate `.busy-admission.json` metadata records the authorized generation and
 publication time; old `.queued.json` history never authorizes or blocks CP hints.
 Successful publication waits up to ten minutes for intake. If still accepted
-then, fresh admission rechecks guards and spends the budget again. Claim alone
-is no Receive. Publication failure or contention retries the same generation on
-existing poll rounds without extra budget while its TTL and policy are valid.
+then, fresh admission rechecks guards without booking an autonomous turn. Claim
+alone is no Receive. Publication failure or contention retries the same generation on
+existing poll rounds without booking a turn while its TTL and policy are valid.
 Policy drift or expiry invalidates that retry. Restart recovers valid CP metadata;
-missing or unreadable metadata requires a fresh budgeted admission. There is no
+missing or unreadable metadata requires a fresh authorized admission. There is no
 native queue fallback. Progress is `waiting/awaiting-user-turn` while intake is
 pending, `waiting/retry-pending` after publication failure and
 `waiting/awaiting-turn-confirmation` after an actual offer.
@@ -171,12 +171,14 @@ An interactive Codex TUI on Codex 0.160 can write the same first rollout line as
 Desktop chat (measured on macOS, issue #268). The TUI marker and cached
 shared-daemon probe still restrict the automatic `codexApp` grant: a positively
 reachable TUI is excluded, and a marked candidate with unknown reachability waits
-without spending budget. Full-id policy authorization permits CP admission
+without admission bookkeeping. Full-id policy authorization permits CP admission
 independently of that probe. The probe remains bounded to two seconds and cached
 for ten seconds; Windows does not connect to that daemon socket.
 
 The kill switch, full-id authorization or `codexApp` grant, permission-mode check
-and reply-depth limit remain. Admission uses the shared turn budget and spacing.
+and reply-depth limit remain. CP hint admission and claim do not check or spend
+the shared turn budget or spacing. Actual listener wakes and Stop continuations retain their existing
+autonomous-turn gates.
 App-grant decisions retain `"grant": "codexApp"` in the metadata-only wake audit.
 Codex background tasks and genuinely closed targets retain their separate policy
 paths; Claude delivery is unchanged. Source and synthetic tests do not establish

@@ -13,7 +13,7 @@ import { getMessage, getMessageProgress, markOffered, storeMessage } from "./inb
 import { T0, TASK } from "./task-fixture.mts";
 import { writeTask } from "./task-records.mts";
 
-// Budgeted CP hint publication with the original admission guards.
+// Authorized CP hint publication with the original admission guards.
 
 const SID = "01a0db01-0000-7000-8000-000000000001";
 const PEER = { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "claude-peer-session" };
@@ -48,7 +48,8 @@ const queues = (node: Node): string[][] => {
   assert.deepEqual(node.runs(), [], "CP publication starts no native process");
   return [];
 };
-const hints = (node: Node): number => fs.readdirSync(listenerDir(node.paths)).filter((file) => file.endsWith(".turns.json")).reduce((count, file) => count + JSON.parse(fs.readFileSync(path.join(listenerDir(node.paths), file), "utf8")).turns.length, 0);
+const hints = (node: Node): number => fs.readdirSync(listenerDir(node.paths)).filter((file) => file.endsWith(".busy-hint.json")).length;
+const generation = (node: Node, owner = SID): string => JSON.parse(fs.readFileSync(path.join(listenerDir(node.paths), `${owner}.busy-hint.json`), "utf8")).generation;
 const actions = (node: Node): [string, string[]][] => {
   const file = path.join(node.paths.dir, "wake.jsonl");
   return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l)).map((l) => [l.action, l.messageIds]) : [];
@@ -86,22 +87,24 @@ test("one pending hint per session; accepted content can be admitted again later
   const node = wakeNode(t);
   const first = deliver(node, "one");
   await poll(node);
+  const initial = generation(node);
   const second = deliver(node, "two");
   node.tick(TURN_SPACING_MS + 1);
   await poll(node);
-  assert.equal(hints(node), 1, "the first wake is still unconfirmed");
+  assert.equal(generation(node), initial, "the first hint is still unconfirmed");
   markOffered(node.paths.inbox, first, T0);
   await poll(node);
-  assert.equal(hints(node), 2, "offered: the next message may wake");
+  const next = generation(node);
+  assert.notEqual(next, initial, "offered: the next message may be admitted");
   // Never offered within 10 minutes (no hook): not queued again, it waits for the next prompt.
   node.tick(11 * 60_000);
   await poll(node);
-  assert.equal(hints(node), 3, "accepted messages need fresh budgeted admission after ten minutes");
+  assert.notEqual(generation(node), next, "accepted messages need fresh authorized admission after ten minutes");
   assert.equal(getMessage(node.paths.inbox, second)?.state, "accepted");
   assert.equal(getMessageProgress(node.paths.inbox, second)?.code, "awaiting-user-turn");
 });
 
-test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply depth, budget", async (t) => {
+test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply depth", async (t) => {
   const off = wakeNode(t, null);
   deliver(off, "x");
   await poll(off);
@@ -138,22 +141,21 @@ test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply de
   await poll(byName);
   assert.deepEqual([queues(byName), actions(byName)], [[], [["not-allowlisted", [g]]]]);
 
-  const spent = wakeNode(t);
-  for (let n = 0; n < 6; n++) assert.equal(takeTurn(spent.paths, SID, T0 - 50 * 60_000 + n * 2 * TURN_SPACING_MS), "ok");
-  const f = deliver(spent, "x");
-  await poll(spent);
-  assert.deepEqual([queues(spent), actions(spent)], [[], [["budget", [f]]]]);
+
 });
 
-test("a configured wake.budget lets a seventh queue attempt of the hour through (issue #259)", async (t) => {
+test("CP hint admission preserves an existing configured shared budget", async (t) => {
   const node = wakeNode(t);
   const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8")) as { wake: Record<string, unknown> };
   policy.wake.budget = { perHour: 8, perDay: 100 };
   fs.writeFileSync(node.paths.policy, JSON.stringify(policy));
   for (let n = 0; n < 6; n++) assert.equal(takeTurn(node.paths, SID, T0 - 50 * 60_000 + n * 2 * TURN_SPACING_MS), "ok");
+  const ledger = path.join(listenerDir(node.paths), `${SID}.turns.json`);
+  const before = fs.readFileSync(ledger);
   const id = deliver(node, "x");
   await poll(node);
-  assert.deepEqual([hints(node), actions(node)], [7, [["wake", [id]]]]);
+  assert.deepEqual([hints(node), actions(node)], [1, [["wake", [id]]]]);
+  assert.deepEqual(fs.readFileSync(ledger), before, "CP admission does not book a seventh real turn");
 });
 
 test("task sessions are excluded; original owners do not depend on a working CLI", async (t) => {
@@ -227,7 +229,9 @@ test("CP admission returns at once and never starts even a hanging native queue"
   await codexQueueIdle();
   assert.deepEqual(queues(node), []);
   assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${HANG}.busy-hint.json`)), true);
+  const initial = generation(node, HANG);
   node.tick(11 * 60_000);
   await poll(node);
-  assert.equal(hints(node), 2, "later CP admission uses fresh guards and budget");
+  assert.notEqual(generation(node, HANG), initial, "later CP admission uses fresh guards");
+  assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${HANG}.turns.json`)), false);
 });

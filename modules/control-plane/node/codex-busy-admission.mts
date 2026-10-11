@@ -2,11 +2,11 @@ import path from "node:path";
 
 import { listenerDir } from "./autonomy.mts";
 import { isBusyHintAdmission, type BusyHintAdmission } from "./codex-busy-ticket.mts";
-import type { NodePaths } from "./config.mts";
+import { ensureDir, type NodePaths } from "./config.mts";
 import { readJson, writeJsonAtomic } from "./inbox.mts";
 
 // CP-only bookkeeping. Native queue ledgers and bindings are never read or
-// changed. A retry retains the already budgeted generation, including when its
+// changed. A retry retains the authorized generation, including when its
 // metadata could not be persisted; restart without it requires fresh admission.
 export interface BusyAdmission {
   ticket: BusyHintAdmission;
@@ -36,6 +36,7 @@ export function readBusyAdmission(paths: NodePaths, owner: string): BusyAdmissio
 export function saveBusyAdmission(paths: NodePaths, value: BusyAdmission): void {
   const key = file(paths, value.ticket.owner);
   volatile.set(key, value);
+  ensureDir(path.dirname(key));
   writeJsonAtomic(key, value);
   volatile.delete(key);
 }

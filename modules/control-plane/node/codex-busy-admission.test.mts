@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { listenerDir, TURN_SPACING_MS } from "./autonomy.mts";
+import { listenerDir, takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
 import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { CODEX_ACTIVE_MS, recordCodexSession } from "./codex-sessions.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
@@ -22,7 +22,14 @@ function setup(t: test.TestContext, budget = {}) {
   const dir = listenerDir(node.paths), ticket = path.join(dir, `${OWNER}.busy-hint.json`);
   const metadata = path.join(dir, `${OWNER}.busy-admission.json`);
   fs.mkdirSync(dir, { recursive: true });
-  const turns = () => JSON.parse(fs.readFileSync(path.join(dir, `${OWNER}.turns.json`), "utf8")).turns as number[];
+  const turnFile = path.join(dir, `${OWNER}.turns.json`);
+  assert.equal(takeTurn(node.paths, OWNER, T0 - 2 * TURN_SPACING_MS), "ok");
+  const turnBytes = fs.readFileSync(turnFile);
+  const turns = () => {
+    const bytes = fs.readFileSync(turnFile);
+    assert.deepEqual(bytes, turnBytes, "CP hint admission and claim preserve the real-turn ledger byte-for-byte");
+    return JSON.parse(bytes.toString()).turns as number[];
+  };
   const admission = () => JSON.parse(fs.readFileSync(metadata, "utf8"));
   const poll = async () => {
     pollCodexQueue({ ...node.deps(), codex: { home: path.join(node.root, "empty-codex-home"),
@@ -33,10 +40,10 @@ function setup(t: test.TestContext, budget = {}) {
     assert.equal(getMessage(node.paths.inbox, ID)?.state, "accepted");
     assert.equal(getMessage(node.paths.inbox, ID)?.offers, undefined);
   };
-  return { ...node, dir, ticket, metadata, turns, admission, poll, retained };
+  return { ...node, dir, ticket, metadata, turnFile, turnBytes, turns, admission, poll, retained };
 }
 
-for (const fault of ["contention", "persist"]) test(`publication ${fault} retries the same generation and budget`, async (t) => {
+for (const fault of ["contention", "persist"]) test(`publication ${fault} retries the same generation without booking a real turn`, async (t) => {
   const node = setup(t);
   const obstruction = fault === "contention" ? node.ticket + ".lock" : node.ticket;
   fs.writeFileSync(obstruction, fault === "persist" ? "{broken-synthetic-ticket" : "held");
@@ -70,24 +77,47 @@ test("claimed metadata is not Receive; reoffer after ten minutes requires fresh 
   node.tick(10 * 60_000 + 1);
   await node.poll();
   assert.notEqual(node.admission().ticket.generation, JSON.parse(first).generation);
-  assert.equal(node.turns().length, 2);
+  assert.equal(node.turns().length, 1);
   assert.equal(JSON.parse(fs.readFileSync(node.ticket, "utf8")).claimed, false);
   node.retained();
 });
 
-test("an exhausted budget blocks readmission after the publication interval", async (t) => {
+test("an exhausted shared ledger allows hint admission and owner claim but still denies Stop continuation", async (t) => {
   const node = setup(t, { perHour: 1 });
   await node.poll();
-  const first = fs.readFileSync(node.ticket, "utf8");
+  assert.equal(fs.existsSync(node.metadata), true, "an exhausted real-turn budget does not block CP admission");
+  const first = node.admission().ticket.generation;
+  const input = { session_id: OWNER, permission_mode: "default", hook_event_name: "PostToolUse",
+    transcript_path: `/synthetic/rollout-2026-10-10T10-00-00-${OWNER}.jsonl` };
+  assert.match(deliverForCodex(input, { paths: node.paths, now: () => T0 }), /New peer messages/);
+  assert.equal(node.turns().length, 1);
+  node.retained();
+  assert.equal(deliverForCodex({ ...input, hook_event_name: "Stop", stop_hook_active: false }, {
+    paths: node.paths, now: () => T0 }), "", "a real autonomous continuation is still budget-denied");
+  assert.equal(node.turns().length, 1);
   node.tick(10 * 60_000 + 1);
   await node.poll();
-  assert.equal(fs.readFileSync(node.ticket, "utf8"), first);
+  assert.notEqual(node.admission().ticket.generation, first);
+  assert.equal(getMessageProgress(node.paths.inbox, ID)?.code, "awaiting-user-turn");
   assert.equal(node.turns().length, 1);
-  assert.equal(getMessageProgress(node.paths.inbox, ID)?.code, "budget-exhausted");
   node.retained();
 });
 
-for (const invalidation of ["ttl", "policy"]) test(`${invalidation} invalidates a failed admission; later publication spends fresh budget`, async (t) => {
+test("a genuine Stop continuation books exactly one turn after a budget-free hint", async (t) => {
+  const node = setup(t);
+  await node.poll();
+  assert.equal(node.turns().length, 1);
+  const input = { session_id: OWNER, permission_mode: "default", hook_event_name: "Stop", stop_hook_active: false };
+  const output = deliverForCodex(input, { paths: node.paths, now: () => T0 });
+  assert.equal(JSON.parse(output).decision, "block");
+  assert.deepEqual(JSON.parse(fs.readFileSync(node.turnFile, "utf8")).turns,
+    [...JSON.parse(node.turnBytes.toString()).turns, T0]);
+  assert.equal(deliverForCodex({ ...input, stop_hook_active: true }, { paths: node.paths, now: () => T0 }), "");
+  assert.equal(JSON.parse(fs.readFileSync(node.turnFile, "utf8")).turns.length, 2);
+  node.retained();
+});
+
+for (const invalidation of ["ttl", "policy"]) test(`${invalidation} invalidates a failed admission; later publication books no real turn`, async (t) => {
   const node = setup(t);
   fs.writeFileSync(node.ticket + ".lock", "held");
   await node.poll();
@@ -105,11 +135,11 @@ for (const invalidation of ["ttl", "policy"]) test(`${invalidation} invalidates 
   fs.unlinkSync(node.ticket + ".lock");
   await node.poll();
   assert.notEqual(node.admission().ticket.generation, first.ticket.generation);
-  assert.equal(node.turns().length, 2);
+  assert.equal(node.turns().length, 1);
   node.retained();
 });
 
-test("restart recovers valid retry metadata; loss of metadata requires new budget", async (t) => {
+test("restart recovers valid retry metadata; loss of metadata requires fresh admission without a real turn", async (t) => {
   const node = setup(t);
   fs.writeFileSync(node.ticket + ".lock", "held");
   await node.poll();
@@ -133,7 +163,7 @@ test("restart recovers valid retry metadata; loss of metadata requires new budge
   fs.unlinkSync(node.metadata);
   restart(T0 + TURN_SPACING_MS + 1);
   assert.notEqual(node.admission().ticket.generation, first.ticket.generation);
-  assert.equal(node.turns().length, 2);
+  assert.equal(node.turns().length, 1);
   node.retained();
 });
 
