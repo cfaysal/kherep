@@ -40,14 +40,18 @@ The installer copies the dispatcher, its literal classifier, the existing hook a
 
 ## Quiet peer-message feedback
 
-The installer also projects an independent native `PostToolUse` delivery group
-for busy original-owner turns. A successful authorized queue submission publishes
-a bounded metadata ticket; the native owner gate excludes children before local
-storage reads, and fresh policy plus at most eight current records control its
-claim. A persisted claim emits one compact developer-context hint. No peer body,
-path or receive command appears in it. Existing receive/confirmation paths still
-own offers and receipts; the persistent queue remains the fallback without a tool
-boundary or on a quiet failure. See the [Control Plane contract](../modules/control-plane/ARCHITECTURE.md#codex-busy-turn-hint-admission).
+The installer also projects an independent synchronous native `PostToolUse`
+delivery group for busy original-owner turns. Authorized, budgeted CP admission
+publishes a bounded metadata ticket directly, without a native queue submission.
+The native owner gate excludes children before local storage reads, and fresh
+policy plus at most eight current records control its claim. A persisted claim
+emits one compact `additionalContext` hint in the original owner's running turn
+at the next supported tool boundary. No peer body, path or receive command
+appears in it, and it does not interrupt sampling. Idle or reasoning without
+another tool boundary waits for the next original-owner intake. Existing
+receive/confirmation paths still own offers and receipts; admission and claim
+leave content accepted in the persistent CP Inbox. Quiet failures retain that
+content, with no native queue fallback. See the [Control Plane contract](../modules/control-plane/ARCHITECTURE.md#codex-busy-turn-hint-admission).
 
 Exact predecessor renders retain their bytes. The upgrade checks external
 PostToolUse group positions after verified managed-tail reanchoring and refuses
