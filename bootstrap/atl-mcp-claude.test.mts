@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,7 @@ import {
   OAUTH_PLUGIN, classifyEntry, desiredEntry, registerAtlassianMcp, type ClaudeRun,
 } from "./atl-mcp-claude.mts";
 
+const STEP = path.join(import.meta.dirname, "atl-mcp-claude.mts");
 const TEMP = process.platform === "win32" ? os.tmpdir() : fs.realpathSync(os.tmpdir());
 
 interface Host {
@@ -150,4 +152,58 @@ test("classifies only the exact wrapper entry as Kherep's", () => {
   assert.equal(classifyEntry({ ...desired, args: ["/x/other.mts"] }, desired), "operator-owned");
   assert.equal(classifyEntry({ ...desired, env: { ...desired.env, KHEREP_MCP_AUTH_FILE: "/y.txt" } }, desired),
     "kherep-previous");
+});
+
+// Issue #382. A local-scope entry in the same registry takes precedence in its
+// directory: it is named, never touched, and only for an installation that ran.
+test("names a local-scope entry that shadows the managed server and leaves it as it is", (t) => {
+  const stale = { type: "sse", url: "https://mcp.atlassian.com/v1/sse" };
+  const h = host(t, {
+    mcpServers: {},
+    projects: {
+      "/Users/operator": { mcpServers: { atlassian: stale } },
+      "/Users/operator/repo": { mcpServers: { keep: { command: "keep" } } },
+      "/Users/operator/empty": {},
+    },
+  });
+  const result = registerAtlassianMcp(options(h));
+  assert.equal(result.status, "configured");
+  assert.deepEqual(result.shadowedIn, ["/Users/operator"]);
+  const registry = JSON.parse(fs.readFileSync(h.registryFile, "utf8"));
+  assert.deepEqual(registry.projects["/Users/operator"].mcpServers.atlassian, stale);
+
+  fs.rmSync(h.tokenFile);
+  assert.equal(registerAtlassianMcp(options(h)).shadowedIn, undefined, "a skipped installation reports nothing else");
+});
+
+test("the step exits 1 and prints the removal command for a shadowing entry", (t) => {
+  const home = fs.mkdtempSync(path.join(TEMP, "atl-mcp-claude-cli-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const claudeHome = path.join(home, ".claude");
+  const tokenFile = path.join(claudeHome, "kherep", "atl-mcp-credential-claude.txt");
+  fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
+  fs.writeFileSync(tokenFile, `${"k".repeat(48)}\n`, { mode: 0o600 });
+  const registryFile = path.join(home, ".claude.json");
+  fs.writeFileSync(registryFile, JSON.stringify({ projects: { [home]: { mcpServers: { atlassian: { type: "sse" } } } } }));
+  // A fake claude CLI: add-json writes the user scope, plugin list reports nothing.
+  const fake = path.join(home, "fake-claude.mjs");
+  fs.writeFileSync(fake, [
+    "import fs from 'node:fs';",
+    "const [, , ...args] = process.argv;",
+    `const file = ${JSON.stringify(registryFile)};`,
+    "if (args[0] === 'mcp' && args[1] === 'add-json') {",
+    "  const value = JSON.parse(fs.readFileSync(file, 'utf8'));",
+    "  value.mcpServers = { ...value.mcpServers, [args[4]]: JSON.parse(args[5]) };",
+    "  fs.writeFileSync(file, JSON.stringify(value));",
+    "} else if (args.join(' ') === 'plugin list --json') process.stdout.write('[]');",
+  ].join("\n"));
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home,
+    KHEREP_CLAUDE_BIN: process.execPath, KHEREP_CLAUDE_BIN_ARGS_JSON: JSON.stringify([fake]) };
+  for (const key of Object.keys(env)) if (key.startsWith("KHEREP_ATL_")) delete env[key];
+  const run = spawnSync(process.execPath, [STEP, "--claude-home", claudeHome], { env, encoding: "utf8", timeout: 60_000 });
+  assert.equal(run.status, 1, run.stdout + run.stderr);
+  assert.match(run.stdout, /atl-mcp-claude: configured:/);
+  assert.ok(run.stdout.includes(`WARNING a local-scope 'atlassian' entry for ${home} shadows`), run.stdout);
+  assert.ok(run.stdout.includes(`cd ${JSON.stringify(home)} && claude mcp remove atlassian -s local`), run.stdout);
+  assert.doesNotMatch(run.stdout + run.stderr, /k{48}/);
 });
