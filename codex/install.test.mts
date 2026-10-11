@@ -175,6 +175,7 @@ function withoutAtlassianDestructiveGuard(config: string, hookDir: string): stri
 }
 
 function beforePostEditDispatcher(config: string, hookDir: string): string {
+  config = beforeShellDispatcher(config, hookDir);
   const dispatcherCommand = command(process.execPath, path.join(hookDir, "codex-post-edit-checks.mts"));
   const dispatcherGroup = hookGroup("PostToolUse", POST_EDIT_MATCHER, [{
     command: dispatcherCommand, commandWindows: `& ${dispatcherCommand}`,
@@ -188,6 +189,23 @@ function beforePostEditDispatcher(config: string, hookDir: string): string {
   const predecessor = config.replace(dispatcherGroup, hookGroup("PostToolUse", POST_EDIT_MATCHER, predecessorHooks));
   assert.notEqual(predecessor, config, "the current dispatcher group must be present exactly");
   return withoutAtlassianDestructiveGuard(predecessor, hookDir).replace(/\n\n\[\[hooks\.PostToolUse\]\]\nmatcher = "\.\*"\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = .*deliver-hook\.mts.*\n(?:commandWindows = .*\n)?timeout = 10(?=\n)/, "");
+}
+
+// Reconstruct the exact pre-#386 group before deriving older fixtures.
+function beforeShellDispatcher(config: string, hookDir: string): string {
+  const attribution = path.resolve(here, "..", "modules", "control-plane", "node", "attribution-hook.mts");
+  const current = command(process.execPath, path.join(hookDir, "codex-shell-checks.mts"), attribution, "--runtime", "codex");
+  const matcher = "Bash|shell_command|exec_command|functions\\.exec";
+  const currentGroup = hookGroup("PreToolUse", matcher, [{ command: current, commandWindows: `& ${current}`, timeout: 40 }]);
+  const guards = [["commit-guard", "pre"], ["deploy-guard", "pre-no-transcript"], ["main-checkout-guard", "pre"]]
+    .map(([name, phase]) => {
+      const cmd = command(process.execPath, path.join(hookDir, "codex-hook-adapter.mts"), path.join(hookDir, `${name}.mts`), phase!);
+      return { command: cmd, commandWindows: `& ${cmd}` };
+    });
+  const attr = command(process.execPath, attribution, "--runtime", "codex");
+  const previous = hookGroup("PreToolUse", matcher, [...guards, { command: attr, commandWindows: `& ${attr}` }]);
+  assert.ok(config.includes(currentGroup));
+  return config.replace(currentGroup, previous);
 }
 
 test("installs native Codex research hooks and every local dependency idempotently", (t) => {
@@ -1617,7 +1635,8 @@ test("wires the control-plane delivery hook from the checkout and upgrades a blo
   // hook that only comes with them, and the commandWindows forms (issue #68) the
   // block is the one the previous installer wrote, and a reinstall recognises and
   // upgrades it.
-  const previous = config.replace(`\n\n${groups}`, "").replace(/^commandWindows = .*\n/gm, "")
+  const hookDir = path.join(installOptions.codexHome, "hooks", "kherep-maestro");
+  const previous = beforeShellDispatcher(config, hookDir).replace(`\n\n${groups}`, "").replace(/^commandWindows = .*\n/gm, "")
     .replace(/\n\n\[\[hooks\.PostToolUse\]\]\nmatcher = "\.\*"\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = .*deliver-hook\.mts.*\ntimeout = 10(?=\n)/, "")
     .replace(/^\[sandbox_workspace_write\]\nwritable_roots = .*\n\n/m, "")
     .replace(/\n\n\[\[hooks\.PostToolUse\]\]\nmatcher = "Bash[^\n]*\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = .*attribution-hook\.mts.*\ntimeout = 10(?=\n)/, "")

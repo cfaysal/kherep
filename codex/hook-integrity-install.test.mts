@@ -145,9 +145,9 @@ test("3. a missing commit-guard.mts is restored", (t) => {
   const ctx = fixture(t);
   fs.rmSync(path.join(ctx.hookDir, "commit-guard.mts"));
   const result = run(ctx);
-  assert.match(String(result.context), /kherep-maestro\/commit-guard\.mts: wired but not present on disk/);
+  assert.match(String(result.context), /kherep-maestro\/commit-guard\.mts \(imported by [^)]*codex-shell-checks\.mts\): imported but not present on disk/);
   assertRestored(ctx, result, "commit-guard.mts", "claude/hooks/commit-guard.mts");
-  assert.equal(journal(ctx.codexHome)[0]?.kind, "wired");
+  assert.equal(journal(ctx.codexHome)[0]?.kind, "import");
 });
 
 test("4. an ESM syntax error in codex-cbm-reminder.mts is restored from codex/hooks", (t) => {
@@ -194,7 +194,7 @@ test("7. without a checkout nothing is written and the result is NOT restored", 
   fs.writeFileSync(file, "");
   const result = run(ctx);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(String(result.context), /commit-guard\.mts: 0 bytes .* NOT restored \(no checkout resolved/);
+  assert.match(String(result.context), /commit-guard\.mts \(imported by [^)]*codex-shell-checks\.mts\): 0 bytes .* NOT restored \(no checkout resolved/);
   assert.equal(fs.statSync(file).size, 0);
   assert.equal(journal(ctx.codexHome)[0]?.restoreProven, false);
 });

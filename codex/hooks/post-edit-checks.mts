@@ -49,6 +49,10 @@ function finding(output: string, watcher: string): Finding | null {
 function run(payload: HookPayload): number {
   const findings: Finding[] = [];
   for (const normalized of planPostEditPayloads(payload)) {
+    // All four versioned watchers reject Bash before inspecting input. Keep
+    // patch extraction and its conservative normalization; skip only that
+    // proven no-op outcome, rather than attempting to classify shell commands.
+    if (normalized.tool_name === "Bash") continue;
     for (const watcher of WATCHERS) {
       const target = path.join(import.meta.dirname, watcher);
       const result = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", target], {

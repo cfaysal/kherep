@@ -106,5 +106,7 @@ test("an install from another checkout points the attribution hook at the curren
   const result = prepareManagedConfig(written, managed(CHECKOUT));
   assert.equal(result.managedFragment, "replaced");
   assert.doesNotMatch(result.config, /synthetic\/other\//);
-  assert.equal([...result.config.matchAll(new RegExp(ATTRIBUTION.source, "gm"))].length, 2);
+  assert.equal([...result.config.matchAll(new RegExp(ATTRIBUTION.source, "gm"))].length, 1,
+    "PostToolUse keeps direct attribution; PreToolUse calls it in the dispatcher");
+  assert.match(result.config, /codex-shell-checks\.mts[^\n]*attribution-hook\.mts/);
 });

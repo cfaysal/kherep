@@ -31,7 +31,8 @@ function preGroups(config: string): string[][] {
 const block = (body: string): string => `${START}\n${body.trim()}\n${END}\n`;
 
 test("the guard is the last entry of the MCP group, and no PreToolUse key moves", () => {
-  const current = preGroups(parity.render(renderOptions));
+  // Isolate the historical guard addition from the later shell consolidation.
+  const current = preGroups(parity.renderBeforeShellDispatcher(renderOptions));
   const previous = preGroups(parity.renderBeforeAtlassianDestructiveGuard(renderOptions));
   assert.equal(current.length, previous.length, "no PreToolUse group added");
   const mcp = current.findIndex(([header]) => header!.includes("|mcp__.*"));
@@ -45,7 +46,7 @@ test("the guard is the last entry of the MCP group, and no PreToolUse key moves"
 
 test("every historical renderer predates the guard", () => {
   for (const [name, value] of Object.entries(parity)) {
-    if (/^render(Before|Previous|Legacy)/.test(name) && typeof value === "function") {
+    if (name !== "renderBeforeShellDispatcher" && /^render(Before|Previous|Legacy)/.test(name) && typeof value === "function") {
       assert.doesNotMatch((value as typeof parity.render)(renderOptions), /atlassian-destructive-guard/, name);
     }
   }

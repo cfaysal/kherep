@@ -54,15 +54,12 @@ export function sessionContext(): string {
 export function turnContext(): string {
   return [
     "MAESTRO TURN CHECK:",
-    "1. Ground load-bearing claims in current primary evidence; unresolved facts are UNKNOWN.",
-    "2. Classify privacy before tool use. Private material is forbidden to Codex/cloud paths.",
-    "3. Delegate only for parallelism, specialization, context isolation, or an independent lens; never overlap writes.",
-    "4. Bound every worker by objective, scope, constraints, evidence, and return format. Maestro keeps final acceptance.",
-    "5. Before done, inspect the final diff and report C1 correctness, C2 verification, C3 safety, and C4 scope integrity.",
-    "6. Do not claim memory of prior sessions unless the active context or current artifacts establish it.",
-    "7. Trivial conversation skips orchestration ceremony.",
-    "8. Before final, dispatch codex-obs once with agent_type codex-obs, model gpt-5.6-luna, reasoning_effort low, fork_turns none; pass only a bounded nonprivate summary and require strict JSON.",
-    "9. Validate candidates; publish nonempty observations only from the Maestro through the configured Codex Confluence broker when observationPublishingAuthorized is literal true. Empty means zero writes; keep routine observation status out of the user answer.",
+    "Use current primary evidence; unresolved facts are UNKNOWN. Prior-session memory needs active context or current artifacts.",
+    "Classify privacy before tools; private material is forbidden to Codex/cloud paths.",
+    "Delegate only for parallelism, specialization, isolation or independent review; never overlap writes. Bound workers by objective, scope, constraints, evidence and return format; Maestro owns acceptance.",
+    "Inspect the final diff; report C1 correctness, C2 verification, C3 safety and C4 scope integrity. Trivial conversation skips ceremony.",
+    "Before final, dispatch codex-obs once: agent_type codex-obs, model gpt-5.6-luna, reasoning_effort low, fork_turns none; bounded nonprivate summary, strict JSON.",
+    "Validate candidates; only Maestro publishes through the configured Codex Confluence broker when observationPublishingAuthorized is literal true. Empty means zero writes; omit routine observation status.",
   ].join("\n");
 }
 

@@ -252,7 +252,7 @@ test("upgrades the exact pre-main-checkout-guard managed block and then settles"
     assert.doesNotMatch(previous, /main-checkout-guard/);
     assert.match(previous, /codex-hook-integrity\.mts/);
     const upgraded = prepareManagedConfig(`${managed.startMarker}\n${previous}${managed.endMarker}`, managed).config;
-    assert.match(upgraded, /main-checkout-guard\.mts/);
+    assert.match(upgraded, /codex-shell-checks\.mts/);
     assert.equal(prepareManagedConfig(upgraded, managed).config, upgraded);
   }
   for (const historical of [renderBeforeHookIntegrity(options), renderBeforeResearchHooks(options),

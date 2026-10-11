@@ -4,8 +4,8 @@
 // to .mts each one has to still block, run exactly the way Codex runs it: the
 // command string from the installed config.toml (through codex-hook-adapter.mts
 // where the projection wires it so), under its wired event and matcher. A wiring
-// that points at a missing or empty file exits without a block; that is
-// fail-open, and these tests fail on it. An upgrade over a block the previous
+// that points at a missing or empty shell guard must deny through the dispatcher.
+// An upgrade over a block the previous
 // installer wrote (.js names) must replace that block and remove the old copies.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -64,9 +64,10 @@ function wiredHooks(config: string): WiredHook[] {
   return found;
 }
 
-// The one wired hook whose command runs <guard>.mts from the hook dir.
+// Shell guards run through one installed dispatcher; Playwright stays direct.
 function wiredGuard(config: string, hookDir: string, guard: string): WiredHook {
-  const script = `"${path.join(hookDir, `${guard}.mts`)}"`;
+  const target = guard === "playwright-file-guard" ? `${guard}.mts` : "codex-shell-checks.mts";
+  const script = `"${path.join(hookDir, target)}"`;
   const hits = wiredHooks(config).filter((hook) => hook.command.includes(script));
   assert.equal(hits.length, 1, `config.toml wires ${guard}.mts exactly once`);
   return hits[0]!;
@@ -115,7 +116,7 @@ function assertGuardsBlock(config: string, hookDir: string): void {
     assert.equal(hook.event, "PreToolUse", item.guard);
     assert.equal(hook.matcher, item.matcher, item.guard);
     assert.ok(new RegExp(hook.matcher).test(item.tool), `${item.guard} matcher covers ${item.tool}`);
-    assert.match(hook.command, /codex-hook-adapter\.mts"/, `${item.guard} runs through the adapter`);
+    assert.match(hook.command, /codex-shell-checks\.mts"/, `${item.guard} runs through the installed dispatcher`);
     const blocked = runWired(hook, { tool_name: item.tool, tool_input: { command: item.blocking }, cwd: hookDir });
     assert.equal(blocked.status, 0, `${item.guard} must answer ${item.blocking} on exit 0; stderr: ${blocked.stderr}`);
     assert.equal(blocked.decision, "deny", `${item.guard} must deny ${item.blocking}; stderr: ${blocked.stderr}`);
@@ -201,15 +202,23 @@ test("an upgrade over the .js projection replaces its block and removes the old 
   assertGuardsBlock(config, hookDir);
 });
 
-test("a wired guard whose file is missing or empty fails these checks", (t) => {
+test("missing or empty installed shell guards deny benign commands", (t) => {
   const { hookDir, options } = fixture(t);
   const config = fs.readFileSync(install(options).targets.config, "utf8");
   for (const broken of ["missing", "empty"] as const) {
-    for (const guard of GUARDS) {
+    for (const guard of [...GUARDS, "main-checkout-guard"]) {
       const file = path.join(hookDir, `${guard}.mts`);
       const original = fs.readFileSync(file);
       if (broken === "missing") fs.rmSync(file); else fs.writeFileSync(file, "");
-      assert.throws(() => assertGuardsBlock(config, hookDir), assert.AssertionError, `${broken} ${guard}`);
+      if (guard === "playwright-file-guard") {
+        assert.throws(() => assertGuardsBlock(config, hookDir), assert.AssertionError, `${broken} ${guard}`);
+      } else {
+        const result = runWired(wiredGuard(config, hookDir, guard), {
+          tool_name: "shell_command", tool_input: { command: "git status --short" }, cwd: hookDir,
+        });
+        assert.deepEqual([result.status, result.decision], [0, "deny"], `${broken} ${guard}: ${result.stderr}`);
+        assert.match(String(result.reason), new RegExp(guard));
+      }
       fs.writeFileSync(file, original);
     }
   }
@@ -222,7 +231,7 @@ test("main-checkout-guard denies git switch feat in the main checkout through it
   const hook = wiredGuard(fs.readFileSync(install(options).targets.config, "utf8"), hookDir, "main-checkout-guard");
   assert.equal(fs.readFileSync(path.join(hookDir, "main-checkout-guard.mts"), "utf8"),
     fs.readFileSync(path.join(import.meta.dirname, "..", "claude", "hooks", "main-checkout-guard.mts"), "utf8"));
-  assert.deepEqual([hook.event, hook.matcher, /codex-hook-adapter\.mts"/.test(hook.command)],
+  assert.deepEqual([hook.event, hook.matcher, /codex-shell-checks\.mts"/.test(hook.command)],
     ["PreToolUse", "Bash|shell_command|exec_command|functions\\.exec", true]);
   const [main, linked] = [path.join(options.workspace, "repo"), path.join(options.workspace, "repo-wt")];
   fs.mkdirSync(main, { recursive: true });
