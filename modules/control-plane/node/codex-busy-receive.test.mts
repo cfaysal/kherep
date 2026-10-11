@@ -8,6 +8,9 @@ import { fileURLToPath } from "node:url";
 import { BUSY_BODY, BUSY_CONTEXT, BUSY_OWNER, busyFixture } from "./codex-busy-fixture.mts";
 import { codexSessionName, legacyCodexSessionName, recordCodexSession } from "./codex-sessions.mts";
 import { writeLocalSessions } from "./exchange.mts";
+import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
+import { listQueueBindings, queueBindingDir } from "./codex-queue-binding.mts";
+import { listenerDir } from "./autonomy.mts";
 import { getMessage } from "./inbox.mts";
 
 const HOOK = fileURLToPath(new URL("./deliver-hook.mts", import.meta.url));
@@ -24,8 +27,28 @@ function commands(node: ReturnType<typeof busyFixture>) {
   return { hook, receive };
 }
 
-test("real hook stdout is compact; only the owner's Receive and existing Stop offer and confirm once", (t) => {
-  const node = busyFixture(t, 1, Date.now());
+test("real CP poll, hook, Receive and Stop offer and confirm once without native artifacts", async (t) => {
+  const now = Date.now();
+  const node = busyFixture(t, 1, now, false);
+  const legacyLedger = path.join(listenerDir(node.paths), `${BUSY_OWNER}.queued.json`);
+  const legacyBinding = path.join(queueBindingDir(node.paths), "00000000-0000-4000-8000-000000000001.json");
+  const card = path.join(node.root, "synthetic-native-queue-card.json");
+  fs.mkdirSync(listenerDir(node.paths), { recursive: true });
+  fs.mkdirSync(queueBindingDir(node.paths), { recursive: true });
+  const seeded = [legacyLedger, legacyBinding, card].map((file, index) => {
+    const bytes = index === 0 ? JSON.stringify({ queued: { [node.ids[0]]: new Date(now).toISOString() } })
+      : JSON.stringify({ syntheticLegacyArtifact: index });
+    fs.writeFileSync(file, bytes); return { file, bytes };
+  });
+  const poll = async () => {
+    pollCodexQueue({ ...node.deps(), now: () => now, codex: { home: path.join(node.root, "empty-home"),
+      findCodex: () => { assert.fail("no native queue or appserver process"); } } });
+    await codexQueueIdle();
+  };
+  await poll();
+  await poll();
+  assert.equal(JSON.parse(fs.readFileSync(node.ticket, "utf8")).messages.length, 1);
+  assert.deepEqual(listQueueBindings(node.paths), [], "no new native binding");
   const { hook, receive } = commands(node);
   const hinted = hook(node.input);
   assert.equal(hinted.status, 0, hinted.stderr);
@@ -33,19 +56,24 @@ test("real hook stdout is compact; only the owner's Receive and existing Stop of
   assert.match(hinted.stderr, /^(?:\(node:\d+\) ExperimentalWarning: Type Stripping is an experimental feature and might change at any time\r?\n\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)\r?\n)?$/);
   assert.deepEqual(JSON.parse(hinted.stdout), { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: BUSY_CONTEXT } });
   assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "accepted");
+  assert.equal(hook(node.input).stdout, "", "claim is once per generation");
+  await poll();
   const received = receive();
   assert.equal(received.status, 0, received.stderr);
   assert.ok(received.stdout.includes(BUSY_BODY));
   const offered = getMessage(node.paths.inbox, node.ids[0])!;
   assert.equal(offered.state, "offered");
   assert.equal(offered.offers, 1);
+  assert.equal(receive().stdout.includes(BUSY_BODY), false, "repeated Receive never reoffers offered content");
+  await poll();
   const stopped = hook({ ...node.input, hook_event_name: "Stop", stop_hook_active: true });
   assert.equal(stopped.status, 0, stopped.stderr);
   assert.equal(stopped.stdout, "");
   assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "delivered");
   assert.equal(hook(node.input).stdout, "");
-  assert.equal(receive().stdout.includes(BUSY_BODY), false, "a later queued pointer does not offer the packet again");
+  assert.equal(receive().stdout.includes(BUSY_BODY), false, "a later intake does not offer the packet again");
   assert.equal(getMessage(node.paths.inbox, node.ids[0])?.offers, 1);
+  for (const { file, bytes } of seeded) assert.equal(fs.readFileSync(file, "utf8"), bytes);
 });
 
 test("an interrupt before confirming Stop leaves the actual offer unconfirmed", (t) => {
@@ -76,4 +104,45 @@ test("a post-admission alias collision cannot deliver a peer body through Receiv
   assert.ok(hook(node.input).stdout.includes(BUSY_CONTEXT), "the existing admission can give a stale metadata hint");
   assert.equal(receive().stdout.includes(BUSY_BODY), false, "Receive still checks current alias uniqueness");
   assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "accepted");
+});
+
+
+test("more than eight admitted IDs and bounded Receive retain every unreturned message", async (t) => {
+  const now = Date.now();
+  const node = busyFixture(t, 12, now, false);
+  // Existing Receive has a per-call maximum of ten messages; no artificial
+  // test receipt is used to confirm the two records outside its actual output.
+  pollCodexQueue({ ...node.deps(), now: () => now, codex: { home: path.join(node.root, "empty-home") } });
+  await codexQueueIdle();
+  assert.equal(JSON.parse(fs.readFileSync(node.ticket, "utf8")).messages.length, 8);
+  const { hook, receive } = commands(node);
+  assert.ok(hook(node.input).stdout.includes(BUSY_CONTEXT));
+  assert.ok(node.ids.every((id) => getMessage(node.paths.inbox, id)?.state === "accepted"));
+  const received = receive();
+  assert.equal(received.status, 0, received.stderr);
+  const returned = node.ids.filter((id) => received.stdout.includes(id));
+  assert.ok(returned.length > 0 && returned.length < node.ids.length);
+  for (const id of node.ids) assert.equal(getMessage(node.paths.inbox, id)?.state,
+    returned.includes(id) ? "offered" : "accepted");
+  const stopped = hook({ ...node.input, hook_event_name: "Stop", stop_hook_active: true });
+  assert.equal(stopped.status, 0, stopped.stderr);
+  for (const id of node.ids) assert.equal(getMessage(node.paths.inbox, id)?.state,
+    returned.includes(id) ? "delivered" : "accepted");
+});
+
+
+test("a real original-owner hint without Receive leaves content accepted", async (t) => {
+  const now = Date.now();
+  const node = busyFixture(t, 1, now, false);
+  pollCodexQueue({ ...node.deps(), now: () => now, codex: { home: path.join(node.root, "empty-home") } });
+  await codexQueueIdle();
+  const { hook } = commands(node);
+  assert.ok(hook(node.input).stdout.includes(BUSY_CONTEXT));
+  assert.equal(hook(node.input).stdout, "");
+  assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "accepted");
+  // A stop_hook_active input confirms actual offers only, without authorizing
+  // another Stop continuation for the unread accepted packet.
+  assert.equal(hook({ ...node.input, hook_event_name: "Stop", stop_hook_active: true }).stdout, "");
+  assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "accepted");
+  assert.equal(getMessage(node.paths.inbox, node.ids[0])?.offers, undefined);
 });

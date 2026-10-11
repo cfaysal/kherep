@@ -53,8 +53,8 @@ test("a Desktop queue keeps the original mailbox and only that chat's hook confi
     assert.equal(getMessage(node.paths.inbox, MESSAGE)?.state, "accepted");
     assert.equal(getMessage(node.paths.inbox, MESSAGE)?.toSession, APP);
     assert.equal(getMessage(node.paths.inbox, MESSAGE)?.closedTo, undefined);
-    assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, "wake-pending");
-    assert.equal(node.launches(), 1, "the public queue producer runs without resuming the thread");
+    assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, "awaiting-user-turn");
+    assert.equal(node.launches(), 0, "the public queue producer runs without resuming the thread");
     assert.deepEqual(listTasks(node.paths), []);
     assert.equal(takeTurn(node.paths, APP, T0), "spacing", "queue admission consumes the shared turn budget");
     const input = { session_id: APP, cwd: node.workspace, permission_mode: "default" };
@@ -78,8 +78,8 @@ test("a Desktop alias remains readable after repeated polls without a confirming
   assert.equal(record.toSession, alias);
   assert.equal(record.offers, undefined);
   assert.equal(record.delivery, undefined);
-  assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, "wake-unconfirmed");
-  assert.equal(node.launches(), 1, "an unconfirmed queue attempt is never repeated");
+  assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, "awaiting-user-turn");
+  assert.equal(node.launches(), 0, "an unconfirmed queue attempt is never repeated");
   assert.deepEqual(listTasks(node.paths), []);
 });
 
@@ -87,22 +87,25 @@ test("a pending or unconfirmed Desktop attempt preserves the original message wi
   for (const queuedAt of [T0, T0 - 11 * 60_000]) {
     const node = setup(t, true);
     fs.mkdirSync(listenerDir(node.paths), { recursive: true });
-    fs.writeFileSync(path.join(listenerDir(node.paths), `${APP}.queued.json`),
-      JSON.stringify({ queued: { [MESSAGE]: new Date(queuedAt).toISOString() } }));
+    const file = path.join(listenerDir(node.paths), `${APP}.queued.json`);
+    const bytes = JSON.stringify({ queued: { [MESSAGE]: new Date(queuedAt).toISOString() } });
+    fs.writeFileSync(file, bytes);
     await node.poll();
     assert.equal(getMessage(node.paths.inbox, MESSAGE)?.state, "accepted");
     assert.equal(getMessage(node.paths.inbox, MESSAGE)?.toSession, APP);
-    assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, queuedAt === T0 ? "wake-pending" : "wake-unconfirmed");
+    assert.equal(getMessageProgress(node.paths.inbox, MESSAGE)?.code, "awaiting-user-turn");
     assert.equal(node.launches(), 0);
+    assert.equal(fs.readFileSync(file, "utf8"), bytes);
+    assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${APP}.busy-hint.json`)), true);
   }
 });
 
 test("a TUI that reads as Desktop but is loaded on the daemon with its marker is queued once listed by full id", async (t) => {
   const listed = setup(t, false, APP, { wake: { sessions: [APP] } });
   await listed.poll();
-  assert.equal(listed.launches(), 1, "an authorized queue does not require a loaded-thread probe");
+  assert.equal(listed.launches(), 0, "an authorized queue does not require a loaded-thread probe");
   await listed.poll();
-  assert.equal(listed.launches(), 1, "the second round does not repeat the queue");
+  assert.equal(listed.launches(), 0, "the second round does not repeat the queue");
   assert.equal(getMessage(listed.paths.inbox, MESSAGE)?.toSession, APP);
   assert.deepEqual(listTasks(listed.paths), [], "no intercom task or second writer");
   const granted = setup(t, false, APP, { wake: { codexApp: true } });

@@ -40,7 +40,7 @@ export function consumeBusyHint(input: unknown, deps: HookDeps): string {
     });
     return result.status === "hint" ? contextOutput("PostToolUse", HINT) : "";
   } catch {
-    // Metadata/read/claim failure leaves the persistent native queue intact.
+    // Metadata/read/claim failure leaves the persistent CP Inbox intact.
     return "";
   }
 }

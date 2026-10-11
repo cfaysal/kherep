@@ -102,6 +102,7 @@ writeTask(paths, { taskId: id(99), runtime: "codex", name: "synthetic-task", ses
   permissionMode: "auto", state: "done", deadline: new Date().toISOString(), startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 const config: NodeConfig = { version: 1, controlUrl: "https://control.example.invalid", nodeId: NODE, name: "synthetic",
   publicKey: identity.publicKey, privateKeyFile: paths.privateKey, policyFile: paths.policy, enrolledAt: new Date().toISOString() };
+fs.writeFileSync(paths.config, JSON.stringify(config));
 const daemon = startDaemon(config, paths, () => {}, async () => [], async () => ({ ok: true }));
 try {
   socket.listeners.get("open")?.({});
@@ -197,13 +198,13 @@ try {
   assert.equal(getMessage(paths.inbox, id(4))?.state, "accepted");
   assert.equal(getMessage(paths.inbox, id(5))?.state, "accepted");
   assert.equal(getMessage(paths.inbox, id(6)), null);
-  assert.equal(queues.length, 1); assert.equal(queues[0][2], SID);
-  const ledger = JSON.parse(fs.readFileSync(path.join(paths.dir, "listeners", `${SID}.queued.json`), "utf8"));
-  assert.deepEqual(Object.keys(ledger.queued), [id(4)]);
+  assert.equal(queues.length, 0);
+  const ledger = JSON.parse(fs.readFileSync(path.join(paths.dir, "listeners", `${SID}.busy-admission.json`), "utf8"));
+  assert.deepEqual(ledger.messageIds, [id(4)]);
   assert.equal(exited, 0); assert.equal(frames.some(f => f.type === "command.ack"), false);
   const before = getMessage(paths.inbox, id(4));
   socket.message(frame("message.deliver", body(4))); tick(); await flush(); await codexQueueIdle();
-  assert.deepEqual(getMessage(paths.inbox, id(4)), before); assert.equal(queues.length, 1);
+  assert.deepEqual(getMessage(paths.inbox, id(4)), before); assert.equal(queues.length, 0);
   assert.ok(frames.every((f, i) => !i || f.seq > frames[i - 1].seq));
   assert.ok(frames.every(f => f.ack === 0));
   release(); await flush();

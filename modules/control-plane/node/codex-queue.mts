@@ -1,52 +1,32 @@
 import fs from "node:fs";
-import path from "node:path";
 
-import { bypassesPermissions, isPlainSessionId, listenerDir, takeTurn, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
+import { bypassesPermissions, isPlainSessionId, takeTurn, type AutonomyAction, type WakeGrant } from "./autonomy.mts";
 import { codexHome, currentCodexApp } from "./codex-app.mts";
 import { captureBusyHint, publishAdmittedBusyHint } from "./codex-busy-publish.mts";
-import { saveQueueBinding } from "./codex-queue-binding.mts";
+import { readBusyAdmission, saveBusyAdmission, type BusyAdmission } from "./codex-busy-admission.mts";
+import { busyPolicyFingerprint } from "./codex-busy-policy.mts";
 import { daemonSocket, loadedThreads, probesSettled, tuiMarker, tuiReachability } from "./codex-daemon.mts";
 import { codexInboxRound, type CodexInboxSelector } from "./codex-queue-inbox.mts";
 import { codexSessionRefs, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { note, pruneNoted } from "./codex-wake.mts";
-import { queueArgs, runQueue } from "./codex-queue-run.mts";
 export { guardQueue, QUEUE_TIMEOUT_MS, queueArgs } from "./codex-queue-run.mts";
-import { ensureDir, type NodePaths } from "./config.mts";
 import { progressRecords } from "./delivery-progress.mts";
 import { REOFFER_AFTER_MS } from "./deliver-core.mts";
-import { getMessageProgress, messageIds, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
-import type { NodePolicy } from "./policy.mts";
+import { getMessageProgress, MAX_REPLY_DEPTH, type InboxRecord } from "./inbox.mts";
 import { explicitlyListed, wakeAllowed, wakeBudget } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { listTasks } from "./task-records.mts";
 import { killSwitch } from "./wake-hook.mts";
 
-// Queues a compact pointer for an authorized original Codex session (issue
-// #367). The existing owner consumes persistent queue input; this producer
-// never resumes the thread. Trusted hooks alone offer and confirm peer text
-// from the original mailbox. Queue success is not delivery confirmation.
-//
-// Candidates are recorded Codex sessions seen within 12 hours, except task
-// threads. Both paths use the kill switch, full-id allowlist or codexApp
-// grant, permission-mode check and reply-depth limit. Queue attempts use the
-// shared budget and record at most one attempt per message. A TUI marker with
-// unknown reachability cannot authorize a queue through the app-only grant.
-
-const queuedFile = (paths: NodePaths, sessionId: string): string => path.join(listenerDir(paths), `${sessionId}.queued.json`);
-
-// Message id -> when a queue was run for it; ids no longer in the inbox dropped.
-function readQueued(paths: NodePaths, sessionId: string): Record<string, string> {
-  const queued = readJson<{ queued?: Record<string, string> }>(queuedFile(paths, sessionId))?.queued ?? {};
-  const present = new Set(messageIds(paths.inbox));
-  return Object.fromEntries(Object.entries(queued).filter(([id]) => present.has(id)));
-}
-
-// Queue runs go on their own serial lane, never awaited by the exchange
-// round, with at most one run per session in flight.
+// Admit a compact CP hint for the authorized original Codex owner. The
+// synchronous original-owner hook consumes it at a supported tool boundary;
+// no native queue, thread resume or replacement owner is started. Admission
+// and metadata claims never offer or confirm the persistent Inbox content.
+// Keep the public poll/lane interface for existing intake-window callers.
 let lane: Promise<void> = Promise.resolve();
 const inFlight = new Set<string>();
 
-// Resolves once every queue run started so far has settled (tests, shutdown).
+// Resolves once every hint publication started so far has settled (tests, shutdown).
 export async function codexQueueIdle(): Promise<void> {
   for (let current = lane; ; current = lane) {
     await current;
@@ -122,6 +102,12 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], selectInb
   const waiting = mine.filter((r) => r.state === "accepted");
   if (waiting.length === 0) return;
   const fresh = waiting;
+  const previous = readBusyAdmission(paths, sessionId);
+  if (previous && (previous.ticket.policyFingerprint !== busyPolicyFingerprint(policy)
+    || now >= previous.ticket.expiresAt)) {
+    previous.invalidated = true;
+    try { saveBusyAdmission(paths, previous); } catch { /* the process retains invalidation */ }
+  }
   const ids = (records: InboxRecord[]): string[] => records.map((r) => r.messageId);
   if (!policy.wake) {
     progressRecords(paths, fresh, "waiting", "wake-disabled", now);
@@ -154,7 +140,7 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], selectInb
     progressRecords(paths, deep, "waiting", "reply-limit", now);
     decide(deep, "depth-limit");
   }
-  let due = fresh.filter((r) => (r.depth ?? 0) < MAX_REPLY_DEPTH);
+  const due = fresh.filter((r) => (r.depth ?? 0) < MAX_REPLY_DEPTH);
   if (due.length === 0) return;
   const tuiReachable = reachable(sessionId);
   // Full policy authorization does not require the owner's loaded-thread
@@ -164,62 +150,62 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], selectInb
     progressRecords(paths, due, "waiting", "awaiting-user-turn", now);
     return decide(due, "awaiting-user-turn");
   }
-  const queued = readQueued(paths, sessionId);
-  const pending = due.filter((r) => queued[r.messageId] && now - Date.parse(queued[r.messageId]) < REOFFER_AFTER_MS);
-  const pendingWithoutFailure = pending.filter((record) => getMessageProgress(paths.inbox, record.messageId)?.phase !== "failed");
-  if (pendingWithoutFailure.length > 0) progressRecords(paths, pendingWithoutFailure, "waking", "wake-pending", now);
-  const unconfirmed = due.filter((r) => queued[r.messageId] && !pending.includes(r)
-    && getMessageProgress(paths.inbox, r.messageId)?.phase !== "failed");
-  if (unconfirmed.length > 0) progressRecords(paths, unconfirmed, "waiting", "wake-unconfirmed", now);
-  due = due.filter((r) => !queued[r.messageId]);
-  if (pending.length > 0 || due.length === 0) return;
-  // Audited only for messages about to take the queue decision, not again in
-  // every round while a queued message waits for confirmation.
-  if (tuiReachable) decide(due, "tui-reachable");
-  const budget = takeTurn(paths, sessionId, now, wakeBudget(policy));
-  if (budget === "spacing" || budget === "locked") {
-    progressRecords(paths, due, "waiting", "retry-pending", now);
+  const valid = previous && !previous.invalidated && previous.ticket.admittedAt <= now && now < previous.ticket.expiresAt
+    && previous.ticket.policyFingerprint === busyPolicyFingerprint(policy);
+  const pending = valid && previous.publishedAt !== undefined
+    && now - previous.publishedAt < REOFFER_AFTER_MS
+    && due.some((record) => previous.messageIds.includes(record.messageId));
+  if (pending) {
+    progressRecords(paths, due, "waiting", "awaiting-user-turn", now);
     return;
   }
-  if (budget === "exhausted") {
-    progressRecords(paths, due, "waiting", "budget-exhausted", now);
-    return decide(due, "budget");
+  // Failed publication retries the same budgeted generation. Policy/TTL drift
+  // requires fresh admission; native queue history cannot authorize a retry.
+  let admission: BusyAdmission;
+  if (valid && previous.publishedAt === undefined
+    && due.some((record) => previous.ticket.messages.some((message) => message.messageId === record.messageId))) {
+    admission = previous;
+  } else {
+    if (tuiReachable) decide(due, "tui-reachable");
+    const budget = takeTurn(paths, sessionId, now, wakeBudget(policy));
+    if (budget === "spacing" || budget === "locked") {
+      progressRecords(paths, due, "waiting", "retry-pending", now);
+      return;
+    }
+    if (budget === "exhausted") {
+      progressRecords(paths, due, "waiting", "budget-exhausted", now);
+      return decide(due, "budget");
+    }
+    const ticket = captureBusyHint(deps, sessionId, due, now);
+    if (!ticket) {
+      progressRecords(paths, due, "waiting", "retry-pending", now);
+      return;
+    }
+    admission = { ticket, messageIds: ids(due) };
   }
-  // Recorded first, so a slow or failed queue is not repeated every round.
-  ensureDir(listenerDir(paths));
-  writeJsonAtomic(queuedFile(paths, sessionId),
-    { queued: { ...queued, ...Object.fromEntries(due.map((r) => [r.messageId, new Date(now).toISOString()])) } });
-  progressRecords(paths, due, "waking", "wake-pending", now);
-  const args = queueArgs(sessionId, due.length);
-  const busyHint = captureBusyHint(deps, sessionId, due, now);
+  try { saveBusyAdmission(paths, admission); } catch {
+    log("kherep-node: Codex CP admission persistence failed; inbox remains accepted");
+  }
+  progressRecords(paths, due, "waiting", "retry-pending", now);
   inFlight.add(sessionId);
-  lane = lane.then(() => runQueue(deps, args)).then(
-    (admission) => {
-      if (admission.queueId && admission.producer.route === "local") {
-        try {
-          const stored = saveQueueBinding(paths, {
-            version: 1, owner: admission.owner, queuedSubmissionId: admission.queueId,
-            admissionComplete: true, admissionMessageIds: ids(due), expectedInput: admission.expectedInput,
-            producer: admission.producer,
-          });
-          if (stored === "full") log("kherep-node: Codex queue binding store is full; native queue remains accepted");
-        } catch {
-          log("kherep-node: Codex queue binding persistence failed; native queue remains accepted");
-        }
+  lane = lane.then(() => {
+    const result = publishAdmittedBusyHint(deps, admission.ticket);
+    if (result === "invalid") {
+      admission = { ...admission, invalidated: true };
+      try { saveBusyAdmission(paths, admission); } catch { /* the process retains invalidation */ }
+    }
+    const published = result === "published" || result === "unchanged";
+    if (published) {
+      admission = { ...admission, publishedAt: deps.now?.() ?? Date.now() };
+      try { saveBusyAdmission(paths, admission); } catch {
+        log("kherep-node: Codex CP publication bookkeeping failed; inbox remains accepted");
       }
-      if (busyHint && publishAdmittedBusyHint(deps, busyHint) === "failed") {
-        log("kherep-node: Codex busy hint persistence failed; native queue remains accepted");
-      }
-      decide(due, "wake");
-    },
-    (error: unknown) => {
-      progressRecords(paths, due, "failed", "wake-failed", deps.now?.() ?? Date.now());
-      decide(due, "queue-failed");
-      log(`kherep-node: codex queue for ${sessionId} failed: ${String((error as Error).message ?? error)}`);
-    },
-  ).catch((error: unknown) => {
-    // A failing audit write (ENOSPC, EACCES) must neither reject the lane,
-    // which would skip every later queue run, nor crash the daemon.
-    log(`kherep-node: codex queue bookkeeping for ${sessionId} failed: ${String((error as Error).message ?? error)}`);
+    }
+    progressRecords(paths, due, "waiting", published ? "awaiting-user-turn" : "retry-pending", deps.now?.() ?? Date.now());
+    if (published) decide(due, "wake");
+    else if (result !== "invalid") log("kherep-node: Codex CP hint publication pending; inbox remains accepted");
+  }).catch((error: unknown) => {
+    // Audit/persistence failure must not poison the serial lane.
+    log(`kherep-node: Codex CP hint bookkeeping for ${sessionId} failed: ${String((error as Error).message ?? error)}`);
   }).finally(() => { inFlight.delete(sessionId); });
 }

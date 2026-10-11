@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
+import { listenerDir } from "./autonomy.mts";
 import { codexNode, fakeCodexBin } from "./codex-fixture.mts";
 import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { codexSessionName, legacyCodexSessionName, recordCodexSession } from "./codex-sessions.mts";
@@ -31,7 +32,13 @@ function message(node: ReturnType<typeof queueNode>, toSession: string, now = T0
   return messageId;
 }
 
-const queues = (node: ReturnType<typeof queueNode>) => node.runs().filter((run) => run.argv[0] === "queue");
+const queues = (node: ReturnType<typeof queueNode>) => {
+  assert.deepEqual(node.runs(), [], "CP admission launches no native process");
+  return node.runs();
+};
+const hints = (node: ReturnType<typeof queueNode>): string[] => fs.readdirSync(listenerDir(node.paths))
+  .filter((file) => file.endsWith(".busy-hint.json"))
+  .map((file) => JSON.parse(fs.readFileSync(path.join(listenerDir(node.paths), file), "utf8")).owner);
 
 function actions(node: ReturnType<typeof queueNode>): { action: string; messageIds: string[] }[] {
   const file = path.join(node.paths.dir, "wake.jsonl");
@@ -66,7 +73,7 @@ test("a multi-owner queue round without targets takes one full Inbox snapshot", 
   assert.deepEqual(node.runs().filter((run) => run.argv[0] === "queue"), []);
 });
 
-test("multiple queued owners reread no unrelated message body after the round snapshot", async (t) => {
+test("multiple admitted owners reread no unrelated message body after the round snapshot", async (t) => {
   const node = queueNode(t);
   const owners = OWNERS.slice(0, 3);
   for (const owner of owners) {
@@ -85,11 +92,12 @@ test("multiple queued owners reread no unrelated message body after the round sn
   await codexQueueIdle();
 
   assert.deepEqual([...reads.values()], Array(20).fill(1), "filename cleanup must not reparse unrelated records");
-  assert.deepEqual(queues(node).map((run) => run.argv[2]).sort(), [...owners].sort());
+  assert.deepEqual(queues(node), []);
+  assert.deepEqual(hints(node).sort(), [...owners].sort());
   intercepted.mock.restore();
   pollCodexQueue(node.deps());
   await codexQueueIdle();
-  assert.equal(queues(node).length, owners.length, "pending messages are not queued twice");
+  assert.equal(hints(node).length, owners.length, "pending CP hints are not published twice");
 });
 
 test("a round without an eligible plain Codex owner does not read an Inbox record snapshot", async (t) => {
@@ -125,7 +133,8 @@ test("full ids and aliases route oldest first while an ambiguous alias and task 
   pollCodexQueue(node.deps());
   await codexQueueIdle();
 
-  assert.deepEqual(queues(node).map((run) => run.argv[2]).sort(), [a, b].sort());
+  assert.deepEqual(queues(node), []);
+  assert.deepEqual(hints(node).sort(), [a, b].sort());
   assert.deepEqual(actions(node).filter((entry) => entry.action === "wake")
     .map((entry) => entry.messageIds), [[oldest, newer], [toB]]);
   assert.equal(getMessageProgress(node.paths.inbox, ambiguous)?.code, "ambiguous-target");
@@ -180,13 +189,15 @@ test("targeted refresh rejects records changed after the routing snapshot and us
   await codexQueueIdle();
 
   assert.deepEqual(queues(node), []);
+  assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${owner}.busy-hint.json`)), false);
+  assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${owner}.busy-admission.json`)), false);
   assert.equal(getMessage(node.paths.inbox, delivered)?.state, "delivered");
   assert.equal(getMessage(node.paths.inbox, deleted), null);
   assert.equal(getMessage(node.paths.inbox, readdressed)?.toSession, "different-owner");
   assert.deepEqual(actions(node).filter((entry) => entry.action === "depth-limit").map((entry) => entry.messageIds), [[deep]]);
 });
 
-test("a message arriving after the snapshot waits for the next queue round", async (t) => {
+test("a message arriving after the snapshot waits for the next CP admission round", async (t) => {
   const node = queueNode(t);
   const owner = OWNERS[0];
   recordCodexSession(node.paths, owner, node.workspace, T0, "default");
@@ -206,9 +217,12 @@ test("a message arriving after the snapshot waits for the next queue round", asy
 
   assert.ok(arrived);
   assert.deepEqual(queues(node), [], "the captured round cannot see a later arrival");
+  assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${owner}.busy-hint.json`)), false);
+  assert.equal(fs.existsSync(path.join(listenerDir(node.paths), `${owner}.busy-admission.json`)), false);
   pollCodexQueue(node.deps());
   await codexQueueIdle();
-  assert.deepEqual(queues(node).map((run) => run.argv[2]), [owner]);
+  assert.deepEqual(queues(node), []);
+  assert.deepEqual(hints(node), [owner]);
   assert.equal(getMessage(node.paths.inbox, arrived)?.state, "accepted");
 });
 
