@@ -70,7 +70,11 @@ for (const windows of [false, true]) {
     assert.ok(mcpIndex >= 0);
     assert.match(afterPre[mcpIndex]!.at(-1)!, /atlassian-destructive-guard\.mts/);
     afterPre.forEach((group, index) => {
-      assert.deepEqual([shellIndex, mcpIndex].includes(index) ? group.slice(0, -1) : group, beforePre[index]);
+      if (index === shellIndex) {
+        assert.equal(group[0], beforePre[index]![0], "shell group position and matcher stay intact");
+        assert.equal(group.length, 2, "one dispatcher includes attribution");
+        assert.match(group[1]!, /codex-shell-checks\.mts.*attribution-hook\.mts/);
+      } else assert.deepEqual(index === mcpIndex ? group.slice(0, -1) : group, beforePre[index]);
     });
     assert.match(afterPre[shellIndex]!.at(-1)!, /attribution-hook\.mts/);
     const afterPost = groups(result.config, "PostToolUse");

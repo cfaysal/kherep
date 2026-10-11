@@ -18,6 +18,8 @@ The workspace path must be a single shell word: no whitespace and none of ``| & 
 
 ## 2. Review an isolated installation
 
+For Codex, follow the [isolated candidate procedure](CODEX.md) and inspect the native hook definitions. The shell dispatcher introduced in issue #386 replaces three guard adapters and pre-tool attribution with one command. Existing state and custom groups are preserved, but the changed definition needs host review in `/hooks` and a native-session restart after an authorized update. Repository checks do not establish Desktop activation; use the [bounded host acceptance](CODEX-HOOK-RUNS.md#host-acceptance) to verify guards and Intercom.
+
 This preview writes managed files to a new candidate directory, leaves global, system and workspace Git configuration unchanged and does not install dependencies or start a memory agent. `KHEREP_INSTALL_PREVIEW=1` implies `KHEREP_INSTALL_SKIP_GITCONFIG`, `KHEREP_INSTALL_SKIP_RUNTIME_AGENT`, `KHEREP_INSTALL_SKIP_ATL_CREDENTIAL` and `KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE`, so the preview never reads a real credential file named by an inherited `KHEREP_ATL_CRED_FILE_*` variable and makes no live call. The Git, credential and knowledge-space steps each print one `install: SKIP_<STEP>=1 (by <reason>; ...)` line when skipped.
 
 ```sh

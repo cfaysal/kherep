@@ -106,6 +106,15 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- Codex hooks: one shell dispatcher retains commit, deploy and checkout checks
+  and pre-tool attribution while removing redundant adapter starts. Post-edit
+  dispatch skips four watcher children for normalized Bash inputs, which all
+  four watchers already reject. Per-turn reminders retain their rules with
+  less text. The synthetic fixture runs 41 rather than 65 hook commands and
+  85 rather than 121 processes; native Desktop counts remain unmeasured.
+  Exact upgrades preserve operator state and require review of the new hook
+  definition (issue #386).
+
 - Atlassian MCP: with the optional Atlassian tool set, both runtimes reach the
   v2 Atlassian remote MCP server (`https://mcp.atlassian.com/v2/mcp`) as their
   own Atlassian service account instead of the operator's personal OAuth login.

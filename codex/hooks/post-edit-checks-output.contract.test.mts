@@ -105,6 +105,18 @@ test("keeps a successful no-op silent", () => {
   assert.equal(result.stdout, "");
 });
 
+test("the four real watchers reject normalized Bash, even with paths and text that would trigger an edit", () => {
+  materialize();
+  for (const watcher of WATCHERS) {
+    const result = run({ tool_name: "Bash", session_id: "synthetic-bash-noop", tool_input: {
+      file_path: watcher === "manifest-watch" ? MANIFEST : watcher === "umlaut-translit-watch" ? GERMAN : LARGE,
+      new_string: "Das ist fuer die naechste Pruefung.", command: "synthetic",
+    } }, path.join(INSTALLED, `${watcher}.mts`));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "", `${watcher} must remain a Bash no-op for the dispatcher optimization`);
+  }
+});
+
 test("does not hide a child failure as an all-green result", () => {
   const hooks = path.join(TEMP, "synthetic-hooks");
   const hook = materialize(hooks);

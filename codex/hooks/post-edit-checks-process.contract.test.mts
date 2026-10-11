@@ -105,12 +105,11 @@ test("measures twelve children for three recognized patch targets and keeps path
   assert.equal(fs.existsSync(path.join(ROOT, "payload-sentinel")), false);
 });
 
-test("measures four children for an unknown wrapper and twelve when its patch has three targets", () => {
+test("measures zero children for Bash fallbacks and twelve for three extracted edit targets", () => {
   const unknown = run({
     cwd: ROOT, tool_name: "functions.exec", tool_input: "await tools.future_tool({value: 1});",
   });
-  assert.equal(unknown.length, 4);
-  assert.ok(unknown.every(({ tool_name }) => tool_name === "Bash"));
+  assert.equal(unknown.length, 0);
 
   const mixed = run({
     cwd: ROOT,
@@ -126,7 +125,6 @@ test("measures four children for an unknown wrapper and twelve when its patch ha
     'await tools.mcp__codebase_memory_mcp__search_graph({`query`:"hooks"});',
   ]) {
     const records = run({ cwd: ROOT, tool_name: "functions.exec", tool_input: malformed });
-    assert.equal(records.length, 4, malformed);
-    assert.ok(records.every(({ tool_name }) => tool_name === "Bash"));
+    assert.equal(records.length, 0, malformed);
   }
 });

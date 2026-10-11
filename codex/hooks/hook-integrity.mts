@@ -32,11 +32,15 @@ const SELF = "kherep-maestro/codex-hook-integrity.mts";
 // dispatch-contract-guard.mts requires obs-brief-policy the same way (issue #331),
 // so the walk reads them as imports of the guard that loads them.
 const COMPUTED: Record<string, string[]> = {
+  // Registers the child guard edges appended by computedImports below.
+  "kherep-maestro/codex-shell-checks.mts": [],
   "kherep-maestro/codex-privacy-boundary-guard.mts": ["workspace-scope", "private-path-policy", "private-path-rules", "real-path-policy"],
   "kherep-maestro/codex-dispatch-contract-guard.mts": ["obs-brief-policy"],
 };
 export const ALWAYS_CHECK = Object.values(COMPUTED).flat().map((name) => `./lib/${name}.mts`);
-const computedImports = (rel: string): string => (COMPUTED[rel] || []).map((name) => `\nimport "./lib/${name}.mts";`).join("");
+const computedImports = (rel: string): string => (COMPUTED[rel] || []).map((name) => `\nimport "./lib/${name}.mts";`).join("")
+  + (rel === "kherep-maestro/codex-shell-checks.mts"
+    ? ["commit-guard", "deploy-guard", "main-checkout-guard"].map(name => `\nimport "./${name}.mts";`).join("") : "");
 const RENDERED = new Set(["kherep-maestro/codex-observation-stop.mts", "kherep-maestro/codex-observation-turn-completion.mts"]);
 // Copied from codex/hooks under their own name; every other plain name is a shared Claude guard.
 const CODEX_HELPERS = new Set(["acceptance-policy.mts", "obs-candidate-policy.mts", "research-common.mts", "research-exec-parser.mts",

@@ -150,16 +150,17 @@ function denyOutput(reason: string): string {
   } });
 }
 
-function main(): void {
-  const target = process.argv[2];
-  const phase = process.argv[3] || "pre";
-  if (!target || !path.isAbsolute(target)) process.exit(0);
-  let payload: HookPayload;
-  try { payload = JSON.parse(fs.readFileSync(0, "utf8")); } catch { process.exit(0); }
+export interface AdaptedResult { stdout: string; stderr: string; status: number }
+
+// Also used by the shell dispatcher: reuse the exact normalization and guard
+// invocation without starting one adapter process per guard.
+export function runAdaptedHook(target: string, phase: string, payload: HookPayload, timeoutMs?: number): AdaptedResult {
   const preToolUse = PRE_TOOL_USE_PHASES.has(phase);
   // PreToolUse stdout waits until no later item blocks, so a deny stays the one
   // JSON document on stdout.
   let held = "";
+  let stderr = "";
+  const deadline = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
   for (const item of normalizePayloads(payload, phase)) {
     const normalized = phase === "pre-no-transcript"
       ? normalizeDeployApproval({ ...item, transcript_path: null }) : item;
@@ -169,27 +170,36 @@ function main(): void {
       encoding: "utf8",
       input: JSON.stringify(normalized),
       windowsHide: true,
+      ...(deadline === undefined ? {} : { timeout: Math.max(1, deadline - Date.now()) }),
     });
     if (preToolUse && result.status === 2) {
-      if (result.stderr) process.stderr.write(result.stderr);
       const reason = result.stderr.trim() || `${path.basename(target)} blocked this tool call without giving a reason.`;
-      process.stdout.write(denyOutput(reason));
-      return;
+      return { stdout: denyOutput(reason), stderr: stderr + result.stderr, status: 0 };
     }
     if (result.stdout) {
-      if (!preToolUse) process.stdout.write(result.stdout);
+      if (!preToolUse) held += result.stdout;
       else {
         held += result.stdout;
         if (phase === "pre-privacy") break;
       }
     }
-    if (result.stderr) process.stderr.write(result.stderr);
-    if (result.status) {
-      process.exitCode = result.status;
-      break;
-    }
+    if (result.stderr) stderr += result.stderr;
+    if (result.error || result.signal || result.status !== 0)
+      return { stdout: held, stderr, status: result.status || 1 };
   }
-  process.stdout.write(held);
+  return { stdout: held, stderr, status: 0 };
+}
+
+function main(): void {
+  const target = process.argv[2];
+  const phase = process.argv[3] || "pre";
+  if (!target || !path.isAbsolute(target)) return;
+  let payload: HookPayload;
+  try { payload = JSON.parse(fs.readFileSync(0, "utf8")); } catch { return; }
+  const result = runAdaptedHook(target, phase, payload);
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
+  process.exitCode = result.status;
 }
 
 // Node loads the main module from its real path, so a script started through a

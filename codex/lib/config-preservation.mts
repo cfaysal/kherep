@@ -337,6 +337,7 @@ function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
       next, { ...currentRenderOptions, pluginMcpServers: plugins }, legacyRenderOptions, predecessorRenderOptions,
     );
     return [
+      ...[...currentVariants, ...beforeControlPlaneWindowsVariants].map(parityConfig.renderBeforeShellDispatcher),
       ...[...currentVariants, ...beforeControlPlaneWindowsVariants,
         beforeWindowsCommands, beforeControlPlane].flatMap((current) => {
         const previousStop = { ...current, observationStopHook: false };
