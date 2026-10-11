@@ -111,7 +111,8 @@ function fixtureMcpServers(root: string): Record<string, unknown> {
 }
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-codex-install-"));
+  const tempRoot = process.platform === "win32" ? os.tmpdir() : fs.realpathSync(os.tmpdir());
+  const root = fs.mkdtempSync(path.join(tempRoot, "kherep-codex-install-"));
   const codexHome = path.join(root, "home with spaces", ".codex");
   const claudeConfigDir = path.join(root, "home with spaces", ".claude");
   const claudeRegistryFile = path.join(root, "home with spaces", ".claude.json");
