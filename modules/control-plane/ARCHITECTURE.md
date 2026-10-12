@@ -243,18 +243,21 @@ Delivery hooks own `inbox/<messageId>.json`; the daemon owns `inbox/progress/<me
 Senders read `running` and `stopped` as refinements of `accepted`, derived from those progress codes by one shared function (`senderState`). No new wire state exists, because an older Worker rejects an unknown state in `isNodeMessageStatusBody` and would leave a newer node retrying forever. An accepted message without progress for 5 minutes is shown with a fixed actionable reason instead of a bare `accepted`; the bound is evaluated on the sender, so it also covers an offline or older target node. The MCP `status` tool applies the same two functions to the Worker's stored state, progress and `updated_at` against the Worker's clock and adds `senderState` and a fixed `hint` beside the unchanged canonical `state`. `running` is not a liveness signal: progress is written on change only, so it reports the last observation and its `observedAt`.
 
 Claude progress comes from the current successful session snapshot and freshly loaded node policy. Each accepted message resolves once: an exact session id precedes names, a unique name resolves to one session, and a shared name produces one stable `ambiguous-target` observation. An already offered message remains `awaiting-turn-confirmation`. An idle authorized Claude session reports `waking`/`wake-pending` only for messages the live listener covers: its scope file (`listeners/<session_id>.scope.json`, valid while its token matches the lock) says whether it is listed, which task grant it uses, and whether it wakes for replies; a listener without one, from an older node version, covers only task-granted messages. With `wake.replies` a reply to an unlisted session's own recent message, or a message of a task it requested from the node that runs it, counts as authorized (the reply and task message grants, `node/wake-reply.mts`, issues #253 and #264) and reports `waking`/`wake-pending` only under a scope with `replies`. Every other authorized message reports `waiting`/`awaiting-user-turn` (issue #213). That existing code is reused on purpose: a new code would make an older Worker reject the whole `message.status` in `isNodeMessageStatusBody`. Codex interactive progress annotates CP admission and original-owner intake. For Codex task sessions, the message resume records the code of the guard that holds it, `wake-failed` for a failed start and `awaiting-turn-confirmation` for the messages a run carries, while a separate observer marks messages for active tasks `target-busy` and for operator-stopped tasks `operator-stopped`. Closed-session fallback annotates its existing start or resume path; each of its refusals names the existing code of its guard at the call site, and `fallback-failed` is reserved for a start or resume that failed (issue #230), so a policy refusal is never reported as a failed launch. These observations add no wake attempt, permission, transcript read, or message-body persistence.
+
 ## Sender notices
 
 `node/sent-notices.mts` selects what the delivery hook tells a session about
 messages it sent, in one read of the node's `sent/` records that carry no
 `noticedAt`: failures (`refused`, `expired`, issue #31) whose `fromSession` is
 the session's id or name, and receipts (`delivered`, issue #402) whose
-`fromSessionId` or `fromSession` is, so a renamed session or a stale
-`sessions.json` name still finds its receipts. `delivered` means the turn that
-carried the message completed (issue #308); that may have been a fallback or
-intercom session (issue #389), so the line says only `was received (confirmed
-<updatedAt>)`, with the time this node recorded `delivered`, because the
-Worker's status carries no timestamp. A `PostToolUse` call reads `sent/` once
+`fromSessionId` is, or `fromSession` for a record without `fromSessionId`
+(from an older sender), so a renamed session or a stale `sessions.json` name
+still finds its receipts and a later session reusing the name does not.
+`delivered` means the turn that carried the message completed (issue #308);
+that may have been a fallback or intercom session (issue #389), so the line
+says only `was received (confirmed <updatedAt>)`, with the time this node
+recorded `delivered`, because the Worker's status carries no timestamp. A
+`PostToolUse` call reads `sent/` once
 for its early exit and hands the found records to `deliveryContext`, which
 rereads only those (`stillUnnoticed`), so each hook call reads `sent/` once. A message already `replied`, or whose
 reply sits in this node's inbox by the Worker's replied rule (`repliesTo`, also
