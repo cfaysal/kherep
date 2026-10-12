@@ -32,17 +32,29 @@ function tomlStringValue(literal: string): string | undefined {
   }
 }
 
-// The token file a managed Atlassian table of an earlier install names, so a
-// block written for another path is still known as the installer's own. Only
-// the managed block is read; the full fragment must still match exactly.
-export function managedAtlassianTokenFile(
-  config: string, markers: { start: string; end: string },
-): string | undefined {
+interface Markers { start: string; end: string }
+
+function managedAtlassianTable(config: string, markers: Markers): string | undefined {
   const range = mcpTableRange(config, ATLASSIAN_MCP_SERVER);
   const start = config.indexOf(markers.start);
   const end = config.indexOf(markers.end);
   if (!range || start < 0 || end <= start || range.start <= start || range.start >= end) return undefined;
-  const env = range.text.match(
+  return range.text;
+}
+
+// Issue #397. Whether the managed block carries an Atlassian table in any form,
+// so an upgrade keeps the optional tool set an earlier install configured.
+export function hasManagedAtlassianTable(config: string, markers: Markers): boolean {
+  return managedAtlassianTable(config, markers) !== undefined;
+}
+
+// The token file a managed Atlassian table of an earlier install names, so a
+// block written for another path is still known as the installer's own. Only
+// the managed block is read; the full fragment must still match exactly.
+export function managedAtlassianTokenFile(config: string, markers: Markers): string | undefined {
+  const table = managedAtlassianTable(config, markers);
+  if (table === undefined) return undefined;
+  const env = table.match(
     /^env = \{ KHEREP_MCP_AUTH_FILE = ("(?:\\.|[^"\\])*"), KHEREP_MCP_ENDPOINT = ("(?:\\.|[^"\\])*") \}\r?$/m,
   );
   return env ? tomlStringValue(env[1]) : undefined;
