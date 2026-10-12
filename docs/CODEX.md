@@ -114,7 +114,7 @@ Claude's direct broker authorization and publication path is unchanged.
 
 ## Messages for the current Codex app session
 
-A Codex desktop app restart starts a new session with a new id, so a `wake.sessions` list of full ids stops matching the session the operator works in. The optional node policy field `wake.codexApp` (boolean, default `false`) adds one grant for it:
+A Codex desktop app restart starts a new session with a new id, so a `wake.sessions` list of full ids stops matching the session the operator works in. The optional node policy field `wake.codexApp` (boolean, `false` when a written `wake` section omits it) adds one grant for it. A policy file without a `wake` section gets the built-in default `{ "enabled": true, "sessions": ["*"], "codexApp": true, "replies": true }`, so waking, this grant included, is on by default; `"wake": { "enabled": false }` turns it off (issue #390):
 
 ```json
 "wake": { "enabled": true, "sessions": [], "codexApp": true }

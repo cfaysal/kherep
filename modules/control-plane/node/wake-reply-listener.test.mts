@@ -89,7 +89,7 @@ test("a granted reply at the depth limit does not wake", async (t) => {
 });
 
 test("withdrawing the switch ends an unlisted listener: lock released, audit not-allowlisted (issue #213)", async (t) => {
-  for (const wake of [{ enabled: true, sessions: ["someone-else"] }, { enabled: true, replies: false }, undefined]) {
+  for (const wake of [{ enabled: true, sessions: ["someone-else"] }, { enabled: true, replies: false }, { enabled: false }]) {
     const { paths } = setup(t, { wake: REPLIES });
     sentOriginal(paths);
     const result = await listen(paths, { tick: (clock) => {

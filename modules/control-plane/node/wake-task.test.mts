@@ -16,7 +16,8 @@ import { auditLines, id, listen, SELF, setup, T0 } from "./wake-fixture.mts";
 const TASK = "3f2a1b0c-0000-4000-8000-000000000001";
 const PEER = "00000000-0000-4000-8000-0000000000cc";
 
-function taskSession(t: test.TestContext, wake?: unknown) {
+// Waking is off unless the test says otherwise (an absent section wakes every session, issue #390).
+function taskSession(t: test.TestContext, wake: unknown = { enabled: false }) {
   const { paths } = setup(t, { wake });
   fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [], ...(wake === undefined ? {} : { wake }),
     sessions: { enabled: true, workspaceRoots: [paths.dir] } }));
@@ -35,7 +36,7 @@ function listenFor(paths: NodePaths, n: number, withTask: boolean, start = T0, m
 }
 
 test("a task session is woken by its task's messages without being on the allowlist", async (t) => {
-  for (const wake of [undefined, { enabled: true, sessions: ["someone-else"] }]) {
+  for (const wake of [{ enabled: false }, { enabled: true, sessions: ["someone-else"] }]) {
     const paths = taskSession(t, wake);
     assert.deepEqual(await listenFor(paths, 1, true), { code: 2, text: wakeText(1) }, JSON.stringify(wake));
     const other = taskSession(t, wake);
@@ -47,7 +48,7 @@ test("a task session is woken by its task's messages without being on the allowl
 
 test("the grant needs sessions enabled and a task started for this session", async (t) => {
   const paths = taskSession(t);
-  fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [] }));
+  fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [], wake: { enabled: false } }));
   assert.deepEqual(await listenFor(paths, 1, true), { code: 0 });
 });
 

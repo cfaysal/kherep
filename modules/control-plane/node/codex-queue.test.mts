@@ -104,11 +104,11 @@ test("one pending hint per session; accepted content can be admitted again later
   assert.equal(getMessageProgress(node.paths.inbox, second)?.code, "awaiting-user-turn");
 });
 
-test("the wake guards: opt-in, allowlist, kill switch, permission mode, reply depth", async (t) => {
+test("the wake guards: opt-out, allowlist, kill switch, permission mode, reply depth", async (t) => {
   const off = wakeNode(t, null);
   deliver(off, "x");
   await poll(off);
-  assert.deepEqual([queues(off), actions(off)], [[], []], "no wake section: nothing, not even an audit line");
+  assert.deepEqual([queues(off), actions(off)], [[], []], "wake disabled: nothing, not even an audit line");
 
   const unlisted = wakeNode(t, ["someone-else"]);
   const a = deliver(unlisted, "x");

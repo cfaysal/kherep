@@ -106,6 +106,24 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- Control Plane wake is on by default (operator decision of 2026-10-12). A
+  node `policy.json` without a `wake` section now acts as
+  `{ "enabled": true, "sessions": ["*"], "codexApp": true, "replies": true }`,
+  so an existing node that accepts messages wakes its idle sessions for them
+  after the upgrade; `"wake": { "enabled": false }` opts out, and a malformed
+  section still fails closed. Messaging admission keeps failing closed: a file
+  without a `messaging` section still accepts nothing. The rule for every
+  sender, `{ "accept": [{ "session": "*", "from": ["*"] }] }`, is written
+  explicitly by `onboard` into a new `policy.json` together with the default
+  `wake` section (an existing file is never rewritten), and a missing file
+  reads as that default policy. The default autonomous-turn budget rises from
+  6 per hour and 20 per day to 20 per hour and 100 per day (30 s spacing
+  unchanged), and a `wake.budget` with `perDay` alone is no longer compared
+  with the default hour. `kherep-node doctor` reports `wakeSource` (`file` or
+  `default`) and `messagingSource` (`file`, `absent` for a file without the
+  section, `default` for a missing file), and no longer reports
+  `"enabled": false` as a rejected wake section (issue #390).
+
 - Codex hooks: one shell dispatcher retains commit, deploy and checkout checks
   and pre-tool attribution while removing redundant adapter starts. Post-edit
   dispatch skips four watcher children for normalized Bash inputs, which all

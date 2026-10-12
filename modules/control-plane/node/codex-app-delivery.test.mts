@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { listenerDir, takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
+import { listenerDir, takeTurn, TURN_SPACING_MS, TURNS_PER_HOUR } from "./autonomy.mts";
 import { planAppDelivery, startAppDelivery } from "./codex-app-delivery.mts";
 import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { SCRIPT, waitFor, type FakeRun } from "./codex-fixture.mts";
@@ -135,7 +135,7 @@ test("Desktop CP admission preserves wake guards and leaves turn budget untouche
     storeMessage(node.paths.inbox, { messageId: id, from: PEER, toSession: APP, text: "private message",
       createdAt: new Date(T0).toISOString() }, T0, expected === "depth-limit" ? 6 : 0);
     if (expected === "disabled") fs.writeFileSync(path.join(node.paths.dir, "wake.disabled"), "");
-    if (item.exhaustBudget) for (let n = 0; n < 6; n++) {
+    if (item.exhaustBudget) for (let n = 0; n < TURNS_PER_HOUR; n++) {
       assert.equal(takeTurn(node.paths, APP, T0 - 50 * 60_000 + n * 2 * TURN_SPACING_MS), "ok");
     }
     const ledger = path.join(listenerDir(node.paths), `${APP}.turns.json`);
