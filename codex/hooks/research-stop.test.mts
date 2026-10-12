@@ -64,6 +64,17 @@ test("accepts namespaced exec research and still requires research after code ch
   assert.ok(decision(payload(transcript(started, exec(graph), patch, message("assistant", "done"))), env, exists, config));
 });
 
+test("accepts an unnamespaced Codex Desktop exec broker search and still blocks one without research (#398)", () => {
+  const exec = (source: string) => line("response_item", {
+    type: "custom_tool_call", id: "ctc", status: "completed", call_id: "call", name: "exec", input: source,
+  });
+  const collect = 'text(await tools.write_stdin({session_id: 7, chars: ""}));';
+  const brain = 'await Promise.allSettled([tools.exec_command({cmd: "node D:/Work/tools/atl-confluence.mts search --space KB --query hooks"})]);';
+  const other = 'text(await tools.exec_command({cmd: "npm test"}));';
+  assert.equal(decision(payload(transcript(started, exec(brain + collect), message("assistant", "done"))), env, exists, config), null);
+  assert.ok(decision(payload(transcript(started, exec(other + collect), message("assistant", "done"))), env, exists, config));
+});
+
 test("accepts only a nonempty opt-out reason in the final assistant message", () => {
   const work = call("exec_command", { cmd: "npm test" });
   assert.equal(decision(payload(transcript(started, work, message("assistant", "[research: none - local mechanical check]"))), env, exists, config), null);

@@ -111,15 +111,75 @@ test("recognizes exec when the functions namespace is recorded separately", () =
   }
 });
 
-test("does not treat bare exec or another namespace as the functions wrapper", () => {
+test("does not treat another namespace, or a bare exec function_call, as the functions wrapper", () => {
   const source = 'await tools.exec_command({cmd: "node D:/Work/tools/atl-confluence.mts search --space KB --query hooks"});';
-  for (const namespace of [undefined, "other"]) {
+  for (const [type, namespace] of [["custom_tool_call", "other"], ["function_call", undefined]]) {
     const parsed = parseRollout(rollout(started("turn"), line("response_item", {
-      type: "custom_tool_call", name: "exec", namespace, input: source,
+      type, name: "exec", namespace, [type === "function_call" ? "arguments" : "input"]: source,
     })), "turn");
     assert.ok(parsed);
-    assert.equal(researchFacts(parsed, "D:/Work/repo", () => false).brain, false);
+    assert.equal(researchFacts(parsed, "D:/Work/repo", () => false).brain, false, `${type} ${namespace}`);
   }
+});
+
+// Synthetic record shapes of a Codex Desktop code-mode turn (#398): the wrapper is a
+// custom_tool_call named "exec" without a namespace field, the process result is
+// collected through write_stdin, and outputs and process completions follow as
+// custom_tool_call_output and item_completed records.
+const BROKER = "node /work/tools/atl-confluence.mts search --space KB --query hooks";
+const desktopExec = (id: string, input: string): string => line("response_item", {
+  type: "custom_tool_call", id: `ctc_${id}`, status: "completed", call_id: `call_${id}`, name: "exec", input,
+  internal_chat_message_metadata_passthrough: { turn: "synthetic" },
+});
+const desktopOutput = (id: string, text: string): string => line("response_item", {
+  type: "custom_tool_call_output", id: `out_${id}`, call_id: `call_${id}`, output: [{ type: "input_text", text }],
+});
+const itemCompleted = (command: string, output: string): string => line("event_msg", {
+  type: "item_completed", thread_id: "thread", turn_id: "turn", item: {
+    type: "command_execution", id: "item", process_id: "41", command: [command], cwd: "/work/repo",
+    parsed_cmd: [{ type: "read", cmd: command, name: "x", path: "x" }], source: "unified_exec_startup",
+    status: "completed", aggregated_output: output, exit_code: 0,
+  },
+});
+
+test("recognizes an unnamespaced Codex Desktop exec whose broker search is collected via write_stdin", () => {
+  const forms = {
+    allSettled: [
+      "const [search] = await Promise.allSettled([",
+      `  tools.exec_command({cmd: ${JSON.stringify(BROKER)}, yield_time_ms: 1000}),`,
+      "]);",
+      'text(await tools.write_stdin({session_id: 41, chars: "", yield_time_ms: 5000}));',
+    ].join("\n"),
+    alone: [
+      `text(await tools.exec_command({cmd: ${JSON.stringify(BROKER)}, yield_time_ms: 1000}));`,
+      'text(await tools.write_stdin({session_id: 41, chars: ""}));',
+    ].join("\n"),
+  };
+  for (const [form, source] of Object.entries(forms)) {
+    const parsed = parseRollout(rollout(
+      started("turn"), desktopExec(form, source), desktopOutput(form, "status: hit, count: 3"),
+      itemCompleted(BROKER, "status: hit"), message("assistant", "answer"),
+    ), "turn");
+    assert.ok(parsed);
+    assert.deepEqual(parsed.calls.map(({ name }) => name), ["exec_command", "write_stdin"], form);
+    assert.equal(researchFacts(parsed, "/work/repo", () => false).brain, true, form);
+  }
+});
+
+test("does not count broker text in an unnamespaced exec's comments, strings, or outputs", () => {
+  const source = [
+    `// tools.exec_command({cmd: ${JSON.stringify(BROKER)}});`,
+    `const note = 'tools.exec_command({cmd: "${BROKER}"})';`,
+    'text(await tools.exec_command({cmd: "echo ready"}));',
+    'text(await tools.write_stdin({session_id: 41, chars: ""}));',
+  ].join("\n");
+  const parsed = parseRollout(rollout(
+    started("turn"), message("user", `please run ${BROKER}`), desktopExec("neg", source),
+    desktopOutput("neg", BROKER), itemCompleted("echo ready", BROKER), message("assistant", "answer"),
+  ), "turn");
+  assert.ok(parsed);
+  assert.deepEqual(parsed.calls.map(({ name }) => name), ["exec_command", "write_stdin"]);
+  assert.equal(researchFacts(parsed, "/work/repo", () => false).brain, false);
 });
 
 test("does not infer calls from user text, tool output, strings, or comments", () => {
