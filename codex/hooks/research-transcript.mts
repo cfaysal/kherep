@@ -53,7 +53,12 @@ function callsFrom(entry: RecordLike): ToolCall[] {
   if (entry.type !== "response_item" || !["function_call", "custom_tool_call"].includes(String(payload.type))) return [];
   if (typeof payload.name !== "string") return [];
   const input = parsedInput(payload.arguments ?? payload.input ?? {});
-  const isExec = payload.name === "functions.exec" || (payload.name === "exec" && payload.namespace === "functions");
+  // Codex Desktop records the code-mode wrapper as a freeform custom_tool_call named
+  // "exec" with no namespace field at all (#398). Only that exact form is accepted
+  // without a namespace; a bare exec function_call or another namespace is not the wrapper.
+  const isExec = payload.name === "functions.exec"
+    || (payload.name === "exec" && (payload.namespace === "functions"
+      || (payload.type === "custom_tool_call" && !("namespace" in payload))));
   if (isExec && typeof input === "string") return nestedToolCalls(input);
   return [{ name: payload.name, input }];
 }
