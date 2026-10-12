@@ -24,9 +24,12 @@ function policyFile(t: test.TestContext, value: unknown): string {
 }
 
 const withMessaging = (messaging: unknown) => ({ version: 1, allowedCommands: ["node.status"], messaging });
+// A parsed policy whose file has no messaging section. DEFAULT_POLICY, the file
+// onboarding writes, carries an explicit accept rule for every sender (issue #390).
+const NO_MESSAGING: NodePolicy = { version: 1, allowedCommands: [...DEFAULT_POLICY.allowedCommands] };
 
 test("messaging is disabled without a section, without rules or with a malformed section", (t) => {
-  assert.equal(messagingEnabled(DEFAULT_POLICY), false);
+  assert.equal(messagingEnabled(DEFAULT_POLICY), true);
   assert.equal(messagingEnabled(loadPolicy(policyFile(t, { version: 1, allowedCommands: [] }))), false);
   assert.equal(messagingEnabled(loadPolicy(policyFile(t, withMessaging({ accept: [] })))), false);
   const malformed = [
@@ -55,11 +58,11 @@ test("accept rules match the session exactly or by wildcard, and the sender by i
   assert.equal(acceptsMessage(policy, "build", PEER), false);
   assert.equal(acceptsMessage(policy, "anything", OTHER), true);
   assert.equal(acceptsMessage(policy, "open", PEER), true);
-  assert.equal(acceptsMessage(DEFAULT_POLICY, "open", PEER), false);
+  assert.equal(acceptsMessage(NO_MESSAGING, "open", PEER), false);
 });
 
 test("messaging.v1 is advertised only when an accept rule exists", async () => {
-  assert.deepEqual(advertisedCapabilities(DEFAULT_POLICY), [...DEFAULT_POLICY.allowedCommands, MESSAGING_ACK_CAPABILITY]);
+  assert.deepEqual(advertisedCapabilities(NO_MESSAGING), [...DEFAULT_POLICY.allowedCommands, MESSAGING_ACK_CAPABILITY]);
   const policy: NodePolicy = { ...DEFAULT_POLICY, messaging: { accept: [{ session: "*", from: ["operator"] }] } };
   assert.deepEqual(advertisedCapabilities(policy), [...DEFAULT_POLICY.allowedCommands, MESSAGING_CAPABILITY, MESSAGING_ACK_CAPABILITY]);
   const { frames } = await authed(policy);

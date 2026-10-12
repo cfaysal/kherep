@@ -86,11 +86,11 @@ test("policy: wake.replies is an optional boolean that needs no list; anything e
     fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [], wake }));
     return loadPolicy(paths.policy).wake;
   };
-  assert.deepEqual(load({ enabled: true, replies: true }), { sessions: [], replies: true }, "the switch alone needs no list");
-  assert.deepEqual(load({ enabled: true, sessions: [], replies: true }), { sessions: [], replies: true });
-  assert.deepEqual(load({ enabled: true, sessions: ["a"], replies: true }), { sessions: ["a"], replies: true });
-  assert.deepEqual(load({ enabled: true, sessions: ["a"], replies: false }), { sessions: ["a"] });
-  assert.deepEqual(load({ enabled: true, replies: true, codexApp: true }), { sessions: [], codexApp: true, replies: true });
+  assert.deepEqual(load({ enabled: true, replies: true }), { enabled: true, sessions: [], replies: true }, "the switch alone needs no list");
+  assert.deepEqual(load({ enabled: true, sessions: [], replies: true }), { enabled: true, sessions: [], replies: true });
+  assert.deepEqual(load({ enabled: true, sessions: ["a"], replies: true }), { enabled: true, sessions: ["a"], replies: true });
+  assert.deepEqual(load({ enabled: true, sessions: ["a"], replies: false }), { enabled: true, sessions: ["a"] });
+  assert.deepEqual(load({ enabled: true, replies: true, codexApp: true }), { enabled: true, sessions: [], codexApp: true, replies: true });
   for (const replies of ["true", 1, null, {}, []]) assert.equal(load({ enabled: true, sessions: ["a"], replies }), undefined, JSON.stringify(replies));
   assert.equal(load({ enabled: false, replies: true }), undefined);
   assert.equal(load({ enabled: true, replies: false }), undefined, "an empty list still needs a grant");

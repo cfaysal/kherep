@@ -183,8 +183,8 @@ test("a listener on its task grant alone does not wake for another message until
     [[new Date(allowAt + WAKE_SETTLE_MS).toISOString(), "wake", [message]]]);
 });
 
-test("a withdrawn wake section or allowlist entry ends the listener: lock released, audit not-allowlisted", async (t) => {
-  for (const wake of [undefined, { enabled: true, sessions: ["someone-else"] }]) {
+test("a disabled wake section or a withdrawn allowlist entry ends the listener: lock released, audit not-allowlisted", async (t) => {
+  for (const wake of [{ enabled: false }, { enabled: true, sessions: ["someone-else"] }]) {
     const { paths } = setup(t);
     const result = await listen(paths, { tick: (clock) => {
       if (clock === T0 + 2 * WAKE_POLL_MS) writePolicy(paths, wake);

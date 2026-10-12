@@ -24,8 +24,10 @@ const listenFor = (paths: Parameters<typeof listen>[0], n: number, options: List
   } });
 };
 
-test("no wake without an opt-in: missing, disabled or malformed wake sections arm nothing", async (t) => {
-  const malformed = [undefined, false, { enabled: false, sessions: ["*"] }, { enabled: "true", sessions: ["*"] }, { enabled: true },
+// An absent section is the default and wakes every session (issue #390); an
+// explicit opt-out or a malformed section arms nothing.
+test("no wake after an opt-out: disabled or malformed wake sections arm nothing, an absent one wakes", async (t) => {
+  const malformed = [false, { enabled: false }, { enabled: false, sessions: ["*"] }, { enabled: "true", sessions: ["*"] }, { enabled: true },
     { enabled: true, sessions: [] }, { enabled: true, sessions: "*" }, { enabled: true, sessions: ["review", 7] }];
   for (const wake of malformed) {
     const { paths } = setup(t, { wake });
@@ -34,6 +36,8 @@ test("no wake without an opt-in: missing, disabled or malformed wake sections ar
     assert.equal(fs.existsSync(listenerDir(paths)), false);
     assert.deepEqual(auditLines(paths), []);
   }
+  const absent = setup(t, { wake: undefined }).paths;
+  assert.deepEqual(await listenFor(absent, 1), { code: 2, text: wakeText(1) });
   // A policy file that does not parse fails closed as a whole.
   const broken = setup(t).paths;
   fs.writeFileSync(broken.policy, "{not json");
@@ -138,13 +142,15 @@ test("a run whose mode is undecided arms as before (fail open)", async (t) => {
 test(`wakes at most ${TURNS_PER_HOUR} times per rolling hour and waits out the spacing`, async (t) => {
   const { paths } = setup(t);
   for (let n = 1; n <= TURNS_PER_HOUR; n++) assert.equal((await listenFor(paths, n, { start: T0 + n * 60_000 })).code, 2, `wake ${n}`);
-  assert.deepEqual(await listenFor(paths, 20, { start: T0 + 7 * 60_000 }), { code: 0 });
-  assert.equal(getMessage(paths.inbox, id(20))?.state, "accepted", "it waits for the next user prompt");
-  assert.deepEqual(auditLines(paths).at(-1), { ts: new Date(T0 + 7 * 60_000 + 2 * WAKE_POLL_MS + 250).toISOString(),
-    sessionId: SELF, messageIds: [id(20)], action: "budget" });
+  const over = TURNS_PER_HOUR + 1;
+  const late = T0 + over * 60_000;
+  assert.deepEqual(await listenFor(paths, over, { start: late }), { code: 0 });
+  assert.equal(getMessage(paths.inbox, id(over))?.state, "accepted", "it waits for the next user prompt");
+  assert.deepEqual(auditLines(paths).at(-1), { ts: new Date(late + 2 * WAKE_POLL_MS + 250).toISOString(),
+    sessionId: SELF, messageIds: [id(over)], action: "budget" });
   // The first wake leaves the rolling hour one hour after it was taken.
   const firstWake = Date.parse(auditLines(paths)[0].ts);
-  assert.equal((await listenFor(paths, 21, { start: firstWake + 60 * 60_000 })).code, 2);
+  assert.equal((await listenFor(paths, over + 1, { start: firstWake + 60 * 60_000 })).code, 2);
 
   // Spacing: a message 10 s after a wake wakes once 30 s have passed.
   const spaced = setup(t).paths;

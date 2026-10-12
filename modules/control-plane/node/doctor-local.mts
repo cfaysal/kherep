@@ -71,22 +71,29 @@ function budgetReport(policy: NodePolicy): Required<WakeBudget> {
 }
 
 // A wake section the parser rejected disables waking (fail closed); doctor
-// reports it as a failure so the operator sees it.
+// reports it as a failure so the operator sees it (issue #390): wakeSource is
+// "file" for a written section, else "default" (a file without it, or no file).
+// messagingSource is "file" for a written section, "absent" for a file without
+// one (nothing is accepted), and "default" for no file (DEFAULT_POLICY).
 export function checkPolicy(file: string): { check: Check; policy: NodePolicy | null } {
   const policy = readPolicy(file);
   if (!policy) return { check: { ok: false, detail: "policy.json is unreadable or malformed; nothing is allowed" }, policy };
-  let raw: { wake?: unknown } | null = null;
+  let raw: { wake?: unknown; messaging?: unknown } | null = null;
   try {
-    raw = readJson<{ wake?: unknown }>(file);
+    raw = readJson<{ wake?: unknown; messaging?: unknown }>(file);
   } catch {
     // readPolicy accepted the file a moment ago; a race leaves raw null.
   }
-  const wakeRejected = raw?.wake !== undefined && !policy.wake;
+  const wakeSource = raw?.wake !== undefined ? "file" : "default";
+  const messagingSource = !raw ? "default" : raw.messaging !== undefined ? "file" : "absent";
+  // enabled false is the operator's explicit opt-out, not a rejected section.
+  const optedOut = (raw?.wake as { enabled?: unknown } | null | undefined)?.enabled === false;
+  const wakeRejected = raw?.wake !== undefined && !policy.wake && !optedOut;
   const wake = policy.wake
     ? { enabled: true, sessions: policy.wake.sessions, codexApp: policy.wake.codexApp === true, replies: policy.wake.replies === true }
     : { enabled: false, ...(wakeRejected ? { rejected: true } : {}) };
   return { check: { ok: !wakeRejected, source: raw ? "file" : "default", allowedCommands: policy.allowedCommands.length,
-    messagingRules: policy.messaging?.accept.length ?? 0, wake, wakeBudget: budgetReport(policy),
+    messagingRules: policy.messaging?.accept.length ?? 0, messagingSource, wake, wakeSource, wakeBudget: budgetReport(policy),
     sessions: policy.sessions?.enabled ? { enabled: true, runtimes: policy.sessions.runtimes } : { enabled: false },
     remoteMcp: policy.remoteMcp?.enabled === true,
     ...(wakeRejected ? { detail: "the wake section is malformed and waking is off" } : {}) }, policy };

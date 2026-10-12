@@ -30,7 +30,8 @@ export function taskNode(t: test.TestContext, sessions: Record<string, unknown> 
   fs.mkdirSync(paths.dir, { recursive: true });
   writeConfig(paths.config, { version: 1, controlUrl: "https://control.example.invalid", nodeId: "00000000-0000-4000-8000-0000000000aa",
     name: "n", publicKey: "", privateKeyFile: "", policyFile: paths.policy, enrolledAt: new Date(T0).toISOString() });
-  fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [],
+  // Waking is off unless extra sets a wake section: an absent one wakes every session (issue #390).
+  fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [], wake: { enabled: false },
     sessions: { enabled: true, workspaceRoots: [workspace], ...sessions }, ...extra }));
   const calls: Call[] = [];
   const rows: Record<string, unknown>[] = [];

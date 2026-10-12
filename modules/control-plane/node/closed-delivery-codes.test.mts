@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import type { MessageProgressCode } from "../protocol-messages.mts";
-import { rememberMode, takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
+import { rememberMode, takeTurn, TURN_SPACING_MS, TURNS_PER_HOUR } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
 import { audits, closedNode, deliver, SESSION, type Node } from "./closed-fixture.mts";
 import { writeLocalSessions } from "./exchange.mts";
@@ -49,7 +49,7 @@ const policyRefusals: Case[] = [
   ["maxStartsPerDay", "retry-pending", /at most 1 task sessions per day/, (node) => writeTask(node.paths, task(node, 9, {})),
     { maxStartsPerDay: 1 }],
   ["the turn budget", "budget-exhausted", /budget/, (node) => {
-    for (let i = 0; i < 6; i++) takeTurn(node.paths, SESSION, T0 - 50 * 60_000 + i * TURN_SPACING_MS * 2);
+    for (let i = 0; i < TURNS_PER_HOUR; i++) takeTurn(node.paths, SESSION, T0 - 50 * 60_000 + i * TURN_SPACING_MS * 2);
   }],
   ["a cwd outside the workspace roots", "wake-not-authorized", /cwd is outside the workspace roots of this node/,
     (node) => knownCwd(node, node.root)],

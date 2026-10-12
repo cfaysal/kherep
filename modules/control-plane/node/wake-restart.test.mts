@@ -142,7 +142,8 @@ test("the guards hold for waiting messages: kill switch, allowlist, reply depth 
     arrive(paths, n, T0 + n * 60_000 - 1_000);
     assert.deepEqual(await listen(paths, atStart({ start: T0 + n * 60_000 })), { code: 2, text: wakeText(1) }, `wake ${n}`);
   }
-  arrive(paths, 20, T0 + 7 * 60_000 - 1_000);
-  assert.deepEqual(await listen(paths, atStart({ start: T0 + 7 * 60_000 })), { code: 0 });
-  assert.deepEqual(auditLines(paths).at(-1), { ...auditLines(paths).at(-1), action: "budget", messageIds: [id(20)] });
+  const over = TURNS_PER_HOUR + 1;
+  arrive(paths, over, T0 + over * 60_000 - 1_000);
+  assert.deepEqual(await listen(paths, atStart({ start: T0 + over * 60_000 })), { code: 0 });
+  assert.deepEqual(auditLines(paths).at(-1), { ...auditLines(paths).at(-1), action: "budget", messageIds: [id(over)] });
 });
