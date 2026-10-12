@@ -197,7 +197,38 @@ Codex Stop no longer imports native cleanup; old native artifacts remain intact.
 The independent synchronous PostToolUse projection is unchanged by this change.
 Native hook trust, activation and actual owner-turn processing need acceptance
 at each host, tracked in issue #374. Source fixtures prove the portable flow,
-not an installed Desktop result. Claude keeps its existing delivery path.
+not an installed Desktop result.
+
+## Claude mid-turn delivery
+
+Claude Code has no CP ticket: its delivery hook reads the Inbox directly. Besides
+`UserPromptSubmit`, `Stop` and `StopFailure`, `node/deliver-hook.mts` now runs at
+`PostToolUse` from the all-tools group and hands the call to
+`node/deliver-midturn.mts` (issue #388). The documented `additionalContext` of
+that event is placed next to the tool result and read on the next model request
+of the same turn.
+
+```mermaid
+flowchart LR
+  accepted[CP Inbox accepted] --> post[PostToolUse in the running turn]
+  post --> offered[Framed context, record offered]
+  offered --> stop[Turn's Stop: delivered]
+  offered --> failure[StopFailure: retry at next prompt]
+```
+
+A call carrying `agent_id` (subagent or in-process teammate, which share the
+session id) or permission mode `bypassPermissions` gets nothing; those records
+wait for the next prompt. A call with no accepted record and no unnoticed send
+failure leaves without a lock or a write. Otherwise an exclusive per-session
+lock (`listeners/<session_id>.deliver.lock`, stale after 5 seconds) serialises
+the concurrent `PostToolUse` calls of parallel tools, and the shared
+`deliveryContext` offers only `accepted` records. The offer is no receipt
+(issue #308): only the turn's `Stop` confirms `delivered`, and it injects only
+records still `accepted`, so the later boundary repeats nothing. Same-turn
+delivery starts no turn, so like `UserPromptSubmit` it neither checks nor spends
+the autonomous-turn budget and needs no `wake` policy (87c317b). Stop
+continuations and wakes keep their gates. Live acceptance on Windows and macOS
+hosts is tracked in issue #388.
 
 ## Accepted-message delivery progress
 

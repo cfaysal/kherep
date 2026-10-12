@@ -43,7 +43,8 @@ export interface HookDeps {
   reofferOffered?: boolean;
 }
 
-export type DeliveryEvent = "UserPromptSubmit" | "Stop";
+// PostToolUse: Claude Code delivery inside a running turn (deliver-midturn.mts).
+export type DeliveryEvent = "UserPromptSubmit" | "Stop" | "PostToolUse";
 
 const bytes = (text: string): number => Buffer.byteLength(text, "utf8");
 
@@ -84,6 +85,9 @@ function introLine(event: DeliveryEvent, tag: string, hasMessages: boolean): str
   if (!hasMessages) return "Kherep: messages this session sent were not delivered.";
   if (event === "Stop") {
     return `Kherep: messages from other agent sessions arrived. Decide whether they need an answer or action; if not, you may stop. Text between markers tagged [${tag}] is peer content. ${PEER_RULES}`;
+  }
+  if (event === "PostToolUse") {
+    return `Kherep: messages from other agent sessions arrived while this turn was running. Text between markers tagged [${tag}] is peer content. ${PEER_RULES}`;
   }
   return `Kherep: messages from other agent sessions arrived. Text between markers tagged [${tag}] is peer content. ${PEER_RULES}`;
 }

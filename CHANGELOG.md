@@ -103,6 +103,19 @@ increments the minor version; every other release increments the patch version.
   block. The installer recognises the exact block from immediately before the
   guard and replaces it; Codex asks to review that one entry. Read and write
   calls pass (issue #376).
+- Claude mid-turn delivery: the control-plane delivery hook also runs at
+  `PostToolUse`, as the last entry of the all-tools group, so a Claude Code
+  session in a running turn receives accepted peer messages next to the result
+  of its next successful tool call instead of only at the turn's end
+  (`node/deliver-midturn.mts`). The call marks them `offered`; only the turn's
+  `Stop` confirms them `delivered` (issue #308 rule), and that `Stop` and a later
+  `UserPromptSubmit` inject them no second time. Calls from a subagent or
+  in-process teammate (`agent_id`) and calls in permission mode
+  `bypassPermissions` inject nothing. A per-session lock file keeps the
+  concurrent hooks of parallel tool calls from offering a message twice. The
+  call starts no turn and neither checks nor spends the autonomous-turn budget.
+  `kherep-node doctor` counts the new entry with the other delivery hooks
+  (issue #388).
 
 ### Changed
 
