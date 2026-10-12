@@ -210,8 +210,9 @@ test("re-anchors a split block written from an earlier source pin", () => {
 
 test("refuses a split block from an earlier source pin with any other difference", () => {
   const timeout = (text: string) => text.replace(/timeout = (\d+)/, (_, seconds) => `timeout = ${Number(seconds) + 1}`);
-  const hookDir = (text: string) => text.replace(String.raw`C:\\Synthetic\\.codex\\hooks\\kherep-maestro\\`,
-    String.raw`C:\\Synthetic\\other\\hooks\\kherep-maestro\\`);
+  // No trailing separator: the fixture joins the next segment with "/" on POSIX hosts.
+  const hookDir = (text: string) => text.replace(String.raw`C:\\Synthetic\\.codex\\hooks\\kherep-maestro`,
+    String.raw`C:\\Synthetic\\other\\hooks\\kherep-maestro`);
   for (const edit of [timeout, hookDir]) {
     const config = fromPin(split(TAIL)).replace(fromPin(HEAD), edit(fromPin(HEAD)));
     assert.notEqual(config, fromPin(split(TAIL)));
