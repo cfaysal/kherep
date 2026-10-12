@@ -30,7 +30,8 @@ export type TokenBindingStatus = "ok" | "missing" | "invalid" | "shared";
 export interface TokenBinding {
   runtime: AtlassianRuntime;
   file: string;
-  source: "option" | "env" | "default";
+  // "installed": the file the managed table of the previous install names.
+  source: "option" | "env" | "installed" | "default";
   status: TokenBindingStatus;
 }
 
@@ -68,10 +69,11 @@ export function resolveTokenBinding(
   homes: RuntimeHomes,
   env: Record<string, string | undefined>,
   explicit?: string,
+  installed?: string,
 ): TokenBinding {
   const fromEnv = bound(env, MCP_TOKEN_ENV[runtime]);
-  const file = explicit ?? fromEnv ?? defaultTokenFile(runtime, homes[runtime]);
-  const source = explicit !== undefined ? "option" : fromEnv ? "env" : "default";
+  const file = explicit ?? fromEnv ?? installed ?? defaultTokenFile(runtime, homes[runtime]);
+  const source = explicit !== undefined ? "option" : fromEnv ? "env" : installed !== undefined ? "installed" : "default";
   const other: AtlassianRuntime = runtime === "claude" ? "codex" : "claude";
   const forbidden = [tokenFile(other, homes, env), brokerFile(runtime, homes, env), brokerFile(other, homes, env)]
     .map(comparable);

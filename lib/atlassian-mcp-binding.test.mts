@@ -40,6 +40,22 @@ test("the runtime's own variable wins over the default, and an option over both"
   assert.equal(resolveTokenBinding("codex", h, { KHEREP_ATL_MCP_TOKEN_FILE_CLAUDE: fromEnv }).source, "default");
 });
 
+// Issue #397. An upgrade reuses the key file the installed table names, ahead
+// of the default; the variable and an option still win, and the checks apply.
+test("the installed key file wins over the default and loses to the variable and an option", (t) => {
+  const { root, homes: h } = homes(t);
+  const installed = key(path.join(root, "installed.txt"));
+  const fromEnv = key(path.join(root, "env.txt"));
+  assert.deepEqual(resolveTokenBinding("codex", h, {}, undefined, installed),
+    { runtime: "codex", file: installed, source: "installed", status: "ok" });
+  assert.equal(resolveTokenBinding("codex", h, { KHEREP_ATL_MCP_TOKEN_FILE_CODEX: fromEnv }, undefined, installed).source, "env");
+  assert.equal(resolveTokenBinding("codex", h, {}, fromEnv, installed).source, "option");
+  fs.rmSync(installed);
+  assert.deepEqual(resolveTokenBinding("codex", h, {}, undefined, installed),
+    { runtime: "codex", file: installed, source: "installed", status: "missing" });
+  assert.equal(resolveTokenBinding("codex", h, { KHEREP_ATL_MCP_TOKEN_FILE_CLAUDE: fromEnv }, undefined, fromEnv).status, "shared");
+});
+
 test("a file of the other runtime or of a broker credential is refused", (t) => {
   const { root, homes: h } = homes(t);
   const shared = key(path.join(root, "shared.txt"));

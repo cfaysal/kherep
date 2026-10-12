@@ -215,6 +215,18 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Codex upgrade (issue #397): a managed block that the Codex app split around
+  its trust tables and that names an earlier checkout or source pin before the
+  control-plane `deliver-hook.mts` and `attribution-hook.mts` is upgraded
+  instead of refused, also with an earlier Node executable; any other
+  difference in the block is still refused. An upgrade keeps a managed
+  `atlassian` table: without `KHEREP_INSTALL_ATLASSIAN_TOOLS` the tool set is
+  installed again with the key file the installed table names (receipt
+  `tokenSource` `installed`), an unusable key file stops the install before
+  it writes, and an explicit opt-out records `atlassianMcp.status` `removed`.
+  `kherep-node doctor` counts a hook in a source pin of the checked-out commit
+  as this checkout and lists it under `pinned`; a pin of another commit is
+  still reported as another checkout.
 - Control plane messaging: closed-session delivery (`messaging.resumeClosed`)
   no longer takes a session for closed because one session listing did not
   show it. It readdressed every waiting message for such a session to an

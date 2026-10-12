@@ -5,7 +5,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { atlassianMcpServer, managedAtlassianTokenFile, PREDECESSOR_NATIVE_ATLASSIAN } from "./atlassian-mcp.mts";
+import {
+  atlassianMcpServer, hasManagedAtlassianTable, managedAtlassianTokenFile, PREDECESSOR_NATIVE_ATLASSIAN,
+} from "./atlassian-mcp.mts";
 import { prepareManagedConfig } from "./config-preservation.mts";
 import * as parity from "./parity-config.mts";
 
@@ -109,6 +111,20 @@ test("upgrades each earlier Atlassian block form idempotently and keeps operator
   }
   assert.equal(managedAtlassianTokenFile(block(olds[2]!), { start: START, end: END }), moved);
   assert.equal(managedAtlassianTokenFile(block(olds[0]!), { start: START, end: END }), undefined);
+});
+
+// Issue #397. Whether the installed block carries an Atlassian table at all,
+// in any form; one outside the block is the operator's and does not count.
+test("finds a managed Atlassian table of either form only inside the block", () => {
+  const markers = { start: START, end: END };
+  const native = block(parity.render({ ...renderOptions, pluginMcpServers: { atlassian: PREDECESSOR_NATIVE_ATLASSIAN } }));
+  const serviceAccount = block(parity.render({ ...renderOptions, pluginMcpServers: { atlassian: atlassianMcpServer(TOKEN, TABLE) } }));
+  const without = block(parity.render(renderOptions));
+  assert.equal(hasManagedAtlassianTable(native, markers), true);
+  assert.equal(hasManagedAtlassianTable(serviceAccount, markers), true);
+  assert.equal(hasManagedAtlassianTable(without, markers), false);
+  assert.equal(hasManagedAtlassianTable(`${without}\n[mcp_servers.atlassian]\nurl = "https://operator.invalid/mcp"\n`, markers), false);
+  assert.equal(hasManagedAtlassianTable("", markers), false);
 });
 
 test("an unknown Atlassian table inside the block still refuses", () => {

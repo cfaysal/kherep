@@ -208,6 +208,77 @@ function beforeShellDispatcher(config: string, hookDir: string): string {
   return config.replace(currentGroup, previous);
 }
 
+// Issue #397. The checkout hooks of a block an install from another source pin
+// wrote name that pin instead of this checkout.
+function fromSourcePin(config: string, pin: string): string {
+  const escaped = (value: string): string => JSON.stringify(value).slice(1, -1);
+  const checkout = escaped(path.join(path.resolve(here, ".."), "modules", "control-plane"));
+  assert.ok(config.includes(checkout));
+  return config.replaceAll(checkout, escaped(path.join(pin, "modules", "control-plane")));
+}
+
+// The layout the Codex app writes when it stores hook trust (issue #274): its
+// trust tables inside the block, the block's tail behind the end marker.
+const TRUST = "[hooks.state]\n\n[hooks.state.'config.toml:stop:0:0']\ntrusted_hash = \"sha256:fixture\"";
+function splitByTrust(config: string): { config: string; head: string; tail: string } {
+  const start = config.indexOf(CONFIG_START) + CONFIG_START.length;
+  const end = config.indexOf(CONFIG_END);
+  const body = config.slice(start, end);
+  const cut = body.lastIndexOf("[[hooks.SessionStart]]");
+  const head = body.slice(0, cut).trimEnd();
+  const tail = body.slice(cut).trim();
+  return {
+    config: `${config.slice(0, start)}${head}\n\n${TRUST}\n${CONFIG_END}\n\n${tail}\n${config.slice(end + CONFIG_END.length)}`,
+    head, tail,
+  };
+}
+
+test("upgrades a block written from another source pin, also when the Codex app split it", (t) => {
+  const { root, codexHome, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const current = fs.readFileSync(install(installOptions).targets.config, "utf8");
+  const pin = path.join(codexHome, "orchestra", "source-pins", "0123456789abcdef0123456789abcdef01234567");
+  const configTarget = path.join(codexHome, "config.toml");
+  const escaped = (value: string): string => JSON.stringify(value).slice(1, -1);
+  const pinned = escaped(path.join(pin, "modules"));
+  // The issue's Node variant: the earlier install also ran another Node executable.
+  const previousNode = path.join(root, "previous node", path.basename(process.execPath));
+  const fromNode = (text: string): string => text.replaceAll(escaped(process.execPath), escaped(previousNode));
+  fs.writeFileSync(configTarget, splitByTrust(current).config);
+  const sameCheckout = fs.readFileSync(install(installOptions).targets.config, "utf8");
+
+  for (const earlier of [(text: string) => fromSourcePin(text, pin), (text: string) => fromNode(fromSourcePin(text, pin))]) {
+    fs.writeFileSync(configTarget, earlier(current));
+    assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), current);
+
+    const split = splitByTrust(earlier(current));
+    assert.ok(split.head.includes(pinned) && split.tail.includes(pinned), "both parts name the earlier pin");
+    fs.writeFileSync(configTarget, split.config);
+    const upgraded = fs.readFileSync(install(installOptions).targets.config, "utf8");
+    const block = upgraded.slice(upgraded.indexOf(CONFIG_START), upgraded.indexOf(CONFIG_END));
+    assert.equal(block.includes(pinned) || block.includes(escaped(previousNode)), false);
+    assert.ok(upgraded.slice(upgraded.indexOf(CONFIG_END)).includes(TRUST), "the trust tables stay");
+    assert.equal(fs.readFileSync(install(installOptions).targets.config, "utf8"), upgraded, "a reinstall is idempotent");
+    // A split block from the earlier pin ends exactly as the same split block
+    // from this checkout does. The tables the re-anchor leaves behind the end
+    // marker are kept as written, so this holds for the pin alone.
+    if (!split.config.includes(escaped(previousNode))) assert.equal(upgraded, sameCheckout);
+  }
+});
+
+test("refuses a block from another source pin that also carries an operator edit", (t) => {
+  const { root, codexHome, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const current = fs.readFileSync(install(installOptions).targets.config, "utf8");
+  const pin = path.join(codexHome, "orchestra", "source-pins", "0123456789abcdef0123456789abcdef01234567");
+  const edit = (text: string): string => text.replace(/^timeout = (\d+)$/m, (_, seconds) => `timeout = ${Number(seconds) + 1}`);
+  for (const config of [edit(fromSourcePin(current, pin)), edit(splitByTrust(fromSourcePin(current, pin)).config)]) {
+    fs.writeFileSync(path.join(codexHome, "config.toml"), config);
+    assert.throws(() => install(installOptions), /without an exact known managed fragment/);
+    assert.equal(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"), config, "nothing is written");
+  }
+});
+
 test("installs native Codex research hooks and every local dependency idempotently", (t) => {
   const { root, codexHome, installOptions } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -816,6 +887,73 @@ test("a key file that moved between installs is still the installer's own table"
   const config = fs.readFileSync(result.targets.config, "utf8");
   assertServiceAccountAtlassian(config, result.targets.registryRuntime, moved);
   assert.equal(config.includes(JSON.stringify(installOptions.atlassianMcpTokenFile)), false);
+});
+
+// Issue #397. Runs fn with none of the variables that select the Atlassian tool
+// set or its key file, as on a plain upgrade.
+const ATLASSIAN_ENV = ["KHEREP_INSTALL_ATLASSIAN_TOOLS", "KHEREP_ATL_MCP_TOKEN_FILE_CODEX", "KHEREP_ATL_MCP_TOKEN_FILE_CLAUDE",
+  "KHEREP_ATL_CRED_FILE_CODEX", "KHEREP_ATL_CRED_FILE_CLAUDE"];
+function withoutAtlassianEnv(fn: () => void): void {
+  const before = Object.fromEntries(ATLASSIAN_ENV.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of ATLASSIAN_ENV) delete process.env[key];
+    fn();
+  } finally {
+    for (const key of ATLASSIAN_ENV) {
+      if (before[key] === undefined) delete process.env[key];
+      else process.env[key] = before[key];
+    }
+  }
+}
+
+test("an upgrade keeps the managed Atlassian table with the key file it names", (t) => {
+  const { root, installOptions, workspace } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { atlassianMcpTokenFile, installAtlassianTools: _switch, ...plain } = installOptions;
+  withoutAtlassianEnv(() => {
+    const first = install(installOptions);
+    const configured = fs.readFileSync(first.targets.config, "utf8");
+    fs.rmSync(path.join(workspace, "tools", "atl-jira.mts"));
+
+    for (const options of [plain, { ...plain, installAtlassianTools: true }]) {
+      const upgraded = install(options);
+      const config = fs.readFileSync(upgraded.targets.config, "utf8");
+      assert.equal(config, configured, "the table and its key file stay");
+      assertServiceAccountAtlassian(config, upgraded.targets.registryRuntime, atlassianMcpTokenFile);
+      assert.deepEqual(upgraded.receipt.atlassianMcp,
+        { status: "configured", authentication: "secret-file-bearer", tokenSource: "installed" });
+      assert.equal(upgraded.atlassianMcpProblem, undefined);
+      assert.ok(fs.existsSync(path.join(workspace, "tools", "atl-jira.mts")), "the rest of the tool set is refreshed");
+    }
+    // Opting out is the one way to drop it, and the receipt says so.
+    process.env.KHEREP_INSTALL_ATLASSIAN_TOOLS = "0";
+    const removed = install(plain);
+    assert.equal(fs.readFileSync(removed.targets.config, "utf8").includes("[mcp_servers.atlassian"), false);
+    assert.deepEqual(removed.receipt.atlassianMcp, { status: "removed" });
+    delete process.env.KHEREP_INSTALL_ATLASSIAN_TOOLS;
+    assert.deepEqual(install(plain).receipt.atlassianMcp, { status: "not-requested" });
+  });
+});
+
+test("an upgrade refuses to drop the managed Atlassian table when its key file is unusable", (t) => {
+  const { root, codexHome, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { atlassianMcpTokenFile, installAtlassianTools: _switch, ...plain } = installOptions;
+  withoutAtlassianEnv(() => {
+    const configured = fs.readFileSync(install(installOptions).targets.config, "utf8");
+    fs.rmSync(atlassianMcpTokenFile);
+    const missing = path.join(root, "operator", "absent.txt");
+    for (const options of [plain, { ...plain, installAtlassianTools: true }, { ...installOptions, atlassianMcpTokenFile: missing }]) {
+      assert.throws(() => install(options), (error: Error) => {
+        assert.match(error.message, /Refusing to remove the managed mcp_servers\.atlassian table/);
+        assert.match(error.message, /KHEREP_ATL_MCP_TOKEN_FILE_CODEX/);
+        assert.match(error.message, /KHEREP_INSTALL_ATLASSIAN_TOOLS=0/);
+        assert.equal(error.message.includes("a".repeat(16)), false, "the message never holds a key");
+        return true;
+      });
+      assert.equal(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"), configured, "nothing is written");
+    }
+  });
 });
 
 test("Codex reads only its own key file variable and refuses another identity's file", (t) => {

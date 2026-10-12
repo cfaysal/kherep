@@ -13,7 +13,9 @@ import { ATLASSIAN_MCP_SERVER, resolveTokenBinding, tokenBindingProblem } from "
 import { mergeLocalInferenceConfig } from "../bootstrap/render-profile.mts";
 import * as registryBridgeModule from "../modules/mcp-auth-bridge/registry-http-wrapper.mts";
 import { setPluginEnabled } from "./lib/plugin-config.mts";
-import { atlassianMcpServer, managedAtlassianTokenFile, PREDECESSOR_NATIVE_ATLASSIAN } from "./lib/atlassian-mcp.mts";
+import {
+  atlassianMcpServer, hasManagedAtlassianTable, managedAtlassianTokenFile, PREDECESSOR_NATIVE_ATLASSIAN,
+} from "./lib/atlassian-mcp.mts";
 import { componentHash } from "./lib/component-hash.mts";
 import { prepareManagedConfig } from "./lib/config-preservation.mts";
 import type { Capabilities, McpCompatibilityOptions, PluginMcpServer, RunCodex } from "./lib/contracts.mts";
@@ -150,8 +152,6 @@ export function install(options: InstallOptions = {}) {
   const { memoryProvider, retired: retiredMemoryProvider } = resolveMemoryProvider(selectionFile, options.memoryProviderConfig
     ? JSON.parse(fs.readFileSync(options.memoryProviderConfig, "utf8")) : options.memoryProvider);
   const workspace = resolveWorkspace(options, platform);
-  const installAtlassianTools =
-    options.installAtlassianTools ?? process.env.KHEREP_INSTALL_ATLASSIAN_TOOLS === "1";
   const claudeHome = path.resolve(options.claudeConfigDir || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"));
   const capabilitiesFile = path.join(sourceRoot, "parity", "capabilities.json");
   const capabilities = JSON.parse(fs.readFileSync(capabilitiesFile, "utf8")) as Capabilities;
@@ -297,15 +297,29 @@ export function install(options: InstallOptions = {}) {
     ...(capabilities.retiredMcpServers || []),
   ])];
   const basePluginMcpServers = capabilities.pluginMcpServers || {};
+  // Issue #397. An upgrade keeps the optional Atlassian tool set an earlier
+  // install configured; only an explicit opt-out (any value but 1) drops it.
+  const markers = { start: CONFIG_START, end: CONFIG_END };
+  const installedAtlassian = hasManagedAtlassianTable(existingConfig, markers);
+  const previousAtlassianToken = managedAtlassianTokenFile(existingConfig, markers);
+  const atlassianSwitch = process.env.KHEREP_INSTALL_ATLASSIAN_TOOLS;
+  const installAtlassianTools = options.installAtlassianTools
+    ?? (atlassianSwitch ? atlassianSwitch === "1" : installedAtlassian);
   // Issue #376. The Atlassian server runs as the Codex service account or not
   // at all: without a usable key file nothing falls back to a personal login.
   const atlassianTable = { node: mcp.node, runtime: targets.registryRuntime };
   const atlassianToken = installAtlassianTools
-    ? resolveTokenBinding("codex", { claude: claudeHome, codex: codexHome }, process.env, options.atlassianMcpTokenFile)
+    ? resolveTokenBinding("codex", { claude: claudeHome, codex: codexHome }, process.env,
+      options.atlassianMcpTokenFile, previousAtlassianToken)
     : undefined;
+  // Issue #397. A service-account table the block carries is never dropped for
+  // want of a usable key file; the install stops before it writes anything.
+  if (previousAtlassianToken && atlassianToken && atlassianToken.status !== "ok") {
+    throw new Error(`Refusing to remove the managed mcp_servers.atlassian table: ${tokenBindingProblem(atlassianToken)}.`
+      + " Make the key file usable, or set KHEREP_INSTALL_ATLASSIAN_TOOLS=0 to remove the table.");
+  }
   const optionalPluginMcpServers: Record<string, PluginMcpServer> = atlassianToken?.status === "ok"
     ? { [ATLASSIAN_MCP_SERVER]: atlassianMcpServer(atlassianToken.file, atlassianTable) } : {};
-  const previousAtlassianToken = managedAtlassianTokenFile(existingConfig, { start: CONFIG_START, end: CONFIG_END });
   const predecessorOptionalPluginMcpServers = [
     { [ATLASSIAN_MCP_SERVER]: PREDECESSOR_NATIVE_ATLASSIAN },
     ...(previousAtlassianToken
@@ -540,7 +554,7 @@ export function install(options: InstallOptions = {}) {
           : atlassianToken.status === "ok" ? "configured" : `skipped-token-file-${atlassianToken.status}`,
         authentication: "secret-file-bearer",
         tokenSource: atlassianToken.source,
-      } : { status: "not-requested" },
+      } : { status: installedAtlassian ? "removed" : "not-requested" },
       retiredMcpServers,
       // Issue #72: where the outbox writable root landed, or why it did not.
       controlPlaneOutbox: { status: preparedConfig.outboxWritableRoot },
@@ -641,6 +655,9 @@ if (isMainModule()) {
       process.stderr.write(`install: WARNING no Atlassian MCP server for Codex: ${result.atlassianMcpProblem}.`
         + " Nothing falls back to a personal login. The parity installation above stands.\n");
       process.exitCode = 1;
+    } else if (result.receipt.atlassianMcp.status === "removed") {
+      process.stderr.write("install: NOTE KHEREP_INSTALL_ATLASSIAN_TOOLS opts out, so the managed"
+        + " mcp_servers.atlassian table and its key file binding were removed.\n");
     } else if (result.receipt.atlassianMcp.status === "preserved-existing") {
       process.stderr.write("install: NOTE mcp_servers.atlassian outside the Kherep block is the operator's own"
         + " and stays as it is; the Codex service-account server is not rendered.\n");
