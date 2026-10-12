@@ -78,17 +78,20 @@ function budgetReport(policy: NodePolicy): Required<WakeBudget> {
 export function checkPolicy(file: string): { check: Check; policy: NodePolicy | null } {
   const policy = readPolicy(file);
   if (!policy) return { check: { ok: false, detail: "policy.json is unreadable or malformed; nothing is allowed" }, policy };
-  let raw: { wake?: unknown; messaging?: unknown } | null = null;
+  type RawSections = { wake?: unknown; messaging?: unknown };
+  let raw: RawSections | null = null;
   try {
-    raw = readJson<{ wake?: unknown; messaging?: unknown }>(file);
+    raw = readJson<RawSections>(file);
   } catch {
     // readPolicy accepted the file a moment ago; a race leaves raw null.
   }
-  const wakeSource = raw?.wake !== undefined ? "file" : "default";
-  const messagingSource = !raw ? "default" : raw.messaging !== undefined ? "file" : "absent";
+  const wakeWritten = raw?.wake !== undefined;
+  const wakeSource = wakeWritten ? "file" : "default";
+  let messagingSource = "default";
+  if (raw) messagingSource = raw.messaging !== undefined ? "file" : "absent";
   // enabled false is the operator's explicit opt-out, not a rejected section.
   const optedOut = (raw?.wake as { enabled?: unknown } | null | undefined)?.enabled === false;
-  const wakeRejected = raw?.wake !== undefined && !policy.wake && !optedOut;
+  const wakeRejected = wakeWritten && !policy.wake && !optedOut;
   const wake = policy.wake
     ? { enabled: true, sessions: policy.wake.sessions, codexApp: policy.wake.codexApp === true, replies: policy.wake.replies === true }
     : { enabled: false, ...(wakeRejected ? { rejected: true } : {}) };
