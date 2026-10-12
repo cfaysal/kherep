@@ -215,6 +215,18 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Codex research Stop hook: a Central Brain broker search run through the Codex
+  Desktop code-mode wrapper counts as a research attempt. Codex Desktop
+  records that wrapper as a `custom_tool_call` named `exec` without a
+  `namespace` field, which the parser accepted only as `functions.exec` or with
+  `namespace: "functions"`, so a substantial turn got the "missing a Central
+  Brain research attempt" continuation after a lookup it had run. The
+  unnamespaced form is accepted only as a `custom_tool_call`; a bare `exec`
+  `function_call` and other namespaces still do not count. The nested
+  `tools.exec_command(...)` call counts as before, also inside
+  `Promise.allSettled`, with its output collected through `write_stdin`. Text in
+  comments, strings, user messages, tool output and `item_completed` records
+  still does not count (issue #398).
 - Codex upgrade (issue #397): a managed block that the Codex app split around
   its trust tables and that names an earlier checkout or source pin before the
   control-plane `deliver-hook.mts` and `attribution-hook.mts` is upgraded
