@@ -184,6 +184,20 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control plane messaging: a reply (`--reply-to`) to a message that session S
+  sent is no longer handed to another session when S is missing from a session
+  listing. Closed-session delivery (`messaging.resumeClosed`) readdressed every
+  waiting message for an unlisted session to the intercom session of its
+  sender, so a reply could land in the replying peer's background intercom
+  session on S's node while S never saw it. A reply now goes only to the
+  session it answers: it stays addressed to S, waits with
+  `waiting/awaiting-user-turn` and the `wake.jsonl` reason `a reply goes only
+  to the session it answers`, and is refused with `target session not running`
+  when S does not return within 60 minutes. Only a reply addressed to the
+  sender's intercom session itself still resumes that session, and one whose
+  resume fails starts no new session (`failed/fallback-failed`). `msg status`
+  on the original sender lists, under each reply that a node handed over, the
+  session it was forwarded to and its delivery task and session (issue #389).
 - Atlassian MCP: the Claude step reports every local-scope `atlassian` entry in
   `~/.claude.json` that takes precedence over the managed service-account server
   in its directory, with the removal command, leaves it as it is and exits 1.

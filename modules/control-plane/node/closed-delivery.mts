@@ -45,6 +45,8 @@ export const LISTING_FRESH_MS = 3 * 60_000;
 
 type Outcome = "reused" | "new" | "refused";
 
+export const REPLY_HELD = "a reply goes only to the session it answers";
+
 // Refusals are audited once per message and reason, not at every round.
 const noted = new Set<string>();
 function audit(paths: NodePaths, now: number, sessionId: string, records: InboxRecord[], outcome: Outcome, reason?: string,
@@ -89,6 +91,15 @@ export async function deliverToClosed(deps: RunnerDeps, log: (line: string) => v
   for (const record of waiting) {
     const target = resolveTarget(paths, record.toSession);
     if (!target || live.has(target.sessionId)) continue;
+    // Issue #389: a reply answers the session that sent the original message
+    // and is handed to no other session. Only a target that is itself the
+    // sender's intercom session is resumed for it; otherwise the reply waits
+    // for its session and is refused after UNDELIVERABLE_AFTER_MS.
+    if (record.inReplyTo !== undefined && intercomFor(paths, record)?.sessionId !== target.sessionId) {
+      progressRecords(paths, [record], "waiting", "awaiting-user-turn", now);
+      audit(paths, now, target.sessionId, [record], "refused", REPLY_HELD);
+      continue;
+    }
     const key = `${target.sessionId} ${record.from.nodeId}/${record.from.session}`;
     const burst = bursts.get(key) ?? { target, records: [] };
     burst.records.push(record);
@@ -218,9 +229,15 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
       return true;
     }
   }
-  const started = await startIntercom(deps, { sessionId, runtime: found.runtime, cwd: cwd.cwd }, records, mode);
+  // Issue #389: a reply for an intercom session that could not be resumed goes
+  // to no new session; its attempt is marked, so it waits for the refusal.
+  const replies = records.filter((r) => r.inReplyTo !== undefined);
+  if (replies.length > 0) refuse(`${why ? `${why}; ` : ""}${REPLY_HELD}`, "fallback-failed", replies);
+  const carried = records.filter((r) => r.inReplyTo === undefined);
+  if (carried.length === 0) return true;
+  const started = await startIntercom(deps, { sessionId, runtime: found.runtime, cwd: cwd.cwd }, carried, mode);
   if (started === null) {
-    audit(paths, now, sessionId, records, "new", why);
-  } else refuse(`${why ? `${why}; ` : ""}no intercom session: ${started}`, "fallback-failed");
+    audit(paths, now, sessionId, carried, "new", why);
+  } else refuse(`${why ? `${why}; ` : ""}no intercom session: ${started}`, "fallback-failed", carried);
   return true;
 }

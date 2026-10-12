@@ -33,10 +33,11 @@ export function closedNode(t: test.TestContext, sessions: Record<string, unknown
 }
 
 // An accepted message that arrived before the listing.
-export function deliver(node: Node, extra: { toSession?: string; depth?: number; text?: string; from?: typeof PEER } = {}): string {
+export function deliver(node: Node, extra: { toSession?: string; depth?: number; text?: string; from?: typeof PEER; inReplyTo?: string } = {}): string {
   const id = `c105ed${(++counter).toString(16).padStart(2, "0")}-0000-4000-8000-000000000000`;
   storeMessage(node.paths.inbox, { messageId: id, from: extra.from ?? PEER, toSession: extra.toSession ?? SESSION,
-    text: extra.text ?? "are the tests green?", createdAt: new Date(T0).toISOString() }, T0 - 5_000, extra.depth ?? 0);
+    text: extra.text ?? "are the tests green?", createdAt: new Date(T0).toISOString(),
+    ...(extra.inReplyTo ? { inReplyTo: extra.inReplyTo } : {}) }, T0 - 5_000, extra.depth ?? 0);
   return id;
 }
 
