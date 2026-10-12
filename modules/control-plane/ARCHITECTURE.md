@@ -246,11 +246,17 @@ Claude progress comes from the current successful session snapshot and freshly l
 ## Sender notices
 
 `node/sent-notices.mts` selects what the delivery hook tells a session about
-messages it sent, from the node's `sent/` records whose `fromSession` is the
-session's id or name and that carry no `noticedAt`: failures (`refused`,
-`expired`, issue #31) and receipts (`delivered`, issue #402). `delivered` means
-the target's turn that carried the message completed (issue #308), so a receipt
-says the target session received it. A message already `replied`, or whose
+messages it sent, in one read of the node's `sent/` records that carry no
+`noticedAt`: failures (`refused`, `expired`, issue #31) whose `fromSession` is
+the session's id or name, and receipts (`delivered`, issue #402) whose
+`fromSessionId` or `fromSession` is, so a renamed session or a stale
+`sessions.json` name still finds its receipts. `delivered` means the turn that
+carried the message completed (issue #308); that may have been a fallback or
+intercom session (issue #389), so the line says only `was received (confirmed
+<updatedAt>)`, with the time this node recorded `delivered`, because the
+Worker's status carries no timestamp. A `PostToolUse` call reads `sent/` once
+for its early exit and hands the found records to `deliveryContext`, which
+rereads only those (`stillUnnoticed`), so each hook call reads `sent/` once. A message already `replied`, or whose
 reply sits in this node's inbox by the Worker's replied rule (`repliesTo`, also
 used by `msg status`), gets no receipt: the reply proves receipt and the Worker
 may record `replied` after the reply arrived. `deliveryContext` in
@@ -261,9 +267,11 @@ Receipts never start or continue a turn. They are read only inside hook events
 the runtime already runs; `Stop` returns nothing when receipts are all it has,
 so no `mayContinue` check, no turn budget and no `wake.jsonl` entry follow. A
 state change in `sent/` wakes nothing: the wake paths act on inbox records, and
-`wake-reply.mts` reads a sent record only to grant a reply's wake. They are low priority in the context
-budget: they are included only when every shown peer message fits whole and
-otherwise stay unnoticed for the next event. More than 5 are summarized in one
+`wake-reply.mts` reads a sent record only to grant a reply's wake. Receipts are
+low priority in the context budget: failures take message slots, receipts
+none, and receipts get only the room left after every shown peer message fits
+whole. Otherwise they stay unnoticed for the next event; only printed receipts
+are marked. More than 5 are summarized in one
 counting line. Codex gets them through the same `deliveryContext` at
 `UserPromptSubmit` and in `msg inbox --receive`; its `Stop` carries no context.
 

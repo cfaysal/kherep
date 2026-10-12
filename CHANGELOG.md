@@ -14,12 +14,15 @@ increments the minor version; every other release increments the patch version.
 - Sender receipts (issue #402): when a message reaches `delivered` (the target
   session's turn that carried it completed), the sending session's next
   delivery hook event shows one line, `Your message <id> to <node>/<session>
-  was received by the target session at <time>.`, once per message
-  (`noticedAt`), for Claude Code and Codex senders. No receipt before
+  was received (confirmed <updatedAt>).`, once per message (`noticedAt`), for
+  Claude Code and Codex senders. The time is when the sender's node recorded
+  `delivered`. A receipt matches the sender by session id (`fromSessionId`) or
+  by `fromSession`, so a renamed session still gets it. No receipt before
   `delivered`, nor when the message is `replied` or its reply already arrived.
   A receipt never wakes a session or continues a turn: `Stop` shows it only
   beside messages or failure notices, and no wake entry or turn budget is used.
-  Receipts give way to peer messages in the context budget; more than 5 are
+  Receipts never cost a peer message slot or block: they take only the room
+  left after the messages and wait otherwise; more than 5 are
   counted in one line. The intro names receipts, failures or both. Failure
   notices are unchanged. Selection lives in
   `modules/control-plane/node/sent-notices.mts`.

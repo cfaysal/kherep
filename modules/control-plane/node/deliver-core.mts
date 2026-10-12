@@ -5,7 +5,7 @@ import { exhaustedOfferReason } from "./delivery-failure.mts";
 import { listInbox, markDelivered, markOffered, markRefused, markRetry, MAX_REPLY_DEPTH, type InboxRecord } from "./inbox.mts";
 import { cliCommand } from "./msg-cli.mts";
 import { nodeLabel } from "./msg-resolve.mts";
-import { failureNotice, noticesIntro, receiptNotice, unnoticedNotices } from "./sent-notices.mts";
+import { failureNotice, noticesIntro, receiptNotice, stillUnnoticed, unnoticedNotices, type SentNotices } from "./sent-notices.mts";
 
 // The runtime-independent part of the delivery hook (issue #31): which inbox
 // records a session gets, how they are framed as context, and the offer and
@@ -38,10 +38,13 @@ const FOOTER_BYTES = 160;
 // autonomous turn (autonomy.mts); false leaves everything for the next prompt.
 // reofferOffered: false when a caller can only introduce new accepted records
 // to an already-running turn; hooks leave it true by default.
+// notices: what the caller's own unnoticedNotices found, so the call reads
+// those records again instead of the whole of sent/.
 export interface HookDeps {
   paths: NodePaths; nonce?: () => string; replyCommand?: string; now?: () => number; replyFrom?: string; maxBytes?: number;
   mayContinue?: (messageIds: string[]) => boolean;
   reofferOffered?: boolean;
+  notices?: SentNotices;
 }
 
 // PostToolUse: Claude Code delivery inside a running turn (deliver-midturn.mts).
@@ -182,7 +185,7 @@ export function deliveryContext(event: DeliveryEvent, refs: string[], deps: Hook
       else markRefused(paths.inbox, r.messageId, exhaustedOfferReason(r, MAX_OFFERS));
     }
   }
-  const notices = unnoticedNotices(paths, refs);
+  const notices = deps.notices ? stillUnnoticed(paths, deps.notices) : unnoticedNotices(paths, refs);
   const failures = notices.failures.slice(0, MAX_MESSAGES_PER_CALL);
   // A receipt alone never continues a turn at Stop (issue #402): it waits for
   // the next event, or rides along with messages or failures.
