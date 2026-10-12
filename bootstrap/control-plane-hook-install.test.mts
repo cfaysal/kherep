@@ -18,7 +18,8 @@ const HERE = import.meta.dirname;
 const HOOK = "modules/control-plane/node/deliver-hook.mts";
 const WAKE = "modules/control-plane/node/wake-hook.mts";
 const ATTRIBUTION = "modules/control-plane/node/attribution-hook.mts";
-const EVENTS = ["UserPromptSubmit", "Stop", "StopFailure"];
+// PostToolUse (issue #388) delivers inside a running turn, from the all-tools group.
+const EVENTS = ["UserPromptSubmit", "Stop", "StopFailure", "PostToolUse"];
 // The events the wake listener is armed at, after the delivery hook where the
 // event has one. SessionStart (issue #97) has none: the listener ends its group.
 const WAKE_EVENTS = ["SessionStart", "UserPromptSubmit", "Stop"];
@@ -27,11 +28,13 @@ const forward = (value: string): string => value.replace(/\\/g, "/");
 const slash = (value: string): string =>
   forward(value).replace(/^([A-Za-z]):\//, (_match, drive: string) => `/${drive.toLowerCase()}/`);
 const hookCommand = (repo: string, hook = HOOK): string => `node "${repo}/${hook}"`;
-type HookGroups = { hooks: Record<string, { hooks: { command: string; [field: string]: unknown }[] }[]> };
+type HookGroups = { hooks: Record<string, { matcher?: string; hooks: { command: string; [field: string]: unknown }[] }[]> };
 // The delivery hook ends each event's last group, except where the wake
-// listener follows it.
+// listener follows it; on PostToolUse it ends the all-tools group.
+const deliverGroup = (value: HookGroups, event: string) =>
+  event === "PostToolUse" ? value.hooks[event].find((group) => !group.matcher) : value.hooks[event].at(-1);
 const deliverCommand = (value: HookGroups, event: string) =>
-  value.hooks[event].at(-1)?.hooks.at(WAKE_EVENTS.includes(event) ? -2 : -1)?.command;
+  deliverGroup(value, event)?.hooks.at(WAKE_EVENTS.includes(event) ? -2 : -1)?.command;
 const wakeEntries = (value: HookGroups, event: string) =>
   value.hooks[event].flatMap((group) => group.hooks).filter((hook) => hook.command.includes("wake-hook"));
 const wakeEntry = (value: HookGroups, event: string) => value.hooks[event].at(-1)?.hooks.at(-1);
@@ -148,7 +151,7 @@ test("install wires the delivery and wake hooks from the checkout, drift-check i
   assert.ok(!fs.readFileSync(copy, "utf8").includes(forward(KHEREP_REPO)), "capture left the machine path of the checkout");
 
   // Removing the entries by hand, as docs/INSTALLATION.md describes, is drift.
-  for (const event of EVENTS) settings.hooks[event].at(-1).hooks.pop();
+  for (const event of EVENTS) deliverGroup(settings, event)!.hooks.pop();
   fs.writeFileSync(path.join(f.claude, "settings.json"), `${JSON.stringify(settings, null, 2)}\n`);
   const removed = bash([slash(path.join(HERE, "drift-check.sh"))], f);
   assert.equal(removed.status, 1, `${removed.stdout}\n${removed.stderr}`);
