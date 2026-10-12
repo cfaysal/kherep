@@ -4,7 +4,7 @@ import path from "node:path";
 import { bypassesPermissions, isPlainSessionId, listenerDir } from "./autonomy.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { contextOutput, deliveryContext, sessionInbox, type HookDeps } from "./deliver-core.mts";
-import { unnoticedFailures } from "./exchange.mts";
+import { unnoticedNotices } from "./sent-notices.mts";
 
 // Claude Code PostToolUse delivery inside a running turn (issue #388). From
 // https://code.claude.com/docs/en/hooks (read 2026-10-12): PostToolUse
@@ -49,8 +49,12 @@ function withMidTurnLock(paths: NodePaths, sessionId: string, body: () => string
 
 export function midTurnOutput(input: Record<string, unknown>, sessionId: string, refs: string[], deps: HookDeps): string {
   if (Object.hasOwn(input, "agent_id") || !isPlainSessionId(sessionId) || bypassesPermissions(input.permission_mode)) return "";
-  // Every tool call runs this: leave without a lock or directory when nothing waits.
+  // Every tool call runs this: leave without a lock or directory when nothing
+  // waits and no failure or receipt notice is due.
   const waiting = sessionInbox(deps.paths, refs).some((record) => record.state === "accepted");
-  if (!waiting && unnoticedFailures(deps.paths, refs).length === 0) return "";
+  if (!waiting) {
+    const { failures, receipts } = unnoticedNotices(deps.paths, refs);
+    if (failures.length === 0 && receipts.length === 0) return "";
+  }
   return withMidTurnLock(deps.paths, sessionId, () => contextOutput("PostToolUse", deliveryContext("PostToolUse", refs, deps))) ?? "";
 }

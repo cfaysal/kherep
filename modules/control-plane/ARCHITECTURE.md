@@ -219,7 +219,7 @@ flowchart LR
 A call carrying `agent_id` (subagent or in-process teammate, which share the
 session id) or permission mode `bypassPermissions` gets nothing; those records
 wait for the next prompt. A call with no accepted record and no unnoticed send
-failure leaves without a lock or a write. Otherwise an exclusive per-session
+failure or receipt leaves without a lock or a write. Otherwise an exclusive per-session
 lock (`listeners/<session_id>.deliver.lock`, stale after 5 seconds) serialises
 the concurrent `PostToolUse` calls of parallel tools, and the shared
 `deliveryContext` offers only `accepted` records. The offer is no receipt
@@ -243,6 +243,30 @@ Delivery hooks own `inbox/<messageId>.json`; the daemon owns `inbox/progress/<me
 Senders read `running` and `stopped` as refinements of `accepted`, derived from those progress codes by one shared function (`senderState`). No new wire state exists, because an older Worker rejects an unknown state in `isNodeMessageStatusBody` and would leave a newer node retrying forever. An accepted message without progress for 5 minutes is shown with a fixed actionable reason instead of a bare `accepted`; the bound is evaluated on the sender, so it also covers an offline or older target node. The MCP `status` tool applies the same two functions to the Worker's stored state, progress and `updated_at` against the Worker's clock and adds `senderState` and a fixed `hint` beside the unchanged canonical `state`. `running` is not a liveness signal: progress is written on change only, so it reports the last observation and its `observedAt`.
 
 Claude progress comes from the current successful session snapshot and freshly loaded node policy. Each accepted message resolves once: an exact session id precedes names, a unique name resolves to one session, and a shared name produces one stable `ambiguous-target` observation. An already offered message remains `awaiting-turn-confirmation`. An idle authorized Claude session reports `waking`/`wake-pending` only for messages the live listener covers: its scope file (`listeners/<session_id>.scope.json`, valid while its token matches the lock) says whether it is listed, which task grant it uses, and whether it wakes for replies; a listener without one, from an older node version, covers only task-granted messages. With `wake.replies` a reply to an unlisted session's own recent message, or a message of a task it requested from the node that runs it, counts as authorized (the reply and task message grants, `node/wake-reply.mts`, issues #253 and #264) and reports `waking`/`wake-pending` only under a scope with `replies`. Every other authorized message reports `waiting`/`awaiting-user-turn` (issue #213). That existing code is reused on purpose: a new code would make an older Worker reject the whole `message.status` in `isNodeMessageStatusBody`. Codex interactive progress annotates CP admission and original-owner intake. For Codex task sessions, the message resume records the code of the guard that holds it, `wake-failed` for a failed start and `awaiting-turn-confirmation` for the messages a run carries, while a separate observer marks messages for active tasks `target-busy` and for operator-stopped tasks `operator-stopped`. Closed-session fallback annotates its existing start or resume path; each of its refusals names the existing code of its guard at the call site, and `fallback-failed` is reserved for a start or resume that failed (issue #230), so a policy refusal is never reported as a failed launch. These observations add no wake attempt, permission, transcript read, or message-body persistence.
+## Sender notices
+
+`node/sent-notices.mts` selects what the delivery hook tells a session about
+messages it sent, from the node's `sent/` records whose `fromSession` is the
+session's id or name and that carry no `noticedAt`: failures (`refused`,
+`expired`, issue #31) and receipts (`delivered`, issue #402). `delivered` means
+the target's turn that carried the message completed (issue #308), so a receipt
+says the target session received it. A message already `replied`, or whose
+reply sits in this node's inbox by the Worker's replied rule (`repliesTo`, also
+used by `msg status`), gets no receipt: the reply proves receipt and the Worker
+may record `replied` after the reply arrived. `deliveryContext` in
+`node/deliver-core.mts` frames both after the intro and marks each shown record
+`noticedAt`, so each is told once.
+
+Receipts never start or continue a turn. They are read only inside hook events
+the runtime already runs; `Stop` returns nothing when receipts are all it has,
+so no `mayContinue` check, no turn budget and no `wake.jsonl` entry follow. A
+state change in `sent/` wakes nothing: the wake paths act on inbox records, and
+`wake-reply.mts` reads a sent record only to grant a reply's wake. They are low priority in the context
+budget: they are included only when every shown peer message fits whole and
+otherwise stay unnoticed for the next event. More than 5 are summarized in one
+counting line. Codex gets them through the same `deliveryContext` at
+`UserPromptSubmit` and in `msg inbox --receive`; its `Stop` carries no context.
+
 ## Runtime readiness and inactivity
 
 A delivery is not a turn. Live finding of issue #197: a background Claude session whose login had expired went idle without a turn while its sender read `delivered`, and `claude auth status` still reported `loggedIn: true`. The node therefore decides from a real minimal call, not from local credential state, whether a runtime can run a turn (`node/runtime-probe.mts`), and caches the verdict (`node/runtime-readiness.mts`): one probe per enabled runtime at daemon start; afterwards the last verdict is used stale while a background probe revalidates it once aged (ready 10 minutes, otherwise 2), and the session round revalidates a runtime that is not ready. Probes are shared by concurrent callers and never run on the daemon's frame lane: a native MCP intent waits at most 8 seconds for its acknowledgement there, a probe up to 45. Only a session command for a runtime without any verdict waits, before it enters the lane, on a command lane that keeps command order (`node/readiness-lane.mts`); daemon rounds never wait. Only a sign-in failure blocks: a task reports `failed` and a message is `refused`, each with the fixed reason `target runtime <runtime> not ready (sign-in required)`. After a probe that timed out or failed otherwise, tasks run as before and messages wait with `retry-pending`. CLI output never reaches a message or report; the daemon log carries one redacted line.

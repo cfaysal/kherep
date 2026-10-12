@@ -11,6 +11,18 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Sender receipts (issue #402): when a message reaches `delivered` (the target
+  session's turn that carried it completed), the sending session's next
+  delivery hook event shows one line, `Your message <id> to <node>/<session>
+  was received by the target session at <time>.`, once per message
+  (`noticedAt`), for Claude Code and Codex senders. No receipt before
+  `delivered`, nor when the message is `replied` or its reply already arrived.
+  A receipt never wakes a session or continues a turn: `Stop` shows it only
+  beside messages or failure notices, and no wake entry or turn budget is used.
+  Receipts give way to peer messages in the context budget; more than 5 are
+  counted in one line. The intro names receipts, failures or both. Failure
+  notices are unchanged. Selection lives in
+  `modules/control-plane/node/sent-notices.mts`.
 - Observation result check: a new `SubagentStop` hook, `obs-result-check.mts`,
   wired with matcher `claude-obs`, checks the agent's `OBS-RESULT` status line
   through `claude/hooks/lib/obs-result-policy.mts`. The first non-empty line is
