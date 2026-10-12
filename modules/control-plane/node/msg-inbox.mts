@@ -6,6 +6,7 @@ import { readDirectory, type LocalSession, type SentRecord } from "./exchange.mt
 import { listInbox, readJson } from "./inbox.mts";
 import type { MsgArgs, MsgContext } from "./msg-cli.mts";
 import { NO_SESSION, nodeLabel, senderSession, sessionIdFromEnv } from "./msg-resolve.mts";
+import { repliesTo } from "./sent-notices.mts";
 
 type InboxIo = Required<MsgContext>;
 
@@ -80,12 +81,9 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
   return 0;
 }
 
-// Issue #200: the replies to a sent message that reached this node, by the
-// rule by which the Worker records replied: in reply to it, from its target
-// node, to its sender session (or to that address before a fallback handover).
+// Issue #200: the replies to a sent message that reached this node (repliesTo).
 export function replyLines(paths: NodePaths, sent: SentRecord): string[] {
-  const replies = listInbox(paths.inbox).filter((r) => r.inReplyTo === sent.messageId && r.from.nodeId === sent.to?.nodeId
-    && (r.closedTo ?? r.toSession) === sent.fromSession);
+  const replies = repliesTo(listInbox(paths.inbox), sent);
   if (replies.length === 0) return [];
   const directory = readDirectory(paths);
   return replies.flatMap((r) => {

@@ -125,7 +125,7 @@ test(`after ${MAX_OFFERS} unconfirmed offers the message is refused and not offe
   assert.equal(state(paths, messageId), "refused", "a late Stop does not confirm a refused message");
 });
 
-function sent(paths: NodePaths, n: number, fromSession: string, status: "refused" | "expired" | "delivered", reason?: string): string {
+function sent(paths: NodePaths, n: number, fromSession: string, status: "refused" | "expired" | "accepted", reason?: string): string {
   writeOutbox(paths, { messageId: id(n), fromSession, to: { nodeId: PEER, session: "planner" }, text: "hi", createdAt: new Date(NOW).toISOString() });
   recordSent(paths, id(n), status, reason, NOW + n);
   return id(n);
@@ -136,7 +136,7 @@ test("the sending session is told once about each refused or expired message", (
   const refused = sent(paths, 11, "review", "refused", "target session not running");
   const expired = sent(paths, 12, "s-self", "expired");
   const other = sent(paths, 13, "someone-else", "refused", "not accepted by node policy");
-  sent(paths, 14, "review", "delivered");
+  sent(paths, 14, "review", "accepted"); // receipts for delivered ones: sent-receipt.test.mts
   const context = hook(paths, "UserPromptSubmit");
   assert.match(context, /^Kherep: messages this session sent were not delivered\./);
   assert.ok(context.includes(`Your message ${refused} to node-b (${PEER})/planner was not delivered: "target session not running"`));

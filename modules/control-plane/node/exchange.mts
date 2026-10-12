@@ -104,23 +104,6 @@ export function recordSent(paths: NodePaths, messageId: string, state: SentState
   return true;
 }
 
-// Sent records of the given sender sessions (id or name) that ended refused
-// or expired and whose session was not told yet, oldest first. An unreadable
-// file is skipped.
-export function unnoticedFailures(paths: NodePaths, fromSessions: string[]): SentRecord[] {
-  const read = (id: string): SentRecord | null => {
-    try {
-      return getSent(paths, id);
-    } catch {
-      return null;
-    }
-  };
-  return messageIds(paths.sent).map(read)
-    .filter((r): r is SentRecord => r !== null && (r.state === "refused" || r.state === "expired") && r.noticedAt === undefined
-      && r.fromSession !== undefined && fromSessions.includes(r.fromSession))
-    .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
-}
-
 // The depth of an arriving message: one more than this node's sent message it
 // answers, 0 for a new message or an answer to something this node did not send.
 export function replyDepth(paths: NodePaths, inReplyTo: string | undefined): number {
