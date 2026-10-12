@@ -34,6 +34,19 @@ test("omits graph outside a repository and emits nothing outside scope or when s
   assert.equal(promptContext("bad", env, config, () => false), "");
 });
 
+test("guides a blocked broker read through scoped approval without granting network access", () => {
+  const text = promptContext(
+    { cwd: "D:/Work/repo", prompt: "PRIVATE-PROMPT-MARKER" },
+    { KHEREP_WORKSPACE: "D:/Work" }, config, () => false,
+  );
+  assert.match(text, /read-only.*broker.*search/i);
+  assert.match(text, /sandbox_permissions.*require_escalated/);
+  assert.match(text, /codex exec --approve-for-me/);
+  assert.match(text, /reviewed/);
+  assert.match(text, /unavailable.*UNKNOWN/);
+  assert.doesNotMatch(text, /PRIVATE-PROMPT-MARKER|network_access\s*=\s*true|dangerously-bypass/);
+});
+
 test("invalid configuration never echoes its space value", () => {
   const bad = path.join(tmp, "bad.json");
   fs.writeFileSync(bad, JSON.stringify({ spaceKey: "KB; LEAK-MARKER" }));

@@ -232,6 +232,11 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Codex headless broker research (issue #405): the research reminder explains
+  command-scoped approval when sandbox networking blocks a read-only search.
+  The documented `codex exec --approve-for-me` invocation retains the
+  workspace-write sandbox and makes the escalation reviewable. An unavailable
+  lookup remains UNKNOWN; no sandbox defaults or privacy guards are changed.
 - Codex research Stop hook: a Central Brain broker search run through the Codex
   Desktop code-mode wrapper counts as a research attempt. Codex Desktop
   records that wrapper as a `custom_tool_call` named `exec` without a
