@@ -18,6 +18,20 @@ const isState = (table: string): boolean => /^\[hooks\.state[\].]/.test(table);
 // Each part opens with a table header and owns every line up to the next one.
 const tables = (text: string): string[] => text.split(/^(?=\[)/m);
 
+// Issue #397. The checkout hooks run from the checkout or source pin the
+// installer ran from, so a block from an earlier pin names another directory
+// before them. The same hooks control-plane-hook-path.mts points at the current
+// checkout in a whole block; here they take the fragment's own directory, and
+// nothing else in the text may differ.
+const CHECKOUT_DIR = /(?<=\\")(?:[^"\\]|\\\\)*?(?:\\\\|\/)modules(?:\\\\|\/)control-plane(?:\\\\|\/)node(?:\\\\|\/)(?=(?:deliver|attribution)-hook\.mts\\" \\"--runtime\\" \\"codex\\")/g;
+
+function atCheckoutOf(fragment: string): (text: string) => string {
+  const dirs = new Set(Array.from(fragment.matchAll(CHECKOUT_DIR), ([dir]) => dir));
+  if (dirs.size !== 1) return (text) => text;
+  const [dir] = dirs;
+  return (text) => text.replace(CHECKOUT_DIR, () => dir);
+}
+
 // Returns the config with the trust tables behind the end marker and the tail in
 // the block, or undefined unless the block without its trust tables is the exact
 // start of a known fragment whose exact rest follows the marker, with nothing but
@@ -41,13 +55,19 @@ export function reanchorSplitManagedBlock(
   const following = tables(after.slice(firstTable));
   const tailIndex = following.findIndex((table) => !isState(table));
   if (tailIndex < 0) return undefined;
-  const rest = following.slice(tailIndex).join("");
+  const restTables = following.slice(tailIndex);
   const moved = [...body.filter(isState), separated.slice(1), ...following.slice(0, tailIndex)]
     .join("").replace(/^\n+|\n+$/g, "");
   const fragments = knownFragments.map((fragment) => fragment.trim()).sort((left, right) => right.length - left.length);
   for (const fragment of fragments) {
-    if (!fragment.startsWith(`${head}\n`)) continue;
-    const tail = fragment.slice(head.length).trim();
+    const atCheckout = atCheckoutOf(fragment);
+    const ownHead = atCheckout(head);
+    if (!fragment.startsWith(`${ownHead}\n`)) continue;
+    const tail = fragment.slice(ownHead.length).trim();
+    // Only the tables the tail can cover are compared at the fragment's
+    // checkout; whatever follows them stays as written.
+    const covered = tables(tail).length;
+    const rest = atCheckout(restTables.slice(0, covered).join("")) + restTables.slice(covered).join("");
     if (rest !== tail && !rest.startsWith(`${tail}\n`)) continue;
     const remainder = rest.slice(tail.length).replace(/^\n+/, "");
     return `${config.slice(0, start)}${startMarker}\n${fragment}\n${endMarker}\n`

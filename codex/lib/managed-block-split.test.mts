@@ -183,3 +183,42 @@ test("refuses a split block with unknown content left inside the block", () => {
   assert.throws(() => prepareManagedConfig(config, OPTIONS),
     /Refusing to overwrite a managed block without an exact known managed fragment/);
 });
+
+// Issue #397. A block written from an earlier source pin names that pin before
+// the checkout hooks. The Codex app splits such a block as well, so the
+// re-anchor has to know it; any other difference still refuses.
+const PIN = String.raw`C:\\Synthetic\\.codex\\orchestra\\source-pins\\0123456789abcdef0123456789abcdef01234567`;
+const fromPin = (text: string): string =>
+  text.replace(/C:\\\\Synthetic\\\\repo(?=\\\\modules\\\\control-plane\\\\node\\\\(?:deliver|attribution)-hook\.mts)/g, PIN);
+const fromNode = (text: string): string =>
+  text.replaceAll(String.raw`C:\\Program Files\\nodejs\\node.exe`, String.raw`D:\\Previous\\nodejs\\node.exe`);
+
+test("re-anchors a split block written from an earlier source pin", () => {
+  for (const earlier of [fromPin, (text: string) => fromNode(fromPin(text))]) {
+    const config = earlier(split(TAIL));
+    assert.ok(fromPin(HEAD) !== HEAD && fromPin(TAIL) !== TAIL, "the pin names both parts");
+
+    const result = prepareManagedConfig(config, OPTIONS);
+
+    assert.equal(result.managedFragment, "replaced");
+    assert.equal(managedBlock(result.config), managedBlock(FRESH));
+    assert.equal(result.config.includes(PIN), false, "no command names the earlier pin");
+    assert.ok(result.config.endsWith(`\n\n${OPERATOR}\n`));
+    assert.equal(prepareManagedConfig(result.config, OPTIONS).managedFragment, "current");
+  }
+});
+
+test("refuses a split block from an earlier source pin with any other difference", () => {
+  const timeout = (text: string) => text.replace(/timeout = (\d+)/, (_, seconds) => `timeout = ${Number(seconds) + 1}`);
+  const hookDir = (text: string) => text.replace(String.raw`C:\\Synthetic\\.codex\\hooks\\kherep-maestro\\`,
+    String.raw`C:\\Synthetic\\other\\hooks\\kherep-maestro\\`);
+  for (const edit of [timeout, hookDir]) {
+    const config = fromPin(split(TAIL)).replace(fromPin(HEAD), edit(fromPin(HEAD)));
+    assert.notEqual(config, fromPin(split(TAIL)));
+    assert.throws(() => prepareManagedConfig(config, OPTIONS),
+      /Refusing to overwrite a managed block without an exact known managed fragment/);
+  }
+  const tail = fromPin(TAIL).replace("startup_timeout_sec = 30.0", "startup_timeout_sec = 31.0");
+  assert.throws(() => prepareManagedConfig(fromPin(split(tail)), OPTIONS),
+    /Refusing to overwrite a managed block without an exact known managed fragment/);
+});
