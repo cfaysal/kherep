@@ -20,6 +20,7 @@ export function promptContext(
   const lines = [
     "RESEARCH FIRST (ROUTING.md, Evidence first): classify this prompt. Answer a banal prompt directly. For a relevant prompt, research before answering:",
     `1. Central Brain: ${brainSearchCommand(workspace, configPath || codexConfigPath(env))}. Search terms follow the privacy classification; private content never goes to Atlassian. A lookup attempt is evidence of process, not proof that the lookup succeeded.`,
+    'If sandbox networking blocks this read-only broker search, request command-scoped approval with sandbox_permissions="require_escalated". Headless research needs codex exec --approve-for-me so the request can be reviewed. Keep the sandbox and privacy guards; an unavailable lookup is UNKNOWN, not evidence of a service outage.',
   ];
   if (gitRepositoryOf(payload.cwd, exists)) {
     lines.push("2. Code graph: this working directory is in a repository. If code changes, query codebase-memory first (mcp__codebase_memory_mcp__* or mcp__codebase-memory-mcp__*).");
