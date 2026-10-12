@@ -75,11 +75,11 @@ test("policy: wake.codexApp is an optional boolean; anything else disables wakin
     fs.writeFileSync(file, JSON.stringify({ version: 1, allowedCommands: [], wake }));
     return loadPolicy(file).wake;
   };
-  assert.deepEqual(load({ enabled: true, sessions: ["a"] }), { sessions: ["a"] }, "absent: unchanged");
-  assert.deepEqual(load({ enabled: true, sessions: ["a"], codexApp: false }), { sessions: ["a"] });
-  assert.deepEqual(load({ enabled: true, sessions: ["a"], codexApp: true }), { sessions: ["a"], codexApp: true });
-  assert.deepEqual(load({ enabled: true, codexApp: true }), { sessions: [], codexApp: true }, "the grant alone needs no list");
-  assert.deepEqual(load({ enabled: true, sessions: [], codexApp: true }), { sessions: [], codexApp: true });
+  assert.deepEqual(load({ enabled: true, sessions: ["a"] }), { enabled: true, sessions: ["a"] }, "absent: unchanged");
+  assert.deepEqual(load({ enabled: true, sessions: ["a"], codexApp: false }), { enabled: true, sessions: ["a"] });
+  assert.deepEqual(load({ enabled: true, sessions: ["a"], codexApp: true }), { enabled: true, sessions: ["a"], codexApp: true });
+  assert.deepEqual(load({ enabled: true, codexApp: true }), { enabled: true, sessions: [], codexApp: true }, "the grant alone needs no list");
+  assert.deepEqual(load({ enabled: true, sessions: [], codexApp: true }), { enabled: true, sessions: [], codexApp: true });
   for (const codexApp of ["true", 1, null, {}, []]) assert.equal(load({ enabled: true, sessions: ["a"], codexApp }), undefined, JSON.stringify(codexApp));
   assert.equal(load({ enabled: false, codexApp: true }), undefined);
   assert.equal(load({ enabled: true, sessions: [], codexApp: false }), undefined, "an empty list still needs the grant");

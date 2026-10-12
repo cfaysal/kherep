@@ -32,7 +32,7 @@ test(`takeTurn allows ${TURNS_PER_HOUR} per rolling hour, ${TURNS_PER_DAY} per r
   // Rolling: the first turn leaves the hour window exactly one hour later.
   assert.equal(takeTurn(paths, SELF, T0 + HOUR), "ok");
 
-  // 11 minutes apart the hour never fills; the day does after 20 turns.
+  // 11 minutes apart the hour never fills; the day does after TURNS_PER_DAY turns.
   const daily = setup(t).paths;
   for (let n = 0; n < TURNS_PER_DAY; n++) assert.equal(takeTurn(daily, SELF, T0 + n * 11 * 60_000), "ok", `turn ${n + 1}`);
   assert.equal(takeTurn(daily, SELF, T0 + 24 * HOUR - 1), "exhausted");
@@ -45,11 +45,12 @@ test("Stop continuations consume the budget; when it is exhausted Stop offers no
     arrive(paths, n, T0);
     assert.match(stop(paths, T0 + n * TURN_SPACING_MS), new RegExp(`=== Kherep peer message ${id(n)} `), `continuation ${n}`);
   }
-  arrive(paths, 7, T0);
-  assert.equal(stop(paths, T0 + 7 * TURN_SPACING_MS), "");
-  assert.equal(getMessage(paths.inbox, id(7))?.state, "accepted", "it waits for the next user prompt");
+  const over = TURNS_PER_HOUR + 1;
+  arrive(paths, over, T0);
+  assert.equal(stop(paths, T0 + over * TURN_SPACING_MS), "");
+  assert.equal(getMessage(paths.inbox, id(over))?.state, "accepted", "it waits for the next user prompt");
   assert.deepEqual(auditLines(paths).map((l) => l.action), [...Array(TURNS_PER_HOUR).fill("continue"), "continue-budget"]);
-  assert.deepEqual(auditLines(paths).at(-1)?.messageIds, [id(7)]);
+  assert.deepEqual(auditLines(paths).at(-1)?.messageIds, [id(over)]);
   assert.ok(!fs.readFileSync(wakeAudit(paths), "utf8").includes(SECRET), "the audit never carries message text");
   // A prompt of the user is not autonomous: it delivers regardless of the budget.
   assert.match(deliverForHook({ session_id: SELF, hook_event_name: "UserPromptSubmit" }, { paths, now: () => T0 + HOUR / 2 }), /Kherep/);

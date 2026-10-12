@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
+import { takeTurn, TURN_SPACING_MS, TURNS_PER_HOUR } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
 import { audits, closedNode, deliver, PEER, SESSION, turnDone, type Node } from "./closed-fixture.mts";
 import { deliveryContext } from "./deliver-core.mts";
@@ -167,7 +167,7 @@ test("an ended intercom session is not resumed past the budget of its session", 
   const task = await firstIntercom(node);
   writeTask(node.paths, { ...task, state: "done" });
   later(node);
-  for (let i = 0; i < 6; i++) takeTurn(node.paths, task.sessionId!, T0 - 50 * 60_000 + i * TURN_SPACING_MS * 2);
+  for (let i = 0; i < TURNS_PER_HOUR; i++) takeTurn(node.paths, task.sessionId!, T0 - 50 * 60_000 + i * TURN_SPACING_MS * 2);
   const id = deliver(node);
   await deliverToClosed(node.deps());
   assert.equal(claudeRuns(node).length, 1);

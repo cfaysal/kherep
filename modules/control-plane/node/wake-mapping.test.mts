@@ -20,7 +20,8 @@ const OLD = "0ld5e551-0000-4000-8000-000000000000";
 const PEER = "00000000-0000-4000-8000-0000000000cc";
 
 // An intercom session of this node for PEER/build whose mapping is pending.
-function pendingNode(t: test.TestContext, record: Partial<TaskRecord> = {}, wake?: unknown) {
+// Waking is off unless the test says otherwise (an absent section wakes every session, issue #390).
+function pendingNode(t: test.TestContext, record: Partial<TaskRecord> = {}, wake: unknown = { enabled: false }) {
   const { paths } = setup(t, { wake });
   fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: [], ...(wake === undefined ? {} : { wake }),
     sessions: { enabled: true, workspaceRoots: [paths.dir] } }));
@@ -42,7 +43,7 @@ const message = (paths: NodePaths, n: number, at: number): void => {
 };
 
 test("a listener armed before the mapping wakes once the node records its session id", async (t) => {
-  for (const wake of [undefined, { enabled: true, sessions: ["someone-else"] }]) {
+  for (const wake of [{ enabled: false }, { enabled: true, sessions: ["someone-else"] }]) {
     const paths = pendingNode(t, {}, wake);
     const result = await listen(paths, { maxWaitMs: 60_000, tick: (clock) => {
       if (clock === T0 + 3 * WAKE_POLL_MS) message(paths, 1, clock);
