@@ -161,6 +161,24 @@ test("a receipt matches the sender by name alone or by its session id after a re
   assert.ok(!context.includes(elsewhere));
 });
 
+test("a receipt of another session id is not shown to a later session that reuses its name", (t) => {
+  const paths = setup(t);
+  const reused = sent(paths, 1, "delivered", "review", undefined, "s-other");
+  assert.equal(hook(paths, "UserPromptSubmit"), "");
+  assert.equal(getSent(paths, reused)?.noticedAt, undefined);
+});
+
+test("at Stop a receipt rides along with a failure notice and is marked", (t) => {
+  const paths = setup(t);
+  const refused = sent(paths, 1, "refused", "review", "target session not running");
+  const delivered = sent(paths, 2, "delivered", "review", undefined, SELF);
+  const context = hook(paths, "Stop", { stop_hook_active: false });
+  assert.ok(context.includes(`Your message ${refused} to node-b (${PEER})/planner was not delivered: "target session not running"`));
+  assert.ok(context.includes(receipt(delivered, 2)));
+  assert.equal(getSent(paths, refused)?.noticedAt, at(1_000));
+  assert.equal(getSent(paths, delivered)?.noticedAt, at(1_000));
+});
+
 test("receipts never cost a peer message block: they take only the room left after the blocks", (t) => {
   const seen = new Set<string>();
   const offeredWith = (receiptToo: boolean, size: number): number => {

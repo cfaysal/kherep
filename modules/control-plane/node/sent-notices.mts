@@ -35,15 +35,16 @@ export function repliesTo(inbox: InboxRecord[], sent: SentRecord): InboxRecord[]
 // failures of records whose fromSession is one of them (unchanged since issue
 // #31), and receipts for messages delivered (the target's turn completed, issue
 // #308) without a reply, since a reply already proves receipt and the Worker may
-// record replied after the reply arrived. A receipt also matches the sender's
-// session id (fromSessionId), so a renamed session still gets it.
+// record replied after the reply arrived. A receipt matches the sender's
+// session id (fromSessionId), and fromSession only for a record without one
+// (an older sender), as the reply grant does (wake-reply.mts): a renamed
+// session still gets it, a later session reusing the name does not.
 export function unnoticedNotices(paths: NodePaths, refs: string[]): SentNotices {
   const records = messageIds(paths.sent).map((id) => read(paths, id))
     .filter((r): r is SentRecord => r !== null && r.noticedAt === undefined && r.fromSession !== undefined)
     .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
   const failures = records.filter((r) => failed(r) && refs.includes(r.fromSession!));
-  const delivered = records.filter((r) => r.state === "delivered"
-    && (refs.includes(r.fromSessionId ?? r.fromSession!) || refs.includes(r.fromSession!)));
+  const delivered = records.filter((r) => r.state === "delivered" && refs.includes(r.fromSessionId ?? r.fromSession!));
   const inbox = delivered.length > 0 ? listInbox(paths.inbox) : [];
   return { failures, receipts: delivered.filter((r) => repliesTo(inbox, r).length === 0) };
 }

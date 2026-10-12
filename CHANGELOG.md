@@ -16,9 +16,11 @@ increments the minor version; every other release increments the patch version.
   delivery hook event shows one line, `Your message <id> to <node>/<session>
   was received (confirmed <updatedAt>).`, once per message (`noticedAt`), for
   Claude Code and Codex senders. The time is when the sender's node recorded
-  `delivered`. A receipt matches the sender by session id (`fromSessionId`) or
-  by `fromSession`, so a renamed session still gets it. No receipt before
-  `delivered`, nor when the message is `replied` or its reply already arrived.
+  `delivered`. A receipt matches the sender by session id (`fromSessionId`),
+  and by `fromSession` only for a record without it (an older sender), so a
+  renamed session still gets it and a later session reusing the name does not.
+  No receipt before `delivered`, nor when the message is `replied` or its reply
+  already arrived.
   A receipt never wakes a session or continues a turn: `Stop` shows it only
   beside messages or failure notices, and no wake entry or turn budget is used.
   Receipts never cost a peer message slot or block: they take only the room
