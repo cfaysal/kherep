@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -65,6 +66,71 @@ test("strings outside hook commands are ignored in Claude settings and Codex con
   assert.equal(check.ok, true, JSON.stringify(check));
   assert.deepEqual(check.claude, { present: true, deliver: 1, wake: 0, foreign: [] });
   assert.deepEqual(check.codex, { present: true, deliver: 2, wake: 0, foreign: [] });
+});
+
+// Issue #397. An installation may run its hooks from a source pin, a copy of
+// the repository at one commit under <dir>/source-pins/<commit>. Such a pin of
+// the checked-out commit counts as this checkout; a pin of another commit and
+// another checkout do not.
+function git(cwd: string, ...args: string[]): string {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+  const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", env, windowsHide: true });
+  if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+// A commit without running any hook: plumbing only, with a synthetic identity.
+function commitCheckout(repo: string): string {
+  git(repo, "init", "-q");
+  const tree = git(repo, "write-tree");
+  const commit = git(repo, "-c", "user.name=Kherep Fixture", "-c", "user.email=fixture@example.invalid",
+    "commit-tree", tree, "-m", "fixture");
+  git(repo, "update-ref", "HEAD", commit);
+  return commit;
+}
+
+function pinnedHook(root: string, name: string): string {
+  const hooks = path.join(root, ".codex", "orchestra", "source-pins", name, "modules", "control-plane", "node");
+  fs.mkdirSync(hooks, { recursive: true });
+  fs.writeFileSync(path.join(hooks, "deliver-hook.mts"), "");
+  return path.join(hooks, "deliver-hook.mts");
+}
+
+const codexHook = (hook: string): string => ["[[hooks.Stop]]", "[[hooks.Stop.hooks]]", 'type = "command"',
+  `command = ${JSON.stringify(`"/usr/bin/node" "${hook}" "--runtime" "codex"`)}`, ""].join("\n");
+
+test("a hook in a source pin of the checked-out commit counts for this checkout", (t) => {
+  if (spawnSync("git", ["--version"], { windowsHide: true }).status !== 0) return t.skip("git is not available");
+  const f = files(t);
+  const commit = commitCheckout(f.repo);
+  const root = path.dirname(f.repo);
+  for (const name of [commit, commit.slice(0, 12)]) {
+    const hook = pinnedHook(root, name);
+    fs.writeFileSync(f.codex, codexHook(hook));
+    const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
+    assert.equal(check.ok, true, JSON.stringify(check));
+    assert.deepEqual(check.codex, { present: true, deliver: 1, wake: 0, foreign: [], pinned: [hook] });
+  }
+});
+
+test("a source pin of another commit, a missing pin and another checkout still count as foreign", (t) => {
+  if (spawnSync("git", ["--version"], { windowsHide: true }).status !== 0) return t.skip("git is not available");
+  const f = files(t);
+  const commit = commitCheckout(f.repo);
+  const root = path.dirname(f.repo);
+  const otherCommit = commit.replace(/^./, (digit) => (digit === "0" ? "1" : "0"));
+  const missing = path.join(root, ".codex", "orchestra", "source-pins", commit.slice(0, 10), "modules", "control-plane",
+    "node", "deliver-hook.mts");
+  const checkout = path.join(root, "other", "modules", "control-plane", "node", "deliver-hook.mts");
+  fs.mkdirSync(path.dirname(checkout), { recursive: true });
+  fs.writeFileSync(checkout, "");
+  for (const hook of [pinnedHook(root, otherCommit), missing, checkout]) {
+    fs.writeFileSync(f.codex, codexHook(hook));
+    const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
+    assert.equal(check.ok, false, hook);
+    assert.deepEqual(check.codex, { present: true, deliver: 0, wake: 0, foreign: [hook] });
+    assert.equal(check.detail, "a hook command names another checkout");
+  }
 });
 
 // Issue #388: the delivery entry in the all-tools PostToolUse group counts as
