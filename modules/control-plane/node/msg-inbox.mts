@@ -89,12 +89,13 @@ export function replyLines(paths: NodePaths, sent: SentRecord): string[] {
   if (replies.length === 0) return [];
   const directory = readDirectory(paths);
   return replies.flatMap((r) => {
-    const line = `  reply ${r.messageId} from node ${nodeLabel(directory, r.from.nodeId)}, session ${r.from.session}`
-      + ` (${r.state}, received ${r.receivedAt})`;
+    const lines = [`  reply ${r.messageId} from node ${nodeLabel(directory, r.from.nodeId)}, session ${r.from.session}`
+      + ` (${r.state}, received ${r.receivedAt})`];
     // Issue #389: a reply handed to another session names where it went.
-    if (r.closedTo === undefined) return [line];
-    return [line, ...(r.toSession !== r.closedTo ? [`    forwarded to: session ${r.toSession}`] : []),
-      ...(r.delivery ? [`    delivery task: ${r.delivery.taskId}`] : []),
-      ...(r.delivery?.sessionId ? [`    delivery session: ${r.delivery.sessionId}`] : [])];
+    if (r.closedTo === undefined) return lines;
+    if (r.toSession !== r.closedTo) lines.push(`    forwarded to: session ${r.toSession}`);
+    if (r.delivery) lines.push(`    delivery task: ${r.delivery.taskId}`);
+    if (r.delivery?.sessionId) lines.push(`    delivery session: ${r.delivery.sessionId}`);
+    return lines;
   });
 }

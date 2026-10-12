@@ -231,13 +231,14 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   }
   // Issue #389: a reply for an intercom session that could not be resumed goes
   // to no new session; its attempt is marked, so it waits for the refusal.
+  const prefix = why ? `${why}; ` : "";
   const replies = records.filter((r) => r.inReplyTo !== undefined);
-  if (replies.length > 0) refuse(`${why ? `${why}; ` : ""}${REPLY_HELD}`, "fallback-failed", replies);
+  if (replies.length > 0) refuse(`${prefix}${REPLY_HELD}`, "fallback-failed", replies);
   const carried = records.filter((r) => r.inReplyTo === undefined);
   if (carried.length === 0) return true;
   const started = await startIntercom(deps, { sessionId, runtime: found.runtime, cwd: cwd.cwd }, carried, mode);
   if (started === null) {
     audit(paths, now, sessionId, carried, "new", why);
-  } else refuse(`${why ? `${why}; ` : ""}no intercom session: ${started}`, "fallback-failed", carried);
+  } else refuse(`${prefix}no intercom session: ${started}`, "fallback-failed", carried);
   return true;
 }
