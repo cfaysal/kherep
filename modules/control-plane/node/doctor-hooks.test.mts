@@ -66,3 +66,18 @@ test("strings outside hook commands are ignored in Claude settings and Codex con
   assert.deepEqual(check.claude, { present: true, deliver: 1, wake: 0, foreign: [] });
   assert.deepEqual(check.codex, { present: true, deliver: 2, wake: 0, foreign: [] });
 });
+
+// Issue #388: the delivery entry in the all-tools PostToolUse group counts as
+// one more delivery hook, beside those of the turn-boundary events.
+test("a delivery hook on PostToolUse counts like those on the turn-boundary events", (t) => {
+  const f = files(t);
+  const deliver = { type: "command", command: `node "${path.join(f.hooks, "deliver-hook.mts")}"` };
+  const groups = Object.fromEntries(["UserPromptSubmit", "Stop", "StopFailure"].map((event) => [event, [{ hooks: [deliver] }]]));
+  fs.writeFileSync(f.claude, JSON.stringify({ hooks: { ...groups, PostToolUse: [
+    { matcher: "", hooks: [{ type: "command", command: "node /opt/own/watch.mts" }, deliver] },
+    { matcher: "Bash|PowerShell", hooks: [{ type: "command", command: "node /opt/own/attribution.mts" }] },
+  ] } }));
+  const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
+  assert.equal(check.ok, true, JSON.stringify(check));
+  assert.deepEqual(check.claude, { present: true, deliver: 4, wake: 0, foreign: [] });
+});

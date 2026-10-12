@@ -7,6 +7,7 @@ import { markListenerIdle, mayContinue } from "./autonomy.mts";
 import { nodePaths } from "./config.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
 import { contextOutput, deliveryContext, retryOffered, sessionInbox, type HookDeps } from "./deliver-core.mts";
+import { midTurnOutput } from "./deliver-midturn.mts";
 import { localSessionName } from "./exchange.mts";
 import { nodeWakeBudget } from "./policy.mts";
 
@@ -27,6 +28,9 @@ import { nodeWakeBudget } from "./policy.mts";
 //   the debug log only ("Exit code 0").
 // - additionalContext is capped at 10,000 characters; longer text is moved to
 //   a file ("JSON output"). The 8 KB budget below stays under that cap.
+// - PostToolUse: hookSpecificOutput.additionalContext is "added to Claude's
+//   context alongside the tool result" (fetched 2026-10-12); it carries peer
+//   messages into a running turn, see deliver-midturn.mts (issue #388).
 // - Stop "Does not run if the stoppage occurred due to a user interrupt. API
 //   errors fire StopFailure instead" ("Stop").
 // - StopFailure "Runs instead of Stop when the turn ends due to an API error";
@@ -39,15 +43,18 @@ export { MAX_CONTEXT_BYTES, MAX_MESSAGES_PER_CALL, MAX_OFFERS, REOFFER_AFTER_MS,
 export type HookRuntime = "claude" | "codex";
 
 // The hook's stdout for one input: empty when there is nothing to deliver.
+// PostToolUse offers new arrivals inside the running turn (deliver-midturn.mts).
 // StopFailure only flags this session's offered records for a new offer and
 // tells a listener armed at UserPromptSubmit that the turn has ended.
 export function deliverForHook(input: unknown, deps: HookDeps): string {
   if (typeof input !== "object" || input === null) return "";
-  const { hook_event_name: event, session_id: sessionId, permission_mode: mode } = input as Record<string, unknown>;
-  if ((event !== "UserPromptSubmit" && event !== "Stop" && event !== "StopFailure") || typeof sessionId !== "string"
-    || sessionId === "") return "";
+  const fields = input as Record<string, unknown>;
+  const { hook_event_name: event, session_id: sessionId, permission_mode: mode } = fields;
+  if ((event !== "UserPromptSubmit" && event !== "Stop" && event !== "StopFailure" && event !== "PostToolUse")
+    || typeof sessionId !== "string" || sessionId === "") return "";
   const name = localSessionName(deps.paths, sessionId);
   const refs = name === undefined ? [sessionId] : [sessionId, name];
+  if (event === "PostToolUse") return midTurnOutput(fields, sessionId, refs, deps);
   const now = deps.now?.() ?? Date.now();
   if (event === "StopFailure") {
     retryOffered(deps.paths, sessionInbox(deps.paths, refs));
