@@ -7,6 +7,7 @@ import { listCodexSessions, listCodexTaskSessions } from "./codex-sessions.mts";
 import { readCodexTitles, withCodexTitles } from "./codex-titles.mts";
 import type { NodePaths } from "./config.mts";
 import { findOnPath } from "./discovery.mts";
+import { markUnseen } from "./known-sessions.mts";
 import { listTasks, type TaskRecord } from "./task-records.mts";
 
 // Agent session discovery (issue #31, step 2). Claude Code lists its running
@@ -123,7 +124,13 @@ export async function listSessions(deps: SessionDeps = {}): Promise<SessionInfo[
   const claude = await listClaudeSessions(deps);
   deps.signal?.throwIfAborted();
   const titled = deps.codexHome ? withCodexTitles([...tasks, ...codex], readCodexTitles(deps.codexHome)) : [...tasks, ...codex];
-  return [...(deps.paths ? withLabels(claude, listTasks(deps.paths)) : claude), ...titled].slice(0, MAX_SESSIONS);
+  const all = [...(claude && deps.paths ? withLabels(claude, listTasks(deps.paths)) : claude ?? []), ...titled];
+  // Issue #389: what this listing could not see is no evidence that a session
+  // ended: Claude without claude on PATH, any runtime at the cap.
+  const unseen: string[] = [];
+  if (!claude) unseen.push(CLAUDE_RUNTIME);
+  if (all.length >= MAX_SESSIONS) unseen.push("*");
+  return markUnseen(all.slice(0, MAX_SESSIONS), unseen);
 }
 
 // A Claude task session with a label (issue #74) carries it, found by the
@@ -135,9 +142,10 @@ export function withLabels(sessions: SessionInfo[], tasks: TaskRecord[]): Sessio
   });
 }
 
-async function listClaudeSessions(deps: SessionDeps): Promise<SessionInfo[]> {
+// null without claude on PATH.
+async function listClaudeSessions(deps: SessionDeps): Promise<SessionInfo[] | null> {
   const claude = (deps.findClaude ?? findClaude)();
-  if (!claude) return [];
+  if (!claude) return null;
   const run = claudeInvocation(claude, deps.platform, deps.comSpec);
   if (deps.signal) run.options.signal = deps.signal;
   const output = await (deps.exec ?? execFileText)(run.file, run.args, run.options)

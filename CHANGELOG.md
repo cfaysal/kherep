@@ -215,6 +215,26 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control plane messaging: closed-session delivery (`messaging.resumeClosed`)
+  no longer takes a session for closed because one session listing did not
+  show it. It readdressed every waiting message for such a session to an
+  intercom session of its sender, so a reply (`--reply-to`) to a message that
+  session S sent could land in the replying peer's background intercom session
+  on S's node while S was still open and never saw it. A target now counts as
+  closed only after 3 consecutive successful listings without it, the first at
+  least 90 seconds before the last (about 2 minutes at the 60-second listing
+  interval). A listing that shows the session resets the count; a failed
+  listing, and a partial one for the runtimes it could not see (no `claude` on
+  `PATH`, a listing at its 512-session cap), counts no miss. The count is kept
+  in `known-sessions.json`, survives a daemon restart and is pruned with the
+  session's entry; a target the node never listed is counted from its first
+  waiting message on. Until then every message, a reply or not, stays
+  addressed to S and waits with `waiting/awaiting-user-turn`, and is refused
+  with `target session not running` when S does not return within 60 minutes.
+  Once S is closed, a reply reaches an intercom session of its sender like any
+  other message (issues #102, #105). `msg status` on the original sender lists,
+  under each reply that a node handed over, the session it was forwarded to and
+  its delivery task and session (issue #389).
 - Atlassian MCP: the Claude step reports every local-scope `atlassian` entry in
   `~/.claude.json` that takes precedence over the managed service-account server
   in its directory, with the removal command, leaves it as it is and exits 1.

@@ -2,11 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type test from "node:test";
 
+import type { SessionInfo } from "../protocol.mts";
 import { TURN_SPACING_MS } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
+import { SESSIONS_INTERVAL_MS } from "./daemon.mts";
 import { writeLocalSessions } from "./exchange.mts";
 import { storeMessage } from "./inbox.mts";
-import { rememberSessions } from "./known-sessions.mts";
+import { CLOSED_AFTER_MISSES, rememberSessions } from "./known-sessions.mts";
 import { WORKING_SETTLE_MS } from "./run-progress.mts";
 import type { ExecOptions } from "./sessions.mts";
 import { T0, taskNode } from "./task-fixture.mts";
@@ -15,7 +17,10 @@ import { watchTasks } from "./task-watch.mts";
 
 // Shared fixture of the closed-session tests (issues #102, #105): a task node whose
 // policy accepts every sender and enables resumeClosed, with one Claude
-// session listed an hour ago and missing from the listing taken now.
+// session listed an hour ago and missing from the listing taken now. Issue
+// #389: one listing without a session no longer closes it; the fixture records
+// the misses explicitly, by default CLOSED_AFTER_MISSES periodic listings
+// (SESSIONS_INTERVAL_MS apart, the last at T0), which close the session.
 
 export const SESSION = "1f0e2c9a-6d0b-4c11-9f39-2a77c1d4e8b5";
 export const PEER = { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "peer-1" };
@@ -24,19 +29,36 @@ let counter = 0;
 
 export type Node = ReturnType<typeof taskNode>;
 
-export function closedNode(t: test.TestContext, sessions: Record<string, unknown> = {}, messaging: Record<string, unknown> = {}): Node {
+export function closedNode(t: test.TestContext, sessions: Record<string, unknown> = {}, messaging: Record<string, unknown> = {},
+  misses: number = CLOSED_AFTER_MISSES): Node {
   const node = taskNode(t, { delegate: { accept: true }, ...sessions }, { messaging: { ...ACCEPT_ALL, resumeClosed: true, ...messaging } });
   rememberSessions(node.paths, [{ sessionId: SESSION, runtime: "claude-code", state: "idle", name: "review",
     cwd: path.join(node.workspace, "repo") }], T0 - 3_600_000);
-  writeLocalSessions(node.paths, [], T0);
+  missListings(node, misses);
   return node;
 }
 
+// count successful listings that show only listed, spacing apart, the last at
+// end, which is also written to sessions.json.
+export function missListings(node: Node, count: number, end: number = T0, spacing: number = SESSIONS_INTERVAL_MS,
+  listed: SessionInfo[] = []): void {
+  for (let i = count - 1; i >= 0; i--) rememberSessions(node.paths, listed, end - i * spacing);
+  writeLocalSessions(node.paths, listed, end);
+}
+
+// A session listed once and then missing from CLOSED_AFTER_MISSES periodic
+// listings, the last at end: closed (issue #389).
+export function closedSince(node: Node, session: SessionInfo, end: number = T0): void {
+  rememberSessions(node.paths, [session], end - CLOSED_AFTER_MISSES * SESSIONS_INTERVAL_MS);
+  missListings(node, CLOSED_AFTER_MISSES, end);
+}
+
 // An accepted message that arrived before the listing.
-export function deliver(node: Node, extra: { toSession?: string; depth?: number; text?: string; from?: typeof PEER } = {}): string {
+export function deliver(node: Node, extra: { toSession?: string; depth?: number; text?: string; from?: typeof PEER; inReplyTo?: string } = {}): string {
   const id = `c105ed${(++counter).toString(16).padStart(2, "0")}-0000-4000-8000-000000000000`;
   storeMessage(node.paths.inbox, { messageId: id, from: extra.from ?? PEER, toSession: extra.toSession ?? SESSION,
-    text: extra.text ?? "are the tests green?", createdAt: new Date(T0).toISOString() }, T0 - 5_000, extra.depth ?? 0);
+    text: extra.text ?? "are the tests green?", createdAt: new Date(T0).toISOString(),
+    ...(extra.inReplyTo ? { inReplyTo: extra.inReplyTo } : {}) }, T0 - 5_000, extra.depth ?? 0);
   return id;
 }
 

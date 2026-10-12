@@ -8,7 +8,7 @@ import { ensureDir, type NodePaths } from "./config.mts";
 import {
   markReported, messageIds, readJson, refuseUndeliverable, UNDELIVERABLE_AFTER_MS, unreportedStatuses, writeJsonAtomic,
 } from "./inbox.mts";
-import { rememberSessions } from "./known-sessions.mts";
+import { rememberSessions, unlistedRuntimes } from "./known-sessions.mts";
 import { directoryDue, sendSchedule } from "./send-schedule.mts";
 
 // The local exchange between the daemon and the session tools (issue #31,
@@ -205,7 +205,7 @@ export function recordingSessions(paths: NodePaths, list: (signal?: AbortSignal)
       log(`kherep-node: could not write sessions.json: ${String(error)}`);
     }
     try {
-      rememberSessions(paths, sessions, observedAt);
+      rememberSessions(paths, sessions, observedAt, unlistedRuntimes(sessions));
     } catch (error) {
       log(`kherep-node: could not write known-sessions.json: ${String(error)}`);
     }

@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { TURN_SPACING_MS } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
-import { ACCEPT_ALL, deliver } from "./closed-fixture.mts";
+import { ACCEPT_ALL, closedSince, deliver } from "./closed-fixture.mts";
 import { fakeCodexBin, THREAD, waitFor } from "./codex-fixture.mts";
 import { readExit } from "./codex-output.mts";
 import { codexFiles, detachCodex, WINDOWLESS, type CodexDeps } from "./codex-process.mts";
@@ -14,7 +14,6 @@ import { spawnRun } from "./codex-runner.mts";
 import { watchCodexTasks } from "./codex-watch.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
-import { writeLocalSessions } from "./exchange.mts";
 import { getMessage, markOffered } from "./inbox.mts";
 import { T0, taskId, taskNode } from "./task-fixture.mts";
 import { listTasks, readTask, writeTask, type TaskRecord } from "./task-records.mts";
@@ -72,7 +71,7 @@ function closedCodexNode(t: test.TestContext) {
     { messaging: { ...ACCEPT_ALL, resumeClosed: true } });
   const repo = path.join(node.workspace, "repo");
   recordCodexSession(node.paths, CLOSED, repo, T0 - 13 * 3_600_000, "default");
-  writeLocalSessions(node.paths, [], T0);
+  closedSince(node, { sessionId: CLOSED, runtime: "codex", state: "idle" });
   const codexDeps: CodexDeps = { findCodex: () => codex.file, processStart: alive, startWaitMs: 5_000, graceMs: 300 };
   const deps = () => ({ ...node.deps(), codex: codexDeps });
   return { node, codex, deps };

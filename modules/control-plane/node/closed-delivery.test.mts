@@ -6,11 +6,11 @@ import test from "node:test";
 import { rememberMode, takeTurn, TURN_SPACING_MS, TURNS_PER_HOUR } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
 import { startIntercom } from "./closed-resume.mts";
-import { ACCEPT_ALL, audits, closedNode, deliver, endedIntercom, PEER, SESSION, turnDone, type Node } from "./closed-fixture.mts";
+import { ACCEPT_ALL, audits, closedNode, closedSince, deliver, endedIntercom, PEER, SESSION, turnDone, type Node } from "./closed-fixture.mts";
 import { fakeCodexBin } from "./codex-fixture.mts";
 import { recordingSessions, writeDirectory } from "./exchange.mts";
 import { getMessage, getMessageProgress } from "./inbox.mts";
-import { readKnownSessions, rememberSessions } from "./known-sessions.mts";
+import { readKnownSessions } from "./known-sessions.mts";
 import { loadPolicy } from "./policy.mts";
 import type { ExecOptions } from "./sessions.mts";
 import { T0, taskId } from "./task-fixture.mts";
@@ -175,8 +175,8 @@ const refusals: [string, (node: Node) => void, Record<string, unknown>, RegExp][
   ["the budget", (node) => {
     for (let i = 0; i < TURNS_PER_HOUR; i++) takeTurn(node.paths, SESSION, T0 - 50 * 60_000 + i * TURN_SPACING_MS * 2);
   }, {}, /budget/],
-  ["a cwd outside the workspace roots", (node) => rememberSessions(node.paths, [{ sessionId: SESSION, runtime: "claude-code",
-    state: "idle", cwd: node.root }], T0 - 60_000), {}, /outside the workspace roots/],
+  ["a cwd outside the workspace roots", (node) => closedSince(node, { sessionId: SESSION, runtime: "claude-code",
+    state: "idle", cwd: node.root }), {}, /outside the workspace roots/],
 ];
 
 test("a configured wake.budget lets an intercom session start past the default turns of this hour (issue #259)", async (t) => {
