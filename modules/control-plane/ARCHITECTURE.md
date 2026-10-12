@@ -247,6 +247,25 @@ remain effective after initial registration. Operator tasks are not owner grants
 An enrolled node is the authenticated principal; a session name is a routing label,
 not a security boundary between Desktop chats.
 
+Wake is on by default (issue #390, operator decision of 2026-10-12); messaging
+admission is not. `node/policy.mts` gives a policy file without a `wake` section
+`{ "enabled": true, "sessions": ["*"], "codexApp": true, "replies": true }` when the
+file is parsed, so every consumer of the parsed policy (the wake listener, the
+delivery hooks, the Codex queue and task resume, closed-session delivery, delivery
+progress and doctor) sees the same effective section. A file without a `messaging`
+section still accepts nothing (fail closed): an implied accept rule for every sender
+would silently open existing nodes, so the permissive rule
+`{ "session": "*", "from": ["*"] }` exists only in `DEFAULT_POLICY`, which `onboard`
+writes into a new file (never over an existing one) and which a missing file reads
+as. Waking acts only on messages that admission accepted. An explicit section is
+honoured as written: `"wake": { "enabled": false }` and `"messaging": { "accept": [] }`
+are the opt-outs. A malformed section still fails closed, and an unreadable or
+malformed file still denies everything. Even the onboarding rule is bounded by the
+control plane: only authenticated enrolled nodes and the operator API reach a node.
+The default autonomous-turn budget is 20 per rolling hour, 100 per rolling day and
+30 s spacing. `kherep-node doctor` reports `wakeSource` (`file` or `default`) and
+`messagingSource` (`file`, `absent` or, for a missing file, `default`).
+
 Task-control storage contains identifiers, state, observation time and fixed error
 codes. It does not transport prompts, message bodies, transcripts, local paths or
 process ids. The one free-text field is `reportedReason`: the reason of the target's

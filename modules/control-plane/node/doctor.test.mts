@@ -137,7 +137,27 @@ test("the policy check fails on a malformed file and on a rejected wake section,
   assert.equal((await runDoctor(h.deps)).checks.policy.ok, false);
   fs.rmSync(h.paths.policy);
   policy = (await runDoctor(h.deps)).checks.policy;
-  assert.deepEqual([policy.ok, policy.source, policy.wake, policy.sessions], [true, "default", { enabled: false }, { enabled: false }]);
+  assert.deepEqual([policy.ok, policy.source, policy.wake, policy.sessions],
+    [true, "default", { enabled: true, sessions: ["*"], codexApp: true, replies: true }, { enabled: false }]);
+  assert.deepEqual([policy.wakeSource, policy.messagingSource, policy.messagingRules], ["default", "default", 1]);
+});
+
+// Issue #390: doctor says whether wake comes from the file or is the built-in
+// default, and shows a file without a messaging section, which accepts nothing.
+test("the policy check names the source of the wake and messaging sections", async (t) => {
+  const h = host(t);
+  const check = async (value: Record<string, unknown>) => {
+    fs.writeFileSync(h.paths.policy, JSON.stringify({ version: 1, allowedCommands: [], ...value }));
+    return (await runDoctor(h.deps)).checks.policy;
+  };
+  let policy = await check({});
+  assert.deepEqual([policy.source, policy.wakeSource, policy.messagingSource], ["file", "default", "absent"]);
+  assert.deepEqual([policy.wake, policy.messagingRules], [{ enabled: true, sessions: ["*"], codexApp: true, replies: true }, 0]);
+  policy = await check({ messaging: { accept: [{ session: "*", from: ["*"] }] } });
+  assert.deepEqual([policy.messagingSource, policy.messagingRules], ["file", 1]);
+  policy = await check({ wake: { enabled: false }, messaging: { accept: [] } });
+  assert.deepEqual([policy.ok, policy.wakeSource, policy.messagingSource], [true, "file", "file"]);
+  assert.deepEqual([policy.wake, policy.messagingRules], [{ enabled: false }, 0]);
 });
 
 test("the runtime check fails without any runtime and when a configured runtime is missing or silent", async (t) => {

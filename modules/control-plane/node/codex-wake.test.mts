@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
+import { takeTurn, TURN_SPACING_MS, TURNS_PER_HOUR } from "./autonomy.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
 import { codexNode, THREAD, waitFor } from "./codex-fixture.mts";
 import { readExit } from "./codex-output.mts";
@@ -122,20 +122,20 @@ test("the wake guards: allowlist or task grant, reply depth, kill switch, budget
   assert.deepEqual(auditLines(node).map((l) => [l.action, l.messageIds]),
     [["not-allowlisted", [other]], ["depth-limit", [deep]], ["disabled", [granted]]]);
   fs.rmSync(path.join(node.paths.dir, "wake.disabled"));
-  // Budget: six autonomous turns this hour leave none.
-  for (let n = 0; n < 6; n++) assert.equal(takeTurn(node.paths, THREAD, T0 - 50 * 60_000 + n * TURN_SPACING_MS * 2), "ok");
+  // Budget: the default autonomous turns of this hour leave none.
+  for (let n = 0; n < TURNS_PER_HOUR; n++) assert.equal(takeTurn(node.paths, THREAD, T0 - 50 * 60_000 + n * TURN_SPACING_MS * 2), "ok");
   await pollCodexInbound(node.deps());
   assert.equal(node.runs().length, 1);
   assert.equal(auditLines(node).at(-1)?.action, "budget");
   assert.equal(getMessage(node.paths.inbox, granted)?.state, "accepted", "it waits");
 });
 
-test("a configured wake.budget lets a seventh resume of the hour through (issue #259)", posix, async (t) => {
+test("a configured wake.budget lets a resume past the default hour through (issue #259)", posix, async (t) => {
   const node = await doneTask(t);
   const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8")) as Record<string, unknown>;
   fs.writeFileSync(node.paths.policy, JSON.stringify({ ...policy,
-    wake: { enabled: true, sessions: ["unrelated"], budget: { perHour: 8, perDay: 100 } } }));
-  for (let n = 0; n < 6; n++) assert.equal(takeTurn(node.paths, THREAD, T0 - 50 * 60_000 + n * TURN_SPACING_MS * 2), "ok");
+    wake: { enabled: true, sessions: ["unrelated"], budget: { perHour: TURNS_PER_HOUR + 2, perDay: 100 } } }));
+  for (let n = 0; n < TURNS_PER_HOUR; n++) assert.equal(takeTurn(node.paths, THREAD, T0 - 50 * 60_000 + n * TURN_SPACING_MS * 2), "ok");
   const id = deliver(node, "about the task");
   await pollCodexInbound(node.deps());
   await runEnds(node, 2);

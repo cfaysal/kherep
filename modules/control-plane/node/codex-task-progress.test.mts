@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { senderState } from "../protocol-messages.mts";
-import { takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
+import { takeTurn, TURN_SPACING_MS, TURNS_PER_HOUR } from "./autonomy.mts";
 import { codexNode, THREAD, waitFor } from "./codex-fixture.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { observeCodexTaskProgress } from "./delivery-progress.mts";
@@ -88,7 +88,7 @@ test("each wake guard of an ended Codex task leaves a reason on its waiting mess
   assert.equal(code(node, granted), "wake-disabled");
   fs.rmSync(path.join(node.paths.dir, "wake.disabled"));
 
-  for (let n = 0; n < 6; n++) assert.equal(takeTurn(node.paths, ended.sessionId!, T0 - 50 * 60_000 + n * TURN_SPACING_MS * 2), "ok");
+  for (let n = 0; n < TURNS_PER_HOUR; n++) assert.equal(takeTurn(node.paths, ended.sessionId!, T0 - 50 * 60_000 + n * TURN_SPACING_MS * 2), "ok");
   await pollCodexInbound(deps());
   assert.equal(code(node, granted), "budget-exhausted");
   node.tick(2 * 60 * 60_000);

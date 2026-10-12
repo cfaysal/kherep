@@ -16,18 +16,22 @@ import { parseSessionsPolicy, type SessionsPolicy } from "./session-policy.mts";
 // file can narrow what runs here but never widen it.
 //
 // The optional messaging section (issue #31) lists which senders may leave a
-// message for which local session. Without a rule nothing is accepted.
+// message for which local session. Without a rule nothing is accepted, also
+// in a file without the section (fail closed). DEFAULT_POLICY, which onboarding
+// writes into a new file, carries the explicit rule for every sender (issue #390).
 export interface AcceptRule { session: string; from: string[] }
 // codexApp (issue #82): also wake the current Codex desktop app session (codex-app.mts).
 // replies (issue #253): a reply to a message a session sent may wake it (wake-reply.mts).
 // budget (issue #259): the per-session autonomous-turn budget (autonomy.mts), as written.
-// Its defaults (operator decision of 2026-09-25) live here, not in autonomy.mts,
-// because this file is staged into the messaging client without autonomy.mts
-// (claude-mcp-client.mts CLAUDE_CLIENT_GRAPH).
+// Its defaults (operator decision of 2026-10-12, issue #390) live here, not in
+// autonomy.mts, because this file is staged into the messaging client without
+// autonomy.mts (claude-mcp-client.mts CLAUDE_CLIENT_GRAPH).
+// enabled is kept in the parsed section so that a parsed policy written back
+// as JSON is a valid policy file again (onboard.mts writes DEFAULT_POLICY).
 export interface TurnBudget { perHour: number; perDay: number; spacingMs: number }
-export const DEFAULT_TURN_BUDGET: TurnBudget = { perHour: 6, perDay: 20, spacingMs: 30_000 };
+export const DEFAULT_TURN_BUDGET: TurnBudget = { perHour: 20, perDay: 100, spacingMs: 30_000 };
 export interface WakeBudget { perHour?: number; perDay?: number; spacingSeconds?: number }
-export interface WakePolicy { sessions: string[]; codexApp?: boolean; replies?: boolean; budget?: WakeBudget }
+export interface WakePolicy { enabled: true; sessions: string[]; codexApp?: boolean; replies?: boolean; budget?: WakeBudget }
 // resumeClosed (issue #102): a message for a known session of this node that
 // is no longer running resumes it, or starts an intercom session instead
 // (closed-delivery.mts). Only the boolean true enables it.
@@ -40,7 +44,15 @@ export interface NodePolicy {
   remoteMcp?: { enabled: true; claudeCode?: true };
 }
 
-export const DEFAULT_POLICY: NodePolicy = { version: 1, allowedCommands: [...PHASE1_COMMANDS] };
+// Issue #390: a policy file without a wake section wakes every session; an
+// explicit section, including a disabling one, is honoured as written. Waking
+// acts only on messages the messaging section accepted. The accept rule for
+// every sender is never implied: it is written into a new file by onboarding
+// (DEFAULT_POLICY) and applies to a missing file, so it is a visible choice.
+const defaultWake = (): WakePolicy => ({ enabled: true, sessions: ["*"], codexApp: true, replies: true });
+
+export const DEFAULT_POLICY: NodePolicy = { version: 1, allowedCommands: [...PHASE1_COMMANDS],
+  messaging: { accept: [{ session: "*", from: ["*"] }] }, wake: defaultWake() };
 
 function denyAll(): NodePolicy {
   return { version: 1, allowedCommands: [] };
@@ -68,7 +80,7 @@ export function readPolicy(file: string, required = false): NodePolicy | null {
       sessions?: unknown; remoteMcp?: unknown };
     if (value.version !== 1 || !Array.isArray(value.allowedCommands)) return null;
     const accept = parseAcceptRules(value.messaging);
-    const wake = parseWake(value.wake);
+    const wake = value.wake === undefined ? defaultWake() : parseWake(value.wake);
     const sessions = parseSessionsPolicy(value.sessions);
     const remoteMcpValue = value.remoteMcp as { enabled?: unknown; claudeCode?: unknown } | null;
     const remoteMcp = typeof remoteMcpValue === "object" && remoteMcpValue !== null && remoteMcpValue.enabled === true
@@ -144,10 +156,11 @@ export function acceptsMessage(policy: NodePolicy, toSession: string, fromNodeId
     (rule.session === "*" || refs.includes(rule.session)) && (rule.from.includes("*") || rule.from.includes(fromNodeId)));
 }
 
-// The optional wake section (issue #31, operator decision 2026-09-25): waking
-// idle sessions is opt-in per node and per session. Anything but enabled true
-// with a non-empty list of session ids or names disables it (fail closed);
-// "*" matches every session, but only where it is written. codexApp and
+// The optional wake section (issue #31): waking idle sessions is on by default
+// (operator decision 2026-10-12, issue #390: an absent section is defaultWake)
+// and an operator opts out explicitly. A present section with anything but
+// enabled true and a non-empty list of session ids or names disables it (fail
+// closed); "*" matches every session. codexApp and
 // replies must be booleans when present; with either true the list may be
 // empty or absent. A budget that parseBudget rejects disables it as well.
 function parseWake(section: unknown): WakePolicy | null {
@@ -160,7 +173,7 @@ function parseWake(section: unknown): WakePolicy | null {
   const granted = codexApp === true || replies === true;
   const list = sessions === undefined && granted ? [] : sessions;
   if (!Array.isArray(list) || !list.every(isSessionRef) || (list.length === 0 && !granted)) return null;
-  return { sessions: [...list] as string[], ...(codexApp ? { codexApp: true } : {}), ...(replies ? { replies: true } : {}),
+  return { enabled: true, sessions: [...list] as string[], ...(codexApp ? { codexApp: true } : {}), ...(replies ? { replies: true } : {}),
     ...(budget ? { budget } : {}) };
 }
 
@@ -168,8 +181,9 @@ function parseWake(section: unknown): WakePolicy | null {
 const BUDGET_BOUNDS: Record<keyof WakeBudget, [number, number]> = { perHour: [1, 60], perDay: [1, 500], spacingSeconds: [5, 3600] };
 
 // Only the known keys, each an integer within its bounds, and an explicit
-// perDay at least perHour; anything else is null. Without perDay the day
-// allows at least perHour turns, so perHour alone never disables waking.
+// perDay at least an explicit perHour; anything else is null. Without perDay
+// the day allows at least perHour turns, so perHour alone never disables
+// waking; perDay alone caps the day, also below the default hour (issue #390).
 function parseBudget(value: unknown): WakeBudget | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const budget: WakeBudget = {};
@@ -179,7 +193,7 @@ function parseBudget(value: unknown): WakeBudget | null {
     if (!bounds || !Number.isInteger(field) || field < bounds[0] || field > bounds[1]) return null;
     budget[name] = field;
   }
-  return budget.perDay === undefined || budget.perDay >= (budget.perHour ?? DEFAULT_TURN_BUDGET.perHour) ? budget : null;
+  return budget.perDay === undefined || budget.perHour === undefined || budget.perDay >= budget.perHour ? budget : null;
 }
 
 const turnBudget = (budget: WakeBudget): TurnBudget => ({

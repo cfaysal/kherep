@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { rememberMode, takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
+import { rememberMode, takeTurn, TURN_SPACING_MS, TURNS_PER_HOUR } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
 import { startIntercom } from "./closed-resume.mts";
 import { ACCEPT_ALL, audits, closedNode, deliver, endedIntercom, PEER, SESSION, turnDone, type Node } from "./closed-fixture.mts";
@@ -173,19 +173,19 @@ const refusals: [string, (node: Node) => void, Record<string, unknown>, RegExp][
     state: "running", startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 3_600_000).toISOString(),
     updatedAt: new Date(T0).toISOString() }), { maxConcurrent: 1 }, /at most 1 task sessions/],
   ["the budget", (node) => {
-    for (let i = 0; i < 6; i++) takeTurn(node.paths, SESSION, T0 - 50 * 60_000 + i * TURN_SPACING_MS * 2);
+    for (let i = 0; i < TURNS_PER_HOUR; i++) takeTurn(node.paths, SESSION, T0 - 50 * 60_000 + i * TURN_SPACING_MS * 2);
   }, {}, /budget/],
   ["a cwd outside the workspace roots", (node) => rememberSessions(node.paths, [{ sessionId: SESSION, runtime: "claude-code",
     state: "idle", cwd: node.root }], T0 - 60_000), {}, /outside the workspace roots/],
 ];
 
-test("a configured wake.budget lets an intercom session start past six turns this hour (issue #259)", async (t) => {
+test("a configured wake.budget lets an intercom session start past the default turns of this hour (issue #259)", async (t) => {
   const node = closedNode(t);
   const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8")) as Record<string, unknown>;
   fs.writeFileSync(node.paths.policy, JSON.stringify({ ...policy,
-    wake: { enabled: true, sessions: ["unrelated"], budget: { perHour: 8, perDay: 100 } } }));
+    wake: { enabled: true, sessions: ["unrelated"], budget: { perHour: TURNS_PER_HOUR + 2, perDay: 100 } } }));
   rememberMode(node.paths, SESSION, "auto");
-  for (let i = 0; i < 6; i++) takeTurn(node.paths, SESSION, T0 - 50 * 60_000 + i * TURN_SPACING_MS * 2);
+  for (let i = 0; i < TURNS_PER_HOUR; i++) takeTurn(node.paths, SESSION, T0 - 50 * 60_000 + i * TURN_SPACING_MS * 2);
   deliver(node);
   await deliverToClosed(node.deps());
   assert.equal(claudeRuns(node).length, 1);
