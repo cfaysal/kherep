@@ -5,14 +5,16 @@ import path from "node:path";
 import test from "node:test";
 
 import { listenerDir, wakeAudit } from "./autonomy.mts";
+import { recordCodexSession } from "./codex-sessions.mts";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
 import { MAX_CONTEXT_BYTES } from "./deliver-core.mts";
 import { deliverForHook } from "./deliver-hook.mts";
-import { getSent, recordSent, writeDirectory, writeLocalSessions, writeOutbox } from "./exchange.mts";
-import { storeMessage } from "./inbox.mts";
+import { getSent, markNoticed, recordSent, writeDirectory, writeLocalSessions, writeOutbox } from "./exchange.mts";
+import { getMessage, storeMessage } from "./inbox.mts";
+import { runMsg } from "./msg-cli.mts";
 import type { SentState } from "./client.mts";
-import { RECEIPT_LINES } from "./sent-notices.mts";
+import { RECEIPT_LINES, stillUnnoticed, unnoticedNotices } from "./sent-notices.mts";
 
 // Issue #402: the sending session hears once that its message was received,
 // at its next delivery hook event, without a wake, a turn or budget.
@@ -40,14 +42,15 @@ const id = (n: number): string => `00000000-0000-4000-8000-${n.toString(16).padS
 const at = (n: number): string => new Date(NOW + n).toISOString();
 
 // A message this node sent from fromSession, recorded in the given state at NOW + n.
-function sent(paths: NodePaths, n: number, state: SentState | null, fromSession = "review", reason?: string): string {
-  writeOutbox(paths, { messageId: id(n), fromSession, to: { nodeId: PEER, session: "planner" }, text: "report", createdAt: at(0) });
+function sent(paths: NodePaths, n: number, state: SentState | null, fromSession = "review", reason?: string, fromSessionId?: string): string {
+  writeOutbox(paths, { messageId: id(n), fromSession, ...(fromSessionId ? { fromSessionId } : {}), to: { nodeId: PEER, session: "planner" },
+    text: "report", createdAt: at(0) });
   if (state) recordSent(paths, id(n), state, reason, NOW + n);
   return id(n);
 }
 
 const receipt = (messageId: string, n: number): string =>
-  `Your message ${messageId} to node-b (${PEER})/planner was received by the target session at ${at(n)}.`;
+  `Your message ${messageId} to node-b (${PEER})/planner was received (confirmed ${at(n)}).`;
 
 function hook(paths: NodePaths, event: string, extra: Record<string, unknown> = {}): string {
   const output = deliverForHook({ session_id: SELF, hook_event_name: event, permission_mode: "default", ...extra },
@@ -146,4 +149,60 @@ test("a Codex sender sees the receipt at UserPromptSubmit and never at Stop", (t
   assert.ok(!JSON.parse(codex("UserPromptSubmit")).hookSpecificOutput.additionalContext.includes(messageId), "not twice");
   assert.equal(fs.existsSync(wakeAudit(paths)), false);
   assert.equal(fs.existsSync(path.join(listenerDir(paths), `${CODEX}.turns.json`)), false);
+});
+
+test("a receipt matches the sender by name alone or by its session id after a rename", (t) => {
+  const paths = setup(t);
+  const byName = sent(paths, 1, "delivered", "review");
+  const byId = sent(paths, 2, "delivered", "old-name", undefined, SELF);
+  const elsewhere = sent(paths, 3, "delivered", "old-name", undefined, "s-other");
+  const context = hook(paths, "UserPromptSubmit");
+  assert.ok(context.includes(receipt(byName, 1)) && context.includes(receipt(byId, 2)));
+  assert.ok(!context.includes(elsewhere));
+});
+
+test("receipts never cost a peer message block: they take only the room left after the blocks", (t) => {
+  const seen = new Set<string>();
+  const offeredWith = (receiptToo: boolean, size: number): number => {
+    const paths = setup(t);
+    if (receiptToo) sent(paths, 1, "delivered");
+    const ids = [70, 71, 72].map((n) => {
+      storeMessage(paths.inbox, { messageId: id(n), from: { nodeId: PEER, session: "build" }, toSession: "review",
+        text: "y".repeat(size), createdAt: at(n) }, NOW + n);
+      return id(n);
+    });
+    const context = hook(paths, "UserPromptSubmit");
+    const printed = context.includes("was received");
+    if (receiptToo) {
+      assert.equal(printed, getSent(paths, id(1))?.noticedAt !== undefined, "only printed receipts are marked");
+      seen.add(printed ? "printed" : "dropped");
+    }
+    return ids.filter((messageId) => getMessage(paths.inbox, messageId)?.state === "offered" && !context.includes("[truncated")).length;
+  };
+  for (let size = 1_800; size <= 2_100; size += 10) assert.equal(offeredWith(true, size), offeredWith(false, size), `size ${size}`);
+  assert.deepEqual([...seen].sort(), ["dropped", "printed"], "the sizes cross the boundary where the receipt no longer fits");
+});
+
+test("Codex msg inbox --receive shows a receipt once", async (t) => {
+  const paths = setup(t);
+  recordCodexSession(paths, CODEX, "/work/repo", NOW);
+  const messageId = sent(paths, 1, "delivered", CODEX);
+  const receive = async (): Promise<string> => {
+    const out: string[] = [];
+    await runMsg(["inbox", "--from", CODEX, "--receive"], { paths, env: {}, now: () => NOW + 1_000, out: (l) => out.push(l), err: () => {} });
+    return out.join("\n");
+  };
+  assert.ok((await receive()).includes(receipt(messageId, 1)));
+  assert.equal(await receive(), "no messages waiting for this continuation");
+});
+
+test("a mid-turn call rereads only the records its one sent/ scan found, and drops those told meanwhile", (t) => {
+  const paths = setup(t);
+  const [told, due] = [sent(paths, 1, "delivered"), sent(paths, 2, "delivered")];
+  const failure = sent(paths, 3, "refused", "review", "policy");
+  const found = unnoticedNotices(paths, [SELF, "review"]);
+  markNoticed(paths, told, NOW);
+  sent(paths, 4, "delivered"); // after the scan: waits for the next call
+  const fresh = stillUnnoticed(paths, found);
+  assert.deepEqual([fresh.receipts.map((r) => r.messageId), fresh.failures.map((r) => r.messageId)], [[due], [failure]]);
 });

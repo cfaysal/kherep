@@ -32,7 +32,8 @@ export { SEND_RETRY_MS } from "./send-schedule.mts";
 // wake-reply.mts). Both stay local: toSendBody builds the frame without them.
 export interface OutboxRecord extends MessageSendBody { createdAt: string; depth?: number; fromSessionId?: string }
 // A malformed outbox file leaves a sent record with only messageId and state error.
-// noticedAt: when the delivery hook told the sending session it failed.
+// noticedAt: when the delivery hook told the sending session that the message
+// failed or was received (sent-notices.mts); a record is told at most once.
 export type SentRecord = Partial<OutboxRecord> & {
   messageId: string; state: SentState; reason?: string; progress?: MessageProgress; updatedAt: string; noticedAt?: string;
 };
