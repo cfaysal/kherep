@@ -6,10 +6,9 @@ import test from "node:test";
 import type { MessageProgressCode } from "../protocol-messages.mts";
 import { rememberMode, takeTurn, TURN_SPACING_MS, TURNS_PER_HOUR } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
-import { audits, closedNode, deliver, SESSION, type Node } from "./closed-fixture.mts";
+import { audits, closedNode, closedSince, deliver, SESSION, type Node } from "./closed-fixture.mts";
 import { writeLocalSessions } from "./exchange.mts";
 import { getMessage, getMessageProgress } from "./inbox.mts";
-import { rememberSessions } from "./known-sessions.mts";
 import type { ExecOptions } from "./sessions.mts";
 import { T0, taskId } from "./task-fixture.mts";
 import { listTasks, writeTask, type TaskRecord } from "./task-records.mts";
@@ -27,8 +26,8 @@ const progress = (node: Node, id: string) => {
 const task = (node: Node, n: number, extra: Partial<TaskRecord>): TaskRecord => ({ taskId: taskId(n), name: `task-0000000${n}`,
   cwd: node.workspace, permissionMode: "auto", state: "done", startedAt: new Date(T0).toISOString(),
   deadline: new Date(T0 + 3_600_000).toISOString(), updatedAt: new Date(T0).toISOString(), ...extra });
-const knownCwd = (node: Node, cwd: string) => rememberSessions(node.paths, [{ sessionId: SESSION, runtime: "claude-code", state: "idle",
-  cwd }], T0 - 60_000);
+// Issue #389: listed with that cwd, then closed by its miss streak.
+const knownCwd = (node: Node, cwd: string) => closedSince(node, { sessionId: SESSION, runtime: "claude-code", state: "idle", cwd });
 
 type Case = [what: string, code: MessageProgressCode, reason: RegExp, arrange?: (node: Node) => void, sessions?: Record<string, unknown>,
   messaging?: Record<string, unknown>, message?: Parameters<typeof deliver>[1]];
@@ -108,11 +107,11 @@ test("a start the policy refuses after a failed resume is a failed delivery, not
   const [intercom] = listTasks(node.paths);
   writeTask(node.paths, { ...intercom, state: "done" });
   node.tick(TURN_SPACING_MS * 2);
-  writeLocalSessions(node.paths, [], T0 + TURN_SPACING_MS * 2);
-  // A closed Codex session of the same sender: the Claude intercom is resumed, its start would be Codex.
+  // A closed Codex session of the same sender (issue #389: closed by its miss
+  // streak): the Claude intercom is resumed, its start would be Codex.
   const codex = "0199a000-0000-7000-8000-0000000002a0";
-  rememberSessions(node.paths, [{ sessionId: codex, runtime: "codex", state: "idle", cwd: path.join(node.workspace, "repo") }],
-    T0 + TURN_SPACING_MS);
+  closedSince(node, { sessionId: codex, runtime: "codex", state: "idle", cwd: path.join(node.workspace, "repo") },
+    T0 + TURN_SPACING_MS * 2);
   const id = deliver(node, { toSession: codex });
   const base = node.deps();
   const exec = async (file: string, args: string[], options: ExecOptions): Promise<string> => {

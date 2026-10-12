@@ -9,11 +9,40 @@ import { readJson, writeJsonAtomic } from "./inbox.mts";
 // keeps its runtime, name and working directory for a while, so a message that
 // arrives for it can still resume it (closed-delivery.mts). Updated by every
 // successful listing, entries not seen for KNOWN_RETENTION_MS are dropped.
+//
+// Issue #389: one listing without a session is no proof that it ended. Each
+// entry also counts the successful listings since it was last seen that did not
+// show it (misses, from missedSince to missedAt). A listing that shows it starts
+// a fresh entry without them; a failed listing never reaches this file, and a
+// partial one (unseen runtimes, sessions.mts) counts no miss for the runtimes it
+// could not see. The streak lives and is pruned with its entry.
 
 export const KNOWN_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const MAX_KNOWN = 512;
 
-export interface KnownSession { sessionId: string; runtime: string; name?: string; cwd?: string; lastSeen: string }
+// A session counts as closed only after CLOSED_AFTER_MISSES consecutive
+// listings without it that span at least CLOSED_MIN_AGE_MS. The daemon lists
+// every SESSIONS_INTERVAL_MS (60 s, daemon.mts), so three periodic misses span
+// about 120 s and close a session at the third. Other listings (registration,
+// a Worker session.list, a reconnect) can come seconds apart; the minimum age of
+// 1.5 periodic intervals keeps such a burst from closing a session on its own,
+// while the jitter of a periodic listing cannot delay the third periodic miss.
+export const CLOSED_AFTER_MISSES = 3;
+export const CLOSED_MIN_AGE_MS = 90_000;
+
+export interface KnownSession {
+  sessionId: string; runtime: string; name?: string; cwd?: string; lastSeen: string;
+  misses?: number; missedSince?: string; missedAt?: string;
+}
+
+// The runtimes a successful listing could not see ("*" for all), set by
+// listSessions on the array it returns and read where the listing is recorded.
+const unseenRuntimes = new WeakMap<SessionInfo[], readonly string[]>();
+export function markUnseen(sessions: SessionInfo[], runtimes: readonly string[]): SessionInfo[] {
+  if (runtimes.length > 0) unseenRuntimes.set(sessions, runtimes);
+  return sessions;
+}
+export const unlistedRuntimes = (sessions: SessionInfo[]): readonly string[] => unseenRuntimes.get(sessions) ?? [];
 
 export const knownSessionsFile = (paths: NodePaths): string => path.join(paths.dir, "known-sessions.json");
 
@@ -22,13 +51,17 @@ export function readKnownSessions(paths: NodePaths): KnownSession[] {
   return Array.isArray(value?.sessions) ? value.sessions as KnownSession[] : [];
 }
 
-// Merges a successful listing into the file, newest first.
-export function rememberSessions(paths: NodePaths, sessions: SessionInfo[], now: number = Date.now()): void {
+// Merges a successful listing into the file, newest first. unseen names the
+// runtimes the listing could not see ("*" for all of them).
+export function rememberSessions(paths: NodePaths, sessions: SessionInfo[], now: number = Date.now(),
+  unseen: readonly string[] = []): void {
   const seen = new Date(now).toISOString();
   const fresh: KnownSession[] = sessions.map((s) => ({ sessionId: s.sessionId, runtime: s.runtime,
     ...(s.name ? { name: s.name } : {}), ...(s.cwd ? { cwd: s.cwd } : {}), lastSeen: seen }));
   const ids = new Set(fresh.map((s) => s.sessionId));
-  const kept = readKnownSessions(paths).filter((s) => !ids.has(s.sessionId) && now - Date.parse(s.lastSeen) <= KNOWN_RETENTION_MS);
+  const missed = (s: KnownSession): boolean => !unseen.includes("*") && !unseen.includes(s.runtime);
+  const kept = readKnownSessions(paths).filter((s) => !ids.has(s.sessionId) && now - Date.parse(s.lastSeen) <= KNOWN_RETENTION_MS)
+    .map((s) => missed(s) ? { ...s, misses: (s.misses ?? 0) + 1, missedSince: s.missedSince ?? seen, missedAt: seen } : s);
   ensureDir(paths.dir);
   writeJsonAtomic(knownSessionsFile(paths), { sessions: [...fresh, ...kept].slice(0, MAX_KNOWN) });
 }
@@ -40,4 +73,22 @@ export function findKnown(paths: NodePaths, ref: string): KnownSession | null {
   if (byId) return byId;
   const named = known.filter((s) => s.name === ref);
   return named.length === 1 ? named[0] : null;
+}
+
+// A message target this node never listed (a Codex session its hook recorded
+// while no daemon listed, a task session that ended between two listings)
+// gets an entry now, so that the listings from here on count its misses.
+export function trackSession(paths: NodePaths, session: { sessionId: string; runtime: string; cwd?: string }, now: number): void {
+  const known = readKnownSessions(paths);
+  if (known.some((s) => s.sessionId === session.sessionId)) return;
+  ensureDir(paths.dir);
+  writeJsonAtomic(knownSessionsFile(paths), { sessions: [{ ...session, lastSeen: new Date(now).toISOString() }, ...known].slice(0, MAX_KNOWN) });
+}
+
+// True only for a known session whose miss streak is complete; a session
+// without an entry is never taken for closed.
+export function closedSession(paths: NodePaths, sessionId: string): boolean {
+  const known = readKnownSessions(paths).find((s) => s.sessionId === sessionId);
+  if (!known || (known.misses ?? 0) < CLOSED_AFTER_MISSES) return false;
+  return Date.parse(known.missedAt ?? "") - Date.parse(known.missedSince ?? "") >= CLOSED_MIN_AGE_MS;
 }

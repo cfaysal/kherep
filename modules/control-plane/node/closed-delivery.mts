@@ -11,7 +11,7 @@ import { attachDelivery } from "./delivery-identity.mts";
 import { progressRecords } from "./delivery-progress.mts";
 import { readLocalSessions } from "./exchange.mts";
 import { listInbox, markClosedAttempt, markRefused, MAX_REPLY_DEPTH, readJson, type InboxRecord } from "./inbox.mts";
-import { findKnown } from "./known-sessions.mts";
+import { closedSession, findKnown, trackSession } from "./known-sessions.mts";
 import { acceptsMessage, wakeBudget } from "./policy.mts";
 import { notReadyNow } from "./runtime-readiness.mts";
 import type { RunnerDeps } from "./session-runner.mts";
@@ -26,8 +26,11 @@ import { killSwitch } from "./wake-hook.mts";
 // messaging.resumeClosed. Run by the daemon after each session listing: an
 // accepted message for a known session of this node (known-sessions.json,
 // codex-sessions/ or a task record) that a listing taken after its arrival did
-// not show goes to an intercom session of its sender, never to the closed
-// session itself, whose resume would reload its whole conversation:
+// not show, and that is closed by its miss streak (issue #389,
+// known-sessions.mts: CLOSED_AFTER_MISSES successful listings without it over
+// at least CLOSED_MIN_AGE_MS), goes to an intercom session of its sender, never
+// to the closed session itself, whose resume would reload its whole
+// conversation. A reply takes the same path as any other message:
 // - the newest intercom session this node started for the same sender session
 //   (task record local intercom, requestedBy <sender node>/<sender session>)
 //   gets it: a running one through its delivery hook and wake (task grant,
@@ -89,6 +92,15 @@ export async function deliverToClosed(deps: RunnerDeps, log: (line: string) => v
   for (const record of waiting) {
     const target = resolveTarget(paths, record.toSession);
     if (!target || live.has(target.sessionId)) continue;
+    // Issue #389: one listing without a session is no proof that it ended.
+    // Until its miss streak closes it, the message waits for the session's
+    // own hook, and is refused after UNDELIVERABLE_AFTER_MS if it never returns.
+    if (!closedSession(paths, target.sessionId)) {
+      trackSession(paths, { sessionId: target.sessionId, runtime: target.runtime === "codex" ? CODEX_RUNTIME : CLAUDE_RUNTIME,
+        ...(target.cwd ? { cwd: target.cwd } : {}) }, now);
+      progressRecords(paths, [record], "waiting", "awaiting-user-turn", now);
+      continue;
+    }
     const key = `${target.sessionId} ${record.from.nodeId}/${record.from.session}`;
     const burst = bursts.get(key) ?? { target, records: [] };
     burst.records.push(record);

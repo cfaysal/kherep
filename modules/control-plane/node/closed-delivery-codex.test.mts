@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { TURN_SPACING_MS } from "./autonomy.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
-import { ACCEPT_ALL, audits, deliver, PEER } from "./closed-fixture.mts";
+import { ACCEPT_ALL, audits, closedSince, deliver, PEER } from "./closed-fixture.mts";
 import { SCRIPT, THREAD, waitFor, type FakeRun } from "./codex-fixture.mts";
 import { readExit } from "./codex-output.mts";
 import { codexFiles, type CodexDeps } from "./codex-process.mts";
@@ -26,6 +26,7 @@ import { wakeText } from "./wake-hook.mts";
 // runs on Windows too, behind an npm-style shim.
 
 const CLOSED = "0199a000-0000-7000-8000-0000000000c1";
+const CLOSED_SESSION = { sessionId: CLOSED, runtime: "codex", state: "idle" };
 
 function fakeCodex(t: test.TestContext): { file: string; runs: () => FakeRun[] } {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-fake-codex-"));
@@ -68,7 +69,7 @@ test("failed Codex intercom starts keep the message accepted and unassociated", 
     const node = taskNode(t, { runtimes: ["claude", "codex"], delegate: { accept: true } },
       { messaging: { ...ACCEPT_ALL, resumeClosed: true } });
     recordCodexSession(node.paths, CLOSED, path.join(node.workspace, "repo"), T0 - 13 * 3_600_000, "default");
-    writeLocalSessions(node.paths, [], T0);
+    closedSince(node, CLOSED_SESSION);
     const id = deliver(node, { toSession: CLOSED, text: name });
     await deliverToClosed({ ...node.deps(), codex });
     const message = getMessage(node.paths.inbox, id);
@@ -89,7 +90,8 @@ test("a closed Codex session's messages go to one Codex intercom session: starte
   const repo = path.join(node.workspace, "repo");
   // Last seen by a hook 13 hours ago: no longer listed.
   recordCodexSession(node.paths, CLOSED, repo, T0 - 13 * 3_600_000, "default");
-  writeLocalSessions(node.paths, [], T0);
+  // Issue #389: closed by its miss streak.
+  closedSince(node, CLOSED_SESSION);
   const codex = fakeCodex(t);
   const alive = (pid: number): string | null => {
     try {
