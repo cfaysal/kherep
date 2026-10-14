@@ -39,6 +39,10 @@ mock.module(new URL("./codex-wake.mts", import.meta.url).href, { namedExports: {
   pollCodexInbound: async () => { entered++; await gate; exited++; }, note: () => {}, pruneNoted: () => {},
 } });
 const discovery = await import("./discovery.mts");
+const binary = await import("./codex-binary.mts");
+// This fixture tests the CP intake window while a separate wake is held.
+// Native Queue lifecycle is exercised by its own producer/process fixtures.
+mock.module(new URL("./codex-binary.mts", import.meta.url).href, { namedExports: { ...binary, findCodex: () => null } });
 mock.module(new URL("./discovery.mts", import.meta.url).href, { namedExports: { ...discovery,
   detectFacts: () => ({ hostname: "synthetic.example.invalid", os: "win32", arch: "x64", cpus: 1, memoryBytes: 1024 }),
   discoverRuntimes: async () => [],
