@@ -242,7 +242,10 @@ on-disk plist as authoritative. The adapter checks the exact loaded origin,
 program, arguments, observable working directory and log paths, environment,
 process ownership and descendants before stopping the selected job. It probes
 the loaded identity twice and rereads configured bytes and security metadata;
-a mismatch or uncertain observation refuses adoption. A complete snapshot of
+configured and loaded path presence must agree as well as path values. Cleanup
+without a recorded PID surrounds a complete process inventory with native job
+probes; a mismatch, orphan or uncertain observation refuses the operation. The
+last probe and `bootout` are not one atomic launchd operation. A complete snapshot of
 the previous launchd memory cache is unknown and is not claimed as a backup.
 On Windows, adoption accepts only the documented direct daemon or dedicated
 PowerShell supervisor forms, current-user ownership, one `Exec` action and one

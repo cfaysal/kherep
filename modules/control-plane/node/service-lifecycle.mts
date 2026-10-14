@@ -87,8 +87,10 @@ export async function removeFresh(binding: ServiceBinding, input: LifecycleDepen
     await input.adapter.preflightStop(binding, { pid: candidate.pid, startedAt: candidate.startedAt });
     await input.adapter.stop(binding, { pid: candidate.pid, startedAt: candidate.startedAt });
     await proveStopped(candidate.pid, deps);
-  } else if (native?.running === false) await input.adapter.preflightStop(binding, undefined);
-  else if (native) await input.adapter.stop(binding, undefined);
+  } else if (native) {
+    await input.adapter.preflightStop(binding, undefined);
+    if (native.running !== false) await input.adapter.stop(binding, undefined);
+  }
   if (!native) return;
   await input.adapter.remove(binding);
   if (await input.adapter.read(binding)) throw new Error("new service removal could not be verified");
@@ -141,14 +143,15 @@ export async function restorePrior(input: RecoveryInput): Promise<void> {
       try {
         const context = candidateState && candidateState.pid !== input.previousPid
           ? { pid: candidateState.pid, startedAt: candidateState.startedAt } : undefined;
-        if (context) await input.deps.adapter.preflightStop(input.binding, context);
+        await input.deps.adapter.preflightStop(input.binding, context);
         await input.deps.adapter.stop(input.binding, context);
         await proveStopped(context?.pid, runtime);
         absenceProven = true;
       } catch { /* exact raw restoration still proceeds without restarting either daemon */ }
-    } else if (native.running === false) {
+    } else if (native.running !== true) {
       try {
         await input.deps.adapter.preflightStop(stoppedBinding, undefined);
+        if (native.running !== false) await input.deps.adapter.stop(stoppedBinding, undefined);
         if (!candidateState || candidateState.pid === input.previousPid || !runtime.alive(candidateState.pid)) {
           absenceProven = true;
         }
