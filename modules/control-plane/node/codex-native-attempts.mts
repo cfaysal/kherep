@@ -4,7 +4,7 @@ import { isMessageId } from "../protocol-messages.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
 import { isQueueBinding, type QueueBinding } from "./codex-queue-binding.mts";
 import { sameIdentity } from "./codex-queue-cleanup.mts";
-import { queueArgs } from "./codex-queue-run.mts";
+import { nativeQueueText } from "./codex-queue-text.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { writeJsonAtomic } from "./inbox.mts";
 
@@ -24,7 +24,8 @@ function receipts(paths: NodePaths, owner: string): string {
   return path.join(paths.dir, "codex-native-reconciled", owner);
 }
 export function nativeQueueInput(owner: string, count: number): QueueBinding["expectedInput"] {
-  return [{ type: "text", text: queueArgs(owner, count)[4]!, text_elements: [] }];
+  if (!isCodexSessionId(owner)) throw new Error("codex session id is not a plain name");
+  return [{ type: "text", text: nativeQueueText(count), text_elements: [] }];
 }
 function equal(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);

@@ -198,6 +198,8 @@ unloaded owner, opens a transcript, or carries peer text in the Queue pointer.
 
 `node/codex-native-attempts.mts` binds each successful native attempt to the
 complete batch, exact owner, Queue ID, expected input and captured producer.
+Its fixed pointer text comes from the pure `node/codex-queue-text.mts` formatter,
+also used by the producer, without importing the native process launcher.
 `node/codex-native-reconcile.mts` revalidates the local route, executable hashes
 and Codex home before opening the public app-server Queue client. All batch
 members must still belong to that owner and be `delivered`. Normal Stop awaits
