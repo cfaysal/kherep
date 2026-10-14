@@ -4,6 +4,7 @@ import path from "node:path";
 import { listenerDir, type ListenerLock } from "./autonomy.mts";
 import { readConfig, type NodeConfig, type NodePaths } from "./config.mts";
 import { readDaemonState } from "./daemon-state.mts";
+import { captureSourceIdentity, compareSourceIdentity, type SourceIdentity } from "./daemon-source.mts";
 import { readPrivateKey } from "./identity.mts";
 import { readJson } from "./inbox.mts";
 import { readPolicy, wakeBudget, type NodePolicy, type WakeBudget } from "./policy.mts";
@@ -33,7 +34,20 @@ export function checkEnrollment(paths: NodePaths): { check: Check; config: NodeC
 }
 
 // ok: the recorded process runs and its last connection is authenticated.
-export function checkDaemon(paths: NodePaths, pidAlive: (pid: unknown) => boolean): Check {
+function checkSource(recorded: SourceIdentity | undefined, repoRoot: string): Check {
+  if (!recorded) return { ok: false, status: "unknown", detail: "the daemon did not record a startup source identity; restart it through the managed service" };
+  try {
+    const compared = compareSourceIdentity(recorded, captureSourceIdentity(repoRoot, false));
+    if (compared.status === "match") return { ok: true, status: "match", running: recorded };
+    if (compared.status === "mismatch") return { ok: false, status: "mismatch", reason: compared.reason, running: recorded,
+      detail: "the running daemon loaded a different source than the invoking checkout" };
+    return { ok: false, status: "unknown", running: recorded, detail: compared.reason };
+  } catch {
+    return { ok: false, status: "unknown", running: recorded, detail: "the invoking source identity could not be verified" };
+  }
+}
+
+export function checkDaemon(paths: NodePaths, pidAlive: (pid: unknown) => boolean, repoRoot: string): Check {
   let state;
   try {
     state = readDaemonState(paths);
@@ -44,12 +58,14 @@ export function checkDaemon(paths: NodePaths, pidAlive: (pid: unknown) => boolea
   const alive = pidAlive(state.pid);
   const connectedAt = typeof state.connectedAt === "string" ? state.connectedAt : null;
   const disconnectedAt = typeof state.disconnectedAt === "string" ? state.disconnectedAt : null;
+  const source = checkSource(state.source, repoRoot);
   let detail: string | undefined;
   if (!alive) detail = "the recorded daemon process is not running";
   else if (!connectedAt) detail = "the daemon has not authenticated since it started";
   else if (disconnectedAt) detail = "the daemon lost its connection and has not authenticated again";
-  return { ok: alive && connectedAt !== null && disconnectedAt === null, pid: state.pid, alive, startedAt: state.startedAt,
-    connectedAt, disconnectedAt, ...(detail ? { detail } : {}) };
+  else if (!source.ok) detail = String(source.detail);
+  return { ok: alive && connectedAt !== null && disconnectedAt === null && source.ok, pid: state.pid, alive, startedAt: state.startedAt,
+    connectedAt, disconnectedAt, source, ...(detail ? { detail } : {}) };
 }
 
 // The readiness record of a running daemon (issue #222). A dead daemon's

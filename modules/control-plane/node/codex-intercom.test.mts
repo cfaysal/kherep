@@ -11,6 +11,7 @@ import { fakeCodexBin, THREAD, waitFor } from "./codex-fixture.mts";
 import { readExit } from "./codex-output.mts";
 import { codexFiles, detachCodex, WINDOWLESS, type CodexDeps } from "./codex-process.mts";
 import { spawnRun } from "./codex-runner.mts";
+import { beginServiceDrain } from "./service-drain.mts";
 import { watchCodexTasks } from "./codex-watch.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
@@ -39,6 +40,20 @@ test("only a Windows intercom run shares the daemon's console; operator tasks an
   assert.equal(detachCodex("win32", false), true);
   assert.equal(detachCodex("linux", true), true);
   assert.equal(detachCodex("darwin", true), true);
+});
+
+test("a service drain rejects every Codex run at the shared spawn boundary", async (t) => {
+  const node = taskNode(t, { runtimes: ["claude", "codex"] });
+  const endDrain = beginServiceDrain(node.paths);
+  t.after(endDrain);
+  let spawned = false;
+  const record: TaskRecord = { taskId: taskId(1), runtime: "codex", name: "task-1", cwd: node.workspace,
+    permissionMode: "auto", state: "started", startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 3_600_000).toISOString(),
+    updatedAt: new Date(T0).toISOString() };
+  const codex: CodexDeps = { findCodex: () => "codex-fake", spawn: (() => { spawned = true; throw new Error("spawned"); }) as never };
+  await assert.rejects(spawnRun({ ...node.deps(), codex }, record, () => ["exec"], "hello"), /draining new session admissions/);
+  assert.equal(spawned, false);
+  assert.equal(readTask(node.paths, record.taskId), null);
 });
 
 test("spawnRun passes detached false only for an intercom record on win32, and wraps only the detached win32 run (issue #124)", async (t) => {

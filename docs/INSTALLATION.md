@@ -217,6 +217,87 @@ Read the installed source receipt and target files when comparing an upgrade. Re
 
 ## Upgrades and rollback
 
+The enrolled Control Plane node can run as a supported per-user login service
+on macOS or Windows. Install it from a clean committed checkout and name the
+workspace in which daemon-started work should run:
+
+```sh
+kherep-node service install --workspace /absolute/workspace --source /absolute/kherep-checkout
+kherep-node service status
+```
+
+On Windows, `--service-name '\Example\KherepNode'` selects a task in a nested
+Task Scheduler folder. The equivalent split form is `--service-name KherepNode
+--task-path '\Example\'`. A macOS service name is a LaunchAgent label and has no
+task path. Fresh definitions run as the current interactive user with least
+privilege. The fresh defaults are `org.kherep.node` on macOS and `KherepNode`
+on Windows. They do not install a system service.
+
+Platform behavior follows Apple's [launchd job guidance](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html)
+and Microsoft's [`Register-ScheduledTask` reference](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/register-scheduledtask?view=win10-ps).
+
+An existing definition is never taken over implicitly. To adopt one, supply its
+exact name and `--adopt`. Adoption accepts only the documented direct daemon or
+dedicated PowerShell supervisor forms, current-user ownership, one action and
+one logon trigger, least privilege and no execution-affecting Node environment.
+The action must be exactly one `Exec`; any additional action type is refused.
+It replaces only the selected daemon action and retains the prior definition,
+security metadata and source identity for recovery. Adoption reads and retains
+the selected service's existing Node executable; it does not turn a source
+upgrade into a Node runtime upgrade. On Windows it also retains the selected
+dedicated supervisor's absolute log path. The managed product supervisor appends
+daemon stdout and stderr to that file and restarts an exited daemon after 30
+seconds. It uses a fixed binding and does not accept an operator-supplied command,
+arguments, environment or shell setting. A fresh installation uses the Node
+executable that runs `kherep-node` and writes its service log below the per-user
+Control Plane service directory.
+
+```sh
+kherep-node service install --workspace /absolute/workspace --source /absolute/kherep-checkout --service-name <exact-name> --adopt
+kherep-node service upgrade --source /absolute/clean-kherep-checkout
+kherep-node service rollback
+```
+
+`upgrade` uses the existing managed service binding. If `--source` is omitted,
+it uses the checkout that contains the invoked CLI. The command archives only
+tracked committed files into a complete verified per-user source pin. Dirty or
+uncertain source, symbolic links, manifest drift and unlisted pin content are
+refused. On Windows extraction uses the native system archive tool, so Git Bash
+path rewriting and cross-drive source/config locations do not change the pin.
+Before a service stop, the daemon blocks new session admissions,
+waits for in-flight admissions, verifies the exact process again and refuses
+unknown or present descendants. A daemon of this version honors the drain for
+managed task starts. On Windows the transaction also verifies the selected task
+supervisor and its one direct daemon child, retains both process handles, stops
+the supervisor first and then stops only that already retained daemon process.
+The candidate generation gets one binding-specific launch permit only after the
+old generation is proven absent. Every other supervisor launch or restart waits
+while the drain exists. During legacy adoption, the immediate descendant and
+ownership recheck narrows but cannot eliminate a process-start race, so any
+uncertain observation aborts and the operator should retry. The
+transaction then requires a fresh pid, authenticated connection and matching
+startup source. It never stops Claude Code or Codex session processes by pid.
+Admission leases record PID, process start and owner provenance. A crashed
+lease is removed only when that owner is positively stale; an uncertain owner
+aborts the transaction. `service status` succeeds only when the native service
+is running and its live, authenticated daemon matches the recorded process,
+source, config and service binding.
+
+Native definitions and security metadata are backed up before mutation and are
+kept after rollback. Recovery restores and reads back the exact selected
+definition. A historical adopted definition that still points at a mutable
+checkout can be rolled back only while that prior source identity still
+verifies. Managed-to-managed rollback uses the retained immutable prior pin.
+When an adopted legacy daemon has no startup source record, its native action,
+Node executable, PID and start provenance must still match before mutation. The
+backup records the prior loaded source as `unknown`; failure recovery restores
+and reads back the exact native bytes but does not restart that unknown source.
+After a mutating command fails, the CLI reports only a fixed service failure
+code and the measured recovery state, `restored` or `unknown`; it does not print
+the native definition, environment or native command output.
+These service commands do not edit runtime hook configuration; run `kherep-node
+doctor` and update an independently managed stale hook binding separately.
+
 Compare managed source and installed files in both directions before replacing an existing setup. Preserve operator edits and inspect an isolated candidate with read-only settings fixtures.
 
 The installer records backups through managed transactions. Verify recovery in a disposable candidate and retain the recorded backup. Never recursively remove a configuration home to repair an installation.

@@ -1,5 +1,46 @@
 # Control Plane architecture
 
+## Managed daemon service
+
+`node/service-cli.mts` dispatches `service install|upgrade|status|rollback`
+before the generic node CLI parser. A clean committed checkout is archived into
+an immutable per-user source pin whose full file inventory, Git blob identities,
+paths and executable modes reproduce the checkout tree commitment. The service
+runner starts the daemon from that pin and `daemon.json` captures its verified
+source identity once at startup.
+
+The platform adapters manage only a selected per-user LaunchAgent or Scheduled
+Task. Adoption requires the exact service id and validates ownership, privilege,
+action shape and execution-affecting environment. Windows task paths retain
+nested scheduler folders and backups include both exported XML and the task
+security descriptor. macOS uses exact `gui/<uid>/<label>` targets and retains
+the property-list bytes and file ownership metadata. Adoption derives the Node
+executable from the selected definition and owned daemon, preserving that
+runtime across a source-only upgrade. On Windows the managed task launches a
+fixed product Node supervisor through headless `conhost`. The supervisor derives
+the daemon command from its strict binding, verifies the immutable source before
+every child start, appends both output streams to the retained service log and
+restarts an exited daemon after 30 seconds. It accepts no arbitrary command,
+arguments, environment or shell setting.
+
+`node/service-transaction.mts` serializes activation with one local lock. It
+preflights native definition drift and the exact owned daemon, saves raw native
+state, drains new task admissions and waits for existing admission leases. The
+platform adapter then verifies no daemon descendants and the transaction checks
+process identity again immediately before stopping the selected service. Managed
+daemons honor the admission drain; legacy adoption has no absolute race-free
+claim and aborts on any uncertain recheck. A Windows activation gives only the
+new supervisor generation a binding-specific, atomic one-use launch permit after
+the old supervisor and daemon are proven absent. Every other initial launch or
+restart waits for the drain. Windows stop retains positively attested handles
+for the selected supervisor and its one direct daemon child, stops and proves the
+supervisor first, then stops that exact daemon handle. A candidate succeeds only
+after native readback, a fresh pid, authenticated
+connection, matching service binding and matching startup source. Recovery and
+rollback independently read back restored bytes and restart only a verified
+prior source. An uncertain absence or historical mutable-source drift stays
+unknown and does not authorize another process stop.
+
 ## Codex intake peer progress
 
 The daemon retains one runtime-mutation lane. Only around its awaited

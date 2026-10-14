@@ -61,7 +61,10 @@ test("the daemon records its pid at start, each authenticated connection and eac
   const started = readDaemonState(paths);
   assert.equal(started?.pid, process.pid);
   assert.ok(started && !Number.isNaN(Date.parse(started.startedAt)));
+  assert.ok(started.source);
   assert.equal(started?.connectedAt, undefined);
+  assert.match(started?.source.commit ?? "", /^[0-9a-f]{40,64}$/);
+  assert.match(started?.source.digest ?? "", /^[0-9a-f]{64}$/);
 
   await flush();
   const probed = readDaemonState(paths)?.readiness;
@@ -77,7 +80,7 @@ test("the daemon records its pid at start, each authenticated connection and eac
   assert.ok(connected?.connectedAt && !Number.isNaN(Date.parse(connected.connectedAt)));
   assert.deepEqual(connected?.readiness, probed, "a connection keeps the readiness record");
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(daemonStateFile(paths), "utf8"))).sort(),
-    ["connectedAt", "pid", "readiness", "startedAt"]);
+    ["connectedAt", "pid", "readiness", "source", "startedAt"]);
 
   listeners.get("close")?.({ code: 1012 });
   const lost = readDaemonState(paths);

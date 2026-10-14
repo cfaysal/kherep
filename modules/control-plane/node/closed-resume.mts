@@ -10,6 +10,7 @@ import { attachDelivery, updateDeliverySession } from "./delivery-identity.mts";
 import { addLocalSession, readDirectory } from "./exchange.mts";
 import { getMessage, markClosedAttempt, markOffered, markRetry, readdress, setMessageProgress, type InboxRecord } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
+import { withServiceAdmission, type ServiceAdmission } from "./service-drain.mts";
 import { agentRows, BACKGROUNDED, mapIds, runClaude, startTask, type RunnerDeps } from "./session-runner.mts";
 import { CLAUDE_RUNTIME } from "./sessions.mts";
 import { queueReport, readTask, senderOf, writeTask, type TaskRecord } from "./task-records.mts";
@@ -53,6 +54,11 @@ function rerunRecord(deps: RunnerDeps, task: TaskRecord, cwd: string, now: numbe
 // written before the run with mappingPendingSince (session-runner.mts
 // background), and restored if the resume fails.
 export async function resumeClaude(deps: RunnerDeps, task: TaskRecord, cwd: string, count: number, now: number): Promise<string | null> {
+  try { return await withServiceAdmission(deps.paths, () => resumeClaudeAdmitted(deps, task, cwd, count, now)); }
+  catch (error) { return reasonOf(error); }
+}
+
+async function resumeClaudeAdmitted(deps: RunnerDeps, task: TaskRecord, cwd: string, count: number, now: number): Promise<string | null> {
   const sessionId = task.sessionId!;
   // The session held so far is stopped once a copy is adopted and it is idle (issue #111).
   const retire = [...(task.retire ?? []), ...(task.shortId ? [{ shortId: task.shortId, sessionId }] : [])];
@@ -97,6 +103,13 @@ export async function resumeClaude(deps: RunnerDeps, task: TaskRecord, cwd: stri
 }
 
 export async function resumeCodex(deps: RunnerDeps, task: TaskRecord, cwd: string, count: number, now: number): Promise<string | null> {
+  try { return await withServiceAdmission(deps.paths, (admission) => resumeCodexAdmitted(deps, task, cwd, count, now, admission)); }
+  catch (error) { return reasonOf(error); }
+}
+
+async function resumeCodexAdmitted(
+  deps: RunnerDeps, task: TaskRecord, cwd: string, count: number, now: number, admission: ServiceAdmission,
+): Promise<string | null> {
   const sessionId = task.sessionId!;
   const refs = [sessionId, task.name];
   const context = deliveryContext("UserPromptSubmit", refs, { paths: deps.paths, now: () => now,
@@ -107,7 +120,8 @@ export async function resumeCodex(deps: RunnerDeps, task: TaskRecord, cwd: strin
   // As codex-wake.mts: a run for peer messages keeps the task's state; the watch round settles its offers.
   const run: TaskRecord = { ...rerunRecord(deps, task, cwd, now), running: true, offered };
   try {
-    await spawnRun(deps, run, (files, outbox) => resumeArgs(sessionId, task.permissionMode, files, outbox), `${wakeText(count)}\n\n${context}`);
+    await spawnRun(deps, run, (files, outbox) => resumeArgs(sessionId, task.permissionMode, files, outbox),
+      `${wakeText(count)}\n\n${context}`, admission);
   } catch (error) {
     for (const id of offered) markRetry(deps.paths.inbox, id);
     return reasonOf(error);

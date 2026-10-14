@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { checkHooks, hookPaths } from "./doctor-hooks.mts";
+import { pinServiceSource } from "./service-source.mts";
 
 // Issue #215 review: only the script path of a hook command counts and is
 // reported, whether quoted or not, and only hook command fields are read.
@@ -82,6 +83,7 @@ function git(cwd: string, ...args: string[]): string {
 // A commit without running any hook: plumbing only, with a synthetic identity.
 function commitCheckout(repo: string): string {
   git(repo, "init", "-q");
+  git(repo, "add", ".");
   const tree = git(repo, "write-tree");
   const commit = git(repo, "-c", "user.name=Kherep Fixture", "-c", "user.email=fixture@example.invalid",
     "commit-tree", tree, "-m", "fixture");
@@ -89,11 +91,9 @@ function commitCheckout(repo: string): string {
   return commit;
 }
 
-function pinnedHook(root: string, name: string): string {
-  const hooks = path.join(root, ".codex", "orchestra", "source-pins", name, "modules", "control-plane", "node");
-  fs.mkdirSync(hooks, { recursive: true });
-  fs.writeFileSync(path.join(hooks, "deliver-hook.mts"), "");
-  return path.join(hooks, "deliver-hook.mts");
+function pinnedHook(root: string, repo: string): string {
+  const pin = pinServiceSource(repo, path.join(root, ".codex", "orchestra"));
+  return path.join(pin.root, "modules", "control-plane", "node", "deliver-hook.mts");
 }
 
 const codexHook = (hook: string): string => ["[[hooks.Stop]]", "[[hooks.Stop.hooks]]", 'type = "command"',
@@ -104,13 +104,12 @@ test("a hook in a source pin of the checked-out commit counts for this checkout"
   const f = files(t);
   const commit = commitCheckout(f.repo);
   const root = path.dirname(f.repo);
-  for (const name of [commit, commit.slice(0, 12)]) {
-    const hook = pinnedHook(root, name);
-    fs.writeFileSync(f.codex, codexHook(hook));
-    const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
-    assert.equal(check.ok, true, JSON.stringify(check));
-    assert.deepEqual(check.codex, { present: true, deliver: 1, wake: 0, foreign: [], pinned: [hook] });
-  }
+  assert.match(commit, /^[0-9a-f]{40,64}$/);
+  const hook = pinnedHook(root, f.repo);
+  fs.writeFileSync(f.codex, codexHook(hook));
+  const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
+  assert.equal(check.ok, true, JSON.stringify(check));
+  assert.deepEqual(check.codex, { present: true, deliver: 1, wake: 0, foreign: [], pinned: [hook] });
 });
 
 test("a source pin of another commit, a missing pin and another checkout still count as foreign", (t) => {
@@ -124,7 +123,10 @@ test("a source pin of another commit, a missing pin and another checkout still c
   const checkout = path.join(root, "other", "modules", "control-plane", "node", "deliver-hook.mts");
   fs.mkdirSync(path.dirname(checkout), { recursive: true });
   fs.writeFileSync(checkout, "");
-  for (const hook of [pinnedHook(root, otherCommit), missing, checkout]) {
+  const fake = path.join(root, ".codex", "orchestra", "source-pins", otherCommit, "modules", "control-plane", "node", "deliver-hook.mts");
+  fs.mkdirSync(path.dirname(fake), { recursive: true });
+  fs.writeFileSync(fake, "");
+  for (const hook of [fake, missing, checkout]) {
     fs.writeFileSync(f.codex, codexHook(hook));
     const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
     assert.equal(check.ok, false, hook);

@@ -5,6 +5,7 @@ import type { NodePaths } from "./config.mts";
 import { readJson, writeJsonAtomic } from "./inbox.mts";
 import type { ProbeCause } from "./runtime-probe.mts";
 import type { Verdict } from "./runtime-readiness.mts";
+import type { SourceIdentity } from "./daemon-source.mts";
 
 // Liveness evidence for `kherep-node doctor` (issue #215): daemon.json beside
 // node.json, written when the daemon starts and again after each
@@ -13,8 +14,10 @@ import type { Verdict } from "./runtime-readiness.mts";
 // and per runtime the last readiness probe (issue #222): ready or not with the
 // fixed cause code, and when it completed; never the probe's output.
 export interface ProbeRecord { ready: boolean; cause?: ProbeCause; probedAt: string }
+export interface DaemonServiceBinding { name: string; platform: "darwin" | "win32"; taskPath?: string }
 export interface DaemonState {
-  pid: number; startedAt: string; connectedAt?: string; disconnectedAt?: string; readiness?: Partial<Record<TaskRuntime, ProbeRecord>>;
+  pid: number; startedAt: string; connectedAt?: string; disconnectedAt?: string;
+  source?: SourceIdentity; service?: DaemonServiceBinding; readiness?: Partial<Record<TaskRuntime, ProbeRecord>>;
 }
 
 export const daemonStateFile = (paths: NodePaths): string => path.join(paths.dir, "daemon.json");

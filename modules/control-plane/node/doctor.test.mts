@@ -8,6 +8,7 @@ import test from "node:test";
 import { listenerDir } from "./autonomy.mts";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { daemonStateFile } from "./daemon-state.mts";
+import { captureSourceIdentity } from "./daemon-source.mts";
 import { runDoctor, type DoctorDeps } from "./doctor.mts";
 import { generateIdentity, writePrivateKey } from "./identity.mts";
 
@@ -30,12 +31,20 @@ function host(t: test.TestContext): Host {
     publicKey: identity.publicKey, privateKeyFile: paths.privateKey, policyFile: paths.policy, enrolledAt: new Date(0).toISOString() });
   fs.writeFileSync(paths.policy, JSON.stringify({ version: 1, allowedCommands: ["node.status"],
     wake: { enabled: true, sessions: ["build"] }, sessions: { enabled: true, workspaceRoots: ["/synthetic/work"], runtimes: ["claude"] } }));
-  fs.writeFileSync(daemonStateFile(paths), JSON.stringify({ pid: LIVE_PID, startedAt: "2026-10-04T10:00:00.000Z",
-    connectedAt: "2026-10-04T10:00:01.000Z" }));
   const repo = path.join(root, "checkout");
   fs.mkdirSync(HOOKS(repo), { recursive: true });
   for (const hook of ["deliver-hook.mts", "wake-hook.mts"]) fs.writeFileSync(path.join(HOOKS(repo), hook), "");
   fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify({ version: "9.8.7" }));
+  const git = (...args: string[]) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", windowsHide: true });
+  assert.equal(git("init", "-q").status, 0);
+  assert.equal(git("add", ".").status, 0);
+  const tree = git("write-tree").stdout.trim();
+  const committed = git("-c", "user.name=Kherep Fixture", "-c", "user.email=fixture@example.invalid",
+    "commit-tree", tree, "-m", "fixture");
+  assert.equal(committed.status, 0, committed.stderr);
+  assert.equal(git("update-ref", "HEAD", committed.stdout.trim()).status, 0);
+  fs.writeFileSync(daemonStateFile(paths), JSON.stringify({ pid: LIVE_PID, startedAt: "2026-10-04T10:00:00.000Z",
+    connectedAt: "2026-10-04T10:00:01.000Z", source: captureSourceIdentity(repo) }));
   const claude = path.join(root, "claude");
   const codex = path.join(root, "codex");
   fs.mkdirSync(claude);
@@ -75,8 +84,32 @@ test("a healthy host passes every check and reports versions without secrets", a
   assert.deepEqual(report.checks.hooks.claude, { present: true, deliver: 1, wake: 1, foreign: [] });
   assert.deepEqual(report.checks.hooks.codex, { present: true, deliver: 1, wake: 0, foreign: [] });
   assert.deepEqual(report.checks.listeners, { ok: true, live: 0, stale: 0 });
+  assert.equal((report.checks.daemon.source as { status: string }).status, "match");
   const text = JSON.stringify(report);
   for (const secret of ["SYNTHETIC_SECRET", "PRIVATE KEY", h.pem.split("\n")[1]]) assert.equal(text.includes(secret), false);
+});
+
+test("the daemon source is unknown when missing and fails when the invoking checkout advanced", async (t) => {
+  const h = host(t);
+  const base = JSON.parse(fs.readFileSync(daemonStateFile(h.paths), "utf8")) as Record<string, unknown>;
+  fs.writeFileSync(daemonStateFile(h.paths), JSON.stringify({ ...base, source: undefined }));
+  let daemon = (await runDoctor(h.deps)).checks.daemon;
+  assert.deepEqual([daemon.ok, (daemon.source as { status: string }).status], [false, "unknown"]);
+  assert.match(String(daemon.detail), /startup source identity/);
+
+  const oldSource = captureSourceIdentity(h.repo);
+  fs.writeFileSync(path.join(h.repo, "package.json"), JSON.stringify({ version: "9.8.8" }));
+  const git = (...args: string[]) => spawnSync("git", ["-C", h.repo, ...args], { encoding: "utf8", windowsHide: true });
+  assert.equal(git("add", ".").status, 0);
+  const tree = git("write-tree").stdout.trim();
+  const commit = git("-c", "user.name=Kherep Fixture", "-c", "user.email=fixture@example.invalid",
+    "commit-tree", tree, "-p", oldSource.commit, "-m", "advance");
+  assert.equal(commit.status, 0, commit.stderr);
+  assert.equal(git("update-ref", "HEAD", commit.stdout.trim()).status, 0);
+  fs.writeFileSync(daemonStateFile(h.paths), JSON.stringify({ ...base, source: oldSource }));
+  daemon = (await runDoctor(h.deps)).checks.daemon;
+  assert.deepEqual([daemon.ok, (daemon.source as { status: string }).status], [false, "mismatch"]);
+  assert.match(String(daemon.detail), /different source/);
 });
 
 test("enrollment fails without a node, without a readable key, with a foreign key or an invalid node.json", async (t) => {

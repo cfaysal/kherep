@@ -58,6 +58,7 @@ flowchart LR
     runner["Local inference runner"]
     bridge["MCP auth bridge"]
     nodeDaemon["Control Plane node daemon"]
+    daemonService["Per-user daemon service<br/>verified source pin and rollback"]
     queueRetire["Native Queue reconciliation"]
   end
 
@@ -74,6 +75,7 @@ flowchart LR
   runtimes --> runner --> model
   runtimes --> bridge --> mcp
   nodeDaemon <--> worker <--> peers
+  daemonService -->|starts and upgrades| nodeDaemon
   nodeDaemon -.->|delivers peer messages| runtimes
   nodeDaemon -.->|Codex CP admission and original-owner intake| codex
   codex -.->|Confirming Stop| queueRetire
@@ -90,6 +92,7 @@ flowchart LR
 | Local inference | `modules/local-inference/` | Runner for a configured local model server, reached locally or over SSH |
 | MCP auth bridge | `modules/mcp-auth-bridge/` | Authenticated transport wrappers for configured MCP servers |
 | Control Plane | `modules/control-plane/` | Cloudflare Worker, node daemon and shared protocol for enrollment, session messaging and tasks |
+| Daemon service | `modules/control-plane/node/service-*.mts` | Per-user LaunchAgent or supervised Scheduled Task, immutable source activation, measured upgrade and rollback |
 
 ### Central Brain
 

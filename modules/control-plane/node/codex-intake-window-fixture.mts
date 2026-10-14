@@ -31,6 +31,14 @@ let release!: () => void, entered = 0, exited = 0;
 const gate = new Promise<void>(r => { release = r; });
 const oldHome = process.env.CODEX_HOME;
 process.env.CODEX_HOME = path.join(root, "codex-home");
+const daemonSource = await import("./daemon-source.mts");
+mock.module(new URL("./daemon-source.mts", import.meta.url).href, { namedExports: { ...daemonSource,
+  captureRuntimeSourceIdentity: () => ({ root: path.resolve(import.meta.dirname, "..", "..", ".."),
+    commit: "0".repeat(40), digest: "0".repeat(64), kind: "checkout" as const, verified: true as const }),
+} });
+const { defaultServiceOwnerProbe } = await import("./service-drain.mts");
+mock.method(defaultServiceOwnerProbe, "current", () => ({ version: 1 as const, pid: process.pid,
+  startedAt: "2026-01-01T00:00:00.000Z", owner: "S-1-5-21-1-2-3-1001" }));
 for (const method of ["spawn", "execFile", "execFileSync", "spawnSync", "exec", "execSync"] as const) {
   mock.method(cp, method, () => { throw new Error("FORBIDDEN_RUNTIME_PROCESS"); });
 }
