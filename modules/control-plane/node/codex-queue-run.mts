@@ -7,6 +7,7 @@ import { queueProducerIdentity } from "./codex-queue-context.mts";
 import { sameIdentity } from "./codex-queue-cleanup.mts";
 import type { NativeQueueInput, QueueProducerIdentity } from "./codex-queue-binding.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
+import { nativeQueueText } from "./codex-queue-text.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 
 export const QUEUE_TIMEOUT_MS = 30_000;
@@ -39,7 +40,7 @@ function queueInput(args: string[]): { owner: string; text: string } {
 
 export function queueArgs(thread: string, count: number): string[] {
   if (!isCodexSessionId(thread)) throw new Error("codex session id is not a plain name");
-  return guardQueue(["queue", "--thread", thread, "--message", `Kherep: ${count} peer message(s) waiting in your inbox.`]);
+  return guardQueue(["queue", "--thread", thread, "--message", nativeQueueText(count)]);
 }
 
 export function guardQueue(args: string[]): string[] {
