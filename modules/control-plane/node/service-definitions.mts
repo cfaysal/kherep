@@ -87,7 +87,7 @@ export function windowsManagedAction(binding: ServiceBinding): ServiceAction {
 }
 
 export function windowsLegacyLogFile(action: ServiceAction): string {
-  if (!/^conhost(?:\.exe)?$/i.test(path.basename(action.executable))) {
+  if (!/^conhost(?:\.exe)?$/i.test(path.win32.basename(action.executable))) {
     throw new Error("service legacy supervisor log path is unavailable");
   }
   const tokens = windowsArgs(action.arguments);
@@ -103,7 +103,7 @@ export interface WindowsSupervisorProcess { executable: string; argv: string[]; 
 
 export function windowsSupervisorProcess(action: ServiceAction, binding: ServiceBinding): WindowsSupervisorProcess {
   const tokens = windowsArgs(action.arguments);
-  if (/^conhost(?:\.exe)?$/i.test(path.basename(action.executable)) && tokens[0] === "--headless" && tokens[1]) {
+  if (/^conhost(?:\.exe)?$/i.test(path.win32.basename(action.executable)) && tokens[0] === "--headless" && tokens[1]) {
     let managed = false;
     if (binding.logFile && binding.supervisorGeneration) {
       const expected = windowsManagedAction(binding);
@@ -112,7 +112,7 @@ export function windowsSupervisorProcess(action: ServiceAction, binding: Service
     }
     return { executable: tokens[1], argv: tokens.slice(1), kind: managed ? "managed" : "legacy" };
   }
-  if (/^(?:powershell|pwsh)(?:\.exe)?$/i.test(path.basename(action.executable))) {
+  if (/^(?:powershell|pwsh)(?:\.exe)?$/i.test(path.win32.basename(action.executable))) {
     return { executable: action.executable, argv: [action.executable, ...tokens], kind: "legacy" };
   }
   throw new Error("service has an unsupported supervisor action");
@@ -148,16 +148,16 @@ function sameWindowsPath(left: string, right: string): boolean {
 
 function validateWrapper(action: ServiceAction, binding: ServiceBinding, sourceRoot: string): void {
   const tokens = windowsArgs(action.arguments);
-  const direct = /^(?:powershell|pwsh)(?:\.exe)?$/i.test(path.basename(action.executable));
+  const direct = /^(?:powershell|pwsh)(?:\.exe)?$/i.test(path.win32.basename(action.executable));
   let wrapper: string | undefined;
   if (direct) {
     const file = tokens.findIndex(token => token.toLowerCase() === "-file");
     if (file < 0 || file !== tokens.length - 2) throw new Error("service has an unsupported PowerShell wrapper");
     wrapper = tokens[file + 1];
-  } else if (/^conhost(?:\.exe)?$/i.test(path.basename(action.executable))) {
+  } else if (/^conhost(?:\.exe)?$/i.test(path.win32.basename(action.executable))) {
     const expectedFlags = ["--headless"];
     if (tokens.length !== 12 || tokens[0] !== expectedFlags[0]
-      || !/^(?:powershell|pwsh)(?:\.exe)?$/i.test(path.basename(tokens[1]))
+      || !/^(?:powershell|pwsh)(?:\.exe)?$/i.test(path.win32.basename(tokens[1]))
       || tokens[2].toLowerCase() !== "-noprofile" || tokens[3].toLowerCase() !== "-noninteractive"
       || tokens[4].toLowerCase() !== "-file" || tokens[6].toLowerCase() !== "-workspace"
       || tokens[8].toLowerCase() !== "-nodeexe" || tokens[10].toLowerCase() !== "-logfile") {

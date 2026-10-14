@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +5,14 @@ import path from "node:path";
 import {
   adoptMacDefinition, freshMacDefinition, legacyDaemonArguments, managedArguments, retargetMacDefinition, validateMacExecutionFields,
 } from "./service-definitions.mts";
+import {
+  MAC_EXECUTABLE_PROBE, PID_PATH_JXA, attestMacLaunchAgent, attestMacProcessAbsence, macFileSecurity, probeMacLaunchAgent, readMacPlist,
+  runMacCommand, sameMacLaunchAgent,
+  type MacCommand, type MacLaunchAgentProbe,
+} from "./service-platform-mac-native.mts";
 import type { NativeServiceSnapshot, ServiceAdapter, ServiceBinding, ServiceStopContext } from "./service-types.mts";
+
+export { MAC_EXECUTABLE_PROBE, macAclAbsent } from "./service-platform-mac-native.mts";
 
 export function validateServiceName(value: string): string {
   if (!/^[A-Za-z0-9._-]{1,200}$/.test(value)) throw new Error("invalid service name");
@@ -15,41 +21,10 @@ export function validateServiceName(value: string): string {
 
 export const launchTarget = (uid: number, label: string): string => `gui/${uid}/${validateServiceName(label)}`;
 
-type Result = { status: number | null; stdout: string; stderr: string; error?: Error };
-const PID_PATH_JXA = "ObjC.import('Foundation');ObjC.bindFunction('proc_pidpath',['int',['int','void *','unsigned int']]);"
-  + "function run(argv){var b=$.NSMutableData.dataWithLength(4096);var n=$.proc_pidpath(Number(argv[0]),b.mutableBytes,4096);"
-  + "if(!(n>0&&n<4096))throw Error('path unavailable');b.length=n;"
-  + "return ObjC.unwrap($.NSString.alloc.initWithDataEncoding(b,$.NSUTF8StringEncoding));}";
-export const MAC_EXECUTABLE_PROBE = "/usr/bin/osascript";
-
-function command(file: string, args: string[], timeout = 15_000, env = process.env): Result {
-  const result = spawnSync(file, args, { encoding: "utf8", env, windowsHide: true, timeout, stdio: ["ignore", "pipe", "pipe"] });
-  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "", ...(result.error ? { error: result.error } : {}) };
-}
-
-function checked(file: string, args: string[]): string {
-  const result = command(file, args);
+function checked(run: MacCommand, file: string, args: string[]): string {
+  const result = run(file, args);
   if (result.status !== 0) throw new Error(`${path.basename(file)} failed for the selected user service`);
   return result.stdout;
-}
-
-export function macAclAbsent(output: string): boolean {
-  const lines = output.split(/\r?\n/u).filter(line => line.length > 0);
-  if (!lines.length) throw new Error("LaunchAgent ACL inventory is empty");
-  return !lines.some(line => /^\s*\d+:\s/u.test(line));
-}
-
-function attestNoAcl(file: string): void {
-  const inventory = command("/bin/ls", ["-lde", file], 15_000, { ...process.env, LANG: "C", LC_ALL: "C" });
-  if (inventory.status !== 0) throw new Error("LaunchAgent ACL inventory is unavailable");
-  if (!macAclAbsent(inventory.stdout)) throw new Error("LaunchAgent has an extended ACL");
-}
-
-function security(file: string): Buffer {
-  const stat = fs.lstatSync(file);
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("LaunchAgent definition is not a regular file");
-  attestNoAcl(file);
-  return Buffer.from(JSON.stringify({ mode: stat.mode & 0o777, uid: stat.uid, gid: stat.gid, acl: "absent" }));
 }
 
 export class MacServiceAdapter implements ServiceAdapter {
@@ -58,23 +33,26 @@ export class MacServiceAdapter implements ServiceAdapter {
   readonly #gid: number;
   readonly #agents: string;
   readonly #scratch: string;
+  readonly #run: MacCommand;
 
-  constructor(serviceRoot: string, home = os.homedir(), uid = process.getuid?.(), gid = process.getgid?.()) {
+  constructor(serviceRoot: string, home = os.homedir(), uid = process.getuid?.(), gid = process.getgid?.(), run = runMacCommand) {
     if (uid === undefined || gid === undefined) throw new Error("current macOS user identity is unavailable");
-    this.#uid = uid;
-    this.#gid = gid;
+    this.#uid = uid; this.#gid = gid;
     this.#agents = path.join(home, "Library", "LaunchAgents");
-    this.#scratch = path.join(serviceRoot, "scratch");
+    this.#scratch = path.join(serviceRoot, "scratch"); this.#run = run;
   }
 
   #file(name: string): string { return path.join(this.#agents, `${validateServiceName(name)}.plist`); }
+  #probe(binding: ServiceBinding): MacLaunchAgentProbe {
+    return probeMacLaunchAgent(this.#run, this.#uid, validateServiceName(binding.serviceName));
+  }
 
   #safeEnvironment(): void {
     if (Object.keys(process.env).some(key => /^(?:NODE_OPTIONS|NODE_PATH)$/i.test(key))) {
       throw new Error("host has execution-affecting Node environment variables");
     }
     for (const key of ["NODE_OPTIONS", "NODE_PATH"]) {
-      const value = command("launchctl", ["getenv", key]);
+      const value = this.#run("launchctl", ["getenv", key]);
       if (value.status === 0 && value.stdout.trim()) throw new Error("launchd has execution-affecting Node environment variables");
       if (value.status !== 0 && value.status !== 1) throw new Error("launchd environment could not be verified");
     }
@@ -85,7 +63,7 @@ export class MacServiceAdapter implements ServiceAdapter {
     const input = path.join(this.#scratch, `plist-${process.pid}-${Date.now()}.json`);
     try {
       fs.writeFileSync(input, JSON.stringify(value), { mode: 0o600 });
-      return Buffer.from(checked("plutil", ["-convert", "xml1", "-o", "-", "--", input]));
+      return Buffer.from(checked(this.#run, "plutil", ["-convert", "xml1", "-o", "-", "--", input]));
     } finally { fs.rmSync(input, { force: true }); }
   }
 
@@ -95,16 +73,33 @@ export class MacServiceAdapter implements ServiceAdapter {
     if (binding.taskPath) throw new Error("task paths apply only to Windows Scheduled Tasks");
     const serviceName = binding.serviceName;
     const file = this.#file(serviceName);
+    const before = this.#probe(binding);
+    attestMacLaunchAgent(before, file);
     const stat = fs.lstatSync(file, { throwIfNoEntry: false });
-    if (!stat) return null;
+    if (!stat) {
+      if (before.kind === "loaded") throw new Error("LaunchAgent loaded definition is unavailable");
+      const after = this.#probe(binding);
+      if (!sameMacLaunchAgent(before, after)) throw new Error("LaunchAgent loaded identity changed during readback");
+      return null;
+    }
     if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("LaunchAgent definition is not a regular file");
     const definition = fs.readFileSync(file);
-    const converted = command("plutil", ["-convert", "json", "-o", "-", "--", file]);
-    if (converted.status !== 0) throw new Error("LaunchAgent property list has unsupported values");
-    const mac = JSON.parse(converted.stdout) as Record<string, unknown>;
-    const printed = command("launchctl", ["print", launchTarget(this.#uid, serviceName)]);
-    const pid = printed.status === 0 ? /\bpid\s*=\s*(\d+)\b/.exec(printed.stdout)?.[1] : undefined;
-    return { definition, security: security(file), running: pid ? true : "unknown", ...(pid ? { pid: Number(pid) } : {}), mac };
+    const mac = readMacPlist(this.#run, file);
+    attestMacLaunchAgent(before, file, mac);
+    const metadata = macFileSecurity(file, this.#run);
+    const after = this.#probe(binding);
+    if (!sameMacLaunchAgent(before, after)) throw new Error("LaunchAgent loaded identity changed during readback");
+    attestMacLaunchAgent(after, file, mac);
+    let currentDefinition: Buffer;
+    try { currentDefinition = fs.readFileSync(file); }
+    catch { throw new Error("LaunchAgent configured definition changed during readback"); }
+    if (!definition.equals(currentDefinition)) throw new Error("LaunchAgent configured definition changed during readback");
+    if (!metadata.equals(macFileSecurity(file, this.#run))) {
+      throw new Error("LaunchAgent configured security changed during readback");
+    }
+    const pid = after.kind === "loaded" ? after.pid : undefined;
+    return { definition, security: metadata, running: pid ? true : after.kind === "absent" ? false : "unknown",
+      ...(pid ? { pid } : {}), mac };
   }
 
   async fresh(binding: ServiceBinding): Promise<Buffer> {
@@ -161,13 +156,13 @@ export class MacServiceAdapter implements ServiceAdapter {
   }
 
   async processOwned(pid: number, binding: ServiceBinding, startedAt: string, sourceRoot = binding.source.root): Promise<boolean> {
-    const printed = command("launchctl", ["print", launchTarget(this.#uid, binding.serviceName)]);
-    const nativePid = printed.status === 0 ? /\bpid\s*=\s*(\d+)\b/.exec(printed.stdout)?.[1] : undefined;
-    if (Number(nativePid) !== pid) return false;
-    const started = command("ps", ["-ww", "-p", String(pid), "-o", "lstart="]);
-    const uid = command("ps", ["-p", String(pid), "-o", "uid="]);
-    const argv = command("ps", ["-ww", "-p", String(pid), "-o", "command="]);
-    const executable = command(MAC_EXECUTABLE_PROBE, ["-l", "JavaScript", "-e", PID_PATH_JXA, String(pid)]);
+    const native = this.#probe(binding);
+    if (native.kind === "absent") return false;
+    try { attestMacLaunchAgent(native, this.#file(binding.serviceName), undefined, pid); } catch { return false; }
+    const started = this.#run("ps", ["-ww", "-p", String(pid), "-o", "lstart="]);
+    const uid = this.#run("ps", ["-p", String(pid), "-o", "uid="]);
+    const argv = this.#run("ps", ["-ww", "-p", String(pid), "-o", "command="]);
+    const executable = this.#run(MAC_EXECUTABLE_PROBE, ["-l", "JavaScript", "-e", PID_PATH_JXA, String(pid)]);
     if (started.status !== 0 || uid.status !== 0 || argv.status !== 0 || executable.status !== 0
       || Number(uid.stdout.trim()) !== this.#uid) return false;
     const actualExecutable = executable.stdout.trim();
@@ -184,10 +179,23 @@ export class MacServiceAdapter implements ServiceAdapter {
       && Number.isFinite(created) && Math.abs(Date.parse(startedAt) - created) <= 60_000;
   }
 
-  async preflightStop(_binding: ServiceBinding, expected: ServiceStopContext | undefined): Promise<void> {
-    if (!expected) throw new Error("selected LaunchAgent process is unavailable");
+  async preflightStop(binding: ServiceBinding, expected: ServiceStopContext | undefined): Promise<void> {
+    if (!expected) {
+      const native = this.#probe(binding);
+      if (native.kind !== "absent") throw new Error("selected LaunchAgent process is unavailable");
+      attestMacProcessAbsence(this.#run, [
+        [binding.nodeExecutable, ...managedArguments(binding)].join(" "),
+        [binding.nodeExecutable, ...legacyDaemonArguments(binding, binding.source.root)].join(" "),
+      ]);
+      return;
+    }
     const pid = expected.pid;
-    const result = command("ps", ["-axo", "pid=", "-o", "ppid="]);
+    const native = this.#probe(binding);
+    if (native.kind === "absent") throw new Error("selected LaunchAgent process is unavailable");
+    const file = this.#file(binding.serviceName);
+    attestMacLaunchAgent(native, file, undefined, pid);
+    attestMacLaunchAgent(native, file, readMacPlist(this.#run, file), pid);
+    const result = this.#run("ps", ["-axo", "pid=", "-o", "ppid="]);
     if (result.status !== 0) throw new Error("STOP_UNKNOWN_DESCENDANTS");
     const rows = result.stdout.split(/\r?\n/).map(line => line.trim().split(/\s+/).map(Number))
       .filter((row): row is [number, number] => row.length === 2 && row.every(Number.isInteger));
@@ -209,24 +217,33 @@ export class MacServiceAdapter implements ServiceAdapter {
     fs.mkdirSync(this.#agents, { recursive: true, mode: 0o700 });
     const file = this.#file(serviceName);
     const existing = fs.lstatSync(file, { throwIfNoEntry: false });
-    if (existing && !security(file).equals(metadata)) throw new Error("LaunchAgent security metadata changed before write");
+    if (existing && !macFileSecurity(file, this.#run).equals(metadata)) throw new Error("LaunchAgent security metadata changed before write");
     const temp = `${file}.${process.pid}.tmp`;
     try {
       fs.writeFileSync(temp, definition, { mode: own.mode, flag: "wx" });
       fs.chmodSync(temp, own.mode);
-      if (!security(temp).equals(metadata)) throw new Error("LaunchAgent temporary security metadata differs");
+      if (!macFileSecurity(temp, this.#run).equals(metadata)) throw new Error("LaunchAgent temporary security metadata differs");
       fs.renameSync(temp, file);
     } finally { fs.rmSync(temp, { force: true }); }
   }
 
   async remove(binding: ServiceBinding): Promise<void> { fs.rmSync(this.#file(binding.serviceName), { force: true }); }
-  async stop(binding: ServiceBinding, _expected: ServiceStopContext | undefined): Promise<void> {
+  async stop(binding: ServiceBinding, expected: ServiceStopContext | undefined): Promise<void> {
     const serviceName = binding.serviceName;
-    const result = command("launchctl", ["bootout", launchTarget(this.#uid, serviceName)]);
+    const native = this.#probe(binding);
+    if (native.kind === "absent") {
+      if (expected) throw new Error("selected LaunchAgent process is unavailable");
+      return;
+    }
+    const file = this.#file(serviceName);
+    attestMacLaunchAgent(native, file, undefined, expected?.pid);
+    attestMacLaunchAgent(native, file, readMacPlist(this.#run, file), expected?.pid);
+    if (!expected && native.pid !== undefined) throw new Error("selected LaunchAgent process is unavailable");
+    const result = this.#run("launchctl", ["bootout", launchTarget(this.#uid, serviceName)]);
     if (result.status !== 0) throw new Error("launchctl could not prove the selected service stopped");
   }
   async start(binding: ServiceBinding): Promise<void> {
     const serviceName = binding.serviceName;
-    checked("launchctl", ["bootstrap", `gui/${this.#uid}`, this.#file(serviceName)]);
+    checked(this.#run, "launchctl", ["bootstrap", `gui/${this.#uid}`, this.#file(serviceName)]);
   }
 }

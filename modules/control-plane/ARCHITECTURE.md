@@ -14,7 +14,15 @@ Task. Adoption requires the exact service id and validates ownership, privilege,
 action shape and execution-affecting environment. Windows task paths retain
 nested scheduler folders and backups include both exported XML and the task
 security descriptor. macOS uses exact `gui/<uid>/<label>` targets and retains
-the property-list bytes and file ownership metadata. Adoption derives the Node
+the configured on-disk property-list bytes and file ownership metadata. Explicit
+`--adopt` makes that file authoritative, rather than claiming a complete backup
+of the previous launchd memory cache. `service-platform-mac-native.mts` checks
+the loaded origin, program, argv, observable working directory and log paths,
+execution-affecting environment and PID. Two native probes around the configured
+read, followed by unchanged bytes and security metadata, bind that snapshot to
+the selected job. Foreign origins, observable mismatch and unknown reads refuse
+the transaction. A positive missing-job diagnostic also requires an independently
+readable exact GUI domain; recovery additionally excludes an orphan daemon. Adoption derives the Node
 executable from the selected definition and owned daemon, preserving that
 runtime across a source-only upgrade. On Windows the managed task launches a
 fixed product Node supervisor through headless `conhost`. The supervisor derives
@@ -24,8 +32,9 @@ restarts an exited daemon after 30 seconds. It accepts no arbitrary command,
 arguments, environment or shell setting.
 
 `node/service-transaction.mts` serializes activation with one local lock. It
-preflights native definition drift and the exact owned daemon, saves raw native
-state, drains new task admissions and waits for existing admission leases. The
+preflights configured definition drift and the exact owned daemon, saves the
+exported task state or configured plist bytes and security metadata, drains new
+task admissions and waits for existing admission leases. The
 platform adapter then verifies no daemon descendants and the transaction checks
 process identity again immediately before stopping the selected service. Managed
 daemons honor the admission drain; legacy adoption has no absolute race-free

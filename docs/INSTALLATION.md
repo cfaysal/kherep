@@ -237,12 +237,19 @@ Platform behavior follows Apple's [launchd job guidance](https://developer.apple
 and Microsoft's [`Register-ScheduledTask` reference](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/register-scheduledtask?view=win10-ps).
 
 An existing definition is never taken over implicitly. To adopt one, supply its
-exact name and `--adopt`. Adoption accepts only the documented direct daemon or
-dedicated PowerShell supervisor forms, current-user ownership, one action and
-one logon trigger, least privilege and no execution-affecting Node environment.
-The action must be exactly one `Exec`; any additional action type is refused.
-It replaces only the selected daemon action and retains the prior definition,
-security metadata and source identity for recovery. Adoption reads and retains
+exact name and `--adopt`. On macOS this explicitly selects the configured
+on-disk plist as authoritative. The adapter checks the exact loaded origin,
+program, arguments, observable working directory and log paths, environment,
+process ownership and descendants before stopping the selected job. It probes
+the loaded identity twice and rereads configured bytes and security metadata;
+a mismatch or uncertain observation refuses adoption. A complete snapshot of
+the previous launchd memory cache is unknown and is not claimed as a backup.
+On Windows, adoption accepts only the documented direct daemon or dedicated
+PowerShell supervisor forms, current-user ownership, one `Exec` action and one
+logon trigger, least privilege and no execution-affecting Node environment.
+Any additional action type is refused. Adoption replaces only the selected
+daemon action and retains the exported task definition or configured plist,
+security metadata and recorded source identity for recovery. Adoption reads and retains
 the selected service's existing Node executable; it does not turn a source
 upgrade into a Node runtime upgrade. On Windows it also retains the selected
 dedicated supervisor's absolute log path. The managed product supervisor appends
@@ -283,9 +290,12 @@ aborts the transaction. `service status` succeeds only when the native service
 is running and its live, authenticated daemon matches the recorded process,
 source, config and service binding.
 
-Native definitions and security metadata are backed up before mutation and are
-kept after rollback. Recovery restores and reads back the exact selected
-definition. A historical adopted definition that still points at a mutable
+Exported Windows task definitions, configured macOS plist bytes and their
+security metadata are backed up before mutation and kept after rollback.
+Recovery restores and reads back those exact selected configured bytes.
+On macOS, successful bootstrap, native origin and process readback, source
+identity and authenticated health establish the newly loaded generation;
+subsequent managed rollback uses its retained configured snapshot. A historical adopted definition that still points at a mutable
 checkout can be rolled back only while that prior source identity still
 verifies. Managed-to-managed rollback uses the retained immutable prior pin.
 When an adopted legacy daemon has no startup source record, its native action,
