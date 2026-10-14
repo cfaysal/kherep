@@ -58,6 +58,7 @@ flowchart LR
     runner["Local inference runner"]
     bridge["MCP auth bridge"]
     nodeDaemon["Control Plane node daemon"]
+    queueRetire["Native Queue reconciliation"]
   end
 
   confluence[("Confluence space<br/>Central Brain")]
@@ -75,6 +76,8 @@ flowchart LR
   nodeDaemon <--> worker <--> peers
   nodeDaemon -.->|delivers peer messages| runtimes
   nodeDaemon -.->|Codex CP admission and original-owner intake| codex
+  codex -.->|Confirming Stop| queueRetire
+  queueRetire -.->|Exact owned Queue list/delete/readback| codex
 ```
 
 | Component | Directory | Responsibility |

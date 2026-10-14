@@ -17,7 +17,7 @@ import { explicitlyListed, wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { listTasks } from "./task-records.mts";
 import { killSwitch } from "./wake-hook.mts";
-import { nativeQueueIdle, scheduleNativeQueue } from "./codex-queue-producer.mts";
+import { nativeQueueIdle, scheduleNativeQueue, scheduleNativeReconciliation } from "./codex-queue-producer.mts";
 
 // Admit a compact CP hint for the authorized original Codex owner. The
 // synchronous original-owner hook consumes it at a supported tool boundary;
@@ -79,6 +79,7 @@ export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = (
   };
   for (const sessionId of candidates) {
     try {
+      scheduleNativeReconciliation(deps, sessionId, log);
       queueFor(deps, sessionId, live, selectInbox, now, log, appSession, home, reachable);
     } catch (error) {
       log(`kherep-node: could not wake Codex session ${sessionId}: ${String((error as Error).message ?? error)}`);

@@ -53,6 +53,8 @@ export interface CodexDeps {
   startWaitMs?: number;
   // How long a `codex queue` run may take (codex-queue.mts).
   queueTimeoutMs?: number;
+  // Await exact owned-pointer reconciliation; the default uses public Queue RPC.
+  reconcileQueue?: (owner: string) => Promise<void>;
   // The Codex home whose rollouts wake.codexApp reads (codex-app.mts);
   // CODEX_HOME or ~/.codex when absent.
   home?: string;

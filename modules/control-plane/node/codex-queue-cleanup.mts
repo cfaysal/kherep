@@ -19,7 +19,12 @@ export class NativeQueueShutdownError extends Error {
   }
 }
 
-interface CleanupOptions { timeoutMs?: number; maxPages?: number; owner?: string }
+interface CleanupOptions {
+  timeoutMs?: number; maxPages?: number; owner?: string;
+  candidates?: QueueBinding[];
+  retire?: (binding: QueueBinding, matchedInput: boolean) => boolean | void;
+  authorized?: () => boolean;
+}
 interface CompleteList { complete: boolean; rows: QueueRow[] }
 type OpenQueueClient = (opened: (client: NativeQueueClient) => void) => Promise<NativeQueueClient>;
 
@@ -48,7 +53,7 @@ function exactValue(left: unknown, right: unknown): boolean {
 function delivered(paths: NodePaths, binding: QueueBinding): boolean {
   return binding.admissionComplete === true && binding.admissionMessageIds.every((id) => {
     const record = getMessage(paths.inbox, id);
-    return record?.toSession === binding.owner && record.state === "delivered";
+    return record?.messageId === id && record.toSession === binding.owner && record.state === "delivered";
   });
 }
 
@@ -78,34 +83,35 @@ async function completeList(client: NativeQueueClient, owner: string, maxPages: 
 
 async function cleanup(paths: NodePaths, current: QueueProducerIdentity, open: OpenQueueClient,
   maxPages: number, active: () => boolean, opened: (client: NativeQueueClient) => void,
-  owner?: string): Promise<{ removed: number; kept: number }> {
-  const bindings = listQueueBindings(paths);
+  options: CleanupOptions): Promise<{ removed: number; kept: number }> {
+  const bindings = options.candidates ?? listQueueBindings(paths);
+  const owner = options.owner;
+  const authorized = options.authorized ?? (() => true);
+  const retire = options.retire ?? ((binding: QueueBinding) => removeQueueBinding(paths, binding.queuedSubmissionId));
   const candidates = bindings.filter((binding) => (owner === undefined || binding.owner === owner)
-    && sameIdentity(binding.producer, current) && delivered(paths, binding));
+    && authorized() && sameIdentity(binding.producer, current) && delivered(paths, binding));
   if (candidates.length === 0) return { removed: 0, kept: bindings.length };
   let removed = 0;
   const client = await open(opened);
   opened(client);
   try {
     for (const binding of candidates) {
-      if (!active()) break;
+      if (!active() || !authorized()) break;
       const before = await completeList(client, binding.owner, maxPages, active);
       if (!active() || !before.complete) continue;
       const matches = before.rows.filter((row) => row.id === binding.queuedSubmissionId);
       if (matches.length === 0) {
-        if (!active()) continue;
-        removeQueueBinding(paths, binding.queuedSubmissionId);
-        removed++;
+        if (!active() || !authorized()) continue;
+        if (retire(binding, false) !== false) removed++;
         continue;
       }
       if (matches.length !== 1 || !exactValue(matches[0]!.input, binding.expectedInput)) continue;
-      if (!active() || !delivered(paths, binding)) continue;
+      if (!active() || !authorized() || !delivered(paths, binding)) continue;
       const response = await client.delete(binding.owner, binding.queuedSubmissionId);
       if (!active() || response.deleted !== true) continue;
       const after = await completeList(client, binding.owner, maxPages, active);
       if (active() && after.complete && !after.rows.some((row) => row.id === binding.queuedSubmissionId)) {
-        removeQueueBinding(paths, binding.queuedSubmissionId);
-        removed++;
+        if (retire(binding, true) !== false) removed++;
       }
     }
   } finally {
@@ -116,14 +122,14 @@ async function cleanup(paths: NodePaths, current: QueueProducerIdentity, open: O
 
 export async function cleanupOwnedQueues(paths: NodePaths, current: QueueProducerIdentity,
   open: OpenQueueClient, options: CleanupOptions = {}): Promise<{ removed: number; kept: number }> {
-  const bindings = listQueueBindings(paths);
+  const bindings = options.candidates ?? listQueueBindings(paths);
   const timeoutMs = options.timeoutMs ?? 5_000;
   let active = true;
   let timer: NodeJS.Timeout | undefined;
   let client: NativeQueueClient | undefined;
   let timeoutClose: Promise<void> = Promise.resolve();
   const work = cleanup(paths, current, open, options.maxPages ?? 32, () => active,
-    (opened) => { client = opened; }, options.owner);
+    (opened) => { client = opened; }, options);
   try {
     return await Promise.race([
       work,

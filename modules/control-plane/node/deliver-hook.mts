@@ -4,7 +4,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { markListenerIdle, mayContinue } from "./autonomy.mts";
-import { nodePaths } from "./config.mts";
+import { nodePaths, readConfig } from "./config.mts";
+import { isCodexSessionId } from "./codex-sessions.mts";
+import { reconcileNativeQueues } from "./codex-native-reconcile.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
 import { contextOutput, deliveryContext, retryOffered, sessionInbox, type HookDeps } from "./deliver-core.mts";
 import { midTurnOutput } from "./deliver-midturn.mts";
@@ -88,11 +90,20 @@ export function runHook(stdin: string, deps: HookDeps, write: (text: string) => 
   }
 }
 
-// Codex Stop retains synchronous offer/confirmation. Native queue cards and
-// bindings predate CP hint admission and remain untouched by this hook.
+// Confirm first, then await exact native pointer retirement before Stop returns.
+// Legacy bindings remain outside the native attempt reconciliation namespace.
 export async function runCodexHook(stdin: string, deps: HookDeps, write: (text: string) => void,
-  warn: (line: string) => void, _legacyCleanup?: (owner: string) => Promise<void>): Promise<void> {
+  warn: (line: string) => void,
+  reconcile: (owner: string) => Promise<void> = (owner) => reconcileNativeQueues(deps.paths, owner)): Promise<void> {
   runHook(stdin, deps, write, warn, "codex");
+  try {
+    const input: unknown = JSON.parse(stdin);
+    if (typeof input !== "object" || input === null) return;
+    const { hook_event_name: event, session_id: owner } = input as Record<string, unknown>;
+    if (event === "Stop" && isCodexSessionId(owner) && readConfig(deps.paths.config)) await reconcile(owner);
+  } catch {
+    warn("kherep deliver-hook: native queue reconciliation pending");
+  }
 }
 
 // Node loads the main module from its real path, so a script started through a
