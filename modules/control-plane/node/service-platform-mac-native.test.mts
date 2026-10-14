@@ -90,7 +90,7 @@ test("launchctl parser refuses malformed or execution-affecting loaded environme
 });
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-mac-origin-"));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "kherep-mac-origin-")));
   const home = path.join(root, "home");
   const file = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
