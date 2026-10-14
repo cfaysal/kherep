@@ -144,18 +144,18 @@ test("Mac read binds raw backup to one stable loaded origin and definition", asy
 
   const nativePaths = { workingDirectory: f.root, stdoutPath: path.join(f.root, "stdout.log"),
     stderrPath: path.join(f.root, "stderr.log") };
+  const configuredPaths = { ...mac, WorkingDirectory: nativePaths.workingDirectory, StandardOutPath: nativePaths.stdoutPath,
+    StandardErrorPath: nativePaths.stderrPath };
   const pathDrift = new MacServiceAdapter(path.join(f.root, "service-path-drift"), f.home, uid, f.stat.gid,
     nativeRunner([result(0, loaded(f.file, f.node, f.args, 12345, nativePaths)),
-      result(0, loaded(f.file, f.node, f.args, 12345, { ...nativePaths, stdoutPath: path.join(f.root, "other.log") }))], mac, []));
+      result(0, loaded(f.file, f.node, f.args, 12345, { ...nativePaths, stdoutPath: path.join(f.root, "other.log") }))],
+    configuredPaths, []));
   await assert.rejects(() => pathDrift.read(f.binding), /identity changed/);
 
-  const configuredPaths = { ...mac, WorkingDirectory: nativePaths.workingDirectory,
-    StandardOutPath: nativePaths.stdoutPath, StandardErrorPath: nativePaths.stderrPath };
   const pathMismatch = new MacServiceAdapter(path.join(f.root, "service-path-mismatch"), f.home, uid, f.stat.gid,
     nativeRunner([result(0, loaded(f.file, f.node, f.args, 12345,
       { ...nativePaths, stderrPath: path.join(f.root, "other.log") }))], configuredPaths, []));
   await assert.rejects(() => pathMismatch.read(f.binding), /loaded definition does not match/);
-
   const mismatch = new MacServiceAdapter(path.join(f.root, "service4"), f.home, uid, f.stat.gid,
     nativeRunner([result(0, loaded(f.file, f.node, [f.node, "foreign"], 12345))], mac, []));
   await assert.rejects(() => mismatch.read(f.binding), /loaded definition does not match/);

@@ -172,8 +172,10 @@ export function attestMacLaunchAgent(
   ];
   for (const [observed, key] of paths) {
     const expected = configured[key];
-    if (expected !== undefined && (typeof expected !== "string" || !path.isAbsolute(expected)
-      || expected.includes("\0") || probe[observed] !== expected)) {
+    const actual = probe[observed];
+    if ((expected === undefined) !== (actual === undefined)
+      || (expected !== undefined && (typeof expected !== "string" || !path.isAbsolute(expected)
+        || expected.includes("\0") || actual !== expected))) {
       throw new Error("LaunchAgent loaded definition does not match selected definition");
     }
   }

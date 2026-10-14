@@ -22,7 +22,12 @@ execution-affecting environment and PID. Two native probes around the configured
 read, followed by unchanged bytes and security metadata, bind that snapshot to
 the selected job. Foreign origins, observable mismatch and unknown reads refuse
 the transaction. A positive missing-job diagnostic also requires an independently
-readable exact GUI domain; recovery additionally excludes an orphan daemon. Adoption derives the Node
+readable exact GUI domain. Observable working-directory and log-path presence
+must match the configured plist as well as their values. Every no-context stop,
+including a loaded job without a PID, rechecks the native identity around a
+complete process inventory and refuses an orphan daemon. The interval from the
+last read-only probe to `bootout` is not an atomic launchd operation, so later
+recovery still treats any unverified process state as unknown. Adoption derives the Node
 executable from the selected definition and owned daemon, preserving that
 runtime across a source-only upgrade. On Windows the managed task launches a
 fixed product Node supervisor through headless `conhost`. The supervisor derives
