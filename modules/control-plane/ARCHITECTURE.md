@@ -35,7 +35,12 @@ arguments, environment or shell setting.
 preflights configured definition drift and the exact owned daemon, saves the
 exported task state or configured plist bytes and security metadata, drains new
 task admissions and waits for existing admission leases. The
-platform adapter then verifies no daemon descendants and the transaction checks
+platform adapter then verifies no daemon descendants. Windows read-only probes
+may wait for known owned descendants while preserving
+the same native definition, security and daemon/supervisor creation identities.
+Unknown evidence, extra supervisor children or drift refuse immediately. The
+30-second polling budget excludes time spent in separately bounded native calls;
+the mutating stop is not retried and still requires no descendants. The transaction checks
 process identity again immediately before stopping the selected service. Managed
 daemons honor the admission drain; legacy adoption has no absolute race-free
 claim and aborts on any uncertain recheck. A Windows activation gives only the

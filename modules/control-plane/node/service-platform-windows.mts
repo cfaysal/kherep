@@ -2,10 +2,14 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 import {
-  daemonArgumentsMatch, legacyDaemonArguments, managedArguments, validateWindowsAdoption, validateWindowsManaged, windowsArgs,
+  legacyDaemonArguments, managedArguments, validateWindowsAdoption, validateWindowsManaged, windowsArgs,
   windowsLegacyLogFile, windowsManagedAction, windowsSupervisorProcess,
 } from "./service-definitions.mts";
 import { WINDOWS_PROCESS_PROVENANCE_SCRIPT, WINDOWS_STOP_SCRIPT } from "./service-platform-windows-process.mts";
+import {
+  waitForWindowsQuiescence, windowsProcessObservation, windowsProvenanceState, windowsStopObservation,
+  type WindowsProvenance, type WindowsQuiescenceObservation,
+} from "./service-windows-quiescence.mts";
 import {
   FAILED_WRITE_SNAPSHOT, type FailedServiceWrite, type NativeServiceSnapshot, type ServiceAction, type ServiceAdapter, type ServiceBinding,
   type ServiceStopContext, type WindowsServiceSummary,
@@ -68,31 +72,15 @@ export function windowsPrincipalSid(identity: string): string {
   return value.sid;
 }
 
-export interface WindowsTaskProvenance {
-  ownerSid?: string;
-  currentSid?: string;
-  selectedInstances?: number;
-  enginePid?: number;
-  engineInAncestry?: boolean;
-  matchingEngineTasks?: number;
-  supervisorPid?: number;
-  supervisorOwner?: boolean;
-  daemonDirectChild?: boolean;
-  supervisorChildren?: number;
-  daemonDescendants?: number;
-}
+export type WindowsTaskProvenance = WindowsProvenance;
 
 export function windowsTaskProvenanceValid(value: WindowsTaskProvenance): boolean {
-  return typeof value.ownerSid === "string" && typeof value.currentSid === "string"
-    && /^S-\d+(?:-\d+)+$/i.test(value.ownerSid) && value.ownerSid.toLowerCase() === value.currentSid.toLowerCase()
-    && value.selectedInstances === 1 && Number.isInteger(value.enginePid) && (value.enginePid ?? 0) > 0
-    && value.engineInAncestry === true && value.matchingEngineTasks === 1 && Number.isInteger(value.supervisorPid)
-    && (value.supervisorPid ?? 0) > 0 && value.supervisorOwner === true && value.daemonDirectChild === true
-    && value.supervisorChildren === 1 && value.daemonDescendants === 0;
+  return windowsProvenanceState(value) === "clear";
 }
 
 async function actionEvidence(adapter: WindowsServiceAdapter, binding: ServiceBinding, sourceRoot: string,
-  allowLegacy: boolean): Promise<{ action: ServiceAction; wrapper: ReturnType<typeof windowsSupervisorProcess> }> {
+  allowLegacy: boolean): Promise<{ snapshot: NativeServiceSnapshot; action: ServiceAction;
+    wrapper: ReturnType<typeof windowsSupervisorProcess> }> {
   const snapshot = await adapter.read(binding);
   const action = snapshot?.windows?.actions[0];
   if (!snapshot || !action) throw new Error("Scheduled Task action is unavailable");
@@ -102,7 +90,30 @@ async function actionEvidence(adapter: WindowsServiceAdapter, binding: ServiceBi
     if (!allowLegacy) throw new Error("an unowned legacy supervisor cannot be stopped without daemon context");
     validateWindowsAdoption(snapshot.windows!, binding, await adapter.currentUser(), sourceRoot);
   }
-  return { action, wrapper };
+  return { snapshot, action, wrapper };
+}
+
+async function processEvidence(adapter: WindowsServiceAdapter, binding: ServiceBinding, pid: number,
+  startedAt: string, sourceRoot: string): Promise<WindowsQuiescenceObservation | null> {
+  const evidence = await actionEvidence(adapter, binding, sourceRoot, true);
+  const output = invoke(WINDOWS_PROCESS_PROVENANCE_SCRIPT,
+    { pid, ...selector(binding), action: evidence.action, wrapper: evidence.wrapper });
+  let process: Parameters<typeof windowsProcessObservation>[1];
+  try { process = JSON.parse(output) as typeof process; }
+  catch { throw new Error("Scheduled Task process provenance is incomplete"); }
+  return windowsProcessObservation(evidence.snapshot, process, binding, pid, startedAt, sourceRoot);
+}
+
+async function stopEvidence(adapter: WindowsServiceAdapter, binding: ServiceBinding, expected: ServiceStopContext,
+): Promise<WindowsQuiescenceObservation> {
+  const sourceRoot = expected.sourceRoot ?? binding.source.root;
+  const evidence = await actionEvidence(adapter, binding, sourceRoot, true);
+  const daemon = { executable: binding.nodeExecutable, argv: [binding.nodeExecutable,
+    ...(evidence.wrapper.kind === "managed" ? managedArguments(binding) : legacyDaemonArguments(binding, sourceRoot))] };
+  const output = invoke(WINDOWS_STOP_SCRIPT, { ...selector(binding), action: evidence.action, wrapper: evidence.wrapper,
+    checkOnly: true, daemon,
+    expected: { pid: expected.pid, startedAt: expected.startedAt } });
+  return windowsStopObservation(evidence.snapshot, output);
 }
 
 export const WINDOWS_READ_SCRIPT = `Import-Module ScheduledTasks;$matches=@(Get-ScheduledTask -TaskPath $payload.taskPath -ErrorAction Stop|Where-Object{$_.TaskName -ceq $payload.serviceName});if($matches.Count -eq 0){'{"missing":true}';exit};if($matches.Count -ne 1){throw'expected one selected task'};$t=$matches[0];$raw=Export-ScheduledTask -TaskName $payload.serviceName -TaskPath $payload.taskPath;[xml]$x=$raw;$n=New-Object Xml.XmlNamespaceManager($x.NameTable);$n.AddNamespace('t',$x.DocumentElement.NamespaceURI);$p=$x.SelectSingleNode('//t:Principals/t:Principal',$n);try{$id=[string]$p.UserId;if($id-match'^S-\\d+(?:-\\d+)+$'){$sid=New-Object Security.Principal.SecurityIdentifier($id)}else{$sid=(New-Object Security.Principal.NTAccount($id)).Translate([Security.Principal.SecurityIdentifier])};[void]$sid.Translate([Security.Principal.NTAccount])}catch{throw'task principal identity is unresolved'};$trigger=$x.SelectSingleNode('//t:Triggers/t:LogonTrigger',$n);$triggerEnabled=if($trigger-and$trigger.Enabled){[bool]::Parse([string]$trigger.Enabled)}else{$null};$triggerUser=$null;if($trigger-and$trigger.UserId){try{$tid=[string]$trigger.UserId;if($tid-match'^S-\\d+(?:-\\d+)+$'){$tsid=New-Object Security.Principal.SecurityIdentifier($tid)}else{$tsid=(New-Object Security.Principal.NTAccount($tid)).Translate([Security.Principal.SecurityIdentifier])};[void]$tsid.Translate([Security.Principal.NTAccount]);$triggerUser=$tsid.Value}catch{throw'task trigger identity is unresolved'}};$triggerTypes=@($x.SelectNodes('//t:Triggers/*',$n)|ForEach-Object{$_.LocalName});$types=@($x.SelectNodes('//t:Actions/*',$n)|ForEach-Object{$_.LocalName});$acts=@($x.SelectNodes('//t:Actions/t:Exec',$n)|ForEach-Object{@{executable=$_.Command;arguments=$_.Arguments;workingDirectory=$_.WorkingDirectory}});$env=@{};foreach($k in @('NODE_OPTIONS','NODE_PATH')){foreach($scope in @('User','Machine')){$v=[Environment]::GetEnvironmentVariable($k,$scope);if($v){$env[$k]=$v}}};$folder=if($payload.taskPath -eq '\\'){'\\'}else{$payload.taskPath.TrimEnd('\\')};$com=New-Object -ComObject 'Schedule.Service';$com.Connect();$registered=$com.GetFolder($folder).GetTask($payload.serviceName);$sddl=$registered.GetSecurityDescriptor(7);$s=@{owner=$sid.Value;logonType=if($p.LogonType){[string]$p.LogonType}else{$null};runLevel=if($p.RunLevel){[string]$p.RunLevel}else{$null};enabled=if($x.Task.Settings.Enabled){[bool]::Parse([string]$x.Task.Settings.Enabled)}else{$null};logonTriggers=@($x.SelectNodes('//t:Triggers/t:LogonTrigger',$n)).Count;triggerTypes=$triggerTypes;logonTriggerEnabled=$triggerEnabled;logonTriggerUser=$triggerUser;actionTypes=$types;actions=$acts;executionEnvironment=$env;securityDescriptor='retained'};$sec=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sddl));@{missing=$false;definition=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($raw));security=$sec;running=if([string]$t.State -eq 'Running'){$true}elseif([string]$t.State -eq 'Ready'){$false}else{'unknown'};summary=$s}|ConvertTo-Json -Compress -Depth 8`;
@@ -185,15 +196,16 @@ export class WindowsServiceAdapter implements ServiceAdapter {
     validateWindowsManaged(snapshot.windows, binding, await this.currentUser());
   }
   async processOwned(pid: number, binding: ServiceBinding, startedAt: string, sourceRoot = binding.source.root): Promise<boolean> {
-    const evidence = await actionEvidence(this, binding, sourceRoot, true);
-    const output = invoke(WINDOWS_PROCESS_PROVENANCE_SCRIPT, { pid, ...selector(binding), ...evidence });
-    const process = JSON.parse(output) as { missing: boolean; executable?: string; commandLine?: string; created?: string } & WindowsTaskProvenance;
-    if (process.missing || process.executable?.toLowerCase() !== path.resolve(binding.nodeExecutable).toLowerCase()) return false;
-    const argv = process.commandLine ? windowsArgs(process.commandLine) : [];
-    const created = Date.parse(process.created ?? "");
-    return windowsTaskProvenanceValid(process) && argv.length > 1
-      && path.resolve(argv[0]).toLowerCase() === path.resolve(binding.nodeExecutable).toLowerCase()
-      && daemonArgumentsMatch(argv.slice(1), binding, sourceRoot) && Number.isFinite(created) && Math.abs(Date.parse(startedAt) - created) <= 60_000;
+    const first = await processEvidence(this, binding, pid, startedAt, sourceRoot);
+    if (!first) return false;
+    let useFirst = true;
+    await waitForWindowsQuiescence(async () => {
+      if (useFirst) { useFirst = false; return first; }
+      const current = await processEvidence(this, binding, pid, startedAt, sourceRoot);
+      if (!current) throw new Error("Windows process ownership changed while waiting");
+      return current;
+    });
+    return true;
   }
   async preflightStop(binding: ServiceBinding, expected: ServiceStopContext | undefined): Promise<void> {
     await this.#stop(binding, expected, true);
@@ -220,11 +232,15 @@ export class WindowsServiceAdapter implements ServiceAdapter {
     await this.#stop(binding, expected, false);
   }
   async #stop(binding: ServiceBinding, expected: ServiceStopContext | undefined, checkOnly: boolean): Promise<void> {
+    if (checkOnly && expected) {
+      await waitForWindowsQuiescence(() => stopEvidence(this, binding, expected));
+      return;
+    }
     const sourceRoot = expected?.sourceRoot ?? binding.source.root;
     const evidence = await actionEvidence(this, binding, sourceRoot, expected !== undefined);
     const daemon = { executable: binding.nodeExecutable, argv: [binding.nodeExecutable,
       ...(evidence.wrapper.kind === "managed" ? managedArguments(binding) : legacyDaemonArguments(binding, sourceRoot))] };
-    invoke(WINDOWS_STOP_SCRIPT, { ...selector(binding), ...evidence, checkOnly, daemon,
+    invoke(WINDOWS_STOP_SCRIPT, { ...selector(binding), action: evidence.action, wrapper: evidence.wrapper, checkOnly, daemon,
       expected: expected ? { pid: expected.pid, startedAt: expected.startedAt } : null });
   }
   async start(binding: ServiceBinding): Promise<void> { invoke("Import-Module ScheduledTasks;Start-ScheduledTask -TaskName $payload.serviceName -TaskPath $payload.taskPath", selector(binding)); }
