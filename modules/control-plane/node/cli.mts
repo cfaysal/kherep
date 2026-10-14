@@ -13,6 +13,7 @@ import { MSG_USAGE, runMsg } from "./msg-cli.mts";
 import { nodeStatus, onboard, unenroll } from "./onboard.mts";
 import { parseTaskArgs, runTaskArgs, TASK_USAGE } from "./task-cli.mts";
 import { runTaskControlArgs, TASK_CONTROL_USAGE } from "./task-control-cli.mts";
+import { runService, safeServiceFailure, SERVICE_USAGE } from "./service-cli.mts";
 
 // kherep-node: node side of the Kherep Control Plane, Phase 1.
 //
@@ -34,6 +35,7 @@ const USAGE = `usage:
   kherep-node node unenroll
   kherep-node daemon
   kherep-node doctor
+${SERVICE_USAGE}
 ${MSG_USAGE.replace("usage:\n", "")}
 ${TASK_USAGE.replace("usage:\n", "")}
 ${TASK_CONTROL_USAGE.replace("usage:\n", "")}
@@ -45,6 +47,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === "msg") return runMsg(argv.slice(1), { paths: nodePaths(), env: process.env });
   if (argv[0] === "attach") return runAttach(argv.slice(1), { paths: nodePaths() });
   if (argv[0] === "attribution") return runAttribution(argv.slice(1), { paths: nodePaths() });
+  if (argv[0] === "service") return runService(argv.slice(1));
   if (argv[0] === "task" && ["status", "stop", "result"].includes(argv[1] ?? "")) {
     return runTaskControlArgs(argv.slice(1), { paths: nodePaths() });
   }
@@ -118,7 +121,8 @@ function isMainModule(): boolean {
 
 if (isMainModule()) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (error: unknown) => {
-    console.error(`kherep-node: ${(error as Error).message ?? String(error)}`);
+    const serviceFailure = safeServiceFailure(error);
+    console.error(serviceFailure ? JSON.stringify(serviceFailure) : `kherep-node: ${(error as Error).message ?? String(error)}`);
     process.exitCode = 1;
   });
 }

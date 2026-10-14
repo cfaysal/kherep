@@ -12,6 +12,7 @@ import { permanentFallbackFailure } from "./delivery-failure.mts";
 import { getMessage, markDelivered, markRefused, markRetry } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
 import { notReady } from "./runtime-readiness.mts";
+import { continueServiceAdmission, type ServiceAdmission } from "./service-drain.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit, refuse, trim } from "./task-admission.mts";
 import { isActive, queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
@@ -38,7 +39,13 @@ export type RunArgs = (files: CodexFiles, outbox: string) => string[];
 // Spawns codex for the record, with the outbox as its one extra writable root,
 // the session named in its environment and the prompt on stdin, and records
 // pid and start time. Rejects when it cannot start.
-export async function spawnRun(deps: RunnerDeps, record: TaskRecord, args: RunArgs, prompt: string): Promise<TaskRecord> {
+export async function spawnRun(
+  deps: RunnerDeps, record: TaskRecord, args: RunArgs, prompt: string, admission?: ServiceAdmission,
+): Promise<TaskRecord> {
+  return continueServiceAdmission(deps.paths, admission, () => spawnAdmitted(deps, record, args, prompt));
+}
+
+async function spawnAdmitted(deps: RunnerDeps, record: TaskRecord, args: RunArgs, prompt: string): Promise<TaskRecord> {
   const codex = deps.codex ?? {};
   const files = codexFiles(deps.paths, record.taskId);
   const file = (codex.findCodex ?? findCodex)();
@@ -72,12 +79,14 @@ async function mcpOff(deps: RunnerDeps, record: TaskRecord): Promise<string[]> {
 
 // spawnRun, then up to startWaitMs for thread.started (or the process's end)
 // when the thread is not known yet. A start error fails the task.
-async function launch(deps: RunnerDeps, record: TaskRecord, args: RunArgs, prompt: string): Promise<TaskRecord> {
+async function launch(
+  deps: RunnerDeps, record: TaskRecord, args: RunArgs, prompt: string, admission?: ServiceAdmission,
+): Promise<TaskRecord> {
   const codex = deps.codex ?? {};
   const files = codexFiles(deps.paths, record.taskId);
   let saved: TaskRecord;
   try {
-    saved = await spawnRun(deps, record, args, prompt);
+    saved = await spawnRun(deps, record, args, prompt, admission);
   } catch (error) {
     const message = String((error as Error).message);
     writeTask(deps.paths, { ...record, state: "failed", reason: trim(message) });
@@ -94,13 +103,17 @@ async function launch(deps: RunnerDeps, record: TaskRecord, args: RunArgs, promp
   return saved;
 }
 
-export async function startCodex(deps: RunnerDeps, record: TaskRecord, prompt: string): Promise<{ taskId: string; state: string; sessionId?: string }> {
-  const saved = await launch(deps, record, (files, outbox) => startArgs(record.cwd, record.permissionMode, files, outbox), prompt);
+export async function startCodex(
+  deps: RunnerDeps, record: TaskRecord, prompt: string, admission?: ServiceAdmission,
+): Promise<{ taskId: string; state: string; sessionId?: string }> {
+  const saved = await launch(deps, record, (files, outbox) => startArgs(record.cwd, record.permissionMode, files, outbox), prompt, admission);
   return { taskId: saved.taskId, state: saved.state, ...sessionOf(saved) };
 }
 
 // Only a task whose thread is known and whose process has ended.
-export async function continueCodex(args: SessionContinueArgs, deps: RunnerDeps): Promise<{ taskId: string; state: string }> {
+export async function continueCodex(
+  args: SessionContinueArgs, deps: RunnerDeps, admission?: ServiceAdmission,
+): Promise<{ taskId: string; state: string }> {
   const record = readTask(deps.paths, args.taskId)!;
   if (!deps.policy.sessions?.enabled) throw new Error("sessions are not enabled on this node");
   if (!deps.policy.sessions.runtimes.includes("codex")) throw new Error("runtime codex is not supported on this node yet");
@@ -121,7 +134,7 @@ export async function continueCodex(args: SessionContinueArgs, deps: RunnerDeps)
   const { operatorStoppedAt: _operatorStoppedAt, taskControlRecoveryRunVersion: _taskControlRecoveryRunVersion, ...resumable } = record;
   const restarted: TaskRecord = { ...resumable, cwd: cwd.cwd, state: "started", reason: undefined, pid: undefined, pidStart: undefined,
     deadline: new Date(now + deps.policy.sessions.maxRuntimeMinutes * 60_000).toISOString() };
-  const saved = await launch(deps, restarted, (files, outbox) => resumeArgs(threadId, record.permissionMode, files, outbox), prompt);
+  const saved = await launch(deps, restarted, (files, outbox) => resumeArgs(threadId, record.permissionMode, files, outbox), prompt, admission);
   return { taskId: saved.taskId, state: saved.state };
 }
 

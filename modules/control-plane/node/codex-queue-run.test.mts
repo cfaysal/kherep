@@ -7,9 +7,20 @@ import { codexCommand } from "./codex-binary.mts";
 import { codexNode, fakeCodexBin } from "./codex-fixture.mts";
 import { queueProducerIdentity } from "./codex-queue-context.mts";
 import { MAX_QUEUE_STDOUT_BYTES, parseQueueAdmission, queueArgs, runQueue } from "./codex-queue-run.mts";
+import { beginServiceDrain } from "./service-drain.mts";
 
 const OWNER = "01a0db01-0000-7000-8000-000000000001";
 const QUEUE = "00000001-0000-4000-8000-000000000001";
+
+test("a service drain rejects a queue subprocess before spawn", async (t) => {
+  const fake = fakeCodexBin(t);
+  const node = codexNode(t);
+  const endDrain = beginServiceDrain(node.paths);
+  t.after(endDrain);
+  await assert.rejects(runQueue({ ...node.deps(), codex: { findCodex: () => fake.file, home: node.root } }, queueArgs(OWNER, 1)),
+    /draining new session admissions/);
+  assert.equal(fake.runs().length, 0);
+});
 
 test("changed executable bytes reject the captured producer before starting a child", async (t) => {
   const fake = fakeCodexBin(t);

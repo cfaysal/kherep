@@ -50,7 +50,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   const now = deps.now?.() ?? Date.now();
   const checks: Record<string, Check> = {
     enrollment,
-    daemon: checkDaemon(deps.paths, alive),
+    daemon: checkDaemon(deps.paths, alive, repoRoot),
     worker: config ? await checkWorker(config.controlUrl, deps.fetch ?? fetch) : notEnrolled,
     policy,
     runtimes: await checkRuntimes(parsed?.sessions?.enabled ? parsed.sessions.runtimes : [],

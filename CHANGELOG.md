@@ -11,6 +11,19 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Managed node daemon service (issue #404): `kherep-node service install`,
+  `upgrade`, `status` and `rollback` manage a per-user macOS LaunchAgent or
+  Windows Scheduled Task from a verified immutable source pin. Upgrade and
+  rollback retain exact native definition and security backups, verify daemon
+  ownership, authenticated reconnection and loaded source identity, and refuse
+  service drift, unsafe adoption, uncertain process identity and active
+  descendants before stopping a service. The Windows task uses a fixed Node
+  supervisor that preserves the selected log, verifies the source before every
+  child start and restarts an exited daemon after 30 seconds. A generation-bound
+  one-use permit admits only the transaction's candidate while task admissions
+  are drained, and stop retains and terminates the selected supervisor before
+  its exact daemon child. Doctor now compares the daemon's
+  recorded startup source and verified hook pins with the invoking checkout.
 - Sender receipts (issue #402): when a message reaches `delivered` (the target
   session's turn that carried it completed), the sending session's next
   delivery hook event shows one line, `Your message <id> to <node>/<session>

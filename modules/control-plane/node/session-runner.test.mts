@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
+import type { CodexDeps } from "./codex-process.mts";
 import { claudeCall } from "./sessions.mts";
+import { resumeClaude } from "./closed-resume.mts";
+import type { Readiness } from "./runtime-readiness.mts";
+import { beginServiceDrain, serviceAdmissionsIdle } from "./service-drain.mts";
 import { continueTask, startTask, stopTask } from "./session-runner.mts";
 import { startArgs, TASK, taskId, taskNode } from "./task-fixture.mts";
 import { readTask } from "./task-records.mts";
@@ -11,6 +16,52 @@ import { readTask } from "./task-records.mts";
 const FRAMED = `Task ${TASK} from the operator via the Kherep Control Plane: fix the flaky test\n\nWhen you are done, report with: `
   + `kherep-node task done ${TASK} --summary "...". Coordinate with other sessions of this task through \`kherep-node msg\` `
   + "(your messages carry the task id automatically).";
+
+test("a service drain blocks task starts and closed-session resumes without writing a false task state", async (t) => {
+  const node = taskNode(t);
+  const endDrain = beginServiceDrain(node.paths);
+  t.after(endDrain);
+  await assert.rejects(startTask(startArgs(), node.deps()), /draining new session admissions/);
+  assert.equal(readTask(node.paths, TASK), null);
+
+  const saved = { taskId: TASK, runtime: "claude" as const, name: "task-3f2a1b0c", cwd: node.workspace,
+    permissionMode: "auto" as const, state: "done" as const, startedAt: new Date(0).toISOString(),
+    deadline: new Date(3_600_000).toISOString(), updatedAt: new Date(0).toISOString(), sessionId: "session-1", shortId: "short-1" };
+  const reason = await resumeClaude(node.deps(), saved, node.workspace, 1, 1);
+  assert.match(reason ?? "", /draining new session admissions/);
+  assert.equal(readTask(node.paths, TASK), null);
+  assert.equal(node.calls.length, 0);
+});
+
+test("a drain waits for an admitted Codex start while rejecting a new start before native spawn", async (t) => {
+  const node = taskNode(t, { runtimes: ["claude", "codex"] });
+  let admitted!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((resolve) => { admitted = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const readiness: Readiness = {
+    check: async () => { admitted(); await held; return { ready: true, at: 1 }; },
+    peek: () => null, revalidate: () => {}, invalidate: () => {}, ready: () => [],
+  };
+  let spawned = false;
+  const codex: CodexDeps = { findCodex: () => "codex-fake", platform: "linux", processStart: () => "start",
+    spawn: ((_file: string, _args: string[], options: Parameters<typeof spawn>[2]) => {
+      spawned = true;
+      return spawn(process.execPath, ["-e", ""], options);
+    }) as typeof spawn };
+  const deps = { ...node.deps(), readiness, codex };
+  const existing = startTask(startArgs(TASK, { runtime: "codex" }), deps);
+  await reached;
+  const endDrain = beginServiceDrain(node.paths);
+  t.after(endDrain);
+  assert.equal(serviceAdmissionsIdle(node.paths), false, "the drain observes the admitted start");
+  await assert.rejects(startTask(startArgs(taskId(2), { runtime: "codex" }), deps), /draining new session admissions/);
+  assert.equal(spawned, false, "the admitted start is still before native spawn");
+  release();
+  assert.equal((await existing).state, "started");
+  assert.equal(spawned, true);
+  assert.equal(serviceAdmissionsIdle(node.paths), true);
+});
 
 test("a task session does not inherit the daemon's Claude Code session markers (issue #235)", async (t) => {
   const saved = { CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT, CLAUDECODE: process.env.CLAUDECODE, CLAUDE_PID: process.env.CLAUDE_PID };

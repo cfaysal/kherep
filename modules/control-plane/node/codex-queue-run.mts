@@ -8,6 +8,7 @@ import { sameIdentity } from "./codex-queue-cleanup.mts";
 import type { NativeQueueInput, QueueProducerIdentity } from "./codex-queue-binding.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
 import { nativeQueueText } from "./codex-queue-text.mts";
+import { withServiceAdmission } from "./service-drain.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 
 export const QUEUE_TIMEOUT_MS = 30_000;
@@ -51,6 +52,10 @@ export function guardQueue(args: string[]): string[] {
 // Runs codex without a shell, in its own process group on POSIX. The launcher
 // may leave stderr open, so exit has a short bounded drain grace period.
 export function runQueue(deps: RunnerDeps, args: string[], expectedProducer?: QueueProducerIdentity): Promise<QueueRunResult> {
+  return withServiceAdmission(deps.paths, () => runQueueAdmitted(deps, args, expectedProducer));
+}
+
+function runQueueAdmitted(deps: RunnerDeps, args: string[], expectedProducer?: QueueProducerIdentity): Promise<QueueRunResult> {
   const file = (deps.codex?.findCodex ?? findCodex)();
   if (!file) return Promise.reject(new Error("codex is not installed on this node"));
   const { owner, text } = queueInput(args);

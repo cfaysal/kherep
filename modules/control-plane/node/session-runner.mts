@@ -13,6 +13,7 @@ import { withNodeOnPath, withoutSessionMarkers } from "./task-env.mts";
 import { queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
 import { frameFollowUp } from "./task-prompt.mts";
 import { recordRefusal } from "./task-refusals.mts";
+import { withServiceAdmission } from "./service-drain.mts";
 
 // Starts, continues and stops Claude Code background sessions for tasks
 // (issue #31, item 5), from https://code.claude.com/docs/en/agent-view and
@@ -149,33 +150,37 @@ function keepRefusal(args: SessionStartArgs, deps: RunnerDeps, error: unknown): 
 export async function startTask(args: SessionStartArgs, deps: RunnerDeps): Promise<{ taskId: string; state: string; sessionId?: string }> {
   const existing = readTask(deps.paths, args.taskId);
   if (existing) return { taskId: existing.taskId, state: existing.state }; // a resent command
-  const { record, prompt } = await admit(args, deps).catch((error: unknown) => {
-    keepRefusal(args, deps, error);
-    throw error;
+  return withServiceAdmission(deps.paths, async (admission) => {
+    const { record, prompt } = await admit(args, deps).catch((error: unknown) => {
+      keepRefusal(args, deps, error);
+      throw error;
+    });
+    if (args.runtime === "codex") return startCodex(deps, record, prompt, admission);
+    const saved = await background(deps, record, ["--bg", "--name", args.name, "--permission-mode", record.permissionMode, prompt]);
+    return { taskId: saved.taskId, state: saved.state, ...(saved.sessionId ? { sessionId: saved.sessionId } : {}) };
   });
-  if (args.runtime === "codex") return startCodex(deps, record, prompt);
-  const saved = await background(deps, record, ["--bg", "--name", args.name, "--permission-mode", record.permissionMode, prompt]);
-  return { taskId: saved.taskId, state: saved.state, ...(saved.sessionId ? { sessionId: saved.sessionId } : {}) };
 }
 
 // Only a task this node started, whose session is known and not running.
 export async function continueTask(args: SessionContinueArgs, deps: RunnerDeps): Promise<{ taskId: string; state: string }> {
-  const record = readTask(deps.paths, args.taskId);
-  if (!record) throw new Error("this node did not start that task");
-  if (record.runtime === "codex") return continueCodex(args, deps);
-  if (!deps.policy.sessions?.enabled) throw new Error("sessions are not enabled on this node");
-  if (!record.sessionId) throw new Error("the task's session id is not known yet");
-  if (record.state === "started" || record.state === "running" || record.running) throw new Error("the task's session is still running");
-  const now = deps.now?.() ?? Date.now();
-  const limit = overLimit(deps, now, args.taskId);
-  if (limit) throw new Error(limit);
-  const blocked = await notReady(deps.readiness, "claude");
-  if (blocked) throw new Error(blocked);
-  const restarted: TaskRecord = { ...record, state: "started", reason: undefined,
-    deadline: new Date(now + deps.policy.sessions.maxRuntimeMinutes * 60_000).toISOString() };
-  const saved = await background(deps, restarted, ["--resume", record.sessionId, "--bg", "--permission-mode", record.permissionMode,
-    frameFollowUp(args.taskId, args.prompt, deps.cli ?? taskCliCommand(deps.platform))]);
-  return { taskId: saved.taskId, state: saved.state };
+  return withServiceAdmission(deps.paths, async (admission) => {
+    const record = readTask(deps.paths, args.taskId);
+    if (!record) throw new Error("this node did not start that task");
+    if (record.runtime === "codex") return continueCodex(args, deps, admission);
+    if (!deps.policy.sessions?.enabled) throw new Error("sessions are not enabled on this node");
+    if (!record.sessionId) throw new Error("the task's session id is not known yet");
+    if (record.state === "started" || record.state === "running" || record.running) throw new Error("the task's session is still running");
+    const now = deps.now?.() ?? Date.now();
+    const limit = overLimit(deps, now, args.taskId);
+    if (limit) throw new Error(limit);
+    const blocked = await notReady(deps.readiness, "claude");
+    if (blocked) throw new Error(blocked);
+    const restarted: TaskRecord = { ...record, state: "started", reason: undefined,
+      deadline: new Date(now + deps.policy.sessions.maxRuntimeMinutes * 60_000).toISOString() };
+    const saved = await background(deps, restarted, ["--resume", record.sessionId, "--bg", "--permission-mode", record.permissionMode,
+      frameFollowUp(args.taskId, args.prompt, deps.cli ?? taskCliCommand(deps.platform))]);
+    return { taskId: saved.taskId, state: saved.state };
+  });
 }
 
 // `claude stop <short id>` for a task this node started. A task whose session

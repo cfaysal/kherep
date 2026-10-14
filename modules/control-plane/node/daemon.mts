@@ -9,7 +9,8 @@ import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { codexIntakeWindow } from "./codex-intake-window.mts";
 import { connectUrl, ensureDir, type NodeConfig, type NodePaths } from "./config.mts";
-import { recordDaemonState, withVerdict, type DaemonState } from "./daemon-state.mts";
+import { recordDaemonState, withVerdict, type DaemonServiceBinding, type DaemonState } from "./daemon-state.mts";
+import { captureRuntimeSourceIdentity } from "./daemon-source.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
 import { observeClaudeDeliveryProgress, observeCodexTaskProgress } from "./delivery-progress.mts";
 import {
@@ -71,14 +72,16 @@ export function commandHandlers(config: NodeConfig, startedAt: number,
 export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: string) => void = (line) => console.error(line),
   sessionSource?: (signal?: AbortSignal) => Promise<SessionInfo[]>,
   probe: (runtime: TaskRuntime) => Promise<ProbeResult> = (runtime) =>
-    probeRuntime(runtime, { forgetSession: (threadId) => forgetCodexSession(paths, threadId) })): DaemonHandle {
+    probeRuntime(runtime, { forgetSession: (threadId) => forgetCodexSession(paths, threadId) }),
+  service?: DaemonServiceBinding): DaemonHandle {
   const identity = readPrivateKey(config.privateKeyFile);
   if (identity.publicKey !== config.publicKey) throw new Error("private key does not match the enrolled public key");
   const policy = loadPolicy(config.policyFile);
   // Issue #72. For nodes enrolled before onboard created it: a sandboxed
   // `msg send` can write into the outbox but not create it.
   ensureDir(paths.outbox);
-  let state: DaemonState = { pid: process.pid, startedAt: new Date().toISOString() };
+  let state: DaemonState = { pid: process.pid, startedAt: new Date().toISOString(), source: captureRuntimeSourceIdentity(),
+    ...(service ? { service } : {}) };
   recordDaemonState(paths, state, log);
   try {
     const purged = purgeInbox(paths.inbox);

@@ -1,9 +1,9 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import type { Check } from "./doctor-local.mts";
+import { captureSourceIdentity, compareSourceIdentity, type SourceIdentity } from "./daemon-source.mts";
 
 // The hook check of `kherep-node doctor` (issue #215): whether the delivery
 // and wake hook commands in Claude settings.json and Codex config.toml name
@@ -54,29 +54,10 @@ function realOrResolved(file: string): string {
   try { return fs.realpathSync.native(expanded); } catch { return path.resolve(expanded); }
 }
 
-// The commit a git checkout has checked out, or undefined. GIT_* variables of
-// the calling process never redirect the read to another repository.
-function gitHead(root: string): string | undefined {
-  if (!fs.existsSync(path.join(root, ".git"))) return undefined;
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
-  const result = spawnSync("git", ["-C", root, "rev-parse", "--verify", "HEAD^{commit}"],
-    { encoding: "utf8", env, timeout: 5000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
-  const commit = result.status === 0 ? result.stdout.trim().toLowerCase() : "";
-  return /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(commit) ? commit : undefined;
-}
-
-// Issue #397. A source pin is a copy of the repository at one commit, kept at
-// <dir>/source-pins/<commit>. Its git HEAD, where it has one, outranks the name.
-function pinCommit(root: string): string | undefined {
-  const name = path.basename(root);
-  if (path.basename(path.dirname(root)) !== "source-pins" || !/^[0-9a-f]{7,64}$/i.test(name)) return undefined;
-  return gitHead(root) ?? name.toLowerCase();
-}
-
 type HookScan = { present: boolean; deliver: number; wake: number; foreign: string[]; pinned?: string[] };
 
 function scanHooks(
-  file: string, repoRoot: string, commandsOf: (text: string) => string[], checkoutCommit: () => string | undefined,
+  file: string, repoRoot: string, commandsOf: (text: string) => string[], checkoutSource: () => SourceIdentity | undefined,
 ): HookScan | null {
   let commands: string[];
   try {
@@ -92,31 +73,37 @@ function scanHooks(
     const kind = /deliver-hook\.mts$/.test(found) ? "deliver" : "wake";
     const expected = path.join(repoRoot, "modules", "control-plane", "node", `${kind}-hook.mts`);
     if (realOrResolved(found) === realOrResolved(expected)) counts[kind]++;
-    else if (pinsCheckout(found, checkoutCommit)) { counts[kind]++; pinned.add(found); }
+    else if (pinsCheckout(found, checkoutSource)) { counts[kind]++; pinned.add(found); }
     else foreign.add(found);
   }
   return { present: true, ...counts, foreign: [...foreign], ...(pinned.size ? { pinned: [...pinned] } : {}) };
 }
 
-// The hook file exists in a source pin whose commit is the checked-out one; an
-// abbreviated pin name matches the start of the full commit.
-function pinsCheckout(found: string, checkoutCommit: () => string | undefined): boolean {
+// The hook file exists in a complete verified source pin equivalent to the
+// invoking checkout. A directory name alone is never source evidence.
+function pinsCheckout(found: string, checkoutSource: () => SourceIdentity | undefined): boolean {
   const hook = path.resolve(expand(found));
   if (!fs.statSync(hook, { throwIfNoEntry: false })?.isFile()) return false;
-  const pin = pinCommit(path.resolve(path.dirname(hook), "..", "..", ".."));
-  if (!pin) return false;
-  return checkoutCommit()?.startsWith(pin) ?? false;
+  const root = path.resolve(path.dirname(hook), "..", "..", "..");
+  if (path.basename(path.dirname(root)) !== "source-pins") return false;
+  try {
+    const checkout = checkoutSource();
+    return checkout ? compareSourceIdentity(checkout, captureSourceIdentity(root)).status === "match" : false;
+  } catch { return false; }
 }
 
 // ok: at least one hook is installed and every hook command names this checkout
 // or a source pin of its commit.
 export function checkHooks(files: { claude: string; codex: string }, repoRoot: string): Check {
   // Read at most once, and only when a hook names a source pin.
-  let commit: { value?: string } | undefined;
-  const checkoutCommit = (): string | undefined =>
-    (commit ??= { value: gitHead(repoRoot) ?? pinCommit(path.resolve(repoRoot)) }).value;
-  const claude = scanHooks(files.claude, repoRoot, claudeCommands, checkoutCommit);
-  const codex = scanHooks(files.codex, repoRoot, codexCommands, checkoutCommit);
+  let source: { value?: SourceIdentity } | undefined;
+  const checkoutSource = (): SourceIdentity | undefined => {
+    if (source) return source.value;
+    try { source = { value: captureSourceIdentity(repoRoot, false) }; } catch { source = {}; }
+    return source.value;
+  };
+  const claude = scanHooks(files.claude, repoRoot, claudeCommands, checkoutSource);
+  const codex = scanHooks(files.codex, repoRoot, codexCommands, checkoutSource);
   if (!claude || !codex) return { ok: false, detail: "a runtime configuration file is unreadable" };
   const foreign = claude.foreign.length + codex.foreign.length;
   const total = claude.deliver + claude.wake + codex.deliver + codex.wake + foreign;
