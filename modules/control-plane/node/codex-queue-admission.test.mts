@@ -3,7 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 import { listenerDir } from "./autonomy.mts";
-import { codexNode, fakeCodexBin } from "./codex-fixture.mts";
+import { codexNode } from "./codex-fixture.mts";
 import { listQueueBindings } from "./codex-queue-binding.mts";
 import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
@@ -15,15 +15,14 @@ const NO_ID_OWNER = "beef0001-0000-7000-8000-000000000001";
 const PEER = { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "peer" };
 
 async function admitted(t: test.TestContext, owner: string) {
-  const fake = fakeCodexBin(t);
-  const node = codexNode(t, {}, { findCodex: () => fake.file });
+  const node = codexNode(t, {}, { findCodex: () => null });
   const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8"));
   policy.wake = { enabled: true, sessions: [owner] };
   fs.writeFileSync(node.paths.policy, JSON.stringify(policy));
   recordCodexSession(node.paths, owner, node.workspace, T0, "default");
   const messageId = owner === OWNER ? "9e570001-0000-4000-8000-000000000000" : "9e570002-0000-4000-8000-000000000000";
   storeMessage(node.paths.inbox, { messageId, from: PEER, toSession: owner, text: "x", createdAt: new Date(T0).toISOString() }, T0);
-  pollCodexQueue(node.deps({ findCodex: () => fake.file }));
+  pollCodexQueue(node.deps());
   await codexQueueIdle();
   return { node, messageId };
 }

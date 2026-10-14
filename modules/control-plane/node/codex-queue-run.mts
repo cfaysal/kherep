@@ -4,6 +4,7 @@ import { codexCommand, findCodex } from "./codex-binary.mts";
 import { lastLine } from "./codex-output.mts";
 import { signalGroup } from "./codex-process.mts";
 import { queueProducerIdentity } from "./codex-queue-context.mts";
+import { sameIdentity } from "./codex-queue-cleanup.mts";
 import type { NativeQueueInput, QueueProducerIdentity } from "./codex-queue-binding.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
 import type { RunnerDeps } from "./session-runner.mts";
@@ -48,17 +49,19 @@ export function guardQueue(args: string[]): string[] {
 
 // Runs codex without a shell, in its own process group on POSIX. The launcher
 // may leave stderr open, so exit has a short bounded drain grace period.
-export function runQueue(deps: RunnerDeps, args: string[]): Promise<QueueRunResult> {
+export function runQueue(deps: RunnerDeps, args: string[], expectedProducer?: QueueProducerIdentity): Promise<QueueRunResult> {
   const file = (deps.codex?.findCodex ?? findCodex)();
   if (!file) return Promise.reject(new Error("codex is not installed on this node"));
   const { owner, text } = queueInput(args);
   const platform = deps.codex?.platform ?? process.platform;
   const command = codexCommand(file, args, platform);
   const producer = queueProducerIdentity(file, args, deps);
+  if (expectedProducer && !sameIdentity(expectedProducer, producer)) return Promise.reject(new Error("Codex queue producer changed before submission"));
   const timeoutMs = deps.codex?.queueTimeoutMs ?? QUEUE_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
     const child = spawn(command.file, command.args,
-      { stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32", windowsHide: true });
+      { stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32", windowsHide: true,
+        env: { ...process.env, CODEX_HOME: producer.resolvedCodexHome } });
     let stdout = "";
     let stdoutBytes = 0;
     let stdoutOverflow = false;

@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { listenerDir, takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
-import { codexNode, fakeCodexBin } from "./codex-fixture.mts";
+import { codexNode } from "./codex-fixture.mts";
 import { codexQueueIdle, guardQueue, pollCodexQueue, queueArgs } from "./codex-queue.mts";
 import { codexSessionName, legacyCodexSessionName, readCodexSession, recordCodexSession } from "./codex-sessions.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
@@ -23,13 +23,12 @@ type Node = ReturnType<typeof codexNode>;
 
 // A node whose policy wakes the listed sessions, and one recorded Codex session.
 function wakeNode(t: test.TestContext, wake: string[] | null = [SID], mode: string | null = "default", session = SID): Node {
-  const fake = fakeCodexBin(t);
-  const node = codexNode(t, {}, { findCodex: () => fake.file });
+  const node = codexNode(t, {}, { findCodex: () => null }); // Isolate CP hint behavior from the native producer.
   const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8")) as Record<string, unknown>;
   if (wake) policy.wake = { enabled: true, sessions: wake };
   fs.writeFileSync(node.paths.policy, JSON.stringify(policy));
   recordCodexSession(node.paths, session, node.workspace, T0, mode ?? undefined);
-  return { ...node, fake: fake.file, runs: fake.runs };
+  return node;
 }
 
 function deliver(node: Node, text: string, depth = 0, toSession = SID): string {
@@ -72,9 +71,8 @@ test("an idle Codex session gets a CP hint; the message waits for original-owner
 test("a second poll preserves progress while a CP hint waits for intake", async (t) => {
   const session = "5eec0001-0000-7000-8000-000000000002";
   const node = wakeNode(t, [session], "default", session);
-  const fake = fakeCodexBin(t);
   const id = deliver(node, "x", 0, session);
-  const deps = node.deps({ findCodex: () => fake.file, queueTimeoutMs: 2_000 });
+  const deps = node.deps({ findCodex: () => null, queueTimeoutMs: 2_000 });
   pollCodexQueue(deps);
   await codexQueueIdle();
   assert.equal(getMessageProgress(node.paths.inbox, id)?.code, "awaiting-user-turn");
@@ -219,7 +217,7 @@ test("two sessions started in the same minute: their shared old name wakes neith
   assert.equal(getMessage(node.paths.inbox, toA)?.state, "accepted");
 });
 
-test("CP admission returns at once and never starts even a hanging native queue", async (t) => {
+test("CP-only admission returns at once without a native executable or turn budget", async (t) => {
   const HANG = "0a9e0001-0000-7000-8000-000000000001";
   const node = wakeNode(t, [HANG], "default", HANG);
   deliver(node, "x", 0, HANG);

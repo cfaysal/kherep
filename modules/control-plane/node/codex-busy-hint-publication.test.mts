@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { listenerDir } from "./autonomy.mts";
 import { currentCodexApp } from "./codex-app.mts";
-import { codexNode, fakeCodexBin } from "./codex-fixture.mts";
+import { codexNode } from "./codex-fixture.mts";
 import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { codexSessionName, legacyCodexSessionName, recordCodexSession } from "./codex-sessions.mts";
 import { writeLocalSessions } from "./exchange.mts";
@@ -20,8 +20,7 @@ const PEER = { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "synthet
 const BODY = "synthetic body must stay out of the busy hint ticket";
 
 function fixture(t: test.TestContext, owner = OWNER, count = 1, toSession = owner) {
-  const fake = fakeCodexBin(t);
-  const node = codexNode(t, {}, { findCodex: () => fake.file });
+  const node = codexNode(t, {}, { findCodex: () => null }); // Isolate CP publication from native Queue tests.
   const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8"));
   policy.wake = { enabled: true, sessions: [owner] };
   fs.writeFileSync(node.paths.policy, JSON.stringify(policy));
@@ -30,7 +29,7 @@ function fixture(t: test.TestContext, owner = OWNER, count = 1, toSession = owne
   for (const messageId of ids) storeMessage(node.paths.inbox, {
     messageId, from: PEER, toSession, text: BODY, createdAt: new Date(T0).toISOString(),
   }, T0);
-  return { ...node, ids, runs: fake.runs,
+  return { ...node, ids,
     ticket: path.join(listenerDir(node.paths), `${owner}.busy-hint.json`) };
 }
 

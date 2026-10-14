@@ -147,14 +147,17 @@ cumulative acknowledgement, but it does not refresh liveness or dispatch again.
 but admits CP hints directly after enrollment, wake policy, kill switch, full-id
 or app grant, permissions, alias uniqueness, reply depth, task exclusion, TUI
 classification. Hint admission creates no autonomous turn and neither checks nor
-spends the shared turn budget; actual listener wakes and Stop continuations keep
-their existing budget gates. It never invokes the native queue or
-creates a queue binding. Composer Queue/Steer preferences are independent.
+spends the shared turn budget. `node/codex-queue-producer.mts` runs a separate
+serialized native lane after CP publication, using the existing autonomous-turn
+budget. Composer Queue/Steer preferences remain independent.
 
 ```mermaid
 flowchart LR
   accepted[CP Inbox accepted] --> admission[Guarded CP admission]
   admission --> ticket[Bounded immutable hint ticket]
+  admission --> native[Exact-owner native Queue pointer]
+  native --> turn[Native runtime: wait while active, start when eligible]
+  turn --> receive
   ticket --> hook[Originalowner PostToolUse additionalContext]
   hook --> receive[Actual Receive: returned messages offered]
   receive --> stop[Confirming Stop: delivered]
@@ -176,6 +179,25 @@ it requires a fresh authorized admission. These hint paths never book a real tur
 Native `.queued.json`, bindings and cards are neither read as CP success nor changed. Progress uses existing waiting codes:
 `awaiting-user-turn`, `retry-pending` or, after actual offer,
 `awaiting-turn-confirmation`. No turn-start claim or new wire code is introduced.
+
+The native producer admits exact-addressed accepted records independently of
+hint generations. It rechecks current enrollment, policy fingerprint, owner
+permission mode, app/full-ID grant, task exclusion, kill switch and message
+address/depth immediately before enqueue. It uses the captured Codex home and
+approved executable identity, with no model, sandbox or approval overrides.
+Exclusive-create attempt records precede invocation in the separate
+`codex-native-attempts/<owner>/` namespace. Known IDs record submission only;
+unknown results remain uncertain and cannot authorize a retry. A crashed or
+unreadable record is retained. The 1,024-record owner limit fails closed while
+CP hints continue. This path adds native Queue cards and leaves legacy artifacts
+alone; the native runtime dispatches its cards. It never resumes or replaces an
+unloaded owner, opens a transcript, or carries peer text in the Queue pointer.
+
+Native Queue arbitration, rather than the directory's recent-session `active`
+label, decides when an owner can start. The regular original-owner intake and
+confirming Stop remain the only canonical delivery evidence. A stalled CLI
+cannot block the CP publication lane. Source tests and an enqueue acknowledgement
+do not establish that a particular host has installed and processed this path.
 
 `node/codex-busy-ticket.mts` uses exclusive owner locks and atomic writes. The
 retained generation is immutable; a strictly newer admission may replace it.

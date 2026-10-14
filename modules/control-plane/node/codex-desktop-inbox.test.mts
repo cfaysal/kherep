@@ -38,15 +38,16 @@ function setup(t: test.TestContext, resumeClosed: boolean, address = APP, tui?: 
     fs.mkdirSync(path.join(home, "tui-thread-reference-capabilities"));
     fs.writeFileSync(path.join(home, "tui-thread-reference-capabilities", APP), "");
   }
-  let launches = 0;
   const fake = fakeCodexBin(t);
   const loadedThreads = async (): Promise<Set<string> | null> => (tui ? new Set([APP]) : null);
-  const deps = () => ({ ...node.deps(), codex: { home, loadedThreads, findCodex: () => { launches++; return fake.file; } } });
+  // These mailbox tests isolate CP publication. The native producer and its
+  // original Receive/Stop pipeline have separate functional tests.
+  const deps = () => ({ ...node.deps(), codex: { home, loadedThreads, findCodex: () => null } });
   const poll = async () => { pollCodexQueue(deps()); await codexQueueIdle(); };
-  return { ...node, poll, launches: () => launches };
+  return { ...node, poll, launches: () => fake.runs().length };
 }
 
-test("a Desktop queue keeps the original mailbox and only that chat's hook confirms delivery", async (t) => {
+test("a Desktop CP hint keeps the original mailbox and only that chat's hook confirms delivery", async (t) => {
   for (const resumeClosed of [true, false]) {
     const node = setup(t, resumeClosed);
     await node.poll();
@@ -83,7 +84,7 @@ test("a Desktop alias remains readable after repeated polls without a confirming
   assert.deepEqual(listTasks(node.paths), []);
 });
 
-test("a pending or unconfirmed Desktop attempt preserves the original message without retry", async (t) => {
+test("CP publication preserves legacy Desktop attempt metadata and the original message", async (t) => {
   for (const queuedAt of [T0, T0 - 11 * 60_000]) {
     const node = setup(t, true);
     fs.mkdirSync(listenerDir(node.paths), { recursive: true });
@@ -100,7 +101,7 @@ test("a pending or unconfirmed Desktop attempt preserves the original message wi
   }
 });
 
-test("a TUI that reads as Desktop but is loaded on the daemon with its marker is queued once listed by full id", async (t) => {
+test("a TUI that reads as Desktop needs full-id authorization for CP publication", async (t) => {
   const listed = setup(t, false, APP, { wake: { sessions: [APP] } });
   await listed.poll();
   assert.equal(listed.launches(), 0, "an authorized queue does not require a loaded-thread probe");

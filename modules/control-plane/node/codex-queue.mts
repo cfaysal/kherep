@@ -17,12 +17,14 @@ import { explicitlyListed, wakeAllowed } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { listTasks } from "./task-records.mts";
 import { killSwitch } from "./wake-hook.mts";
+import { nativeQueueIdle, scheduleNativeQueue } from "./codex-queue-producer.mts";
 
 // Admit a compact CP hint for the authorized original Codex owner. The
 // synchronous original-owner hook consumes it at a supported tool boundary;
-// no native queue, thread resume or replacement owner is started. Admission
-// and metadata claims never offer or confirm the persistent Inbox content.
-// No autonomous turn is created, so admission never spends the shared turn budget.
+// native Queue adds only a fixed pointer, never resumes or replaces the owner.
+// Admission and metadata claims never offer or confirm persistent Inbox content.
+// CP hint admission never spends the shared turn budget. The independent
+// native producer reserves it only for an original-owner Queue attempt.
 // Keep the public poll/lane interface for existing intake-window callers.
 let lane: Promise<void> = Promise.resolve();
 const inFlight = new Set<string>();
@@ -32,6 +34,7 @@ export async function codexQueueIdle(): Promise<void> {
   for (let current = lane; ; current = lane) {
     await current;
     await probesSettled();
+    await nativeQueueIdle();
     if (current === lane) return;
   }
 }
@@ -151,6 +154,8 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], selectInb
     progressRecords(paths, due, "waiting", "awaiting-user-turn", now);
     return decide(due, "awaiting-user-turn");
   }
+  scheduleNativeQueue(deps, sessionId, due.filter((record) => record.toSession === sessionId)
+    .map((record) => record.messageId), grant, log);
   const valid = previous && !previous.invalidated && previous.ticket.admittedAt <= now && now < previous.ticket.expiresAt
     && previous.ticket.policyFingerprint === busyPolicyFingerprint(policy);
   const pending = valid && previous.publishedAt !== undefined

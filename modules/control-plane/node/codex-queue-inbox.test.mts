@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { listenerDir } from "./autonomy.mts";
-import { codexNode, fakeCodexBin } from "./codex-fixture.mts";
+import { codexNode } from "./codex-fixture.mts";
 import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { codexSessionName, legacyCodexSessionName, recordCodexSession } from "./codex-sessions.mts";
 import { writeLocalSessions } from "./exchange.mts";
@@ -17,12 +17,11 @@ const PEER = { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "synthet
 const OWNERS = Array.from({ length: 8 }, (_, n) => `01a0db0${n}-0000-7000-8000-00000000000${n}`);
 
 function queueNode(t: test.TestContext) {
-  const fake = fakeCodexBin(t);
-  const node = codexNode(t, {}, { findCodex: () => fake.file });
+  const node = codexNode(t, {}, { findCodex: () => null }); // Native admission has separate targeted-read tests.
   const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8")) as Record<string, unknown>;
   policy.wake = { enabled: true, sessions: ["*"] };
   fs.writeFileSync(node.paths.policy, JSON.stringify(policy));
-  return { ...node, runs: fake.runs };
+  return node;
 }
 
 function message(node: ReturnType<typeof queueNode>, toSession: string, now = T0, depth = 0,
