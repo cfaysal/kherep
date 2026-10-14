@@ -275,6 +275,11 @@ Before a service stop, the daemon blocks new session admissions,
 waits for in-flight admissions, verifies the exact process again and refuses
 unknown or present descendants. A daemon of this version honors the drain for
 managed task starts. On Windows the transaction also verifies the selected task
+and may wait read-only for positively owned daemon descendants to exit. Each
+probe repeats native action, security and process-identity checks; drift or an
+extra supervisor child refuses immediately. The polling budget is 30 seconds,
+with separate native-call timeouts, so total elapsed time can be longer. The
+mutating stop is single-shot and still refuses any descendants. It verifies the
 supervisor and its one direct daemon child, retains both process handles, stops
 the supervisor first and then stops only that already retained daemon process.
 The candidate generation gets one binding-specific launch permit only after the

@@ -706,7 +706,11 @@ restarts an exited child after 30 seconds. A generation-bound one-use permit let
 only the transaction's candidate start while admissions are drained. A stop
 is refused when ownership, source, service binding or descendant absence is not
 proven; on Windows it retains the attested supervisor and daemon handles, stops
-the supervisor first and never reopens a pid after that boundary. The
+the supervisor first and never reopens a pid after that boundary. Read-only
+Windows probes may wait for positively owned daemon descendants to exit, with
+fresh identity, definition and security checks on every probe. The polling budget
+is 30 seconds plus separately bounded native calls. The mutating stop stays
+single-shot and refuses descendants. The
 transaction drains new task admissions, waits for an admission that already
 holds a lease, and rechecks ownership immediately before the selected service
 stop. Admission leases carry PID, start-time and owner provenance;
