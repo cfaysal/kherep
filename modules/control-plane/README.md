@@ -695,8 +695,11 @@ node modules/control-plane/node/cli.mts doctor
 After enrollment, `kherep-node service install|upgrade|status|rollback` manages
 the daemon as a per-user macOS LaunchAgent or Windows Scheduled Task. The
 service runs the product runner from a verified source pin, records that source
-once at daemon startup and preserves exact native definition and security
-backups. Existing definitions require explicit adoption by exact name. The
+once at daemon startup and retains exported Windows task definitions or configured
+macOS plist bytes with their security metadata. Existing definitions require
+explicit adoption by exact name. macOS adoption makes the on-disk plist
+authoritative and refuses observable loaded-origin, action or log-path mismatch;
+a complete previous launchd memory-cache snapshot remains unknown. The
 Windows task runs a fixed product Node supervisor that verifies the pin before
 each child start, appends both daemon streams to the retained service log and
 restarts an exited child after 30 seconds. A generation-bound one-use permit lets

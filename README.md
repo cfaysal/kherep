@@ -94,6 +94,10 @@ flowchart LR
 | Control Plane | `modules/control-plane/` | Cloudflare Worker, node daemon and shared protocol for enrollment, session messaging and tasks |
 | Daemon service | `modules/control-plane/node/service-*.mts` | Per-user LaunchAgent or supervised Scheduled Task, immutable source activation, measured upgrade and rollback |
 
+macOS adoption uses the configured on-disk plist and verifies observable loaded
+job identity. It retains configured bytes rather than a complete launchd memory
+cache; see the [service adoption contract](docs/INSTALLATION.md).
+
 ### Central Brain
 
 [![Relief: scribes of Claude Code and Codex bring findings to one archive; a scale weighs the evidence, the broker seals each scroll, private matters stay in a locked shrine.](assets/illustrations/kherep-brain-relief.svg)](https://raw.githubusercontent.com/cfaysal/kherep/main/assets/illustrations/kherep-brain.svg)

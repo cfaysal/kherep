@@ -13,7 +13,8 @@ import type { ServiceBinding } from "./service-types.mts";
 export const SERVICE_USAGE = `  kherep-node service install --workspace <absolute> [--source <clean checkout>] [--service-name <name>] [--task-path <path>] [--adopt]
   kherep-node service upgrade [--source <clean checkout>]
   kherep-node service status
-  kherep-node service rollback`;
+  kherep-node service rollback
+  macOS --adopt uses the configured on-disk plist, not a complete snapshot of the loaded launchd cache.`;
 
 export type ServiceCommand = { action: "install"; workspace: string; source?: string; serviceName?: string; taskPath?: string;
   adopt: boolean; explicitServiceName: boolean } | { action: "upgrade"; source?: string }

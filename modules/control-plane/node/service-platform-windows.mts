@@ -135,7 +135,7 @@ export class WindowsServiceAdapter implements ServiceAdapter {
   async freshSecurity(_binding: ServiceBinding): Promise<Buffer> { return Buffer.alloc(0); }
   async adoptionNode(snapshot: NativeServiceSnapshot, pid?: number): Promise<string> {
     const action = snapshot.windows?.actions[0];
-    if (action && /^conhost(?:\.exe)?$/i.test(path.basename(action.executable))) {
+    if (action && /^conhost(?:\.exe)?$/i.test(path.win32.basename(action.executable))) {
       const args = windowsArgs(action.arguments);
       const index = args.findIndex(value => value.toLowerCase() === "-nodeexe");
       if (index >= 0 && args[index + 1] && (path.win32.isAbsolute(args[index + 1]) || path.isAbsolute(args[index + 1]))) return args[index + 1];
@@ -149,7 +149,7 @@ export class WindowsServiceAdapter implements ServiceAdapter {
   }
   async adoptionSourceRoot(snapshot: NativeServiceSnapshot): Promise<string> {
     const action = snapshot.windows?.actions[0];
-    if (!action || !/^conhost(?:\.exe)?$/i.test(path.basename(action.executable))) {
+    if (!action || !/^conhost(?:\.exe)?$/i.test(path.win32.basename(action.executable))) {
       throw new Error("Scheduled Task legacy source root is unavailable");
     }
     const args = windowsArgs(action.arguments);
