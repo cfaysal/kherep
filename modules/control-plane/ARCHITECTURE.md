@@ -161,6 +161,9 @@ flowchart LR
   ticket --> hook[Originalowner PostToolUse additionalContext]
   hook --> receive[Actual Receive: returned messages offered]
   receive --> stop[Confirming Stop: delivered]
+  stop --> reconcile[Await exact owned Queue list/delete/readback]
+  native --> attempts[Durable batch identity and duplicate barrier]
+  attempts --> reconcile
 ```
 
 `node/codex-busy-publish.mts` captures at most eight message ID/address pairs,
@@ -176,7 +179,7 @@ fresh guards. Publication failure or contention retries the same
 authorized generation during its TTL and unchanged policy on existing polls. Policy
 drift or expiry invalidates retry. Restart can recover valid CP metadata; losing
 it requires a fresh authorized admission. These hint paths never book a real turn.
-Native `.queued.json`, bindings and cards are neither read as CP success nor changed. Progress uses existing waiting codes:
+Legacy `.queued.json` and bindings are neither read as CP success nor changed. Progress uses existing waiting codes:
 `awaiting-user-turn`, `retry-pending` or, after actual offer,
 `awaiting-turn-confirmation`. No turn-start claim or new wire code is introduced.
 
@@ -192,6 +195,26 @@ unreadable record is retained. The 1,024-record owner limit fails closed while
 CP hints continue. This path adds native Queue cards and leaves legacy artifacts
 alone; the native runtime dispatches its cards. It never resumes or replaces an
 unloaded owner, opens a transcript, or carries peer text in the Queue pointer.
+
+`node/codex-native-attempts.mts` binds each successful native attempt to the
+complete batch, exact owner, Queue ID, expected input and captured producer.
+`node/codex-native-reconcile.mts` revalidates the local route, executable hashes
+and Codex home before opening the public app-server Queue client. All batch
+members must still belong to that owner and be `delivered`. Normal Stop awaits
+list, exact-ID/full-input delete and complete absence readback before returning.
+Late producer settlement and the existing daemon poll retry bounded cleanup.
+Wake/kill-off still forbids new enqueues but does not preserve an already
+confirmed stale pointer. Current enrollment is rechecked before deletion.
+
+Reconciliation receipts live separately in `codex-native-reconciled/<owner>/`;
+attempts are never removed, so retirement cannot authorize duplicate enqueue.
+Older native attempts are considered only after a complete consistent snapshot
+and exact native input/count match. Offered, partial, malformed, mismatched or
+uncertain groups are retained, as are legacy bindings and foreign cards. Public
+Queue calls have a shared five-second deadline and bounded pagination. A queue
+already claimed by the runtime, or whose ID becomes known only after Stop, can
+already have started a turn; cleanup neither interrupts it nor guarantees zero
+empty turns under every such race. No global lock or additional model turn is added.
 
 Native Queue arbitration, rather than the directory's recent-session `active`
 label, decides when an owner can start. The regular original-owner intake and

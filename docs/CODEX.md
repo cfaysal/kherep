@@ -133,10 +133,11 @@ A Codex desktop app restart starts a new session with a new id, so a `wake.sessi
 With `codexApp: true` the list may be empty or absent. Any non-boolean value turns waking off, as a malformed list does. The grant selects exactly one Codex session that the list does not name: the most recently seen session recorded by the delivery hook whose rollout, `<CODEX_HOME or ~/.codex>/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl`, begins with a `session_meta` line for that id with `originator` `"Codex Desktop"` and `source` `"vscode"`, and no parent thread. The node reads that line itself. It searches the newest 62 date directories, reads at most 256 KiB, follows no links and refuses a missing, unreadable or garbled file or any other value. Exec runs, Codex tasks and app subagent threads are never granted. If two app sessions share the latest time, neither is granted. A TUI reachable on the shared app-server daemon (below) is never granted and is skipped when the newest app session is chosen.
 
 An eligible Desktop or Terminal session receives a CP hint admission. The node
-publishes metadata directly after the existing authorization guards;
-it does not invoke `codex queue`, create a native queue binding, resume the thread
-or start another owner. Peer text remains in the persistent CP Inbox. Existing
-native queue cards, ledgers and bindings stay unchanged, including at Codex Stop.
+publishes metadata directly after the existing authorization guards. A separate
+guarded producer submits a fixed native Queue pointer to that exact owner,
+retaining peer text in the persistent CP Inbox. Native arbitration waits while
+active and can start the same idle loaded owner. No thread is resumed or replaced.
+Legacy queue bindings remain untouched.
 The Composer's Queue or Steer default is an independent user preference and does
 not control this route. Kherep does not change that setting.
 
@@ -156,8 +157,8 @@ permissions and reads only those bounded references. A durable claim produces
 one fixed additionalContext hint in the same running turn at the next supported
 tool boundary. The hint contains no peer bodies, IDs, paths or receive command.
 This does not interrupt sampling or send a literal `turn/steer` RPC. Without a
-tool boundary, idle or reasoning-only work waits for the next original-owner
-intake. The existing Stop continuation remains available for accepted messages
+tool boundary, the native pointer remains available for the next eligible turn.
+The existing Stop continuation remains available for accepted messages
 under its existing budget and permissions.
 
 Admission and a metadata claim leave messages `accepted`. Explicit
@@ -166,6 +167,16 @@ Stop marks those `offered` records `delivered`. An interrupt does not confirm th
 Messages outside the ticket or a limited Receive remain in the CP Inbox under
 its existing retention contract. The normal prompt/Stop intake remains available.
 
+After confirming delivery, normal Stop awaits bounded cleanup of exact native
+pointer groups. Every member must be delivered to the original owner; the Queue
+ID, full input, local producer binary/hash and Codex home must match. Public
+list/delete and a complete readback establish removal. Attempts remain durable
+duplicate barriers. Offered, uncertain, partial and foreign cards are retained.
+Late producer settlement and existing daemon polls recover pending cleanup,
+including already-delivered pointers after wake is disabled. No new model turn
+is started by cleanup. A pointer already claimed, or admitted after Stop before
+its ID is known, may already have started a turn; cleanup does not interrupt it.
+
 Separate `.busy-admission.json` metadata records the authorized generation and
 publication time; old `.queued.json` history never authorizes or blocks CP hints.
 Successful publication waits up to ten minutes for intake. If still accepted
@@ -173,8 +184,8 @@ then, fresh admission rechecks guards without booking an autonomous turn. Claim
 alone is no Receive. Publication failure or contention retries the same generation on
 existing poll rounds without booking a turn while its TTL and policy are valid.
 Policy drift or expiry invalidates that retry. Restart recovers valid CP metadata;
-missing or unreadable metadata requires a fresh authorized admission. There is no
-native queue fallback. Progress is `waiting/awaiting-user-turn` while intake is
+missing or unreadable metadata requires a fresh authorized admission. Native
+attempts remain independent of hint retries. Progress is `waiting/awaiting-user-turn` while intake is
 pending, `waiting/retry-pending` after publication failure and
 `waiting/awaiting-turn-confirmation` after an actual offer.
 

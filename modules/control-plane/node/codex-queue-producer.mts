@@ -8,6 +8,8 @@ import { busyPolicyFingerprint, busyWakeDisabled } from "./codex-busy-policy.mts
 import { tuiMarker } from "./codex-daemon.mts";
 import { queueProducerIdentity } from "./codex-queue-context.mts";
 import { queueArgs, runQueue } from "./codex-queue-run.mts";
+import { MAX_NATIVE_ATTEMPTS, nativeAttemptsPath, nativeQueueInput } from "./codex-native-attempts.mts";
+import { reconcileNativeQueues } from "./codex-native-reconcile.mts";
 import { CODEX_ACTIVE_MS, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { ensureDir, readConfig } from "./config.mts";
 import { getMessage, MAX_REPLY_DEPTH, writeJsonAtomic } from "./inbox.mts";
@@ -17,16 +19,32 @@ import { listTasks } from "./task-records.mts";
 
 // A separate namespace leaves legacy Queue cards/bindings untouched. An
 // unreadable, partial or uncertain attempt is never interpreted as absent.
-export const MAX_NATIVE_ATTEMPTS = 1_024;
+export { MAX_NATIVE_ATTEMPTS } from "./codex-native-attempts.mts";
 const MAX_BATCH = 8;
 const pending = new Map<string, Promise<void>>();
 let nativeLane: Promise<void> = Promise.resolve();
 export function nativeAttemptDir(deps: RunnerDeps, owner: string): string {
-  return path.join(deps.paths.dir, "codex-native-attempts", owner);
+  return nativeAttemptsPath(deps.paths, owner);
 }
 
 export async function nativeQueueIdle(): Promise<void> {
   while (pending.size) await Promise.all([...pending.values()]);
+}
+
+function reconcile(deps: RunnerDeps, owner: string): Promise<void> {
+  return deps.codex?.reconcileQueue?.(owner) ?? reconcileNativeQueues(deps.paths, owner);
+}
+
+// Recovery shares the bounded serial lane, but never reserves an enqueue slot.
+export function scheduleNativeReconciliation(deps: RunnerDeps, owner: string, log: (line: string) => void): void {
+  const key = `${path.join(deps.paths.dir, owner)}:reconcile`;
+  if (pending.has(key)) return;
+  const work = nativeLane.then(() => new Promise<void>((resolve) => { setImmediate(resolve); }))
+    .then(() => reconcile(deps, owner))
+    .catch(() => { log("kherep-node: native queue reconciliation pending"); })
+    .finally(() => { pending.delete(key); });
+  pending.set(key, work);
+  nativeLane = work;
 }
 
 // Independent of the CP hint lane: a stalled CLI cannot delay publication.
@@ -111,9 +129,12 @@ async function produce(deps: RunnerDeps, owner: string, messageIds: string[], fi
     }
   }
   if (!claimed.length) return;
+  const expectedInput = nativeQueueInput(owner, claimed.length);
   const settle = (state: string, queueId?: string): void => {
     for (const messageId of claimed) writeJsonAtomic(path.join(dir, `${messageId}.json`),
-      { version: 1, owner, messageId, attemptedAt: now, state, producer, ...(queueId ? { queueId } : {}) });
+      { version: 1, owner, messageId, attemptedAt: now, state, producer,
+        groupMessageIds: claimed, expectedInput,
+        ...(queueId ? { queueId } : {}) });
   };
   const current = admitted(deps, owner, claimed, fingerprint, grant);
   if (!current || current.ids.length !== claimed.length) { settle("cancelled-before-submit"); return; }
@@ -121,5 +142,8 @@ async function produce(deps: RunnerDeps, owner: string, messageIds: string[], fi
     const result = await runQueue({ ...deps, codex: { ...deps.codex,
       findCodex: () => file, home: producer.resolvedCodexHome } }, queueArgs(owner, claimed.length), producer);
     settle(result.queueId ? "submitted" : "uncertain", result.queueId);
-  } catch { settle("uncertain"); }
+  } catch { settle("uncertain"); return; }
+  // Stop may have confirmed the content while native admission was in flight.
+  // Cleanup failure must never overwrite the successfully persisted queue ID.
+  await reconcile(deps, owner);
 }

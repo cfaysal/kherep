@@ -50,11 +50,16 @@ The native owner gate excludes children before local storage reads, and fresh
 policy plus at most eight current records control its claim. A persisted claim
 emits one compact `additionalContext` hint in the original owner's running turn
 at the next supported tool boundary. No peer body, path or receive command
-appears in it, and it does not interrupt sampling. Idle or reasoning without
-another tool boundary waits for the next original-owner intake. Existing
+appears in it, and it does not interrupt sampling. A separate guarded native
+Queue pointer waits while active and can wake the same idle loaded owner. Existing
 receive/confirmation paths still own offers and receipts; admission and claim
 leave content accepted in the persistent CP Inbox. Quiet failures retain that
-content, with no native queue fallback. See the [Control Plane contract](../modules/control-plane/ARCHITECTURE.md#codex-busy-turn-hint-admission).
+content. Normal Stop confirms offered content and awaits bounded reconciliation
+of exact native pointer groups whose entire batch is delivered. List/delete and
+complete readback use the captured local producer identity; attempts remain as
+the duplicate barrier. Late settlement and existing poll rounds recover pending
+cleanup. Offered and foreign cards remain untouched; already-started turns are
+never interrupted. See the [Control Plane contract](../modules/control-plane/ARCHITECTURE.md#codex-busy-turn-hint-admission).
 
 Exact predecessor renders retain their bytes. The upgrade checks external
 PostToolUse group positions after verified managed-tail reanchoring and refuses
