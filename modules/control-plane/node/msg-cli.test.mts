@@ -334,3 +334,14 @@ test("msg status shows the threaded replies that reached this node (issue #200)"
     `    offered by: wake at ${new Date(NOW + 3).toISOString()} (offer 1)`,
   ]);
 });
+
+test("msg status names an unusable closed-session cwd, not the target policy (issue #396)", async (t) => {
+  const paths = setup(t);
+  const sent = (await run(paths, ["send", "node-b/docs", "x"])).out;
+  const observed = new Date(NOW).toISOString();
+  recordSent(paths, sent, "accepted", undefined, NOW, { phase: "waiting", code: "cwd-refused", observedAt: observed });
+  const status = await run(paths, ["status", sent]);
+  assert.deepEqual([status.code, status.out], [0, `${sent} accepted: the last closed-session delivery attempt was refused: the closed `
+    + "session's working directory is not usable on the target node (not absolute, missing, or outside its workspace roots); the message "
+    + `stays queued and is tried again each round [waiting/cwd-refused; observed ${observed}] (updated ${observed})`]);
+});

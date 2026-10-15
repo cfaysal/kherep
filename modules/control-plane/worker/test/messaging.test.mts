@@ -2,7 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { makeEnvelope, type Envelope, type MessageType } from "../../protocol.mts";
-import { MESSAGING_CAPABILITY, type MessageDeliverBody, type MessageReceiptBody, type MessageStatusBody } from "../../protocol-messages.mts";
+import { MESSAGING_CAPABILITY, MESSAGING_PROGRESS_V2_CAPABILITY, type MessageDeliverBody, type MessageProgress, type MessageReceiptBody, type MessageStatusBody } from "../../protocol-messages.mts";
 import { MAX_QUEUED_PER_NODE } from "../src/message-store.mts";
 import { MESSAGE_STATUS_PAGE_SIZE } from "../src/node-session.mts";
 import { authenticate, enroll, FACTS, newKey, nextMessageStatus, registry, type NodeKey, type TestSocket } from "./helpers.mts";
@@ -140,6 +140,39 @@ describe("message routing", () => {
     expect(await row(id)).toMatchObject({ state: "delivered", progress_phase: null, progress_code: null,
       progress_observed_at: null, progress_retry_at: null });
     for (const socket of [sender, target, foreign]) socket.ws.close(1000, "done");
+  });
+
+  // Issue #396: the Worker stores cwd-refused and sends it only to a sender that advertises messaging.progress.v2.
+  it("relays cwd-refused to a progress.v2 sender and wake-not-authorized to an older sender", async () => {
+    const older = await node("older-sender");
+    const newer = await node("newer-sender", [MESSAGING_CAPABILITY, MESSAGING_PROGRESS_V2_CAPABILITY]);
+    const b = await node("target");
+    const target = await authenticate(b.nodeId, b.key);
+    const first: MessageProgress = { phase: "waiting", code: "cwd-refused", observedAt: "2026-09-29T12:00:00.000Z" };
+    const again: MessageProgress = { ...first, observedAt: "2026-09-29T12:01:00.000Z" };
+    for (const [who, legacy] of [[older, true], [newer, false]] as const) {
+      const seen = (p: MessageProgress): MessageProgress => (legacy ? { ...p, code: "wake-not-authorized" } : p);
+      const sender = await authenticate(who.nodeId, who.key);
+      const id = send(sender, b.nodeId);
+      await expectStatus(sender, { messageId: id, state: "queued" });
+      await expectFrame(target, "message.deliver");
+      frame(target, "message.status", { messageId: id, state: "accepted", progress: first });
+      await expectStatus(sender, { messageId: id, state: "accepted", progress: seen(first) });
+      expect((await expectFrame<MessageReceiptBody>(target, "event")).body.storedProgressAt).toBe(first.observedAt);
+      frame(target, "message.status", { messageId: id, state: "accepted", progress: again });
+      await expectStatus(sender, { messageId: id, state: "accepted", progress: seen(again) });
+      expect((await expectFrame<MessageReceiptBody>(target, "event")).body.storedProgressAt).toBe(again.observedAt);
+      expect(await row(id)).toMatchObject({ progress_phase: "waiting", progress_code: "cwd-refused", progress_observed_at: again.observedAt });
+      // A repeated send and the reconnect replay carry the same code as the push.
+      send(sender, b.nodeId, "hello", id);
+      await expectStatus(sender, { messageId: id, state: "accepted", progress: seen(again) });
+      sender.ws.close(1000, "done");
+      const reconnected = await authenticate(who.nodeId, who.key);
+      expect((await expectFrame<MessageStatusBody>(reconnected, "message.status")).body)
+        .toEqual({ messageId: id, state: "accepted", progress: seen(again) });
+      reconnected.ws.close(1000, "done");
+    }
+    target.ws.close(1000, "done");
   });
 
   it("delivers at once to a connected target and treats a repeated messageId as the same message", async () => {

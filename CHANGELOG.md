@@ -11,6 +11,13 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Closed-session cwd refusal code (issue #396): a closed-session delivery that
+  the recorded working directory refuses (not absolute, missing, or outside
+  the workspace roots) now waits with `waiting/cwd-refused` instead of
+  `waiting/wake-not-authorized`, and `msg status` on the sender says so. Nodes
+  advertise `messaging.progress.v2`; the Worker sends `wake-not-authorized`
+  to a sender without it. Upgrade the Worker before the nodes: an older
+  Worker rejects the new code, and the target node retries the report.
 - Offer provenance (issue #417): an inbox record carries `offeredBy`
   (`wake`, `prompt`, `stop`, `tool`, `codex-prompt`, `receive`, `codex-wake`,
   `intercom`, `mcp`) with `offeredAt`; the wake listener leaves

@@ -190,7 +190,8 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   const limit = overLimit(deps, now, reusable?.taskId);
   if (limit) return refuse(limit, "retry-pending");
   const cwd = resolveCwd(sessions, reusable?.cwd ?? found.cwd, deps.realpath);
-  if (!cwd.ok) return refuse(cwd.reason, "wake-not-authorized");
+  // Issue #396: the recorded cwd is unusable here; the policy authorized the sender.
+  if (!cwd.ok) return refuse(cwd.reason, "cwd-refused");
   // What admitStart would refuse for a new intercom session, checked here so it reads as policy.
   const mode: PermissionMode = delegated(deps, sessions.defaultPermissionMode) ? sessions.defaultPermissionMode : "default";
   const startRefusal = (): [string, MessageProgressCode] | null => {

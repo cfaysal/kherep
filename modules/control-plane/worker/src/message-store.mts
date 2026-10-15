@@ -1,6 +1,6 @@
 import {
   MAX_REPLY_DEPTH, MESSAGING_CAPABILITY, OPERATOR_NODE_ID, type MessageAddress, type MessageDeliverBody, type MessageProgress, type MessageReceiptBody, type MessageState,
-  type MessageStatusBody, type NodeReportedState,
+  type MessageStatusBody, type NodeReportedState, legacyProgress,
 } from "../../protocol-messages.mts";
 import { depthExceeded, DEPTH_QUERIES, REPLY_DEPTH_EXCEEDED, replyDepth } from "./message-depth.mts";
 import { MessageRetention, RETENTION_QUERIES } from "./message-retention.mts";
@@ -148,7 +148,7 @@ export class MessageStore {
     const existing = this.get(message.messageId);
     if (existing) {
       if (existing.fromNode !== message.from.nodeId) return { ok: false, error: "duplicate messageId" };
-      return { ok: true, status: statusOf(existing), effects };
+      return { ok: true, status: this.statusFor(existing.fromNode, statusOf(existing)), effects };
     }
     const settled = this.retention.resend(message.messageId, message.from.nodeId);
     if (settled) return settled.ok ? { ...settled, effects } : settled;
@@ -226,7 +226,7 @@ export class MessageStore {
     const pageSize = Math.min(128, Math.max(1, Math.floor(limit)));
     const cursor = Math.max(0, Math.floor(afterRowId));
     const rows = this.sql.exec(STATUS_PAGE, nodeId, cursor, pageSize).toArray();
-    for (const row of rows) effects.statuses.push({ nodeId, body: statusOf(toRecord(row)) });
+    for (const row of rows) effects.statuses.push({ nodeId, body: this.statusFor(nodeId, statusOf(toRecord(row))) });
     const nextCursor = rows.length === pageSize ? Number(rows.at(-1)?.cursor) : null;
     return { effects, nextCursor };
   }
@@ -317,6 +317,13 @@ export class MessageStore {
     return typeof row?.reply_message_id === "string" ? row.reply_message_id : null;
   }
 
+  // Issue #396: a sending node without messaging.progress.v2 gets the older
+  // progress code it validates. The row and the audit keep the reported code.
+  private statusFor(nodeId: string, body: MessageStatusBody): MessageStatusBody {
+    if (!body.progress || nodeId === OPERATOR_NODE_ID) return body;
+    return { ...body, progress: legacyProgress(body.progress, this.capabilities(nodeId)) };
+  }
+
   private get(messageId: string): MessageRecord | null {
     const row = this.sql.exec(`SELECT ${COLUMNS} FROM messages WHERE id = ?`, messageId).toArray()[0];
     return row ? toRecord(row) : null;
@@ -336,7 +343,8 @@ export class MessageStore {
     this.audit(actor, "message.state", record.toNode, { messageId: record.messageId, state, reason, ...(kept ? { progress: kept } : {}) });
     this.retention.finalized(record.messageId, record.fromNode, state, now);
     if (record.fromNode !== OPERATOR_NODE_ID) {
-      effects.statuses.push({ nodeId: record.fromNode, body: statusBody(record.messageId, state, reason, kept) });
+      const body = statusBody(record.messageId, state, reason, kept);
+      effects.statuses.push({ nodeId: record.fromNode, body: this.statusFor(record.fromNode, body) });
     }
   }
 
@@ -346,7 +354,8 @@ export class MessageStore {
     progress.retryAt ?? null, now, record.messageId);
     this.audit(actor, "message.progress", record.toNode, { messageId: record.messageId, progress });
     if (record.fromNode !== OPERATOR_NODE_ID) {
-      effects.statuses.push({ nodeId: record.fromNode, body: statusBody(record.messageId, "accepted", null, progress) });
+      const body = statusBody(record.messageId, "accepted", null, progress);
+      effects.statuses.push({ nodeId: record.fromNode, body: this.statusFor(record.fromNode, body) });
     }
   }
 }

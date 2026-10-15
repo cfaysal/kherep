@@ -4,8 +4,8 @@ import test from "node:test";
 import { makeEnvelope, MESSAGE_TYPES, parseEnvelope } from "./protocol.mts";
 import {
   isDirectoryBody, isDirectoryGetBody, isMessageAddress, isMessageDeliverBody, isMessageId, isMessageReceiptBody, isMessageSendBody, isMessageState, isMessageStatusBody,
-  isNodeMessageStatusBody, isNodeReportedState, isSessionRef, MAX_MESSAGE_TEXT, MAX_SESSION_REF, MAX_STATUS_REASON,
-  MAX_DIRECTORY_SESSIONS, MESSAGE_STATES,
+  isMessageProgress, isNodeMessageStatusBody, isNodeReportedState, isSessionRef, legacyProgress, MAX_MESSAGE_TEXT, MAX_SESSION_REF,
+  MAX_STATUS_REASON, MAX_DIRECTORY_SESSIONS, MESSAGE_STATES, MESSAGING_CAPABILITY, MESSAGING_PROGRESS_V2_CAPABILITY,
 } from "./protocol-messages.mts";
 
 const ID = "00000000-0000-4000-8000-00000000000a";
@@ -98,6 +98,20 @@ test("message delivery progress is strict, fixed and accepted-state only", () =>
     { messageId: ID, state: "accepted", progress: { ...progress, text: "private" } },
     { messageId: ID, state: "accepted", unexpected: true },
   ]) assert.equal(isMessageStatusBody(body), false, JSON.stringify(body));
+});
+
+// Issue #396: cwd-refused is new; a sender without messaging.progress.v2 gets the code it already knows.
+test("cwd-refused is a waiting code that older senders receive as wake-not-authorized", () => {
+  const progress = { phase: "waiting", code: "cwd-refused", observedAt: "2026-09-29T12:00:00.000Z" } as const;
+  assert.equal(MESSAGING_PROGRESS_V2_CAPABILITY, "messaging.progress.v2");
+  assert.equal(isMessageProgress(progress), true);
+  assert.equal(isMessageProgress({ ...progress, phase: "failed" }), false);
+  const legacy = { ...progress, code: "wake-not-authorized" };
+  for (const capabilities of [null, [], [MESSAGING_CAPABILITY]]) assert.deepEqual(legacyProgress(progress, capabilities), legacy);
+  assert.equal(legacyProgress(progress, [MESSAGING_CAPABILITY, MESSAGING_PROGRESS_V2_CAPABILITY]), progress);
+  const known = { phase: "waiting", code: "target-busy", observedAt: progress.observedAt, retryAt: "2026-09-29T12:01:00.000Z" } as const;
+  assert.equal(legacyProgress(known, null), known);
+  assert.deepEqual(legacyProgress({ ...progress, retryAt: known.retryAt }, null), { ...legacy, retryAt: known.retryAt });
 });
 
 test("message receipt events identify the requested and durable states", () => {
