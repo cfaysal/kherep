@@ -137,7 +137,7 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
         stopping = true;
         if (inflight.size > 0) {
           options.log?.(`kherep-node: stopping; waiting for the ${[...inflight.keys()].join(" and ")} probe to finish, `
-            + `at most ${(PROBE_TIMEOUT_MS + PROBE_KILL_GRACE_MS) / 1000} s`);
+            + `about ${(PROBE_TIMEOUT_MS + PROBE_KILL_GRACE_MS) / 1000} s`);
         }
         while (inflight.size > 0) await Promise.allSettled([...inflight.values()]);
       })();
