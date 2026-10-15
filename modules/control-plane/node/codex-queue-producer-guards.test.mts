@@ -18,7 +18,7 @@ test("a new TUI marker blocks a scheduled automatic App grant, including a reach
     const node = nativeQueueNode(sub);
     node.add();
     const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8"));
-    policy.wake = { enabled: true, sessions: [], codexApp: true };
+    policy.wake = { enabled: true, sessions: [], codexApp: true, nativeQueue: true };
     fs.writeFileSync(node.paths.policy, JSON.stringify(policy));
     const dir = path.join(node.home, "sessions", "2026", "10", "14");
     fs.mkdirSync(dir, { recursive: true });
@@ -48,11 +48,17 @@ test("full-id authorization permits a marked TUI without the automatic App grant
 });
 
 test("native submission rechecks policy, enrollment, kill switch, mode and task ownership", async (t) => {
-  for (const change of ["policy", "enrollment", "kill", "mode", "task"] as const) await t.test(change, async (sub) => {
+  for (const change of ["policy", "opt-out", "enrollment", "kill", "mode", "task"] as const) await t.test(change, async (sub) => {
     const node = nativeQueueNode(sub);
     const id = node.add();
     pollCodexQueue(node.deps());
     if (change === "policy") fs.writeFileSync(node.paths.policy, '{"version":1,"wake":{"enabled":false}}');
+    // Issue #429: withdrawing the opt-in after scheduling cancels the snapshotted submission.
+    if (change === "opt-out") {
+      const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8"));
+      delete policy.wake.nativeQueue;
+      fs.writeFileSync(node.paths.policy, JSON.stringify(policy));
+    }
     if (change === "enrollment") fs.renameSync(node.paths.config, `${node.paths.config}.saved`);
     if (change === "kill") fs.writeFileSync(path.join(node.paths.dir, "wake.disabled"), "synthetic");
     if (change === "mode") recordCodexSession(node.paths, node.owner, node.workspace, T0, "bypassPermissions");

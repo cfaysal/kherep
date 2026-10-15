@@ -49,8 +49,10 @@ export function scheduleNativeReconciliation(deps: RunnerDeps, owner: string, lo
 }
 
 // Independent of the CP hint lane: a stalled CLI cannot delay publication.
+// Off unless wake.nativeQueue is true (issue #429); the CP hint path is unchanged.
 export function scheduleNativeQueue(deps: RunnerDeps, owner: string, messageIds: string[],
   grant: WakeGrant | undefined, log: (line: string) => void): void {
+  if (deps.policy.wake?.nativeQueue !== true) return;
   const key = path.join(deps.paths.dir, owner);
   if (pending.has(key)) return;
   const fingerprint = busyPolicyFingerprint(deps.policy);
@@ -70,7 +72,7 @@ function admitted(deps: RunnerDeps, owner: string, messageIds: string[], fingerp
   const session = readCodexSession(deps.paths, owner);
   const seen = Date.parse(session?.lastSeen ?? "");
   if (!readConfig(deps.paths.config) || !policy || busyPolicyFingerprint(policy) !== fingerprint
-    || !policy.wake || busyWakeDisabled(deps.paths) || !session || session.sessionId !== owner
+    || !policy.wake || !policy.wake.nativeQueue || busyWakeDisabled(deps.paths) || !session || session.sessionId !== owner
     || !Number.isFinite(seen) || seen > now || now - seen > CODEX_ACTIVE_MS
     || listTasks(deps.paths).some((task) => task.sessionId === owner)) return null;
   if (bypassesPermissions(session.permissionMode)

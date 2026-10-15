@@ -43,7 +43,8 @@ test("queued native submission defers before attempt and budget mutation, then r
   assert.equal(fs.existsSync(path.join(nativeAttemptsPath(f.paths, f.owner), `${messageId}.json`)), true);
 });
 
-test("existing poll recovers delivered native cards even with wake and kill switches off, without enqueue", async (t) => {
+// Issue #429: the fixture policy has no wake.nativeQueue, so this is also the producer-off retirement proof.
+test("existing poll recovers delivered native cards with the producer off by default and wake and kill switches off, without enqueue", async (t) => {
   for (const offered of [false, true]) await t.test(String(offered), async (t) => {
     const f = fixture(t);
     fs.writeFileSync(path.join(f.paths.dir, "wake.disabled"), "synthetic");

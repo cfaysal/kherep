@@ -9,6 +9,19 @@ increments the minor version; every other release increments the patch version.
 
 ## [Unreleased]
 
+### Changed
+
+- Native Codex Queue pointer producer off by default (issue #429). The
+  exact-owner producer that submits a fixed `codex queue` pointer for an
+  authorized Codex owner now runs only with `"nativeQueue": true` in the node
+  policy `wake` section; the key grants nothing by itself, and any non-boolean
+  value rejects the section. Neither the built-in default nor onboarding writes
+  it, and no upgrade step rewrites `policy.json`, so an existing node stops
+  producing native Queue cards at the first daemon round after the upgrade. CP
+  hints are unchanged, and pointers already submitted are still retired at
+  confirming Stop and on poll rounds. `kherep-node doctor` shows the flag as
+  `checks.policy.wake.nativeQueue`; it never fails the policy check.
+
 ### Fixed
 
 - Service owner probe in unit tests (issue #423): the runner deps carry the

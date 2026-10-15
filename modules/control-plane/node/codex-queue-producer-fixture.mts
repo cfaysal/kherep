@@ -17,7 +17,7 @@ export function nativeQueueNode(t: test.TestContext, owner = NATIVE_OWNER) {
   const home = path.join(node.root, "synthetic-owner-home");
   fs.mkdirSync(home);
   const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8"));
-  policy.wake = { enabled: true, sessions: [owner] };
+  policy.wake = { enabled: true, sessions: [owner], nativeQueue: true };
   fs.writeFileSync(node.paths.policy, JSON.stringify(policy));
   recordCodexSession(node.paths, owner, node.workspace, T0, "default");
   const deps = () => node.deps({ findCodex: () => fake.file, home, queueTimeoutMs: 1_000 });

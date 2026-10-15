@@ -221,15 +221,16 @@ cumulative acknowledgement, but it does not refresh liveness or dispatch again.
 but admits CP hints directly after enrollment, wake policy, kill switch, full-id
 or app grant, permissions, alias uniqueness, reply depth, task exclusion, TUI
 classification. Hint admission creates no autonomous turn and neither checks nor
-spends the shared turn budget. `node/codex-queue-producer.mts` runs a separate
-serialized native lane after CP publication, using the existing autonomous-turn
-budget. Composer Queue/Steer preferences remain independent.
+spends the shared turn budget. With `wake.nativeQueue: true` (off by default,
+issue #429), `node/codex-queue-producer.mts` runs a separate serialized native
+lane after CP publication, using the existing autonomous-turn budget. Composer
+Queue/Steer preferences remain independent.
 
 ```mermaid
 flowchart LR
   accepted[CP Inbox accepted] --> admission[Guarded CP admission]
   admission --> ticket[Bounded immutable hint ticket]
-  admission --> native[Exact-owner native Queue pointer]
+  admission --> native["Exact-owner native Queue pointer (wake.nativeQueue)"]
   native --> turn[Native runtime: wait while active, start when eligible]
   turn --> receive
   ticket --> hook[Originalowner PostToolUse additionalContext]
@@ -266,8 +267,8 @@ Exclusive-create attempt records precede invocation in the separate
 `codex-native-attempts/<owner>/` namespace. Known IDs record submission only;
 unknown results remain uncertain and cannot authorize a retry. A crashed or
 unreadable record is retained. The 1,024-record owner limit fails closed while
-CP hints continue. This path adds native Queue cards and leaves legacy artifacts
-alone; the native runtime dispatches its cards. It never resumes or replaces an
+CP hints continue. When opted in, this path adds native Queue cards and leaves
+legacy artifacts alone; the native runtime dispatches its cards. It never resumes or replaces an
 unloaded owner, opens a transcript, or carries peer text in the Queue pointer.
 
 `node/codex-native-attempts.mts` binds each successful native attempt to the

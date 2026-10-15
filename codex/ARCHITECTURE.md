@@ -50,8 +50,9 @@ The native owner gate excludes children before local storage reads, and fresh
 policy plus at most eight current records control its claim. A persisted claim
 emits one compact `additionalContext` hint in the original owner's running turn
 at the next supported tool boundary. No peer body, path or receive command
-appears in it, and it does not interrupt sampling. A separate guarded native
-Queue pointer waits while active and can wake the same idle loaded owner. Existing
+appears in it, and it does not interrupt sampling. With `wake.nativeQueue: true`
+(off by default, issue #429), a separate guarded native Queue pointer waits while
+active and can wake the same idle loaded owner. Existing
 receive/confirmation paths still own offers and receipts; admission and claim
 leave content accepted in the persistent CP Inbox. Quiet failures retain that
 content. Normal Stop confirms offered content and awaits bounded reconciliation

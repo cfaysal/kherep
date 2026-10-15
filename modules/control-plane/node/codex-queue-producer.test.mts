@@ -7,7 +7,7 @@ import test from "node:test";
 import { takeTurn, TURN_SPACING_MS } from "./autonomy.mts";
 import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { nativeQueueNode as fixture, NATIVE_OWNER as OWNER } from "./codex-queue-producer-fixture.mts";
-import { getMessage, markOffered } from "./inbox.mts";
+import { getMessage, getMessageProgress, markOffered } from "./inbox.mts";
 import { T0 } from "./task-fixture.mts";
 
 test("exact original-owner messages get one native pointer, without offering their content", async (t) => {
@@ -101,4 +101,28 @@ test("CP publication settles before native executable lookup can block its event
   pollCodexQueue(deps);
   await codexQueueIdle();
   assert.equal(node.fake.runs().length, 1);
+});
+
+// Issue #429: the native Queue pointer producer is off unless wake.nativeQueue
+// is true. The default leaves the CP hint path exactly as it is.
+test("the default policy schedules no native Queue pointer while the CP hint still publishes", async (t) => {
+  for (const wake of [{}, { nativeQueue: false }]) await t.test(JSON.stringify(wake), async (sub) => {
+    const node = fixture(sub);
+    const policy = JSON.parse(fs.readFileSync(node.paths.policy, "utf8"));
+    policy.wake = { enabled: true, sessions: [OWNER], ...wake };
+    fs.writeFileSync(node.paths.policy, JSON.stringify(policy));
+    const id = node.add();
+    await node.poll();
+    assert.equal(node.fake.runs().length, 0);
+    assert.ok(fs.existsSync(path.join(node.paths.dir, "listeners", `${OWNER}.busy-hint.json`)));
+    assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted");
+    const progress = getMessageProgress(node.paths.inbox, id);
+    assert.equal(progress?.phase, "waiting");
+    assert.equal(progress?.code, "awaiting-user-turn");
+    assert.equal(fs.existsSync(path.join(node.paths.dir, "codex-native-attempts")), false);
+    assert.equal(fs.existsSync(path.join(node.paths.dir, "listeners", `${OWNER}.turns.json`)), false);
+    node.tick(TURN_SPACING_MS + 1);
+    await node.poll();
+    assert.equal(node.fake.runs().length, 0);
+  });
 });
