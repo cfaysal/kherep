@@ -61,7 +61,7 @@ test("stop waits for the probe in flight and starts no probe afterwards", async 
   await readiness.stop();
   assert.ok(Date.now() - started >= 150, "resolved only after the probe settled");
   assert.equal(verdicts.length, 1, "the completed probe's verdict is still recorded");
-  assert.ok(logs.includes("kherep-node: stopping; waiting for the claude probe to finish, at most 50 s"));
+  assert.ok(logs.includes("kherep-node: stopping; waiting for the claude probe to finish, about 50 s"));
   readiness.invalidate("claude");
   readiness.peek("claude");
   readiness.revalidate("codex");

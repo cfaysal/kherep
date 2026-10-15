@@ -83,7 +83,7 @@ test("stop waits for the Claude probe in flight, which removes its marker", asyn
   g.open({ ok: true });
   await handle.done;
   assert.equal(fs.existsSync(probeMarkerFile(f.paths)), false, "nothing for the next daemon to report");
-  assert.ok(logs.includes("kherep-node: stopping; waiting for the claude probe to finish, at most 50 s"), logs.join("\n"));
+  assert.ok(logs.includes("kherep-node: stopping; waiting for the claude probe to finish, about 50 s"), logs.join("\n"));
   assert.equal(readDaemonState(f.paths)?.readiness?.claude?.ready, true, "its verdict is kept for the next start");
 });
 

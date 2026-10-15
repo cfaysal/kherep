@@ -239,7 +239,7 @@ helpers before stopping it, as described below. This version has no separate
 and `kherep-node doctor` show whether Claude is still signed in.
 
 On SIGINT, SIGTERM or SIGHUP the daemon starts no new readiness probe and
-waits for one in flight to finish, at most 50 seconds (the 45-second probe
+waits for one in flight to finish, about 50 seconds (the 45-second probe
 timeout plus a 5-second grace), logging `stopping; waiting for the claude probe
 to finish`. A probe that times out on macOS or Linux gets SIGTERM and only
 after that grace SIGKILL; on Windows it is still ended with `taskkill /T /F`.
