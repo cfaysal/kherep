@@ -9,6 +9,7 @@ import { deliverToClosed } from "./closed-delivery.mts";
 import { ACCEPT_ALL, closedSince, deliver } from "./closed-fixture.mts";
 import { fakeCodexBin, THREAD, waitFor } from "./codex-fixture.mts";
 import { readExit } from "./codex-output.mts";
+import { resetMcpCache } from "./codex-mcp.mts";
 import { codexFiles, detachCodex, WINDOWLESS, type CodexDeps } from "./codex-process.mts";
 import { spawnRun } from "./codex-runner.mts";
 import { beginServiceDrain } from "./service-drain.mts";
@@ -57,6 +58,8 @@ test("a service drain rejects every Codex run at the shared spawn boundary", asy
 });
 
 test("spawnRun passes detached false only for an intercom record on win32, and wraps only the detached win32 run (issue #124)", async (t) => {
+  resetMcpCache();
+  t.after(resetMcpCache);
   const node = taskNode(t, { runtimes: ["claude", "codex"] });
   const seen: { detached: unknown; windowsHide: unknown; wrapped: boolean }[] = [];
   // spawnCodex unrefs the child, so its exit event alone keeps no event loop alive: poll instead.
@@ -66,6 +69,7 @@ test("spawnRun passes detached false only for an intercom record on win32, and w
     updatedAt: new Date(T0).toISOString(), ...(local ? { local } : {}) });
   for (const [n, platform, local] of [[1, "win32", "intercom"], [2, "win32", undefined], [3, "linux", "intercom"]] as const) {
     const codex: CodexDeps = { platform, findCodex: () => "codex-fake", processStart: () => "t",
+      mcpList: async () => ({ code: 0, stdout: "[]", stderr: "" }),
       spawn: ((file: string, args: string[], options: { detached?: boolean; windowsHide?: boolean }) => {
         seen.push({ detached: options.detached, windowsHide: options.windowsHide, wrapped: file === process.execPath && args[0] === WINDOWLESS });
         const child = spawn(process.execPath, ["-e", ""], { ...options, cwd: node.workspace });

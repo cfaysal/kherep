@@ -20,6 +20,9 @@ test("hookPaths takes only the script path from quoted and unquoted commands", (
     ["/repo/modules/control-plane/node/deliver-hook.mts"]);
   assert.deepEqual(hookPaths(String.raw`& "C:\Program Files\nodejs\node.exe" "C:\Users\x\kherep\modules\control-plane\node\deliver-hook.mts" "--runtime" "codex"`),
     [String.raw`C:\Users\x\kherep\modules\control-plane\node\deliver-hook.mts`]);
+  assert.deepEqual(hookPaths(String.raw`node "C:\Users\x\node-hook-alias\deliver-hook.mts"`),
+    [String.raw`C:\Users\x\node-hook-alias\deliver-hook.mts`]);
+  assert.deepEqual(hookPaths('node "/tmp/prefix-deliver-hook.mts"'), []);
   assert.deepEqual(hookPaths("echo modules/control-plane/node/deliver-hook.mts"), []);
 });
 
