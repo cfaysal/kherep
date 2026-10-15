@@ -12,7 +12,7 @@ import { permanentFallbackFailure } from "./delivery-failure.mts";
 import { getMessage, markDelivered, markRefused, markRetry } from "./inbox.mts";
 import { taskCliCommand } from "./msg-cli.mts";
 import { notReady } from "./runtime-readiness.mts";
-import { continueServiceAdmission, type ServiceAdmission } from "./service-drain.mts";
+import { continueServiceAdmission, retainServiceAdmission, type ServiceAdmission } from "./service-drain.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit, refuse, trim } from "./task-admission.mts";
 import { isActive, queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
@@ -42,10 +42,12 @@ export type RunArgs = (files: CodexFiles, outbox: string) => string[];
 export async function spawnRun(
   deps: RunnerDeps, record: TaskRecord, args: RunArgs, prompt: string, admission?: ServiceAdmission,
 ): Promise<TaskRecord> {
-  return continueServiceAdmission(deps.paths, admission, () => spawnAdmitted(deps, record, args, prompt));
+  return continueServiceAdmission(deps.paths, admission, (active) => spawnAdmitted(deps, record, args, prompt, active));
 }
 
-async function spawnAdmitted(deps: RunnerDeps, record: TaskRecord, args: RunArgs, prompt: string): Promise<TaskRecord> {
+async function spawnAdmitted(
+  deps: RunnerDeps, record: TaskRecord, args: RunArgs, prompt: string, admission: ServiceAdmission,
+): Promise<TaskRecord> {
   const codex = deps.codex ?? {};
   const files = codexFiles(deps.paths, record.taskId);
   const file = (codex.findCodex ?? findCodex)();
@@ -53,7 +55,7 @@ async function spawnAdmitted(deps: RunnerDeps, record: TaskRecord, args: RunArgs
   ensureDir(deps.paths.outbox);
   const intercom = record.local === "intercom";
   const detached = detachCodex(codex.platform ?? process.platform, intercom);
-  const pid = await spawnCodex(codex, file, [...(intercom ? await mcpOff(deps, record) : []), ...args(files, deps.paths.outbox)], record.cwd, files,
+  const pid = await spawnCodex(codex, file, [...(intercom ? await mcpOff(deps, record, admission) : []), ...args(files, deps.paths.outbox)], record.cwd, files,
     codexEnv(deps.paths, record.sessionId ?? record.name), prompt, detached);
   let pidStart: string | undefined;
   try {
@@ -67,8 +69,12 @@ async function spawnAdmitted(deps: RunnerDeps, record: TaskRecord, args: RunArgs
 
 // Issue #119: an intercom run keeps the user's Codex config but not its MCP
 // servers (codex-mcp.mts). Without a list it starts as before, logged.
-async function mcpOff(deps: RunnerDeps, record: TaskRecord): Promise<string[]> {
-  const found = await intercomMcpOverrides(deps.codex ?? {}, deps.now?.());
+async function mcpOff(deps: RunnerDeps, record: TaskRecord, admission: ServiceAdmission): Promise<string[]> {
+  const codex = deps.codex ?? {};
+  const found = await intercomMcpOverrides({ ...codex, onUnconfirmedShutdown: () => {
+    retainServiceAdmission(admission);
+    codex.onUnconfirmedShutdown?.();
+  } }, deps.now?.());
   if ("reason" in found) {
     deps.log?.(`kherep-node: task ${record.taskId}: MCP servers left as configured: ${found.reason}`);
     return [];

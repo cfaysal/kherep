@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import { TURN_SPACING_MS } from "./autonomy.mts";
@@ -9,10 +11,10 @@ import { deliverToClosed } from "./closed-delivery.mts";
 import { ACCEPT_ALL, closedSince, deliver } from "./closed-fixture.mts";
 import { fakeCodexBin, THREAD, waitFor } from "./codex-fixture.mts";
 import { readExit } from "./codex-output.mts";
-import { resetMcpCache } from "./codex-mcp.mts";
+import { intercomMcpOverrides, resetMcpCache } from "./codex-mcp.mts";
 import { codexFiles, detachCodex, WINDOWLESS, type CodexDeps } from "./codex-process.mts";
 import { spawnRun } from "./codex-runner.mts";
-import { beginServiceDrain } from "./service-drain.mts";
+import { beginServiceDrain, serviceAdmissionsIdle } from "./service-drain.mts";
 import { watchCodexTasks } from "./codex-watch.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
@@ -81,6 +83,48 @@ test("spawnRun passes detached false only for an intercom record on win32, and w
   await waitFor(() => children.every((c) => c.exitCode !== null || c.signalCode !== null), "the spawned processes");
   assert.deepEqual(seen, [{ detached: false, windowsHide: true, wrapped: false }, { detached: true, windowsHide: true, wrapped: true },
     { detached: true, windowsHide: true, wrapped: false }]);
+});
+
+async function unconfirmedMcpAdmission(t: test.TestContext, cache: "cold" | "pending" | "latched"): Promise<void> {
+  resetMcpCache();
+  t.after(resetMcpCache);
+  const node = taskNode(t, { runtimes: ["claude", "codex"] });
+  const helper = Object.assign(new EventEmitter(), {
+    pid: 4570, stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, signalCode: null,
+  });
+  const children: ChildProcess[] = [];
+  let spawns = 0;
+  let shutdownNotices = 0;
+  const codex: CodexDeps = { platform: "linux", findCodex: () => "codex-fake", processStart: () => "t", mcpListTimeoutMs: 5,
+    signal: () => {}, onUnconfirmedShutdown: () => { shutdownNotices += 1; },
+    spawn: ((_file: string, _args: string[], options: object) => {
+      if (spawns++ === 0) return helper;
+      const child = spawn(process.execPath, ["-e", ""], { ...options, cwd: node.workspace });
+      children.push(child);
+      return child;
+    }) as unknown as typeof spawn };
+  const pending = cache === "cold" ? undefined : intercomMcpOverrides(codex, T0);
+  if (cache === "latched") await pending;
+  const record: TaskRecord = { taskId: taskId(1), runtime: "codex", name: "task-1", cwd: node.workspace,
+    permissionMode: "auto", state: "started", local: "intercom", startedAt: new Date(T0).toISOString(),
+    deadline: new Date(T0 + 3_600_000).toISOString(), updatedAt: new Date(T0).toISOString() };
+  const started = spawnRun({ ...node.deps(), codex }, record, () => ["exec"], "hello");
+  await Promise.all([started, ...(pending ? [pending] : [])]);
+  await waitFor(() => children.every((child) => child.exitCode !== null || child.signalCode !== null), "the task process");
+  assert.ok(shutdownNotices > 0, "the caller's shutdown callback remains subscribed");
+  assert.equal(serviceAdmissionsIdle(node.paths), false, `${cache} uncertain helper retains the spawn admission`);
+}
+
+test("spawnRun retains its admission when its cold MCP helper shutdown is unconfirmed", async (t) => {
+  await unconfirmedMcpAdmission(t, "cold");
+});
+
+test("spawnRun retains its admission when joining a pending uncertain MCP helper", async (t) => {
+  await unconfirmedMcpAdmission(t, "pending");
+});
+
+test("spawnRun retains its admission when consuming a latched uncertain MCP result", async (t) => {
+  await unconfirmedMcpAdmission(t, "latched");
 });
 
 function closedCodexNode(t: test.TestContext) {
