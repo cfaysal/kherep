@@ -15,7 +15,7 @@ type Result = Partial<SpawnSyncReturns<string>>;
 // spawnSync's result when its timeout ended the child.
 const timedOutResult = (): Result => ({ status: null, signal: "SIGTERM", stdout: "", stderr: "",
   error: Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" }) });
-const found = (stdout: string): Result => ({ status: 0, signal: null, stdout, stderr: "" });
+const found = (stdout: string): Result => ({ status: 0, stdout });
 const SID = "S-1-5-21-1-2-3-1001";
 
 function scripted(...results: Result[]) {
@@ -50,7 +50,7 @@ test("two timed-out identity lookups fail as a timeout and are not cached", () =
 });
 
 test("a failed or non-SID identity lookup is final after one start", () => {
-  for (const result of [{ status: 1, stdout: "", stderr: "denied" }, found("DOMAIN\\user\r\n")]) {
+  for (const result of [{ status: 1 },found("DOMAIN\\user\r\n")]) {
     const { calls, probe } = scripted(result, found(`${SID}\r\n`));
     assert.throws(() => probe.current(), { message: IDENTITY_UNVERIFIED });
     assert.equal(calls.length, 1);
@@ -66,7 +66,7 @@ test("an owner observation is retried once after a timeout and is unknown after 
   const twice = scripted(timedOutResult(), timedOutResult(), observation);
   assert.equal(twice.probe.active(owner), "unknown");
   assert.equal(twice.calls.length, 2);
-  const failed = scripted({ status: 1, stdout: "", stderr: "" }, observation);
+  const failed = scripted({ status: 1 }, observation);
   assert.equal(failed.probe.active(owner), "unknown");
   assert.equal(failed.calls.length, 1);
   for (const call of [...retried.calls, ...twice.calls, ...failed.calls]) {
