@@ -1,10 +1,11 @@
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import type { NodePaths } from "./config.mts";
+import { defaultServiceOwnerProbe, type ServiceFileOwner, type ServiceOwnerProbe } from "./service-owner-probe.mts";
+
+export { defaultServiceOwnerProbe, type ServiceFileOwner, type ServiceOwnerProbe };
 
 const root = (paths: NodePaths): string => path.join(paths.dir, "service");
 export const serviceDrainFile = (paths: NodePaths): string => path.join(root(paths), "drain");
@@ -16,70 +17,6 @@ const retainedAdmissions = new WeakSet<ServiceAdmission>();
 export class ServiceDrainActiveError extends Error {
   constructor() { super("managed service upgrade is draining new session admissions"); }
 }
-
-export interface ServiceFileOwner { version: 1; pid: number; startedAt: string; owner: string }
-export interface ServiceOwnerProbe {
-  current(): ServiceFileOwner;
-  active(owner: ServiceFileOwner): boolean | "unknown";
-}
-
-const WINDOWS_SID = /^S-\d+(?:-\d+)+$/i;
-let cachedWindowsOwner: string | undefined;
-const currentOwner = (): string => {
-  if (process.platform !== "win32") return os.userInfo().username;
-  if (cachedWindowsOwner) return cachedWindowsOwner;
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-    "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"], {
-    encoding: "utf8", windowsHide: true, timeout: 10_000, stdio: ["ignore", "pipe", "pipe"],
-  });
-  const sid = result.stdout.trim();
-  if (result.status !== 0 || !WINDOWS_SID.test(sid)) throw new Error("service controller identity cannot be verified");
-  cachedWindowsOwner = sid.toUpperCase();
-  return cachedWindowsOwner;
-};
-const processStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
-
-function observedOwner(pid: number): { startedAt: string; owner: string } | null | "unknown" {
-  if (process.platform === "win32") {
-    const script = "try{$p=Get-CimInstance Win32_Process -Filter ('ProcessId='+$env:KHEREP_OWNER_PID) -ErrorAction Stop}"
-      + "catch{@{status='unknown'}|ConvertTo-Json -Compress;exit};"
-      + "if($null-eq$p){@{status='missing'}|ConvertTo-Json -Compress;exit};"
-      + "try{$o=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop}"
-      + "catch{@{status='unknown'}|ConvertTo-Json -Compress;exit};"
-      + "if($o.ReturnValue-ne0){@{status='unknown'}|ConvertTo-Json -Compress;exit};"
-      + "@{status='found';startedAt=$p.CreationDate.ToUniversalTime().ToString('o');owner=[string]$o.Sid}|ConvertTo-Json -Compress";
-    const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-      encoding: "utf8", windowsHide: true, timeout: 10_000, env: { ...process.env, KHEREP_OWNER_PID: String(pid) },
-    });
-    if (result.status !== 0) return "unknown";
-    try {
-      const observed = JSON.parse(result.stdout) as { status?: unknown; startedAt?: unknown; owner?: unknown };
-      if (observed.status === "missing") return null;
-      if (observed.status !== "found") return "unknown";
-      if (typeof observed.startedAt !== "string" || !Number.isFinite(Date.parse(observed.startedAt))
-        || typeof observed.owner !== "string" || !WINDOWS_SID.test(observed.owner)) return "unknown";
-      return { startedAt: observed.startedAt, owner: observed.owner.toUpperCase() };
-    } catch { return "unknown"; }
-  }
-  const result = spawnSync("ps", ["-p", String(pid), "-o", "user=", "-o", "lstart="], { encoding: "utf8", timeout: 10_000 });
-  if (result.status === 1 && result.stdout.trim() === "") return null;
-  if (result.status !== 0) return "unknown";
-  const match = /^(\S+)\s+(.+)$/.exec(result.stdout.trim());
-  const startedAt = match ? new Date(match[2]).toISOString() : "";
-  return match && startedAt !== "Invalid Date" ? { owner: match[1], startedAt } : "unknown";
-}
-
-export const defaultServiceOwnerProbe: ServiceOwnerProbe = {
-  current: () => ({ version: 1, pid: process.pid, startedAt: processStartedAt, owner: currentOwner() }),
-  active: (owner) => {
-    if (process.platform === "win32" && !WINDOWS_SID.test(owner.owner)) return "unknown";
-    const observed = observedOwner(owner.pid);
-    if (observed === "unknown") return "unknown";
-    if (observed === null) return false;
-    return observed.owner === owner.owner
-      && Math.abs(Date.parse(observed.startedAt) - Date.parse(owner.startedAt)) <= 2_000;
-  },
-};
 
 function readOwner(file: string): { owner: ServiceFileOwner; bytes: string } {
   const stat = fs.lstatSync(file);
