@@ -98,7 +98,8 @@ test("policy: wake.replies is an optional boolean that needs no list; anything e
 
   // doctor shows the switch, and a malformed one as a rejected section.
   load({ enabled: true, replies: true });
-  assert.deepEqual(checkPolicy(paths.policy).check.wake, { enabled: true, sessions: [], codexApp: false, replies: true });
+  assert.deepEqual(checkPolicy(paths.policy).check.wake, { enabled: true, sessions: [], codexApp: false, replies: true,
+    nativeQueue: false });
   load({ enabled: true, sessions: ["a"], replies: "yes" });
   const rejected = checkPolicy(paths.policy).check;
   assert.deepEqual([rejected.ok, rejected.wake], [false, { enabled: false, rejected: true }]);

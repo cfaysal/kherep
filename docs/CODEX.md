@@ -133,11 +133,21 @@ A Codex desktop app restart starts a new session with a new id, so a `wake.sessi
 With `codexApp: true` the list may be empty or absent. Any non-boolean value turns waking off, as a malformed list does. The grant selects exactly one Codex session that the list does not name: the most recently seen session recorded by the delivery hook whose rollout, `<CODEX_HOME or ~/.codex>/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl`, begins with a `session_meta` line for that id with `originator` `"Codex Desktop"` and `source` `"vscode"`, and no parent thread. The node reads that line itself. It searches the newest 62 date directories, reads at most 256 KiB, follows no links and refuses a missing, unreadable or garbled file or any other value. Exec runs, Codex tasks and app subagent threads are never granted. If two app sessions share the latest time, neither is granted. A TUI reachable on the shared app-server daemon (below) is never granted and is skipped when the newest app session is chosen.
 
 An eligible Desktop or Terminal session receives a CP hint admission. The node
-publishes metadata directly after the existing authorization guards. A separate
-guarded producer submits a fixed native Queue pointer to that exact owner,
-retaining peer text in the persistent CP Inbox. Native arbitration waits while
-active and can start the same idle loaded owner. No thread is resumed or replaced.
-Legacy queue bindings remain untouched.
+publishes metadata directly after the existing authorization guards. When
+`wake.nativeQueue` is `true`, a separate guarded producer submits a fixed native
+Queue pointer to that exact owner, retaining peer text in the persistent CP Inbox.
+Native arbitration waits while active and can start the same idle loaded owner.
+No thread is resumed or replaced. Legacy queue bindings remain untouched.
+The producer is off by default (issue #429): a `wake` section without
+`nativeQueue`, the built-in default included, submits no native Queue card, and the
+owner still gets the CP hint. `nativeQueue` grants nothing by itself; the owner
+still needs full-id authorization or the `codexApp` grant. Any non-boolean value
+turns waking off, as for `codexApp`:
+
+```json
+"wake": { "enabled": true, "sessions": ["<full thread id>"], "nativeQueue": true }
+```
+
 The Composer's Queue or Steer default is an independent user preference and does
 not control this route. Kherep does not change that setting.
 
@@ -157,7 +167,8 @@ permissions and reads only those bounded references. A durable claim produces
 one fixed additionalContext hint in the same running turn at the next supported
 tool boundary. The hint contains no peer bodies, IDs, paths or receive command.
 This does not interrupt sampling or send a literal `turn/steer` RPC. Without a
-tool boundary, the native pointer remains available for the next eligible turn.
+tool boundary, an opted-in native pointer remains available for the next
+eligible turn.
 The existing Stop continuation remains available for accepted messages
 under its existing budget and permissions.
 

@@ -24,6 +24,7 @@ import { parseSessionsPolicy, type SessionsPolicy } from "./session-policy.mts";
 export interface AcceptRule { session: string; from: string[] }
 // codexApp (issue #82): also wake the current Codex desktop app session (codex-app.mts).
 // replies (issue #253): a reply to a message a session sent may wake it (wake-reply.mts).
+// nativeQueue (issue #429): the exact-owner native Codex Queue pointer producer (codex-queue-producer.mts), off unless true.
 // budget (issue #259): the per-session autonomous-turn budget (autonomy.mts), as written.
 // Its defaults (operator decision of 2026-10-12, issue #390) live here, not in
 // autonomy.mts, because this file is staged into the messaging client without
@@ -33,7 +34,7 @@ export interface AcceptRule { session: string; from: string[] }
 export interface TurnBudget { perHour: number; perDay: number; spacingMs: number }
 export const DEFAULT_TURN_BUDGET: TurnBudget = { perHour: 20, perDay: 100, spacingMs: 30_000 };
 export interface WakeBudget { perHour?: number; perDay?: number; spacingSeconds?: number }
-export interface WakePolicy { enabled: true; sessions: string[]; codexApp?: boolean; replies?: boolean; budget?: WakeBudget }
+export interface WakePolicy { enabled: true; sessions: string[]; codexApp?: boolean; replies?: boolean; nativeQueue?: boolean; budget?: WakeBudget }
 // resumeClosed (issue #102): a message for a known session of this node that
 // is no longer running resumes it, or starts an intercom session instead
 // (closed-delivery.mts). Only the boolean true enables it.
@@ -165,19 +166,20 @@ export function acceptsMessage(policy: NodePolicy, toSession: string, fromNodeId
 // enabled true and a non-empty list of session ids or names disables it (fail
 // closed); "*" matches every session. codexApp and
 // replies must be booleans when present; with either true the list may be
-// empty or absent. A budget that parseBudget rejects disables it as well.
+// empty or absent. nativeQueue must be a boolean when present and grants
+// nothing (issue #429). A budget that parseBudget rejects disables it as well.
 function parseWake(section: unknown): WakePolicy | null {
   if (typeof section !== "object" || section === null) return null;
-  const { enabled, sessions, codexApp, replies, budget: rawBudget } = section as { enabled?: unknown; sessions?: unknown; codexApp?: unknown;
-    replies?: unknown; budget?: unknown };
-  if (enabled !== true || [codexApp, replies].some((flag) => flag !== undefined && typeof flag !== "boolean")) return null;
+  const { enabled, sessions, codexApp, replies, nativeQueue, budget: rawBudget } = section as { enabled?: unknown; sessions?: unknown;
+    codexApp?: unknown; replies?: unknown; nativeQueue?: unknown; budget?: unknown };
+  if (enabled !== true || [codexApp, replies, nativeQueue].some((flag) => flag !== undefined && typeof flag !== "boolean")) return null;
   const budget = rawBudget === undefined ? undefined : parseBudget(rawBudget);
   if (budget === null) return null;
   const granted = codexApp === true || replies === true;
   const list = sessions === undefined && granted ? [] : sessions;
   if (!Array.isArray(list) || !list.every(isSessionRef) || (list.length === 0 && !granted)) return null;
   return { enabled: true, sessions: [...list] as string[], ...(codexApp ? { codexApp: true } : {}), ...(replies ? { replies: true } : {}),
-    ...(budget ? { budget } : {}) };
+    ...(nativeQueue ? { nativeQueue: true } : {}), ...(budget ? { budget } : {}) };
 }
 
 // Hard bounds (issue #259), so that a policy can loosen the budget but never remove it.

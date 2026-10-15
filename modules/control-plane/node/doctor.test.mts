@@ -81,7 +81,7 @@ test("a healthy host passes every check and reports versions without secrets", a
   assert.equal(report.version, "9.8.7");
   assert.deepEqual(report.checks.enrollment, { ok: true, enrolled: true, nodeId: NODE_ID, keyReadable: true });
   assert.deepEqual(report.checks.worker, { ok: true, reachable: true, status: 200, version: "9.8.7", commit: "0123abc", remoteMcp: true });
-  assert.deepEqual(report.checks.policy.wake, { enabled: true, sessions: ["build"], codexApp: false, replies: false });
+  assert.deepEqual(report.checks.policy.wake, { enabled: true, sessions: ["build"], codexApp: false, replies: false, nativeQueue: false });
   assert.deepEqual(report.checks.runtimes.claude, { installed: true, version: "2.1.300 (Claude Code)", configured: true, ready: "unknown" });
   assert.deepEqual(report.checks.hooks.claude, { present: true, deliver: 1, wake: 1, foreign: [] });
   assert.deepEqual(report.checks.hooks.codex, { present: true, deliver: 1, wake: 0, foreign: [] });
@@ -181,7 +181,7 @@ test("the policy check fails on a malformed file and on a rejected wake section,
   fs.rmSync(h.paths.policy);
   policy = (await runDoctor(h.deps)).checks.policy;
   assert.deepEqual([policy.ok, policy.source, policy.wake, policy.sessions],
-    [true, "default", { enabled: true, sessions: ["*"], codexApp: true, replies: true }, { enabled: false }]);
+    [true, "default", { enabled: true, sessions: ["*"], codexApp: true, replies: true, nativeQueue: false }, { enabled: false }]);
   assert.deepEqual([policy.wakeSource, policy.messagingSource, policy.messagingRules], ["default", "default", 1]);
 });
 
@@ -195,9 +195,12 @@ test("the policy check names the source of the wake and messaging sections", asy
   };
   let policy = await check({});
   assert.deepEqual([policy.source, policy.wakeSource, policy.messagingSource], ["file", "default", "absent"]);
-  assert.deepEqual([policy.wake, policy.messagingRules], [{ enabled: true, sessions: ["*"], codexApp: true, replies: true }, 0]);
+  assert.deepEqual([policy.wake, policy.messagingRules], [{ enabled: true, sessions: ["*"], codexApp: true, replies: true, nativeQueue: false }, 0]);
   policy = await check({ messaging: { accept: [{ session: "*", from: ["*"] }] } });
   assert.deepEqual([policy.messagingSource, policy.messagingRules], ["file", 1]);
+  // Issue #429: the native Queue producer opt-in is a plain field, never a failure.
+  policy = await check({ wake: { enabled: true, sessions: ["build"], nativeQueue: true } });
+  assert.deepEqual([policy.ok, policy.wake], [true, { enabled: true, sessions: ["build"], codexApp: false, replies: false, nativeQueue: true }]);
   policy = await check({ wake: { enabled: false }, messaging: { accept: [] } });
   assert.deepEqual([policy.ok, policy.wakeSource, policy.messagingSource], [true, "file", "file"]);
   assert.deepEqual([policy.wake, policy.messagingRules], [{ enabled: false }, 0]);

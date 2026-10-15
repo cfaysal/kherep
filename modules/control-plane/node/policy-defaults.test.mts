@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { busyPolicyFingerprint } from "./codex-busy-policy.mts";
 import { nodePaths } from "./config.mts";
 import { onboard } from "./onboard.mts";
 import {
@@ -64,7 +65,8 @@ test("an explicit opt-out is honoured as written", (t) => {
 
 test("a malformed wake or messaging section still fails closed", (t) => {
   for (const wake of [null, false, "on", [], { enabled: "true" }, { enabled: true }, { enabled: true, sessions: [] },
-    { enabled: true, sessions: ["*"], replies: "yes" }, { enabled: true, sessions: ["*"], budget: { perHour: 0 } }]) {
+    { enabled: true, sessions: ["*"], replies: "yes" }, { enabled: true, sessions: ["*"], budget: { perHour: 0 } },
+    { enabled: true, sessions: ["*"], nativeQueue: "yes" }, { enabled: true, sessions: [], nativeQueue: true }]) {
     const policy = parse(t, { wake, messaging: MESSAGING });
     assert.equal(policy.wake, undefined, JSON.stringify(wake));
     assert.equal(wakeAllowed(policy, ["any-session"]), false, JSON.stringify(wake));
@@ -110,4 +112,18 @@ test("onboarding writes DEFAULT_POLICY with both sections only when the policy f
   fs.writeFileSync(existing.policy, own);
   await enroll(existing);
   assert.equal(fs.readFileSync(existing.policy, "utf8"), own, "an existing file is never rewritten");
+});
+
+// Issue #429: nativeQueue opts into the native Codex Queue pointer producer. It
+// is stored only when true, so false and an absent key are the same policy, and
+// a change of the flag changes the busy-admission fingerprint.
+test("wake.nativeQueue is stored only when true and changes the policy fingerprint", (t) => {
+  const on = parse(t, { wake: { enabled: true, sessions: ["review"], nativeQueue: true } });
+  const off = parse(t, { wake: { enabled: true, sessions: ["review"] } });
+  const offExplicit = parse(t, { wake: { enabled: true, sessions: ["review"], nativeQueue: false } });
+  assert.deepEqual(on.wake, { enabled: true, sessions: ["review"], nativeQueue: true });
+  assert.deepEqual(offExplicit.wake, { enabled: true, sessions: ["review"] });
+  assert.deepEqual(DEFAULT_POLICY.wake, WAKE);
+  assert.notEqual(busyPolicyFingerprint(on), busyPolicyFingerprint(off));
+  assert.equal(busyPolicyFingerprint(offExplicit), busyPolicyFingerprint(off));
 });
