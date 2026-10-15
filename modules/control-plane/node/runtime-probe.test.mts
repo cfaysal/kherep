@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import { forgetCodexSession, isCodexSession, recordCodexSession } from "./codex-sessions.mts";
 import { nodePaths } from "./config.mts";
 import { CLAUDE_PROBE_ARGS, probeRuntime, spawnProbe, type ProbeRun, type ProbeSpawnOptions } from "./runtime-probe.mts";
+import { retainServiceAdmission, serviceAdmissionsIdle, withServiceAdmission } from "./service-drain.mts";
 
 // Issue #197: the readiness probe is a real minimal call. These tests replace
 // the process with a recorded fake; spawnProbe's timeout runs a real process.
@@ -104,6 +107,21 @@ test("spawnProbe kills a process that outlives the timeout and reports timedOut"
   assert.ok(Date.now() - started < 10_000, "killed, not waited for");
   const ok = await spawnProbe()(process.execPath, ["-e", "process.stdin.pipe(process.stdout)"], { cwd: process.cwd(), timeoutMs: 10_000, input: "hi" });
   assert.deepEqual(ok, { code: 0, stdout: "hi", stderr: "", timedOut: false });
+});
+
+test("an unconfirmed started readiness helper retains its service admission", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-probe-admission-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = nodePaths(root);
+  const child = Object.assign(new EventEmitter(), {
+    pid: 4567, stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough(),
+    exitCode: null, signalCode: null,
+  });
+  const out = await withServiceAdmission(paths, (admission) => spawnProbe("win32", (() => child) as never)(
+    "synthetic-probe", [], { cwd: root, timeoutMs: 5, signal: () => {},
+      onUnconfirmedShutdown: () => retainServiceAdmission(admission) }));
+  assert.equal(out.timedOut, true);
+  assert.equal(serviceAdmissionsIdle(paths), false, "unknown helper lifetime blocks service mutation after the probe returns");
 });
 
 test("forgetCodexSession removes exactly the probe's recorded session", (t) => {

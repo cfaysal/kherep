@@ -9,7 +9,8 @@ import { pathToFileURL } from "node:url";
 import { nodePaths } from "./config.mts";
 import { acquireServiceLock } from "./service-records.mts";
 import {
-  beginServiceDrain, defaultServiceOwnerProbe, serviceAdmissionsIdle, serviceDrainFile, withServiceAdmission, type ServiceOwnerProbe,
+  beginServiceDrain, defaultServiceOwnerProbe, serviceAdmissionsIdle, serviceDrainFile, waitForServiceAdmission,
+  withServiceAdmission, type ServiceOwnerProbe,
 } from "./service-drain.mts";
 
 test("a service drain blocks new admissions and observes an admission that already holds a lease", async (t) => {
@@ -29,6 +30,21 @@ test("a service drain blocks new admissions and observes an admission that alrea
   await operation;
   assert.equal(serviceAdmissionsIdle(paths), true);
   endDrain();
+});
+
+test("deferred service work acquires only after the drain is released", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-service-deferred-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = nodePaths(root);
+  const endDrain = beginServiceDrain(paths);
+  let calls = 0;
+  const pending = waitForServiceAdmission(paths, async () => { calls += 1; return "done"; }, { intervalMs: 5 });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(calls, 0, "the deferred operation cannot run while the drain is active");
+  endDrain();
+  assert.equal(await pending, "done");
+  assert.equal(calls, 1);
+  assert.equal(serviceAdmissionsIdle(paths), true);
 });
 
 test("a crashed controller drain and transaction lock are recovered only after owner provenance proves them stale", (t) => {

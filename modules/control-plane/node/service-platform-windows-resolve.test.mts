@@ -36,7 +36,7 @@ test("Windows executable lookup selects only the highest-priority PATH applicati
   for (const key of Object.keys(env)) if (key.toLowerCase() === "path") delete env[key];
   env.PATH = [firstDir, secondDir, process.env.PATH ?? ""].join(path.delimiter);
   const observed = spawnSync(invocation.executable, invocation.args, {
-    env, encoding: "utf8", windowsHide: true, timeout: 30_000,
+    input: invocation.input, env, encoding: "utf8", windowsHide: true, timeout: 30_000,
   });
   assert.equal(observed.status, 0, "the lookup helper must execute under stock PowerShell");
   assert.deepEqual(JSON.parse(observed.stdout), {

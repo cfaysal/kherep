@@ -15,6 +15,7 @@ import { getMessage, storeMessage, UNDELIVERABLE_AFTER_MS } from "./inbox.mts";
 import { knownSessionsFile } from "./known-sessions.mts";
 import { enqueueMcpIntent } from "./mcp-local.mts";
 import { loadPolicy } from "./policy.mts";
+import { beginServiceDrain } from "./service-drain.mts";
 
 const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 const OLD: SessionInfo = { sessionId: "session-old", runtime: "codex", state: "idle" };
@@ -25,7 +26,7 @@ const decode = (frame: string) => {
   return parsed.envelope;
 };
 
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, options: { initialGate?: Promise<void> } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-mcp-session-daemon-"));
   const paths = nodePaths(root), identity = generateIdentity();
   fs.mkdirSync(paths.dir, { recursive: true });
@@ -39,7 +40,8 @@ async function fixture(t: test.TestContext) {
     clear: globalThis.clearInterval, frame: NodeClient.prototype.onFrame, refresh: NodeClient.prototype.refreshPolicy };
   const timers = new Map<number, (() => void)[]>(), frames: string[] = [], logs: string[] = [];
   const listeners = new Map<string, (event: { data?: string; code?: number }) => void>();
-  let sessions = [OLD], reads = 0, gate: Promise<void> | undefined, signal: AbortSignal | undefined, policyGate: Promise<void> | undefined;
+  let sessions = [OLD], reads = 0, gate: Promise<void> | undefined = options.initialGate;
+  let signal: AbortSignal | undefined, policyGate: Promise<void> | undefined;
   Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true,
     value: class {
       static OPEN = 1; static CONNECTING = 0;
@@ -57,7 +59,8 @@ async function fixture(t: test.TestContext) {
   NodeClient.prototype.onFrame = async function (raw) {
     if (raw !== "synthetic-auth-ok") return original.frame.call(this, raw);
     this.authenticated = true;
-    return [...await this.refreshPolicy(loadPolicy(paths.policy)), ...await this.sessionsSnapshot()];
+    const registration = await this.refreshPolicy(loadPolicy(paths.policy));
+    return options.initialGate ? registration : [...registration, ...await this.sessionsSnapshot()];
   };
   NodeClient.prototype.refreshPolicy = async function (policy) {
     await policyGate;
@@ -117,6 +120,38 @@ test("the daemon publishes the one complete discovery result before the intent w
   assert.deepEqual(frames[0]!.body, { sessions: [OLD, NEW] });
   assert.ok(frames[0]!.seq < frames[1]!.seq);
   assert.equal(f.reads(), 1);
+});
+
+test("service drain defers periodic discovery without publishing an empty snapshot", async t => {
+  const f = await fixture(t);
+  f.sessions([OLD, NEW]);
+  const endDrain = beginServiceDrain(f.paths);
+  f.snapshotTick();
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(f.reads(), 0);
+  assert.deepEqual(f.frames, []);
+  endDrain();
+  await new Promise(resolve => setTimeout(resolve, 40));
+  await flush();
+  assert.equal(f.reads(), 1);
+  assert.deepEqual(f.frames.map(frame => decode(frame).type), ["sessions.snapshot"]);
+});
+
+test("service drain defers command discovery and resumes the same command after release", async t => {
+  const f = await fixture(t);
+  fs.writeFileSync(f.paths.policy, JSON.stringify({ version: 1, allowedCommands: ["session.list"], remoteMcp: { enabled: true } }));
+  f.sessions([OLD, NEW]);
+  const endDrain = beginServiceDrain(f.paths);
+  f.receive(JSON.stringify(makeEnvelope("command", { commandId: "drained-list", command: "session.list" }, 1, 0)));
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(f.reads(), 0);
+  assert.equal(f.frames.map(frame => decode(frame).type).includes("command.result"), false);
+  endDrain();
+  await new Promise(resolve => setTimeout(resolve, 40));
+  await flush();
+  assert.equal(f.reads(), 1);
+  const result = f.frames.map(decode).find(frame => frame.type === "command.result");
+  assert.deepEqual((result?.body as { result?: unknown }).result, [OLD, NEW]);
 });
 
 test("timed out daemon discovery cannot publish or rewrite any session cache after late completion", async t => {
@@ -197,4 +232,27 @@ test("an ordinary session.list cancels an older periodic read before it can reco
   assert.equal(f.frames.length, beforeRelease.length);
   assert.deepEqual(files.map(file => fs.readFileSync(file, "utf8")), cached);
   assert.equal(getMessage(f.paths.inbox, messageId)?.state, "accepted");
+});
+
+test("an ordinary session.list cancels a stale initial read before it can overwrite the newer result", async t => {
+  let releaseInitial!: () => void;
+  const f = await fixture(t, { initialGate: new Promise<void>(resolve => { releaseInitial = resolve; }) });
+  fs.writeFileSync(f.paths.policy, JSON.stringify({ version: 1, allowedCommands: ["session.list"], remoteMcp: { enabled: true } }));
+  const initialSignal = f.signal();
+  assert.ok(initialSignal, "authentication starts the initial listing");
+
+  f.hold(undefined);
+  f.sessions([OLD, NEW]);
+  f.receive(JSON.stringify(makeEnvelope("command", { commandId: "newer-list", command: "session.list" }, 1, 0)));
+  await flush();
+  const beforeRelease = f.frames.map(decode);
+  assert.deepEqual(beforeRelease.map(frame => frame.type), ["register", "command.ack", "command.result"]);
+  assert.deepEqual((beforeRelease[2]!.body as { result: unknown }).result, [OLD, NEW]);
+  assert.equal(initialSignal.aborted, true);
+  const cached = fs.existsSync(f.paths.sessions) ? fs.readFileSync(f.paths.sessions, "utf8") : undefined;
+
+  releaseInitial();
+  await flush();
+  assert.deepEqual(f.frames.map(decode), beforeRelease);
+  assert.equal(fs.existsSync(f.paths.sessions) ? fs.readFileSync(f.paths.sessions, "utf8") : undefined, cached);
 });

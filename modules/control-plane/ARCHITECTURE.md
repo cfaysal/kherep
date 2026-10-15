@@ -44,8 +44,12 @@ platform adapter then verifies no daemon descendants. Windows read-only probes
 may wait for known owned descendants while preserving
 the same native definition, security and daemon/supervisor creation identities.
 Unknown evidence, extra supervisor children or drift refuse immediately. The
-30-second polling budget excludes time spent in separately bounded native calls;
-the mutating stop is not retried and still requires no descendants. The transaction checks
+mutating Windows stop repeats that complete read-only attestation inside its
+single native invocation for up to 30 seconds before its first effect. It then
+performs one stop sequence, with a 65-second invocation budget that includes
+the two bounded 10-second retained-handle exit waits. No probe follows a
+replacement pid, and no mutation is retried. The final probe-to-stop boundary
+is not atomic, so later recovery treats uncertain state as unknown. The transaction checks
 process identity again immediately before stopping the selected service. Managed
 daemons honor the admission drain; legacy adoption has no absolute race-free
 claim and aborts on any uncertain recheck. A Windows activation gives only the
@@ -59,6 +63,16 @@ connection, matching service binding and matching startup source. Recovery and
 rollback independently read back restored bytes and restart only a verified
 prior source. An uncertain absence or historical mutable-source drift stays
 unknown and does not authorize another process stop.
+
+Every daemon path that can start a readiness helper, session discovery or
+native Codex Queue/app-server helper acquires the same service admission at
+actual lane execution. Queued work rechecks after scheduling and waits through
+the drain without consuming attempt or turn-budget state or publishing an
+empty discovery/readiness result. Nested Queue submission and reconciliation
+continue the opaque admission instead of reacquiring it. The lease is released
+only after the helper has both exited and closed its streams. If shutdown cannot
+be confirmed, its lease remains as a fail-closed blocker until positive
+stale-owner recovery.
 
 ## Codex intake peer progress
 

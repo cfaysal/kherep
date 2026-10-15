@@ -16,10 +16,12 @@ import {
 } from "./service-types.mts";
 
 const PRELUDE = "$ErrorActionPreference='Stop';$payload=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:KHEREP_SERVICE_PAYLOAD))|ConvertFrom-Json;";
+const STDIN_BOOTSTRAP = "$script=[Console]::In.ReadToEnd();&([ScriptBlock]::Create($script))";
 
-export function powerShellInvocation(script: string, payload: unknown): { executable: string; args: string[]; env: NodeJS.ProcessEnv } {
-  const encoded = Buffer.from(PRELUDE + script, "utf16le").toString("base64");
-  return { executable: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+export function powerShellInvocation(script: string, payload: unknown): {
+  executable: string; args: string[]; env: NodeJS.ProcessEnv; input: string;
+} {
+  return { executable: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", STDIN_BOOTSTRAP], input: PRELUDE + script,
     env: { ...process.env, KHEREP_SERVICE_PAYLOAD: Buffer.from(JSON.stringify(payload)).toString("base64") } };
 }
 
@@ -55,10 +57,10 @@ export function windowsFreshXml(binding: ServiceBinding, user: string): Buffer {
 </Task>`, "utf16le");
 }
 
-function invoke(script: string, payload: unknown): string {
+function invoke(script: string, payload: unknown, timeout = 30_000): string {
   const call = powerShellInvocation(script, payload);
-  const result = spawnSync(call.executable, call.args, { encoding: "utf8", env: call.env, windowsHide: true, timeout: 30_000,
-    stdio: ["ignore", "pipe", "pipe"] });
+  const result = spawnSync(call.executable, call.args, { input: call.input, encoding: "utf8", env: call.env, windowsHide: true, timeout,
+    stdio: ["pipe", "pipe", "pipe"] });
   if (result.status !== 0) throw new Error("Scheduled Task operation failed for the selected task");
   return result.stdout.trim();
 }
@@ -241,7 +243,8 @@ export class WindowsServiceAdapter implements ServiceAdapter {
     const daemon = { executable: binding.nodeExecutable, argv: [binding.nodeExecutable,
       ...(evidence.wrapper.kind === "managed" ? managedArguments(binding) : legacyDaemonArguments(binding, sourceRoot))] };
     invoke(WINDOWS_STOP_SCRIPT, { ...selector(binding), action: evidence.action, wrapper: evidence.wrapper, checkOnly, daemon,
-      expected: expected ? { pid: expected.pid, startedAt: expected.startedAt } : null });
+      definition: evidence.snapshot.definition.toString("base64"), security: evidence.snapshot.security.toString("base64"),
+      expected: expected ? { pid: expected.pid, startedAt: expected.startedAt } : null }, checkOnly ? 30_000 : 65_000);
   }
   async start(binding: ServiceBinding): Promise<void> { invoke("Import-Module ScheduledTasks;Start-ScheduledTask -TaskName $payload.serviceName -TaskPath $payload.taskPath", selector(binding)); }
 }

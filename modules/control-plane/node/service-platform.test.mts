@@ -5,7 +5,7 @@ import test from "node:test";
 
 import { quoteWindowsArg } from "./service-definitions.mts";
 import { launchTarget, macAclAbsent, MAC_EXECUTABLE_PROBE, validateServiceName } from "./service-platform-mac.mts";
-import { decodePowerShellScript, normalizeTaskPath, powerShellInvocation, splitWindowsService,
+import { normalizeTaskPath, powerShellInvocation, splitWindowsService,
   WINDOWS_READ_SCRIPT, WINDOWS_WRITE_SCRIPT, WindowsServiceAdapter, windowsFreshXml, windowsPrincipalSid,
   windowsTaskProvenanceValid } from "./service-platform-windows.mts";
 import {
@@ -32,14 +32,20 @@ test("native service names and macOS launchctl targets are exact", () => {
   assert.equal(MAC_EXECUTABLE_PROBE, "/usr/bin/osascript");
 });
 
-test("PowerShell uses a fixed encoded script and transports values outside its command text", () => {
+test("PowerShell uses bounded stdin script transport and keeps values outside its command text", { skip: process.platform !== "win32" }, () => {
   const payload = { serviceName: 'Task "$(foreign)"', definition: "SYNTHETIC_NATIVE_XML" };
-  const invocation = powerShellInvocation("Write-Output $payload.serviceName", payload);
-  assert.deepEqual(invocation.args.slice(0, 3), ["-NoProfile", "-NonInteractive", "-EncodedCommand"]);
+  const invocation = powerShellInvocation(`${"# synthetic padding\n".repeat(3_000)}Write-Output $payload.serviceName`, payload);
+  assert.deepEqual(invocation.args.slice(0, 3), ["-NoProfile", "-NonInteractive", "-Command"]);
+  assert.match(invocation.args[3], /Console\]::In\.ReadToEnd/);
+  assert.ok(invocation.args.join(" ").length < 1_000);
   assert.equal(invocation.args.join(" ").includes(payload.serviceName), false);
   assert.equal(invocation.args.join(" ").includes(payload.definition), false);
-  assert.match(decodePowerShellScript(invocation.args[3]), /FromBase64String\(\$env:KHEREP_SERVICE_PAYLOAD\)/);
+  assert.match(invocation.input, /FromBase64String\(\$env:KHEREP_SERVICE_PAYLOAD\)/);
   assert.deepEqual(JSON.parse(Buffer.from(invocation.env.KHEREP_SERVICE_PAYLOAD!, "base64").toString("utf8")), payload);
+  const result = spawnSync(invocation.executable, invocation.args, { input: invocation.input,
+    env: invocation.env, encoding: "utf8", windowsHide: true, timeout: 30_000 });
+  assert.equal(result.status, 0, (result.error as NodeJS.ErrnoException | undefined)?.code);
+  assert.equal(result.stdout.trim(), payload.serviceName);
 });
 
 test("Windows process helpers execute under stock PowerShell without automatic-variable collisions", { skip: process.platform !== "win32" }, () => {
@@ -74,7 +80,7 @@ test("Windows process helpers execute under stock PowerShell without automatic-v
       ancestor=(Test-KherepAncestor 3 1 $parents);descendants=(@(Get-KherepDescendants -rootPid 1 -all $all).Count-eq2)}|
       ConvertTo-Json -Compress`, { node: process.execPath, commandLine, fallback: path.basename(base.executable) });
   const result = spawnSync(invocation.executable, invocation.args, {
-    env: invocation.env, encoding: "utf8", windowsHide: true, timeout: 30_000,
+    input: invocation.input, env: invocation.env, encoding: "utf8", windowsHide: true, timeout: 30_000,
   });
   assert.equal(result.status, 0, "the helper must execute, not only parse");
   assert.deepEqual(JSON.parse(result.stdout), {
@@ -101,7 +107,7 @@ test("Windows wrapper selection preserves 0/1/many CIM arrays and intended throw
         node: process.execPath, commandLine,
       });
   const result = spawnSync(invocation.executable, invocation.args, {
-    env: invocation.env, encoding: "utf8", windowsHide: true, timeout: 30_000,
+    input: invocation.input, env: invocation.env, encoding: "utf8", windowsHide: true, timeout: 30_000,
   });
   assert.equal(result.status, 0, "the native selection must execute under stock PowerShell");
   assert.deepEqual(JSON.parse(result.stdout), { diagnostic: true, one: 1, zero: 0, many: 2 });

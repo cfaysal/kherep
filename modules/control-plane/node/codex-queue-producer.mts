@@ -15,6 +15,7 @@ import { ensureDir, readConfig } from "./config.mts";
 import { getMessage, MAX_REPLY_DEPTH, writeJsonAtomic } from "./inbox.mts";
 import { explicitlyListed, readPolicy, wakeAllowed, wakeBudget } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
+import { waitForServiceAdmission, type ServiceAdmission } from "./service-drain.mts";
 import { listTasks } from "./task-records.mts";
 
 // A separate namespace leaves legacy Queue cards/bindings untouched. An
@@ -31,8 +32,8 @@ export async function nativeQueueIdle(): Promise<void> {
   while (pending.size) await Promise.all([...pending.values()]);
 }
 
-function reconcile(deps: RunnerDeps, owner: string): Promise<void> {
-  return deps.codex?.reconcileQueue?.(owner) ?? reconcileNativeQueues(deps.paths, owner);
+function reconcile(deps: RunnerDeps, owner: string, admission: ServiceAdmission): Promise<void> {
+  return deps.codex?.reconcileQueue?.(owner, admission) ?? reconcileNativeQueues(deps.paths, owner, {}, admission);
 }
 
 // Recovery shares the bounded serial lane, but never reserves an enqueue slot.
@@ -40,7 +41,7 @@ export function scheduleNativeReconciliation(deps: RunnerDeps, owner: string, lo
   const key = `${path.join(deps.paths.dir, owner)}:reconcile`;
   if (pending.has(key)) return;
   const work = nativeLane.then(() => new Promise<void>((resolve) => { setImmediate(resolve); }))
-    .then(() => reconcile(deps, owner))
+    .then(() => waitForServiceAdmission(deps.paths, admission => reconcile(deps, owner, admission)))
     .catch(() => { log("kherep-node: native queue reconciliation pending"); })
     .finally(() => { pending.delete(key); });
   pending.set(key, work);
@@ -54,7 +55,8 @@ export function scheduleNativeQueue(deps: RunnerDeps, owner: string, messageIds:
   if (pending.has(key)) return;
   const fingerprint = busyPolicyFingerprint(deps.policy);
   const work = nativeLane.then(() => new Promise<void>((resolve) => { setImmediate(resolve); }))
-    .then(() => produce(deps, owner, messageIds, fingerprint, grant))
+    .then(() => waitForServiceAdmission(deps.paths,
+      admission => produce(deps, owner, messageIds, fingerprint, grant, admission)))
     .catch(() => { log("kherep-node: native Codex Queue outcome unavailable; original intake remains pending"); })
     .finally(() => { pending.delete(key); });
   pending.set(key, work);
@@ -101,7 +103,8 @@ function absent(file: string): boolean {
   }
 }
 
-async function produce(deps: RunnerDeps, owner: string, messageIds: string[], fingerprint: string, grant?: WakeGrant): Promise<void> {
+async function produce(deps: RunnerDeps, owner: string, messageIds: string[], fingerprint: string, grant: WakeGrant | undefined,
+  serviceAdmission: ServiceAdmission): Promise<void> {
   const file = (deps.codex?.findCodex ?? findCodex)();
   if (!file) return;
   const admission = admitted(deps, owner, messageIds, fingerprint, grant);
@@ -140,10 +143,10 @@ async function produce(deps: RunnerDeps, owner: string, messageIds: string[], fi
   if (!current || current.ids.length !== claimed.length) { settle("cancelled-before-submit"); return; }
   try {
     const result = await runQueue({ ...deps, codex: { ...deps.codex,
-      findCodex: () => file, home: producer.resolvedCodexHome } }, queueArgs(owner, claimed.length), producer);
+      findCodex: () => file, home: producer.resolvedCodexHome } }, queueArgs(owner, claimed.length), producer, serviceAdmission);
     settle(result.queueId ? "submitted" : "uncertain", result.queueId);
   } catch { settle("uncertain"); return; }
   // Stop may have confirmed the content while native admission was in flight.
   // Cleanup failure must never overwrite the successfully persisted queue ID.
-  await reconcile(deps, owner);
+  await reconcile(deps, owner, serviceAdmission);
 }

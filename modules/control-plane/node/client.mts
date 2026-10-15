@@ -40,6 +40,10 @@ export interface ClientOptions {
   runtimes: () => Promise<RuntimeInfo[]>;
   // Rejects when the listing failed, which is not the same as no sessions.
   sessions: (signal?: AbortSignal) => Promise<SessionInfo[]>;
+  // The daemon publishes this after authentication so service-drained session
+  // discovery cannot postpone connectedAt. Transport-free clients keep the
+  // original synchronous auth snapshot by default.
+  deferInitialSessions?: boolean;
   // Stores an accepted message in the node inbox; throws when it cannot.
   storeMessage: (body: MessageDeliverBody) => void;
   // The last local session listing (sessions.json), so a policy rule for a
@@ -155,7 +159,7 @@ export class NodeClient {
           && this.options.mcpCredentialPresent?.() !== true;
         return [
           ...this.pendingRegistrationFrames(),
-          ...await this.sessionsSnapshot(),
+          ...(this.options.deferInitialSessions ? [] : await this.sessionsSnapshot()),
           ...this.directoryRequest(),
         ];
       case "command":

@@ -11,6 +11,11 @@ export const serviceDrainFile = (paths: NodePaths): string => path.join(root(pat
 const admissions = (paths: NodePaths): string => path.join(root(paths), "admissions");
 export interface ServiceAdmission { readonly root: string }
 const activeAdmissions = new WeakSet<ServiceAdmission>();
+const retainedAdmissions = new WeakSet<ServiceAdmission>();
+
+export class ServiceDrainActiveError extends Error {
+  constructor() { super("managed service upgrade is draining new session admissions"); }
+}
 
 export interface ServiceFileOwner { version: 1; pid: number; startedAt: string; owner: string }
 export interface ServiceOwnerProbe {
@@ -133,7 +138,7 @@ export async function withServiceAdmission<T>(
   paths: NodePaths, operation: (admission: ServiceAdmission) => Promise<T>, probe: ServiceOwnerProbe = defaultServiceOwnerProbe,
 ): Promise<T> {
   const drain = serviceDrainFile(paths);
-  if (fs.existsSync(drain)) throw new Error("managed service upgrade is draining new session admissions");
+  if (fs.existsSync(drain)) throw new ServiceDrainActiveError();
   const dir = admissions(paths);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const lease = path.join(dir, `${process.pid}-${crypto.randomUUID()}`);
@@ -145,12 +150,14 @@ export async function withServiceAdmission<T>(
   const admission = Object.freeze({ root: path.resolve(paths.dir) });
   activeAdmissions.add(admission);
   try {
-    if (fs.existsSync(drain)) throw new Error("managed service upgrade is draining new session admissions");
+    if (fs.existsSync(drain)) throw new ServiceDrainActiveError();
     return await operation(admission);
   } finally {
     activeAdmissions.delete(admission);
-    try { if (fs.readFileSync(lease, "utf8") === bytes) fs.rmSync(lease); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (!retainedAdmissions.has(admission)) {
+      try { if (fs.readFileSync(lease, "utf8") === bytes) fs.rmSync(lease); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    }
   }
 }
 
@@ -159,6 +166,31 @@ export async function continueServiceAdmission<T>(
 ): Promise<T> {
   if (admission && activeAdmissions.has(admission) && admission.root === path.resolve(paths.dir)) return operation(admission);
   return withServiceAdmission(paths, operation);
+}
+
+export function retainServiceAdmission(admission: ServiceAdmission): void {
+  if (!activeAdmissions.has(admission)) throw new Error("service admission is not active");
+  retainedAdmissions.add(admission);
+}
+
+export async function waitForServiceAdmission<T>(
+  paths: NodePaths, operation: (active: ServiceAdmission) => Promise<T>,
+  options: { admission?: ServiceAdmission; signal?: AbortSignal; intervalMs?: number } = {},
+): Promise<T> {
+  const interval = options.intervalMs ?? 25;
+  for (;;) {
+    if (options.signal?.aborted) throw options.signal.reason ?? new DOMException("operation aborted", "AbortError");
+    try { return await continueServiceAdmission(paths, options.admission, operation); }
+    catch (error) {
+      if (!(error instanceof ServiceDrainActiveError)) throw error;
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(done, interval);
+        function done(): void { options.signal?.removeEventListener("abort", aborted); resolve(); }
+        function aborted(): void { clearTimeout(timer); reject(options.signal?.reason ?? new DOMException("operation aborted", "AbortError")); }
+        options.signal?.addEventListener("abort", aborted, { once: true });
+      });
+    }
+  }
 }
 
 export function beginServiceDrain(paths: NodePaths, probe?: ServiceOwnerProbe): () => void {

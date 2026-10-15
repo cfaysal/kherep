@@ -38,11 +38,23 @@ export interface SessionDeps {
 
 export interface Invocation { file: string; args: string[]; options: ExecOptions }
 
-const execFileText: Exec = (file, args, options) => new Promise((resolve, reject) => {
-  execFile(file, args, { ...options, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
-    if (error) reject(error);
-    else resolve(stdout);
+export const execFileText: Exec = (file, args, options) => new Promise((resolve, reject) => {
+  let callbackDone = false;
+  let closed = false;
+  let failure: Error | null = null;
+  let output = "";
+  const settle = (started: boolean): void => {
+    if (!callbackDone || (started && !closed)) return;
+    if (failure) reject(failure);
+    else resolve(output);
+  };
+  const child = execFile(file, args, { ...options, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+    callbackDone = true;
+    failure = error;
+    output = String(stdout);
+    settle(child.pid !== undefined);
   });
+  child.once("close", () => { closed = true; settle(child.pid !== undefined); });
 });
 
 // How `claude agents --json` is started. An executable runs directly, without

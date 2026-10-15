@@ -61,7 +61,7 @@ test("native client uses only initialize and public paginated queue list/delete 
   const stdin = new PassThrough();
   const child = Object.assign(new EventEmitter(), { stdout, stderr, stdin, pid: 123, killed: false, exitCode: null as number | null, signalCode: null,
     kill(this: EventEmitter & { killed: boolean; exitCode: number | null }, _signal?: string) {
-      this.killed = true; this.exitCode = 0; queueMicrotask(() => this.emit("exit", 0, null)); return true;
+      this.killed = true; this.exitCode = 0; queueMicrotask(() => { this.emit("exit", 0, null); this.emit("close", 0, null); }); return true;
     } });
   let pending = "";
   stdin.on("data", (chunk) => {
@@ -107,7 +107,7 @@ test("native client rejects malformed, oversized and timed-out responses and clo
     const stdin = new PassThrough();
     const child = Object.assign(new EventEmitter(), { stdout, stderr, stdin, pid: 456, killed: false, exitCode: null as number | null, signalCode: null,
       kill(this: EventEmitter & { killed: boolean; exitCode: number | null }, _signal?: string) {
-        this.killed = true; this.exitCode = 0; queueMicrotask(() => this.emit("exit", 0, null)); return true;
+        this.killed = true; this.exitCode = 0; queueMicrotask(() => { this.emit("exit", 0, null); this.emit("close", 0, null); }); return true;
       } });
     stdin.on("data", (chunk) => {
       const request = JSON.parse(chunk.toString("utf8").trim()) as { id?: number; method?: string };
@@ -138,7 +138,7 @@ test("total cleanup timeout drains pending initialization and delayed process ex
     kill(this: EventEmitter & { killed: boolean; exitCode: number | null }, _signal?: string) {
       if (this.killed) return true;
       this.killed = true;
-      setTimeout(() => { this.exitCode = 0; exited = true; this.emit("exit", 0, null); }, 30);
+      setTimeout(() => { this.exitCode = 0; exited = true; this.emit("exit", 0, null); this.emit("close", 0, null); }, 30);
       return true;
     } });
   stdin.on("data", (chunk) => {

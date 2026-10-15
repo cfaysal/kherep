@@ -23,6 +23,7 @@ import { loadPolicy, type NodePolicy } from "./policy.mts";
 import { routeFrame } from "./readiness-lane.mts";
 import { probeRuntime, type ProbeResult } from "./runtime-probe.mts";
 import { createReadiness } from "./runtime-readiness.mts";
+import { retainServiceAdmission, waitForServiceAdmission } from "./service-drain.mts";
 import { continueTask, startTask, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { listSessions } from "./sessions.mts";
 import { recordAndPublishSessions } from "./periodic-session-publication.mts";
@@ -52,12 +53,13 @@ const enabledRuntimes = (policy: NodePolicy): TaskRuntime[] =>
 // runner: with it, the session commands of item 5 (the client runs them only
 // when the policy enables sessions).
 export function commandHandlers(config: NodeConfig, startedAt: number,
-  sessions: () => Promise<SessionInfo[]> = () => listSessions(), runner?: RunnerDeps): CommandHandlers {
+  sessions: () => Promise<SessionInfo[]> = () => listSessions(), runner?: RunnerDeps,
+  runtimes: () => ReturnType<typeof discoverRuntimes> = () => discoverRuntimes()): CommandHandlers {
   return {
     "node.status": async () => ({
       nodeId: config.nodeId, name: config.name, facts: detectFacts(), uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
     }),
-    "runtime.list": () => discoverRuntimes(),
+    "runtime.list": runtimes,
     // A failed listing rejects, and the command result reports ok:false.
     "session.list": sessions,
     ...(runner ? {
@@ -71,8 +73,8 @@ export function commandHandlers(config: NodeConfig, startedAt: number,
 // probe: the runtime readiness probe (issue #197); tests replace it.
 export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: string) => void = (line) => console.error(line),
   sessionSource?: (signal?: AbortSignal) => Promise<SessionInfo[]>,
-  probe: (runtime: TaskRuntime) => Promise<ProbeResult> = (runtime) =>
-    probeRuntime(runtime, { forgetSession: (threadId) => forgetCodexSession(paths, threadId) }),
+  probe: (runtime: TaskRuntime, onUnconfirmedShutdown?: () => void) => Promise<ProbeResult> = (runtime, onUnconfirmedShutdown) =>
+    probeRuntime(runtime, { forgetSession: (threadId) => forgetCodexSession(paths, threadId), onUnconfirmedShutdown }),
   service?: DaemonServiceBinding): DaemonHandle {
   const identity = readPrivateKey(config.privateKeyFile);
   if (identity.publicKey !== config.publicKey) throw new Error("private key does not match the enrolled public key");
@@ -92,16 +94,22 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // Issue #225: locks of wake listeners whose process is gone, now and hourly.
   const stopSweep = scheduleListenerSweep(paths, log);
   // Successful listings update sessions.json and include hook-recorded Codex sessions.
-  let periodicDiscovery: AbortController | null = null;
-  const source = sessionSource ?? ((signal?: AbortSignal) => listSessions({ paths, codexHome: codexHome(), signal }));
+  let backgroundDiscovery: { controller: AbortController; socket: WebSocket } | null = null;
+  const rawSource = sessionSource ?? ((signal?: AbortSignal) => listSessions({ paths, codexHome: codexHome(), signal }));
+  const source = (signal?: AbortSignal) => waitForServiceAdmission(paths, () => rawSource(signal), { signal });
+  // Filesystem/loopback runtime discovery starts no user runtime process and
+  // must remain available while a replacement service authenticates.
+  const runtimeDiscovery = () => discoverRuntimes();
+  const admittedProbe = (runtime: TaskRuntime) => waitForServiceAdmission(paths,
+    (admission) => probe(runtime, () => retainServiceAdmission(admission)));
   const sessions = recordingSessions(paths, (signal) => {
-    periodicDiscovery?.abort();
+    backgroundDiscovery?.controller.abort();
     return source(signal);
   }, log);
   // Issue #197: one readiness probe per enabled runtime at the start, then only
   // when a run needs a runtime whose verdict aged out (runtime-readiness.mts).
   // Each completed probe goes to daemon.json for doctor (issue #222), off the frame lane.
-  const readiness = createReadiness(probe, { log, onVerdict: (runtime, verdict) => {
+  const readiness = createReadiness(admittedProbe, { log, onVerdict: (runtime, verdict) => {
     state = withVerdict(state, runtime, verdict);
     recordDaemonState(paths, state, log);
   } });
@@ -114,9 +122,9 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     try { disableMcp(paths, mcpInflight); } catch (error) { log(`kherep-node: remote MCP cleanup failed: ${String(error)}`); }
   }
   const client = new NodeClient({
-    nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions, runner),
-    facts: detectFacts, runtimes: () => discoverRuntimes(), readyRuntimes: () => readiness.ready(),
-    sessions,
+    nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions, runner, runtimeDiscovery),
+    facts: detectFacts, runtimes: runtimeDiscovery, readyRuntimes: () => readiness.ready(),
+    sessions, deferInitialSessions: true,
     storeMessage: (body) => { storeMessage(paths.inbox, body, Date.now(), replyDepth(paths, body.inReplyTo)); },
     taskRequestResult: (result) => recordRequestResult(paths, result),
     taskControlRegistrationReceipt: (body) => {
@@ -192,9 +200,9 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         // background, at most every NOT_READY_TTL_MS, so a re-login is noticed
         // and advertised without a run asking for it.
         for (const runtime of enabledRuntimes(loadPolicy(config.policyFile))) readiness.revalidate(runtime);
-        if (periodicDiscovery) return;
+        if (backgroundDiscovery) return;
         const controller = new AbortController();
-        periodicDiscovery = controller;
+        backgroundDiscovery = { controller, socket: ws };
         void source(controller.signal).catch((error: unknown) => {
           if (!controller.signal.aborted) log(`kherep-node: session listing failed, snapshot skipped: ${String(error)}`);
           return null;
@@ -206,7 +214,9 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
             await deliverToClosed(runner, log);
           }).catch((error: unknown) => log(`kherep-node: session snapshot failed: ${String(error)}`));
           return chain;
-        }).finally(() => { if (periodicDiscovery === controller) periodicDiscovery = null; });
+        }).finally(() => {
+          if (backgroundDiscovery?.controller === controller) backgroundDiscovery = null;
+        });
       }, SESSIONS_INTERVAL_MS);
       exchange = setInterval(() => {
         if (intakeWindow) { intakeWindow.tick(); return; }
@@ -283,14 +293,34 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           state = { ...state, connectedAt: new Date().toISOString(), disconnectedAt: undefined };
           recordDaemonState(paths, state, log);
           log(`kherep-node: connected as ${config.nodeId}`);
+          // Session discovery may be service-drained. Start it after the
+          // authenticated health record, then serialize publication back onto
+          // the frame lane without fabricating an empty snapshot.
+          if (sent && !backgroundDiscovery) {
+            const controller = new AbortController();
+            backgroundDiscovery = { controller, socket: ws };
+            void source(controller.signal).then((listed) => {
+              chain = chain.then(async () => {
+                if (socket !== ws || ws.readyState !== WebSocket.OPEN || controller.signal.aborted) return;
+                await recordAndPublishSessions(client, paths, listed, send, log, controller.signal);
+              });
+              return chain;
+            }).catch((error: unknown) => {
+              if (!controller.signal.aborted) log(`kherep-node: initial session snapshot failed: ${String(error)}`);
+            }).finally(() => {
+              if (backgroundDiscovery?.controller === controller) backgroundDiscovery = null;
+            });
+          }
         }
       }).catch((error: unknown) => log(`kherep-node: frame handling failed: ${String(error)}`));
     };
     ws.addEventListener("close", (event) => {
       intakeWindow?.close();
       for (const timer of [ping, snapshots, exchange, directory]) if (timer) clearInterval(timer);
-      periodicDiscovery?.abort();
-      periodicDiscovery = null;
+      if (backgroundDiscovery?.socket === ws) {
+        backgroundDiscovery.controller.abort();
+        backgroundDiscovery = null;
+      }
       client.connectionClosed();
       state = { ...state, disconnectedAt: new Date().toISOString() };
       recordDaemonState(paths, state, log);

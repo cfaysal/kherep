@@ -709,8 +709,10 @@ proven; on Windows it retains the attested supervisor and daemon handles, stops
 the supervisor first and never reopens a pid after that boundary. Read-only
 Windows probes may wait for positively owned daemon descendants to exit, with
 fresh identity, definition and security checks on every probe. The polling budget
-is 30 seconds plus separately bounded native calls. The mutating stop stays
-single-shot and refuses descendants. The
+is 30 seconds. The mutating stop repeats the complete read-only check inside
+its same native invocation before its first effect, then runs one stop sequence
+under a 65-second bounded call that includes both retained-handle exit waits.
+It never follows a replacement pid or retries a mutation. The
 transaction drains new task admissions, waits for an admission that already
 holds a lease, and rechecks ownership immediately before the selected service
 stop. Admission leases carry PID, start-time and owner provenance;
@@ -718,6 +720,13 @@ positively stale leases are recovered and uncertain owners fail closed. Status
 succeeds only for a running, authenticated daemon with the exact managed
 process, source, config and service binding. It does not modify Claude Code or
 Codex hooks.
+
+Readiness probes, session discovery and native Codex Queue reconciliation take
+the same admission when their lane actually executes. Work queued before a
+drain waits and resumes without consuming attempt or budget records or
+publishing an empty result. Nested Queue work reuses its opaque admission, and
+the lease remains until each helper has exited and closed its streams. An
+unconfirmed helper shutdown leaves a fail-closed lease for stale-owner recovery.
 
 The Worker keeps one authenticated connection per node identity. A daemon whose
 connection is replaced by a newer connection for that identity exits on close

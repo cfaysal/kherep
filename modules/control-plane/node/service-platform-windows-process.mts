@@ -21,11 +21,25 @@ function Get-KherepDescendants([int]$rootPid,$all){$seen=New-Object 'Collections
 
 export const WINDOWS_PROCESS_HELPERS_SCRIPT = ARGUMENTS;
 
-const NATIVE = String.raw`$folder=if($payload.taskPath-eq'\'){'\'}else{$payload.taskPath.TrimEnd('\')};$service=New-Object -ComObject 'Schedule.Service';$service.Connect();$registered=$service.GetFolder($folder).GetTask($payload.serviceName);[xml]$nativeXml=$registered.Xml;$ns=New-Object Xml.XmlNamespaceManager($nativeXml.NameTable);$ns.AddNamespace('t',$nativeXml.DocumentElement.NamespaceURI);$nativeActions=@($nativeXml.SelectNodes('//t:Actions/*',$ns));$nativeExec=$nativeXml.SelectSingleNode('//t:Actions/t:Exec',$ns);$actionMatches=($nativeActions.Count-eq1 -and $null-ne$nativeExec -and [string]$nativeExec.Command-ceq[string]$payload.action.executable -and [string]$nativeExec.Arguments-ceq[string]$payload.action.arguments -and [string]$nativeExec.WorkingDirectory-ceq[string]$payload.action.workingDirectory);$running=@($service.GetRunningTasks(1));$selected=@($running|Where-Object{$_.Path -ceq $registered.Path});$engine=if($selected.Count-eq1){[int]$selected[0].EnginePID}else{0};$sameEngine=@($running|Where-Object{[int]$_.EnginePID-eq$engine});$all=@(Get-CimInstance Win32_Process);$parents=@{};foreach($item in $all){$parents[[int]$item.ProcessId]=[int]$item.ParentProcessId};$current=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$wrappers=@(if($actionMatches){@($all|Where-Object{(Test-KherepArgs $_ $payload.wrapper)-and(Test-KherepAncestor ([int]$_.ProcessId) $engine $parents)})}else{@()});$wrapper=if($wrappers.Count-eq1){$wrappers[0]}else{$null};$supervisorPid=if($null-ne$wrapper){[int]$wrapper.ProcessId}else{0};$supervisorChildren=@($all|Where-Object{[int]$_.ParentProcessId-eq$supervisorPid});`;
+const NATIVE = String.raw`function Get-KherepNativeState{
+  $folder=if($payload.taskPath-eq'\'){'\'}else{$payload.taskPath.TrimEnd('\')};$service=New-Object -ComObject 'Schedule.Service';$service.Connect();$registered=$service.GetFolder($folder).GetTask($payload.serviceName)
+  [xml]$nativeXml=$registered.Xml;$ns=New-Object Xml.XmlNamespaceManager($nativeXml.NameTable);$ns.AddNamespace('t',$nativeXml.DocumentElement.NamespaceURI)
+  $nativeActions=@($nativeXml.SelectNodes('//t:Actions/*',$ns));$nativeExec=$nativeXml.SelectSingleNode('//t:Actions/t:Exec',$ns)
+  $actionMatches=($nativeActions.Count-eq1 -and $null-ne$nativeExec -and [string]$nativeExec.Command-ceq[string]$payload.action.executable -and [string]$nativeExec.Arguments-ceq[string]$payload.action.arguments -and [string]$nativeExec.WorkingDirectory-ceq[string]$payload.action.workingDirectory)
+  $running=@($service.GetRunningTasks(1));$selected=@($running|Where-Object{$_.Path -ceq $registered.Path});$engine=if($selected.Count-eq1){[int]$selected[0].EnginePID}else{0};$sameEngine=@($running|Where-Object{[int]$_.EnginePID-eq$engine})
+  $all=@(Get-CimInstance Win32_Process);$parents=@{};foreach($item in $all){$parents[[int]$item.ProcessId]=[int]$item.ParentProcessId};$current=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  $wrappers=@(if($actionMatches){@($all|Where-Object{(Test-KherepArgs $_ $payload.wrapper)-and(Test-KherepAncestor ([int]$_.ProcessId) $engine $parents)})}else{@()});$wrapper=if($wrappers.Count-eq1){$wrappers[0]}else{$null};$supervisorPid=if($null-ne$wrapper){[int]$wrapper.ProcessId}else{0};$supervisorChildren=@($all|Where-Object{[int]$_.ParentProcessId-eq$supervisorPid})
+  $definition=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes((Export-ScheduledTask -TaskName $payload.serviceName -TaskPath $payload.taskPath)))
+  $security=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($registered.GetSecurityDescriptor(7)))
+  [pscustomobject]@{service=$service;registered=$registered;actionMatches=$actionMatches;running=$running;selected=$selected;engine=$engine;sameEngine=$sameEngine;all=$all;parents=$parents;current=$current;wrappers=$wrappers;wrapper=$wrapper;supervisorPid=$supervisorPid;supervisorChildren=$supervisorChildren;definition=$definition;security=$security}
+}
+$native=Get-KherepNativeState;$service=$native.service;$registered=$native.registered;$actionMatches=$native.actionMatches;$running=$native.running;$selected=$native.selected;$engine=$native.engine;$sameEngine=$native.sameEngine;$all=$native.all;$parents=$native.parents;$current=$native.current;$wrappers=$native.wrappers;$wrapper=$native.wrapper;$supervisorPid=$native.supervisorPid;$supervisorChildren=$native.supervisorChildren;`;
+
+export const WINDOWS_FINAL_STOP_WAIT_SCRIPT = String.raw`function Wait-KherepFinalStop([scriptblock]$probe,[int]$timeoutMs=30000,[int]$intervalMs=100){$clock=[Diagnostics.Stopwatch]::StartNew();while($true){$state=&$probe;if($state-ceq'clear'){return};if($state-cne'busy'){throw 'Windows final stop provenance is unknown'};if($clock.ElapsedMilliseconds-ge$timeoutMs){throw 'STOP_BLOCKED_NATIVE_DESCENDANTS'};Start-Sleep -Milliseconds ([Math]::Min($intervalMs,[Math]::Max(1,$timeoutMs-[int]$clock.ElapsedMilliseconds)))}}`;
 
 export const WINDOWS_PROCESS_PROVENANCE_SCRIPT = ARGUMENTS + NATIVE + String.raw`$p=$all|Where-Object{[int]$_.ProcessId-eq[int]$payload.pid}|Select-Object -First 1;if($null-eq$p){'{"missing":true}';exit};$owner=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop;if($owner.ReturnValue-ne0){throw 'process owner is unresolved'};$supervisorOwner=if($null-ne$wrapper){Test-KherepOwner $wrapper $current}else{$false};$descendants=@(Get-KherepDescendants ([int]$p.ProcessId) $all);@{missing=$false;executable=$p.ExecutablePath;commandLine=$p.CommandLine;created=$p.CreationDate.ToUniversalTime().ToString('o');supervisorCreated=if($null-ne$wrapper){$wrapper.CreationDate.ToUniversalTime().ToString('o')}else{$null};ownerSid=[string]$owner.Sid;currentSid=$current;selectedInstances=$selected.Count;enginePid=$engine;engineInAncestry=(Test-KherepAncestor ([int]$p.ProcessId) $engine $parents);matchingEngineTasks=$sameEngine.Count;supervisorPid=$supervisorPid;supervisorOwner=$supervisorOwner;daemonDirectChild=([int]$p.ParentProcessId -eq $supervisorPid);supervisorChildren=$supervisorChildren.Count;daemonDescendants=$descendants.Count}|ConvertTo-Json -Compress`;
 
-export const WINDOWS_STOP_SCRIPT = ARGUMENTS + NATIVE + String.raw`
+export const WINDOWS_STOP_SCRIPT = ARGUMENTS + NATIVE + WINDOWS_FINAL_STOP_WAIT_SCRIPT + String.raw`
 $supervisorRetained=$null;$daemonRetained=$null;
 try{
   if($null-eq$payload.expected -and $selected.Count-eq0){
@@ -51,7 +65,33 @@ try{
     if($supervisorChildren.Count-ne1){throw 'STOP_BLOCKED_NATIVE_DESCENDANTS'}
   }elseif($supervisorChildren.Count-ne0){throw 'expected daemon is unavailable while the supervisor has another child'}
   if($payload.checkOnly){@{stopped=$false;owned=$true;busy=($descendantCount-gt0);daemonPid=$daemonPid;daemonCreated=$daemonCreated;supervisorPid=$supervisorPid;supervisorCreated=$supervisorCreated}|ConvertTo-Json -Compress;exit}
-  if($descendantCount-ne0){throw 'STOP_BLOCKED_NATIVE_DESCENDANTS'}
+  $baselineDefinition=[string]$payload.definition;$baselineSecurity=[string]$payload.security;$baselineEngine=$engine;$baselineCurrent=$current
+  Wait-KherepFinalStop {
+    $final=Get-KherepNativeState
+    if([string]$final.definition-cne$baselineDefinition -or [string]$final.security-cne$baselineSecurity -or -not$final.actionMatches){throw 'Scheduled Task definition changed during final stop'}
+    if($final.selected.Count-ne1 -or [int]$final.engine-ne$baselineEngine -or $final.sameEngine.Count-ne1 -or [string]$final.current-cne$baselineCurrent){throw 'Scheduled Task instance changed during final stop'}
+    if($null-eq$final.wrapper -or [int]$final.supervisorPid-ne$supervisorPid -or -not(Test-KherepAncestor $supervisorPid $baselineEngine $final.parents)){throw 'expected supervisor task provenance changed during final stop'}
+    if(-not(Test-KherepRetainedStart $supervisorRetained $final.wrapper)-or-not(Test-KherepOwner $final.wrapper $baselineCurrent)-or-not(Test-KherepArgs $final.wrapper $payload.wrapper)){throw 'expected supervisor identity changed during final stop'}
+    if($null-ne$daemonRetained){
+      $finalDaemon=$final.all|Where-Object{[int]$_.ProcessId-eq$daemonPid}|Select-Object -First 1
+      if($null-eq$finalDaemon -or -not(Test-KherepRetainedStart $daemonRetained $finalDaemon)-or-not(Test-KherepOwner $finalDaemon $baselineCurrent)-or-not(Test-KherepArgs $finalDaemon $payload.daemon)-or[int]$finalDaemon.ParentProcessId-ne$supervisorPid){throw 'expected daemon identity changed during final stop'}
+      # Refresh after the native, owner and argv checks. A discovery helper can
+      # start during those calls; deciding from $final.all would miss it.
+      $freshAll=@(Get-CimInstance Win32_Process);$freshParents=@{};foreach($item in $freshAll){$freshParents[[int]$item.ProcessId]=[int]$item.ParentProcessId}
+      $freshWrapper=$freshAll|Where-Object{[int]$_.ProcessId-eq$supervisorPid}|Select-Object -First 1
+      $freshDaemon=$freshAll|Where-Object{[int]$_.ProcessId-eq$daemonPid}|Select-Object -First 1
+      if($null-eq$freshWrapper -or -not(Test-KherepRetainedStart $supervisorRetained $freshWrapper)-or-not(Test-KherepArgs $freshWrapper $payload.wrapper)-or-not(Test-KherepAncestor $supervisorPid $baselineEngine $freshParents)){throw 'expected supervisor identity changed during final stop'}
+      if($null-eq$freshDaemon -or -not(Test-KherepRetainedStart $daemonRetained $freshDaemon)-or-not(Test-KherepArgs $freshDaemon $payload.daemon)-or[int]$freshDaemon.ParentProcessId-ne$supervisorPid){throw 'expected daemon identity changed during final stop'}
+      $freshChildren=@($freshAll|Where-Object{[int]$_.ParentProcessId-eq$supervisorPid});if($freshChildren.Count-ne1){throw 'STOP_BLOCKED_NATIVE_DESCENDANTS'}
+      if(@(Get-KherepDescendants $daemonPid $freshAll).Count-gt0){return 'busy'}
+      return 'clear'
+    }
+    $freshAll=@(Get-CimInstance Win32_Process);$freshParents=@{};foreach($item in $freshAll){$freshParents[[int]$item.ProcessId]=[int]$item.ParentProcessId}
+    $freshWrapper=$freshAll|Where-Object{[int]$_.ProcessId-eq$supervisorPid}|Select-Object -First 1
+    if($null-eq$freshWrapper -or -not(Test-KherepRetainedStart $supervisorRetained $freshWrapper)-or-not(Test-KherepArgs $freshWrapper $payload.wrapper)-or-not(Test-KherepAncestor $supervisorPid $baselineEngine $freshParents)){throw 'expected supervisor identity changed during final stop'}
+    if(@($freshAll|Where-Object{[int]$_.ParentProcessId-eq$supervisorPid}).Count-ne0 -or @($freshAll|Where-Object{[int]$_.ProcessId-eq[int]$payload.expected.pid}).Count-ne0){throw 'expected daemon absence changed during final stop'}
+    return 'clear'
+  } 30000 100
   Stop-ScheduledTask -TaskName $payload.serviceName -TaskPath $payload.taskPath
   if(-not$supervisorRetained.HasExited){$supervisorRetained.Kill();if(-not$supervisorRetained.WaitForExit(10000)){throw 'expected supervisor did not exit'}}
   $after=@(Get-CimInstance Win32_Process|Where-Object{[int]$_.ParentProcessId-eq$supervisorPid});$allowed=if($null-ne$daemonRetained){[int]$payload.expected.pid}else{0}
