@@ -55,11 +55,12 @@ type EventFields = Pick<CodexSessionRecord, "lastEvent" | "lastEventAt" | "lastS
 // A hook event replaces the last event (a Stop also the stop time); anything
 // else keeps the previous record's valid event fields.
 function eventFields(previous: CodexSessionRecord | null, event: unknown, now: number): EventFields {
-  const time = (value: unknown): string | undefined => (typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : undefined);
+  const validTime = (value: unknown): string | undefined => (typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : undefined);
   const at = new Date(now).toISOString();
-  const lastEvent = isCodexHookEvent(event) ? event : isCodexHookEvent(previous?.lastEvent) ? previous.lastEvent : undefined;
-  const lastEventAt = isCodexHookEvent(event) ? at : time(previous?.lastEventAt);
-  const lastStopAt = event === "Stop" ? at : time(previous?.lastStopAt);
+  const keptEvent = isCodexHookEvent(previous?.lastEvent) ? previous.lastEvent : undefined;
+  const lastEvent = isCodexHookEvent(event) ? event : keptEvent;
+  const lastEventAt = isCodexHookEvent(event) ? at : validTime(previous?.lastEventAt);
+  const lastStopAt = event === "Stop" ? at : validTime(previous?.lastStopAt);
   return { ...(lastEvent ? { lastEvent } : {}), ...(lastEventAt ? { lastEventAt } : {}), ...(lastStopAt ? { lastStopAt } : {}) };
 }
 
