@@ -215,7 +215,14 @@ test("a partial activity write remains as fail-closed evidence", () => {
     assert.equal(fs.existsSync(path.join(dir, "activity-00.json")), true);
     assert.equal(fs.statSync(path.join(dir, "activity-00.json")).size, 0);
     const result = observeEvent(dir, ARM,
-      event({ hook_event_name: "SessionStart", notification_type: undefined }), deps({ activityPrepare() {},
+      event({ hook_event_name: "SessionStart", notification_type: undefined }), deps({ activityPrepare(file) {
+        if (process.platform !== "win32") return;
+        const script = "$p=$env:KHEREP_TEST_PATH;$i=New-Object IO.FileInfo -ArgumentList $p;$a=$i.GetAccessControl();"
+          + "$s=([Security.Principal.NTAccount]'NT AUTHORITY\\SYSTEM').Translate([Security.Principal.SecurityIdentifier]);"
+          + "$r=New-Object Security.AccessControl.FileSystemAccessRule($s,'Read','Allow');$a.AddAccessRule($r);$i.SetAccessControl($a)";
+        assert.equal(spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script],
+          { env: { ...process.env, KHEREP_TEST_PATH: file }, stdio: "ignore" }).status, 0);
+      },
         activityWrite(fd) {
           assert.equal(ownedPath(path.join(dir, "activity-01.json"), "file", true), true);
           assert.equal(fs.statSync(path.join(dir, "activity-01.json")).size, 0);

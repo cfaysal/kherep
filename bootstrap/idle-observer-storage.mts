@@ -80,7 +80,7 @@ export function ownedPath(file: string, kind: "file" | "directory", privateMode 
   }
 }
 
-function restrictWindows(file: string, directory: boolean): void {
+export function restrictPrivateWindows(file: string, directory: boolean): void {
   const sid = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
     "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"], {
     encoding: "utf8", windowsHide: true, timeout: 5_000, stdio: ["ignore", "pipe", "ignore"],
@@ -91,14 +91,23 @@ function restrictWindows(file: string, directory: boolean): void {
       windowsHide: true, timeout: 5_000, stdio: "ignore",
     });
   }
-  execFileSync("icacls.exe", [file, "/inheritance:r", "/grant:r", directory ? `*${sid}:(OI)(CI)F` : `*${sid}:F`], {
+  const script = "$p=$env:KHEREP_IDLE_PATH;$s=[Security.Principal.WindowsIdentity]::GetCurrent().User;"
+    + "$a=if($env:KHEREP_IDLE_DIRECTORY -eq '1'){New-Object Security.AccessControl.DirectorySecurity}"
+    + "else{New-Object Security.AccessControl.FileSecurity};$a.SetAccessRuleProtection($true,$false);"
+    + "$f=if($env:KHEREP_IDLE_DIRECTORY -eq '1'){[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'}"
+    + "else{[Security.AccessControl.InheritanceFlags]::None};$n=[Security.AccessControl.PropagationFlags]::None;"
+    + "$r=New-Object Security.AccessControl.FileSystemAccessRule($s,'FullControl',$f,$n,'Allow');$a.AddAccessRule($r);"
+    + "if($env:KHEREP_IDLE_DIRECTORY -eq '1'){(New-Object IO.DirectoryInfo -ArgumentList $p).SetAccessControl($a)}"
+    + "else{(New-Object IO.FileInfo -ArgumentList $p).SetAccessControl($a)}";
+  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
     windowsHide: true, timeout: 5_000, stdio: "ignore",
+    env: { ...process.env, KHEREP_IDLE_PATH: file, KHEREP_IDLE_DIRECTORY: directory ? "1" : "0" },
   });
 }
 
 export function createPrivateDirectory(dir: string): void {
   fs.mkdirSync(dir, { mode: 0o700 });
-  if (process.platform === "win32") restrictWindows(dir, true);
+  if (process.platform === "win32") restrictPrivateWindows(dir, true);
   else fs.chmodSync(dir, 0o700);
   if (!ownedPath(dir, "directory", true)) throw new Error("private directory not established");
 }
@@ -113,7 +122,7 @@ export function writePrivateNew(file: string, text: string,
   write: (fd: number, value: string) => void = (fd, value) => fs.writeFileSync(fd, value, "utf8")): void {
   const fd = fs.openSync(file, "wx", 0o600);
   try {
-    if (process.platform === "win32") restrictWindows(file, false);
+    if (process.platform === "win32") restrictPrivateWindows(file, false);
     else fs.chmodSync(file, 0o600);
     if (!ownedPath(file, "file", true)) throw new Error("private file not established");
     write(fd, text);
@@ -157,16 +166,18 @@ function copySecurity(source: string, target: string, original: fs.Stats): strin
       });
     }
     const currentParts = JSON.parse(windowsSecurity(target)) as { Owner: string; Group: string; Access: string };
-    const script = "$s=$env:KHEREP_IDLE_SECURITY_SOURCE;$t=$env:KHEREP_IDLE_SECURITY_TARGET;"
-      + "$x=[Security.AccessControl.AccessControlSections]::Access;if($env:KHEREP_IDLE_COPY_GROUP -eq '1'){"
-      + "$x=$x -bor [Security.AccessControl.AccessControlSections]::Group};"
+    const copyAccess = currentParts.Access !== expectedParts.Access;
+    const copyGroup = currentParts.Group !== expectedParts.Group;
+    const script = "$s=$env:KHEREP_IDLE_SECURITY_SOURCE;$t=$env:KHEREP_IDLE_SECURITY_TARGET;$x=0;"
+      + "if($env:KHEREP_IDLE_COPY_ACCESS -eq '1'){$x=$x -bor [Security.AccessControl.AccessControlSections]::Access};"
+      + "if($env:KHEREP_IDLE_COPY_GROUP -eq '1'){$x=$x -bor [Security.AccessControl.AccessControlSections]::Group};"
       + "$si=New-Object System.IO.FileInfo -ArgumentList $s;$d=$si.GetAccessControl($x).GetSecurityDescriptorSddlForm($x);"
       + "$a=New-Object Security.AccessControl.FileSecurity;$a.SetSecurityDescriptorSddlForm($d,$x);"
       + "$ti=New-Object System.IO.FileInfo -ArgumentList $t;$ti.SetAccessControl($a)";
-    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-      windowsHide: true, timeout: 5_000, stdio: ["ignore", "ignore", "pipe"],
-      env: { ...process.env, KHEREP_IDLE_SECURITY_SOURCE: source, KHEREP_IDLE_SECURITY_TARGET: target,
-        KHEREP_IDLE_COPY_GROUP: currentParts.Group === expectedParts.Group ? "0" : "1" },
+    if (copyAccess || copyGroup) execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+      windowsHide: true, timeout: 5_000, stdio: ["ignore", "ignore", "pipe"], env: { ...process.env,
+        KHEREP_IDLE_SECURITY_SOURCE: source, KHEREP_IDLE_SECURITY_TARGET: target,
+        KHEREP_IDLE_COPY_ACCESS: copyAccess ? "1" : "0", KHEREP_IDLE_COPY_GROUP: copyGroup ? "1" : "0" },
     });
     if (windowsSecurity(target) !== expected) throw new Error("security copy verification failed");
     return expected;

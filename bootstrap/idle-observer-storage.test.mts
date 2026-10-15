@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { macMetadataCanCopy, ownedPath, replaceOwnedFile, windowsSecurity, writePrivateNew } from "./idle-observer-storage.mts";
+import { macMetadataCanCopy, ownedPath, replaceOwnedFile, restrictPrivateWindows, windowsSecurity, writePrivateNew } from "./idle-observer-storage.mts";
 
 function ownSynthetic(...targets: string[]): void {
   if (process.platform !== "win32") return;
@@ -58,6 +58,47 @@ test("Windows security identities use canonical SIDs for owner operations", {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("Windows private restriction removes every foreign explicit ACE", {
+  skip: process.platform !== "win32" ? "Windows private DACL contract" : false,
+}, () => {
+  const root = fs.mkdtempSync(path.join(process.cwd(), ".idle-storage-test-"));
+  const file = path.join(root, "private.json");
+  fs.writeFileSync(file, "");
+  ownSynthetic(root, file);
+  try {
+    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+      "$p=$env:KHEREP_TEST_PATH;$i=New-Object IO.FileInfo -ArgumentList $p;$a=$i.GetAccessControl();"
+      + "$s=([Security.Principal.NTAccount]'NT AUTHORITY\\SYSTEM').Translate([Security.Principal.SecurityIdentifier]);"
+      + "$r=New-Object Security.AccessControl.FileSystemAccessRule($s,'Read','Allow');$a.AddAccessRule($r);$i.SetAccessControl($a)"],
+    { env: { ...process.env, KHEREP_TEST_PATH: file }, stdio: "ignore" });
+    assert.equal(ownedPath(file, "file", true), false);
+    restrictPrivateWindows(file, false);
+    assert.equal(ownedPath(file, "file", true), true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Windows replacement preserves an already matching inherited DACL", {
+  skip: process.platform !== "win32" ? "Windows inherited DACL contract" : false,
+}, () => {
+  const root = fs.mkdtempSync(path.join(process.cwd(), ".idle-storage-test-"));
+  ownSynthetic(root);
+  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+    "$p=$env:KHEREP_TEST_PATH;$i=New-Object IO.DirectoryInfo -ArgumentList $p;$a=New-Object Security.AccessControl.DirectorySecurity;"
+    + "$a.SetAccessRuleProtection($true,$false);$c=[Security.Principal.WindowsIdentity]::GetCurrent().User;"
+    + "$s=([Security.Principal.NTAccount]'NT AUTHORITY\\SYSTEM').Translate([Security.Principal.SecurityIdentifier]);"
+    + "$f=[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit';$n=[Security.AccessControl.PropagationFlags]::None;"
+    + "$a.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($c,'FullControl',$f,$n,'Allow')));"
+    + "$a.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($s,'ReadAndExecute',$f,$n,'Allow')));$i.SetAccessControl($a)"],
+  { env: { ...process.env, KHEREP_TEST_PATH: root }, stdio: "ignore" });
+  const file = path.join(root, "settings.json");
+  fs.writeFileSync(file, "before\n");
+  ownSynthetic(file);
+  try {
+    replaceOwnedFile(file, "before\n", "after\n");
+    assert.equal(fs.readFileSync(file, "utf8"), "after\n");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("settings replacement restores the original bytes after a write failure", () => {

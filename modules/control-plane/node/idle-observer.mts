@@ -68,8 +68,10 @@ function restrictWindows(file: string): void {
   if (!sid) throw new Error("identity unavailable");
   if (!windowsOwned(file, false)) execFileSync("icacls.exe", [file, "/setowner", `*${sid}`, "/Q"], {
     windowsHide: true, timeout: 5_000, stdio: "ignore" });
-  execFileSync("icacls.exe", [file, "/inheritance:r", "/grant:r", `*${sid}:F`], {
-    windowsHide: true, timeout: 5_000, stdio: "ignore" });
+  const script = "$p=$env:KHEREP_IDLE_PATH;$s=[Security.Principal.WindowsIdentity]::GetCurrent().User;"
+    + "$a=New-Object Security.AccessControl.FileSecurity;$a.SetAccessRuleProtection($true,$false);"
+    + "$r=New-Object Security.AccessControl.FileSystemAccessRule($s,'FullControl','Allow');$a.AddAccessRule($r);(New-Object IO.FileInfo -ArgumentList $p).SetAccessControl($a)";
+  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, timeout: 5_000, stdio: "ignore", env: { ...process.env, KHEREP_IDLE_PATH: file } });
 }
 function openPrivateNew(file: string, prepare?: (file: string) => void, retainOnFailure = false): number {
   const fd = fs.openSync(file, "wx", 0o600);
