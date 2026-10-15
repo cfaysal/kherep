@@ -51,7 +51,7 @@ export const aged = (verdict: { ready: boolean; at: number }, now: number): bool
 // probe: ready, and younger than READY_TTL_MS. A not-ready record never counts,
 // so a node signed in again meanwhile is noticed at once.
 export function freshReady(record: unknown, now: number): Verdict | null {
-  const { ready, probedAt } = (typeof record === "object" && record !== null ? record : {}) as Record<string, unknown>;
+  const { ready, probedAt } = (record ?? {}) as Record<string, unknown>;
   const at = typeof probedAt === "string" ? Date.parse(probedAt) : Number.NaN;
   return ready === true && at <= now && !aged({ ready, at }, now) ? { ready, at } : null;
 }

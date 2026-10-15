@@ -189,11 +189,14 @@ test("a real POSIX probe that ends on SIGTERM ends before the grace; one that ig
 // The libuv job object (src/win/process.c: every child not spawned detached is
 // assigned to a job that kills it when the parent exits) measured on this host:
 // a daemon killed by TerminateProcess takes its non-detached Claude child along.
-test("on Windows a killed parent takes its non-detached child along", { skip: process.platform !== "win32" && "Windows job object" }, async () => {
+const windows = { skip: process.platform !== "win32" && "Windows job object" };
+test("on Windows a killed parent takes its non-detached child along", windows, async () => {
   const parent = spawn(process.execPath, ["-e", [
     "const c = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });",
     "console.log(c.pid); setTimeout(() => {}, 60000);"].join(" ")], { stdio: ["ignore", "pipe", "ignore"] });
-  const childPid = Number(await new Promise<string>((resolve) => { parent.stdout.once("data", (chunk: Buffer) => resolve(String(chunk))); }));
+  const childPid = Number(await new Promise<string>((resolve) => {
+    parent.stdout.once("data", (chunk: Buffer) => resolve(String(chunk)));
+  }));
   assert.ok(pidAlive(childPid), "the child runs");
   parent.kill();
   const deadline = Date.now() + 2_000;
