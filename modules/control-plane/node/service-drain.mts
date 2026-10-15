@@ -163,9 +163,10 @@ export async function withServiceAdmission<T>(
 
 export async function continueServiceAdmission<T>(
   paths: NodePaths, admission: ServiceAdmission | undefined, operation: (active: ServiceAdmission) => Promise<T>,
+  probe?: ServiceOwnerProbe,
 ): Promise<T> {
   if (admission && activeAdmissions.has(admission) && admission.root === path.resolve(paths.dir)) return operation(admission);
-  return withServiceAdmission(paths, operation);
+  return withServiceAdmission(paths, operation, probe);
 }
 
 export function retainServiceAdmission(admission: ServiceAdmission): void {
@@ -175,12 +176,12 @@ export function retainServiceAdmission(admission: ServiceAdmission): void {
 
 export async function waitForServiceAdmission<T>(
   paths: NodePaths, operation: (active: ServiceAdmission) => Promise<T>,
-  options: { admission?: ServiceAdmission; signal?: AbortSignal; intervalMs?: number } = {},
+  options: { admission?: ServiceAdmission; signal?: AbortSignal; intervalMs?: number; probe?: ServiceOwnerProbe } = {},
 ): Promise<T> {
   const interval = options.intervalMs ?? 25;
   for (;;) {
     if (options.signal?.aborted) throw options.signal.reason ?? new DOMException("operation aborted", "AbortError");
-    try { return await continueServiceAdmission(paths, options.admission, operation); }
+    try { return await continueServiceAdmission(paths, options.admission, operation, options.probe); }
     catch (error) {
       if (!(error instanceof ServiceDrainActiveError)) throw error;
       await new Promise<void>((resolve, reject) => {

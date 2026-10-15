@@ -42,7 +42,7 @@ export type RunArgs = (files: CodexFiles, outbox: string) => string[];
 export async function spawnRun(
   deps: RunnerDeps, record: TaskRecord, args: RunArgs, prompt: string, admission?: ServiceAdmission,
 ): Promise<TaskRecord> {
-  return continueServiceAdmission(deps.paths, admission, (active) => spawnAdmitted(deps, record, args, prompt, active));
+  return continueServiceAdmission(deps.paths, admission, (active) => spawnAdmitted(deps, record, args, prompt, active), deps.serviceOwner);
 }
 
 async function spawnAdmitted(

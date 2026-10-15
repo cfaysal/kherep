@@ -19,7 +19,7 @@ import { watchCodexTasks } from "./codex-watch.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
 import { getMessage, markOffered } from "./inbox.mts";
-import { T0, taskId, taskNode } from "./task-fixture.mts";
+import { T0, taskId, taskNode, testServiceOwner } from "./task-fixture.mts";
 import { listTasks, readTask, writeTask, type TaskRecord } from "./task-records.mts";
 
 // Issue #119: a daemon-started Codex intercom run on Windows is not detached,
@@ -112,7 +112,7 @@ async function unconfirmedMcpAdmission(t: test.TestContext, cache: "cold" | "pen
   await Promise.all([started, ...(pending ? [pending] : [])]);
   await waitFor(() => children.every((child) => child.exitCode !== null || child.signalCode !== null), "the task process");
   assert.ok(shutdownNotices > 0, "the caller's shutdown callback remains subscribed");
-  assert.equal(serviceAdmissionsIdle(node.paths), false, `${cache} uncertain helper retains the spawn admission`);
+  assert.equal(serviceAdmissionsIdle(node.paths, testServiceOwner), false, `${cache} uncertain helper retains the spawn admission`);
 }
 
 test("spawnRun retains its admission when its cold MCP helper shutdown is unconfirmed", async (t) => {

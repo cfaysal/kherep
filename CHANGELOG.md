@@ -9,6 +9,15 @@ increments the minor version; every other release increments the patch version.
 
 ## [Unreleased]
 
+### Fixed
+
+- Service owner probe in unit tests (issue #423): the runner deps carry the
+  owner probe of a service admission (`serviceOwner`), and task starts,
+  continues, closed-session resumes, Codex runs and Codex queue runs use it.
+  The task test fixture injects a probe that starts no process, so these
+  tests no longer depend on a PowerShell identity lookup that can time out
+  on a loaded Windows runner. The daemon keeps the default probe.
+
 ## [0.3.0] - 2026-10-15
 
 ### Added

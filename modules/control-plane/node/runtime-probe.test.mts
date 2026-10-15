@@ -10,6 +10,7 @@ import { forgetCodexSession, isCodexSession, recordCodexSession } from "./codex-
 import { nodePaths } from "./config.mts";
 import { CLAUDE_PROBE_ARGS, probeRuntime, spawnProbe, type ProbeRun, type ProbeSpawnOptions } from "./runtime-probe.mts";
 import { retainServiceAdmission, serviceAdmissionsIdle, withServiceAdmission } from "./service-drain.mts";
+import { testServiceOwner } from "./task-fixture.mts";
 
 // Issue #197: the readiness probe is a real minimal call. These tests replace
 // the process with a recorded fake; spawnProbe's timeout runs a real process.
@@ -119,9 +120,9 @@ test("an unconfirmed started readiness helper retains its service admission", as
   });
   const out = await withServiceAdmission(paths, (admission) => spawnProbe("win32", (() => child) as never)(
     "synthetic-probe", [], { cwd: root, timeoutMs: 5, signal: () => {},
-      onUnconfirmedShutdown: () => retainServiceAdmission(admission) }));
+      onUnconfirmedShutdown: () => retainServiceAdmission(admission) }), testServiceOwner);
   assert.equal(out.timedOut, true);
-  assert.equal(serviceAdmissionsIdle(paths), false, "unknown helper lifetime blocks service mutation after the probe returns");
+  assert.equal(serviceAdmissionsIdle(paths, testServiceOwner), false, "unknown helper lifetime blocks service mutation after the probe returns");
 });
 
 test("forgetCodexSession removes exactly the probe's recorded session", (t) => {
