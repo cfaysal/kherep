@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-
 import {
   installObservation,
   observationStatus,
@@ -11,18 +11,34 @@ import {
   type InstallOptions,
   type InstallerDeps,
 } from "./idle-observer-install.mts";
-
+import { ownedPath, writePrivateNew } from "./idle-observer-storage.mts";
 const NOW = "2026-10-15T09:00:00.000Z";
 const OBSERVER = fileURLToPath(new URL("../modules/control-plane/node/idle-observer.mts", import.meta.url));
+const OBSERVER_PROCESS = fileURLToPath(new URL("../modules/control-plane/node/idle-observer-process.mts", import.meta.url));
 const CANARY_PATH = "SYNTHETIC-private-path-canary";
-
-function fixture(settings: unknown = baseSettings()): { root: string; settings: string; runDir: string } {
+function ownSynthetic(...targets: string[]): void {
+  if (process.platform !== "win32") return;
+  for (const target of targets) {
+    const kind = fs.statSync(target).isDirectory() ? "directory" : "file";
+    if (!ownedPath(target, kind)) {
+      const sid = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+        "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"], { encoding: "utf8" }).trim();
+      execFileSync("icacls.exe", [target, "/setowner", `*${sid}`, "/Q"], { stdio: "ignore", windowsHide: true });
+    }
+    assert.equal(ownedPath(target, kind), true);
+  }
+}
+function fixture(settings: unknown = baseSettings()): { root: string; settings: string; runDir: string; observer: string } {
   const root = fs.mkdtempSync(path.join(process.cwd(), ".idle-install-test-"));
   const settingsFile = path.join(root, "settings.json");
+  const observer = path.join(root, "idle-observer.mts");
+  const observerProcess = path.join(root, "idle-observer-process.mts");
   fs.writeFileSync(settingsFile, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
-  return { root, settings: settingsFile, runDir: path.join(root, "private-run") };
+  fs.copyFileSync(OBSERVER, observer);
+  fs.copyFileSync(OBSERVER_PROCESS, observerProcess);
+  ownSynthetic(root, settingsFile, observer, observerProcess);
+  return { root, settings: settingsFile, runDir: path.join(root, "private-run"), observer };
 }
-
 function baseSettings(): Record<string, unknown> {
   return {
     env: { KEEP: CANARY_PATH },
@@ -34,36 +50,30 @@ function baseSettings(): Record<string, unknown> {
     },
   };
 }
-
-function options(f: { settings: string; runDir: string }): InstallOptions {
+function options(f: { settings: string; runDir: string; observer: string }): InstallOptions {
   return {
     settingsFile: f.settings,
     runDir: f.runDir,
-    observerFile: OBSERVER,
+    observerFile: f.observer,
     sessionId: "synthetic-session-0001",
     owner: { pid: 4242, startedAt: "synthetic-generation-1" },
     expiresAt: "2026-10-15T09:09:00.000Z",
   };
 }
-
 function deps(): InstallerDeps {
   return { now: () => new Date(NOW), randomHex: () => "b".repeat(64), nodePath: "synthetic-node" };
 }
-
 function read(file: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
 }
-
 function allHandlers(settings: Record<string, unknown>): Record<string, unknown>[] {
   const hooks = settings.hooks as Record<string, Array<{ hooks?: Record<string, unknown>[] }>>;
   return Object.values(hooks).flatMap((groups) => groups.flatMap((group) => group.hooks ?? []));
 }
-
 function ownedHandlers(settings: Record<string, unknown>): Record<string, unknown>[] {
   return allHandlers(settings).filter((handler) => Array.isArray(handler.args)
     && (handler.args as unknown[]).includes("--run-id"));
 }
-
 test("install adds only three task-bound handlers and preserves all existing settings", () => {
   const f = fixture();
   const before = fs.readFileSync(f.settings, "utf8");
@@ -81,31 +91,30 @@ test("install adds only three task-bound handlers and preserves all existing set
     assert.equal(ownedHandlers(after).length, 3);
     assert.deepEqual(Object.keys(after.hooks as object).sort(), ["Notification", "SessionStart", "Stop", "UserPromptSubmit"]);
     assert.equal(fs.readFileSync(path.join(f.runDir, "settings.backup"), "utf8"), before);
-
     const notification = ((after.hooks as Record<string, Array<Record<string, unknown>>>).Notification)
       .find((entry) => entry.matcher === "^idle_prompt$");
     assert.equal(notification?.matcher, "^idle_prompt$");
     const own = ownedHandlers(after);
+    assert.equal(own.every((entry) => Array.isArray(entry.args)
+      && entry.args[0] === "--disable-warning=ExperimentalWarning"
+      && entry.args[1] === f.observer && entry.args[2] === "callback"), true);
     assert.equal(own.some((entry) => "async" in entry || "asyncRewake" in entry), false);
     assert.equal(JSON.stringify(own).includes("additionalContext"), false);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
   }
 });
-
 test("install and remove are idempotent, and removal preserves unrelated intervening edits", () => {
   const f = fixture();
   try {
     assert.equal(installObservation(options(f), deps()).status, "installed");
     assert.equal(installObservation(options(f), deps()).status, "already-installed");
     assert.equal(ownedHandlers(read(f.settings)).length, 3);
-
     const edited = read(f.settings);
     (edited.env as Record<string, unknown>).LATER = "unrelated";
     const hooks = edited.hooks as Record<string, Array<Record<string, unknown>>>;
     hooks.Notification.push({ matcher: "auth_success", hooks: [{ type: "command", command: "later" }] });
     fs.writeFileSync(f.settings, `${JSON.stringify(edited, null, 2)}\n`, { mode: 0o600 });
-
     assert.equal(removeObservation({ settingsFile: f.settings, runDir: f.runDir }).status, "removed");
     const removed = read(f.settings);
     assert.equal((removed.env as Record<string, unknown>).LATER, "unrelated");
@@ -116,7 +125,6 @@ test("install and remove are idempotent, and removal preserves unrelated interve
     fs.rmSync(f.root, { recursive: true, force: true });
   }
 });
-
 test("remove refuses owned-entry drift without modifying the settings file", () => {
   const f = fixture();
   try {
@@ -133,13 +141,12 @@ test("remove refuses owned-entry drift without modifying the settings file", () 
     fs.rmSync(f.root, { recursive: true, force: true });
   }
 });
-
 test("status reports only fixed safe metadata and activity invalidates idle validity", () => {
   const f = fixture();
   try {
     installObservation(options(f), deps());
     const run = read(path.join(f.runDir, "run.json"));
-    fs.writeFileSync(path.join(f.runDir, "journal.json"), `${JSON.stringify({
+    writePrivateNew(path.join(f.runDir, "journal.json"), `${JSON.stringify({
       version: 1, runId: run.runId,
       events: [
         { runId: run.runId, event: "Notification", notificationType: "idle_prompt", receivedAt: NOW,
@@ -147,7 +154,7 @@ test("status reports only fixed safe metadata and activity invalidates idle vali
         { runId: run.runId, event: "UserPromptSubmit", receivedAt: NOW,
           owner: run.owner, codeSha256: run.codeSha256, sequence: 2 },
       ],
-    })}\n`, { mode: 0o600 });
+    })}\n`);
     const result = observationStatus({ settingsFile: f.settings, runDir: f.runDir });
     assert.deepEqual(result, {
       ok: true, status: "installed", ownedEntries: 3, observationCount: 2,
@@ -162,17 +169,16 @@ test("status reports only fixed safe metadata and activity invalidates idle vali
     fs.rmSync(f.root, { recursive: true, force: true });
   }
 });
-
 test("status requires an unexpired run and the current owner generation", () => {
   const f = fixture();
   try {
     installObservation(options(f), deps());
     const run = read(path.join(f.runDir, "run.json"));
-    fs.writeFileSync(path.join(f.runDir, "journal.json"), `${JSON.stringify({
+    writePrivateNew(path.join(f.runDir, "journal.json"), `${JSON.stringify({
       version: 1, runId: run.runId,
       events: [{ runId: run.runId, event: "Notification", notificationType: "idle_prompt",
         receivedAt: NOW, owner: run.owner, codeSha256: run.codeSha256, sequence: 1 }],
-    })}\n`, { mode: 0o600 });
+    })}\n`);
     const target = { settingsFile: f.settings, runDir: f.runDir };
     const expired = observationStatus(target, {
       now: () => new Date("2026-10-15T09:10:00.000Z"), ownerIdentity: () => options(f).owner,
@@ -190,21 +196,20 @@ test("status requires an unexpired run and the current owner generation", () => 
     fs.rmSync(f.root, { recursive: true, force: true });
   }
 });
-
 test("a contended activity witness invalidates an otherwise latest idle receipt", () => {
   const f = fixture();
   try {
     installObservation(options(f), deps());
     const run = read(path.join(f.runDir, "run.json"));
-    fs.writeFileSync(path.join(f.runDir, "journal.json"), `${JSON.stringify({
+    writePrivateNew(path.join(f.runDir, "journal.json"), `${JSON.stringify({
       version: 1, runId: run.runId,
       events: [{ runId: run.runId, event: "Notification", notificationType: "idle_prompt",
         receivedAt: NOW, owner: run.owner, codeSha256: run.codeSha256, sequence: 1 }],
-    })}\n`, { mode: 0o600 });
-    fs.writeFileSync(path.join(f.runDir, "activity-00.json"), `${JSON.stringify({
+    })}\n`);
+    writePrivateNew(path.join(f.runDir, "activity-00.json"), `${JSON.stringify({
       runId: run.runId, event: "UserPromptSubmit", receivedAt: NOW,
       owner: run.owner, codeSha256: run.codeSha256, sequence: 2,
-    })}\n`, { mode: 0o600 });
+    })}\n`);
     const status = observationStatus({ settingsFile: f.settings, runDir: f.runDir }, {
       now: () => new Date(NOW), ownerIdentity: () => options(f).owner,
     });
@@ -213,7 +218,6 @@ test("a contended activity witness invalidates an otherwise latest idle receipt"
     fs.rmSync(f.root, { recursive: true, force: true });
   }
 });
-
 test("malformed, expired and symlink targets fail closed without changing input", async (t) => {
   await t.test("malformed settings", () => {
     const f = fixture("malformed-shape");

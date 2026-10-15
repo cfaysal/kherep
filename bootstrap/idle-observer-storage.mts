@@ -48,16 +48,20 @@ function copyMacMetadata(source: string, target: string): string {
   return expected;
 }
 
-function windowsOwner(file: string): boolean {
+function windowsSecurityMatches(file: string, privateMode: boolean): boolean {
   try {
     const script = "$p=$env:KHEREP_IDLE_PATH;"
       + "$a=if([IO.Directory]::Exists($p)){[IO.Directory]::GetAccessControl($p)}else{[IO.File]::GetAccessControl($p)};"
       + "$o=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;"
       + "$c=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;"
-      + "if($o -eq $c){'1'}";
+      + "if($o -ne $c){return};if($env:KHEREP_IDLE_PRIVATE -ne '1'){'1';return};"
+      + "$r=$a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]);"
+      + "$f=[Security.AccessControl.FileSystemRights]::FullControl;$ok=$r.Count -gt 0;"
+      + "foreach($e in $r){if($e.IdentityReference.Value -ne $c -or $e.AccessControlType -ne 'Allow'"
+      + " -or (($e.FileSystemRights -band $f) -ne $f)){$ok=$false}};if($ok){'1'}";
     return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
       encoding: "utf8", windowsHide: true, timeout: 5_000, stdio: ["ignore", "pipe", "ignore"],
-      env: { ...process.env, KHEREP_IDLE_PATH: file },
+      env: { ...process.env, KHEREP_IDLE_PATH: file, KHEREP_IDLE_PRIVATE: privateMode ? "1" : "0" },
     }).trim() === "1";
   } catch {
     return false;
@@ -68,7 +72,7 @@ export function ownedPath(file: string, kind: "file" | "directory", privateMode 
   try {
     const stat = fs.lstatSync(file);
     if (stat.isSymbolicLink() || (kind === "file" ? !stat.isFile() : !stat.isDirectory())) return false;
-    if (process.platform === "win32") return windowsOwner(file);
+    if (process.platform === "win32") return windowsSecurityMatches(file, privateMode);
     return typeof process.getuid === "function" && stat.uid === process.getuid()
       && (!privateMode || (stat.mode & 0o077) === 0);
   } catch {
@@ -82,6 +86,11 @@ function restrictWindows(file: string, directory: boolean): void {
     encoding: "utf8", windowsHide: true, timeout: 5_000, stdio: ["ignore", "pipe", "ignore"],
   }).trim();
   if (!sid) throw new Error("identity unavailable");
+  if (!windowsSecurityMatches(file, false)) {
+    execFileSync("icacls.exe", [file, "/setowner", `*${sid}`, "/Q"], {
+      windowsHide: true, timeout: 5_000, stdio: "ignore",
+    });
+  }
   execFileSync("icacls.exe", [file, "/inheritance:r", "/grant:r", directory ? `*${sid}:(OI)(CI)F` : `*${sid}:F`], {
     windowsHide: true, timeout: 5_000, stdio: "ignore",
   });
@@ -100,23 +109,35 @@ export function readText(file: string): string {
   return fs.readFileSync(file, "utf8");
 }
 
-export function writePrivateNew(file: string, text: string): void {
-  fs.writeFileSync(file, text, { mode: 0o600, flag: "wx" });
-  if (process.platform === "win32") restrictWindows(file, false);
-  else fs.chmodSync(file, 0o600);
-  if (!ownedPath(file, "file", true)) throw new Error("private file not established");
+export function writePrivateNew(file: string, text: string,
+  write: (fd: number, value: string) => void = (fd, value) => fs.writeFileSync(fd, value, "utf8")): void {
+  const fd = fs.openSync(file, "wx", 0o600);
+  try {
+    if (process.platform === "win32") restrictWindows(file, false);
+    else fs.chmodSync(file, 0o600);
+    if (!ownedPath(file, "file", true)) throw new Error("private file not established");
+    write(fd, text);
+    fs.fsyncSync(fd);
+  } catch (error) {
+    fs.closeSync(fd);
+    fs.rmSync(file, { force: true });
+    throw error;
+  }
+  fs.closeSync(fd);
 }
 
 export interface ReplaceOwnedFileDeps {
   write?: (fd: number, text: string) => void;
 }
 
-function windowsSecurity(file: string): string {
+export function windowsSecurity(file: string): string {
   const script = "$p=$env:KHEREP_IDLE_SECURITY_PATH;"
     + "$i=New-Object System.IO.FileInfo -ArgumentList $p;"
     + "$a=$i.GetAccessControl([Security.AccessControl.AccessControlSections]::Access);"
-    + "$o=$i.GetAccessControl([Security.AccessControl.AccessControlSections]::Owner).Owner;"
-    + "$g=$i.GetAccessControl([Security.AccessControl.AccessControlSections]::Group).Group;"
+    + "$o=$i.GetAccessControl([Security.AccessControl.AccessControlSections]::Owner)"
+    + ".GetOwner([Security.Principal.SecurityIdentifier]).Value;"
+    + "$g=$i.GetAccessControl([Security.AccessControl.AccessControlSections]::Group)"
+    + ".GetGroup([Security.Principal.SecurityIdentifier]).Value;"
     + "$d=$a.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access);"
     + "[pscustomobject]@{Owner=$o;Group=$g;Access=$d}|ConvertTo-Json -Compress";
   return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
@@ -128,14 +149,24 @@ function windowsSecurity(file: string): string {
 function copySecurity(source: string, target: string, original: fs.Stats): string | null {
   if (process.platform === "win32") {
     const expected = windowsSecurity(source);
+    const expectedParts = JSON.parse(expected) as { Owner: string; Group: string; Access: string };
+    const initialParts = JSON.parse(windowsSecurity(target)) as { Owner: string; Group: string; Access: string };
+    if (initialParts.Owner !== expectedParts.Owner) {
+      execFileSync("icacls.exe", [target, "/setowner", `*${expectedParts.Owner}`, "/Q"], {
+        windowsHide: true, timeout: 5_000, stdio: "ignore",
+      });
+    }
+    const currentParts = JSON.parse(windowsSecurity(target)) as { Owner: string; Group: string; Access: string };
     const script = "$s=$env:KHEREP_IDLE_SECURITY_SOURCE;$t=$env:KHEREP_IDLE_SECURITY_TARGET;"
-      + "$x=[Security.AccessControl.AccessControlSections]::Access;"
+      + "$x=[Security.AccessControl.AccessControlSections]::Access;if($env:KHEREP_IDLE_COPY_GROUP -eq '1'){"
+      + "$x=$x -bor [Security.AccessControl.AccessControlSections]::Group};"
       + "$si=New-Object System.IO.FileInfo -ArgumentList $s;$d=$si.GetAccessControl($x).GetSecurityDescriptorSddlForm($x);"
       + "$a=New-Object Security.AccessControl.FileSecurity;$a.SetSecurityDescriptorSddlForm($d,$x);"
       + "$ti=New-Object System.IO.FileInfo -ArgumentList $t;$ti.SetAccessControl($a)";
     execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
       windowsHide: true, timeout: 5_000, stdio: ["ignore", "ignore", "pipe"],
-      env: { ...process.env, KHEREP_IDLE_SECURITY_SOURCE: source, KHEREP_IDLE_SECURITY_TARGET: target },
+      env: { ...process.env, KHEREP_IDLE_SECURITY_SOURCE: source, KHEREP_IDLE_SECURITY_TARGET: target,
+        KHEREP_IDLE_COPY_GROUP: currentParts.Group === expectedParts.Group ? "0" : "1" },
     });
     if (windowsSecurity(target) !== expected) throw new Error("security copy verification failed");
     return expected;

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -6,14 +7,37 @@ import { fileURLToPath } from "node:url";
 
 import { observeEvent } from "../modules/control-plane/node/idle-observer.mts";
 import { installObservation, observationStatus, removeObservation, type InstallOptions } from "./idle-observer-install.mts";
+import { ownedPath } from "./idle-observer-storage.mts";
+
+const OBSERVER = fileURLToPath(new URL("../modules/control-plane/node/idle-observer.mts", import.meta.url));
+const OBSERVER_PROCESS = fileURLToPath(new URL("../modules/control-plane/node/idle-observer-process.mts", import.meta.url));
+
+function syntheticObserver(root: string, ...ownedTargets: string[]): string {
+  const observer = path.join(root, "idle-observer.mts");
+  const observerProcess = path.join(root, "idle-observer-process.mts");
+  fs.copyFileSync(OBSERVER, observer);
+  fs.copyFileSync(OBSERVER_PROCESS, observerProcess);
+  if (process.platform === "win32") {
+    for (const target of [root, ...ownedTargets, observer, observerProcess]) {
+      const kind = fs.statSync(target).isDirectory() ? "directory" : "file";
+      if (!ownedPath(target, kind)) {
+        const sid = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+          "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"], { encoding: "utf8" }).trim();
+        execFileSync("icacls.exe", [target, "/setowner", `*${sid}`, "/Q"], { stdio: "ignore", windowsHide: true });
+      }
+      assert.equal(ownedPath(target, kind), true);
+    }
+  }
+  return observer;
+}
 
 test("receipt finalization failure rolls settings back without orphaning owned hooks", () => {
   const root = fs.mkdtempSync(path.join(process.cwd(), ".idle-transaction-test-"));
   const settingsFile = path.join(root, "settings.json");
   const runDir = path.join(root, "private-run");
-  const observerFile = fileURLToPath(new URL("../modules/control-plane/node/idle-observer.mts", import.meta.url));
   const before = `${JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "existing" }] }] } }, null, 2)}\n`;
   fs.writeFileSync(settingsFile, before, { mode: 0o600 });
+  const observerFile = syntheticObserver(root, settingsFile);
   const options: InstallOptions = {
     settingsFile, runDir, observerFile, sessionId: "synthetic-session-0001",
     owner: { pid: 4242, startedAt: "synthetic-generation-1" },
@@ -47,13 +71,13 @@ test("a failed activity write cannot leave an earlier idle status positive", () 
   const root = fs.mkdtempSync(path.join(process.cwd(), ".idle-activity-failure-test-"));
   const settingsFile = path.join(root, "settings.json");
   const runDir = path.join(root, "private-run");
-  const observerFile = fileURLToPath(new URL("../modules/control-plane/node/idle-observer.mts", import.meta.url));
   fs.writeFileSync(settingsFile, "{}\n", { mode: 0o600 });
+  const observerFile = syntheticObserver(root, settingsFile);
   const now = new Date();
   const owner = { pid: 4242, startedAt: "synthetic-generation-1" };
   try {
     assert.equal(installObservation({ settingsFile, runDir, observerFile, sessionId: "synthetic-session-0001",
-      owner, expiresAt: new Date(now.getTime() + 5 * 60_000).toISOString() }).status, "installed");
+      owner, expiresAt: new Date(now.getTime() + 5 * 60_000).toISOString() }, { now: () => now }).status, "installed");
     const run = JSON.parse(fs.readFileSync(path.join(runDir, "run.json"), "utf8")) as {
       armNonce: string; codeSha256: string;
     };

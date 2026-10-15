@@ -19,6 +19,8 @@ export interface ObserverReceipt {
 export interface HookCommand { type: "command"; command: string; args: string[]; timeout: number }
 export interface PlannedHook { event: string; matcher: string | null; handler: HookCommand }
 
+const TYPE_STRIPPING_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
+
 export function isObject(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -45,7 +47,8 @@ export function plannedHooks(nodePath: string, observerFile: string, runDir: str
   const handler: HookCommand = {
     type: "command",
     command: nodePath,
-    args: [observerFile, "callback", "--run-dir", runDir, "--arm", armNonce, "--run-id", runId],
+    args: [TYPE_STRIPPING_WARNING_FLAG, observerFile, "callback", "--run-dir", runDir,
+      "--arm", armNonce, "--run-id", runId],
     timeout: 10,
   };
   return [
@@ -78,8 +81,11 @@ function marker(handler: JsonObject, runId: string): boolean {
 }
 
 export function hasObserverCommand(settings: JsonObject, observerFile: string): boolean {
-  return commands(settings).some(({ handler }) => Array.isArray(handler.args)
-    && handler.args[0] === observerFile && handler.args[1] === "callback");
+  return commands(settings).some(({ handler }) => {
+    if (!Array.isArray(handler.args)) return false;
+    const offset = handler.args[0] === TYPE_STRIPPING_WARNING_FLAG ? 1 : 0;
+    return handler.args[offset] === observerFile && handler.args[offset + 1] === "callback";
+  });
 }
 
 export function addOwnedHooks(settings: JsonObject, plan: PlannedHook[]): { settings: JsonObject; hooks: OwnedHook[] } {

@@ -6,6 +6,8 @@ The observer accepts a native `Notification` only when `notification_type` is `i
 
 The native event source is the [Claude Code hooks documentation](https://code.claude.com/docs/en/hooks#notification). A synthetic callback proves parsing and storage behavior only. Live activation requires a separately measured callback from the native application.
 
+> Scope warning: this `Notification/idle_prompt` observer applies to interactive Claude Code CLI sessions. The [Claude Agent SDK does not emit `idle_prompt`](https://code.claude.com/docs/en/agent-sdk/hooks#forward-notifications-to-slack), so a Desktop SDK host cannot be proved idle by this observer and must not wait for this callback.
+
 ## CLI contract
 
 All paths must be absolute. The commands print one JSON object and no raw settings or event input.

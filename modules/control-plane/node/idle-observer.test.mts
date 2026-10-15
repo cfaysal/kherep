@@ -4,22 +4,21 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-
 import {
   observeEvent,
   type ObservationDeps,
   type ObservationJournal,
   type ObservationRun,
 } from "./idle-observer.mts";
-
+import { createPrivateDirectory, ownedPath, writePrivateNew } from "../../../bootstrap/idle-observer-storage.mts";
 const NOW = "2026-10-15T09:00:00.000Z";
 const OWNER = { pid: 4242, startedAt: "owner-generation-1" };
 const CODE = "a".repeat(64);
 const ARM = "b".repeat(64);
-
 function fixture(overrides: Partial<ObservationRun> = {}): { dir: string; run: ObservationRun } {
   const dir = fs.mkdtempSync(path.join(process.cwd(), ".idle-observer-test-"));
-  fs.chmodSync(dir, 0o700);
+  fs.rmSync(dir, { recursive: true });
+  createPrivateDirectory(dir);
   const run: ObservationRun = {
     version: 1,
     runId: "synthetic-run-0001",
@@ -31,10 +30,9 @@ function fixture(overrides: Partial<ObservationRun> = {}): { dir: string; run: O
     codeSha256: CODE,
     ...overrides,
   };
-  fs.writeFileSync(path.join(dir, "run.json"), `${JSON.stringify(run)}\n`, { mode: 0o600 });
+  writePrivateNew(path.join(dir, "run.json"), `${JSON.stringify(run)}\n`);
   return { dir, run };
 }
-
 function deps(overrides: Partial<ObservationDeps> = {}): ObservationDeps {
   return {
     now: () => new Date(NOW),
@@ -43,7 +41,6 @@ function deps(overrides: Partial<ObservationDeps> = {}): ObservationDeps {
     ...overrides,
   };
 }
-
 function event(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     session_id: "synthetic-session-0001",
@@ -52,12 +49,10 @@ function event(overrides: Record<string, unknown> = {}): Record<string, unknown>
     ...overrides,
   };
 }
-
 function journal(dir: string): ObservationJournal | null {
   const file = path.join(dir, "journal.json");
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as ObservationJournal : null;
 }
-
 test("records one fresh native idle receipt for the exact session and owner generation", () => {
   const { dir, run } = fixture();
   try {
@@ -79,7 +74,6 @@ test("records one fresh native idle receipt for the exact session and owner gene
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test("rejects foreign, unknown, reused, expired, future, malformed and wrong-event input", async (t) => {
   const cases: Array<[string, Partial<ObservationRun>, Record<string, unknown>, Partial<ObservationDeps>]> = [
     ["foreign session", {}, event({ session_id: "synthetic-session-foreign" }), {}],
@@ -101,7 +95,6 @@ test("rejects foreign, unknown, reused, expired, future, malformed and wrong-eve
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
-
   const { dir } = fixture();
   try {
     fs.writeFileSync(path.join(dir, "run.json"), "{malformed", { mode: 0o600 });
@@ -111,7 +104,6 @@ test("rejects foreign, unknown, reused, expired, future, malformed and wrong-eve
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test("stores no raw hook fields and never duplicates the idle receipt", () => {
   const { dir } = fixture();
   const canaries = {
@@ -135,7 +127,6 @@ test("stores no raw hook fields and never duplicates the idle receipt", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test("target activity invalidates the idle receipt and advances the sequence", () => {
   const { dir } = fixture();
   try {
@@ -152,7 +143,6 @@ test("target activity invalidates the idle receipt and advances the sequence", (
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test("journal capacity preserves the first idle receipt as a one-shot marker", () => {
   const { dir } = fixture();
   const activity = event({ hook_event_name: "UserPromptSubmit", notification_type: undefined });
@@ -169,7 +159,6 @@ test("journal capacity preserves the first idle receipt as a one-shot marker", (
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test("rejects a symlinked run contract", (t) => {
   const { dir } = fixture();
   const target = path.join(dir, "target.json");
@@ -187,7 +176,6 @@ test("rejects a symlinked run contract", (t) => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test("a competing callback lock fails closed without removing the owner's lock", () => {
   const { dir } = fixture();
   const lock = path.join(dir, ".observer.lock");
@@ -200,7 +188,6 @@ test("a competing callback lock fails closed without removing the owner's lock",
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test("activity contention leaves a durable invalidation witness", () => {
   const { dir } = fixture();
   const lock = path.join(dir, ".observer.lock");
@@ -216,27 +203,35 @@ test("activity contention leaves a durable invalidation witness", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test("a partial activity write remains as fail-closed evidence", () => {
   const { dir } = fixture();
   try {
     assert.equal(observeEvent(dir, ARM, event(), deps()), "recorded");
-    const result = observeEvent(dir, ARM,
+    const beforeContent = observeEvent(dir, ARM,
       event({ hook_event_name: "SessionStart", notification_type: undefined }), deps({
+        activityPrepare() { throw new Error("synthetic security failure"); },
+      }));
+    assert.equal(beforeContent, "ignored");
+    assert.equal(fs.existsSync(path.join(dir, "activity-00.json")), true);
+    assert.equal(fs.statSync(path.join(dir, "activity-00.json")).size, 0);
+    const result = observeEvent(dir, ARM,
+      event({ hook_event_name: "SessionStart", notification_type: undefined }), deps({ activityPrepare() {},
         activityWrite(fd) {
+          assert.equal(ownedPath(path.join(dir, "activity-01.json"), "file", true), true);
+          assert.equal(fs.statSync(path.join(dir, "activity-01.json")).size, 0);
           fs.writeSync(fd, "{partial", 0, "utf8");
           throw new Error("synthetic activity write failure");
         },
       }));
     assert.equal(result, "ignored");
-    assert.equal(fs.readFileSync(path.join(dir, "activity-00.json"), "utf8"), "{partial");
+    assert.equal(fs.readFileSync(path.join(dir, "activity-01.json"), "utf8"), "{partial");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test("the command callback is silent and exits zero for malformed input", () => {
-  const result = spawnSync(process.execPath, [fileURLToPath(new URL("./idle-observer.mts", import.meta.url)), "callback"], {
+  const result = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning",
+    fileURLToPath(new URL("./idle-observer.mts", import.meta.url)), "callback"], {
     input: "{malformed", encoding: "utf8", windowsHide: true,
   });
   assert.equal(result.status, 0);
