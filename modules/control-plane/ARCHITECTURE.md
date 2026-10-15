@@ -452,8 +452,14 @@ are the opt-outs. A malformed section still fails closed, and an unreadable or
 malformed file still denies everything. Even the onboarding rule is bounded by the
 control plane: only authenticated enrolled nodes and the operator API reach a node.
 The default autonomous-turn budget is 20 per rolling hour, 100 per rolling day and
-30 s spacing. `kherep-node doctor` reports `wakeSource` (`file` or `default`) and
-`messagingSource` (`file`, `absent` or, for a missing file, `default`).
+30 s spacing. The wildcard wake default covers permission-bearing `UserPromptSubmit`
+and `Stop` events. A `SessionStart` without `permission_mode` needs the session id or
+current unique name explicitly in `wake.sessions`, a known safe stored or transcript
+mode, safe settings and a successful fresh launch check. A policy change can alter an
+already armed listener, but it cannot attach `asyncRewake` after the native owner hook
+has exited. That recovery needs a genuine owner hook event. `kherep-node doctor`
+reports `wakeSource` (`file` or `default`) and `messagingSource` (`file`, `absent` or,
+for a missing file, `default`).
 
 Task-control storage contains identifiers, state, observation time and fixed error
 codes. It does not transport prompts, message bodies, transcripts, local paths or
@@ -503,6 +509,19 @@ daemon's recorded verdict with its probe time and the fixed cause code, or
 `unknown` without a record or when the recorded pid is not running; doctor
 never probes. A configured runtime whose last probe needs a sign-in fails the
 runtimes check, as it is the one cause that makes the node refuse a run.
+
+The separate `wakeReadiness` doctor check uses a successful local sessions snapshot
+only while it is no older than two daemon scan intervals. The snapshot preserves the
+listing's unseen-runtime marker and is labelled complete, partial, or unknown for a
+legacy file. Every count describes observed rows, not the total current population.
+A missing, unreadable, malformed, future-dated or stale snapshot makes observed idle
+state unknown. For each observed idle Claude Code row it distinguishes general policy
+eligibility, exact restart authorization, recognized, restricted or unknown remembered
+permission mode, and live listed-listener evidence. A verified listener entry requires
+matching lock and scope tokens, `listed: true`, a live process and an age inside the
+listener deadline. It does not prove current idle state, the kill switch decision or
+message receipt, so the check derives no ready verdict. Missing lock files and failed
+reads are different results. Output is aggregate and omits session ids, tokens and paths.
 
 Besides a listener releasing its own lock, the daemon removes wake listener
 locks (`node/listener-sweep.mts`, issue #225): at its start and hourly, the

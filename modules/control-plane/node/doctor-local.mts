@@ -9,6 +9,7 @@ import { readPrivateKey } from "./identity.mts";
 import { readJson } from "./inbox.mts";
 import { readPolicy, wakeBudget, type NodePolicy, type WakeBudget } from "./policy.mts";
 import { WAKE_MAX_WAIT_MS } from "./wake-hook.mts";
+export { checkWakeReadiness } from "./wake-readiness.mts";
 
 // The checks of `kherep-node doctor` that read only this node's config
 // directory (issue #215). Details are fixed texts, ids, counts and times:

@@ -10,6 +10,7 @@ import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { daemonStateFile } from "./daemon-state.mts";
 import { captureSourceIdentity } from "./daemon-source.mts";
 import { runDoctor, type DoctorDeps } from "./doctor.mts";
+import { writeLocalSessions } from "./exchange.mts";
 import { generateIdentity, writePrivateKey } from "./identity.mts";
 
 // Issue #215. Every check is driven through runDoctor against a synthetic
@@ -45,6 +46,7 @@ function host(t: test.TestContext): Host {
   assert.equal(git("update-ref", "HEAD", committed.stdout.trim()).status, 0);
   fs.writeFileSync(daemonStateFile(paths), JSON.stringify({ pid: LIVE_PID, startedAt: "2026-10-04T10:00:00.000Z",
     connectedAt: "2026-10-04T10:00:01.000Z", source: captureSourceIdentity(repo) }));
+  writeLocalSessions(paths, [], Date.parse("2026-10-04T12:00:00.000Z"));
   const claude = path.join(root, "claude");
   const codex = path.join(root, "codex");
   fs.mkdirSync(claude);
@@ -84,6 +86,14 @@ test("a healthy host passes every check and reports versions without secrets", a
   assert.deepEqual(report.checks.hooks.claude, { present: true, deliver: 1, wake: 1, foreign: [] });
   assert.deepEqual(report.checks.hooks.codex, { present: true, deliver: 1, wake: 0, foreign: [] });
   assert.deepEqual(report.checks.listeners, { ok: true, live: 0, stale: 0 });
+  assert.deepEqual(report.checks.wakeReadiness, {
+    ok: true,
+    snapshot: { status: "fresh", completeness: "complete", updatedAt: "2026-10-04T12:00:00.000Z", ageSeconds: 0 },
+    wakeEnabled: true, observedIdle: 0, observedPolicyEligible: 0, observedExplicitRestartAuthorized: 0,
+    observedMissingExplicitRestartAuthorization: 0,
+    rememberedPermission: { allowed: 0, restricted: 0, unknown: 0 },
+    liveListedListeners: { verified: 0, missing: 0, unreadable: 0, stale: 0, mismatched: 0 },
+  });
   assert.equal((report.checks.daemon.source as { status: string }).status, "match");
   const text = JSON.stringify(report);
   for (const secret of ["SYNTHETIC_SECRET", "PRIVATE KEY", h.pem.split("\n")[1]]) assert.equal(text.includes(secret), false);

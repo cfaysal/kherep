@@ -152,7 +152,7 @@ export function writeLocalSessions(paths: NodePaths, sessions: SessionInfo[], no
   ensureDir(paths.dir);
   const local: LocalSession[] = sessions.map((s) => ({ sessionId: s.sessionId, ...(s.name ? { name: s.name } : {}),
     runtime: s.runtime, state: s.state }));
-  writeJsonAtomic(paths.sessions, { sessions: local, updatedAt: new Date(now).toISOString() });
+  writeJsonAtomic(paths.sessions, { sessions: local, unseen: [...unlistedRuntimes(sessions)], updatedAt: new Date(now).toISOString() });
 }
 
 export function readLocalSessions(paths: NodePaths): LocalSession[] {
