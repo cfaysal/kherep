@@ -10,7 +10,7 @@ import { captureSourceIdentity, compareSourceIdentity, type SourceIdentity } fro
 // this checkout. Only hook command fields are read, never permissions or other
 // settings, and only the matched script path is reported.
 
-const HOOK = String.raw`modules[\\/]+control-plane[\\/]+node[\\/]+(?:deliver|wake)-hook\.mts`;
+const HOOK = String.raw`[\\/](?:deliver|wake)-hook\.mts`;
 const START = String.raw`(?:[A-Za-z]:[\\/]|[\\/]|~[\\/])`;
 // A quoted path may hold spaces; an unquoted one ends at whitespace and must
 // start a word, so a command prefix or an inline VAR=value never joins it.
