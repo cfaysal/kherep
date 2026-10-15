@@ -213,6 +213,10 @@ Track changes in [GitHub Issues](https://github.com/cfaysal/kherep/issues). Chan
 
 Planned and in-progress work is tracked as [open issues](https://github.com/cfaysal/kherep/issues). Released changes and the `[Unreleased]` section are in the [changelog](CHANGELOG.md).
 
+## Acknowledgements
+
+Kherep's approach to session memory and observations was inspired by [claude-mem](https://github.com/thedotmack/claude-mem) by Alex Newman. Kherep contains no code from claude-mem.
+
 ## License
 
 Kherep is licensed under the [Apache License 2.0](LICENSE); see [NOTICE](NOTICE). Bundled and adapted third-party material keeps its own license, listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
