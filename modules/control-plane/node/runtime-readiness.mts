@@ -49,18 +49,21 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
   const now = options.now ?? Date.now;
   const verdicts = new Map<TaskRuntime, Verdict>();
   const inflight = new Map<TaskRuntime, Promise<Verdict>>();
-  // Runtimes whose probe was deferred since their last probe started.
+  // Runtimes seen paused since their last probe started; each gets one probe
+  // once the pause ends, whatever its verdict, so a sign-in lost meanwhile shows.
   const deferred = new Set<TaskRuntime>();
+  const paused = (runtime: TaskRuntime): boolean => {
+    if (!options.defer?.(runtime)) return false;
+    if (!deferred.has(runtime)) options.log?.(`kherep-node: runtime ${runtime} probe deferred: install in progress`);
+    deferred.add(runtime);
+    return true;
+  };
   const run = (runtime: TaskRuntime): Promise<Verdict> => {
     const pending = inflight.get(runtime);
     if (pending) return pending;
     // A deferred probe answers with the last verdict, or a not-ready one that
     // is not kept: messages wait, a task is not refused, nothing is advertised.
-    if (options.defer?.(runtime)) {
-      if (!deferred.has(runtime)) options.log?.(`kherep-node: runtime ${runtime} probe deferred: install in progress`);
-      deferred.add(runtime);
-      return Promise.resolve(verdicts.get(runtime) ?? { ready: false, at: now(), cause: "error" });
-    }
+    if (paused(runtime)) return Promise.resolve(verdicts.get(runtime) ?? { ready: false, at: now(), cause: "error" });
     deferred.delete(runtime);
     const started = probe(runtime).catch((error: unknown): ProbeResult => ({ ok: false, cause: "error", detail: String(error) }))
       .then((result) => {
@@ -93,8 +96,9 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
     peek,
     revalidate: (runtime) => {
       const verdict = verdicts.get(runtime);
-      // Also a runtime whose first probe was deferred, so it is probed after the install.
-      if (verdict ? !verdict.ready && aged(verdict, now()) : deferred.has(runtime)) void run(runtime);
+      // The watch round also notices a pause and its end (issue #403).
+      if (paused(runtime)) return;
+      if (deferred.has(runtime) || (verdict && !verdict.ready && aged(verdict, now()))) void run(runtime);
     },
     invalidate: (runtime) => {
       const verdict = verdicts.get(runtime);

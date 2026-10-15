@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 
+import { PROBE_MARKER_STALE_MS } from "../modules/control-plane/node/install-pause.mts";
 import { CLAUDE_PROBE_ARGS } from "../modules/control-plane/node/runtime-probe.mts";
 import { checkReadiness } from "./claude-readiness-check.mts";
 
@@ -29,7 +30,12 @@ if (mode === "expired") {
   process.stdout.write(result(true, "Failed to authenticate: OAuth session expired and could not be refreshed"));
   process.exit(1);
 }
-if (mode === "busy") { process.stdout.write(result(true, "another Claude Code process is refreshing it")); process.exit(1); }
+if (mode === "busy") {
+  // The renewal-lock text is not the last line, so only the whole output shows it.
+  process.stdout.write(result(true, "Could not refresh your login because another Claude Code process is refreshing it"));
+  process.stderr.write("synthetic trailing line\n");
+  process.exit(1);
+}
 if (mode === "hang") setTimeout(() => {}, 60000);
 else { process.stderr.write("synthetic failure"); process.exit(3); }
 `;
@@ -71,7 +77,7 @@ test("a timeout, another failure or a missing claude is inconclusive and never f
   assert.deepEqual(await checkReadiness({ env: f.env("crash") }),
     { code: 0, line: "install: claude probe inconclusive (probe failed: synthetic failure)" });
   assert.deepEqual(await checkReadiness({ env: f.env("busy") }),
-    { code: 0, line: "install: claude probe inconclusive (login renewal busy: another Claude Code process is refreshing it)" },
+    { code: 0, line: "install: claude probe inconclusive (login renewal busy)" },
     "a renewal held by another process is not a lost sign-in");
   const missing = await checkReadiness({ env: { ...process.env, KHEREP_CLAUDE_BIN: path.join(f.root, "no-such-claude") } });
   assert.equal(missing.code, 0);
@@ -106,4 +112,55 @@ test("pause writes the install lock only for an existing node directory; resume 
   assert.equal(f.run("ready", "resume", "4242").status, 0, "resume without a lock is a no-op");
   assert.equal(f.run("ready", "bogus").status, 2, "unknown command");
   assert.deepEqual(f.calls(), [], "pause and resume never run claude");
+});
+
+test("pause waits for a Claude probe the daemon marked in flight, and not for a stale marker", async (t) => {
+  const f = fixture(t);
+  const dir = path.join(f.root, "config", "control-plane");
+  fs.mkdirSync(dir, { recursive: true });
+  const marker = path.join(dir, "claude-probe.inflight");
+  fs.writeFileSync(marker, "1\n");
+  const started = Date.now();
+  const child = spawn(process.execPath, [subject, "pause", "4242"], { env: f.env("ready") });
+  let stdout = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+  setTimeout(() => fs.rmSync(marker), 1_000);
+  const code = await new Promise<number | null>((resolve) => child.once("close", resolve));
+  assert.equal(code, 0);
+  assert.ok(Date.now() - started >= 1_000, "pause returned before the probe ended");
+  assert.match(stdout, /install: waiting for the Kherep node's Claude probe in flight \(at most 60 s\)/);
+  assert.ok(fs.existsSync(path.join(dir, "install.lock")), "the lock was written before the wait");
+  fs.rmSync(path.join(dir, "install.lock"));
+  fs.writeFileSync(marker, "1\n");
+  const old = new Date(Date.now() - PROBE_MARKER_STALE_MS - 1_000);
+  fs.utimesSync(marker, old, old);
+  const stale = f.run("ready", "pause", "4242");
+  assert.equal(stale.status, 0);
+  assert.doesNotMatch(stale.stdout, /waiting/, "a marker a crashed daemon left is not waited for");
+});
+
+type Fixture = ReturnType<typeof fixture>;
+
+// install.sh section E as it is, with a fake claude: a lost sign-in alone is
+// named as such in the verdict, never as a failed deps phase.
+function sectionE(f: Fixture, mode: string, postRc: number) {
+  const source = fs.readFileSync(path.join(import.meta.dirname, "install.sh"), "utf8");
+  const from = source.indexOf("# ---- E.");
+  assert.notEqual(from, -1, "install.sh lost its E section marker");
+  const repo = path.join(import.meta.dirname, "..").replaceAll("\\", "/");
+  const script = ["set -Eeuo pipefail", `REPO_ROOT='${repo}'`, "SKIP_DEPS=0", `post_rc=${postRc}`, source.slice(from)].join("\n");
+  return spawnSync(process.env.BASH || "bash", ["-c", script], { encoding: "utf8", env: f.env(mode) });
+}
+test("install.sh: a lost sign-in alone fails the install as a lost sign-in, not as a failed deps phase", (t) => {
+  const f = fixture(t);
+  const lost = sectionE(f, "expired", 0);
+  assert.equal(lost.status, 1, lost.stderr);
+  assert.match(lost.stdout, /install: WARNING claude SIGN-IN LOST/);
+  assert.match(lost.stdout, /install: DONE WITH ERRORS \(Claude sign-in lost, see above; managed files stay committed\)/);
+  assert.doesNotMatch(lost.stdout, /deps phase failed/);
+  const ready = sectionE(f, "ready", 0);
+  assert.deepEqual([ready.status, ready.stdout.trim().split(/\r?\n/).slice(-2)], [0, ["install: claude ready", "install done."]]);
+  const both = sectionE(f, "ready", 1);
+  assert.equal(both.status, 1);
+  assert.match(both.stdout, /deps phase failed/, "an earlier failure keeps its own verdict");
 });
