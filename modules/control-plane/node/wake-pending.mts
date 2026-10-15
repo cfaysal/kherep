@@ -46,7 +46,11 @@ export function claimWake(paths: NodePaths, sessionId: string, now: number): boo
   } catch {
     // unreadable: removed below, never claimed
   }
-  fs.rmSync(file, { force: true });
+  try {
+    fs.rmSync(file, { force: true });
+  } catch {
+    // no marker: workerd's fs throws ENOENT despite force; delivery must not fail on it
+  }
   return typeof marker?.wokenAt === "number" && now - marker.wokenAt <= WAKE_CLAIM_MS;
 }
 
