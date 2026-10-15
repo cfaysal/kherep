@@ -104,10 +104,8 @@ async function resumeClaudeAdmitted(deps: RunnerDeps, task: TaskRecord, cwd: str
 }
 
 export async function resumeCodex(deps: RunnerDeps, task: TaskRecord, cwd: string, count: number, now: number): Promise<string | null> {
-  try {
-    return await withServiceAdmission(deps.paths, (admission) => resumeCodexAdmitted(deps, task, cwd, count, now, admission),
-      deps.serviceOwner);
-  } catch (error) { return reasonOf(error); }
+  try { return await withServiceAdmission(deps.paths, (admission) => resumeCodexAdmitted(deps, task, cwd, count, now, admission), deps.serviceOwner); }
+  catch (error) { return reasonOf(error); }
 }
 
 async function resumeCodexAdmitted(
