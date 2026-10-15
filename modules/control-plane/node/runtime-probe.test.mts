@@ -142,6 +142,8 @@ test("forgetCodexSession removes exactly the probe's recorded session", (t) => {
 // Issue #420: a timed-out Claude probe may be waiting on a login renewal, so on
 // POSIX its group gets SIGTERM and SIGKILL only after a grace. Windows has no
 // graceful signal for a windowless console process: taskkill /T /F at once.
+// The direct child's exit and close prove nothing about the rest of its
+// process group, so the group SIGKILL follows the grace in any case.
 function fakeChild(platform: NodeJS.Platform, endOn: NodeJS.Signals | null) {
   const child = Object.assign(new EventEmitter(), {
     pid: 4567, stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough(), exitCode: null, signalCode: null,
@@ -156,15 +158,25 @@ function fakeChild(platform: NodeJS.Platform, endOn: NodeJS.Signals | null) {
   return { run, sent };
 }
 
-test("a timed-out POSIX probe gets SIGTERM first and SIGKILL only when it outlives the grace", async () => {
-  const graceful = fakeChild("linux", "SIGTERM");
-  assert.equal((await graceful.run(5_000)).timedOut, true);
-  assert.deepEqual(graceful.sent, ["SIGTERM"], "ended on SIGTERM, no SIGKILL");
+test("a timed-out POSIX probe gets SIGTERM first and the group SIGKILL after the grace", async () => {
   const stubborn = fakeChild("linux", null);
   const started = Date.now();
   assert.equal((await stubborn.run(100)).timedOut, true);
   assert.deepEqual(stubborn.sent, ["SIGTERM", "SIGKILL"]);
   assert.ok(Date.now() - started >= 90, "SIGKILL waited for the grace");
+});
+
+test("a POSIX probe whose launcher ends on SIGTERM settles only after the group SIGKILL at the end of the grace", async () => {
+  const launcher = fakeChild("linux", "SIGTERM");
+  const started = Date.now();
+  let settledAt = 0;
+  const pending = launcher.run(300).then((out) => { settledAt = Date.now(); return out; });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(launcher.sent, ["SIGTERM"], "the launcher has exited and closed");
+  assert.equal(settledAt, 0, "not settled before the grace ran out");
+  assert.equal((await pending).timedOut, true);
+  assert.deepEqual(launcher.sent, ["SIGTERM", "SIGKILL"], "a helper left in the group still gets SIGKILL");
+  assert.ok(settledAt - started >= 290, "settled after the grace");
 });
 
 test("a timed-out Windows probe is still killed with its tree at once", async () => {
@@ -173,17 +185,31 @@ test("a timed-out Windows probe is still killed with its tree at once", async ()
   assert.deepEqual(windows.sent, ["SIGKILL"]);
 });
 
-test("a real POSIX probe that ends on SIGTERM ends before the grace; one that ignores it ends by SIGKILL after it", posix, async () => {
+test("a real POSIX probe gets the full grace whether it ends on SIGTERM or ignores it", posix, async () => {
   let started = Date.now();
   const polite = await spawnProbe()(process.execPath, ["-e", "setTimeout(() => {}, 30000)"],
-    { cwd: process.cwd(), timeoutMs: 200, graceMs: 5_000 });
+    { cwd: process.cwd(), timeoutMs: 200, graceMs: 1_000 });
   assert.equal(polite.timedOut, true);
-  assert.ok(Date.now() - started < 4_000, "SIGTERM ended it");
+  assert.ok(Date.now() - started >= 1_100, "settled only after the grace");
   started = Date.now();
   const stubborn = await spawnProbe()(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
     { cwd: process.cwd(), timeoutMs: 200, graceMs: 1_000 });
   assert.equal(stubborn.timedOut, true);
   assert.ok(Date.now() - started >= 1_100, "SIGKILL only after the grace");
+});
+
+test("a real POSIX helper that traps SIGTERM in the probe's group is dead after the probe settles", posix, async () => {
+  const helper = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)";
+  const launcher = [
+    `const h = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(helper)}], { stdio: 'ignore' });`,
+    "h.unref(); process.stdout.write(String(h.pid)); setInterval(() => {}, 1000);"].join(" ");
+  const out = await spawnProbe()(process.execPath, ["-e", launcher], { cwd: process.cwd(), timeoutMs: 500, graceMs: 500 });
+  assert.equal(out.timedOut, true);
+  const helperPid = Number(out.stdout.trim());
+  assert.ok(Number.isInteger(helperPid) && helperPid > 0, out.stdout);
+  const deadline = Date.now() + 2_000;
+  while (pidAlive(helperPid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(pidAlive(helperPid), false, "the group SIGKILL reached the helper");
 });
 
 // The libuv job object (src/win/process.c: every child not spawned detached is
