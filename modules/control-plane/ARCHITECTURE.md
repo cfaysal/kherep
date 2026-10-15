@@ -321,6 +321,35 @@ Native hook trust, activation and actual owner-turn processing need acceptance
 at each host, tracked in issue #374. Source fixtures prove the portable flow,
 not an installed Desktop result.
 
+## Codex idle evidence
+
+Issue #408, first increment. Each Codex session record
+(`codex-sessions/<id>.json`, `node/codex-sessions.mts`) keeps the last hook
+event that reached it, `lastEvent` with `lastEventAt`, and `lastStopAt`.
+`deliver-codex.mts` passes `SessionStart`, `UserPromptSubmit` and `Stop` to
+`recordCodexSession`; `codex-busy-consume.mts` refreshes only `lastEvent` and
+`lastEventAt` of an existing record at the original owner's `PostToolUse`,
+after the `codex-hook-owner.mts` identity check and before the wake policy, in
+its own failure scope, so a child's call writes nothing and the hint path is
+unchanged. An input without a known event keeps the previous values.
+
+```mermaid
+flowchart LR
+  hook[SessionStart / UserPromptSubmit / Stop] --> record[lastEvent, lastEventAt; Stop also lastStopAt]
+  post[Owner PostToolUse] --> refresh[lastEvent, lastEventAt of an existing record]
+  record --> idle["idleEvidence(): Stop >= 90 s ago, seen within 12 h"]
+  refresh --> idle
+```
+
+`idleEvidence()` is pure: a record is idle only when its last event is a `Stop`
+at least the threshold (default 90 s, accepted 30 s to 1 h) ago and `lastSeen`
+is within `CODEX_ACTIVE_MS`. A missing record, a record of an older hook
+without `lastEvent`, an unreadable time or an out-of-range threshold is not
+idle. No delivery path consults it yet; `msg sessions` prints the last event of
+this node's Codex sessions and doctor counts records per last event. Whether
+`Stop` fires on a cancelled turn and whether an approval wait is
+distinguishable remain UNKNOWN, so the result is evidence, not proof.
+
 ## Claude mid-turn delivery
 
 Claude Code has no CP ticket: its delivery hook reads the Inbox directly. Besides
@@ -537,6 +566,12 @@ matching lock and scope tokens, `listed: true`, a live process and an age inside
 listener deadline. It does not prove current idle state, the kill switch decision or
 message receipt, so the check derives no ready verdict. Missing lock files and failed
 reads are different results. Output is aggregate and omits session ids, tokens and paths.
+
+The `codexSessions` doctor check (issue #408) reads `codex-sessions/` directly
+instead of through `listCodexSessions`, so it removes no expired record. It
+counts the records seen within `CODEX_ACTIVE_MS` per last hook event, with
+`unknown` for a record of an older hook, and omits session ids. An unreadable
+directory fails the check; a missing one counts zero.
 
 Besides a listener releasing its own lock, the daemon removes wake listener
 locks (`node/listener-sweep.mts`, issue #225): at its start and hourly, the

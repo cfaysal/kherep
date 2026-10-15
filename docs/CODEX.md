@@ -172,6 +172,16 @@ eligible turn.
 The existing Stop continuation remains available for accepted messages
 under its existing budget and permissions.
 
+Idle evidence (issue #408): the node's record of each Codex session keeps the
+last hook event that reached it and when, plus the time of the last `Stop`.
+The original owner's `PostToolUse` refreshes the event of an existing record
+only; a subagent's call writes nothing. A session counts as idle only when its
+last event is a `Stop` at least 90 seconds old and it was seen within 12 hours.
+This is evidence, not proof, and nothing acts on it yet: `msg sessions` shows
+the last event of this node's Codex sessions and `kherep-node doctor` counts
+them per event. Whether `Stop` fires for a cancelled turn, and whether an
+approval wait can be told apart, is UNKNOWN.
+
 Admission and a metadata claim leave messages `accepted`. Explicit
 `msg inbox --receive` offers only the messages actually returned; normal confirming
 Stop marks those `offered` records `delivered`. An interrupt does not confirm them.

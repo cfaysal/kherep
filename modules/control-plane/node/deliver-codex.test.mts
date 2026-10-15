@@ -174,3 +174,17 @@ test("a Stop continuation is an autonomous turn: never in bypassPermissions, and
   const audit = fs.readFileSync(path.join(paths.dir, "wake.jsonl"), "utf8");
   assert.deepEqual(audit.trim().split("\n").map((l) => JSON.parse(l).action), ["continue-permission-mode", "continue", "continue-budget"]);
 });
+
+test("each delivery hook event records itself as the session's last event, Stop also its time (issue #408)", (t) => {
+  const paths = setup(t);
+  const record = () => readJson<Record<string, unknown>>(path.join(paths.codexSessions, `${SELF}.json`));
+  const at = (ms: number) => new Date(ms).toISOString();
+  hook(paths, "SessionStart", { source: "startup" });
+  assert.deepEqual([record()?.lastEvent, record()?.lastEventAt, record()?.lastStopAt], ["SessionStart", at(clock), undefined]);
+  clock += 1_000;
+  hook(paths, "UserPromptSubmit", { prompt: "go on" });
+  assert.deepEqual([record()?.lastEvent, record()?.lastEventAt, record()?.lastStopAt], ["UserPromptSubmit", at(clock), undefined]);
+  clock += 1_000;
+  assert.equal(stop(paths), "");
+  assert.deepEqual([record()?.lastEvent, record()?.lastEventAt, record()?.lastStopAt], ["Stop", at(clock), at(clock)]);
+});

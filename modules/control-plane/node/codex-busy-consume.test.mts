@@ -26,9 +26,36 @@ test("the original owner receives one compact hint with at most eight targeted r
   assert.equal(reads, 8, "a claimed generation does not reread Inbox records");
   discovery.mock.restore(); mockedRead.mock.restore();
   assert.deepEqual(node.inboxBytes(), before, "hinting does not offer, confirm or change progress");
-  assert.equal(fs.readFileSync(path.join(node.paths.codexSessions, `${BUSY_OWNER}.json`), "utf8"), session);
+  // Issue #408: the tool boundary refreshes only the last event, never lastSeen, cwd or mode.
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(node.paths.codexSessions, `${BUSY_OWNER}.json`), "utf8")),
+    { ...JSON.parse(session), lastEvent: "PostToolUse", lastEventAt: new Date(node.admission.admittedAt).toISOString() });
   assert.equal(fs.existsSync(path.join(node.paths.dir, "wake.jsonl")), false);
   assert.deepEqual(fs.readdirSync(listenerDir(node.paths)), [`${BUSY_OWNER}.busy-hint.json`]);
+});
+
+test("the verified owner's PostToolUse records its last event even without a hint; a child's leaves the record untouched", (t) => {
+  const node = busyFixture(t, 1, undefined, false);
+  const file = path.join(node.paths.codexSessions, `${BUSY_OWNER}.json`);
+  const session = fs.readFileSync(file, "utf8");
+  for (const patch of [{ agent_id: "synthetic-child" }, { agent_type: "worker" }, { transcript_path: node.input.transcript_path.replace(BUSY_OWNER,
+    "01a0db74-0000-7000-8000-000000000002") }]) {
+    assert.equal(deliverForCodex({ ...node.input, ...patch }, node.hookDeps), "");
+    assert.equal(fs.readFileSync(file, "utf8"), session, JSON.stringify(patch));
+  }
+  fs.writeFileSync(path.join(node.paths.dir, "wake.disabled"), "");
+  assert.equal(deliverForCodex(node.input, node.hookDeps), "", "the kill switch still suppresses the hint");
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).lastEvent, "PostToolUse");
+});
+
+test("an owner PostToolUse never creates a session record, and a failed refresh keeps the hint", (t) => {
+  const node = busyFixture(t);
+  const file = path.join(node.paths.codexSessions, `${BUSY_OWNER}.json`);
+  fs.unlinkSync(file);
+  assert.match(deliverForCodex(node.input, node.hookDeps), /New peer messages/);
+  assert.equal(fs.existsSync(file), false);
+  const other = busyFixture(t);
+  fs.writeFileSync(path.join(other.paths.codexSessions, `${BUSY_OWNER}.json`), "{broken json");
+  assert.equal(deliverForCodex({ ...other.input, permission_mode: "default" }, other.hookDeps).length > 0, true);
 });
 
 test("a child or foreign transcript is rejected before ticket or Inbox reads", (t) => {

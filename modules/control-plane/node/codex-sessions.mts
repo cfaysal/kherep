@@ -20,9 +20,48 @@ export const CODEX_ACTIVE_MS = 12 * 60 * 60_000;
 // Files of sessions not seen for this long are removed.
 export const CODEX_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
+// The hook events a record keeps as idle evidence (issue #408).
+export const CODEX_HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"] as const;
+export type CodexHookEvent = typeof CODEX_HOOK_EVENTS[number];
+export const isCodexHookEvent = (value: unknown): value is CodexHookEvent => CODEX_HOOK_EVENTS.includes(value as CodexHookEvent);
+
 // permissionMode: the hook input's permission_mode (documented values default,
 // acceptEdits, plan, dontAsk, bypassPermissions), kept when a later input lacks it.
-export interface CodexSessionRecord { sessionId: string; cwd?: string; lastSeen: string; runtime: typeof CODEX_RUNTIME; permissionMode?: string }
+// lastEvent and lastEventAt: the last hook event and its time; lastStopAt: the
+// time of the last Stop. All three are kept when a later input has no event; a
+// record without lastEvent (an older hook) is unknown, never idle.
+export interface CodexSessionRecord {
+  sessionId: string; cwd?: string; lastSeen: string; runtime: typeof CODEX_RUNTIME; permissionMode?: string;
+  lastEvent?: CodexHookEvent; lastEventAt?: string; lastStopAt?: string;
+}
+
+// Idle evidence (issue #408): the last event is a Stop at least idleAfterMs
+// ago and the session was seen within CODEX_ACTIVE_MS. Evidence, not proof:
+// whether Stop fires on a cancelled turn, or an approval wait is told apart,
+// is UNKNOWN. A threshold outside 30 s to 1 h is never idle.
+export const CODEX_IDLE_AFTER_MS = 90_000;
+const IDLE_AFTER_MIN_MS = 30_000;
+const IDLE_AFTER_MAX_MS = 3_600_000;
+
+export function idleEvidence(record: CodexSessionRecord | null | undefined, now: number, idleAfterMs: number = CODEX_IDLE_AFTER_MS): boolean {
+  if (!Number.isSafeInteger(idleAfterMs) || idleAfterMs < IDLE_AFTER_MIN_MS || idleAfterMs > IDLE_AFTER_MAX_MS) return false;
+  if (record?.lastEvent !== "Stop") return false;
+  const stoppedAt = Date.parse(record.lastStopAt ?? ""), seenAt = Date.parse(record.lastSeen);
+  return now - stoppedAt >= idleAfterMs && now - seenAt <= CODEX_ACTIVE_MS;
+}
+
+type EventFields = Pick<CodexSessionRecord, "lastEvent" | "lastEventAt" | "lastStopAt">;
+
+// A hook event replaces the last event (a Stop also the stop time); anything
+// else keeps the previous record's valid event fields.
+function eventFields(previous: CodexSessionRecord | null, event: unknown, now: number): EventFields {
+  const time = (value: unknown): string | undefined => (typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : undefined);
+  const at = new Date(now).toISOString();
+  const lastEvent = isCodexHookEvent(event) ? event : isCodexHookEvent(previous?.lastEvent) ? previous.lastEvent : undefined;
+  const lastEventAt = isCodexHookEvent(event) ? at : time(previous?.lastEventAt);
+  const lastStopAt = event === "Stop" ? at : time(previous?.lastStopAt);
+  return { ...(lastEvent ? { lastEvent } : {}), ...(lastEventAt ? { lastEventAt } : {}), ...(lastStopAt ? { lastStopAt } : {}) };
+}
 
 // Session ids name files, so only plain file-name characters are accepted.
 export function isCodexSessionId(value: unknown): value is string {
@@ -88,23 +127,36 @@ export function codexSessionRefs(paths: NodePaths, sessionId: string, now: numbe
 const fileOf = (paths: NodePaths, sessionId: string): string => path.join(paths.codexSessions, `${sessionId}.json`);
 
 // Writes or refreshes the record of one Codex session. Throws for an id that
-// cannot name a file.
-export function recordCodexSession(paths: NodePaths, sessionId: string, cwd: unknown, now: number = Date.now(), permissionMode?: unknown): void {
+// cannot name a file. event: the hook event (issue #408).
+export function recordCodexSession(paths: NodePaths, sessionId: string, cwd: unknown, now: number = Date.now(), permissionMode?: unknown,
+  event?: unknown): void {
   if (!isCodexSessionId(sessionId)) throw new Error("codex session id is not a plain name");
   ensureDir(paths.codexSessions);
-  let mode = typeof permissionMode === "string" && /^[A-Za-z-]{1,32}$/.test(permissionMode) ? permissionMode : undefined;
-  if (mode === undefined) {
-    try {
-      mode = readCodexSession(paths, sessionId)?.permissionMode;
-    } catch {
-      // an unreadable record is rewritten without it
-    }
+  let previous: CodexSessionRecord | null = null;
+  try {
+    previous = readCodexSession(paths, sessionId);
+  } catch {
+    // an unreadable record is rewritten without its mode and events
   }
+  const given = typeof permissionMode === "string" && /^[A-Za-z-]{1,32}$/.test(permissionMode) ? permissionMode : undefined;
+  const mode = given ?? previous?.permissionMode;
   const record: CodexSessionRecord = {
     sessionId, ...(typeof cwd === "string" && isSessionRef(cwd) && cwd.length <= 512 ? { cwd } : {}),
     lastSeen: new Date(now).toISOString(), runtime: CODEX_RUNTIME, ...(mode ? { permissionMode: mode } : {}),
+    ...eventFields(previous, event, now),
   };
   writeJsonAtomic(fileOf(paths, sessionId), record);
+}
+
+// Issue #408: the original owner's PostToolUse refreshes the last event of an
+// existing record and nothing else, so a tool boundary never creates a session
+// or moves lastSeen. false: no record of this session to refresh.
+export function refreshCodexEvent(paths: NodePaths, sessionId: string, event: CodexHookEvent, now: number = Date.now()): boolean {
+  if (!isCodexSessionId(sessionId)) return false;
+  const previous = readCodexSession(paths, sessionId);
+  if (previous?.sessionId !== sessionId || previous.runtime !== CODEX_RUNTIME || typeof previous.lastSeen !== "string") return false;
+  writeJsonAtomic(fileOf(paths, sessionId), { ...previous, ...eventFields(previous, event, now) });
+  return true;
 }
 
 // Issue #197: the readiness probe's own run loads the user's config, whose

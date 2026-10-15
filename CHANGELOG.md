@@ -9,6 +9,21 @@ increments the minor version; every other release increments the patch version.
 
 ## [Unreleased]
 
+### Added
+
+- Codex idle evidence (issue #408, first increment). The node's record of each
+  Codex session (`codex-sessions/<id>.json`) now keeps `lastEvent` and
+  `lastEventAt`, the last hook event (`SessionStart`, `UserPromptSubmit`,
+  `PostToolUse` or `Stop`) and its time, and `lastStopAt`, the time of the last
+  `Stop`; an input without a known event keeps them. The original owner's
+  `PostToolUse` refreshes only the event of an existing record, and a
+  subagent's call writes nothing. The pure `idleEvidence()` reads a record as
+  idle only for a `Stop` at least 90 seconds old of a session seen within 12
+  hours; a record of an older hook is never idle. Nothing acts on it yet:
+  `msg sessions` prints `last event <event> at <time>` for this node's Codex
+  sessions, and `kherep-node doctor` adds the `codexSessions` check with counts
+  per last event and no session ids. Message delivery is unchanged.
+
 ### Changed
 
 - Native Codex Queue pointer producer off by default (issue #429). The

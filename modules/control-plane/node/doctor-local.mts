@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { listenerDir, type ListenerLock } from "./autonomy.mts";
+import { CODEX_ACTIVE_MS, isCodexHookEvent, isCodexSessionId, type CodexHookEvent, type CodexSessionRecord } from "./codex-sessions.mts";
 import { readConfig, type NodeConfig, type NodePaths } from "./config.mts";
 import { readDaemonState } from "./daemon-state.mts";
 import { captureSourceIdentity, compareSourceIdentity, type SourceIdentity } from "./daemon-source.mts";
@@ -120,6 +121,31 @@ export function checkPolicy(file: string): { check: Check; policy: NodePolicy | 
     sessions: policy.sessions?.enabled ? { enabled: true, runtimes: policy.sessions.runtimes } : { enabled: false },
     remoteMcp: policy.remoteMcp?.enabled === true,
     ...(wakeRejected ? { detail: "the wake section is malformed and waking is off" } : {}) }, policy };
+}
+
+// Issue #408: the Codex sessions recorded within CODEX_ACTIVE_MS, counted by
+// their last hook event (idle evidence); unknown counts a record from an older
+// hook. Read only: unlike listCodexSessions it removes nothing. Counts only;
+// session ids stay out of the report.
+export function checkCodexSessions(paths: NodePaths, now: number): Check {
+  let names: string[];
+  try {
+    names = fs.readdirSync(paths.codexSessions);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { ok: false, detail: "the Codex session directory is unreadable" };
+    names = [];
+  }
+  const lastEvent: Record<CodexHookEvent | "unknown", number> = { SessionStart: 0, UserPromptSubmit: 0, PostToolUse: 0, Stop: 0, unknown: 0 };
+  let recorded = 0;
+  for (const name of names.filter((entry) => entry.endsWith(".json"))) {
+    let record: CodexSessionRecord | null = null;
+    try { record = readJson<CodexSessionRecord>(path.join(paths.codexSessions, name)); } catch { /* not counted */ }
+    if (!record || !isCodexSessionId(record.sessionId) || `${record.sessionId}.json` !== name) continue;
+    if (!(now - Date.parse(record.lastSeen) <= CODEX_ACTIVE_MS)) continue;
+    recorded++;
+    lastEvent[isCodexHookEvent(record.lastEvent) ? record.lastEvent : "unknown"]++;
+  }
+  return { ok: true, recorded, lastEvent };
 }
 
 // Live: the lock's process runs and the lock is younger than the listener's
