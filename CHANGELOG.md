@@ -39,6 +39,23 @@ increments the minor version; every other release increments the patch version.
   `service controller identity lookup timed out` instead of `service
   controller identity cannot be verified`. `createServiceOwnerProbe` lets
   tests replace the platform, the spawn function and the timeout.
+- Daemon stop during a Claude probe (issue #420): a daemon stopped by
+  SIGINT, SIGTERM or now SIGHUP starts no new readiness probe and waits for
+  the one in flight, so a stop no longer cuts a login renewal short. A probe
+  still waiting for a service drain is given up instead. A timed-out probe on
+  macOS and Linux gets SIGTERM and SIGKILL only after 5 seconds; Windows keeps
+  `taskkill /T /F`. The macOS LaunchAgent gets `ExitTimeOut` 60 on a fresh
+  installation and on an upgrade of a definition without it. A restarted
+  daemon reuses the previous daemon's ready verdict when it is younger than
+  10 minutes instead of probing at once, so a restart no longer starts a
+  Claude call exactly when daemons are killed. A Claude probe a killed daemon
+  left behind is logged at the next start, forces the probe, is recorded in
+  `daemon.json` and is shown by `kherep-node doctor` as
+  `runtimes.claude.lastStopInterruptedProbeAt` until the next ready verdict.
+  Every daemon log line, in the managed service log and from `kherep-node
+  daemon`, starts with an ISO 8601 timestamp. A Windows kill such as
+  `taskkill /F` still cannot be caught; Claude probes stay attached to the
+  daemon there.
 
 ## [0.3.0] - 2026-10-15
 

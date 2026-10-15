@@ -238,6 +238,24 @@ helpers before stopping it, as described below. This version has no separate
 `service stop` command. After an installation, the installer's readiness line
 and `kherep-node doctor` show whether Claude is still signed in.
 
+On SIGINT, SIGTERM or SIGHUP the daemon starts no new readiness probe and
+waits for one in flight to finish, at most 50 seconds (the 45-second probe
+timeout plus a 5-second grace), logging `stopping; waiting for the claude probe
+to finish`. A probe that times out on macOS or Linux gets SIGTERM and only
+after that grace SIGKILL; on Windows it is still ended with `taskkill /T /F`.
+The macOS LaunchAgent sets `ExitTimeOut` to 60 seconds, on a fresh
+installation and on each upgrade of a definition that does not already set it,
+so launchd does not send SIGKILL during that wait. On Windows `taskkill /F`,
+Task Manager and `Stop-Process` end the daemon without a signal it can handle,
+and a Claude CLI it started ends with it. A restarted daemon whose
+previous Claude probe was ready less than 10 minutes earlier reuses that
+verdict instead of probing at once. When the previous daemon was killed during
+a probe, the next start logs `the previous daemon stop interrupted a claude
+probe`, probes at once, and `kherep-node doctor` shows
+`lastStopInterruptedProbeAt` under `runtimes.claude` until a probe is ready
+again. Every daemon log line, in the service log and from `kherep-node daemon`,
+starts with an ISO 8601 UTC timestamp.
+
 On Windows, `--service-name '\Example\KherepNode'` selects a task in a nested
 Task Scheduler folder. The equivalent split form is `--service-name KherepNode
 --task-path '\Example\'`. A macOS service name is a LaunchAgent label and has no
