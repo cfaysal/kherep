@@ -9,6 +9,8 @@ increments the minor version; every other release increments the patch version.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-15
+
 ### Added
 
 - Closed-session cwd refusal code (issue #396): a closed-session delivery that
@@ -1687,7 +1689,8 @@ First public release.
 - Turn-completion observations for Claude and Codex through the service-account
   Confluence path.
 
-[Unreleased]: https://github.com/cfaysal/kherep/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/cfaysal/kherep/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/cfaysal/kherep/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cfaysal/kherep/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/cfaysal/kherep/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/cfaysal/kherep/compare/v0.1.0...v0.1.1
