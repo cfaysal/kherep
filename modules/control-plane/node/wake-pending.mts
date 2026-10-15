@@ -39,13 +39,14 @@ export function markWoken(paths: NodePaths, sessionId: string, token: string, id
 // Removes the marker whatever it holds; true only for a readable one that is fresh.
 export function claimWake(paths: NodePaths, sessionId: string, now: number): boolean {
   if (!isPlainSessionId(sessionId)) return false;
+  const file = wokeFile(paths, sessionId);
   let marker: { wokenAt?: unknown } | null = null;
   try {
-    marker = readJson<{ wokenAt?: unknown }>(wokeFile(paths, sessionId));
+    marker = readJson<{ wokenAt?: unknown }>(file);
   } catch {
     // unreadable: removed below, never claimed
   }
-  fs.rmSync(wokeFile(paths, sessionId), { force: true });
+  fs.rmSync(file, { force: true });
   return typeof marker?.wokenAt === "number" && now - marker.wokenAt <= WAKE_CLAIM_MS;
 }
 
