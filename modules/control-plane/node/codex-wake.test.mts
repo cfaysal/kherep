@@ -98,6 +98,7 @@ test("a peer message resumes an ended task with the framed message; the reply go
   // The fake answered it with `msg send --reply-to` during the run, which marks
   // the message delivered at once (issue #111), before the turn is confirmed.
   assert.equal(getMessage(node.paths.inbox, id)?.state, "delivered");
+  assert.equal(getMessage(node.paths.inbox, id)?.offeredBy, "codex-wake", "issue #417: the resume offered it; delivered keeps it");
 
   await watchTasks(node.deps());
   assert.equal(getMessage(node.paths.inbox, id)?.state, "delivered", "still delivered once the completed turn is settled");

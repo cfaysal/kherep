@@ -10,7 +10,7 @@ import { getMessage, markAnswered } from "./inbox.mts";
 import {
   KHEREP_SESSION_ENV, resolveSendTarget, senderSession, senderSessionId, SESSION_ENV, sessionIdFromEnv,
 } from "./msg-resolve.mts";
-import { inbox, replyLines } from "./msg-inbox.mts";
+import { inbox, offerLine, replyLines } from "./msg-inbox.mts";
 import { sendNew } from "./msg-new.mts";
 import { directoryFor, sessions } from "./msg-sessions.mts";
 import { stopTask } from "./msg-stop.mts";
@@ -235,5 +235,12 @@ function status(io: Io, messageId: string): number {
     io.out(`${messageId} pending: waiting for the daemon to send it`);
     return 0;
   }
-  return fail(io, `unknown message ${messageId}: not in the outbox or sent messages of this node`);
+  // Issue #417: a message this node received.
+  const received = getMessage(io.paths.inbox, messageId);
+  if (received) {
+    io.out(`${messageId} ${received.state} (received ${received.receivedAt})`);
+    for (const line of offerLine(received)) io.out(line);
+    return 0;
+  }
+  return fail(io, `unknown message ${messageId}: not in the outbox, sent messages or inbox of this node`);
 }

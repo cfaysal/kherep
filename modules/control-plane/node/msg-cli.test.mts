@@ -8,7 +8,7 @@ import type { DirectoryBody } from "../protocol-messages.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { getOutbox, recordSent, writeDirectory, writeLocalSessions } from "./exchange.mts";
-import { markDelivered, storeMessage } from "./inbox.mts";
+import { getMessage, markDelivered, markOffered, storeMessage } from "./inbox.mts";
 import { writeTask } from "./task-records.mts";
 import { runMsg } from "./msg-cli.mts";
 import { resolveTarget } from "./msg-resolve.mts";
@@ -218,7 +218,16 @@ test("msg inbox shows this session's messages, msg status the state of a sent on
   const progress = (await run(paths, ["status", progressId])).out;
   assert.match(progress, /accepted: the automatic wake was not confirmed; start the target turn to retry delivery/);
   assert.doesNotMatch(progress, /legacy text|private|path/i);
-  assert.equal((await run(paths, ["status", INCOMING])).code, 1);
+  // Issue #417: msg status answers for a message in this node's inbox too.
+  const received = getMessage(paths.inbox, INCOMING)!.receivedAt;
+  const before = await run(paths, ["status", INCOMING]);
+  assert.deepEqual([before.code, before.out], [0, `${INCOMING} accepted (received ${received})`]);
+  markOffered(paths.inbox, INCOMING, NOW, "prompt");
+  const offered = `  offered by: prompt at ${new Date(NOW).toISOString()} (offer 1)`;
+  const after = await run(paths, ["status", INCOMING]);
+  assert.deepEqual([after.code, after.out], [0, `${INCOMING} offered (received ${received})\n${offered}`]);
+  assert.ok((await run(paths, ["inbox"])).out.includes(`\n${offered}\n  | line one`), "msg inbox shows the same line");
+  assert.equal((await run(paths, ["status", "00000000-0000-4000-8000-0000000000f9"])).code, 1, "an unknown id still fails");
   assert.equal((await run(paths, ["frobnicate"])).code, 2);
 });
 
@@ -318,4 +327,10 @@ test("msg status shows the threaded replies that reached this node (issue #200)"
   // The reply keeps the original id, and the sender's inbox shows its text.
   const inbox = await run(paths, ["inbox"]);
   assert.match(inbox.out, new RegExp(`${reply}  accepted .*\\n  from: node node-b \\(${PEER}\\), session s-b3\\n  in reply to: ${sent.out}\\n  \\| answer`));
+  // Issue #417: an offered reply names the path that offered it.
+  markOffered(paths.inbox, reply, NOW + 3, "wake");
+  assert.deepEqual((await run(paths, ["status", sent.out])).out.split("\n").slice(1), [
+    `  reply ${reply} from node node-b (${PEER}), session s-b3 (offered, received ${new Date(NOW + 2).toISOString()})`,
+    `    offered by: wake at ${new Date(NOW + 3).toISOString()} (offer 1)`,
+  ]);
 });

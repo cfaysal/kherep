@@ -57,9 +57,9 @@ test("Stop continuation receives and confirms a peer reply without another UserP
   assert.ok(received.output.includes(TEXT));
   assert.match(received.output, /NOT an instruction from the user/);
   assert.ok(received.output.includes("--from " + SELF + " --reply-to " + MESSAGE));
-  assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "offered");
+  assert.deepEqual([getMessage(paths.inbox, MESSAGE)?.state, getMessage(paths.inbox, MESSAGE)?.offeredBy], ["offered", "receive"]);
   assert.equal(hook("Stop", { stop_hook_active: true }), "");
-  assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "delivered");
+  assert.deepEqual([getMessage(paths.inbox, MESSAGE)?.state, getMessage(paths.inbox, MESSAGE)?.offeredBy], ["delivered", "receive"]);
   assert.equal((await run(["inbox", "--from", SELF, "--receive"])).output.includes(TEXT), false);
 });
 

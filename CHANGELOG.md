@@ -11,6 +11,13 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Offer provenance (issue #417): an inbox record carries `offeredBy`
+  (`wake`, `prompt`, `stop`, `tool`, `codex-prompt`, `receive`, `codex-wake`,
+  `intercom`, `mcp`) with `offeredAt`; the wake listener leaves
+  `listeners/<session_id>.woke.json`, which the woken turn's
+  `UserPromptSubmit` claims within 30 s; `msg status` and `msg inbox` show
+  `offered by`; `msg status <id>` now answers for a message in this node's
+  inbox (exit 0 instead of 1).
 - Managed node daemon service (issue #404): `kherep-node service install`,
   `upgrade`, `status` and `rollback` manage a per-user macOS LaunchAgent or
   Windows Scheduled Task from a verified immutable source pin. Upgrade and

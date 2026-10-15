@@ -42,6 +42,8 @@ export interface InboxRecord {
   // Set by the delivery hook each time it hands the message to a turn.
   offers?: number;
   offeredAt?: string;
+  // Which path made the last offer (issue #417), written with offeredAt.
+  offeredBy?: OfferedBy;
   // Set by StopFailure: the turn that carried the offer ended on an API error,
   // so the next UserPromptSubmit offers it again at once.
   retry?: boolean;
@@ -55,6 +57,18 @@ export interface InboxRecord {
   // handed it to the sender's intercom session (issue #105).
   closedTo?: string;
 }
+
+// Which path handed the record to a turn (issue #417). Written with offeredAt.
+export type OfferedBy =
+  | "wake"         // Claude Code: UserPromptSubmit of a turn the wake listener opened (woke marker claimed)
+  | "prompt"       // Claude Code: UserPromptSubmit otherwise (user prompt, queued prompt, resumed intercom's wake prompt)
+  | "stop"         // Claude Code: Stop continuation of a running turn (mayContinue allowed it)
+  | "tool"         // Claude Code: PostToolUse inside the running turn
+  | "codex-prompt" // Codex hook: UserPromptSubmit
+  | "receive"      // msg inbox --receive (Codex Stop continuation)
+  | "codex-wake"   // daemon: codex exec resume of an ended Codex task for its messages (codex-wake.mts)
+  | "intercom"     // daemon: closed-session fallback, new or resumed Codex intercom session (closed-resume.mts)
+  | "mcp";         // daemon: an MCP inbox read returned the record (mcp-local.mts)
 
 // The local states the daemon reports to the Worker. An offered message remains
 // accepted in the cloud until the turn confirms delivery.
@@ -196,11 +210,12 @@ export function markAnswered(dir: string, messageId: string): void {
 
 // Records that the hook handed the message to a turn, which confirms it at
 // its Stop. Returns the updated record, or null when it is not in the inbox.
-export function markOffered(dir: string, messageId: string, now: number = Date.now()): InboxRecord | null {
+export function markOffered(dir: string, messageId: string, now: number = Date.now(), offeredBy?: OfferedBy): InboxRecord | null {
   const record = getMessage(dir, messageId);
   if (!record) return null;
   const { retry: _retry, ...rest } = record;
-  const offered: InboxRecord = { ...rest, state: "offered", offers: (record.offers ?? 0) + 1, offeredAt: new Date(now).toISOString() };
+  const offered: InboxRecord = { ...rest, state: "offered", offers: (record.offers ?? 0) + 1, offeredAt: new Date(now).toISOString(),
+    ...(offeredBy ? { offeredBy } : {}) };
   writeJsonAtomic(fileOf(dir, messageId), offered);
   return offered;
 }

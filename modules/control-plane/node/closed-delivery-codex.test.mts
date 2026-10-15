@@ -146,6 +146,7 @@ test("a closed Codex session's messages go to one Codex intercom session: starte
   assert.deepEqual(getMessage(node.paths.inbox, second)?.delivery,
     { taskId: task.taskId, runtime: "codex", sessionId: THREAD });
   await waitFor(() => replyTo(node.paths.outbox, second) !== undefined, "the second threaded reply");
+  assert.equal(getMessage(node.paths.inbox, second)?.offeredBy, "intercom", "issue #417: the resumed intercom session");
   assert.deepEqual(audits(node).map((a) => [a.outcome, a.messageIds]), [["new", [first]], ["reused", [second]]]);
   assert.deepEqual(node.reports(), []);
   await ended(listTasks(node.paths)[0]);

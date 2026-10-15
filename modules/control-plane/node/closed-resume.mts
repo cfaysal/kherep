@@ -112,7 +112,7 @@ async function resumeCodexAdmitted(
 ): Promise<string | null> {
   const sessionId = task.sessionId!;
   const refs = [sessionId, task.name];
-  const context = deliveryContext("UserPromptSubmit", refs, { paths: deps.paths, now: () => now,
+  const context = deliveryContext("UserPromptSubmit", refs, { paths: deps.paths, now: () => now, offeredBy: "intercom",
     ...(deps.cli ? { replyCommand: deps.cli } : {}) });
   const offeredAt = new Date(now).toISOString();
   const offered = sessionInbox(deps.paths, refs).filter((r) => r.state === "offered" && r.offeredAt === offeredAt).map((r) => r.messageId);
@@ -199,7 +199,7 @@ function handOver(deps: RunnerDeps, name: string, carried: InboxRecord[]): strin
   for (const { messageId } of carried) {
     const state = getMessage(deps.paths.inbox, messageId)?.state;
     if (state !== "accepted" && state !== "offered") continue;
-    if (state === "accepted") markOffered(deps.paths.inbox, messageId, now);
+    if (state === "accepted") markOffered(deps.paths.inbox, messageId, now, "intercom");
     markClosedAttempt(deps.paths.inbox, messageId, now, name);
     ids.push(messageId);
   }
