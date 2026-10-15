@@ -10,7 +10,7 @@ import {
 } from "./codex-mcp.mts";
 import type { CodexDeps } from "./codex-process.mts";
 import { spawnRun } from "./codex-runner.mts";
-import { T0, taskId, taskNode } from "./task-fixture.mts";
+import { T0, taskId, taskNode, testServiceOwner } from "./task-fixture.mts";
 import type { TaskRecord } from "./task-records.mts";
 import { retainServiceAdmission, serviceAdmissionsIdle, withServiceAdmission } from "./service-drain.mts";
 
@@ -171,8 +171,8 @@ test("every cached MCP consumer receives shared unconfirmed-shutdown evidence", 
     spawn: (() => child) as never, signal: () => {} };
   const first = intercomMcpOverrides(deps, T0);
   const second = withServiceAdmission(node.paths, (admission) => intercomMcpOverrides({ ...deps,
-    onUnconfirmedShutdown: () => retainServiceAdmission(admission) }, T0 + 1));
+    onUnconfirmedShutdown: () => retainServiceAdmission(admission) }, T0 + 1), testServiceOwner);
   await Promise.all([first, second]);
-  assert.equal(serviceAdmissionsIdle(node.paths), false,
+  assert.equal(serviceAdmissionsIdle(node.paths, testServiceOwner), false,
     "a joined readiness consumer retains its lease when the shared helper lifetime is unknown");
 });

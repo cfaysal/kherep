@@ -52,9 +52,10 @@ function rerunRecord(deps: RunnerDeps, task: TaskRecord, cwd: string, now: numbe
 
 // task: an ended intercom session with a known session id. The record is
 // written before the run with mappingPendingSince (session-runner.mts
-// background), and restored if the resume fails.
+// background), and restored if the resume fails. Both resumes are admitted
+// with the owner probe of the deps (issue #423).
 export async function resumeClaude(deps: RunnerDeps, task: TaskRecord, cwd: string, count: number, now: number): Promise<string | null> {
-  try { return await withServiceAdmission(deps.paths, () => resumeClaudeAdmitted(deps, task, cwd, count, now)); }
+  try { return await withServiceAdmission(deps.paths, () => resumeClaudeAdmitted(deps, task, cwd, count, now), deps.serviceOwner); }
   catch (error) { return reasonOf(error); }
 }
 
@@ -103,8 +104,10 @@ async function resumeClaudeAdmitted(deps: RunnerDeps, task: TaskRecord, cwd: str
 }
 
 export async function resumeCodex(deps: RunnerDeps, task: TaskRecord, cwd: string, count: number, now: number): Promise<string | null> {
-  try { return await withServiceAdmission(deps.paths, (admission) => resumeCodexAdmitted(deps, task, cwd, count, now, admission)); }
-  catch (error) { return reasonOf(error); }
+  try {
+    return await withServiceAdmission(deps.paths, (admission) => resumeCodexAdmitted(deps, task, cwd, count, now, admission),
+      deps.serviceOwner);
+  } catch (error) { return reasonOf(error); }
 }
 
 async function resumeCodexAdmitted(

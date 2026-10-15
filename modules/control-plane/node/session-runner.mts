@@ -13,7 +13,7 @@ import { withNodeOnPath, withoutSessionMarkers } from "./task-env.mts";
 import { queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
 import { frameFollowUp } from "./task-prompt.mts";
 import { recordRefusal } from "./task-refusals.mts";
-import { withServiceAdmission } from "./service-drain.mts";
+import { withServiceAdmission, type ServiceOwnerProbe } from "./service-drain.mts";
 
 // Starts, continues and stops Claude Code background sessions for tasks
 // (issue #31, item 5), from https://code.claude.com/docs/en/agent-view and
@@ -53,6 +53,9 @@ export interface RunnerDeps {
   // Issue #197: whether each runtime can run a turn (runtime-readiness.mts).
   // The daemon always sets it; without it every runtime counts as ready.
   readiness?: Readiness;
+  // Issue #423: the owner of a service admission; tests replace the default,
+  // whose Windows identity lookup starts PowerShell.
+  serviceOwner?: ServiceOwnerProbe;
 }
 
 // Rejects with the CLI's own stderr (or stdout), never with the command line,
@@ -158,7 +161,7 @@ export async function startTask(args: SessionStartArgs, deps: RunnerDeps): Promi
     if (args.runtime === "codex") return startCodex(deps, record, prompt, admission);
     const saved = await background(deps, record, ["--bg", "--name", args.name, "--permission-mode", record.permissionMode, prompt]);
     return { taskId: saved.taskId, state: saved.state, ...(saved.sessionId ? { sessionId: saved.sessionId } : {}) };
-  });
+  }, deps.serviceOwner);
 }
 
 // Only a task this node started, whose session is known and not running.
@@ -180,7 +183,7 @@ export async function continueTask(args: SessionContinueArgs, deps: RunnerDeps):
     const saved = await background(deps, restarted, ["--resume", record.sessionId, "--bg", "--permission-mode", record.permissionMode,
       frameFollowUp(args.taskId, args.prompt, deps.cli ?? taskCliCommand(deps.platform))]);
     return { taskId: saved.taskId, state: saved.state };
-  });
+  }, deps.serviceOwner);
 }
 
 // `claude stop <short id>` for a task this node started. A task whose session

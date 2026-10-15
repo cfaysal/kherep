@@ -6,6 +6,7 @@ import type test from "node:test";
 import type { SessionStartArgs } from "../protocol-tasks.mts";
 import { nodePaths, writeConfig } from "./config.mts";
 import { loadPolicy } from "./policy.mts";
+import type { ServiceOwnerProbe } from "./service-drain.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import type { ExecOptions } from "./sessions.mts";
 import { readReport, removeReport, reportIds } from "./task-records.mts";
@@ -20,6 +21,15 @@ export const TASK = "3f2a1b0c-0000-4000-8000-000000000001";
 export const taskId = (n: number): string => `${n.toString(16).padStart(8, "0")}-0000-4000-8000-000000000001`;
 
 export interface Call { file: string; args: string[]; options: ExecOptions }
+
+// Issue #423: the owner of the fixture's service admissions, this process,
+// known without the PowerShell identity lookup of the default probe, which
+// can time out on a loaded Windows runner. Pass it to serviceAdmissionsIdle
+// to check the fixture's leases.
+export const testServiceOwner: ServiceOwnerProbe = {
+  current: () => ({ version: 1, pid: process.pid, startedAt: new Date(T0).toISOString(), owner: "kherep-test-owner" }),
+  active: (owner) => owner.pid === process.pid,
+};
 
 export function taskNode(t: test.TestContext, sessions: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-task-"));
@@ -53,6 +63,7 @@ export function taskNode(t: test.TestContext, sessions: Record<string, unknown> 
   };
   const deps = (): RunnerDeps => ({
     paths, policy: loadPolicy(paths.policy), exec, findClaude: () => "/opt/bin/claude", platform: "linux", now: () => clock, cli: "kherep-node",
+    serviceOwner: testServiceOwner,
   });
   // Reports queued since the last call, oldest file order not guaranteed.
   const reports = (): Record<string, unknown>[] => reportIds(paths).map((id) => {

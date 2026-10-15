@@ -41,7 +41,7 @@ export function scheduleNativeReconciliation(deps: RunnerDeps, owner: string, lo
   const key = `${path.join(deps.paths.dir, owner)}:reconcile`;
   if (pending.has(key)) return;
   const work = nativeLane.then(() => new Promise<void>((resolve) => { setImmediate(resolve); }))
-    .then(() => waitForServiceAdmission(deps.paths, admission => reconcile(deps, owner, admission)))
+    .then(() => waitForServiceAdmission(deps.paths, admission => reconcile(deps, owner, admission), { probe: deps.serviceOwner }))
     .catch(() => { log("kherep-node: native queue reconciliation pending"); })
     .finally(() => { pending.delete(key); });
   pending.set(key, work);
@@ -56,7 +56,7 @@ export function scheduleNativeQueue(deps: RunnerDeps, owner: string, messageIds:
   const fingerprint = busyPolicyFingerprint(deps.policy);
   const work = nativeLane.then(() => new Promise<void>((resolve) => { setImmediate(resolve); }))
     .then(() => waitForServiceAdmission(deps.paths,
-      admission => produce(deps, owner, messageIds, fingerprint, grant, admission)))
+      admission => produce(deps, owner, messageIds, fingerprint, grant, admission), { probe: deps.serviceOwner }))
     .catch(() => { log("kherep-node: native Codex Queue outcome unavailable; original intake remains pending"); })
     .finally(() => { pending.delete(key); });
   pending.set(key, work);

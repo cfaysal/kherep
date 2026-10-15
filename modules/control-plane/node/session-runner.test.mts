@@ -10,7 +10,7 @@ import { resumeClaude } from "./closed-resume.mts";
 import type { Readiness } from "./runtime-readiness.mts";
 import { beginServiceDrain, serviceAdmissionsIdle } from "./service-drain.mts";
 import { continueTask, startTask, stopTask } from "./session-runner.mts";
-import { startArgs, TASK, taskId, taskNode } from "./task-fixture.mts";
+import { startArgs, TASK, taskId, taskNode, testServiceOwner } from "./task-fixture.mts";
 import { readTask } from "./task-records.mts";
 
 const FRAMED = `Task ${TASK} from the operator via the Kherep Control Plane: fix the flaky test\n\nWhen you are done, report with: `
@@ -54,13 +54,13 @@ test("a drain waits for an admitted Codex start while rejecting a new start befo
   await reached;
   const endDrain = beginServiceDrain(node.paths);
   t.after(endDrain);
-  assert.equal(serviceAdmissionsIdle(node.paths), false, "the drain observes the admitted start");
+  assert.equal(serviceAdmissionsIdle(node.paths, testServiceOwner), false, "the drain observes the admitted start");
   await assert.rejects(startTask(startArgs(taskId(2), { runtime: "codex" }), deps), /draining new session admissions/);
   assert.equal(spawned, false, "the admitted start is still before native spawn");
   release();
   assert.equal((await existing).state, "started");
   assert.equal(spawned, true);
-  assert.equal(serviceAdmissionsIdle(node.paths), true);
+  assert.equal(serviceAdmissionsIdle(node.paths, testServiceOwner), true);
 });
 
 test("a task session does not inherit the daemon's Claude Code session markers (issue #235)", async (t) => {
