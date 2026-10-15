@@ -21,6 +21,12 @@ export function daemonArgumentsMatch(actual: string[], binding: ServiceBinding, 
     .some(expected => actual.length === expected.length && expected.every((value, index) => actual[index] === value));
 }
 
+// Issue #420: launchd.plist(5) ExitTimeOut is how long launchd waits "between
+// sending the SIGTERM signal and before sending a SIGKILL signal"; its default
+// is system-defined and zero means infinity. 60 s covers a stopping daemon's wait for its readiness probe
+// (45 s timeout and 5 s kill grace) and a session listing (10 s).
+export const MAC_EXIT_TIMEOUT_S = 60;
+
 export function freshMacDefinition(binding: ServiceBinding): Record<string, unknown> {
   return {
     Label: binding.serviceName,
@@ -28,6 +34,7 @@ export function freshMacDefinition(binding: ServiceBinding): Record<string, unkn
     WorkingDirectory: binding.workspace,
     RunAtLoad: true,
     KeepAlive: true,
+    ExitTimeOut: MAC_EXIT_TIMEOUT_S,
   };
 }
 
@@ -61,7 +68,8 @@ export function retargetMacDefinition(existing: Record<string, unknown>, binding
   if (existing.Label !== binding.serviceName) throw new Error("service label does not match the selected service");
   if (affectingEnvironment(existing.EnvironmentVariables)) throw new Error("service has execution-affecting environment variables");
   validateMacExecutionFields(existing, binding);
-  return { ...existing, ProgramArguments: [binding.nodeExecutable, ...managedArguments(binding)] };
+  // An ExitTimeOut the operator set stays (issue #420).
+  return { ExitTimeOut: MAC_EXIT_TIMEOUT_S, ...existing, ProgramArguments: [binding.nodeExecutable, ...managedArguments(binding)] };
 }
 
 export function quoteWindowsArg(value: string): string {

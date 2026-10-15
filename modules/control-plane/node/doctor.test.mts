@@ -233,6 +233,17 @@ test("the runtime check reports the running daemon's readiness record and ignore
   assert.deepEqual([dead.ok, (dead.claude as { ready: unknown }).ready], [true, "unknown"]);
 });
 
+// Issue #420: a Claude probe the last daemon stop interrupted is shown, and never fails the check.
+test("the runtime check names a Claude probe the last daemon stop interrupted", async (t) => {
+  const h = host(t);
+  const at = "2026-10-04T11:58:00.000Z";
+  fs.writeFileSync(daemonStateFile(h.paths), JSON.stringify({ pid: LIVE_PID, startedAt: "2026-10-04T11:59:00.000Z",
+    interruptedProbe: { runtime: "claude", pid: 99, at, noticedAt: "2026-10-04T11:59:00.000Z" } }));
+  const runtimes = (await runDoctor(h.deps)).checks.runtimes;
+  assert.deepEqual([runtimes.ok, runtimes.claude], [true, { installed: true, version: "2.1.300 (Claude Code)", configured: true,
+    ready: "unknown", lastStopInterruptedProbeAt: at }]);
+});
+
 test("the hook check fails for another checkout, for no hooks and for an unreadable file", async (t) => {
   const h = host(t);
   const claude = h.deps.claudeConfigDir as string;

@@ -69,12 +69,14 @@ export function checkDaemon(paths: NodePaths, pidAlive: (pid: unknown) => boolea
     connectedAt, disconnectedAt, source, ...(detail ? { detail } : {}) };
 }
 
-// The readiness record of a running daemon (issue #222). A dead daemon's
-// record describes no running node, so it and an unreadable file give null.
+// The readiness record of a running daemon (issue #222), with a Claude probe
+// its start found interrupted (issue #420). A dead daemon's record describes no
+// running node, so it and an unreadable file give null.
 export function daemonReadiness(paths: NodePaths, pidAlive: (pid: unknown) => boolean): Record<string, unknown> | null {
   try {
     const state = readDaemonState(paths);
-    return state && pidAlive(state.pid) ? state.readiness ?? null : null;
+    if (!state || !pidAlive(state.pid) || (!state.readiness && !state.interruptedProbe)) return null;
+    return { ...state.readiness, ...(state.interruptedProbe ? { interruptedProbe: state.interruptedProbe } : {}) };
   } catch {
     return null;
   }

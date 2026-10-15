@@ -9,7 +9,9 @@ import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { codexIntakeWindow } from "./codex-intake-window.mts";
 import { connectUrl, ensureDir, type NodeConfig, type NodePaths } from "./config.mts";
-import { recordDaemonState, withVerdict, type DaemonServiceBinding, type DaemonState } from "./daemon-state.mts";
+import {
+  carriedOver, previousDaemonState, recordDaemonState, withVerdict, type DaemonServiceBinding, type DaemonState,
+} from "./daemon-state.mts";
 import { captureRuntimeSourceIdentity } from "./daemon-source.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
 import { observeClaudeDeliveryProgress, observeCodexTaskProgress } from "./delivery-progress.mts";
@@ -17,7 +19,7 @@ import {
   DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions, replyDepth,
 } from "./exchange.mts";
 import { readPrivateKey } from "./identity.mts";
-import { installPaused, markedProbe } from "./install-pause.mts";
+import { installPaused, markedProbe, noticeInterruptedProbe } from "./install-pause.mts";
 import { purgeInbox, storeMessage } from "./inbox.mts";
 import { scheduleListenerSweep } from "./listener-sweep.mts";
 import { loadPolicy, type NodePolicy } from "./policy.mts";
@@ -83,8 +85,10 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // Issue #72. For nodes enrolled before onboard created it: a sandboxed
   // `msg send` can write into the outbox but not create it.
   ensureDir(paths.outbox);
+  // Issue #420: before anything overwrites them, the previous daemon's fresh
+  // ready verdicts and a Claude probe its stop interrupted (daemon-state.mts).
   let state: DaemonState = { pid: process.pid, startedAt: new Date().toISOString(), source: captureRuntimeSourceIdentity(),
-    ...(service ? { service } : {}) };
+    ...(service ? { service } : {}), ...carriedOver(previousDaemonState(paths), noticeInterruptedProbe(paths, log), Date.now()) };
   recordDaemonState(paths, state, log);
   try {
     const purged = purgeInbox(paths.inbox);
@@ -102,23 +106,34 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // must remain available while a replacement service authenticates.
   const runtimeDiscovery = () => discoverRuntimes();
   // Issue #403: a Claude probe is marked in flight for the installer (install-pause.mts).
+  // Issue #420: a stopping daemon gives up a probe that still waits for a service drain.
+  const halt = new AbortController();
   const admittedProbe = (runtime: TaskRuntime) => waitForServiceAdmission(paths, (admission) => {
     const run = () => probe(runtime, () => retainServiceAdmission(admission));
     return runtime === "claude" ? markedProbe(paths, run) : run();
-  });
+  }, { signal: halt.signal });
   const sessions = recordingSessions(paths, (signal) => {
     backgroundDiscovery?.controller.abort();
     return source(signal);
   }, log);
   // Issue #197: one readiness probe per enabled runtime at the start, then only
   // when a run needs a runtime whose verdict aged out (runtime-readiness.mts).
+  // Issue #420: none at the start for a runtime with a carried-over verdict.
   // Each completed probe goes to daemon.json for doctor (issue #222), off the frame lane.
   // Issue #403: no Claude probe while install.sh runs the claude CLI (install-pause.mts).
-  const readiness = createReadiness(admittedProbe, { log, onVerdict: (runtime, verdict) => {
+  const readiness = createReadiness(admittedProbe, { log, seed: state.readiness, onVerdict: (runtime, verdict) => {
     state = withVerdict(state, runtime, verdict);
     recordDaemonState(paths, state, log);
   }, defer: (runtime) => runtime === "claude" && installPaused(paths) });
-  // Issue #427: unless a drain or an install pause defers it, the first check runs the Windows identity lookup before connect().
+  // Issue #420: a stop waits for the probe in flight instead of leaving it to a
+  // kill that may cut a login renewal short; no new probe starts meanwhile.
+  const drainProbes = (): Promise<void> => {
+    const drained = readiness.stop();
+    halt.abort();
+    return drained;
+  };
+  // Issue #427: unless a seeded ready verdict (issue #420), a drain or an install pause defers it,
+  // the first check runs the Windows identity lookup before connect().
   for (const runtime of enabledRuntimes(policy)) void readiness.check(runtime);
   const runner: RunnerDeps = { paths, policy, log, readiness };
   recoverOperations(paths);
@@ -162,7 +177,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   let socket: WebSocket | null = null;
   let retry: NodeJS.Timeout | null = null;
   let finish: () => void = () => {};
-  const done = new Promise<void>((resolve) => { finish = resolve; });
+  const done = new Promise<void>((resolve) => { finish = resolve; }).then(drainProbes);
   // One lane spans reconnects so an old socket cannot finish a state mutation
   // concurrently with the replacement connection.
   let chain = Promise.resolve();
@@ -353,6 +368,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   return {
     stop() {
       stopped = true;
+      void drainProbes();
       stopSweep();
       if (retry) clearTimeout(retry);
       if (socket && socket.readyState <= WebSocket.OPEN) socket.close(1000, "node stopping");

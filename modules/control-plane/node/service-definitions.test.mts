@@ -71,7 +71,20 @@ test("macOS managed retarget changes only the product action", () => {
   };
   const retargeted = retargetMacDefinition(existing, nextBinding);
   assert.deepEqual(retargeted.ProgramArguments, [nextBinding.nodeExecutable, ...managedArguments(nextBinding)]);
-  assert.deepEqual({ ...retargeted, ProgramArguments: existing.ProgramArguments }, existing);
+  assert.deepEqual({ ...retargeted, ProgramArguments: existing.ProgramArguments }, { ...existing, ExitTimeOut: 60 });
+});
+
+// Issue #420: launchd waits ExitTimeOut seconds between SIGTERM and SIGKILL
+// (launchd.plist(5)); 60 covers the 45 s probe bound plus the 10 s listing.
+test("macOS definitions give a stopping daemon 60 seconds before launchd sends SIGKILL", () => {
+  const b = binding(path.resolve("synthetic"));
+  assert.equal(freshMacDefinition(b).ExitTimeOut, 60, "fresh");
+  const managed = { Label: b.serviceName, ProgramArguments: [b.nodeExecutable, ...managedArguments(b)] };
+  assert.equal(retargetMacDefinition(managed, b).ExitTimeOut, 60, "added on retarget when absent");
+  assert.equal(retargetMacDefinition({ ...managed, ExitTimeOut: 120 }, b).ExitTimeOut, 120, "an operator's value stays");
+  const legacy = { Label: b.serviceName,
+    ProgramArguments: [b.nodeExecutable, path.join(b.source.root, "modules", "control-plane", "node", "cli.mts"), "daemon"] };
+  assert.equal("ExitTimeOut" in adoptMacDefinition(legacy, b, 1000), false, "adoption keeps the adopted plist's keys");
 });
 
 test("Windows adoption accepts native defaults and one bounded legacy wrapper, then rejects hostile execution", (t) => {

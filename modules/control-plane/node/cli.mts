@@ -14,6 +14,7 @@ import { nodeStatus, onboard, unenroll } from "./onboard.mts";
 import { parseTaskArgs, runTaskArgs, TASK_USAGE } from "./task-cli.mts";
 import { runTaskControlArgs, TASK_CONTROL_USAGE } from "./task-control-cli.mts";
 import { runService, safeServiceFailure, SERVICE_USAGE } from "./service-cli.mts";
+import { stopOnSignals, timestamped } from "./service-runner.mts";
 
 // kherep-node: node side of the Kherep Control Plane, Phase 1.
 //
@@ -63,10 +64,8 @@ export async function main(argv: string[]): Promise<number> {
   if (group === "daemon") {
     const config = readConfig(paths.config);
     if (!config) throw new Error(`not enrolled (${paths.config}); run "kherep-node node onboard" first`);
-    const daemon = startDaemon(config, paths);
-    const stop = () => daemon.stop();
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
+    const daemon = startDaemon(config, paths, timestamped());
+    stopOnSignals(daemon);
     await daemon.done;
     return 0;
   }

@@ -41,7 +41,7 @@ test("a drain waits for an admitted Codex start while rejecting a new start befo
   const held = new Promise<void>((resolve) => { release = resolve; });
   const readiness: Readiness = {
     check: async () => { admitted(); await held; return { ready: true, at: 1 }; },
-    peek: () => null, revalidate: () => {}, invalidate: () => {}, ready: () => [],
+    peek: () => null, revalidate: () => {}, invalidate: () => {}, ready: () => [], stop: async () => {},
   };
   let spawned = false;
   const codex: CodexDeps = { findCodex: () => "codex-fake", platform: "linux", processStart: () => "start",
