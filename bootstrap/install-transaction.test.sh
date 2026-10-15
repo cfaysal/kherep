@@ -798,11 +798,14 @@ test_upgrade_retires_guard_js_hooks() {
 # Expected: COMMITTED, no rollback, the gitconfig phase still ran, exit 1, and
 # the managed files on disk pass drift-check.
 test_deps_failure() {
-  local rc b fake_npm
+  local rc b fake_npm config
   fixture deps
   cat > "$ROOT/fake-npm.js" <<'JS'
 "use strict";
+const fs = require("node:fs");
 const args = process.argv.slice(2);
+// Issue #403: the deps phase runs while the node's Claude probe lock exists.
+if (fs.existsSync(process.env.FAKE_PAUSE_LOCK)) fs.writeFileSync(process.env.FAKE_PAUSE_SEEN, "seen");
 const signature = args.join(" ");
 // Everything satisfied except the pinned transport entry, which must install.
 const dependencies = {
@@ -830,13 +833,18 @@ JS
   # already be Windows-shaped when node opens it.
   fake_npm="$ROOT/fake-npm.js"
   ! command -v cygpath >/dev/null 2>&1 || fake_npm="$(cygpath -m "$fake_npm")"
+  # Issue #403. A throwaway enrolled node directory: the install pauses its
+  # Claude probe there, never in the host's real node directory.
+  config="$ROOT/kherep-config"; mkdir -p "$config/control-plane"
+  ! command -v cygpath >/dev/null 2>&1 || config="$(cygpath -m "$config")"
   # This is the only case here that runs past the commit into C2 and C3. Both
   # read real per-host state (the knowledge space, the Atlassian credential) and
   # check it live, so they sit behind their skip switches like in smoke-test.sh.
   set +e
   HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
     KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE=1 KHEREP_INSTALL_SKIP_ATL_CREDENTIAL=1 \
-    SKIP_SECRETS=1 SKIP_DEPS=0 FAKE_NPM_PREFIX="$ROOT/npm-prefix" \
+    SKIP_SECRETS=1 SKIP_DEPS=0 FAKE_NPM_PREFIX="$ROOT/npm-prefix" KHEREP_CONFIG_DIR="$config" \
+    FAKE_PAUSE_LOCK="$config/control-plane/install.lock" FAKE_PAUSE_SEEN="$config/pause-seen" \
     KHEREP_NPM_BIN="$(node -p 'process.execPath')" KHEREP_NPM_BIN_ARGS_JSON="[\"$fake_npm\"]" \
     KHEREP_CLAUDE_BIN="$ROOT/no-such-claude" bash "$HERE/install.sh" > "$ROOT/log" 2>&1
   rc=$?
@@ -845,6 +853,10 @@ JS
   grep -q 'npm-globals: supergateway install (pinned' "$ROOT/log" || fail "manifest pin was not enforced"
   grep -q 'npm-globals: supergateway FAILED' "$ROOT/log" || fail "fake npm EEXIST was not reported"
   grep -q 'install: DONE WITH ERRORS' "$ROOT/log" || fail "failing deps phase lacks the DONE WITH ERRORS verdict"
+  [ -f "$ROOT/kherep-config/pause-seen" ] || fail "the deps phase ran without the node's Claude probe lock"
+  [ ! -e "$ROOT/kherep-config/control-plane/install.lock" ] || fail "the install left the Claude probe lock behind"
+  grep -q 'install: claude sign-in status unreadable before the deps phase' "$ROOT/log" || fail "the sign-in pre-check did not run"
+  grep -q 'install: claude probe inconclusive' "$ROOT/log" || fail "the end-of-install Claude readiness check did not run"
   grep -q "install: git core.hooksPath -> $C/kherep/githooks" "$ROOT/log" ||
     fail "gitconfig phase was skipped after the deps failure"
   [ ! -e "$GIT_CONFIG_SYSTEM" ] || fail "an install without KHEREP_INSTALL_SYSTEM_HOOKSPATH=1 wrote the system scope"

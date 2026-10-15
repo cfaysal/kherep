@@ -49,6 +49,8 @@ bash bootstrap/install.sh
 
 Replace the workspace with your chosen absolute path. The normal dependency phase installs the declared npm tools and Claude plugins. It runs the Claude CLI without a shell; on Windows it uses the first `claude.exe` on `PATH`, or the native `bin/claude.exe` that an npm install ships next to its `claude.cmd` shim. If neither is found, set `KHEREP_CLAUDE_BIN` to the Claude executable. Encrypted secrets are skipped by default. The memory-agent switch leaves an existing agent untouched and avoids starting an unconfigured one.
 
+The dependency phase and an enrolled Control Plane node's daemon both run the Claude CLI with the same saved login. While the phase runs, the installer writes `install.lock` into the node directory (`<config root>/control-plane/`), and the daemon defers its Claude readiness probe and logs `probe deferred: install in progress` once. The installer removes the file when the phase ends or the installer exits; the daemon ignores a file older than 30 minutes. Before the phase, the installer reads `claude auth status --json` and warns when Claude already reports no sign-in, so a sign-out from before the installation is visible as such; this check never stops the installation. At the end it runs the daemon's readiness probe once, a minimal real `claude -p` call, and prints one of `install: claude ready`, `install: WARNING claude SIGN-IN LOST (...) - run 'claude auth login'`, which makes the installation exit 1, or `install: claude probe inconclusive (...)`, which is only a warning. `claude auth status` alone is not used for this verdict because it has reported an expired login as signed in. `KHEREP_INSTALL_PREVIEW=1`, `KHEREP_INSTALL_SKIP_CLAUDE_READINESS=1` and a `CLAUDE_HOME` other than `~/.claude` (unless `KHEREP_INSTALL_ALLOW_CLAUDE_READINESS=1`) skip the pre-check and the probe; `SKIP_DEPS=1` skips the whole phase.
+
 The installer places managed rules, hooks, skills, agents and routing. It uses backups and updates its managed configuration. Workspace Git-hook binding is part of normal installation; review the chosen workspace before applying it.
 
 The Git hook is bound through `core.hooksPath`: globally for your account and locally in each repository under the workspace, except repositories under a `_deprecated` directory. A previous global value is reported as replaced only when it names a different directory; the Windows spellings `C:/...`, `C:\...` and `/c/...` of the same directory count as equal. The system scope binds every account on the host, so the installer only reads it: when the system value differs from Kherep's hook directory or is unset, it prints both values and changes nothing, even when the system file happens to be writable without elevation. Set `KHEREP_INSTALL_SYSTEM_HOOKSPATH=1` to replace the system value; the installer then reports the value it replaced, and a failed write fails the installation.
@@ -225,6 +227,16 @@ workspace in which daemon-started work should run:
 kherep-node service install --workspace /absolute/workspace --source /absolute/kherep-checkout
 kherep-node service status
 ```
+
+Do not end the daemon by killing its process tree, for example with End process
+tree, `taskkill /T /F` or a signal to its process group. A Claude readiness
+probe or task the daemon started may be renewing the saved Claude login at that
+moment, and a process killed halfway through a renewal can leave the login
+unusable (issue #403). Change or restart a managed service with `kherep-node
+service upgrade` or `kherep-node service rollback`: they drain the daemon's
+helpers before stopping it, as described below. This version has no separate
+`service stop` command. After an installation, the installer's readiness line
+and `kherep-node doctor` show whether Claude is still signed in.
 
 On Windows, `--service-name '\Example\KherepNode'` selects a task in a nested
 Task Scheduler folder. The equivalent split form is `--service-name KherepNode

@@ -49,10 +49,13 @@ kherep_default_credentials_root() {
 # the file an inherited KHEREP_ATL_CRED_FILE_CLAUDE names and checks it live, and
 # the Atlassian MCP step (issue #376) writes the user-scope ~/.claude.json. A
 # CLAUDE_HOME other than <HOME>/.claude is a candidate until the operator says
-# otherwise, so there each step needs KHEREP_INSTALL_ALLOW_<STEP>=1.
+# otherwise, so there each step needs KHEREP_INSTALL_ALLOW_<STEP>=1. The same
+# holds for the Claude readiness check (issue #403): it makes a real model call
+# with the account's login, whichever home is installed.
 # KHEREP_INSTALL_PREVIEW=1 skips them and the knowledge space for any home.
-# Prints why step $1 (GITCONFIG, ATL_CREDENTIAL, ATL_MCP, KNOWLEDGE_SPACE) is
-# skipped, or nothing when it runs. Only the exact value 1 counts, for every switch.
+# Prints why step $1 (GITCONFIG, ATL_CREDENTIAL, ATL_MCP, CLAUDE_READINESS,
+# KNOWLEDGE_SPACE) is skipped, or nothing when it runs. Only the exact value 1
+# counts, for every switch.
 kherep_install_skip_reason() {
   local step="$1" default home claude
   if [ "$(kherep_env "INSTALL_SKIP_$step" 0)" = 1 ]; then
@@ -61,7 +64,7 @@ kherep_install_skip_reason() {
   if [ "$(kherep_env INSTALL_PREVIEW 0)" = 1 ]; then
     printf 'KHEREP_INSTALL_PREVIEW=1\n'; return 0
   fi
-  case "$step" in GITCONFIG|ATL_CREDENTIAL|ATL_MCP) ;; *) return 0 ;; esac
+  case "$step" in GITCONFIG|ATL_CREDENTIAL|ATL_MCP|CLAUDE_READINESS) ;; *) return 0 ;; esac
   [ "$(kherep_env "INSTALL_ALLOW_$step" 0)" = 1 ] && return 0
   # lib.sh builds the default as $HOME/.claude, so HOME=/u/ gives /u//.claude:
   # repeated and trailing slashes do not make another home. Git Bash paths are

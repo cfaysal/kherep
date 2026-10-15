@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { isRegisterBody, makeEnvelope, parseEnvelope, type Envelope } from "../protocol.mts";
 import { RUNTIME_READY_CAPABILITIES, type TaskRuntime } from "../protocol-tasks.mts";
 import { NodeClient } from "./client.mts";
 import { generateIdentity } from "./identity.mts";
+import { INSTALL_PAUSE_STALE_MS, installPaused, installPauseFile } from "./install-pause.mts";
 import { advertisedCapabilities, type NodePolicy } from "./policy.mts";
 import type { ProbeResult } from "./runtime-probe.mts";
 import {
@@ -162,4 +166,52 @@ test("aged applies the readiness TTLs: ready after 10 minutes, not ready after 2
   assert.equal(aged({ ready: true, at: 0 }, READY_TTL_MS), true);
   assert.equal(aged({ ready: false, at: 0 }, NOT_READY_TTL_MS - 1), false);
   assert.equal(aged({ ready: false, at: 0 }, NOT_READY_TTL_MS), true);
+});
+
+// Issue #403: while install.sh runs the claude CLI, the daemon starts no Claude
+// probe; a caller gets the last verdict (or a not-ready one it does not keep),
+// one line is logged, and the probe runs again once the install lock is stale or gone.
+test("no install lock probes; a fresh lock defers Claude only and logs once; a stale lock probes again", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-readiness-lock-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const started = Date.now();
+  let clock = started;
+  const lines: string[] = [];
+  const p = counted([{ ok: true }]);
+  const readiness = createReadiness(p.probe, { now: () => clock, log: (line) => lines.push(line),
+    defer: (runtime) => runtime === "claude" && installPaused({ dir }, clock) });
+  await readiness.check("claude");
+  assert.equal(p.probes.length, 1, "no lock: the first probe runs");
+  fs.writeFileSync(installPauseFile({ dir }), "pid=1\n");
+  clock += READY_TTL_MS;
+  assert.deepEqual(await readiness.check("claude"), { ready: true, at: started }, "the aged verdict answers");
+  readiness.peek("claude");
+  await settle();
+  assert.equal(p.probes.length, 1, "no probe while the lock is fresh");
+  assert.deepEqual(lines.filter((l) => l.includes("deferred")), ["kherep-node: runtime claude probe deferred: install in progress"]);
+  await readiness.check("codex");
+  assert.deepEqual(p.probes, ["claude", "codex"], "only Claude is deferred");
+  clock += INSTALL_PAUSE_STALE_MS;
+  readiness.peek("claude");
+  await settle();
+  assert.deepEqual(p.probes, ["claude", "codex", "claude"], "a stale lock no longer defers");
+});
+
+test("a runtime deferred before its first verdict is pending, not advertised, and the watch round probes it later", async () => {
+  let locked = true;
+  const lines: string[] = [];
+  const p = counted([{ ok: true }]);
+  const readiness = createReadiness(p.probe, { log: (line) => lines.push(line), defer: () => locked });
+  assert.equal(await notReady(readiness, "claude"), null, "a task is not refused for a deferred probe");
+  assert.equal(notReadyNow(readiness, "claude"), "pending", "messages wait");
+  readiness.revalidate("claude");
+  await settle();
+  assert.deepEqual(p.probes, []);
+  assert.deepEqual(readiness.ready(), []);
+  assert.equal(lines.length, 1, "logged once");
+  locked = false;
+  readiness.revalidate("claude");
+  await settle();
+  assert.deepEqual(p.probes, ["claude"], "after the install the watch round runs the first probe");
+  assert.deepEqual(readiness.ready(), ["claude"]);
 });
