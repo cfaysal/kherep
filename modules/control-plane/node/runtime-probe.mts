@@ -102,6 +102,10 @@ export const spawnProbe = (platform: NodeJS.Platform = process.platform, start: 
     let settled = false;
     let shutdownTimer: NodeJS.Timeout | undefined;
     let graceTimer: NodeJS.Timeout | undefined;
+    // Issue #420: between the timeout's SIGTERM and the group SIGKILL. The
+    // direct child's exit and close prove only that it and its stdio ended, not
+    // that its process group is empty, so neither settles the run meanwhile.
+    let terminating = false;
     const child = start(file, args, { cwd: options.cwd, stdio: ["pipe", "pipe", "pipe"], detached: platform !== "win32",
       windowsHide: true, windowsVerbatimArguments: options.verbatim === true });
     const send = (value: NodeJS.Signals): void => {
@@ -120,9 +124,14 @@ export const spawnProbe = (platform: NodeJS.Platform = process.platform, start: 
         if (!exited) send("SIGKILL");
         return;
       }
+      terminating = true;
       send("SIGTERM");
-      // Not settled yet: the probe or a process of its group still runs.
-      graceTimer = setTimeout(() => { shutdown(); send("SIGKILL"); }, options.graceMs ?? PROBE_KILL_GRACE_MS);
+      // Harmless when the group is gone already: signalGroup returns false.
+      graceTimer = setTimeout(() => {
+        terminating = false;
+        shutdown();
+        send("SIGKILL");
+      }, options.graceMs ?? PROBE_KILL_GRACE_MS);
     }, options.timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -142,8 +151,8 @@ export const spawnProbe = (platform: NodeJS.Platform = process.platform, start: 
       stderr += String(error.message);
       if (child.pid === undefined) { exited = true; closed = true; settle(); }
     });
-    child.once("exit", (value) => { exited = true; code = value; if (closed) settle(); });
-    child.once("close", (value) => { closed = true; code ??= value; if (exited) settle(); });
+    child.once("exit", (value) => { exited = true; code = value; if (closed && !terminating) settle(); });
+    child.once("close", (value) => { closed = true; code ??= value; if (exited && !terminating) settle(); });
   });
 
 function lastJson(text: string): Record<string, unknown> | null {
