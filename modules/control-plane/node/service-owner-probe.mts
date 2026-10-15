@@ -11,8 +11,11 @@ type OwnerSpawn = (command: string, args: string[], options: SpawnSyncOptionsWit
 export interface ServiceOwnerProbeDeps { platform?: NodeJS.Platform; spawn?: OwnerSpawn; timeoutMs?: number }
 
 export const IDENTITY_UNVERIFIED = "service controller identity cannot be verified";
+export const IDENTITY_TIMED_OUT = "service controller identity lookup timed out";
 
 const WINDOWS_SID = /^S-\d+(?:-\d+)+$/i;
+const timedOut = (result: SpawnSyncReturns<string>): boolean =>
+  (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
 const processStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
 const OBSERVED_OWNER_SCRIPT = "try{$p=Get-CimInstance Win32_Process -Filter ('ProcessId='+$env:KHEREP_OWNER_PID) -ErrorAction Stop}"
   + "catch{@{status='unknown'}|ConvertTo-Json -Compress;exit};"
@@ -28,14 +31,22 @@ export function createServiceOwnerProbe(deps: ServiceOwnerProbeDeps = {}): Servi
   const timeout = deps.timeoutMs ?? 10_000;
   let cachedWindowsOwner: string | undefined;
 
-  const powerShell = (script: string, options: Partial<SpawnSyncOptionsWithStringEncoding> = {}): SpawnSyncReturns<string> =>
-    spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script],
+  // Issue #427: the first powershell.exe start after a boot or a service
+  // restart can exceed the timeout. As in issues #219 and #221, a timeout alone
+  // runs once more (spawnSync returns only after the killed child exited);
+  // every other failure is final at once.
+  const powerShell = (script: string, options: Partial<SpawnSyncOptionsWithStringEncoding> = {}): SpawnSyncReturns<string> => {
+    const run = () => spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script],
       { encoding: "utf8", windowsHide: true, timeout, ...options });
+    const first = run();
+    return timedOut(first) ? run() : first;
+  };
 
   const currentOwner = (): string => {
     if (platform !== "win32") return os.userInfo().username;
     if (cachedWindowsOwner) return cachedWindowsOwner;
     const result = powerShell("[Security.Principal.WindowsIdentity]::GetCurrent().User.Value", { stdio: ["ignore", "pipe", "pipe"] });
+    if (timedOut(result)) throw new Error(IDENTITY_TIMED_OUT);
     const sid = result.stdout.trim();
     if (result.status !== 0 || !WINDOWS_SID.test(sid)) throw new Error(IDENTITY_UNVERIFIED);
     cachedWindowsOwner = sid.toUpperCase();

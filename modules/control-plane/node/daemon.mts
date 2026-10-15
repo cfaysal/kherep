@@ -118,6 +118,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     state = withVerdict(state, runtime, verdict);
     recordDaemonState(paths, state, log);
   }, defer: (runtime) => runtime === "claude" && installPaused(paths) });
+  // Issue #427: unless a drain or an install pause defers it, the first check runs the Windows identity lookup before connect().
   for (const runtime of enabledRuntimes(policy)) void readiness.check(runtime);
   const runner: RunnerDeps = { paths, policy, log, readiness };
   recoverOperations(paths);
