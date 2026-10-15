@@ -17,6 +17,15 @@ increments the minor version; every other release increments the patch version.
   The task test fixture injects a probe that starts no process, so these
   tests no longer depend on a PowerShell identity lookup that can time out
   on a loaded Windows runner. The daemon keeps the default probe.
+- Windows service identity lookup (issue #427): a PowerShell identity lookup
+  or owner observation that hits its 10 s timeout runs once more; every other
+  failure is still final at once. A first service admission after a boot or
+  a service restart no longer fails, and the start-up readiness probe no
+  longer reports a runtime as not ready for two minutes, when only the first
+  PowerShell start was slow. Two timeouts in a row fail admission with
+  `service controller identity lookup timed out` instead of `service
+  controller identity cannot be verified`. `createServiceOwnerProbe` lets
+  tests replace the platform, the spawn function and the timeout.
 
 ## [0.3.0] - 2026-10-15
 
