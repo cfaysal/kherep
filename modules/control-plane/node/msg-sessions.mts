@@ -44,7 +44,7 @@ function lastEvent(io: Pick<Io, "paths">, sessionId: string): string {
   try {
     const record = readCodexSession(io.paths, sessionId);
     if (!isCodexHookEvent(record?.lastEvent) || !Number.isFinite(Date.parse(record.lastEventAt ?? ""))) return "";
-    return `  last event ${record.lastEvent} at ${record.lastEventAt}`;
+    return `  last event ${record.lastEvent} at ${new Date(Date.parse(record.lastEventAt!)).toISOString()}`;
   } catch {
     return "";
   }

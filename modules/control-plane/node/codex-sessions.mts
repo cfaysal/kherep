@@ -155,7 +155,7 @@ export function recordCodexSession(paths: NodePaths, sessionId: string, cwd: unk
 export function refreshCodexEvent(paths: NodePaths, sessionId: string, event: CodexHookEvent, now: number = Date.now()): boolean {
   if (!isCodexSessionId(sessionId)) return false;
   const previous = readCodexSession(paths, sessionId);
-  if (previous?.sessionId !== sessionId || previous.runtime !== CODEX_RUNTIME || typeof previous.lastSeen !== "string") return false;
+  if (previous?.sessionId !== sessionId || previous.runtime !== CODEX_RUNTIME || !Number.isFinite(Date.parse(previous.lastSeen ?? ""))) return false;
   writeJsonAtomic(fileOf(paths, sessionId), { ...previous, ...eventFields(previous, event, now) });
   return true;
 }
