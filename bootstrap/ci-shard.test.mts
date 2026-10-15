@@ -31,8 +31,8 @@ function jobBlock(id: string): string {
   const start = workflow.indexOf(`\n  ${id}:\n`);
   assert.ok(start >= 0, `ci.yml has no job "${id}"`);
   const rest = workflow.slice(start + 1);
-  const next = rest.slice(1).search(/\n {2}\S/);
-  return next < 0 ? rest : rest.slice(0, next + 1);
+  const next = rest.search(/\n {2}\S/);
+  return next < 0 ? rest : rest.slice(0, next);
 }
 
 test("every named shard file exists under bootstrap/", () => {
