@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -55,15 +55,68 @@ jobs:
       - name: Bootstrap suites (TypeScript on Node, no build)
         run: npm run test:bootstrap
       - name: Install dependencies for native Control Plane tests
-        if: runner.os == 'Windows' || runner.os == 'macOS'
+        if: runner.os == 'macOS'
         run: npm ci
-      - name: Control Plane protocol and node suites (Windows)
-        if: runner.os == 'Windows'
-        # Bound simultaneous native process/PowerShell fixtures on the hosted runner.
-        run: node --test --test-concurrency=1 "modules/control-plane/*.test.mts" "modules/control-plane/node/*.test.mts"
       - name: Control Plane protocol and node suites (macOS)
         if: runner.os == 'macOS'
         run: npm run test:control-plane
+
+  # Windows runs the same suites as `unit`, split across runners: the bootstrap
+  # install tests drive install.sh under Git Bash at 80-330 s each (issue #424).
+  # The shard map and its completeness guard are bootstrap/ci-shard.mts and
+  # bootstrap/ci-shard.test.mts.
+  unit-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [hooks, control-plane, install-preview-safety, project-rules-install, commit-policy-install, drift-check-optional-tools, control-plane-hook-install, bootstrap-rest]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+      - name: Hook test suites
+        if: matrix.suite == 'hooks'
+        shell: bash
+        run: |
+          status=0
+          for t in claude/hooks/*.test.js claude/hooks/*.test.mts claude/hooks/lib/*.test.js claude/hooks/lib/*.test.mts; do
+            [ -e "$t" ] || continue
+            echo "== $t"
+            node "$t" || status=1
+          done
+          exit $status
+      - name: Shared Teamwork Graph tests
+        if: matrix.suite == 'hooks'
+        shell: bash
+        run: node --test modules/twg/*.test.mts
+      - name: Install dependencies for native Control Plane tests
+        if: matrix.suite == 'control-plane'
+        run: npm ci
+      - name: Control Plane protocol and node suites (Windows)
+        if: matrix.suite == 'control-plane'
+        # Bound simultaneous native process/PowerShell fixtures on the hosted runner (PR #155).
+        run: node --test --test-concurrency=1 "modules/control-plane/*.test.mts" "modules/control-plane/node/*.test.mts"
+      - name: Bootstrap shard (TypeScript on Node, no build)
+        if: matrix.suite != 'hooks' && matrix.suite != 'control-plane'
+        run: node bootstrap/ci-shard.mts run ${{ matrix.suite }}
+
+  # The ruleset requires the check "unit (windows-latest)"; this job carries that
+  # name and fails unless every unit-windows shard succeeded. `if: always()` is
+  # load-bearing: without it the gate is skipped when a shard fails, and a job
+  # skipped that way does not block the merge (GitHub docs, "Handling skipped
+  # but required checks").
+  unit-windows-gate:
+    name: unit (windows-latest)
+    needs: unit-windows
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every Windows shard succeeded
+        run: |
+          echo "unit-windows result: ${{ needs.unit-windows.result }}"
+          test "${{ needs.unit-windows.result }}" = "success"
 
   # The unit suites and the node suites of the typescript job (without the type
   # check) on releases the engines field in package.json admits besides the
