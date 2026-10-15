@@ -80,8 +80,9 @@ test("a marker of a dead daemon is reported, removed and returned; a live daemon
   const dead = spawnSync(process.execPath, ["-e", ""]).pid;
   fs.writeFileSync(probeMarkerFile(paths), `${dead} 2026-10-15T08:00:00.000Z\n`);
   const record = noticeInterruptedProbe(paths, log);
-  assert.deepEqual({ ...record, noticedAt: undefined }, { runtime: "claude", pid: dead, at: "2026-10-15T08:00:00.000Z", noticedAt: undefined });
-  assert.match(record!.noticedAt, ISO);
+  const { noticedAt, ...interrupted } = record!;
+  assert.deepEqual(interrupted, { runtime: "claude", pid: dead, at: "2026-10-15T08:00:00.000Z" });
+  assert.match(noticedAt, ISO);
   assert.equal(fs.existsSync(probeMarkerFile(paths)), false, "removed");
   assert.deepEqual(logs, [`kherep-node: the previous daemon stop interrupted a claude probe (daemon pid ${dead}, started `
     + "2026-10-15T08:00:00.000Z); if the next probe reports sign-in required, that stop likely interrupted a login renewal"]);

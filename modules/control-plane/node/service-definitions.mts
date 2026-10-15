@@ -23,8 +23,9 @@ export function daemonArgumentsMatch(actual: string[], binding: ServiceBinding, 
 
 // Issue #420: launchd.plist(5) ExitTimeOut is how long launchd waits "between
 // sending the SIGTERM signal and before sending a SIGKILL signal"; its default
-// is system-defined and zero means infinity. 60 s covers a stopping daemon's wait for its readiness probe
-// (45 s timeout and 5 s kill grace) and a session listing (10 s).
+// is system-defined and zero means infinity. 60 s covers a stopping daemon's
+// wait for its readiness probe (45 s timeout, 5 s kill grace) and a session
+// listing (10 s).
 export const MAC_EXIT_TIMEOUT_S = 60;
 
 export function freshMacDefinition(binding: ServiceBinding): Record<string, unknown> {
