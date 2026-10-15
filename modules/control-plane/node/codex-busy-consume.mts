@@ -4,7 +4,7 @@ import { bypassesPermissions, listenerDir } from "./autonomy.mts";
 import { postToolOriginalOwner } from "./codex-hook-owner.mts";
 import { busyPolicyFingerprint, busyWakeDisabled } from "./codex-busy-policy.mts";
 import { claimBusyHint } from "./codex-busy-ticket.mts";
-import { readCodexSession } from "./codex-sessions.mts";
+import { readCodexSession, refreshCodexEvent } from "./codex-sessions.mts";
 import { contextOutput, type HookDeps } from "./deliver-core.mts";
 import { getMessage, MAX_REPLY_DEPTH } from "./inbox.mts";
 import { explicitlyListed, readPolicy } from "./policy.mts";
@@ -12,13 +12,22 @@ import { explicitlyListed, readPolicy } from "./policy.mts";
 const HINT = "Kherep: New peer messages are waiting. Check this session's inbox and report any relevant update.";
 
 // A metadata hint in the current original-owner turn. No discovery, offers,
-// receipts, session ranking updates or extra turn budget at a tool boundary.
+// receipts, session ranking updates or extra turn budget at a tool boundary;
+// the only other write is the owner record's last event.
 export function consumeBusyHint(input: unknown, deps: HookDeps): string {
   if (!input || typeof input !== "object" || Array.isArray(input)) return "";
   const payload = input as Record<string, unknown>, owner = payload.session_id;
   if (typeof owner !== "string" || !postToolOriginalOwner(payload, owner)) return "";
   try {
-    if (!fs.existsSync(deps.paths.config) || busyWakeDisabled(deps.paths)) return "";
+    if (!fs.existsSync(deps.paths.config)) return "";
+    // Idle evidence (issue #408), whatever the wake policy says. A failed
+    // refresh leaves the hint path below unchanged.
+    try {
+      refreshCodexEvent(deps.paths, owner, "PostToolUse", deps.now?.() ?? Date.now());
+    } catch {
+      // the record keeps its previous event
+    }
+    if (busyWakeDisabled(deps.paths)) return "";
     const policy = readPolicy(deps.paths.policy, true);
     if (!policy?.wake) return "";
     // A current Hook mode wins over the recorded mode. An explicitly unknown

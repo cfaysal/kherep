@@ -6,7 +6,9 @@ import type { NodePaths } from "./config.mts";
 import { pidAlive } from "./daemon-state.mts";
 import { checkRuntimes, checkWorker, findRuntime, runtimeVersion, type VersionOf } from "./doctor-host.mts";
 import { checkHooks } from "./doctor-hooks.mts";
-import { checkDaemon, checkEnrollment, checkListeners, checkPolicy, checkWakeReadiness, daemonReadiness, type Check } from "./doctor-local.mts";
+import {
+  checkCodexSessions, checkDaemon, checkEnrollment, checkListeners, checkPolicy, checkWakeReadiness, daemonReadiness, type Check,
+} from "./doctor-local.mts";
 import { defaultConfigDir } from "./launch-mode.mts";
 
 // `kherep-node doctor` (issue #215): whether this host can take part, as JSON.
@@ -61,6 +63,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     }, repoRoot),
     listeners: checkListeners(deps.paths, alive, now),
     wakeReadiness: checkWakeReadiness(deps.paths, parsed, alive, now),
+    codexSessions: checkCodexSessions(deps.paths, now),
   };
   return { ok: Object.values(checks).every((check) => check.ok), version: checkoutVersion(repoRoot), checks };
 }

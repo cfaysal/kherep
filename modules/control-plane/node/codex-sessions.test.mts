@@ -5,8 +5,8 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  CODEX_ACTIVE_MS, CODEX_RETENTION_MS, codexSessionName, codexSessionRefs, isCodexSession, listCodexSessions, listCodexTaskSessions,
-  recordCodexSession,
+  CODEX_ACTIVE_MS, CODEX_IDLE_AFTER_MS, CODEX_RETENTION_MS, codexSessionName, codexSessionRefs, idleEvidence, isCodexSession,
+  listCodexSessions, listCodexTaskSessions, readCodexSession, recordCodexSession, refreshCodexEvent, type CodexSessionRecord,
 } from "./codex-sessions.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
 import { readLocalSessions, recordingSessions, writeLocalSessions } from "./exchange.mts";
@@ -143,4 +143,66 @@ test("a Codex intercom run is listed with its own kind, a requested task as code
   writeTask(paths, task(3, "019a0000-0000-7000-8000-000000000003", "resume"), NOW);
   assert.deepEqual(listCodexTaskSessions(paths, NOW).map((s) => [s.name, s.kind]),
     [["task-00000001", "codex-task"], ["task-00000002", "codex-intercom"], ["task-00000003", "codex-task"]]);
+});
+
+// Issue #408, PR 1: the hook event is idle evidence.
+test("each hook event writes lastEvent and lastEventAt, Stop also lastStopAt, and an input without one keeps them", (t) => {
+  const paths = setup(t);
+  const at = (ms: number) => new Date(ms).toISOString();
+  recordCodexSession(paths, CODEX, "/work/repo", NOW, "default", "SessionStart");
+  assert.deepEqual(readJson(file(paths, CODEX)), { sessionId: CODEX, cwd: "/work/repo", lastSeen: at(NOW), runtime: "codex",
+    permissionMode: "default", lastEvent: "SessionStart", lastEventAt: at(NOW) });
+  recordCodexSession(paths, CODEX, "/work/repo", NOW + 1000, undefined, "UserPromptSubmit");
+  assert.deepEqual([readCodexSession(paths, CODEX)?.lastEvent, readCodexSession(paths, CODEX)?.lastEventAt,
+    readCodexSession(paths, CODEX)?.lastStopAt], ["UserPromptSubmit", at(NOW + 1000), undefined]);
+  recordCodexSession(paths, CODEX, "/work/repo", NOW + 2000, undefined, "Stop");
+  assert.deepEqual(readCodexSession(paths, CODEX), { sessionId: CODEX, cwd: "/work/repo", lastSeen: at(NOW + 2000), runtime: "codex",
+    permissionMode: "default", lastEvent: "Stop", lastEventAt: at(NOW + 2000), lastStopAt: at(NOW + 2000) });
+  for (const event of [undefined, "Notification", 7]) {
+    recordCodexSession(paths, CODEX, "/work/repo", NOW + 3000, undefined, event);
+    const record = readCodexSession(paths, CODEX);
+    assert.deepEqual([record?.lastSeen, record?.lastEvent, record?.lastEventAt, record?.lastStopAt],
+      [at(NOW + 3000), "Stop", at(NOW + 2000), at(NOW + 2000)], String(event));
+  }
+  recordCodexSession(paths, CODEX, "/work/repo", NOW + 4000, undefined, "UserPromptSubmit");
+  assert.deepEqual([readCodexSession(paths, CODEX)?.lastEvent, readCodexSession(paths, CODEX)?.lastStopAt],
+    ["UserPromptSubmit", at(NOW + 2000)], "a later event keeps the last Stop time");
+});
+
+test("a refresh changes only the event of an existing record and never creates one", (t) => {
+  const paths = setup(t);
+  assert.equal(refreshCodexEvent(paths, CODEX, "PostToolUse", NOW), false);
+  assert.equal(fs.existsSync(file(paths, CODEX)), false, "no record is created");
+  recordCodexSession(paths, CODEX, "/work/repo", NOW, "default", "Stop");
+  const before = readCodexSession(paths, CODEX);
+  assert.equal(refreshCodexEvent(paths, CODEX, "PostToolUse", NOW + 5000), true);
+  assert.deepEqual(readCodexSession(paths, CODEX), { ...before, lastEvent: "PostToolUse", lastEventAt: new Date(NOW + 5000).toISOString() });
+  fs.writeFileSync(file(paths, CODEX), JSON.stringify({ sessionId: "another", runtime: "codex", lastSeen: new Date(NOW).toISOString() }));
+  assert.equal(refreshCodexEvent(paths, CODEX, "PostToolUse", NOW), false, "a record of another session is left alone");
+  assert.equal(refreshCodexEvent(paths, "../escape", "PostToolUse", NOW), false);
+});
+
+test("idleEvidence: only a Stop at least idleAfterMs ago of a session seen within the active window is idle", () => {
+  const stopAt = NOW - CODEX_IDLE_AFTER_MS;
+  const stopped: CodexSessionRecord = { sessionId: CODEX, runtime: "codex", lastSeen: new Date(stopAt).toISOString(),
+    lastEvent: "Stop", lastEventAt: new Date(stopAt).toISOString(), lastStopAt: new Date(stopAt).toISOString() };
+  assert.equal(CODEX_IDLE_AFTER_MS, 90_000);
+  assert.equal(idleEvidence(stopped, NOW), true, "a Stop exactly idleAfterMs ago");
+  assert.equal(idleEvidence(null, NOW), false, "no record");
+  const { lastEvent: _event, ...older } = stopped;
+  assert.equal(idleEvidence(older, NOW), false, "a record without lastEvent is unknown");
+  for (const event of ["SessionStart", "UserPromptSubmit", "PostToolUse"] as const) {
+    assert.equal(idleEvidence({ ...stopped, lastEvent: event }, NOW), false, event);
+  }
+  assert.equal(idleEvidence({ ...stopped, lastStopAt: undefined }, NOW), false, "Stop without a stop time");
+  assert.equal(idleEvidence({ ...stopped, lastStopAt: "not a time" }, NOW), false, "unreadable stop time");
+  assert.equal(idleEvidence(stopped, NOW - 1), false, "stopped less than idleAfterMs ago");
+  assert.equal(idleEvidence(stopped, NOW, CODEX_IDLE_AFTER_MS + 1), false, "a longer idle threshold");
+  assert.equal(idleEvidence(stopped, NOW + 60_000, 120_000), true, "a policy threshold within bounds");
+  for (const bad of [29_999, 3_600_001, Number.NaN, 90_000.5]) assert.equal(idleEvidence(stopped, NOW, bad), false, `threshold ${bad}`);
+  assert.equal(idleEvidence(stopped, NOW + 3_600_000, 3_600_000), true, "the upper bound");
+  assert.equal(idleEvidence({ ...stopped, lastStopAt: new Date(NOW - 30_000).toISOString() }, NOW, 30_000), true, "the lower bound");
+  assert.equal(idleEvidence(stopped, stopAt + CODEX_ACTIVE_MS), true, "seen exactly at the end of the active window");
+  assert.equal(idleEvidence(stopped, stopAt + CODEX_ACTIVE_MS + 1), false, "not seen within the active window");
+  assert.equal(idleEvidence({ ...stopped, lastSeen: "not a time" }, NOW), false, "unreadable lastSeen");
 });

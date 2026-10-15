@@ -1,4 +1,5 @@
 import type { DirectoryBody, DirectorySession } from "../protocol-messages.mts";
+import { CODEX_RUNTIME, isCodexHookEvent, readCodexSession } from "./codex-sessions.mts";
 import { readConfig } from "./config.mts";
 import { readDirectory, requestDirectory } from "./exchange.mts";
 import type { Io } from "./msg-cli.mts";
@@ -37,6 +38,18 @@ function isBackgroundTask(session: DirectorySession): boolean {
     || (session.kind !== "interactive" && session.label !== undefined);
 }
 
+// Issue #408: the last hook event this node recorded for one of its Codex
+// sessions, as idle evidence; nothing for a record without one or a failed read.
+function lastEvent(io: Pick<Io, "paths">, sessionId: string): string {
+  try {
+    const record = readCodexSession(io.paths, sessionId);
+    if (!isCodexHookEvent(record?.lastEvent) || !Number.isFinite(Date.parse(record.lastEventAt ?? ""))) return "";
+    return `  last event ${record.lastEvent} at ${record.lastEventAt}`;
+  } catch {
+    return "";
+  }
+}
+
 export function sessions(io: Io, from?: string): number {
   const current = currentSession(io.paths, io.env);
   let me = current?.id;
@@ -62,8 +75,9 @@ export function sessions(io: Io, from?: string): number {
       const title = s.title ? `  ${JSON.stringify(s.title)}` : "";
       const task = isBackgroundTask(s);
       background ||= task;
+      const event = node.nodeId === nodeId && s.runtime === CODEX_RUNTIME ? lastEvent(io, s.sessionId) : "";
       io.out(`  ${mine ? "*" : " "} ${s.label ?? s.name ?? "-"}${title}  ${s.sessionId}  ${s.state}  ${s.runtime}${s.cwd ? `  ${s.cwd}` : ""}`
-        + (task ? "  [background task]" : ""));
+        + event + (task ? "  [background task]" : ""));
     }
   }
   io.out(`(* marks this session${me ? "" : `; neither ${SESSION_ENV} nor ${KHEREP_SESSION_ENV} is set and no --from was given, so none is marked`})`);

@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { listenerDir } from "./autonomy.mts";
+import { CODEX_ACTIVE_MS, recordCodexSession } from "./codex-sessions.mts";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { daemonStateFile } from "./daemon-state.mts";
 import { captureSourceIdentity } from "./daemon-source.mts";
@@ -273,6 +274,26 @@ test("the listener check counts live and stale listener locks only", async (t) =
   lock("old-session.json", LIVE_PID, now - 2 * 86_400_000);
   lock("live-session.turns.json", LIVE_PID, now);
   assert.deepEqual((await runDoctor(h.deps)).checks.listeners, { ok: true, live: 1, stale: 2 });
+});
+
+test("the Codex session check counts recorded sessions by their last hook event, without session ids (issue #408)", async (t) => {
+  const h = host(t);
+  const now = Date.parse("2026-10-04T12:00:00.000Z");
+  assert.deepEqual((await runDoctor(h.deps)).checks.codexSessions, { ok: true, recorded: 0,
+    lastEvent: { SessionStart: 0, UserPromptSubmit: 0, PostToolUse: 0, Stop: 0, unknown: 0 } });
+  const ids = ["019a0000-0000-7000-8000-0000000000a1", "019a0000-0000-7000-8000-0000000000a2", "019a0000-0000-7000-8000-0000000000a3",
+    "019a0000-0000-7000-8000-0000000000a4", "019a0000-0000-7000-8000-0000000000a5"];
+  recordCodexSession(h.paths, ids[0], "/synthetic/work", now - 1_000, "default", "Stop");
+  recordCodexSession(h.paths, ids[1], "/synthetic/work", now - 2_000, "default", "Stop");
+  recordCodexSession(h.paths, ids[2], "/synthetic/work", now, "default", "UserPromptSubmit");
+  recordCodexSession(h.paths, ids[3], "/synthetic/work", now, "default");
+  recordCodexSession(h.paths, ids[4], "/synthetic/work", now - CODEX_ACTIVE_MS - 1, "default", "Stop");
+  const before = fs.readdirSync(h.paths.codexSessions).sort();
+  const report = await runDoctor(h.deps);
+  assert.deepEqual(report.checks.codexSessions, { ok: true, recorded: 4,
+    lastEvent: { SessionStart: 0, UserPromptSubmit: 1, PostToolUse: 0, Stop: 2, unknown: 1 } });
+  assert.deepEqual(fs.readdirSync(h.paths.codexSessions).sort(), before, "doctor removes no record");
+  for (const id of ids) assert.equal(JSON.stringify(report).includes(id), false);
 });
 
 test("kherep-node doctor prints JSON and exits 1 on a host that is not enrolled", (t) => {

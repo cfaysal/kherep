@@ -305,6 +305,20 @@ test("msg sessions marks background tasks and the session --from names (issue #1
   const anonymous = await run(paths, ["sessions"], {});
   assert.match(anonymous.out, /neither CLAUDE_CODE_SESSION_ID nor KHEREP_SESSION_ID is set and no --from was given, so none is marked/);});
 
+test("msg sessions shows the last recorded hook event of this node's Codex sessions (issue #408)", async (t) => {
+  const codex = "019a2b3c-4d5e-7f60-8123-456789abcdef";
+  const remote = "019a0000-0000-7000-8000-000000000004";
+  const paths = setup(t, { ...DIRECTORY, sessions: [...DIRECTORY.sessions,
+    { nodeId: SELF, sessionId: codex, name: "codex-89abcdef", state: "active", runtime: "codex", kind: "codex", cwd: "/work/b" },
+    { nodeId: PEER, sessionId: remote, name: "codex-00000004", state: "active", runtime: "codex", kind: "codex" }] });
+  recordCodexSession(paths, codex, "/work/b", NOW - 120_000, "default", "Stop");
+  recordCodexSession(paths, remote, "/work/c", NOW, "default", "Stop");
+  const lines = (await run(paths, ["sessions"])).out.split("\n");
+  const stoppedAt = new Date(NOW - 120_000).toISOString();
+  assert.ok(lines.includes(`    codex-89abcdef  ${codex}  active  codex  /work/b  last event Stop at ${stoppedAt}`), lines.join("\n"));
+  assert.ok(lines.includes(`    codex-00000004  ${remote}  active  codex`), "another node's session shows no local record");
+});
+
 test("msg status shows the threaded replies that reached this node (issue #200)", async (t) => {
   const paths = setup(t);
   const sent = await run(paths, ["send", "node-b/docs", "question"]);

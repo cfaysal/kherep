@@ -52,7 +52,8 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
   if (event === "PostToolUse") return consumeBusyHint(input, deps);
   if (event !== "SessionStart" && event !== "UserPromptSubmit" && event !== "Stop") return "";
   if (!isCodexSessionId(sessionId) || !fs.existsSync(deps.paths.config)) return "";
-  recordCodexSession(deps.paths, sessionId, cwd, deps.now?.(), mode);
+  // The event is idle evidence (issue #408).
+  recordCodexSession(deps.paths, sessionId, cwd, deps.now?.(), mode, event);
   // Only names no other live Codex session shares (issue #66).
   const refs = codexSessionRefs(deps.paths, sessionId, deps.now?.()).refs;
   if (event === "SessionStart" || event === "UserPromptSubmit") {
