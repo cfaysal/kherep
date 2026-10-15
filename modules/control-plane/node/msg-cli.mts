@@ -73,6 +73,8 @@ const PROGRESS_TEXT: Record<string, string> = {
   "reply-limit": "the automatic reply depth limit was reached",
   "budget-exhausted": "the target's autonomous-turn budget is exhausted",
   "ambiguous-target": "the target session name is ambiguous; send to its full session id",
+  "cwd-refused": "the last closed-session delivery attempt was refused: the closed session's working directory is not usable on the "
+    + "target node (not absolute, missing, or outside its workspace roots); the message stays queued and is tried again each round",
   "wake-pending": "awaiting automatic wake confirmation",
   "fallback-starting": "a local delivery session is starting",
   "fallback-running": "a local delivery session is running",

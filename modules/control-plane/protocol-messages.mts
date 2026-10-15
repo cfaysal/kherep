@@ -30,7 +30,7 @@ export type FinalMessageState = (typeof FINAL_MESSAGE_STATES)[number];
 
 export const MESSAGE_PROGRESS_CODES = {
   waiting: ["awaiting-user-turn", "awaiting-turn-confirmation", "target-busy", "wake-unconfirmed", "retry-pending", "wake-disabled", "wake-not-authorized",
-    "permission-restricted", "operator-stopped", "reply-limit", "budget-exhausted", "ambiguous-target"],
+    "permission-restricted", "operator-stopped", "reply-limit", "budget-exhausted", "ambiguous-target", "cwd-refused"],
   waking: ["wake-pending"],
   fallback: ["fallback-starting", "fallback-running"],
   failed: ["wake-failed", "fallback-failed"],
@@ -38,6 +38,17 @@ export const MESSAGE_PROGRESS_CODES = {
 export type MessageProgressPhase = keyof typeof MESSAGE_PROGRESS_CODES;
 export type MessageProgressCode = (typeof MESSAGE_PROGRESS_CODES)[MessageProgressPhase][number];
 export interface MessageProgress { phase: MessageProgressPhase; code: MessageProgressCode; observedAt: string; retryAt?: string }
+
+// Issue #396: a sending node that validates the progress codes added from
+// issue #396 on (cwd-refused) advertises this capability. The Worker hands any
+// other sender the older code it validates, so its message.status frames stay valid.
+export const MESSAGING_PROGRESS_V2_CAPABILITY = "messaging.progress.v2";
+const LEGACY_PROGRESS_CODES: Partial<Record<MessageProgressCode, MessageProgressCode>> = { "cwd-refused": "wake-not-authorized" };
+
+export function legacyProgress(progress: MessageProgress, capabilities: readonly string[] | null): MessageProgress {
+  const legacy = LEGACY_PROGRESS_CODES[progress.code];
+  return legacy === undefined || capabilities?.includes(MESSAGING_PROGRESS_V2_CAPABILITY) ? progress : { ...progress, code: legacy };
+}
 
 // What a sender reads (issue #197). running and stopped refine accepted from
 // its existing progress codes and never go on the wire, so a Worker or node

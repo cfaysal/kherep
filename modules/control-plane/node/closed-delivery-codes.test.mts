@@ -34,6 +34,7 @@ type Case = [what: string, code: MessageProgressCode, reason: RegExp, arrange?: 
 const policyRefusals: Case[] = [
   ["the kill switch", "wake-disabled", /kill switch/, (node) => fs.writeFileSync(killSwitch(node.paths), "")],
   ["sessions disabled", "wake-disabled", /sessions are not enabled/, undefined, { enabled: false }],
+  // Issue #396: these two are the node's authorization policy and keep wake-not-authorized.
   ["delegate.accept off", "wake-not-authorized", /does not accept delegated tasks/, undefined, { delegate: { accept: false } }],
   ["the accept rules", "wake-not-authorized", /not accepted by node policy/, undefined, {},
     { accept: [{ session: SESSION, from: ["00000000-0000-4000-8000-0000000000cc"] }] }],
@@ -50,10 +51,11 @@ const policyRefusals: Case[] = [
   ["the turn budget", "budget-exhausted", /budget/, (node) => {
     for (let i = 0; i < TURNS_PER_HOUR; i++) takeTurn(node.paths, SESSION, T0 - 50 * 60_000 + i * TURN_SPACING_MS * 2);
   }],
-  ["a cwd outside the workspace roots", "wake-not-authorized", /cwd is outside the workspace roots of this node/,
+  // Issue #396: an unusable recorded cwd is no policy decision; it waits with cwd-refused.
+  ["a cwd outside the workspace roots", "cwd-refused", /cwd is outside the workspace roots of this node/,
     (node) => knownCwd(node, node.root)],
-  ["a cwd that does not exist", "wake-not-authorized", /cwd does not exist/, (node) => knownCwd(node, path.join(node.workspace, "gone"))],
-  ["a relative cwd", "wake-not-authorized", /cwd must be an absolute path/, (node) => knownCwd(node, "repo")],
+  ["a cwd that does not exist", "cwd-refused", /cwd does not exist/, (node) => knownCwd(node, path.join(node.workspace, "gone"))],
+  ["a relative cwd", "cwd-refused", /cwd must be an absolute path/, (node) => knownCwd(node, "repo")],
   ["a start permission mode the policy does not allow", "permission-restricted", /permission mode default is not allowed/, undefined,
     { permissionModes: ["acceptEdits"], defaultPermissionMode: "acceptEdits" }],
 ];
