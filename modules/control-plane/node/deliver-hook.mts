@@ -68,9 +68,12 @@ export function deliverForHook(input: unknown, deps: HookDeps): string {
   }
   // A Stop continuation is an autonomous turn: budget and permission mode gate it.
   // A prompt that claims the wake listener's marker opened a woken turn (issue #417).
-  const gated: HookDeps = event === "Stop"
-    ? { ...deps, mayContinue: (ids) => mayContinue(deps.paths, sessionId, mode, ids, now, nodeWakeBudget(deps.paths)) }
-    : claimWake(deps.paths, sessionId, now) ? { ...deps, offeredBy: "wake" } : deps;
+  let gated: HookDeps = deps;
+  if (event === "Stop") {
+    gated = { ...deps, mayContinue: (ids) => mayContinue(deps.paths, sessionId, mode, ids, now, nodeWakeBudget(deps.paths)) };
+  } else if (claimWake(deps.paths, sessionId, now)) {
+    gated = { ...deps, offeredBy: "wake" };
+  }
   return contextOutput(event, deliveryContext(event, refs, gated));
 }
 
