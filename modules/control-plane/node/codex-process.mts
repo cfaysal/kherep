@@ -12,6 +12,7 @@ import { writeJsonAtomic } from "./inbox.mts";
 import { KHEREP_SESSION_ENV, SESSION_ENV } from "./msg-resolve.mts";
 import type { ProcessIdentity, ProcessRelation } from "./codex-stop.mts";
 import { withNodeOnPath } from "./task-env.mts";
+import type { ServiceAdmission } from "./service-drain.mts";
 
 // The Codex processes of tasks (issue #63), from `codex exec --help` and
 // `codex exec resume --help` of Codex CLI 0.153.4 and the measurements in the
@@ -54,7 +55,7 @@ export interface CodexDeps {
   // How long a `codex queue` run may take (codex-queue.mts).
   queueTimeoutMs?: number;
   // Await exact owned-pointer reconciliation; the default uses public Queue RPC.
-  reconcileQueue?: (owner: string) => Promise<void>;
+  reconcileQueue?: (owner: string, admission?: ServiceAdmission) => Promise<void>;
   // The Codex home whose rollouts wake.codexApp reads (codex-app.mts);
   // CODEX_HOME or ~/.codex when absent.
   home?: string;
@@ -66,6 +67,9 @@ export interface CodexDeps {
   // Runs `codex <args>` for the MCP server list of intercom runs (codex-mcp.mts).
   mcpList?: McpList;
   mcpListTimeoutMs?: number;
+  // A started helper that cannot prove both exit and close must keep its
+  // service admission fail-closed even when callers reduce the failure to a reason.
+  onUnconfirmedShutdown?: () => void;
 }
 
 export interface CodexFiles { dir: string; events: string; lastMessage: string; stderr: string; exit: string }

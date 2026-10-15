@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import { fakeCodexBin, waitFor } from "./codex-fixture.mts";
@@ -10,6 +12,7 @@ import type { CodexDeps } from "./codex-process.mts";
 import { spawnRun } from "./codex-runner.mts";
 import { T0, taskId, taskNode } from "./task-fixture.mts";
 import type { TaskRecord } from "./task-records.mts";
+import { retainServiceAdmission, serviceAdmissionsIdle, withServiceAdmission } from "./service-drain.mts";
 
 // Issue #119: intercom runs keep the user's Codex config but switch off each
 // MCP server it defines; servers the app or a plugin provides make codex fail
@@ -139,4 +142,37 @@ test("runMcpList kills a codex that does not finish, even when a grandchild hold
   assert.equal(result.code, null);
   assert.match(result.stderr, /did not finish within 1 s/);
   assert.ok(Date.now() - started < 10_000);
+});
+
+test("an MCP helper with unconfirmed shutdown reports and retains fail-closed evidence", async (t) => {
+  const codex = fakeCodexBin(t);
+  const child = Object.assign(new EventEmitter(), {
+    pid: 4568, stdout: new PassThrough(), stderr: new PassThrough(),
+    exitCode: null, signalCode: null,
+  });
+  let retained = 0;
+  const result = await runMcpList(codex.file, { mcpListTimeoutMs: 5, spawn: (() => child) as never,
+    signal: () => {}, onUnconfirmedShutdown: () => { retained += 1; } })(["mcp", "list", "--json"]);
+  assert.equal(result.code, null);
+  assert.match(result.stderr, /did not finish/);
+  assert.equal(retained, 1);
+});
+
+test("every cached MCP consumer receives shared unconfirmed-shutdown evidence", async (t) => {
+  resetMcpCache();
+  t.after(resetMcpCache);
+  const codex = fakeCodexBin(t);
+  const node = taskNode(t);
+  const child = Object.assign(new EventEmitter(), {
+    pid: 4569, stdout: new PassThrough(), stderr: new PassThrough(),
+    exitCode: null, signalCode: null,
+  });
+  const deps: CodexDeps = { findCodex: () => codex.file, mcpListTimeoutMs: 5,
+    spawn: (() => child) as never, signal: () => {} };
+  const first = intercomMcpOverrides(deps, T0);
+  const second = withServiceAdmission(node.paths, (admission) => intercomMcpOverrides({ ...deps,
+    onUnconfirmedShutdown: () => retainServiceAdmission(admission) }, T0 + 1));
+  await Promise.all([first, second]);
+  assert.equal(serviceAdmissionsIdle(node.paths), false,
+    "a joined readiness consumer retains its lease when the shared helper lifetime is unknown");
 });

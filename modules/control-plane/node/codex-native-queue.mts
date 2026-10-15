@@ -29,6 +29,8 @@ class StdioQueueClient implements NativeQueueClient {
   private buffer = "";
   private failed: Error | null = null;
   private closing?: Promise<void>;
+  private exited = false;
+  private closed = false;
 
   constructor(child: ChildProcessWithoutNullStreams, requestTimeoutMs: number) {
     this.child = child;
@@ -37,7 +39,8 @@ class StdioQueueClient implements NativeQueueClient {
     child.stderr.resume();
     child.stdin.on("error", (error) => this.fail(error));
     child.once("error", (error) => this.fail(error));
-    child.once("exit", () => this.fail(new Error("Codex app server exited")));
+    child.once("exit", () => { this.exited = true; this.fail(new Error("Codex app server exited")); });
+    child.once("close", () => { this.closed = true; });
   }
 
   private rejectPending(error: Error): void {
@@ -115,11 +118,17 @@ class StdioQueueClient implements NativeQueueClient {
     return { deleted: result.deleted };
   }
 
-  private waitForExit(timeoutMs: number): Promise<boolean> {
-    if (this.child.exitCode !== null || this.child.signalCode !== null) return Promise.resolve(true);
+  private waitForShutdown(timeoutMs: number): Promise<boolean> {
+    if (this.exited && this.closed) return Promise.resolve(true);
     return new Promise((resolve) => {
       const timer = setTimeout(() => resolve(false), timeoutMs);
-      this.child.once("exit", () => { clearTimeout(timer); resolve(true); });
+      const check = (): void => {
+        if (!this.exited || !this.closed) return;
+        clearTimeout(timer);
+        resolve(true);
+      };
+      this.child.once("exit", check);
+      this.child.once("close", check);
     });
   }
 
@@ -130,9 +139,9 @@ class StdioQueueClient implements NativeQueueClient {
   private async closeOnce(): Promise<void> {
     this.rejectPending(new Error("Codex app server closed"));
     this.child.stdin.end();
-    if (await this.waitForExit(125)) return;
+    if (await this.waitForShutdown(125)) return;
     this.child.kill("SIGKILL");
-    if (!await this.waitForExit(125)) throw new NativeQueueShutdownError();
+    if (!await this.waitForShutdown(125)) throw new NativeQueueShutdownError();
   }
 }
 

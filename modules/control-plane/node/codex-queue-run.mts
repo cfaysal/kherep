@@ -8,10 +8,11 @@ import { sameIdentity } from "./codex-queue-cleanup.mts";
 import type { NativeQueueInput, QueueProducerIdentity } from "./codex-queue-binding.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
 import { nativeQueueText } from "./codex-queue-text.mts";
-import { withServiceAdmission } from "./service-drain.mts";
+import { continueServiceAdmission, retainServiceAdmission, type ServiceAdmission } from "./service-drain.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 
 export const QUEUE_TIMEOUT_MS = 30_000;
+export const QUEUE_SHUTDOWN_GRACE_MS = 250;
 export const MAX_QUEUE_STDOUT_BYTES = 8 * 1024;
 const FORBIDDEN = /^(--dangerously-|--approve-for-me$|--add-dir$|--sandbox$|-s$|-c$|--config$)/;
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -51,11 +52,13 @@ export function guardQueue(args: string[]): string[] {
 
 // Runs codex without a shell, in its own process group on POSIX. The launcher
 // may leave stderr open, so exit has a short bounded drain grace period.
-export function runQueue(deps: RunnerDeps, args: string[], expectedProducer?: QueueProducerIdentity): Promise<QueueRunResult> {
-  return withServiceAdmission(deps.paths, () => runQueueAdmitted(deps, args, expectedProducer));
+export function runQueue(deps: RunnerDeps, args: string[], expectedProducer?: QueueProducerIdentity,
+  admission?: ServiceAdmission): Promise<QueueRunResult> {
+  return continueServiceAdmission(deps.paths, admission, active => runQueueAdmitted(deps, args, expectedProducer, active));
 }
 
-function runQueueAdmitted(deps: RunnerDeps, args: string[], expectedProducer?: QueueProducerIdentity): Promise<QueueRunResult> {
+function runQueueAdmitted(deps: RunnerDeps, args: string[], expectedProducer: QueueProducerIdentity | undefined,
+  admission: ServiceAdmission): Promise<QueueRunResult> {
   const file = (deps.codex?.findCodex ?? findCodex)();
   if (!file) return Promise.reject(new Error("codex is not installed on this node"));
   const { owner, text } = queueInput(args);
@@ -65,7 +68,7 @@ function runQueueAdmitted(deps: RunnerDeps, args: string[], expectedProducer?: Q
   if (expectedProducer && !sameIdentity(expectedProducer, producer)) return Promise.reject(new Error("Codex queue producer changed before submission"));
   const timeoutMs = deps.codex?.queueTimeoutMs ?? QUEUE_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
-    const child = spawn(command.file, command.args,
+    const child = (deps.codex?.spawn ?? spawn)(command.file, command.args,
       { stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32", windowsHide: true,
         env: { ...process.env, CODEX_HOME: producer.resolvedCodexHome } });
     let stdout = "";
@@ -73,10 +76,15 @@ function runQueueAdmitted(deps: RunnerDeps, args: string[], expectedProducer?: Q
     let stdoutOverflow = false;
     let stderr = "";
     let settled = false;
+    let exited = false;
+    let closed = false;
+    let terminalError: Error | undefined;
+    let shutdownTimer: NodeJS.Timeout | undefined;
     const settle = (error?: Error): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (shutdownTimer) clearTimeout(shutdownTimer);
       child.stdout?.destroy();
       child.stderr?.destroy();
       if (error) reject(error);
@@ -86,8 +94,16 @@ function runQueueAdmitted(deps: RunnerDeps, args: string[], expectedProducer?: Q
       }
     };
     const timer = setTimeout(() => {
-      if (child.pid !== undefined) (deps.codex?.signal ?? ((pid, signal) => signalGroup(pid, signal, platform)))(child.pid, "SIGKILL");
-      settle(new Error(`codex queue did not finish within ${Math.round(timeoutMs / 1000)} s`));
+      terminalError = new Error(`codex queue did not finish within ${Math.round(timeoutMs / 1000)} s`);
+      shutdownTimer = setTimeout(() => {
+        if (!closed || !exited) retainServiceAdmission(admission);
+        settle(terminalError);
+      }, QUEUE_SHUTDOWN_GRACE_MS);
+      // An exit event means the PID is no longer an identity. It can already
+      // have been reused while close is delayed, so never signal it again.
+      if (!exited && child.pid !== undefined) {
+        (deps.codex?.signal ?? ((pid, signal) => signalGroup(pid, signal, platform)))(child.pid, "SIGKILL");
+      }
     }, timeoutMs);
     child.stdout?.on("data", (chunk: Buffer) => {
       stdoutBytes += chunk.length;
@@ -95,11 +111,15 @@ function runQueueAdmitted(deps: RunnerDeps, args: string[], expectedProducer?: Q
       else stdout += chunk.toString("utf8");
     });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString("utf8")).slice(-4096); });
-    child.once("error", (error) => settle(error));
-    child.once("exit", (code, signal) => {
-      const done = (): void => settle(code === 0 ? undefined : new Error(lastLine(stderr) || `codex queue ended with ${String(code ?? signal)}`));
-      const grace = setTimeout(done, 250);
-      child.once("close", () => { clearTimeout(grace); done(); });
+    child.once("error", (error) => {
+      terminalError = error;
+      if (child.pid === undefined) settle(error);
     });
+    child.once("exit", (code, signal) => {
+      exited = true;
+      terminalError ??= code === 0 ? undefined : new Error(lastLine(stderr) || `codex queue ended with ${String(code ?? signal)}`);
+      if (closed) settle(terminalError);
+    });
+    child.once("close", () => { closed = true; if (exited) settle(terminalError); });
   });
 }

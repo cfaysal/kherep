@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { makeEnvelope, parseEnvelope, type SessionInfo } from "../protocol.mts";
 import { NodeClient } from "./client.mts";
 import { generateIdentity } from "./identity.mts";
 import { DEFAULT_POLICY } from "./policy.mts";
-import { CLAUDE_RUNTIME, claudeInvocation, LIST_TIMEOUT_MS, listSessions, mapClaudeAgents, nativeClaude } from "./sessions.mts";
+import { CLAUDE_RUNTIME, claudeInvocation, execFileText, LIST_TIMEOUT_MS, listSessions, mapClaudeAgents, nativeClaude } from "./sessions.mts";
 
 const STARTED = Date.UTC(2026, 0, 2, 3, 4, 5);
 const ROW = { pid: 4242, cwd: "/work/repo", kind: "interactive", startedAt: STARTED, sessionId: "0f0e0d0c-1111-4222-8333-444455556666",
@@ -77,6 +80,22 @@ test("native discovery cancellation reaches the executable and never returns a l
       return JSON.stringify([ROW]);
     },
   }), /abort/i);
+});
+
+test("native discovery rejects cancellation only after the started helper is closed", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-session-abort-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const pidFile = path.join(root, "pid");
+  const controller = new AbortController();
+  const pending = execFileText(process.execPath,
+    ["-e", "require('node:fs').writeFileSync(process.argv[1],String(process.pid));setTimeout(()=>{},30000)", pidFile],
+    { timeout: 10_000, signal: controller.signal });
+  for (let i = 0; i < 100 && !fs.existsSync(pidFile); i += 1) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(fs.existsSync(pidFile));
+  const pid = Number(fs.readFileSync(pidFile, "utf8"));
+  controller.abort();
+  await assert.rejects(pending, /abort/i);
+  assert.throws(() => process.kill(pid, 0), "the listing promise cannot release its admission before process close");
 });
 
 function client(sessions: () => Promise<SessionInfo[]>) {

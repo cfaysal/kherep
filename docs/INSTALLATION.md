@@ -281,8 +281,11 @@ managed task starts. On Windows the transaction also verifies the selected task
 and may wait read-only for positively owned daemon descendants to exit. Each
 probe repeats native action, security and process-identity checks; drift or an
 extra supervisor child refuses immediately. The polling budget is 30 seconds,
-with separate native-call timeouts, so total elapsed time can be longer. The
-mutating stop is single-shot and still refuses any descendants. It verifies the
+then the mutating stop repeats the same read-only checks inside one bounded
+native invocation before its first effect. That call has a 65-second limit to
+include two possible 10-second retained-handle exit waits. It performs one
+mutation sequence, never follows a replacement pid and still refuses unknown
+or persistent descendants. It verifies the
 supervisor and its one direct daemon child, retains both process handles, stops
 the supervisor first and then stops only that already retained daemon process.
 The candidate generation gets one binding-specific launch permit only after the
@@ -297,6 +300,13 @@ lease is removed only when that owner is positively stale; an uncertain owner
 aborts the transaction. `service status` succeeds only when the native service
 is running and its live, authenticated daemon matches the recorded process,
 source, config and service binding.
+
+The daemon also takes an admission before readiness probes, session discovery,
+native Queue submission and native Queue reconciliation actually execute.
+Queued work waits through a drain without spending a turn budget, writing an
+attempt or publishing an empty result. Nested Queue work reuses the same opaque
+admission. Its lease remains until the helper process has exited and closed;
+an unconfirmed shutdown remains a fail-closed lease.
 
 Exported Windows task definitions, configured macOS plist bytes and their
 security metadata are backed up before mutation and kept after rollback.

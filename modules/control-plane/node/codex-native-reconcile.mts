@@ -2,11 +2,23 @@ import { readConfig, type NodePaths } from "./config.mts";
 import { getMessage } from "./inbox.mts";
 import { nativeQueueGroups, retireNativeQueue } from "./codex-native-attempts.mts";
 import { connectNativeQueue } from "./codex-native-queue.mts";
-import { cleanupOwnedQueues, sameIdentity } from "./codex-queue-cleanup.mts";
+import { cleanupOwnedQueues, sameIdentity, NativeQueueShutdownError } from "./codex-queue-cleanup.mts";
 import { isDirectNativeQueueIdentity, queueProducerIdentity } from "./codex-queue-context.mts";
+import { retainServiceAdmission, waitForServiceAdmission, type ServiceAdmission } from "./service-drain.mts";
 
 export async function reconcileNativeQueues(paths: NodePaths, owner: string,
-  options: { open?: typeof connectNativeQueue; timeoutMs?: number } = {}): Promise<void> {
+  options: { open?: typeof connectNativeQueue; timeoutMs?: number } = {}, admission?: ServiceAdmission): Promise<void> {
+  await waitForServiceAdmission(paths, async active => {
+    try { await reconcileAdmitted(paths, owner, options); }
+    catch (error) {
+      if (error instanceof NativeQueueShutdownError) retainServiceAdmission(active);
+      throw error;
+    }
+  }, { admission });
+}
+
+async function reconcileAdmitted(paths: NodePaths, owner: string,
+  options: { open?: typeof connectNativeQueue; timeoutMs?: number }): Promise<void> {
   const config = readConfig(paths.config);
   if (!config) return;
   const deadline = Date.now() + (options.timeoutMs ?? 5_000);

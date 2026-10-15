@@ -88,39 +88,85 @@ export function runMcpList(file: string, codex: CodexDeps): McpList {
   const timeoutMs = codex.mcpListTimeoutMs ?? MCP_LIST_TIMEOUT_MS;
   return (args) => new Promise((resolve) => {
     const command = codexCommand(file, args, platform);
-    const child = spawn(command.file, command.args, { stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32", windowsHide: true });
+    const child = (codex.spawn ?? spawn)(command.file, command.args,
+      { stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32", windowsHide: true });
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let exited = false;
+    let closed = false;
+    let timedOut = false;
+    let terminalCode: number | null = null;
+    let shutdownTimer: NodeJS.Timeout | undefined;
     const settle = (result: McpListResult): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (shutdownTimer) clearTimeout(shutdownTimer);
       child.stdout?.destroy();
       child.stderr?.destroy();
       resolve(result);
     };
+    const finish = (): void => {
+      if (!closed || !exited) return;
+      settle(timedOut
+        ? { code: null, stdout: "", stderr: `codex mcp list did not finish within ${Math.round(timeoutMs / 1000)} s` }
+        : { code: terminalCode, stdout, stderr });
+    };
     const timer = setTimeout(() => {
-      if (child.pid !== undefined) (codex.signal ?? ((pid, signal) => signalGroup(pid, signal, platform)))(child.pid, "SIGKILL");
-      settle({ code: null, stdout: "", stderr: `codex mcp list did not finish within ${Math.round(timeoutMs / 1000)} s` });
+      timedOut = true;
+      shutdownTimer = setTimeout(() => {
+        if (!closed || !exited) codex.onUnconfirmedShutdown?.();
+        settle({ code: null, stdout: "", stderr: `codex mcp list did not finish within ${Math.round(timeoutMs / 1000)} s` });
+      }, 250);
+      if (!exited && child.pid !== undefined) {
+        (codex.signal ?? ((pid, signal) => signalGroup(pid, signal, platform)))(child.pid, "SIGKILL");
+      }
     }, timeoutMs);
     child.stdout?.on("data", (chunk: Buffer) => { stdout = (stdout + chunk.toString()).slice(-1_048_576); });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4096); });
-    child.once("error", (error) => settle({ code: null, stdout: "", stderr: error.message }));
-    child.once("close", (code) => settle({ code, stdout, stderr }));
+    child.once("error", (error) => {
+      stderr = error.message;
+      if (child.pid === undefined) { exited = true; closed = true; terminalCode = null; finish(); }
+    });
+    child.once("exit", (code) => { exited = true; terminalCode = code; finish(); });
+    child.once("close", (code) => { closed = true; terminalCode ??= code; finish(); });
   });
 }
 
 // One result per codex binary for MCP_CACHE_MS, shared by concurrent callers.
-let cache: { file: string; at: number; result: Promise<McpOverrides> } | null = null;
+// Every consumer subscribes to uncertain helper lifetime evidence; otherwise
+// the first non-readiness caller could hide a surviving cached helper from a
+// readiness admission that joined the same Promise.
+interface McpCache {
+  file: string; at: number; result: Promise<McpOverrides>;
+  unconfirmed: boolean; shutdownSubscribers: Set<() => void>;
+}
+let cache: McpCache | null = null;
 export const resetMcpCache = (): void => { cache = null; };
+
+function subscribeShutdown(entry: McpCache, subscriber?: () => void): void {
+  if (!subscriber) return;
+  entry.shutdownSubscribers.add(subscriber);
+  if (entry.unconfirmed) subscriber();
+}
 
 export async function intercomMcpOverrides(codex: CodexDeps, now: number = Date.now()): Promise<McpOverrides> {
   const file = (codex.findCodex ?? findCodex)();
   if (!file) return { reason: "codex is not installed on this node" };
-  if (cache && cache.file === file && now - cache.at < MCP_CACHE_MS) return cache.result;
-  const list = codex.mcpList ?? runMcpList(file, codex);
-  const result = computeOverrides(list).catch((error: unknown) => ({ reason: String((error as Error).message ?? error) }));
-  cache = { file, at: now, result };
-  return result;
+  if (cache && cache.file === file && now - cache.at < MCP_CACHE_MS) {
+    subscribeShutdown(cache, codex.onUnconfirmedShutdown);
+    return cache.result;
+  }
+  const entry: McpCache = { file, at: now, result: Promise.resolve({ args: [], names: [], unnamed: 0 }),
+    unconfirmed: false, shutdownSubscribers: new Set() };
+  subscribeShutdown(entry, codex.onUnconfirmedShutdown);
+  const notify = (): void => {
+    entry.unconfirmed = true;
+    for (const subscriber of entry.shutdownSubscribers) subscriber();
+  };
+  const list = codex.mcpList ?? runMcpList(file, { ...codex, onUnconfirmedShutdown: notify });
+  entry.result = computeOverrides(list).catch((error: unknown) => ({ reason: String((error as Error).message ?? error) }));
+  cache = entry;
+  return entry.result;
 }
