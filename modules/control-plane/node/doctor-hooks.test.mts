@@ -155,7 +155,7 @@ test("a canonical hook alias counts only for the matching leaf of a complete sou
   }
 
   const check = (target: string) => {
-    fs.rmSync(alias, { force: true });
+    fs.unlinkSync(alias);
     fs.symlinkSync(target, alias, "file");
     fs.writeFileSync(f.codex, codexHook(alias));
     return checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
