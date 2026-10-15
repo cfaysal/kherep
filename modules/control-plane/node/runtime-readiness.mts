@@ -31,7 +31,11 @@ export interface Readiness {
 }
 
 // onVerdict: each completed probe's verdict, for daemon.json (issue #222).
-export interface ReadinessOptions { now?: () => number; log?: (line: string) => void; onVerdict?: (runtime: TaskRuntime, verdict: Verdict) => void }
+// defer: true while a runtime must not be probed (issue #403, install-pause.mts).
+export interface ReadinessOptions {
+  now?: () => number; log?: (line: string) => void; onVerdict?: (runtime: TaskRuntime, verdict: Verdict) => void;
+  defer?: (runtime: TaskRuntime) => boolean;
+}
 
 // Whether a verdict is due for a new probe; doctor applies the same TTLs.
 export const aged = (verdict: { ready: boolean; at: number }, now: number): boolean =>
@@ -45,9 +49,19 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
   const now = options.now ?? Date.now;
   const verdicts = new Map<TaskRuntime, Verdict>();
   const inflight = new Map<TaskRuntime, Promise<Verdict>>();
+  // Runtimes whose probe was deferred since their last probe started.
+  const deferred = new Set<TaskRuntime>();
   const run = (runtime: TaskRuntime): Promise<Verdict> => {
     const pending = inflight.get(runtime);
     if (pending) return pending;
+    // A deferred probe answers with the last verdict, or a not-ready one that
+    // is not kept: messages wait, a task is not refused, nothing is advertised.
+    if (options.defer?.(runtime)) {
+      if (!deferred.has(runtime)) options.log?.(`kherep-node: runtime ${runtime} probe deferred: install in progress`);
+      deferred.add(runtime);
+      return Promise.resolve(verdicts.get(runtime) ?? { ready: false, at: now(), cause: "error" });
+    }
+    deferred.delete(runtime);
     const started = probe(runtime).catch((error: unknown): ProbeResult => ({ ok: false, cause: "error", detail: String(error) }))
       .then((result) => {
         const verdict: Verdict = result.ok ? { ready: true, at: now() } : { ready: false, at: now(), cause: result.cause };
@@ -79,7 +93,8 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
     peek,
     revalidate: (runtime) => {
       const verdict = verdicts.get(runtime);
-      if (verdict && !verdict.ready && aged(verdict, now())) void run(runtime);
+      // Also a runtime whose first probe was deferred, so it is probed after the install.
+      if (verdict ? !verdict.ready && aged(verdict, now()) : deferred.has(runtime)) void run(runtime);
     },
     invalidate: (runtime) => {
       const verdict = verdicts.get(runtime);

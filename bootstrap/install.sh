@@ -16,6 +16,7 @@ SKIP_DEPS="${SKIP_DEPS:-0}"
 INSTALL_ATLASSIAN_TOOLS="${KHEREP_INSTALL_ATLASSIAN_TOOLS:-0}"
 PREFLIGHT_DIR=""
 INSTALL_BACKUP=""
+CLAUDE_PROBE_PAUSED=0
 
 kherep_validate_shell_path CLAUDE_HOME "$CLAUDE_HOME" || exit $?
 kherep_validate_shell_path KHEREP_WORKSPACE "$WS" || exit $?
@@ -43,6 +44,12 @@ bootstrap_on_signal() {
   exit "$rc"
 }
 
+# Issue #403: removes the Kherep node's Claude probe lock (pause in section C).
+claude_probe_resume() {
+  node "$REPO_ROOT/bootstrap/claude-readiness-check.mts" resume "$$" && CLAUDE_PROBE_PAUSED=0 ||
+    echo "install: WARNING Kherep node Claude probe lock not removed; the daemon ignores it after 30 minutes" >&2
+}
+
 bootstrap_on_exit() {
   local rc="$1" rollback_rc=0
   trap - ERR INT TERM EXIT
@@ -60,6 +67,7 @@ bootstrap_on_exit() {
     fi
   fi
   bootstrap_cleanup_preflight || rollback_rc=1
+  [ "$CLAUDE_PROBE_PAUSED" != 1 ] || claude_probe_resume
   bootstrap_lock_release || rollback_rc=1
   [ "$rollback_rc" = 0 ] || rc=1
   exit "$rc"
@@ -333,7 +341,18 @@ echo "install: managed files committed -> $INSTALL_BACKUP"
 # npm und den Plugins unabhaengig und soll auch dann laufen. Im `||`-Kontext
 # feuert der ERR-Trap nicht, `set -e` beendet das Skript hier also nicht.
 post_rc=0
+# Issue #403. The deps phase runs the claude CLI. While it does, an enrolled
+# Kherep node's daemon defers its Claude readiness probe (install lock in the
+# node directory, removed below and by the EXIT trap), so the two never renew
+# the saved login at the same time. The pre-check names a sign-out that existed
+# before this install. The readiness check (section E) makes a real model call
+# with the account's login, so a candidate home skips both (profile.sh).
+SKIP_CLAUDE_READINESS="$(kherep_install_skip_reason CLAUDE_READINESS)"
 if [ "$SKIP_DEPS" = "0" ]; then
+  [ -n "$SKIP_CLAUDE_READINESS" ] || node "$REPO_ROOT/bootstrap/claude-readiness-check.mts" precheck || true
+  CLAUDE_PROBE_PAUSED=1
+  node "$REPO_ROOT/bootstrap/claude-readiness-check.mts" pause "$$" ||
+    echo "install: WARNING Kherep node Claude probe not paused; it may run during the deps phase"
   node "$REPO_ROOT/bootstrap/npm-globals.mts" "$REPO_ROOT/bootstrap/manifest/npm-globals.txt" \
     "?$REPO_ROOT/bootstrap/manifest/npm-globals.${KHEREP_PROFILE}.txt" || post_rc=1
   node "$REPO_ROOT/bootstrap/reconcile-plugins.mts" \
@@ -358,6 +377,7 @@ if [ "$SKIP_DEPS" = "0" ]; then
     fi
   fi
   echo "install: MCP -> review 'claude mcp list'. forge-knowledge needs interactive OAuth re-consent."
+  claude_probe_resume
 else
   echo "install: SKIP_DEPS=1 (no npm/plugins/mcp)"
 fi
@@ -490,6 +510,18 @@ elif [ -f "$GITHOOKS_DIR/commit-msg" ]; then
     echo "install: WARNING repo-local core.hooksPath not fully bound - commits by OTHER accounts are unenforced in the repos named above (OP-684)"
 else
   echo "install: WARNING $GITHOOKS_DIR/commit-msg missing. The work-item rule is NOT enforced on this host."
+fi
+
+# ---- E. Claude readiness (issue #403, post-commit) ----
+# The daemon's own probe, once, after the probe lock is gone. A lost sign-in
+# fails the install with the fix named; a timeout or another failure only warns.
+# Without SKIP_DEPS (a test that runs section D onward) nothing is probed.
+if [ "${SKIP_DEPS:-1}" != "0" ]; then
+  :
+elif [ -n "$SKIP_CLAUDE_READINESS" ]; then
+  echo "install: SKIP_CLAUDE_READINESS=1 (by $SKIP_CLAUDE_READINESS; claude sign-in not probed)"
+elif ! node "$REPO_ROOT/bootstrap/claude-readiness-check.mts" check; then
+  post_rc=1
 fi
 
 if [ "$post_rc" = 0 ]; then

@@ -17,6 +17,7 @@ import {
   DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions, replyDepth,
 } from "./exchange.mts";
 import { readPrivateKey } from "./identity.mts";
+import { installPaused } from "./install-pause.mts";
 import { purgeInbox, storeMessage } from "./inbox.mts";
 import { scheduleListenerSweep } from "./listener-sweep.mts";
 import { loadPolicy, type NodePolicy } from "./policy.mts";
@@ -109,10 +110,11 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // Issue #197: one readiness probe per enabled runtime at the start, then only
   // when a run needs a runtime whose verdict aged out (runtime-readiness.mts).
   // Each completed probe goes to daemon.json for doctor (issue #222), off the frame lane.
+  // Issue #403: no Claude probe while install.sh runs the claude CLI (install-pause.mts).
   const readiness = createReadiness(admittedProbe, { log, onVerdict: (runtime, verdict) => {
     state = withVerdict(state, runtime, verdict);
     recordDaemonState(paths, state, log);
-  } });
+  }, defer: (runtime) => runtime === "claude" && installPaused(paths) });
   for (const runtime of enabledRuntimes(policy)) void readiness.check(runtime);
   const runner: RunnerDeps = { paths, policy, log, readiness };
   recoverOperations(paths);

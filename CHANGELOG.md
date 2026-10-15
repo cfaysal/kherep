@@ -252,6 +252,21 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Claude sign-in around `install.sh` (issue #403): while the dependency phase
+  runs the Claude CLI, the installer writes `install.lock` into an enrolled
+  node's `control-plane` directory, and the daemon defers its Claude readiness
+  probe while that file is younger than 30 minutes, logging `probe deferred:
+  install in progress` once. The lock is removed after the phase and by the
+  installer's exit trap; the installer still does not restart the daemon.
+  Before the phase a `claude auth status --json` pre-check warns when Claude
+  already reports no sign-in and never blocks the installation. At the end,
+  `bootstrap/claude-readiness-check.mts` runs the daemon's own probe once and
+  prints `install: claude ready`, `install: WARNING claude SIGN-IN LOST (...)
+  - run 'claude auth login'` (the installation exits 1), or `install: claude
+  probe inconclusive (...)` (a warning). `KHEREP_INSTALL_PREVIEW=1`,
+  `KHEREP_INSTALL_SKIP_CLAUDE_READINESS=1` and a candidate `CLAUDE_HOME` skip
+  the pre-check and the probe. The installation guide now advises against
+  killing the daemon's process tree.
 - Codex headless broker research (issue #405): the research reminder explains
   command-scoped approval when sandbox networking blocks a read-only search.
   The documented `codex exec --approve-for-me` invocation retains the
