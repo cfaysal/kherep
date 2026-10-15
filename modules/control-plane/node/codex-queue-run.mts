@@ -54,8 +54,7 @@ export function guardQueue(args: string[]): string[] {
 // may leave stderr open, so exit has a short bounded drain grace period.
 export function runQueue(deps: RunnerDeps, args: string[], expectedProducer?: QueueProducerIdentity,
   admission?: ServiceAdmission): Promise<QueueRunResult> {
-  return continueServiceAdmission(deps.paths, admission, active => runQueueAdmitted(deps, args, expectedProducer, active),
-    deps.serviceOwner);
+  return continueServiceAdmission(deps.paths, admission, active => runQueueAdmitted(deps, args, expectedProducer, active), deps.serviceOwner);
 }
 
 function runQueueAdmitted(deps: RunnerDeps, args: string[], expectedProducer: QueueProducerIdentity | undefined,
