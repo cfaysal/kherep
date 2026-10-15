@@ -4,7 +4,8 @@
 //   precheck        warns when claude already reports no sign-in, so a sign-out
 //                   from before the install is not blamed on it; never fails.
 //   pause <owner>   writes the install lock an enrolled Kherep node's daemon
-//                   honours by deferring its Claude probe (install-pause.mts).
+//                   honours by starting no Claude probe (install-pause.mts), then
+//                   waits for a probe already in flight, at most its time bound.
 //   resume <owner>  removes that lock again, only when <owner> wrote it.
 //   check           runs the daemon's own readiness probe once. `claude auth
 //                   status` is no proof: it reported loggedIn true for an
@@ -19,7 +20,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { configRoot, nodePaths } from "../modules/control-plane/node/config.mts";
-import { installPauseFile } from "../modules/control-plane/node/install-pause.mts";
+import {
+  installPauseFile, PROBE_MARKER_STALE_MS, probeInFlight,
+} from "../modules/control-plane/node/install-pause.mts";
 import { probeRuntime, spawnProbe, type ProbeResult } from "../modules/control-plane/node/runtime-probe.mts";
 import { getClaudeCommand } from "./reconcile-plugins.mts";
 
@@ -28,12 +31,14 @@ const SIGN_IN_HELP = "run 'claude auth login'";
 
 // The CLI's renewal-lock message: another process renews the login (errors.md
 // "Could not refresh your login": "This message doesn't mean your login was rejected").
-const RENEWAL_BUSY = /another claude code process/i;
+// Matched on the probe's whole output, which is never printed; the result's
+// detail is only the redacted last line.
+const RENEWAL_BUSY = /another claude code process|could not refresh your login because/i;
 
-function verdict(result: ProbeResult): { code: 0 | 1; line: string } {
+function verdict(result: ProbeResult, output = ""): { code: 0 | 1; line: string } {
   if (result.ok) return { code: 0, line: "install: claude ready" };
   const detail = result.detail ? `: ${result.detail}` : "";
-  if (RENEWAL_BUSY.test(result.detail)) return { code: 0, line: `install: claude probe inconclusive (login renewal busy${detail})` };
+  if (RENEWAL_BUSY.test(`${output}\n${result.detail}`)) return { code: 0, line: "install: claude probe inconclusive (login renewal busy)" };
   if (result.cause === "sign-in") {
     return { code: 1, line: `install: WARNING claude SIGN-IN LOST (${result.detail || "sign-in required"}) - ${SIGN_IN_HELP}` };
   }
@@ -49,12 +54,17 @@ export async function checkReadiness(options: { env?: NodeJS.ProcessEnv; timeout
     return verdict({ ok: false, cause: "error", detail: (error as Error).message });
   }
   const spawn = spawnProbe();
+  let output = "";
   const result = await probeRuntime("claude", {
     findClaude: () => command.executable, cwd: os.tmpdir(),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-    run: (file, args, spawnOptions) => spawn(file, file === command.executable ? [...command.prefixArgs, ...args] : args, spawnOptions),
+    run: async (file, args, spawnOptions) => {
+      const out = await spawn(file, file === command.executable ? [...command.prefixArgs, ...args] : args, spawnOptions);
+      output = `${out.stdout}\n${out.stderr}`;
+      return out;
+    },
   });
-  return verdict(result);
+  return verdict(result, output);
 }
 
 function precheck(env: NodeJS.ProcessEnv = process.env): string | null {
@@ -77,11 +87,15 @@ function precheck(env: NodeJS.ProcessEnv = process.env): string | null {
 
 // The node directory exists only on an enrolled node; without it no daemon
 // probes, and the installer creates nothing there.
-function pause(owner: string, env: NodeJS.ProcessEnv = process.env): string | null {
+// probeInFlight turns false once the marker is older than its bound, so the wait ends.
+async function pause(owner: string, print: (line: string) => void, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const paths = nodePaths(configRoot(env));
-  if (!fs.statSync(paths.dir, { throwIfNoEntry: false })?.isDirectory()) return null;
+  if (!fs.statSync(paths.dir, { throwIfNoEntry: false })?.isDirectory()) return;
   fs.writeFileSync(installPauseFile(paths), `pid=${owner}\nstartedAt=${new Date().toISOString()}\n`, { mode: 0o600 });
-  return "install: Kherep node Claude probe paused for the deps phase";
+  print("install: Kherep node Claude probe paused until the readiness check");
+  if (!probeInFlight(paths)) return;
+  print(`install: waiting for the Kherep node's Claude probe in flight (at most ${PROBE_MARKER_STALE_MS / 1000} s)`);
+  while (probeInFlight(paths)) await new Promise((resolve) => { setTimeout(resolve, 250); });
 }
 
 function resume(owner: string, env: NodeJS.ProcessEnv = process.env): string | null {
@@ -107,7 +121,8 @@ async function cli(argv: string[]): Promise<number> {
   }
   if (action === "precheck" && argv.length === 1) { print(precheck()); return 0; }
   if ((action === "pause" || action === "resume") && argv.length === 2 && /^\d+$/.test(owner)) {
-    print(action === "pause" ? pause(owner) : resume(owner));
+    if (action === "pause") await pause(owner, print);
+    else print(resume(owner));
     return 0;
   }
   process.stderr.write("usage: claude-readiness-check.mts check | precheck | pause <pid> | resume <pid>\n");

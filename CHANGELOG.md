@@ -252,18 +252,24 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
-- Claude sign-in around `install.sh` (issue #403): while the dependency phase
-  runs the Claude CLI, the installer writes `install.lock` into an enrolled
-  node's `control-plane` directory, and the daemon defers its Claude readiness
-  probe while that file is younger than 30 minutes, logging `probe deferred:
-  install in progress` once. The lock is removed after the phase and by the
-  installer's exit trap; the installer still does not restart the daemon.
-  Before the phase a `claude auth status --json` pre-check warns when Claude
-  already reports no sign-in and never blocks the installation. At the end,
+- Claude sign-in around `install.sh` (issue #403): from the start of the
+  dependency phase to the end-of-install readiness check, the installer keeps
+  `install.lock` in an enrolled node's `control-plane` directory. While that
+  file is younger than 30 minutes the daemon starts no new Claude readiness
+  probe and logs `probe deferred: install in progress` once; a probe already
+  running is marked in flight and the installer waits for it, at most 60
+  seconds. When the file is gone the daemon probes Claude once more, also after
+  a ready verdict, so a sign-out during the installation is not advertised as
+  ready. The installer removes the file after the check and in its exit trap;
+  it still does not restart the daemon. After writing the file, a
+  `claude auth status --json` pre-check warns when Claude already reports no
+  sign-in and never blocks the installation. At the end,
   `bootstrap/claude-readiness-check.mts` runs the daemon's own probe once and
   prints `install: claude ready`, `install: WARNING claude SIGN-IN LOST (...)
-  - run 'claude auth login'` (the installation exits 1), or `install: claude
-  probe inconclusive (...)` (a warning). `KHEREP_INSTALL_PREVIEW=1`,
+  - run 'claude auth login'` (the installation exits 1 with its own
+  `DONE WITH ERRORS (Claude sign-in lost ...)` verdict), or `install: claude
+  probe inconclusive (...)` (a warning, also for a login renewal another Claude
+  process holds). `KHEREP_INSTALL_PREVIEW=1`,
   `KHEREP_INSTALL_SKIP_CLAUDE_READINESS=1` and a candidate `CLAUDE_HOME` skip
   the pre-check and the probe. The installation guide now advises against
   killing the daemon's process tree.

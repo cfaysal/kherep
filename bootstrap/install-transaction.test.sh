@@ -789,6 +789,48 @@ test_upgrade_retires_guard_js_hooks() {
     { cat "$ROOT/drift.log"; fail "a retired .js guard is still live or wired after the upgrade"; }
 }
 
+# Issue #403: an install that is terminated during the deps phase still removes
+# the node's Claude probe lock, through the EXIT trap. The fake npm sends TERM
+# to the installer whose pid the lock names; bash runs the trap once npm returns.
+# Placed before test_deps_failure: a pin in install-host-binding-skip.test.mts
+# expects exactly one install.sh call from that function to the end of the file.
+test_deps_term_releases_probe_lock() {
+  local rc fake_npm config
+  fixture deps-term
+  cat > "$ROOT/fake-npm.js" <<'JS'
+"use strict";
+const fs = require("node:fs");
+const { execFileSync } = require("node:child_process");
+const args = process.argv.slice(2);
+const lock = process.env.FAKE_PAUSE_LOCK;
+if (!fs.existsSync(process.env.FAKE_TERM_SENT) && fs.existsSync(lock)) {
+  const pid = /^pid=(\d+)$/m.exec(fs.readFileSync(lock, "utf8"))[1];
+  fs.writeFileSync(process.env.FAKE_TERM_SENT, pid);
+  execFileSync("bash", ["-c", `kill -TERM ${pid}`]);
+}
+if (args.join(" ") === "ls -g --depth=0 --json") process.stdout.write(JSON.stringify({ name: "npm", dependencies: {} }));
+else if (args.join(" ") === "prefix -g") process.stdout.write(process.env.FAKE_NPM_PREFIX + "\n");
+JS
+  fake_npm="$ROOT/fake-npm.js"
+  ! command -v cygpath >/dev/null 2>&1 || fake_npm="$(cygpath -m "$fake_npm")"
+  config="$ROOT/kherep-config"; mkdir -p "$config/control-plane"
+  ! command -v cygpath >/dev/null 2>&1 || config="$(cygpath -m "$config")"
+  set +e
+  HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
+    KHEREP_INSTALL_SKIP_KNOWLEDGE_SPACE=1 KHEREP_INSTALL_SKIP_ATL_CREDENTIAL=1 \
+    SKIP_SECRETS=1 SKIP_DEPS=0 FAKE_NPM_PREFIX="$ROOT/npm-prefix" KHEREP_CONFIG_DIR="$config" \
+    FAKE_PAUSE_LOCK="$config/control-plane/install.lock" FAKE_TERM_SENT="$config/term-sent" \
+    KHEREP_NPM_BIN="$(node -p 'process.execPath')" KHEREP_NPM_BIN_ARGS_JSON="[\"$fake_npm\"]" \
+    KHEREP_CLAUDE_BIN="$ROOT/no-such-claude" bash "$HERE/install.sh" > "$ROOT/log" 2>&1
+  rc=$?
+  set -e
+  [ -f "$ROOT/kherep-config/term-sent" ] || { cat "$ROOT/log"; fail "the fake npm never saw the Claude probe lock"; }
+  [ "$rc" -eq 143 ] || { cat "$ROOT/log"; fail "a TERM during the deps phase did not exit 143 (rc=$rc)"; }
+  [ ! -e "$ROOT/kherep-config/control-plane/install.lock" ] || fail "the EXIT trap left the Claude probe lock behind"
+  ! grep -q 'install: claude ready\|install: claude probe' "$ROOT/log" || fail "a terminated install still ran the readiness check"
+  [ ! -e "$C/backups/bootstrap/.install.lock" ] || fail "the terminated install kept the bootstrap lock"
+}
+
 # OP-1085: the deps phase runs AFTER the commit and must not be able to undo an
 # install. The fake npm answers every install with the Mac EEXIST; the plugin
 # step fails too, via an unreachable claude binary. The install is forced through
@@ -876,7 +918,7 @@ JS
 # Git Bash on Windows the run takes about 12 minutes, so a silent run looked
 # like a hang. Name each test on stderr as it starts.
 for tx_test in test_library test_retire test_retire_declared test_lock test_preflights test_path_guards \
-  test_partial test_term test_commit_signal test_secrets test_deps_failure test_default_confluence_brokers \
+  test_partial test_term test_commit_signal test_secrets test_deps_term_releases_probe_lock test_deps_failure test_default_confluence_brokers \
   test_upgrade_retires_mpac test_upgrade_retires_js_hooks test_upgrade_unwires_legacy_hooks \
   test_upgrade_moves_clq_to_stop test_upgrade_retires_guard_js_hooks; do
   echo "transaction test: $tx_test (${SECONDS}s)" >&2

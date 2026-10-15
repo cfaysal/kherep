@@ -215,3 +215,25 @@ test("a runtime deferred before its first verdict is pending, not advertised, an
   assert.deepEqual(p.probes, ["claude"], "after the install the watch round runs the first probe");
   assert.deepEqual(readiness.ready(), ["claude"]);
 });
+
+test("a ready runtime is probed exactly once after a pause the watch round saw, even when no run asked", async () => {
+  let locked = false;
+  const lines: string[] = [];
+  const p = counted([{ ok: true }, SIGN_IN]);
+  const readiness = createReadiness(p.probe, { log: (line) => lines.push(line), defer: () => locked });
+  await readiness.check("claude");
+  locked = true;
+  readiness.revalidate("claude");
+  readiness.revalidate("claude");
+  await settle();
+  assert.equal(p.probes.length, 1, "no probe while paused");
+  assert.equal(lines.filter((l) => l.includes("deferred")).length, 1, "logged once");
+  locked = false;
+  readiness.revalidate("claude");
+  await settle();
+  assert.equal(p.probes.length, 2, "the end of the pause forces one probe of a fresh ready verdict");
+  assert.equal(notReadyNow(readiness, "claude"), "target runtime claude not ready (sign-in required)", "a sign-out during the install is seen");
+  readiness.revalidate("claude");
+  await settle();
+  assert.equal(p.probes.length, 2, "exactly once");
+});

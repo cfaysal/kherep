@@ -341,18 +341,19 @@ echo "install: managed files committed -> $INSTALL_BACKUP"
 # npm und den Plugins unabhaengig und soll auch dann laufen. Im `||`-Kontext
 # feuert der ERR-Trap nicht, `set -e` beendet das Skript hier also nicht.
 post_rc=0
-# Issue #403. The deps phase runs the claude CLI. While it does, an enrolled
-# Kherep node's daemon defers its Claude readiness probe (install lock in the
-# node directory, removed below and by the EXIT trap), so the two never renew
-# the saved login at the same time. The pre-check names a sign-out that existed
-# before this install. The readiness check (section E) makes a real model call
-# with the account's login, so a candidate home skips both (profile.sh).
+# Issue #403. From here to the readiness check (section E) the installer runs
+# the claude CLI. Meanwhile an enrolled Kherep node's daemon starts no Claude
+# readiness probe (install lock in the node directory; pause waits for a probe
+# already in flight), so the two never renew the saved login at the same time.
+# The lock is removed after section E and by the EXIT trap. The pre-check names
+# a sign-out that existed before this install. The readiness check makes a real
+# model call with the account's login, so a candidate home skips both (profile.sh).
 SKIP_CLAUDE_READINESS="$(kherep_install_skip_reason CLAUDE_READINESS)"
 if [ "$SKIP_DEPS" = "0" ]; then
-  [ -n "$SKIP_CLAUDE_READINESS" ] || node "$REPO_ROOT/bootstrap/claude-readiness-check.mts" precheck || true
   CLAUDE_PROBE_PAUSED=1
   node "$REPO_ROOT/bootstrap/claude-readiness-check.mts" pause "$$" ||
     echo "install: WARNING Kherep node Claude probe not paused; it may run during the deps phase"
+  [ -n "$SKIP_CLAUDE_READINESS" ] || node "$REPO_ROOT/bootstrap/claude-readiness-check.mts" precheck || true
   node "$REPO_ROOT/bootstrap/npm-globals.mts" "$REPO_ROOT/bootstrap/manifest/npm-globals.txt" \
     "?$REPO_ROOT/bootstrap/manifest/npm-globals.${KHEREP_PROFILE}.txt" || post_rc=1
   node "$REPO_ROOT/bootstrap/reconcile-plugins.mts" \
@@ -377,7 +378,6 @@ if [ "$SKIP_DEPS" = "0" ]; then
     fi
   fi
   echo "install: MCP -> review 'claude mcp list'. forge-knowledge needs interactive OAuth re-consent."
-  claude_probe_resume
 else
   echo "install: SKIP_DEPS=1 (no npm/plugins/mcp)"
 fi
@@ -513,19 +513,27 @@ else
 fi
 
 # ---- E. Claude readiness (issue #403, post-commit) ----
-# The daemon's own probe, once, after the probe lock is gone. A lost sign-in
-# fails the install with the fix named; a timeout or another failure only warns.
+# The daemon's own probe, once, while the daemon's probe is still paused, so
+# the two do not run together; the lock goes right after. A lost sign-in fails
+# the install with the fix named; a timeout or another failure only warns.
 # Without SKIP_DEPS (a test that runs section D onward) nothing is probed.
+claude_rc=0
 if [ "${SKIP_DEPS:-1}" != "0" ]; then
   :
-elif [ -n "$SKIP_CLAUDE_READINESS" ]; then
+elif [ -n "${SKIP_CLAUDE_READINESS:-}" ]; then
   echo "install: SKIP_CLAUDE_READINESS=1 (by $SKIP_CLAUDE_READINESS; claude sign-in not probed)"
-elif ! node "$REPO_ROOT/bootstrap/claude-readiness-check.mts" check; then
-  post_rc=1
+else
+  # Refreshes the lock: a credential prompt above may have aged it past 30 min.
+  node "$REPO_ROOT/bootstrap/claude-readiness-check.mts" pause "$$" >/dev/null || true
+  node "$REPO_ROOT/bootstrap/claude-readiness-check.mts" check || claude_rc=1
 fi
+[ "${CLAUDE_PROBE_PAUSED:-0}" != 1 ] || claude_probe_resume
 
-if [ "$post_rc" = 0 ]; then
+if [ "$post_rc" = 0 ] && [ "$claude_rc" = 0 ]; then
   echo "install done."
+elif [ "$post_rc" = 0 ]; then
+  echo "install: DONE WITH ERRORS (Claude sign-in lost, see above; managed files stay committed)"
+  exit 1
 else
   echo "install: DONE WITH ERRORS (deps phase failed; managed files stay committed, see above)"
   exit 1

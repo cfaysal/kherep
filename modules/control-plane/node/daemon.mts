@@ -17,7 +17,7 @@ import {
   DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions, replyDepth,
 } from "./exchange.mts";
 import { readPrivateKey } from "./identity.mts";
-import { installPaused } from "./install-pause.mts";
+import { installPaused, markedProbe } from "./install-pause.mts";
 import { purgeInbox, storeMessage } from "./inbox.mts";
 import { scheduleListenerSweep } from "./listener-sweep.mts";
 import { loadPolicy, type NodePolicy } from "./policy.mts";
@@ -101,8 +101,11 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // Filesystem/loopback runtime discovery starts no user runtime process and
   // must remain available while a replacement service authenticates.
   const runtimeDiscovery = () => discoverRuntimes();
-  const admittedProbe = (runtime: TaskRuntime) => waitForServiceAdmission(paths,
-    (admission) => probe(runtime, () => retainServiceAdmission(admission)));
+  // Issue #403: a Claude probe is marked in flight for the installer (install-pause.mts).
+  const admittedProbe = (runtime: TaskRuntime) => waitForServiceAdmission(paths, (admission) => {
+    const run = () => probe(runtime, () => retainServiceAdmission(admission));
+    return runtime === "claude" ? markedProbe(paths, run) : run();
+  });
   const sessions = recordingSessions(paths, (signal) => {
     backgroundDiscovery?.controller.abort();
     return source(signal);
