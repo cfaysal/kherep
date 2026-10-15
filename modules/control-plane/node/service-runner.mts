@@ -29,6 +29,20 @@ export function parseServiceRunnerArgs(argv: string[], platform: NodeJS.Platform
   return { configDir: path.resolve(configDir), ...service, workspace: path.resolve(workspace) };
 }
 
+// Issue #420: an ISO time in front of every daemon log line, in the service log
+// and for the foreground `kherep-node daemon`; without it no incident timeline
+// can be built. startDaemon's own default (tests) stays plain.
+export const timestamped = (write: (line: string) => void = (line) => console.error(line)) =>
+  (line: string): void => write(`${new Date().toISOString()} ${line}`);
+
+// Ends the daemon on SIGINT, SIGTERM and SIGHUP. On Windows SIGHUP is the
+// console closing, after which Windows ends Node about 10 s later (Node
+// process.md); TerminateProcess (taskkill /F, Stop-Process) delivers nothing.
+export function stopOnSignals(daemon: { stop(): void }): void {
+  const stop = () => daemon.stop();
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, stop);
+}
+
 async function run(argv: string[]): Promise<void> {
   const args = parseServiceRunnerArgs(argv);
   const paths = nodePaths(args.configDir);
@@ -36,11 +50,9 @@ async function run(argv: string[]): Promise<void> {
   if (!config) throw new Error("managed daemon service is not enrolled");
   process.chdir(args.workspace);
   const platform = supportedServicePlatform();
-  const daemon = startDaemon(config, paths, undefined, undefined, undefined,
+  const daemon = startDaemon(config, paths, timestamped(), undefined, undefined,
     { name: args.serviceName, platform, ...(args.taskPath ? { taskPath: args.taskPath } : {}) });
-  const stop = () => daemon.stop();
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
+  stopOnSignals(daemon);
   await daemon.done;
 }
 
@@ -50,6 +62,6 @@ function isMainModule(): boolean {
 }
 
 if (isMainModule()) run(process.argv.slice(2)).catch((error: unknown) => {
-  console.error(`kherep-node service: ${(error as Error).message ?? String(error)}`);
+  timestamped()(`kherep-node service: ${(error as Error).message ?? String(error)}`);
   process.exitCode = 1;
 });

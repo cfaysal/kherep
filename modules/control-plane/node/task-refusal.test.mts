@@ -70,7 +70,7 @@ test("a refused start is logged and leaves a refusal record that owner status an
 test("a runtime that is not ready is refused the same way", async (t) => {
   const { node, lines, deps } = refusingNode(t);
   const signIn: Readiness = { check: async () => ({ ready: false, cause: "sign-in", at: T0 }), peek: () => null, revalidate: () => {},
-    invalidate: () => {}, ready: () => [] };
+    invalidate: () => {}, ready: () => [], stop: async () => {} };
   await assert.rejects(startTask(delegated(path.join(node.workspace, "repo")), { ...deps(), readiness: signIn }));
   assert.equal(lines.length, 1);
   assert.match(lines[0], new RegExp(`^kherep-node: task ${TASK} refused: `));

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { NodePaths } from "./config.mts";
+import { pidAlive, type InterruptedProbe } from "./daemon-state.mts";
 import { PROBE_TIMEOUT_MS, type ProbeResult } from "./runtime-probe.mts";
 
 // Issue #403. While bootstrap/install.sh runs the claude CLI (npm globals,
@@ -38,11 +39,12 @@ export const probeInFlight = (paths: Pick<NodePaths, "dir">, now: number = Date.
 // Marks the probe in flight and only then reads the lock. The installer writes
 // the lock and only then reads the marker, so at least one of them sees the
 // other. A lock that appeared in between gives a not-ready verdict, probed again
-// after the install.
+// after the install. Issue #420: the marker names the daemon and the probe
+// start, "<pid> <ISO time>"; the installer reads only its file time.
 export async function markedProbe(paths: Pick<NodePaths, "dir">, probe: () => Promise<ProbeResult>): Promise<ProbeResult> {
   const marker = probeMarkerFile(paths);
   try {
-    fs.writeFileSync(marker, `${process.pid}\n`);
+    fs.writeFileSync(marker, `${process.pid} ${new Date().toISOString()}\n`);
   } catch {
     // Without a marker the installer cannot wait; the probe still runs.
   }
@@ -52,4 +54,33 @@ export async function markedProbe(paths: Pick<NodePaths, "dir">, probe: () => Pr
   } finally {
     fs.rmSync(marker, { force: true });
   }
+}
+
+// Issue #420: a daemon killed during a probe never runs the finally above, so
+// its marker outlives it. The next daemon reports it before its first probe
+// instead of overwriting it, since a kill during a login renewal can leave the
+// login unusable. A live pid on a fresh marker is another daemon's probe in
+// flight (close code 4409); on a stale one it is a reused pid.
+export function noticeInterruptedProbe(paths: Pick<NodePaths, "dir">, log: (line: string) => void,
+  alive: (pid: unknown) => boolean = pidAlive, now: number = Date.now()): InterruptedProbe | null {
+  const marker = probeMarkerFile(paths);
+  let content: string;
+  let mtime: number;
+  try {
+    content = fs.readFileSync(marker, "utf8");
+    mtime = fs.statSync(marker).mtimeMs;
+  } catch {
+    return null;
+  }
+  const [pidText = "", started = ""] = content.trim().split(/\s+/);
+  const pid = /^\d+$/.test(pidText) ? Number(pidText) : null;
+  if (pid !== null && alive(pid) && probeInFlight(paths, now)) {
+    log(`kherep-node: another daemon's claude probe (daemon pid ${pid}) is in flight`);
+    return null;
+  }
+  const at = Number.isNaN(Date.parse(started)) ? new Date(mtime).toISOString() : started;
+  log(`kherep-node: the previous daemon stop interrupted a claude probe (daemon pid ${pid ?? "unknown"}, started ${at}); `
+    + "if the next probe reports sign-in required, that stop likely interrupted a login renewal");
+  fs.rmSync(marker, { force: true });
+  return { runtime: "claude", pid, at, noticedAt: new Date(now).toISOString() };
 }

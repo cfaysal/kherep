@@ -1,5 +1,5 @@
-import type { TaskRuntime } from "../protocol-tasks.mts";
-import type { ProbeCause, ProbeResult } from "./runtime-probe.mts";
+import { isTaskRuntime, type TaskRuntime } from "../protocol-tasks.mts";
+import { PROBE_KILL_GRACE_MS, PROBE_TIMEOUT_MS, type ProbeCause, type ProbeResult } from "./runtime-probe.mts";
 
 // Issue #197: the node's verdict whether each runtime can run a turn, from a
 // real minimal call (runtime-probe.mts). The daemon probes the enabled runtimes
@@ -28,18 +28,33 @@ export interface Readiness {
   invalidate(runtime: TaskRuntime): void;
   // The runtimes whose last verdict, current or not, is ready (advertised).
   ready(): TaskRuntime[];
+  // Issue #420: starts no probe any more and resolves once none is in flight,
+  // bounded by the probe's own timeout and kill grace, so a daemon that stops
+  // does not cut one short.
+  stop(): Promise<void>;
 }
 
 // onVerdict: each completed probe's verdict, for daemon.json (issue #222).
 // defer: true while a runtime must not be probed (issue #403, install-pause.mts).
+// seed: the previous daemon's readiness records (daemon.json, issue #420); a
+// fresh ready one stands in for the first probe.
 export interface ReadinessOptions {
   now?: () => number; log?: (line: string) => void; onVerdict?: (runtime: TaskRuntime, verdict: Verdict) => void;
-  defer?: (runtime: TaskRuntime) => boolean;
+  defer?: (runtime: TaskRuntime) => boolean; seed?: Readonly<Record<string, unknown>>;
 }
 
 // Whether a verdict is due for a new probe; doctor applies the same TTLs.
 export const aged = (verdict: { ready: boolean; at: number }, now: number): boolean =>
   now - verdict.at >= (verdict.ready ? READY_TTL_MS : NOT_READY_TTL_MS);
+
+// Issue #420: a recorded probe a new daemon may use instead of its start-up
+// probe: ready, and younger than READY_TTL_MS. A not-ready record never counts,
+// so a node signed in again meanwhile is noticed at once.
+export function freshReady(record: unknown, now: number): Verdict | null {
+  const { ready, probedAt } = (typeof record === "object" && record !== null ? record : {}) as Record<string, unknown>;
+  const at = typeof probedAt === "string" ? Date.parse(probedAt) : Number.NaN;
+  return ready === true && at <= now && !aged({ ready, at }, now) ? { ready, at } : null;
+}
 
 // The fixed reason a message or task gets; never a CLI's own text.
 const CAUSES: Readonly<Record<ProbeCause, string>> = { "sign-in": "sign-in required", timeout: "probe timed out", error: "probe failed" };
@@ -48,6 +63,12 @@ export const notReadyReason = (runtime: TaskRuntime, cause: ProbeCause): string 
 export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeResult>, options: ReadinessOptions = {}): Readiness {
   const now = options.now ?? Date.now;
   const verdicts = new Map<TaskRuntime, Verdict>();
+  for (const [runtime, record] of Object.entries(options.seed ?? {})) {
+    const verdict = freshReady(record, now());
+    if (verdict && isTaskRuntime(runtime)) verdicts.set(runtime, verdict);
+  }
+  let stopping = false;
+  let drained: Promise<void> | null = null;
   const inflight = new Map<TaskRuntime, Promise<Verdict>>();
   // Runtimes seen paused since their last probe started; each gets one probe
   // once the pause ends, whatever its verdict, so a sign-in lost meanwhile shows.
@@ -61,12 +82,18 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
   const run = (runtime: TaskRuntime): Promise<Verdict> => {
     const pending = inflight.get(runtime);
     if (pending) return pending;
-    // A deferred probe answers with the last verdict, or a not-ready one that
-    // is not kept: messages wait, a task is not refused, nothing is advertised.
-    if (paused(runtime)) return Promise.resolve(verdicts.get(runtime) ?? { ready: false, at: now(), cause: "error" });
+    // A deferred probe, or one a stopping daemon does not start, answers with
+    // the last verdict, or a not-ready one that is not kept: messages wait, a
+    // task is not refused, nothing is advertised.
+    const unkept = (): Verdict => verdicts.get(runtime) ?? { ready: false, at: now(), cause: "error" };
+    if (stopping || paused(runtime)) return Promise.resolve(unkept());
     deferred.delete(runtime);
-    const started = probe(runtime).catch((error: unknown): ProbeResult => ({ ok: false, cause: "error", detail: String(error) }))
+    // A probe that failed to run while the daemon stops (an aborted service
+    // admission wait) is no verdict.
+    const started = probe(runtime).catch((error: unknown): ProbeResult | null => (stopping ? null
+      : { ok: false, cause: "error", detail: String(error) }))
       .then((result) => {
+        if (!result) return unkept();
         const verdict: Verdict = result.ok ? { ready: true, at: now() } : { ready: false, at: now(), cause: result.cause };
         const before = verdicts.get(runtime);
         verdicts.set(runtime, verdict);
@@ -105,6 +132,17 @@ export function createReadiness(probe: (runtime: TaskRuntime) => Promise<ProbeRe
       if (verdict) verdicts.set(runtime, { ...verdict, at: Number.NEGATIVE_INFINITY });
     },
     ready: () => [...verdicts].filter(([, v]) => v.ready).map(([runtime]) => runtime),
+    stop: () => {
+      drained ??= (async () => {
+        stopping = true;
+        if (inflight.size > 0) {
+          options.log?.(`kherep-node: stopping; waiting for the ${[...inflight.keys()].join(" and ")} probe to finish, `
+            + `at most ${(PROBE_TIMEOUT_MS + PROBE_KILL_GRACE_MS) / 1000} s`);
+        }
+        while (inflight.size > 0) await Promise.allSettled([...inflight.values()]);
+      })();
+      return drained;
+    },
   };
 }
 

@@ -30,6 +30,9 @@ import { claudeCall, findClaude } from "./sessions.mts";
 // except a redacted last line (codex-output.mts lastLine).
 
 export const PROBE_TIMEOUT_MS = 45_000;
+// Issue #420: how long a timed-out POSIX probe has between SIGTERM and SIGKILL,
+// as codex-stop.mts stopIdentities.
+export const PROBE_KILL_GRACE_MS = 5_000;
 const PROMPT = "Reply with OK.";
 export const CLAUDE_PROBE_ARGS: readonly string[] = ["-p", "--safe-mode", "--no-session-persistence", "--strict-mcp-config",
   "--tools", "", "--output-format", "json", "--system-prompt", PROMPT, "OK"];
@@ -46,7 +49,7 @@ export type ProbeCause = "sign-in" | "timeout" | "error";
 export type ProbeResult = { ok: true } | { ok: false; cause: ProbeCause; detail: string };
 export interface ProbeRun { code: number | null; stdout: string; stderr: string; timedOut: boolean }
 export interface ProbeSpawnOptions {
-  cwd: string; timeoutMs: number; input?: string; verbatim?: boolean;
+  cwd: string; timeoutMs: number; input?: string; verbatim?: boolean; graceMs?: number;
   onUnconfirmedShutdown?: () => void;
   signal?: (pid: number, signal: NodeJS.Signals) => void;
 }
@@ -83,7 +86,11 @@ export function failure(text: string): ProbeResult {
 const MAX_OUTPUT = 65_536;
 
 // Without a shell, in its own process group on POSIX (codex runs behind its npm
-// launcher), killed with its tree at the timeout.
+// launcher), killed with its tree at the timeout. Issue #420: a Claude CLI
+// waiting on the shared refresh lock looks exactly like a hung probe, so on
+// POSIX the group gets SIGTERM first and SIGKILL only after the grace. Windows
+// keeps taskkill /T /F: without /F taskkill only posts WM_CLOSE, which a
+// windowless console process does not act on (codex-stop.mts).
 export const spawnProbe = (platform: NodeJS.Platform = process.platform, start: typeof spawn = spawn): ProbeSpawn => (file, args, options) =>
   new Promise((resolve) => {
     let stdout = "";
@@ -94,15 +101,28 @@ export const spawnProbe = (platform: NodeJS.Platform = process.platform, start: 
     let code: number | null = null;
     let settled = false;
     let shutdownTimer: NodeJS.Timeout | undefined;
+    let graceTimer: NodeJS.Timeout | undefined;
     const child = start(file, args, { cwd: options.cwd, stdio: ["pipe", "pipe", "pipe"], detached: platform !== "win32",
       windowsHide: true, windowsVerbatimArguments: options.verbatim === true });
-    const timer = setTimeout(() => {
-      timedOut = true;
+    const send = (value: NodeJS.Signals): void => {
+      if (child.pid !== undefined) (options.signal ?? ((pid, signal) => signalGroup(pid, signal, platform)))(child.pid, value);
+    };
+    const shutdown = (): void => {
       shutdownTimer = setTimeout(() => {
         if (!exited || !closed) options.onUnconfirmedShutdown?.();
         settle();
       }, 250);
-      if (!exited && child.pid !== undefined) (options.signal ?? ((pid, value) => signalGroup(pid, value, platform)))(child.pid, "SIGKILL");
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (platform === "win32" || exited) {
+        shutdown();
+        if (!exited) send("SIGKILL");
+        return;
+      }
+      send("SIGTERM");
+      // Not settled yet: the probe or a process of its group still runs.
+      graceTimer = setTimeout(() => { shutdown(); send("SIGKILL"); }, options.graceMs ?? PROBE_KILL_GRACE_MS);
     }, options.timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -114,6 +134,7 @@ export const spawnProbe = (platform: NodeJS.Platform = process.platform, start: 
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (graceTimer) clearTimeout(graceTimer);
       if (shutdownTimer) clearTimeout(shutdownTimer);
       resolve({ code, stdout, stderr, timedOut });
     };

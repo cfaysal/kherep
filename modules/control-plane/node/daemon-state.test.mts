@@ -9,7 +9,7 @@ import { listenerDir } from "./autonomy.mts";
 import { NodeClient } from "./client.mts";
 import { nodePaths, type NodeConfig } from "./config.mts";
 import { startDaemon } from "./daemon.mts";
-import { daemonStateFile, pidAlive, readDaemonState } from "./daemon-state.mts";
+import { carriedOver, daemonStateFile, pidAlive, readDaemonState, withVerdict, type DaemonState } from "./daemon-state.mts";
 import { generateIdentity, writePrivateKey } from "./identity.mts";
 
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -98,4 +98,28 @@ test("the daemon records its pid at start, each authenticated connection and eac
 test("pidAlive accepts only a running process id", () => {
   assert.equal(pidAlive(process.pid), true);
   for (const value of [0, -1, 1.5, "1", null]) assert.equal(pidAlive(value), false);
+});
+
+// Issue #420: what a starting daemon takes over from the previous daemon.json.
+test("a start carries fresh ready verdicts over, but no Claude verdict while an interrupted probe is on record", () => {
+  const now = Date.parse("2026-10-15T12:00:00.000Z");
+  const fresh = { ready: true, probedAt: "2026-10-15T11:55:00.000Z" };
+  const previous: DaemonState = { pid: 1, startedAt: "2026-10-15T11:00:00.000Z", connectedAt: "2026-10-15T11:00:01.000Z",
+    readiness: { claude: fresh, codex: { ready: true, probedAt: "2026-10-15T11:40:00.000Z" } } };
+  assert.deepEqual(carriedOver(previous, null, now), { readiness: { claude: fresh } }, "the aged codex verdict is probed again");
+  assert.deepEqual(carriedOver(null, null, now), {});
+  const noticed = { runtime: "claude" as const, pid: 7, at: "2026-10-15T11:59:00.000Z", noticedAt: "2026-10-15T12:00:00.000Z" };
+  assert.deepEqual(carriedOver(previous, noticed, now), { interruptedProbe: noticed }, "the interrupted probe forces a probe");
+  assert.deepEqual(carriedOver({ ...previous, interruptedProbe: noticed }, null, now), { interruptedProbe: noticed },
+    "kept until the next ready verdict, across restarts");
+});
+
+test("a ready Claude verdict clears the interrupted probe; a not-ready one keeps it", () => {
+  const interruptedProbe = { runtime: "claude" as const, pid: 7, at: "2026-10-15T11:59:00.000Z", noticedAt: "2026-10-15T12:00:00.000Z" };
+  const state: DaemonState = { pid: 1, startedAt: "2026-10-15T12:00:00.000Z", interruptedProbe };
+  const at = Date.parse("2026-10-15T12:00:30.000Z");
+  assert.deepEqual(withVerdict(state, "claude", { ready: false, at, cause: "sign-in" }).interruptedProbe, interruptedProbe);
+  assert.deepEqual(withVerdict(state, "codex", { ready: true, at }).interruptedProbe, interruptedProbe);
+  const cleared = withVerdict(state, "claude", { ready: true, at });
+  assert.equal(JSON.parse(JSON.stringify(cleared)).interruptedProbe, undefined);
 });

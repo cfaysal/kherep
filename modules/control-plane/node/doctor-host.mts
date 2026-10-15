@@ -79,6 +79,8 @@ function readinessOf(record: unknown, now: number): Record<string, unknown> {
 // configured: the runtimes the sessions policy names. readiness: daemon.json's
 // record of a running daemon, else null. Only a sign-in failure fails the
 // check, as only it makes the node refuse a run (runtime-readiness.mts).
+// Issue #420: lastStopInterruptedProbeAt, when a Claude probe the last daemon
+// stop interrupted began; kept until the next ready verdict, it fails nothing.
 export async function checkRuntimes(configured: string[], find: (name: string) => string | null,
   versionOf: VersionOf, readiness: Record<string, unknown> | null, now: number): Promise<Check> {
   const runtimes: Record<string, unknown> = {};
@@ -93,7 +95,9 @@ export async function checkRuntimes(configured: string[], find: (name: string) =
     if (file) installed++;
     if (isConfigured && (!file || !version)) failed = true;
     if (isConfigured && probe.cause === "sign-in") signedOut = true;
-    runtimes[name] = { installed: file !== null, version, configured: isConfigured, ...probe };
+    const interrupted = name === "claude" ? (readiness?.interruptedProbe as { at?: unknown } | undefined)?.at : undefined;
+    runtimes[name] = { installed: file !== null, version, configured: isConfigured, ...probe,
+      ...(typeof interrupted === "string" ? { lastStopInterruptedProbeAt: interrupted } : {}) };
   }
   let detail: string | undefined;
   if (installed === 0) detail = "neither claude nor codex is installed";

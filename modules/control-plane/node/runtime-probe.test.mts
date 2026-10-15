@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,6 +9,7 @@ import test from "node:test";
 
 import { forgetCodexSession, isCodexSession, recordCodexSession } from "./codex-sessions.mts";
 import { nodePaths } from "./config.mts";
+import { pidAlive } from "./daemon-state.mts";
 import { CLAUDE_PROBE_ARGS, probeRuntime, spawnProbe, type ProbeRun, type ProbeSpawnOptions } from "./runtime-probe.mts";
 import { retainServiceAdmission, serviceAdmissionsIdle, withServiceAdmission } from "./service-drain.mts";
 import { testServiceOwner } from "./task-fixture.mts";
@@ -135,4 +137,66 @@ test("forgetCodexSession removes exactly the probe's recorded session", (t) => {
   forgetCodexSession(paths, probe);
   forgetCodexSession(paths, "../not-a-session");
   assert.deepEqual([isCodexSession(paths, probe), isCodexSession(paths, other)], [false, true]);
+});
+
+// Issue #420: a timed-out Claude probe may be waiting on a login renewal, so on
+// POSIX its group gets SIGTERM and SIGKILL only after a grace. Windows has no
+// graceful signal for a windowless console process: taskkill /T /F at once.
+function fakeChild(platform: NodeJS.Platform, endOn: NodeJS.Signals | null) {
+  const child = Object.assign(new EventEmitter(), {
+    pid: 4567, stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough(), exitCode: null, signalCode: null,
+  });
+  const sent: NodeJS.Signals[] = [];
+  const signal = (_pid: number, value: NodeJS.Signals) => {
+    sent.push(value);
+    if (value === endOn || value === "SIGKILL") setImmediate(() => { child.emit("exit", null, value); child.emit("close", null, value); });
+  };
+  const run = (graceMs: number) => spawnProbe(platform, (() => child) as never)("synthetic-probe", [],
+    { cwd: os.tmpdir(), timeoutMs: 5, graceMs, signal });
+  return { run, sent };
+}
+
+test("a timed-out POSIX probe gets SIGTERM first and SIGKILL only when it outlives the grace", async () => {
+  const graceful = fakeChild("linux", "SIGTERM");
+  assert.equal((await graceful.run(5_000)).timedOut, true);
+  assert.deepEqual(graceful.sent, ["SIGTERM"], "ended on SIGTERM, no SIGKILL");
+  const stubborn = fakeChild("linux", null);
+  const started = Date.now();
+  assert.equal((await stubborn.run(100)).timedOut, true);
+  assert.deepEqual(stubborn.sent, ["SIGTERM", "SIGKILL"]);
+  assert.ok(Date.now() - started >= 90, "SIGKILL waited for the grace");
+});
+
+test("a timed-out Windows probe is still killed with its tree at once", async () => {
+  const windows = fakeChild("win32", null);
+  assert.equal((await windows.run(5_000)).timedOut, true);
+  assert.deepEqual(windows.sent, ["SIGKILL"]);
+});
+
+test("a real POSIX probe that ends on SIGTERM ends before the grace; one that ignores it ends by SIGKILL after it", posix, async () => {
+  let started = Date.now();
+  const polite = await spawnProbe()(process.execPath, ["-e", "setTimeout(() => {}, 30000)"],
+    { cwd: process.cwd(), timeoutMs: 200, graceMs: 5_000 });
+  assert.equal(polite.timedOut, true);
+  assert.ok(Date.now() - started < 4_000, "SIGTERM ended it");
+  started = Date.now();
+  const stubborn = await spawnProbe()(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+    { cwd: process.cwd(), timeoutMs: 200, graceMs: 1_000 });
+  assert.equal(stubborn.timedOut, true);
+  assert.ok(Date.now() - started >= 1_100, "SIGKILL only after the grace");
+});
+
+// The libuv job object (src/win/process.c: every child not spawned detached is
+// assigned to a job that kills it when the parent exits) measured on this host:
+// a daemon killed by TerminateProcess takes its non-detached Claude child along.
+test("on Windows a killed parent takes its non-detached child along", { skip: process.platform !== "win32" && "Windows job object" }, async () => {
+  const parent = spawn(process.execPath, ["-e", [
+    "const c = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });",
+    "console.log(c.pid); setTimeout(() => {}, 60000);"].join(" ")], { stdio: ["ignore", "pipe", "ignore"] });
+  const childPid = Number(await new Promise<string>((resolve) => { parent.stdout.once("data", (chunk: Buffer) => resolve(String(chunk))); }));
+  assert.ok(pidAlive(childPid), "the child runs");
+  parent.kill();
+  const deadline = Date.now() + 2_000;
+  while (pidAlive(childPid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(pidAlive(childPid), false, "the child ended with its parent");
 });
