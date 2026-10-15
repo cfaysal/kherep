@@ -2,7 +2,9 @@ import type { DirectoryBody } from "../protocol-messages.mts";
 import type { NodePaths } from "./config.mts";
 import { markNoticed, readDirectory } from "./exchange.mts";
 import { exhaustedOfferReason } from "./delivery-failure.mts";
-import { listInbox, markDelivered, markOffered, markRefused, markRetry, MAX_REPLY_DEPTH, type InboxRecord } from "./inbox.mts";
+import {
+  listInbox, markDelivered, markOffered, markRefused, markRetry, MAX_REPLY_DEPTH, type InboxRecord, type OfferedBy,
+} from "./inbox.mts";
 import { cliCommand } from "./msg-cli.mts";
 import { nodeLabel } from "./msg-resolve.mts";
 import { failureNotice, noticesIntro, receiptNotice, stillUnnoticed, unnoticedNotices, type SentNotices } from "./sent-notices.mts";
@@ -21,6 +23,8 @@ import { failureNotice, noticesIntro, receiptNotice, stillUnnoticed, unnoticedNo
 // never silently lost.
 // Loops: records are marked before the output is written, and Stop offers
 // only new arrivals, so a second Stop without new messages stays silent.
+// Each offer records which path made it (offeredBy, issue #417): the event's
+// own label unless the caller names another.
 
 export const MAX_MESSAGES_PER_CALL = 10;
 export const MAX_CONTEXT_BYTES = 8 * 1024;
@@ -40,15 +44,18 @@ const FOOTER_BYTES = 160;
 // to an already-running turn; hooks leave it true by default.
 // notices: what the caller's own unnoticedNotices found, so the call reads
 // those records again instead of the whole of sent/.
+// offeredBy: the label this call's offers carry, EVENT_OFFER of the event by default.
 export interface HookDeps {
   paths: NodePaths; nonce?: () => string; replyCommand?: string; now?: () => number; replyFrom?: string; maxBytes?: number;
   mayContinue?: (messageIds: string[]) => boolean;
   reofferOffered?: boolean;
   notices?: SentNotices;
+  offeredBy?: OfferedBy;
 }
 
 // PostToolUse: Claude Code delivery inside a running turn (deliver-midturn.mts).
 export type DeliveryEvent = "UserPromptSubmit" | "Stop" | "PostToolUse";
+const EVENT_OFFER: Record<DeliveryEvent, OfferedBy> = { UserPromptSubmit: "prompt", Stop: "stop", PostToolUse: "tool" };
 
 const bytes = (text: string): number => Buffer.byteLength(text, "utf8");
 
@@ -210,7 +217,8 @@ export function deliveryContext(event: DeliveryEvent, refs: string[], deps: Hook
   const room = maxBytes - bytes(intro) - FOOTER_BYTES - partBytes(parts);
   const blocks = fitBlocks(shown, directory, tag, reply, cli + " msg inbox" + (deps.replyFrom ? " --from " + deps.replyFrom : "") + " --all", room);
   const offered = waiting.slice(0, blocks.length);
-  for (const record of offered) markOffered(paths.inbox, record.messageId, now);
+  const offeredBy = deps.offeredBy ?? EVENT_OFFER[event];
+  for (const record of offered) markOffered(paths.inbox, record.messageId, now, offeredBy);
   for (const record of received ? [...failures, ...notices.receipts] : failures) markNoticed(paths, record.messageId, now);
   const left = waiting.length - offered.length;
   const footer = left > 0 ? [`${left} more message(s) wait for the next turn.`] : [];

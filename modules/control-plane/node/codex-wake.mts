@@ -151,7 +151,8 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
     return note(paths, now, sessionId, due, "budget");
   }
 
-  const context = deliveryContext("UserPromptSubmit", refs, { paths, now: () => now, ...(deps.cli ? { replyCommand: deps.cli } : {}) });
+  const context = deliveryContext("UserPromptSubmit", refs, { paths, now: () => now, offeredBy: "codex-wake",
+    ...(deps.cli ? { replyCommand: deps.cli } : {}) });
   const offeredAt = new Date(now).toISOString();
   const offered = ids(sessionInbox(paths, refs).filter((r) => r.state === "offered" && r.offeredAt === offeredAt));
   if (!context || offered.length === 0) return;

@@ -177,7 +177,7 @@ export function readMcpInbox(paths: NodePaths, sessionId: string, limit: number,
 // reaches delivered only through a reply. Already offered or final records
 // stay as they are.
 export function offerMcpInbox(paths: NodePaths, messageIds: string[], now: number = Date.now()): void {
-  for (const id of messageIds) if (getMessage(paths.inbox, id)?.state === "accepted") markOffered(paths.inbox, id, now);
+  for (const id of messageIds) if (getMessage(paths.inbox, id)?.state === "accepted") markOffered(paths.inbox, id, now, "mcp");
 }
 
 // An MCP reply the Worker routes through this node (issue #308) answers the

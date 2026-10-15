@@ -149,3 +149,24 @@ test("delivery task identity validates ids and runtime before writing", (t) => {
   assert.equal(setDeliveryTask(dir, ID_B, { taskId: ID_A, runtime: "claude" }), false);
   assert.equal(getMessage(dir, ID_A)?.delivery, undefined);
 });
+
+test("offeredBy names the path of the last offer and survives confirmation; legacy records keep their shape", (t) => {
+  const dir = tempInbox(t);
+  storeMessage(dir, deliver(ID_A), NOW);
+  assert.equal(markOffered(dir, ID_A, NOW + 1, "prompt")?.offeredBy, "prompt");
+  markOffered(dir, ID_A, NOW + 2, "wake");
+  assert.deepEqual([getMessage(dir, ID_A)?.offeredBy, getMessage(dir, ID_A)?.offers, getMessage(dir, ID_A)?.offeredAt],
+    ["wake", 2, new Date(NOW + 2).toISOString()]);
+  markDelivered(dir, ID_A);
+  assert.deepEqual([getMessage(dir, ID_A)?.state, getMessage(dir, ID_A)?.offeredBy], ["delivered", "wake"]);
+
+  storeMessage(dir, deliver(ID_B), NOW);
+  markOffered(dir, ID_B, NOW + 1);
+  assert.equal(Object.hasOwn(getMessage(dir, ID_B)!, "offeredBy"), false, "a call without the label writes no key");
+  // A record written before issue #417 has no offeredBy and still reads.
+  const legacy = "00000000-0000-4000-8000-0000000000c3";
+  fs.writeFileSync(path.join(dir, `${legacy}.json`), JSON.stringify({ ...deliver(legacy), receivedAt: new Date(NOW).toISOString(),
+    state: "offered", offers: 1, offeredAt: new Date(NOW).toISOString() }));
+  assert.deepEqual([getMessage(dir, legacy)?.state, getMessage(dir, legacy)?.offeredBy], ["offered", undefined]);
+  assert.ok(listInbox(dir).some((r) => r.messageId === legacy));
+});

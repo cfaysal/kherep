@@ -18,7 +18,7 @@ import { releaseOwn } from "./listener-sweep.mts";
 import { explicitlyListed, loadPolicy, readPolicy, wakeAllowed, wakeBudget } from "./policy.mts";
 import { mappingPending, taskForSession, type TaskRecord } from "./task-records.mts";
 import { transcriptMode } from "./transcript-mode.mts";
-import { atReplyLimit, pending, rememberWoken } from "./wake-pending.mts";
+import { atReplyLimit, markWoken, pending, rememberWoken } from "./wake-pending.mts";
 import { auditGranted, unlistedGrants } from "./wake-reply.mts";
 
 // Wakes an idle Claude Code session when a peer message arrives (issue #31).
@@ -56,6 +56,7 @@ import { auditGranted, unlistedGrants } from "./wake-reply.mts";
 // while no listener ran (wake-pending.mts). Waking is opt-in
 // (policy.mts wake section) and budgeted with Stop continuations
 // (autonomy.mts). The texts are fixed and carry no peer content.
+// A wake leaves listeners/<session_id>.woke.json for the woken turn (wake-pending.mts markWoken, issue #417).
 // "In non-interactive mode with the -p flag, Claude Code kills any async hook
 // still running at teardown" ("Run hooks in the background", fetched
 // 2026-10-05), yet on Claude Code 2.1.289 (Windows, 2026-10-05) a claude -p run
@@ -282,6 +283,11 @@ export async function runWake(input: unknown, deps: WakeDeps): Promise<WakeResul
     auditGranted(paths, now(), sessionId, stuck, "stuck-offer", kinds);
     auditGranted(paths, now(), sessionId, backlog, "backlog", kinds);
     auditGranted(paths, now(), sessionId, fresh, "wake", kinds);
+    try {
+      markWoken(paths, sessionId, mine.token, [...fresh, ...backlog, ...stuck], now());
+    } catch {
+      // the woken turn's offers then read "prompt"; the wake itself goes ahead
+    }
     return { code: 2, text: messages > 0 ? wakeText(messages) : STUCK_TEXT };
   }
 }

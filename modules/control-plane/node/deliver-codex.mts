@@ -65,7 +65,7 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
         + receiveRecipe);
     }
     const maxBytes = CODEX_CONTEXT_BYTES - Buffer.byteLength(receiveRecipe) - 1;
-    const context = deliveryContext(event, refs, { maxBytes, ...deps, replyFrom: sessionId });
+    const context = deliveryContext(event, refs, { maxBytes, ...deps, replyFrom: sessionId, offeredBy: "codex-prompt" });
     return contextOutput(event, context ? `${context}\n${receiveRecipe}` : receiveRecipe);
   }
   const mine = sessionInbox(deps.paths, refs);

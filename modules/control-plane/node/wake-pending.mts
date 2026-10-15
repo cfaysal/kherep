@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import path from "node:path";
 
-import { listenerDir, type ListenerLock } from "./autonomy.mts";
+import { isPlainSessionId, listenerDir, type ListenerLock } from "./autonomy.mts";
 import type { NodePaths } from "./config.mts";
 import { MAX_OFFERS, offerEnded, sessionInbox } from "./deliver-core.mts";
 import { getMessage, MAX_REPLY_DEPTH, readJson, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
@@ -25,6 +26,27 @@ const wokenFor = (paths: NodePaths, sessionId: string): string[] =>
 export function rememberWoken(paths: NodePaths, sessionId: string, ids: string[]): void {
   const kept = wokenFor(paths, sessionId).filter((id) => getMessage(paths.inbox, id) !== null);
   writeJsonAtomic(wokenFile(paths, sessionId), { messageIds: [...kept, ...ids] });
+}
+
+// Issue #417: a listener that wakes its session leaves this marker; the woken
+// turn's UserPromptSubmit claims it (deliver-hook.mts) and labels its offers
+// "wake". A marker older than WAKE_CLAIM_MS is removed unclaimed.
+export const WAKE_CLAIM_MS = 30_000;
+export const wokeFile = (paths: NodePaths, sessionId: string): string => path.join(listenerDir(paths), `${sessionId}.woke.json`);
+export function markWoken(paths: NodePaths, sessionId: string, token: string, ids: string[], now: number): void {
+  writeJsonAtomic(wokeFile(paths, sessionId), { wokenAt: now, token, messageIds: ids });
+}
+// Removes the marker whatever it holds; true only for a readable one that is fresh.
+export function claimWake(paths: NodePaths, sessionId: string, now: number): boolean {
+  if (!isPlainSessionId(sessionId)) return false;
+  let marker: { wokenAt?: unknown } | null = null;
+  try {
+    marker = readJson<{ wokenAt?: unknown }>(wokeFile(paths, sessionId));
+  } catch {
+    // unreadable: removed below, never claimed
+  }
+  fs.rmSync(wokeFile(paths, sessionId), { force: true });
+  return typeof marker?.wokenAt === "number" && now - marker.wokenAt <= WAKE_CLAIM_MS;
 }
 
 // fresh: accepted records received after the grace period. backlog: at

@@ -4,10 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { nodePaths, type NodePaths } from "./config.mts";
+import { listenerDir } from "./autonomy.mts";
+import { ensureDir, nodePaths, type NodePaths } from "./config.mts";
 import { deliverForHook, MAX_OFFERS, REOFFER_AFTER_MS } from "./deliver-hook.mts";
 import { getSent, recordSent, writeDirectory, writeLocalSessions, writeOutbox } from "./exchange.mts";
 import { getMessage, storeMessage } from "./inbox.mts";
+import { markWoken, WAKE_CLAIM_MS, wokeFile } from "./wake-pending.mts";
 
 // Offer, then confirm (issue #31): a hook call offers, the turn's Stop
 // confirms; and the sending session hears about messages that will not be read.
@@ -42,6 +44,7 @@ function hook(paths: NodePaths, event: "UserPromptSubmit" | "Stop" | "StopFailur
 }
 
 const state = (paths: NodePaths, messageId: string) => getMessage(paths.inbox, messageId)?.state;
+const offeredBy = (paths: NodePaths, messageId: string) => getMessage(paths.inbox, messageId)?.offeredBy;
 
 test("Stop confirms what the turn carried, then offers only messages that arrived during the turn", (t) => {
   const paths = setup(t);
@@ -53,6 +56,8 @@ test("Stop confirms what the turn carried, then offers only messages that arrive
   assert.ok(atStop.includes(`=== Kherep peer message ${second} [t0k3n] ===`));
   assert.ok(!atStop.includes(first), "a message offered in this turn is not injected again");
   assert.deepEqual([state(paths, first), state(paths, second)], ["delivered", "offered"]);
+  // Issue #417: each offer names its event; confirmation keeps it.
+  assert.deepEqual([offeredBy(paths, first), offeredBy(paths, second)], ["prompt", "stop"]);
   assert.equal(hook(paths, "Stop"), "");
   assert.equal(state(paths, second), "delivered");
 });
@@ -99,8 +104,8 @@ test("after StopFailure the next prompt offers the message again at once, marked
   assert.equal(getMessage(paths.inbox, messageId)?.retry, true);
   const again = hook(paths, "UserPromptSubmit", 2_000);
   assert.match(again, new RegExp(`Message id: ${messageId}\nOffered again: the turn that first carried it may not have completed\\.`));
-  assert.deepEqual([state(paths, messageId), getMessage(paths.inbox, messageId)?.offers, getMessage(paths.inbox, messageId)?.retry],
-    ["offered", 2, undefined]);
+  assert.deepEqual([state(paths, messageId), getMessage(paths.inbox, messageId)?.offers, getMessage(paths.inbox, messageId)?.retry,
+    offeredBy(paths, messageId)], ["offered", 2, undefined, "prompt"]);
   assert.equal(hook(paths, "Stop", 3_000), "");
   assert.equal(state(paths, messageId), "delivered");
 });
@@ -123,6 +128,32 @@ test(`after ${MAX_OFFERS} unconfirmed offers the message is refused and not offe
     ["refused", `not confirmed by the session after ${MAX_OFFERS} turns`]);
   assert.equal(hook(paths, "Stop"), "");
   assert.equal(state(paths, messageId), "refused", "a late Stop does not confirm a refused message");
+});
+
+test("a prompt that claims a fresh wake marker labels its offers wake; an old marker or a Stop does not (issue #417)", (t) => {
+  const paths = setup(t);
+  ensureDir(listenerDir(paths));
+  const marker = wokeFile(paths, "s-self");
+  const woken = inbox(paths, 1);
+  markWoken(paths, "s-self", "tok", [woken], NOW - 1_000);
+  assert.match(hook(paths, "UserPromptSubmit"), /message 1/);
+  assert.equal(offeredBy(paths, woken), "wake");
+  assert.equal(fs.existsSync(marker), false, "the woken turn claims the marker");
+  const typed = inbox(paths, 2);
+  assert.match(hook(paths, "UserPromptSubmit", 1_000), /message 2/);
+  assert.equal(offeredBy(paths, typed), "prompt");
+
+  const late = inbox(paths, 3);
+  markWoken(paths, "s-self", "tok", [late], NOW + 2_000 - WAKE_CLAIM_MS - 1);
+  assert.match(hook(paths, "UserPromptSubmit", 2_000), /message 3/);
+  assert.equal(offeredBy(paths, late), "prompt");
+  assert.equal(fs.existsSync(marker), false, "an old marker is removed unclaimed");
+
+  const atStop = inbox(paths, 4);
+  markWoken(paths, "s-self", "tok", [atStop], NOW + 3_000);
+  assert.match(hook(paths, "Stop", 3_000), /message 4/);
+  assert.equal(offeredBy(paths, atStop), "stop");
+  assert.equal(fs.existsSync(marker), true, "Stop neither claims nor removes the marker");
 });
 
 function sent(paths: NodePaths, n: number, fromSession: string, status: "refused" | "expired" | "accepted", reason?: string): string {

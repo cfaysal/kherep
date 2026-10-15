@@ -351,6 +351,20 @@ the autonomous-turn budget and needs no `wake` policy (87c317b). Stop
 continuations and wakes keep their gates. Live acceptance on Windows and macOS
 hosts is tracked in issue #388.
 
+Offer provenance (issue #417): every offer writes `offeredBy` with `offeredAt`
+in the same record write (`markOffered`), so a record names the path that last
+handed it to a turn. `deliveryContext` labels an offer by its event (`prompt`,
+`stop`, `tool`) unless the caller names another: the Codex hook
+(`codex-prompt`), `msg inbox --receive` (`receive`), the Codex task resume
+(`codex-wake`), closed-session delivery (`intercom`). An MCP inbox read labels
+its own offers `mcp`. A turn the wake listener opened is told apart from a user
+prompt without reading the prompt: the listener writes
+`listeners/<session_id>.woke.json` just before it exits 2, and the next
+`UserPromptSubmit` removes it and labels its offers `wake` when the marker is at
+most 30 seconds old. A `Stop` continuation is already its own path (`stop`,
+after `mayContinue` audited `continue`) and never touches the marker. The field
+is local: no wire format, Worker state or sender record carries it.
+
 ## Accepted-message delivery progress
 
 Read-only `node/msg-inbox.mts` inspection resolves the caller's verified session references against both the current inbox target and the retained original `closedTo` address after fallback handover. It exposes the current destination and available delivery task/session identifiers. Hook delivery and `--receive` continue matching the current target exclusively, so inspection does not create a second delivery owner.

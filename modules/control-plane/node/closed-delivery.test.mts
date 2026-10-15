@@ -81,6 +81,7 @@ test("a new intercom session gets the messages framed with their reply commands,
   assert.equal(runs[0].options.cwd, repo(node));
   // Issue #308: offered to the intercom session, delivered only once its turn completed.
   for (const id of [first, second]) assert.equal(getMessage(node.paths.inbox, id)?.state, "offered", id);
+  for (const id of [first, second]) assert.equal(getMessage(node.paths.inbox, id)?.offeredBy, "intercom", id);
   await turnDone(node);
   assert.equal(getMessage(node.paths.inbox, first)?.state, "delivered");
   assert.equal(getMessage(node.paths.inbox, second)?.state, "delivered");

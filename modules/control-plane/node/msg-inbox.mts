@@ -3,7 +3,7 @@ import { CODEX_CONTEXT_BYTES, CODEX_ESCALATION_NOTE } from "./deliver-codex.mts"
 import { deliveryContext } from "./deliver-core.mts";
 import type { NodePaths } from "./config.mts";
 import { readDirectory, type LocalSession, type SentRecord } from "./exchange.mts";
-import { listInbox, readJson } from "./inbox.mts";
+import { listInbox, readJson, type InboxRecord } from "./inbox.mts";
 import type { MsgArgs, MsgContext } from "./msg-cli.mts";
 import { NO_SESSION, nodeLabel, senderSession, sessionIdFromEnv } from "./msg-resolve.mts";
 import { repliesTo } from "./sent-notices.mts";
@@ -54,7 +54,7 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
     const context = deliveryContext("UserPromptSubmit", refs, {
       paths: io.paths, now: io.now, replyFrom: values.from,
       maxBytes: CODEX_CONTEXT_BYTES - Buffer.byteLength(CODEX_ESCALATION_NOTE) - 1,
-      reofferOffered: false,
+      reofferOffered: false, offeredBy: "receive",
     });
     io.out(context ? context + "\n" + CODEX_ESCALATION_NOTE : "no messages waiting for this continuation");
     return 0;
@@ -76,9 +76,15 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
       io.out("  delivery task: " + r.delivery.taskId);
       if (r.delivery.sessionId) io.out("  delivery session: " + r.delivery.sessionId);
     }
+    for (const line of offerLine(r)) io.out(line);
     for (const line of r.text.split("\n")) io.out("  | " + line);
   }
   return 0;
+}
+
+// Issue #417: which path made the record's last offer, and when; nothing before any offer.
+export function offerLine(r: InboxRecord): string[] {
+  return r.offeredAt ? [`  offered by: ${r.offeredBy ?? "unknown"} at ${r.offeredAt} (offer ${r.offers ?? 1})`] : [];
 }
 
 // Issue #200: the replies to a sent message that reached this node (repliesTo).
@@ -88,7 +94,7 @@ export function replyLines(paths: NodePaths, sent: SentRecord): string[] {
   const directory = readDirectory(paths);
   return replies.flatMap((r) => {
     const lines = [`  reply ${r.messageId} from node ${nodeLabel(directory, r.from.nodeId)}, session ${r.from.session}`
-      + ` (${r.state}, received ${r.receivedAt})`];
+      + ` (${r.state}, received ${r.receivedAt})`, ...offerLine(r).map((line) => "  " + line)];
     // Issue #389: a reply handed to another session names where it went.
     if (r.closedTo === undefined) return lines;
     if (r.toSession !== r.closedTo) lines.push(`    forwarded to: session ${r.toSession}`);

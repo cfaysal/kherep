@@ -12,6 +12,7 @@ import { contextOutput, deliveryContext, retryOffered, sessionInbox, type HookDe
 import { midTurnOutput } from "./deliver-midturn.mts";
 import { localSessionName } from "./exchange.mts";
 import { nodeWakeBudget } from "./policy.mts";
+import { claimWake } from "./wake-pending.mts";
 
 // Claude Code hook that hands inbox messages to their session (issue #31,
 // step 3a). Contract, from https://code.claude.com/docs/en/hooks (fetched
@@ -37,6 +38,8 @@ import { nodeWakeBudget } from "./policy.mts";
 //   errors fire StopFailure instead" ("Stop").
 // - StopFailure "Runs instead of Stop when the turn ends due to an API error";
 //   Claude Code ignores its output and exit code ("StopFailure").
+// The hook never reads the UserPromptSubmit `prompt` field: a woken turn is
+// recognised by the wake listener's marker (wake-pending.mts claimWake, issue #417).
 // The offer-and-confirm delivery itself lives in deliver-core.mts; with
 // --runtime codex the same entry point serves Codex (deliver-codex.mts).
 
@@ -64,8 +67,10 @@ export function deliverForHook(input: unknown, deps: HookDeps): string {
     return "";
   }
   // A Stop continuation is an autonomous turn: budget and permission mode gate it.
+  // A prompt that claims the wake listener's marker opened a woken turn (issue #417).
   const gated: HookDeps = event === "Stop"
-    ? { ...deps, mayContinue: (ids) => mayContinue(deps.paths, sessionId, mode, ids, now, nodeWakeBudget(deps.paths)) } : deps;
+    ? { ...deps, mayContinue: (ids) => mayContinue(deps.paths, sessionId, mode, ids, now, nodeWakeBudget(deps.paths)) }
+    : claimWake(deps.paths, sessionId, now) ? { ...deps, offeredBy: "wake" } : deps;
   return contextOutput(event, deliveryContext(event, refs, gated));
 }
 

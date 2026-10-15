@@ -62,6 +62,7 @@ test("PostToolUse adds accepted messages next to the tool result and offers them
   assert.match(context, new RegExp(`=== Kherep peer message ${messageId} \\[t0k3n\\] ===`));
   assert.ok(context.includes(`To reply: ${REPLY} msg send --reply-to ${messageId} -- <reply text>`));
   assert.deepEqual(state(paths, messageId), ["offered", 1]);
+  assert.equal(getMessage(paths.inbox, messageId)?.offeredBy, "tool", "issue #417: offered inside the running turn");
 });
 
 test("the turn's Stop confirms a mid-turn offer and injects nothing again", (t) => {

@@ -82,7 +82,8 @@ test("UserPromptSubmit offers by id and name as developer context, with --from i
   const context: string = output.hookSpecificOutput.additionalContext;
   for (const messageId of [byName, byId]) {
     assert.ok(context.includes(`To reply: ${CLI} msg send --from ${SELF} --reply-to ${messageId} -- <reply text>`));
-    assert.deepEqual([getMessage(paths.inbox, messageId)?.state, getMessage(paths.inbox, messageId)?.offers], ["offered", 1]);
+    assert.deepEqual([getMessage(paths.inbox, messageId)?.state, getMessage(paths.inbox, messageId)?.offers,
+      getMessage(paths.inbox, messageId)?.offeredBy], ["offered", 1, "codex-prompt"]);
   }
   assert.match(context, new RegExp(`Your message ${id(9)} to node-b \\(${PEER}\\)/build was not delivered: "policy"`));
   assert.ok(getSent(paths, id(9))?.noticedAt);

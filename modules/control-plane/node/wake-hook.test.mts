@@ -14,6 +14,7 @@ import {
   wakeAudit, wakeText,
 } from "./wake-hook.mts";
 import { arrive, auditLines, listen, lockFile, SECRET, SELF, setup, T0 } from "./wake-fixture.mts";
+import { wokeFile } from "./wake-pending.mts";
 
 // The wake listener (issue #31): a fake clock and sleep drive it, so no test
 // waits in real time except the one that runs the script as Claude Code would.
@@ -46,13 +47,17 @@ test("wakes with the fixed text for a message that arrives after the grace perio
   const { paths } = setup(t);
   let byName = "";
   let byId = "";
-  const result = await listen(paths, { tick: (clock) => {
+  const result = await listen(paths, { token: "tok", tick: (clock) => {
     if (clock === T0 + 2 * WAKE_POLL_MS) {
       byName = arrive(paths, 1, clock);
       byId = arrive(paths, 2, clock, SELF);
     }
   } });
   assert.deepEqual(result, { code: 2, text: wakeText(2) });
+  // Issue #417: the woken turn's UserPromptSubmit claims this marker.
+  assert.deepEqual(readJson(wokeFile(paths, SELF)),
+    { wokenAt: T0 + 2 * WAKE_POLL_MS + WAKE_SETTLE_MS, token: "tok", messageIds: [byName, byId] });
+  assert.ok(!fs.readFileSync(wokeFile(paths, SELF), "utf8").includes(SECRET), "the marker never carries message text");
   assert.equal(wakeText(2), "Kherep: 2 new message(s) from other agent sessions arrived. They are delivered in this turn.");
   assert.deepEqual(auditLines(paths),
     [{ ts: new Date(T0 + 2 * WAKE_POLL_MS + WAKE_SETTLE_MS).toISOString(), sessionId: SELF, messageIds: [byName, byId], action: "wake" }]);
@@ -76,6 +81,7 @@ test("ignores what arrived up to the grace period after arming, then re-arms its
   assert.deepEqual([getMessage(paths.inbox, before)?.state, getMessage(paths.inbox, during)?.state], ["accepted", "accepted"]);
   assert.deepEqual(auditLines(paths).map((l) => [l.action, l.messageIds]), [["rearm", []]]);
   assert.equal(fs.existsSync(lockFile(paths)), false, "the re-arming listener releases its lock");
+  assert.equal(fs.existsSync(wokeFile(paths, SELF)), false, "a re-arm leaves no wake marker");
 });
 
 test("re-reads the state before waking: a message a delivery hook offered meanwhile wakes nobody", async (t) => {

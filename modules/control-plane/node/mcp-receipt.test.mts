@@ -64,7 +64,8 @@ test("an MCP inbox read offers the waiting records it returned and nothing else"
   assert.equal((await read(2)).ok, true);
   assert.equal(state(paths, old), "accepted", "not returned by a read with limit 2");
   assert.equal(state(paths, done), "delivered", "a final record stays final");
-  assert.deepEqual([state(paths, waiting), getMessage(paths.inbox, waiting)?.offers], ["offered", 1]);
+  assert.deepEqual([state(paths, waiting), getMessage(paths.inbox, waiting)?.offers, getMessage(paths.inbox, waiting)?.offeredBy],
+    ["offered", 1, "mcp"]);
   assert.equal(state(paths, other), "accepted", "another session's record is untouched");
   await read(2);
   assert.equal(getMessage(paths.inbox, waiting)?.offers, 1, "a second read does not count another offer");
