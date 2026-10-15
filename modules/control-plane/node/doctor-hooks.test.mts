@@ -112,6 +112,76 @@ test("a hook in a source pin of the checked-out commit counts for this checkout"
   assert.deepEqual(check.codex, { present: true, deliver: 1, wake: 0, foreign: [], pinned: [hook] });
 });
 
+test("a matching source-pin hook reached through a canonical directory alias counts", (t) => {
+  if (spawnSync("git", ["--version"], { windowsHide: true }).status !== 0) return t.skip("git is not available");
+  const f = files(t);
+  commitCheckout(f.repo);
+  const pin = pinServiceSource(f.repo, path.join(path.dirname(f.repo), ".codex", "orchestra"));
+  const alias = path.join(path.dirname(f.repo), "node-hook-alias");
+  const target = path.join(pin.root, "modules", "control-plane", "node");
+  try {
+    fs.symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (["EPERM", "ENOSYS"].includes((error as NodeJS.ErrnoException).code ?? "")) return t.skip("directory symlinks are unavailable");
+    throw error;
+  }
+  const hook = path.join(alias, "deliver-hook.mts");
+  fs.writeFileSync(f.codex, codexHook(hook));
+  const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
+  assert.equal(check.ok, true, JSON.stringify(check));
+  assert.deepEqual(check.codex, { present: true, deliver: 1, wake: 0, foreign: [], pinned: [hook] });
+});
+
+test("a canonical hook alias counts only for the matching leaf of a complete source pin", (t) => {
+  if (spawnSync("git", ["--version"], { windowsHide: true }).status !== 0) return t.skip("git is not available");
+  const f = files(t);
+  const wrongDirectory = path.join(f.repo, "modules", "control-plane", "other");
+  fs.mkdirSync(wrongDirectory, { recursive: true });
+  fs.writeFileSync(path.join(wrongDirectory, "deliver-hook.mts"), "");
+  commitCheckout(f.repo);
+  const pin = pinServiceSource(f.repo, path.join(path.dirname(f.repo), ".codex", "orchestra"));
+  const aliasDirectory = path.join(path.dirname(f.repo), "hook-aliases");
+  fs.mkdirSync(aliasDirectory);
+  const alias = path.join(aliasDirectory, "deliver-hook.mts");
+  const correct = path.join(pin.root, "modules", "control-plane", "node", "deliver-hook.mts");
+  try {
+    fs.symlinkSync(correct, alias, "file");
+  } catch (error) {
+    if (["EPERM", "ENOSYS"].includes((error as NodeJS.ErrnoException).code ?? "")) return t.skip("file symlinks are unavailable");
+    throw error;
+  }
+
+  const check = (target: string) => {
+    fs.rmSync(alias, { force: true });
+    fs.symlinkSync(target, alias, "file");
+    fs.writeFileSync(f.codex, codexHook(alias));
+    return checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
+  };
+  const accepted = check(correct);
+  assert.equal(accepted.ok, true, JSON.stringify(accepted));
+  assert.deepEqual(accepted.codex, { present: true, deliver: 1, wake: 0, foreign: [], pinned: [alias] });
+
+  const wrongEntry = path.join(pin.root, "modules", "control-plane", "node", "wake-hook.mts");
+  const wrongDirectoryEntry = path.join(pin.root, "modules", "control-plane", "other", "deliver-hook.mts");
+  const foreign = path.join(path.dirname(f.repo), "foreign", "modules", "control-plane", "node", "deliver-hook.mts");
+  fs.mkdirSync(path.dirname(foreign), { recursive: true });
+  fs.writeFileSync(foreign, "");
+  for (const target of [wrongEntry, wrongDirectoryEntry, foreign]) {
+    const refused = check(target);
+    assert.equal(refused.ok, false, target);
+    assert.deepEqual(refused.codex, { present: true, deliver: 0, wake: 0, foreign: [alias] });
+  }
+
+  const broken = check(path.join(pin.root, "missing", "deliver-hook.mts"));
+  assert.equal(broken.ok, false);
+  assert.deepEqual(broken.codex, { present: true, deliver: 0, wake: 0, foreign: [alias] });
+
+  fs.writeFileSync(correct, "drift");
+  const drifted = check(correct);
+  assert.equal(drifted.ok, false);
+  assert.deepEqual(drifted.codex, { present: true, deliver: 0, wake: 0, foreign: [alias] });
+});
+
 test("a source pin of another commit, a missing pin and another checkout still count as foreign", (t) => {
   if (spawnSync("git", ["--version"], { windowsHide: true }).status !== 0) return t.skip("git is not available");
   const f = files(t);

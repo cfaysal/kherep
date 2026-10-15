@@ -73,7 +73,7 @@ function scanHooks(
     const kind = /deliver-hook\.mts$/.test(found) ? "deliver" : "wake";
     const expected = path.join(repoRoot, "modules", "control-plane", "node", `${kind}-hook.mts`);
     if (realOrResolved(found) === realOrResolved(expected)) counts[kind]++;
-    else if (pinsCheckout(found, checkoutSource)) { counts[kind]++; pinned.add(found); }
+    else if (pinsCheckout(found, kind, checkoutSource)) { counts[kind]++; pinned.add(found); }
     else foreign.add(found);
   }
   return { present: true, ...counts, foreign: [...foreign], ...(pinned.size ? { pinned: [...pinned] } : {}) };
@@ -81,12 +81,15 @@ function scanHooks(
 
 // The hook file exists in a complete verified source pin equivalent to the
 // invoking checkout. A directory name alone is never source evidence.
-function pinsCheckout(found: string, checkoutSource: () => SourceIdentity | undefined): boolean {
-  const hook = path.resolve(expand(found));
-  if (!fs.statSync(hook, { throwIfNoEntry: false })?.isFile()) return false;
-  const root = path.resolve(path.dirname(hook), "..", "..", "..");
-  if (path.basename(path.dirname(root)) !== "source-pins") return false;
+function pinsCheckout(
+  found: string, kind: "deliver" | "wake", checkoutSource: () => SourceIdentity | undefined,
+): boolean {
   try {
+    const hook = fs.realpathSync.native(expand(found));
+    if (!fs.statSync(hook).isFile()) return false;
+    const root = path.resolve(path.dirname(hook), "..", "..", "..");
+    const expected = path.join(root, "modules", "control-plane", "node", `${kind}-hook.mts`);
+    if (path.basename(path.dirname(root)) !== "source-pins" || hook !== expected) return false;
     const checkout = checkoutSource();
     return checkout ? compareSourceIdentity(checkout, captureSourceIdentity(root)).status === "match" : false;
   } catch { return false; }
