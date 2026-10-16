@@ -144,6 +144,9 @@ describe("Registry read budget", () => {
         pruneDue: expect.stringContaining("USING INDEX tombstones_deleted_at"),
         oldestTombstone: expect.stringContaining("USING COVERING INDEX tombstones_deleted_at"),
         senderDue: expect.stringContaining("USING INDEX messages_from_node"),
+        proxyParent: expect.stringContaining("USING INDEX sqlite_autoindex_messages_1"),
+        proxyTombstone: expect.stringContaining("USING INDEX sqlite_autoindex_message_tombstones_1"),
+        queuedProxies: expect.stringContaining("USING INDEX messages_to_state"),
       });
       for (const [name, plan] of plans) expect(plan, name).not.toMatch(/SCAN (messages|message_tombstones)|TEMP B-TREE/);
     });

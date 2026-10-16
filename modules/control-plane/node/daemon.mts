@@ -17,7 +17,7 @@ import { captureRuntimeSourceIdentity } from "./daemon-source.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
 import { observeClaudeDeliveryProgress, observeCodexTaskProgress } from "./delivery-progress.mts";
 import {
-  DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions, replyDepth,
+  deliveryDepth, DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions,
 } from "./exchange.mts";
 import { readPrivateKey } from "./identity.mts";
 import { installPaused, markedProbe, noticeInterruptedProbe } from "./install-pause.mts";
@@ -148,7 +148,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions, runner, runtimeDiscovery),
     facts: detectFacts, runtimes: runtimeDiscovery, readyRuntimes: () => readiness.ready(),
     sessions, deferInitialSessions: true,
-    storeMessage: (body) => { storeMessage(paths.inbox, body, Date.now(), replyDepth(paths, body.inReplyTo)); },
+    storeMessage: (body) => { storeMessage(paths.inbox, body, Date.now(), deliveryDepth(paths, body)); },
     taskRequestResult: (result) => recordRequestResult(paths, result),
     taskControlRegistrationReceipt: (body) => {
       taskControlInflight.delete("register:" + body.registrationId);

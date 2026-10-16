@@ -248,6 +248,39 @@ describe("message routing", () => {
     target.ws.close(1000, "done");
   });
 
+  // Issue #408, PR 4: proxyOf reaches the Registry from the frame; a proxy is
+  // delivered with its lineage and never marks the original replied.
+  it("a proxy answer does not mark the original replied; both lineage fields are an invalid body", async () => {
+    const a = await node("sender");
+    const b = await node("target");
+    const sender = await authenticate(a.nodeId, a.key);
+    const target = await authenticate(b.nodeId, b.key);
+    const original = send(sender, b.nodeId, "question");
+    await expectStatus(sender, { messageId: original, state: "queued" });
+    await expectFrame(target, "message.deliver");
+    frame(target, "message.status", { messageId: original, state: "accepted" });
+    await expectStatus(sender, { messageId: original, state: "accepted" });
+    await expectFrame(target, "event");
+
+    const proxy = crypto.randomUUID();
+    frame(target, "message.send", { messageId: proxy, fromSession: "s-b", to: { nodeId: a.nodeId, session: "s-a" },
+      text: "proxy answer", proxyOf: original });
+    await expectStatus(target, { messageId: proxy, state: "queued" });
+    const delivered = (await expectFrame<MessageDeliverBody>(sender, "message.deliver")).body;
+    expect(delivered).toMatchObject({ messageId: proxy, proxyOf: original });
+    expect(delivered).not.toHaveProperty("inReplyTo");
+    expect(await row(original)).toMatchObject({ state: "accepted", reply_message_id: null });
+    expect(await row(proxy)).toMatchObject({ state: "queued", proxy_of: original, depth: 1 });
+
+    const both = crypto.randomUUID();
+    frame(target, "message.send", { messageId: both, fromSession: "s-b", to: { nodeId: a.nodeId, session: "s-a" },
+      text: "x", proxyOf: original, inReplyTo: original });
+    expect((await expectFrame(target, "error")).body).toMatchObject({ error: "invalid message.send body" });
+    expect(await row(both)).toBeUndefined();
+    sender.ws.close(1000, "done");
+    target.ws.close(1000, "done");
+  });
+
   it("does not mark replied when the response targets another session", async () => {
     const a = await node("sender");
     const b = await node("target");

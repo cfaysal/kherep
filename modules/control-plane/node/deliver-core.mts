@@ -5,6 +5,7 @@ import { exhaustedOfferReason } from "./delivery-failure.mts";
 import {
   listInbox, markDelivered, markOffered, markRefused, markRetry, MAX_REPLY_DEPTH, type InboxRecord, type OfferedBy,
 } from "./inbox.mts";
+import { getProxied, type ProxiedRecord } from "./inbox-proxied.mts";
 import { cliCommand } from "./msg-cli.mts";
 import { nodeLabel } from "./msg-resolve.mts";
 import { failureNotice, noticesIntro, receiptNotice, stillUnnoticed, unnoticedNotices, type SentNotices } from "./sent-notices.mts";
@@ -59,8 +60,10 @@ const EVENT_OFFER: Record<DeliveryEvent, OfferedBy> = { UserPromptSubmit: "promp
 
 const bytes = (text: string): number => Buffer.byteLength(text, "utf8");
 
-// reply null: no reply line and no In reply to (frameForFork).
-function block(record: InboxRecord, text: string, directory: DirectoryBody | null, tag: string, reply: string | null): string {
+// reply null: no reply line, no In reply to and no proxy lines (frameForFork).
+// proxied: the sidecar of a proxy answer a fork of this session sent (issue #408).
+function block(record: InboxRecord, text: string, directory: DirectoryBody | null, tag: string, reply: string | null,
+  proxied: ProxiedRecord | null = null): string {
   const id = record.messageId;
   return [
     `=== Kherep peer message ${id} [${tag}] ===`,
@@ -72,6 +75,9 @@ function block(record: InboxRecord, text: string, directory: DirectoryBody | nul
     `Sent: ${record.createdAt}`,
     `Message id: ${id}`,
     ...(record.inReplyTo && reply !== null ? [`In reply to: ${record.inReplyTo}`] : []),
+    ...(record.proxyOf && reply !== null ? [`Proxy answer for your message ${record.proxyOf}`] : []),
+    ...(proxied && reply !== null ? [`A proxy answer was already sent for this message at ${proxied.at} (message ${proxied.relayMessageId}) `
+      + "by an ephemeral fork of this session; do not answer again unless the user asks."] : []),
     ...(record.state === "offered" ? ["Offered again: the turn that first carried it may not have completed."] : []),
     ...(reply !== null ? [`To reply: ${reply} --reply-to ${id} -- <reply text>`] : []),
     `--- message text [${tag}] ---`,
@@ -99,32 +105,39 @@ function introLine(event: DeliveryEvent, tag: string, hasMessages: boolean, fail
 
 // A block that exceeds the room left keeps as much text as fits and says
 // where the rest is.
-function fitted(record: InboxRecord, directory: DirectoryBody | null, tag: string, reply: string, inboxCommand: string, room: number): string {
+function fitted(record: InboxRecord, directory: DirectoryBody | null, tag: string, reply: string, inboxCommand: string, room: number,
+  proxied: ProxiedRecord | null): string {
   let text = record.text;
-  let result = block(record, text, directory, tag, reply);
+  let result = block(record, text, directory, tag, reply, proxied);
   while (bytes(result) > room && text.length > 0) {
     text = text.slice(0, Math.floor(text.length * 0.9));
-    result = block(record, `${text}\n[truncated; the full text: ${inboxCommand}]`, directory, tag, reply);
+    result = block(record, `${text}\n[truncated; the full text: ${inboxCommand}]`, directory, tag, reply, proxied);
   }
   return result;
 }
 
 // Blocks for the records in order within room bytes: the first always, shortened
 // if needed, later ones only while they fit whole.
-function fitBlocks(records: InboxRecord[], directory: DirectoryBody | null, tag: string, reply: string, inboxCommand: string,
-  room: number): string[] {
+function fitBlocks(paths: NodePaths, records: InboxRecord[], directory: DirectoryBody | null, tag: string, reply: string,
+  inboxCommand: string, room: number): string[] {
   const blocks: string[] = [];
   let left = room;
   for (const record of records) {
     const room = left - 2;
-    const full = block(record, record.text, directory, tag, reply);
+    const proxied = proxiedOf(paths, record);
+    const full = block(record, record.text, directory, tag, reply, proxied);
     const fits = bytes(full) <= room;
     if (!fits && blocks.length > 0) break;
-    const next = fits ? full : fitted(record, directory, tag, reply, inboxCommand, room);
+    const next = fits ? full : fitted(record, directory, tag, reply, inboxCommand, room, proxied);
     blocks.push(next);
     left -= bytes(next) + 2;
   }
   return blocks;
+}
+
+// Display only: an unreadable sidecar shows no proxy line.
+function proxiedOf(paths: NodePaths, record: InboxRecord): ProxiedRecord | null {
+  try { return getProxied(paths.inbox, record.messageId); } catch { return null; }
 }
 
 function directoryOf(paths: NodePaths): DirectoryBody | null {
@@ -145,7 +158,7 @@ const newTag = (): string => crypto.randomUUID().slice(-12);
 export function frameRecords(paths: NodePaths, records: InboxRecord[], cli: string, maxBytes: number): { text: string; carried: InboxRecord[] } {
   const tag = newTag();
   const intro = introLine("UserPromptSubmit", tag, true);
-  const blocks = fitBlocks(records, directoryOf(paths), tag, `${cli} msg send`, `${cli} msg inbox --all`, maxBytes - bytes(intro));
+  const blocks = fitBlocks(paths, records, directoryOf(paths), tag, `${cli} msg send`, `${cli} msg inbox --all`, maxBytes - bytes(intro));
   return { text: [intro, ...blocks].join("\n\n"), carried: records.slice(0, blocks.length) };
 }
 
@@ -218,12 +231,12 @@ export function deliveryContext(event: DeliveryEvent, refs: string[], deps: Hook
   // still fits whole; otherwise they wait for the next event.
   const receipt = notices.receipts.length === 0 ? "" : receiptNotice(notices.receipts, directory);
   const received = receipt !== "" && bytes(introLine(event, tag, shown.length > 0, failures.length > 0, true)) + FOOTER_BYTES
-    + partBytes([...failed, receipt]) + partBytes(shown.map((r) => block(r, r.text, directory, tag, reply))) <= maxBytes;
+    + partBytes([...failed, receipt]) + partBytes(shown.map((r) => block(r, r.text, directory, tag, reply, proxiedOf(paths, r)))) <= maxBytes;
   if (shown.length === 0 && failures.length === 0 && !received) return "";
   const intro = introLine(event, tag, shown.length > 0, failures.length > 0, received);
   const parts = received ? [...failed, receipt] : failed;
   const room = maxBytes - bytes(intro) - FOOTER_BYTES - partBytes(parts);
-  const blocks = fitBlocks(shown, directory, tag, reply, cli + " msg inbox" + (deps.replyFrom ? " --from " + deps.replyFrom : "") + " --all", room);
+  const blocks = fitBlocks(paths, shown, directory, tag, reply, cli + " msg inbox" + (deps.replyFrom ? " --from " + deps.replyFrom : "") + " --all", room);
   const offered = waiting.slice(0, blocks.length);
   const offeredBy = deps.offeredBy ?? EVENT_OFFER[event];
   for (const record of offered) markOffered(paths.inbox, record.messageId, now, offeredBy);

@@ -31,6 +31,8 @@ export interface InboxRecord {
   toSession: string;
   text: string;
   inReplyTo?: string;
+  // Issue #408: a proxy answer to this node's message (never with inReplyTo).
+  proxyOf?: string;
   // Item 5: the task the message belongs to (task grant of the wake listener).
   taskId?: string;
   // The local task that performed delivery. Separate from the authorization grant above.
@@ -89,6 +91,13 @@ function progressFileOf(dir: string, messageId: string): string {
   return path.join(dir, "progress", `${messageId}.json`);
 }
 
+// Issue #408: the proxied sidecar (inbox-proxied.mts). Here, so that this
+// module stays inside the closed graph of the staged messaging client.
+export function proxiedFileOf(dir: string, messageId: string): string {
+  if (!isMessageId(messageId)) throw new Error("invalid message id");
+  return path.join(dir, "proxied", `${messageId}.json`);
+}
+
 // Temp file plus rename, so a reader never sees a half-written record. Also
 // used for the other files the daemon and the session tools exchange.
 export function writeJsonAtomic(file: string, value: unknown): void {
@@ -110,7 +119,8 @@ export function storeMessage(dir: string, body: MessageDeliverBody, now: number 
   ensureDir(dir);
   const record: InboxRecord = {
     messageId: body.messageId, from: { nodeId: body.from.nodeId, session: body.from.session }, toSession: body.toSession,
-    text: body.text, ...(body.inReplyTo ? { inReplyTo: body.inReplyTo } : {}), ...(body.taskId ? { taskId: body.taskId } : {}),
+    text: body.text, ...(body.inReplyTo ? { inReplyTo: body.inReplyTo } : {}),
+    ...(body.proxyOf ? { proxyOf: body.proxyOf } : {}), ...(body.taskId ? { taskId: body.taskId } : {}),
     createdAt: body.createdAt,
     receivedAt: new Date(now).toISOString(), state: "accepted", depth,
   };
@@ -348,6 +358,7 @@ export function purgeInbox(dir: string, now: number = Date.now(), maxAgeMs: numb
     if (name.endsWith(".json")) {
       fs.rmSync(receiptFileOf(dir, name.slice(0, -5)), { force: true });
       fs.rmSync(progressFileOf(dir, name.slice(0, -5)), { force: true });
+      if (isMessageId(name.slice(0, -5))) fs.rmSync(proxiedFileOf(dir, name.slice(0, -5)), { force: true });
       removed++;
     }
   }

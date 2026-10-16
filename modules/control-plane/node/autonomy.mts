@@ -38,7 +38,9 @@ export type AutonomyAction = "wake" | "stuck-offer" | "budget" | "depth-limit" |
   // wake-hook.mts: a headless run (claude -p) ended its listener before the first poll (issue #235).
   | "headless"
   // The Codex idle reply proxy (issue #408, codex-fork-reply.mts).
-  | "fork" | "fork-declined" | "fork-failed" | "fork-uncertain" | "fork-superseded" | "fork-not-idle" | "fork-disabled-platform";
+  | "fork" | "fork-declined" | "fork-failed" | "fork-uncertain" | "fork-superseded" | "fork-not-idle" | "fork-disabled-platform"
+  // codex-fork-relay.mts: the fork's answer went to the outbox as a proxy answer (issue #408, PR 4).
+  | "fork-relayed";
 
 export const listenerDir = (paths: NodePaths): string => path.join(paths.dir, "listeners");
 export const wakeAudit = (paths: NodePaths): string => path.join(paths.dir, "wake.jsonl");

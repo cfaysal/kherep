@@ -78,6 +78,8 @@ export interface CodexDeps {
   // A started helper that cannot prove both exit and close must keep its
   // service admission fail-closed even when callers reduce the failure to a reason.
   onUnconfirmedShutdown?: () => void;
+  // Tests only (issue #408, PR 4): runs between the relay's sidecar claim and its outbox write.
+  beforeOutbox?: () => void;
 }
 
 export interface CodexFiles { dir: string; events: string; lastMessage: string; stderr: string; exit: string }

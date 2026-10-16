@@ -6,6 +6,7 @@ import {
   isDirectoryBody, isDirectoryGetBody, isMessageAddress, isMessageDeliverBody, isMessageId, isMessageReceiptBody, isMessageSendBody, isMessageState, isMessageStatusBody,
   isMessageProgress, isNodeMessageStatusBody, isNodeReportedState, isSessionRef, legacyProgress, MAX_MESSAGE_TEXT, MAX_SESSION_REF,
   MAX_STATUS_REASON, MAX_DIRECTORY_SESSIONS, MESSAGE_STATES, MESSAGING_CAPABILITY, MESSAGING_PROGRESS_V2_CAPABILITY,
+  MESSAGING_PROXY_CAPABILITY,
 } from "./protocol-messages.mts";
 
 const ID = "00000000-0000-4000-8000-00000000000a";
@@ -145,4 +146,22 @@ test("directory.get and directory bodies", () => {
     { ...body, sessions: Array(MAX_DIRECTORY_SESSIONS + 1).fill(session) }, { ...body, fetchedAt: "now" }, { ...body, truncated: "yes" },
   ];
   for (const value of bad) assert.equal(isDirectoryBody(value), false, JSON.stringify(value).slice(0, 120));
+});
+
+test("issue #408 relay: proxyOf is an optional message id on send and deliver, never together with inReplyTo", () => {
+  assert.equal(MESSAGING_PROXY_CAPABILITY, "messaging.proxy.v1");
+  assert.equal(isMessageSendBody({ ...SEND, proxyOf: ID }), true);
+  assert.equal(isMessageDeliverBody({ ...DELIVER, proxyOf: ID }), true);
+  for (const body of [{ ...SEND, proxyOf: "not-a-uuid" }, { ...SEND, proxyOf: ID, inReplyTo: ID }]) assert.equal(isMessageSendBody(body), false);
+  for (const body of [{ ...DELIVER, proxyOf: 1 }, { ...DELIVER, proxyOf: ID, inReplyTo: ID }]) assert.equal(isMessageDeliverBody(body), false);
+});
+
+test("issue #408 relay: a directory body may name the Worker's capabilities", () => {
+  const body = { nodes: [], sessions: [], fetchedAt: new Date(0).toISOString() };
+  assert.equal(isDirectoryBody({ ...body, worker: { capabilities: ["messaging.proxy.v1"] } }), true);
+  assert.equal(isDirectoryBody({ ...body, worker: { capabilities: [] } }), true);
+  for (const worker of [null, [], { capabilities: "messaging.proxy.v1" }, { capabilities: [1] }, { capabilities: [""] },
+    { capabilities: Array(65).fill("x") }]) {
+    assert.equal(isDirectoryBody({ ...body, worker }), false, JSON.stringify(worker));
+  }
 });

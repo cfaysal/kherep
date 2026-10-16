@@ -6,6 +6,7 @@ import { busyPolicyFingerprint } from "./codex-busy-policy.mts";
 import { admitForkReply, type ForkRefusal } from "./codex-fork-admission.mts";
 import { advanceForkAttempt, claimForkAttempt, readForkAttempt } from "./codex-fork-attempts.mts";
 import { parseFeaturesList } from "./codex-fork-params.mts";
+import { relayForkAnswer, relayPending, workerTakesProxy } from "./codex-fork-relay.mts";
 import { APP_SERVER_ARGS, runForkAttempt, type ForkOutcome, type ForkTimeouts } from "./codex-fork-process.mts";
 import { intercomMcpOverrides, MCP_CACHE_MS, runMcpList } from "./codex-mcp.mts";
 import type { CodexDeps } from "./codex-process.mts";
@@ -19,9 +20,9 @@ import { retainServiceAdmission, waitForServiceAdmission, type ServiceAdmission 
 // The Codex fork reply producer (issue #408, design sections 2 and 6): for an
 // opted-in, idle owner with an accepted exact-addressed message, one helper
 // at a time on the whole node forks the owner and stores the validated
-// answer in the attempt file. Nothing is sent: no outbox record, no inbox,
-// progress or session record change (the relay is the next increment).
-// With wake.codexFork absent nothing past the first check runs.
+// answer in the attempt file; the relay (codex-fork-relay.mts, PR 4) then
+// sends it as one labelled proxy answer. No inbox, progress or session record
+// changes. With wake.codexFork absent nothing past the first check runs.
 
 const pending = new Map<string, Promise<void>>();
 let forkLane: Promise<void> = Promise.resolve();
@@ -85,7 +86,7 @@ function forkFeatures(file: string, identity: string, codex: CodexDeps, now: num
 export type ForkGuards = { ok: true; producer: QueueProducerIdentity; mcpNames: string[]; features: Set<string> }
   | { ok: false; reason: ForkRefusal };
 
-// Guards 10 to 12, before admission, so a refusal spends no turn.
+// Guards 10 to 13, before admission, so a refusal spends no turn.
 export async function forkGuards(deps: RunnerDeps, codex: CodexDeps, log: (line: string) => void): Promise<ForkGuards> {
   const file = (codex.findCodex ?? findCodex)();
   if (!file) return { ok: false, reason: "fork-producer" };
@@ -98,7 +99,9 @@ export async function forkGuards(deps: RunnerDeps, codex: CodexDeps, log: (line:
   if (mcp.unnamed > 0) log(`kherep-node: ${mcp.unnamed} MCP server(s) without a bare name stay as configured in a Codex fork`);
   const binary = producer.approvedFiles[0]!;
   const features = await forkFeatures(file, `${binary.realpath}\0${binary.sha256}`, codex, deps.now?.() ?? Date.now());
-  return features ? { ok: true, producer, mcpNames: mcp.names, features } : { ok: false, reason: "fork-features-unknown" };
+  if (!features) return { ok: false, reason: "fork-features-unknown" };
+  // 13 (PR 4): an answer the Worker cannot take as a proxy answer is never produced.
+  return workerTakesProxy(deps.paths) ? { ok: true, producer, mcpNames: mcp.names, features } : { ok: false, reason: "fork-relay-unsupported" };
 }
 
 // The oldest of the listed messages that is still accepted and has no
@@ -122,6 +125,8 @@ const AUDIT: Record<ForkOutcome["state"], AutonomyAction> = { completed: "fork",
 
 async function attempt(deps: RunnerDeps, owner: string, messageIds: string[], fingerprint: string, maxAnswerBytes: number,
   admission: ServiceAdmission, log: (line: string) => void): Promise<void> {
+  // A completed answer a crash left unrelayed goes first, at most once.
+  relayPending(deps, owner, log);
   const messageId = oldestAccepted(deps, owner, messageIds);
   if (!messageId) return;
   const codex: CodexDeps = { ...deps.codex, onUnconfirmedShutdown: () => {
@@ -162,4 +167,5 @@ async function attempt(deps: RunnerDeps, owner: string, messageIds: string[], fi
   } finally {
     audit(deps.paths, now(), owner, [messageId], AUDIT[state]);
   }
+  if (state === "completed") relayForkAnswer(deps, owner, messageId, log);
 }

@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { MESSAGE_PROGRESS_CODES } from "../protocol-messages.mts";
+import { OPERATOR_NODE_ID, type MESSAGE_PROGRESS_CODES } from "../protocol-messages.mts";
 import { bypassesPermissions, takeTurn } from "./autonomy.mts";
 import { codexHome } from "./codex-app.mts";
 import { busyPolicyFingerprint, busyWakeDisabled } from "./codex-busy-policy.mts";
@@ -31,7 +31,8 @@ export type ForkRefusal =
   | "cwd-refused" // 7
   | "runtime-pending" | "runtime-not-ready" // 9, checked before the budget
   | "budget-spacing" | "budget-exhausted" // 8, last
-  | "fork-producer" | "fork-mcp-unknown" | "fork-features-unknown"; // 10 to 12, returned by the producer before admission
+  | "fork-producer" | "fork-mcp-unknown" | "fork-features-unknown" // 10 to 12, returned by the producer before admission
+  | "fork-relay-unsupported"; // 13 (issue #408, PR 4): the Worker cannot take a proxy answer; also before admission
 export type ForkAdmission = { ok: true; cwd: string } | { ok: false; reason: ForkRefusal };
 
 // The message keeps waiting whatever the refusal: these are existing waiting codes.
@@ -44,6 +45,7 @@ export const FORK_PROGRESS: Record<ForkRefusal, typeof MESSAGE_PROGRESS_CODES.wa
   "cwd-refused": "cwd-refused", "runtime-pending": "retry-pending", "runtime-not-ready": "awaiting-user-turn",
   "budget-spacing": "retry-pending", "budget-exhausted": "budget-exhausted",
   "fork-producer": "awaiting-user-turn", "fork-mcp-unknown": "awaiting-user-turn", "fork-features-unknown": "awaiting-user-turn",
+  "fork-relay-unsupported": "awaiting-user-turn",
 };
 
 // Decision D10 (2026-10-16): the operator's opt-in of the full thread id in
@@ -102,7 +104,10 @@ function sessionRefusal(f: Facts, policy: NodePolicy): ForkRefusal | null {
 
 function messageRefusal(f: Facts): ForkRefusal | null {
   const m = f.message, depth = m?.depth ?? 0;
-  if (m?.state !== "accepted" || m.toSession !== f.owner || m.taskId !== undefined) return "message-not-eligible";
+  // The operator API cannot be answered with msg send, nor by a proxy answer.
+  if (m?.state !== "accepted" || m.toSession !== f.owner || m.taskId !== undefined || m.from.nodeId === OPERATOR_NODE_ID) {
+    return "message-not-eligible";
+  }
   if (!Number.isSafeInteger(depth) || depth < 0 || depth >= MAX_REPLY_DEPTH) return "depth-limit";
   if (!f.attempts || f.attempts.length >= MAX_FORK_ATTEMPTS) return "attempts-unreadable";
   if (f.attempts.some((a) => a.messageId === m.messageId)) return "attempt-exists";

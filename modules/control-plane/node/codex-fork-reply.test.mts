@@ -71,7 +71,7 @@ test("an owner without idle evidence gets fork-not-idle once, no helper and no s
   assert.deepEqual([f.app.runs.length, turns(f)], [0, []]);
 });
 
-test("an idle opted-in owner: one helper, the answer stored, nothing sent, nothing else changed", async (t) => {
+test("an idle opted-in owner: one helper, the answer stored and relayed once, nothing else changed", async (t) => {
   const f = forkNode(t);
   const id = f.add();
   const session = fs.readFileSync(path.join(f.paths.codexSessions, `${FORK_OWNER}.json`), "utf8");
@@ -84,11 +84,11 @@ test("an idle opted-in owner: one helper, the answer stored, nothing sent, nothi
   if (process.platform !== "win32") {
     assert.equal(fs.statSync(path.join(forkAttemptsPath(f.paths, FORK_OWNER), `${id}.json`)).mode & 0o777, 0o600);
   }
-  assert.deepEqual(forkAudit(f).map((line) => [line.action, line.messageIds]), [["fork", [id]]]);
+  assert.deepEqual(forkAudit(f).map((line) => [line.action, line.messageIds]), [["fork", [id]], ["fork-relayed", [id]]]);
   assert.deepEqual(Object.keys(forkAudit(f)[0]!), ["ts", "sessionId", "messageIds", "action"], "metadata only");
   assert.equal(getMessage(f.paths.inbox, id)?.state, "accepted", "the owner still reads it");
   assert.equal(fs.readFileSync(path.join(f.paths.codexSessions, `${FORK_OWNER}.json`), "utf8"), session);
-  assert.deepEqual(fs.existsSync(f.paths.outbox) ? fs.readdirSync(f.paths.outbox) : [], [], "nothing is sent");
+  assert.deepEqual(fs.readdirSync(f.paths.outbox), [`${attempt?.relayMessageId}.json`], "one proxy answer (PR 4)");
   assert.deepEqual(turns(f), [T0], "one turn of the owner's budget");
   await poll(f);
   assert.equal(f.app.runs.length, 1, "one attempt per message across polls");
