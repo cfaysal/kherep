@@ -2,38 +2,53 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { MESSAGING_PROXY_CAPABILITY, OPERATOR_NODE_ID } from "../protocol-messages.mts";
 import { audit } from "./autonomy.mts";
+import { RELAY_MAX_AGE_MS, relayMessageEligible, relayRefusal, type ForkRefusal, type RelayGuardDeps } from "./codex-fork-admission.mts";
 import { advanceForkAttempt, forkAttempts, readForkAttempt, type ForkAttempt } from "./codex-fork-attempts.mts";
 import type { CodexDeps } from "./codex-process.mts";
 import type { NodePaths } from "./config.mts";
-import { getOutbox, getSent, readDirectory, writeOutbox } from "./exchange.mts";
-import { getMessage, type InboxRecord } from "./inbox.mts";
-import { claimProxied, getProxied, removeProxied } from "./inbox-proxied.mts";
+import { DIRECTORY_INTERVAL_MS, getOutbox, getSent, writeOutbox, type OutboxRecord, type ProxySend } from "./exchange.mts";
+import { getMessage } from "./inbox.mts";
+import { claimProxied, getProxied, removeProxied, setUnconfirmed, setUnresolved, type ProxiedRecord } from "./inbox-proxied.mts";
+import type { NodePolicy } from "./policy.mts";
 
-// The relay of a completed Codex fork answer (issue #408, PR 4, design
-// sections 2.1 and 4): one outbox record per completed attempt, a labelled
-// proxy answer to the original's sender with proxyOf and depth + 1, never
-// inReplyTo, so the original is never marked replied. The inbox record stays
-// accepted for its owner; a local sidecar (inbox-proxied.mts) tells the owner.
-// "Original wins" locally: check, claim the sidecar, write, re-check, and
-// withdraw before the exchange can see the file. Steps 3 to 7 run without an
-// await in between, and the daemon is one event loop, so pollExchange cannot
-// send a record that the re-check withdraws. Every precondition is read from
-// disk. What is left once the proxy is out is closed at the Worker for a
-// proxy still queued (message-proxy.mts); an accepted one stays (PR 7).
+// The relay of a completed Codex fork answer (issue #408, PR 4, design r3
+// sections 2.2 to 2.5 with the r3 review corrections): one outbox record per
+// completed attempt, a labelled proxy answer to the original's sender with
+// proxyOf and depth + 1, never inReplyTo, so the original is never marked
+// replied. There is no stored release: the sweep writes the record only when
+// relayRefusal passes, and the exchange's send gate runs the same guards at
+// every send. The owner reading or answering first withdraws, before any send
+// guard is consulted, exactly when nothing can have left this node and as
+// unconfirmed otherwise; a held record is cleaned up after RELAY_MAX_AGE_MS
+// without a Worker status, and the outcome is then unresolved, not "never
+// sent". Every step is a synchronous file operation; no turn, no helper.
 
-export interface RelayDeps { paths: NodePaths; now?: () => number; codex?: Pick<CodexDeps, "beforeOutbox"> }
-
-// Guard 13: a Worker that names messaging.proxy.v1 in the last directory frame.
-// Any other Worker would drop proxyOf and store the proxy at depth 0.
-export function workerTakesProxy(paths: NodePaths): boolean {
-  try {
-    return readDirectory(paths)?.worker?.capabilities.includes(MESSAGING_PROXY_CAPABILITY) === true;
-  } catch {
-    return false;
-  }
+export interface RelayDeps {
+  paths: NodePaths; policy: NodePolicy; now?: () => number; platform?: string;
+  codex?: Pick<CodexDeps, "beforeOutbox" | "postToolHook">; workerCapabilities?: () => readonly string[] | null;
 }
+// What an attempt waits for: nothing; policy, enrollment, kill switch,
+// fingerprint or capability (every DIRECTORY_INTERVAL_MS); the Worker, the
+// owner's inbox or session state (every poll).
+type Pending = "none" | "blocked" | "external";
+const RANK: Record<Pending, number> = { none: 0, blocked: 1, external: 2 };
+
+// Per owner: the next time the sweep is due (absent: at once). Provenance of
+// this process, never authorization: written (this process wrote the record)
+// and sentOnce (this process sent it at least once).
+const due = new Map<string, number>();
+const written = new Set<string>();
+const sentOnce = new Set<string>();
+const heldLog = new Map<string, string>();
+// The owner's session state changes with hook events: re-checked every poll.
+const OWNER_CODES: readonly ForkRefusal[] = ["not-recorded", "task-session", "permission-mode", "permission-mode-unknown",
+  "post-tool-hook-missing", "fork-not-idle"];
+
+export function resetRelayState(): void {
+  due.clear(); written.clear(); sentOnce.clear(); heldLog.clear();
+}
+export function markRelayDue(owner: string): void { due.delete(owner); }
 
 // All three ids are validated UUIDs, so the header holds no peer or model text.
 export function proxyText(owner: string, forkId: string, messageId: string, answer: string): string {
@@ -41,76 +56,162 @@ export function proxyText(owner: string, forkId: string, messageId: string, answ
     + `was idle. The owner has not read your message yet.\n\n${answer}`;
 }
 
-// Still the owner's to read: accepted, addressed to it, not from the operator API.
-const waiting = (record: InboxRecord | null, owner: string): record is InboxRecord =>
-  record?.state === "accepted" && record.toSession === owner && record.from.nodeId !== OPERATOR_NODE_ID;
+const guards = (deps: RelayDeps): RelayGuardDeps => ({ paths: deps.paths, platform: deps.platform,
+  postToolHook: deps.codex?.postToolHook, workerCapabilities: deps.workerCapabilities });
+const iso = (now: number): string => new Date(now).toISOString();
+const claimOf = (a: ForkAttempt, relayMessageId: string, now: number) => ({ relayMessageId, forkId: a.forkId!, attemptId: a.attemptId, at: iso(now) });
+const matches = (claim: ProxiedRecord | null, a: ForkAttempt, relay: string): claim is ProxiedRecord =>
+  claim?.relayMessageId === relay && claim.attemptId === a.attemptId && claim.forkId === a.forkId;
 
-// The owner was first. ownSidecar: this run claimed it; otherwise only a
-// sidecar with this relay id, left by an earlier run, is removed.
-function supersede(deps: RelayDeps, owner: string, attempt: ForkAttempt, relayMessageId: string, ownSidecar: boolean, now: number): void {
-  const { inbox } = deps.paths;
-  if (ownSidecar || getProxied(inbox, attempt.messageId)?.relayMessageId === relayMessageId) removeProxied(inbox, attempt.messageId);
-  advanceForkAttempt(deps.paths, owner, attempt.messageId, "completed", "superseded", {}, now);
-  audit(deps.paths, now, owner, [attempt.messageId], "fork-superseded");
+function held(owner: string, code: string, log: (line: string) => void): void {
+  if (heldLog.get(owner) !== code) log(`kherep-node: Codex fork relay held: ${code}`);
+  heldLog.set(owner, code);
 }
 
-// One completed attempt; a no-op for any other state and once relayedAt is set.
-// Throws on an unreadable store, attempt, outbox or sidecar.
-export function relayCompleted(deps: RelayDeps, owner: string, messageId: string, log: (line: string) => void): void {
-  const now = (): number => deps.now?.() ?? Date.now();
+// Withdrawal with its provenance (steps 6 and 8, review R3-WX2): exact only
+// when no frame can have left this node, otherwise the record stays as the
+// base of a late Worker status and the sidecar says unconfirmed.
+function withdraw(deps: RelayDeps, a: ForkAttempt, relay: string, now: number): Pending {
   const { paths } = deps;
-  let attempt = readForkAttempt(paths, owner, messageId);
-  if (attempt?.state !== "completed" || attempt.answer === undefined || attempt.forkId === undefined
-    || attempt.relayedAt !== undefined || !workerTakesProxy(paths)) return;
-  const { forkId, answer } = attempt;
-  // 1: the id exists on disk before any outbox write, so a resume reuses it.
-  if (attempt.relayMessageId === undefined) {
-    attempt = advanceForkAttempt(paths, owner, messageId, "completed", "completed", { relayMessageId: crypto.randomUUID() }, now());
+  const sidecar = getProxied(paths.inbox, a.messageId);
+  const own = sidecar === null || sidecar.relayMessageId === relay;
+  const record = getOutbox(paths, relay) !== null;
+  if (!sentOnce.has(relay) && !sidecar?.unconfirmedAt && (!record || written.has(relay))) {
+    fs.rmSync(path.join(paths.outbox, `${relay}.json`), { force: true });
+    if (own) removeProxied(paths.inbox, a.messageId);
+    return "none";
   }
-  const relayMessageId = attempt.relayMessageId!;
-  // 2: the outbox write happened before a crash.
-  if (getSent(paths, relayMessageId) || getOutbox(paths, relayMessageId)) {
-    advanceForkAttempt(paths, owner, messageId, "completed", "completed", { relayedAt: now() }, now());
-    return;
+  if (own) setUnconfirmed(paths.inbox, a.messageId, claimOf(a, relay, now), iso(now));
+  return "external";
+}
+
+// Step 8: the owner was first. Allowed only while relayedAt is unset.
+function supersede(deps: RelayDeps, owner: string, a: ForkAttempt, now: number): Pending {
+  advanceForkAttempt(deps.paths, owner, a.messageId, "completed", "superseded", {}, now);
+  audit(deps.paths, now, owner, [a.messageId], "fork-superseded");
+  return a.relayMessageId ? withdraw(deps, a, a.relayMessageId, now) : "none";
+}
+
+// Step 9 (D19): a held record past the bound without any status is removed.
+// What may have left this node stays an unresolved outcome in the sidecar.
+function cleanup(deps: RelayDeps, a: ForkAttempt, relay: string, record: OutboxRecord, now: number): boolean {
+  if (!(now - Date.parse(record.createdAt) > RELAY_MAX_AGE_MS)) return false;
+  const { paths } = deps;
+  const sidecar = getProxied(paths.inbox, a.messageId);
+  fs.rmSync(path.join(paths.outbox, `${relay}.json`), { force: true });
+  if (sidecar !== null && sidecar.relayMessageId !== relay) return true;
+  if (sentOnce.has(relay) || sidecar?.unconfirmedAt || !written.has(relay)) {
+    setUnconfirmed(paths.inbox, a.messageId, claimOf(a, relay, now), iso(now));
+    setUnresolved(paths.inbox, a.messageId, iso(now));
+  } else removeProxied(paths.inbox, a.messageId);
+  return true;
+}
+
+// Steps 1, 4, 5 and 6 for an attempt every guard passed in this synchronous section.
+function relayAttempt(deps: RelayDeps, owner: string, attempt: ForkAttempt, now: number, log: (line: string) => void): Pending {
+  const { paths } = deps;
+  const a = attempt.relayMessageId ? attempt
+    : advanceForkAttempt(paths, owner, attempt.messageId, "completed", "completed", { relayMessageId: crypto.randomUUID() }, now);
+  const relay = a.relayMessageId!;
+  const claim = claimProxied(paths.inbox, a.messageId, claimOf(a, relay, now)).record;
+  if (!matches(claim, a, relay)) {
+    held(owner, "sidecar-mismatch", log);
+    return "blocked";
   }
-  // 3
-  const record = getMessage(paths.inbox, messageId);
-  if (!waiting(record, owner)) return supersede(deps, owner, attempt, relayMessageId, false, now());
-  // 4
-  const claim = claimProxied(paths.inbox, messageId, { relayMessageId, forkId, attemptId: attempt.attemptId,
-    at: new Date(now()).toISOString() });
-  if (claim.record.relayMessageId !== relayMessageId) {
-    log("kherep-node: Codex fork relay sidecar mismatch; the answer stays stored");
-    return;
+  const record = getMessage(paths.inbox, a.messageId)!;
+  if (!getOutbox(paths, relay)) {
+    // to is the inbox record's sender, never model output.
+    writeOutbox(paths, { messageId: relay, fromSession: owner, fromSessionId: owner, to: { nodeId: record.from.nodeId, session: record.from.session },
+      text: proxyText(owner, a.forkId!, a.messageId, a.answer!), proxyOf: a.messageId, depth: (record.depth ?? 0) + 1, createdAt: iso(now) });
+    written.add(relay);
   }
   deps.codex?.beforeOutbox?.();
-  // 5: to is the inbox record's sender, never model output.
-  writeOutbox(paths, { messageId: relayMessageId, fromSession: owner, fromSessionId: owner,
-    to: { nodeId: record.from.nodeId, session: record.from.session }, text: proxyText(owner, forkId, messageId, answer),
-    proxyOf: messageId, depth: (record.depth ?? 0) + 1, createdAt: new Date(now()).toISOString() });
-  // 6: the owner answered or read it meanwhile: withdraw before the exchange runs.
-  if (!waiting(getMessage(paths.inbox, messageId), owner)) {
-    fs.rmSync(path.join(paths.outbox, `${relayMessageId}.json`), { force: true });
-    return supersede(deps, owner, attempt, relayMessageId, true, now());
-  }
-  // 7
-  advanceForkAttempt(paths, owner, messageId, "completed", "completed", { relayedAt: now() }, now());
-  audit(paths, now(), owner, [messageId], "fork-relayed");
+  if (!relayMessageEligible(paths, owner, a.messageId)) return supersede(deps, owner, a, now);
+  heldLog.delete(owner);
+  return "external";
 }
 
-// The relay of one attempt, with a log line instead of a throw.
-export function relayForkAnswer(deps: RelayDeps, owner: string, messageId: string, log: (line: string) => void): void {
-  try {
-    relayCompleted(deps, owner, messageId, log);
-  } catch (error) {
-    log(`kherep-node: Codex fork relay stopped; the answer stays stored: ${String((error as Error).message ?? error)}`);
-  }
+// A superseded attempt whose record may have left: wait for a late status, then clean up.
+function heldBookkeeping(deps: RelayDeps, a: ForkAttempt, relay: string, now: number): Pending {
+  const sidecar = getProxied(deps.paths.inbox, a.messageId);
+  if (!matches(sidecar, a, relay) || !sidecar.unconfirmedAt || sidecar.unresolvedAt || getSent(deps.paths, relay)) return "none";
+  const record = getOutbox(deps.paths, relay);
+  return !record || cleanup(deps, a, relay, record, now) ? "none" : "external";
 }
 
-// Crash resume: every completed attempt of the owner not yet relayed. An
-// unreadable store relays nothing; admission refuses it on its own.
+function sweepOne(deps: RelayDeps, owner: string, a: ForkAttempt, now: number, log: (line: string) => void): Pending {
+  const { paths } = deps;
+  const relay = a.relayMessageId;
+  if (a.state === "superseded") return relay ? heldBookkeeping(deps, a, relay, now) : "none";
+  if (a.state !== "completed" || a.answer === undefined || a.forkId === undefined || a.relayedAt !== undefined) return "none";
+  const sent = relay ? getSent(paths, relay) : null;
+  if (sent) {
+    // D18: relayedAt is the Worker's first answer recorded in sent/.
+    advanceForkAttempt(paths, owner, a.messageId, "completed", "completed", { relayedAt: now }, now);
+    audit(paths, now, owner, [a.messageId], "fork-relayed");
+    log(`kherep-node: Codex fork relay answered by the control plane: ${sent.state}`);
+    return "none";
+  }
+  const record = relay ? getOutbox(paths, relay) : null;
+  // A record this process did not write: a previous daemon may have sent it.
+  if (relay && record && !written.has(relay)) setUnconfirmed(paths.inbox, a.messageId, claimOf(a, relay, now), iso(now));
+  // Review R3-WX1: the owner first withdraws before any send guard can block it.
+  if (!relayMessageEligible(paths, owner, a.messageId)) return supersede(deps, owner, a, now);
+  const code = relayRefusal(guards(deps), owner, a, now);
+  if (code === "message-not-eligible") return supersede(deps, owner, a, now);
+  if (code === "fork-relay-stale") {
+    held(owner, code, log);
+    if (relay && record) return cleanup(deps, a, relay, record, now) ? "none" : "blocked";
+    const sidecar = getProxied(paths.inbox, a.messageId);
+    if (relay && matches(sidecar, a, relay) && !sidecar.unconfirmedAt) removeProxied(paths.inbox, a.messageId);
+    return "none";
+  }
+  if (code) {
+    held(owner, code, log);
+    return record || OWNER_CODES.includes(code) ? "external" : "blocked";
+  }
+  return relayAttempt(deps, owner, a, now, log);
+}
+
+// The sweep of one owner (design r3 section 2.2), called by the poll loop for
+// every candidate before its inbox filter, when due.
 export function relayPending(deps: RelayDeps, owner: string, log: (line: string) => void): void {
+  if (deps.policy.wake?.codexFork === undefined) return;
+  const now = deps.now?.() ?? Date.now();
+  if (now < (due.get(owner) ?? -Infinity)) return;
   let attempts: ForkAttempt[];
-  try { attempts = forkAttempts(deps.paths, owner); } catch { return; }
-  for (const a of attempts) if (a.state === "completed" && a.relayedAt === undefined) relayForkAnswer(deps, owner, a.messageId, log);
+  try { attempts = forkAttempts(deps.paths, owner); } catch {
+    due.set(owner, now + DIRECTORY_INTERVAL_MS);
+    return;
+  }
+  let pending: Pending = "none";
+  for (const a of attempts) {
+    let result: Pending;
+    try { result = sweepOne(deps, owner, a, now, log); } catch (error) {
+      log(`kherep-node: Codex fork relay stopped; the answer stays stored: ${String((error as Error).message ?? error)}`);
+      result = "blocked";
+    }
+    if (RANK[result] > RANK[pending]) pending = result;
+  }
+  due.set(owner, pending === "external" ? now : pending === "blocked" ? now + DIRECTORY_INTERVAL_MS : Infinity);
+}
+
+// The exchange's proxy send gate (design r3 section 2.5, review R3-2): the
+// attempt, the matching sidecar claim and every relay guard at this send.
+export function relaySendGate(deps: RelayDeps): ProxySend {
+  return {
+    allow(record, now) {
+      if (deps.policy.wake?.codexFork === undefined || !record.proxyOf || record.fromSession !== record.fromSessionId) return false;
+      try {
+        const a = readForkAttempt(deps.paths, record.fromSession, record.proxyOf);
+        if (a?.state !== "completed" || a.answer === undefined || a.forkId === undefined || a.relayMessageId !== record.messageId) return false;
+        const claim = getProxied(deps.paths.inbox, record.proxyOf);
+        if (!matches(claim, a, record.messageId) || claim.unresolvedAt) return false;
+        return relayRefusal(guards(deps), record.fromSession, a, now) === null;
+      } catch {
+        return false;
+      }
+    },
+    sent(messageId) { sentOnce.add(messageId); },
+  };
 }

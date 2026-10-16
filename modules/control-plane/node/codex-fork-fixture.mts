@@ -231,7 +231,9 @@ export function forkNode(t: test.TestContext, scenario: Partial<ForkScenario> = 
     storeMessage(node.paths.inbox, { messageId: id, from: PEER, toSession, text, createdAt: new Date(T0 - serial).toISOString() }, T0 - 1000 + serial);
     return id;
   };
-  const deps = (extra: CodexDeps = {}) => ({ ...node.deps({ ...codex, ...extra }), platform: (options.platform ?? "darwin") as NodeJS.Platform });
+  // The capability as the current connection proved it (client.mts), not directory.json.
+  const deps = (extra: CodexDeps = {}) => ({ ...node.deps({ ...codex, ...extra }), platform: (options.platform ?? "darwin") as NodeJS.Platform,
+    workerCapabilities: () => (options.capability === false ? [] : ["messaging.proxy.v1"]) });
   return { ...node, cwd, home, binary, app, calls, codex, add, deps, idle,
     features: (stdout: string, code = 0, stderr = "") => { featuresStdout = stdout; featuresCode = code; featuresStderr = stderr; } };
 }

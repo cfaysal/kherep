@@ -78,7 +78,7 @@ export interface CodexDeps {
   // A started helper that cannot prove both exit and close must keep its
   // service admission fail-closed even when callers reduce the failure to a reason.
   onUnconfirmedShutdown?: () => void;
-  // Tests only (issue #408, PR 4): runs between the relay's sidecar claim and its outbox write.
+  // Tests only (issue #408, PR 4): runs after the relay's outbox step, before its final re-check of the inbox record.
   beforeOutbox?: () => void;
 }
 

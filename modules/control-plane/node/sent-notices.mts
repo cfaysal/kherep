@@ -41,7 +41,8 @@ export function repliesTo(inbox: InboxRecord[], sent: SentRecord): InboxRecord[]
 // session still gets it, a later session reusing the name does not.
 export function unnoticedNotices(paths: NodePaths, refs: string[]): SentNotices {
   const records = messageIds(paths.sent).map((id) => read(paths, id))
-    .filter((r): r is SentRecord => r !== null && r.noticedAt === undefined && r.fromSession !== undefined)
+    // A proxy answer (issue #408) was never sent by the session: its outcome is the proxied line.
+    .filter((r): r is SentRecord => r !== null && r.noticedAt === undefined && r.fromSession !== undefined && r.proxyOf === undefined)
     .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
   const failures = records.filter((r) => failed(r) && refs.includes(r.fromSession!));
   const delivered = records.filter((r) => r.state === "delivered" && refs.includes(r.fromSessionId ?? r.fromSession!));

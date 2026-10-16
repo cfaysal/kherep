@@ -94,6 +94,11 @@ export class NodeClient {
   // The session list last sent in sessions.snapshot, as JSON.
   private lastSnapshot: string | null = null;
   authenticated = false;
+  // Issue #408, PR 4 (design r3 section 3.3): what the Worker of the current
+  // authenticated connection named in a directory frame received on it; null
+  // until that frame, again at every close and every auth.ok. Never read from
+  // directory.json, so a stale file or an old connection proves nothing.
+  workerCapabilities: readonly string[] | null = null;
 
   constructor(options: ClientOptions) {
     this.options = options;
@@ -106,12 +111,15 @@ export class NodeClient {
 
   connectionClosed(): void {
     this.authenticated = false;
+    this.workerCapabilities = null;
     this.registrationDirty = true;
     this.registrationFrames = null;
     this.credentialRequestPending = null;
   }
 
-  async onFrame(raw: string): Promise<string[]> {
+  // live: the frame arrived on the socket that is current and open when it is
+  // handled (the daemon decides; tests and the default take it as live).
+  async onFrame(raw: string, live = true): Promise<string[]> {
     if (raw === PONG_FRAME) return [];
     const parsed = parseEnvelope(raw);
     if (!parsed.ok) return [];
@@ -152,6 +160,7 @@ export class NodeClient {
         }
         if ((envelope.body as { name?: unknown }).name !== "auth.ok") return [];
         this.authenticated = true;
+        this.workerCapabilities = null;
         this.lastSnapshot = null;
         this.lastRuntimes = await this.options.runtimes();
         this.registrationDirty = true;
@@ -168,7 +177,10 @@ export class NodeClient {
         if (!this.authenticated || !isMessageDeliverBody(envelope.body)) return [];
         return this.onDeliver(envelope.body);
       case "directory":
-        if (isDirectoryBody(envelope.body)) this.callback("directory", () => this.options.storeDirectory?.(envelope.body as DirectoryBody));
+        if (!isDirectoryBody(envelope.body)) return [];
+        this.callback("directory", () => this.options.storeDirectory?.(envelope.body as DirectoryBody));
+        // A frame without worker comes from an older Worker: no capability.
+        if (live && this.authenticated) this.workerCapabilities = [...envelope.body.worker?.capabilities ?? []];
         return [];
       case "message.status": {
         const body = envelope.body;

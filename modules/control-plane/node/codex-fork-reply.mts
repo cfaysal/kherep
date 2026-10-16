@@ -1,12 +1,13 @@
 import path from "node:path";
 
+import { MESSAGING_PROXY_CAPABILITY } from "../protocol-messages.mts";
 import { audit, type AutonomyAction } from "./autonomy.mts";
 import { findCodex } from "./codex-binary.mts";
 import { busyPolicyFingerprint } from "./codex-busy-policy.mts";
 import { admitForkReply, type ForkRefusal } from "./codex-fork-admission.mts";
 import { advanceForkAttempt, claimForkAttempt, readForkAttempt } from "./codex-fork-attempts.mts";
 import { parseFeaturesList } from "./codex-fork-params.mts";
-import { relayForkAnswer, relayPending, workerTakesProxy } from "./codex-fork-relay.mts";
+import { markRelayDue } from "./codex-fork-relay.mts";
 import { APP_SERVER_ARGS, runForkAttempt, type ForkOutcome, type ForkTimeouts } from "./codex-fork-process.mts";
 import { intercomMcpOverrides, MCP_CACHE_MS, runMcpList } from "./codex-mcp.mts";
 import type { CodexDeps } from "./codex-process.mts";
@@ -20,8 +21,8 @@ import { retainServiceAdmission, waitForServiceAdmission, type ServiceAdmission 
 // The Codex fork reply producer (issue #408, design sections 2 and 6): for an
 // opted-in, idle owner with an accepted exact-addressed message, one helper
 // at a time on the whole node forks the owner and stores the validated
-// answer in the attempt file; the relay (codex-fork-relay.mts, PR 4) then
-// sends it as one labelled proxy answer. No inbox, progress or session record
+// answer in the attempt file; the relay sweep (codex-fork-relay.mts, PR 4)
+// then hands it to the exchange as one labelled proxy answer. No inbox, progress or session record
 // changes. With wake.codexFork absent nothing past the first check runs.
 
 const pending = new Map<string, Promise<void>>();
@@ -100,8 +101,9 @@ export async function forkGuards(deps: RunnerDeps, codex: CodexDeps, log: (line:
   const binary = producer.approvedFiles[0]!;
   const features = await forkFeatures(file, `${binary.realpath}\0${binary.sha256}`, codex, deps.now?.() ?? Date.now());
   if (!features) return { ok: false, reason: "fork-features-unknown" };
-  // 13 (PR 4): an answer the Worker cannot take as a proxy answer is never produced.
-  return workerTakesProxy(deps.paths) ? { ok: true, producer, mcpNames: mcp.names, features } : { ok: false, reason: "fork-relay-unsupported" };
+  // 13 (PR 4): an answer the Worker of the current connection cannot take as a proxy answer is never produced.
+  return deps.workerCapabilities?.()?.includes(MESSAGING_PROXY_CAPABILITY) === true ? { ok: true, producer, mcpNames: mcp.names, features }
+    : { ok: false, reason: "fork-relay-unsupported" };
 }
 
 // The oldest of the listed messages that is still accepted and has no
@@ -125,8 +127,6 @@ const AUDIT: Record<ForkOutcome["state"], AutonomyAction> = { completed: "fork",
 
 async function attempt(deps: RunnerDeps, owner: string, messageIds: string[], fingerprint: string, maxAnswerBytes: number,
   admission: ServiceAdmission, log: (line: string) => void): Promise<void> {
-  // A completed answer a crash left unrelayed goes first, at most once.
-  relayPending(deps, owner, log);
   const messageId = oldestAccepted(deps, owner, messageIds);
   if (!messageId) return;
   const codex: CodexDeps = { ...deps.codex, onUnconfirmedShutdown: () => {
@@ -167,5 +167,6 @@ async function attempt(deps: RunnerDeps, owner: string, messageIds: string[], fi
   } finally {
     audit(deps.paths, now(), owner, [messageId], AUDIT[state]);
   }
-  if (state === "completed") relayForkAnswer(deps, owner, messageId, log);
+  // The next poll's sweep relays it (design r3 section 2.2).
+  if (state === "completed") markRelayDue(owner);
 }

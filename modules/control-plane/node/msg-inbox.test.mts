@@ -8,7 +8,6 @@ import { recordCodexSession } from "./codex-sessions.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
 import { writeLocalSessions } from "./exchange.mts";
 import { getMessage, markClosedAttempt, markDelivered, markRefused, setDeliveryTask, storeMessage } from "./inbox.mts";
-import { claimProxied } from "./inbox-proxied.mts";
 import { runMsg } from "./msg-cli.mts";
 
 const SESSION = "019a2b3c-4d5e-7f60-8123-456789abcdef";
@@ -205,22 +204,4 @@ test("Codex inbox needs a verified sender: a recent hook record and no other nod
   const err: string[] = [];
   assert.equal(await runMsg(["inbox"], { paths, env: {}, now: () => NOW, out: line => out.push(line), err: line => err.push(line) }), 1);
   assert.match(err.join("\n"), /neither CLAUDE_CODE_SESSION_ID \(Claude Code\) nor KHEREP_SESSION_ID .* passes --from <its full session id>/);
-});
-
-// Issue #408, PR 4: a message a fork answered by proxy, and a received proxy answer.
-test("msg inbox names a proxy answer sent for a message and the original a received proxy answers", async (t) => {
-  const paths = setup(t);
-  const relay = "00000000-0000-4000-8000-0000000000f1";
-  const at = new Date(NOW + 1000).toISOString();
-  storeMessage(paths.inbox, { messageId: MESSAGE, from: { nodeId: PEER, session: "codex-peer" }, toSession: SESSION, text: "question",
-    createdAt: new Date(NOW).toISOString() }, NOW);
-  claimProxied(paths.inbox, MESSAGE, { relayMessageId: relay, forkId: "fork-a", attemptId: "00000000-0000-4000-8000-0000000000f2", at });
-  storeMessage(paths.inbox, { messageId: SECOND, from: { nodeId: PEER, session: "codex-peer" }, toSession: SESSION, text: "proxy text",
-    proxyOf: TASK, createdAt: new Date(NOW).toISOString() }, NOW + 1);
-  const shown = await run(paths, []);
-  assert.equal(shown.code, 0, shown.err);
-  assert.ok(shown.out.includes(`${MESSAGE}  accepted  ${new Date(NOW).toISOString()}\n  from: node ${PEER}, session codex-peer\n`
-    + `  proxy answer sent: ${relay} at ${at}\n`), shown.out);
-  assert.ok(shown.out.includes(`  proxy for: ${TASK}\n  | proxy text`), shown.out);
-  assert.equal(shown.out.match(/proxy answer sent/g)?.length, 1);
 });

@@ -8,7 +8,10 @@ import { fileURLToPath } from "node:url";
 
 import { nodePaths, type NodePaths } from "./config.mts";
 import { getMessage, INBOX_RETENTION_MS, markDelivered, markReported, purgeInbox, storeMessage } from "./inbox.mts";
-import { claimProxied, getProxied, proxiedFileOf, removeProxied } from "./inbox-proxied.mts";
+import { recordSent, writeOutbox } from "./exchange.mts";
+import {
+  claimProxied, getProxied, proxiedFileOf, relayState, removeProxied, setUnconfirmed, setUnresolved, type ProxiedRecord,
+} from "./inbox-proxied.mts";
 
 // Issue #408, PR 4: the local-only sidecar inbox/proxied/<messageId>.json that
 // marks a message a fork already answered by proxy. Never a field of the
@@ -105,4 +108,45 @@ test("two independent processes racing for one sidecar: exactly one creates it, 
     assert.deepEqual(results.filter((r) => r.startsWith("existing ")).map((r) => r.slice(9)), created, JSON.stringify(results));
     assert.equal(getProxied(paths.inbox, id(round))?.relayMessageId, created[0]);
   }
+});
+
+// Issue #408, PR 4, design r3 section 2.1: the daemon's two later marks keep
+// every other field, and the relay state is derived from sidecar, outbox and
+// sent/ only, never from the sidecar's existence alone.
+test("setUnconfirmed creates or extends the sidecar, setUnresolved extends it; both keep the other fields", (t) => {
+  const paths = setup(t);
+  const later = new Date(NOW + 1000).toISOString();
+  assert.deepEqual(setUnconfirmed(paths.inbox, id(1), fields, later), { version: 1, ...fields, unconfirmedAt: later });
+  assert.deepEqual(getProxied(paths.inbox, id(1)), { version: 1, ...fields, unconfirmedAt: later });
+  claimProxied(paths.inbox, id(2), fields);
+  setUnconfirmed(paths.inbox, id(2), { ...fields, forkId: "ignored" }, later);
+  assert.deepEqual(getProxied(paths.inbox, id(2)), { version: 1, ...fields, unconfirmedAt: later });
+  const end = new Date(NOW + 2000).toISOString();
+  assert.deepEqual(setUnresolved(paths.inbox, id(2), end), { version: 1, ...fields, unconfirmedAt: later, unresolvedAt: end });
+  assert.throws(() => setUnresolved(paths.inbox, id(3), end), /no proxied record/);
+  fs.writeFileSync(proxiedFileOf(paths.inbox, id(4)), JSON.stringify({ version: 1, ...fields, unresolvedAt: "soon" }));
+  assert.throws(() => getProxied(paths.inbox, id(4)), /invalid/);
+});
+
+test("relayState returns each row of the state table from the matching files", (t) => {
+  const paths = setup(t);
+  const sidecar: ProxiedRecord = { version: 1, ...fields };
+  const at = new Date(NOW).toISOString();
+  const out = { messageId: RELAY, fromSession: "owner", to: { nodeId: PEER, session: "peer" }, text: "x", createdAt: at };
+  const state = (record = sidecar) => relayState(paths, record).state;
+  assert.equal(state(), "pending");
+  assert.equal(state({ ...sidecar, unresolvedAt: at }), "unresolved");
+  writeOutbox(paths, out);
+  assert.equal(state(), "handed");
+  assert.equal(state({ ...sidecar, unconfirmedAt: at }), "unconfirmed");
+  for (const [sent, expected] of [["queued", "taken"], ["accepted", "delivered"], ["delivered", "delivered"], ["replied", "delivered"],
+    ["refused", "failed"], ["expired", "failed"], ["error", "failed"]] as const) {
+    writeOutbox(paths, out);
+    fs.rmSync(path.join(paths.sent, `${RELAY}.json`), { force: true });
+    recordSent(paths, RELAY, sent, sent === "refused" ? "proxy parent unknown" : undefined, NOW);
+    const result = relayState(paths, { ...sidecar, unconfirmedAt: at, unresolvedAt: at });
+    assert.equal(result.state, expected, sent);
+    assert.equal(result.sent?.state, sent);
+  }
+  assert.equal(relayState(paths, sidecar).sent?.reason, undefined);
 });
