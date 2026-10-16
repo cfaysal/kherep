@@ -11,11 +11,13 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { renderIntercomInstructions } from "../modules/control-plane/node/intercom-instructions.mts";
+import { intercomValues, renderIntercom } from "./render-intercom.mts";
 
 const HERE = import.meta.dirname;
 const slash = (value: string): string => value.replace(/\\/g, "/");
-const TEMPLATE = "# Kherep\nOperator text.\n__KHEREP_NODE__ msg sessions\n";
+const TEMPLATE = "# Kherep\nOperator text.\n__KHEREP_NODE__ msg sessions\n"
+  + "Example: __KHEREP_NODE__ msg send __KHEREP_EXAMPLE_TARGET__ -- hi\n";
+const rendered = (dir: string): string => renderIntercom(TEMPLATE, intercomValues(dir));
 
 function harness(t: test.TestContext, live: string | null, configDir: string): { status: number | null; out: string } {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kherep-drift-intercom-")));
@@ -53,15 +55,15 @@ function configDir(t: test.TestContext): string {
 
 test("a live file rendered for this config root is in sync", (t) => {
   const dir = configDir(t);
-  const result = harness(t, renderIntercomInstructions(TEMPLATE, dir), dir);
+  const result = harness(t, rendered(dir), dir);
   assert.equal(result.status, 0, result.out);
   assert.match(result.out, /^ok +CLAUDE\.md$/m);
 });
 
 test("a hand-edited command line or an unrendered placeholder is drift", (t) => {
   const dir = configDir(t);
-  const edited = renderIntercomInstructions(TEMPLATE, dir).replace("kherep-node.mjs", "kherep-node-old.mjs");
-  for (const live of [edited, TEMPLATE]) {
+  const edited = rendered(dir).replace("kherep-node.mjs", "kherep-node-old.mjs");
+  for (const live of [edited, TEMPLATE, rendered(dir).replace("peer/session", "other/session")]) {
     const result = harness(t, live, dir);
     assert.equal(result.status, 1, result.out);
     assert.match(result.out, /^DRIFT +CLAUDE\.md$/m);

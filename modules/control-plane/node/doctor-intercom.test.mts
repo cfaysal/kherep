@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { controlPlaneCli, renderControlPlaneRules } from "../../../codex/lib/control-plane-rules.mts";
+import { cliRule, controlPlaneCli, launcherRule, renderControlPlaneRules } from "../../../codex/lib/control-plane-rules.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
 import { checkIntercom } from "./doctor-intercom.mts";
 import { instructionText, writeIntercomHost, type IntercomHost } from "./doctor-intercom-fixture.mts";
-import { INTERCOM_INSTRUCTIONS, expectedIntercomText, launcherToken, renderIntercomInstructions } from "./intercom-instructions.mts";
+import { INTERCOM_INSTRUCTIONS, expectedIntercomText, intercomCommand } from "./intercom-instructions.mts";
 import { launcherCommand } from "./launcher.mts";
 
 // Issue #436. The intercom check against synthetic hosts: one healthy host,
@@ -128,13 +128,19 @@ test("each instruction file is reported stale, missing or unreadable on its own"
   }
 });
 
-test("a rules file that allowlists only the legacy pin CLI is stale", (t) => {
+test("a rules file without the launcher rule as the installer writes it is stale", (t) => {
   const h = host(t);
-  fs.writeFileSync(h.files.codexRules, renderControlPlaneRules(controlPlaneCli(h.pin)));
-  assert.deepEqual([check(h).ok, (check(h).instructions as Record<string, string>).codexRules], [false, "stale"]);
-  fs.writeFileSync(h.files.codexRules, renderControlPlaneRules(controlPlaneCli(h.pin))
-    + renderControlPlaneRules(launcherToken(h.root)));
-  assert.equal((check(h).instructions as Record<string, string>).codexRules, "present");
+  const command = intercomCommand(h.root);
+  const codexRules = (rules: string): string => {
+    fs.writeFileSync(h.files.codexRules, rules);
+    return (check(h).instructions as Record<string, string>).codexRules;
+  };
+  // Only the checkout or pin CLI, as before issue #436.
+  assert.equal(codexRules(renderControlPlaneRules([cliRule(controlPlaneCli(h.pin))])), "stale");
+  // The launcher path with the shell-quoted examples of a CLI rule: same pattern, other Starlark.
+  assert.equal(codexRules(renderControlPlaneRules([cliRule(launcherRule(command).cli)])), "stale");
+  assert.equal(codexRules(renderControlPlaneRules([launcherRule(command)])), "present");
+  assert.equal(check(h).ok, true);
 });
 
 test("an unrendered placeholder in an instruction file is stale", (t) => {
@@ -150,18 +156,20 @@ test("the report holds paths and fixed statuses, never file contents", (t) => {
   fs.writeFileSync(path.join(h.paths.inbox, "m.json"), JSON.stringify({ text: "SYNTHETIC_MESSAGE_BODY" }));
   const text = JSON.stringify(check(h));
   for (const value of ["SYNTHETIC_SECRET", "SYNTHETIC_TOKEN", "SYNTHETIC_MESSAGE_BODY", h.receipt.binding.source.digest,
-    h.receipt.binding.source.commit, "Operator text"]) assert.equal(text.includes(value), false, value);
+    h.receipt.binding.source.commit, "Kherep intercom", "prefix_rule"]) assert.equal(text.includes(value), false, value);
 });
 
-test("the expected text is the launcher command, and the rules pattern its quoted path", (t) => {
+test("the expected text is the installers' command and the launcher's whole prefix_rule", (t) => {
   const h = host(t);
-  for (const kind of INTERCOM_INSTRUCTIONS) assert.ok(instructionText(kind, h.root).includes(expectedIntercomText(kind, h.root)), kind);
-  assert.equal(expectedIntercomText("claudeUser", h.root), launcherCommand(h.root));
-  assert.ok(expectedIntercomText("codexRules", h.root).includes(JSON.stringify(launcherToken(h.root))));
-  assert.equal(`node "${launcherToken(h.root)}"`, launcherCommand(h.root));
-  assert.equal(renderIntercomInstructions("a __KHEREP_NODE__ b __KHEREP_NODE__", h.root),
-    `a ${launcherCommand(h.root)} b ${launcherCommand(h.root)}`);
-  const win = "C:\\Users\\Synthetic\\AppData\\Roaming\\kherep";
-  assert.equal(expectedIntercomText("codexAgents", win, "win32"), 'node "C:/Users/Synthetic/AppData/Roaming/kherep/bin/kherep-node.mjs"');
-  assert.match(expectedIntercomText("codexRules", win, "win32"), /^pattern = \["node", "C:\/Users\/Synthetic\/AppData\/Roaming\/kherep\/bin\/kherep-node\.mjs", "msg", \[/);
+  const command = intercomCommand(h.root);
+  assert.equal(command, launcherCommand(h.root));
+  for (const kind of INTERCOM_INSTRUCTIONS) assert.ok(instructionText(kind, h.root).includes(expectedIntercomText(kind, command)), kind);
+  assert.equal(expectedIntercomText("claudeUser", command), command);
+  const rule = expectedIntercomText("codexRules", command);
+  assert.match(rule, /^prefix_rule\(\n {4}pattern = \["node", "[^"]+kherep-node\.mjs", "msg", \[/);
+  assert.ok(rule.includes(`"${command.replaceAll('"', '\\"')} msg sessions",`), rule);
+  assert.ok(rule.endsWith(")\n"));
+  const win = String.raw`C:\Users\Synthetic\AppData\Roaming\kherep`;
+  assert.equal(intercomCommand(win, "win32"), 'node "C:/Users/Synthetic/AppData/Roaming/kherep/bin/kherep-node.mjs"');
+  assert.throws(() => intercomCommand(String.raw`C:\Users\100%\kherep`, "win32"));
 });

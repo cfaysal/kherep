@@ -3,11 +3,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { renderControlPlaneRules } from "../../../codex/lib/control-plane-rules.mts";
+import { intercomValues, renderIntercom } from "../../../bootstrap/render-intercom.mts";
+import { cliRule, controlPlaneCli, launcherRule, renderControlPlaneRules } from "../../../codex/lib/control-plane-rules.mts";
 import type { NodePaths } from "./config.mts";
-import {
-  INTERCOM_INSTRUCTIONS, intercomInstructionFiles, launcherToken, renderIntercomInstructions, type IntercomInstruction,
-} from "./intercom-instructions.mts";
+import { INTERCOM_INSTRUCTIONS, intercomInstructionFiles, type IntercomInstruction } from "./intercom-instructions.mts";
 import { ensureLauncher } from "./launcher.mts";
 import { serviceRoot, writeServiceReceipt, type ServiceReceipt } from "./service-records.mts";
 import { pinServiceSource } from "./service-source.mts";
@@ -38,10 +37,19 @@ function sourceCheckout(dir: string): string {
   return dir;
 }
 
-// What PR B's renderer is expected to leave in each file (intercom-instructions.mts).
-export function instructionText(kind: IntercomInstruction, root: string): string {
-  if (kind === "codexRules") return renderControlPlaneRules(launcherToken(root));
-  return renderIntercomInstructions(`# Synthetic ${kind}\nOperator text stays.\n__KHEREP_NODE__ msg sessions\n`, root);
+const REPO = path.resolve(import.meta.dirname, "..", "..", "..");
+const TEMPLATES: Readonly<Record<Exclude<IntercomInstruction, "codexRules">, string>> = {
+  claudeUser: "claude/CLAUDE.user.md", claudeRouting: "claude/teams/kherep/ROUTING.md",
+  codexAgents: "codex/AGENTS.maestro.md", codexRouting: "codex/ROUTING.md",
+};
+
+// What the installers write into each file: the repository's own templates
+// through render-intercom.mts, and the rules with the launcher rule first and
+// the checkout CLI rule second, as codex/install.mts renders them.
+export function instructionText(kind: IntercomInstruction, root: string, pin = root): string {
+  const values = intercomValues(root);
+  if (kind === "codexRules") return renderControlPlaneRules([launcherRule(values.command), cliRule(controlPlaneCli(pin))]);
+  return renderIntercom(fs.readFileSync(path.join(REPO, TEMPLATES[kind]), "utf8"), values);
 }
 
 export function writeIntercomHost(paths: NodePaths, claudeDir: string, codexHome: string, scratch: string): IntercomHost {
@@ -59,7 +67,7 @@ export function writeIntercomHost(paths: NodePaths, claudeDir: string, codexHome
   const files = intercomInstructionFiles(claudeDir, codexHome);
   for (const kind of INTERCOM_INSTRUCTIONS) {
     fs.mkdirSync(path.dirname(files[kind]), { recursive: true });
-    fs.writeFileSync(files[kind], instructionText(kind, root));
+    fs.writeFileSync(files[kind], instructionText(kind, root, pin.root));
   }
   return { root, pin: pin.root, receipt, files };
 }
