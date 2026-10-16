@@ -73,8 +73,9 @@ increments the minor version; every other release increments the patch version.
   other line, or the MCP listing fails. Server requests are refused with `-32601` and fail the
   attempt, as do tool items, goal notifications for the fork and turns the
   helper did not start, whenever they arrive, also after `turn/completed` or
-  while the helper closes; a timed-out or violating turn ends with SIGKILL of
-  the helper's process group. The validated answer is stored in the attempt file
+  while the helper closes; a timed-out turn or any violation, also one detected
+  while the helper closes, ends with SIGKILL of the helper's process group.
+  The validated answer is stored in the attempt file
   (`codex-fork-attempts/<owner>/<message>.json`, mode 0600) with a fixed
   `reason` code for every other outcome; nothing is relayed, and the owner's
   inbox record, progress, session record and thread stay unchanged. The fork

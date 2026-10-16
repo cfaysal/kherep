@@ -67,6 +67,7 @@ export class AppServerClient {
   private closing?: Promise<boolean>;
   private exited = false;
   private closed = false;
+  private forced = false;
   private notificationListeners: ((message: AppServerMessage) => void)[] = [];
   private failureListeners: ((error: Error) => void)[] = [];
 
@@ -183,18 +184,24 @@ export class AppServerClient {
     });
   }
 
-  // True when both exit and close of the child were seen. force: end with
-  // SIGKILL whatever the child does, as after a failure (a timed-out turn).
+  // The close, running or not yet started, ends with the group SIGKILL (issue #432; a late watch violation).
+  escalate(): void { this.forced = true; }
+
+  // True when both exit and close of the child were seen. force or a later
+  // escalate(): end with SIGKILL whatever the child does, as after a failure
+  // (a timed-out turn), also when the close is already running.
   shutdown(force = false): Promise<boolean> {
-    return this.closing ??= this.shutdownOnce(force);
+    if (force) this.escalate();
+    return this.closing ??= this.shutdownOnce();
   }
 
-  private async shutdownOnce(force: boolean): Promise<boolean> {
-    const forced = force || (this.options.forceAfterFailure === true && this.failed !== null);
+  private async shutdownOnce(): Promise<boolean> {
+    // Evaluated once when the close starts: fail() runs on every exit, so a clean close stays signal-free.
+    if (this.options.forceAfterFailure === true && this.failed !== null) this.forced = true;
     this.rejectPending(new Error("Codex app server closed"));
     this.child.stdin.end();
     const grace = this.options.graceMs ?? 125;
-    if (await this.waitForShutdown(grace) && !forced) return true;
+    if (await this.waitForShutdown(grace) && !this.forced) return true;
     this.kill("SIGKILL");
     return this.waitForShutdown(grace);
   }
