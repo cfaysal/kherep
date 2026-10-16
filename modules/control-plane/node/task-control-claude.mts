@@ -36,8 +36,11 @@ export function ownsRow(record: Pick<TaskRecord, "shortId" | "sessionId" | "name
 
 // A listed session without a live process: it would resume on a reply
 // (idle) or it ended (closed); there is nothing to stop in either case.
-const withoutProcess = (state: unknown): ClaudeMeasurement =>
-  ({ processState: ENDED.includes(state) ? "closed" : LIVE.includes(state) ? "idle" : "unknown", stopSupported: false });
+function withoutProcess(state: unknown): ClaudeMeasurement {
+  if (ENDED.includes(state)) return { processState: "closed", stopSupported: false };
+  if (LIVE.includes(state)) return { processState: "idle", stopSupported: false };
+  return { processState: "unknown", stopSupported: false };
+}
 
 // Records a changed identity on the current record, never on the copy read
 // before the listing; the previous run's descendants no longer apply.
@@ -71,7 +74,9 @@ export async function measureClaude(record: TaskRecord, runner: RunnerDeps, now:
   }
   if (pidStart === null) return withoutProcess(row.state); // ended between the listing and the read
   const runVersion = runVersionOf(capture(runner.paths, record, pid, pidStart, now))!;
-  if (LIVE.includes(row.state)) return { processState: "running", stopSupported: true, runVersion };
+  // Status never offers a stop the target refuses: the stop half of issue #437
+  // sets stopSupported for a running run once the target can confirm a stop.
+  if (LIVE.includes(row.state)) return { processState: "running", stopSupported: false, runVersion };
   // A finished run whose process the supervisor has not ended yet is not signalled.
   return { processState: ENDED.includes(row.state) ? "idle" : "unknown", stopSupported: false, runVersion };
 }
