@@ -150,7 +150,7 @@ export function recoverForkAttempts(paths: NodePaths, now: number): { recovered:
   const root = path.join(paths.dir, "codex-fork-attempts");
   let owners: string[];
   try {
-    owners = fs.readdirSync(root).sort();
+    owners = fs.readdirSync(root).filter((name) => !name.startsWith(".")).sort();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { recovered: 0, unreadable: [] };
     throw error;
