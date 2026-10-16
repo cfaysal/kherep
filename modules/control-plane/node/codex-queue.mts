@@ -20,6 +20,7 @@ import { killSwitch } from "./wake-hook.mts";
 import { nativeQueueIdle, scheduleNativeQueue, scheduleNativeReconciliation } from "./codex-queue-producer.mts";
 import { forkReplyIdle, scheduleForkReply } from "./codex-fork-reply.mts";
 import { relayPending } from "./codex-fork-relay.mts";
+import { relayBookkeeping } from "./codex-fork-relay-pass.mts";
 
 // Admit a compact CP hint for the authorized original Codex owner. The
 // synchronous original-owner hook consumes it at a supported tool boundary;
@@ -46,6 +47,10 @@ export async function codexQueueIdle(): Promise<void> {
 export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = () => {}): void {
   const now = deps.now?.() ?? Date.now();
   pruneNoted(deps.paths);
+  // Issue #408, PR 4 (WX443-1, WX443-2): relay bookkeeping before, and independent of, the candidates and the flag.
+  try { relayBookkeeping(deps, log); } catch (error) {
+    log(`kherep-node: Codex fork relay bookkeeping failed: ${String((error as Error).message ?? error)}`);
+  }
   const tasks = new Set(listTasks(deps.paths).flatMap((t) => (t.sessionId ? [t.sessionId] : [])));
   let live: string[];
   try {

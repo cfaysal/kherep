@@ -193,7 +193,9 @@ mark. A `Stop` that blocked, or whose mark could not be written, does not count
 as idle.
 
 Codex fork reply (issue #408, in progress). Nothing changes while
-`wake.codexFork` is absent; with it present only `darwin` is accepted, and the
+`wake.codexFork` is absent, except that relays made while it was present are
+still withdrawn when the owner reads and cleaned up after 24 hours; nothing is
+sent, forked or audited. With it present only `darwin` is accepted, and the
 answer is relayed to the peer as one labelled proxy answer while the owner stays
 idle (below). Upgrade the Worker before the nodes. The section names the Codex chats whose
 history an ephemeral read-only fork may use to answer an idle owner's peer
@@ -273,11 +275,16 @@ and starts no helper. The send also needs the message's sidecar
 a missing, unreadable or mismatched one holds the record. A Worker without the
 capability refuses every fork before admission (`fork-relay-unsupported`).
 
-When the owner reads or answers first, the sweep withdraws before any send guard
-is consulted: exactly (outbox record and sidecar removed) when no frame can
-have left this node, and otherwise as unconfirmed, keeping the record (never sent
-again) for a late Worker status. A held record that gets no Worker status within
-24 hours is removed; the sidecar then records `unresolvedAt`, and the outcome is
+When the owner reads or answers first, the daemon withdraws before any send guard
+is consulted, in every poll for every message with a sidecar, whatever the
+owner's session state and whether or not `wake.codexFork` is present (the
+`fork-superseded` audit line only while it is): exactly (outbox record and
+sidecar removed) when no frame can have left this node, and otherwise as
+unconfirmed, keeping the record (never sent again) for a late Worker status. A
+held record that gets no Worker status within 24 hours is removed by the same
+per-poll bookkeeping (a missing sidecar is not recreated, one naming another
+relay is left as it is, and a record that is not the attempt's relay is never
+removed); the sidecar then records `unresolvedAt`, and the outcome is
 unknown, not "not delivered": a later status is acknowledged and not recorded
 locally, and the Worker's message listing and audit may hold it. The Worker
 refuses a proxy whose original row is missing or does not match (`proxy parent
