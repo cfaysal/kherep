@@ -164,6 +164,14 @@ export const FEATURES_STDOUT = ["hooks                       stable             
   "view_image                  stable             true", "js_repl                     removed            false",
   "tool_search                 removed            false", ""].join("\n");
 
+// The rows the measured binaries add to that shape (2026-10-16, raw stdout of
+// 0.160.1, 0.162.0-alpha.17.2 and 0.163.0): the stage deprecated, a dotted
+// removed key, and one trailing empty line. Their WARNING goes to stderr.
+export const FEATURES_STDOUT_MEASURED_ROWS = FEATURES_STDOUT.replace(/\n$/, "\n" + ["transcript_v2               deprecated         false",
+  "use_legacy_landlock         deprecated         false", "web_search_cached           deprecated         false",
+  "web_search_request          deprecated         false", "guardianv2.thread_context   removed            false", ""].join("\n"));
+export const FEATURES_STDERR_WARNING = "WARNING: synthetic warning a real binary prints on stderr\n";
+
 // A node with an opted-in, idle Codex owner and one accepted message for it.
 export function forkNode(t: test.TestContext, scenario: Partial<ForkScenario> = {}, options: { fork?: boolean; platform?: string } = {}) {
   const node = codexNode(t);
@@ -184,10 +192,13 @@ export function forkNode(t: test.TestContext, scenario: Partial<ForkScenario> = 
   idle(FORK_OWNER);
   const app = fakeAppServer({ cwd, ...scenario });
   const calls: string[][] = [];
-  let featuresStdout = FEATURES_STDOUT, featuresCode = 0;
+  let featuresStdout = FEATURES_STDOUT, featuresCode = 0, featuresStderr = "";
   const codex: CodexDeps = {
     findCodex: () => binary, home, spawn: app.spawn as never, signal: app.signal, postToolHook: () => true,
-    featuresList: async (args): Promise<McpListResult> => { calls.push(args); return { code: featuresCode, stdout: featuresStdout, stderr: "" }; },
+    featuresList: async (args): Promise<McpListResult> => {
+      calls.push(args);
+      return { code: featuresCode, stdout: featuresStdout, stderr: featuresStderr };
+    },
     mcpList: async (args): Promise<McpListResult> => { calls.push(args); return { code: 0, stdout: "[]", stderr: "" }; },
   };
   const add = (toSession = FORK_OWNER, text = "Is the build green?"): string => {
@@ -197,5 +208,5 @@ export function forkNode(t: test.TestContext, scenario: Partial<ForkScenario> = 
   };
   const deps = (extra: CodexDeps = {}) => ({ ...node.deps({ ...codex, ...extra }), platform: (options.platform ?? "darwin") as NodeJS.Platform });
   return { ...node, cwd, home, binary, app, calls, codex, add, deps, idle,
-    features: (stdout: string, code = 0) => { featuresStdout = stdout; featuresCode = code; } };
+    features: (stdout: string, code = 0, stderr = "") => { featuresStdout = stdout; featuresCode = code; featuresStderr = stderr; } };
 }

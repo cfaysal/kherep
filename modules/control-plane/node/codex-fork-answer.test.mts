@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FEATURES_STDOUT, FORK_ID, FORK_OWNER, FORK_TURN } from "./codex-fork-fixture.mts";
+import { FEATURES_STDOUT, FEATURES_STDOUT_MEASURED_ROWS, FORK_ID, FORK_OWNER, FORK_TURN } from "./codex-fork-fixture.mts";
 import { forkParams, forkPrompt, parseFeaturesList, validateForkAnswer } from "./codex-fork-process.mts";
 import { ForkWatch } from "./codex-fork-watch.mts";
 import { RECORD } from "./codex-fork-run-fixture.mts";
@@ -53,6 +53,17 @@ test("parseFeaturesList keeps listed keys that are not removed and refuses anyth
   assert.ok(parseFeaturesList("api_key_model_discovery  under development  false\r\n")?.has("api_key_model_discovery"));
   for (const bad of ["", "\n\n", "Feature  Stage  Enabled\nhooks stable true", "hooks stable maybe", "hooks beta true"]) {
     assert.equal(parseFeaturesList(bad), null, JSON.stringify(bad));
+  }
+});
+
+test("parseFeaturesList reads the measured stages: deprecated rows, a dotted removed key, a trailing empty line", () => {
+  const keys = parseFeaturesList(FEATURES_STDOUT_MEASURED_ROWS);
+  assert.ok(keys, "the measured listing parses");
+  for (const key of ["transcript_v2", "use_legacy_landlock", "web_search_cached", "web_search_request"]) assert.ok(keys.has(key), key);
+  assert.ok(!keys.has("guardianv2.thread_context"), "a removed dotted key is not present");
+  assert.ok(keys.has("hooks") && keys.has("goals"));
+  for (const bad of ["hooks  sunset  true", "hooks  deprecated", "hooks  Deprecated  false", "web_search_request  deprecated  false  extra"]) {
+    assert.equal(parseFeaturesList(`${FEATURES_STDOUT}${bad}\n`), null, `still fail-closed: ${bad}`);
   }
 });
 

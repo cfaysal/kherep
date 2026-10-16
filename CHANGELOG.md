@@ -67,8 +67,10 @@ increments the minor version; every other release increments the patch version.
   cached per resolved path and hash. `deferGoalContinuation` is not sent: both
   measured binaries reject it with an ephemeral fork, and it copies the goal
   into a persisted fork. The feature keys are filtered through
-  `codex features list` and the attempt is refused when that listing or the
-  MCP listing fails. Server requests are refused with `-32601` and fail the
+  `codex features list` (stages `stable`, `experimental`, `under development`,
+  `deprecated` and `removed`, as listed by the measured binaries; a removed key
+  is not used) and the attempt is refused when that listing fails or shows any
+  other line, or the MCP listing fails. Server requests are refused with `-32601` and fail the
   attempt, as do tool items, goal notifications for the fork and turns the
   helper did not start. The validated answer is stored in the attempt file
   (`codex-fork-attempts/<owner>/<message>.json`, mode 0600) with a fixed

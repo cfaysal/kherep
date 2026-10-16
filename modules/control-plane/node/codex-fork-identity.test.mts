@@ -3,7 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 import { forkAttempts } from "./codex-fork-attempts.mts";
-import { FORK_OWNER, forkNode } from "./codex-fork-fixture.mts";
+import { FEATURES_STDERR_WARNING, FEATURES_STDOUT_MEASURED_ROWS, FORK_OWNER, forkNode } from "./codex-fork-fixture.mts";
 import { forkTestTimeouts, resetForkFeatureCache } from "./codex-fork-reply.mts";
 import { FAST } from "./codex-fork-run-fixture.mts";
 import { resetMcpCache } from "./codex-mcp.mts";
@@ -74,4 +74,18 @@ test("(b) a binary without a required capability fails closed with a visible rea
   assert.deepEqual(logs.filter((line) => /refused/.test(line)), ["kherep-node: Codex fork reply refused before admission: fork-features-unknown"],
     "a missing feature listing is logged once, with its code");
   assert.deepEqual(forkAttempts(f.paths, FORK_OWNER), []);
+});
+
+test("a features list with the measured rows and a stderr WARNING lets the attempt run", async (t) => {
+  const f = forkNode(t);
+  f.features(FEATURES_STDOUT_MEASURED_ROWS, 0, FEATURES_STDERR_WARNING);
+  f.add();
+  const logs: string[] = [];
+  pollCodexQueue(f.deps(), (line) => { logs.push(line); });
+  await codexQueueIdle();
+  assert.deepEqual(forkAttempts(f.paths, FORK_OWNER).map((a) => a.state), ["completed"]);
+  assert.deepEqual(logs.filter((line) => /refused/.test(line)), []);
+  const config = f.app.runs[0]!.requests.find((m) => m.method === "thread/fork")!.params!.config as Record<string, unknown>;
+  assert.equal(Object.keys(config).some((key) => /transcript_v2|web_search_cached|guardianv2/.test(key)), false,
+    "deprecated keys outside the fork list are not emitted");
 });
