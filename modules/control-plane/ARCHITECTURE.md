@@ -507,9 +507,11 @@ flowchart TD
 | Push re-read | `worker/src/message-routing.mts`, `worker/src/node-session.mts` | `messageQueued` is read again before a proxy delivery is pushed. |
 
 Residual: a proxy already accepted at the peer stays when the owner's reply
-reaches the Worker afterwards, so the peer then holds both. This is audited as
-`message.proxy.late-delivery`. Closing it needs a reservation, a later
-increment. A held record that gets no Worker status within 24 hours is removed
+reaches the Worker afterwards, so the peer then holds both. That case is not
+audited. It shows only in the canonical sent states of the two messages.
+`message.proxy.late-delivery` is audited for a different race: a proxy row the
+tie-break already refused is later reported as accepted or delivered. Closing
+both needs a reservation, a later increment. A held record that gets no Worker status within 24 hours is removed
 and recorded as `unresolvedAt`. Its outcome is unknown, never "not delivered".
 
 ## Claude mid-turn delivery
