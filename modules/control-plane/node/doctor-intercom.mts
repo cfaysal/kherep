@@ -72,16 +72,14 @@ export function checkIntercom(deps: IntercomDeps): Check {
   const instructions = instructionStatuses(deps, root);
   const { status, receipt } = receiptOf(deps.paths);
   const managed = status !== "missing";
+  const fail = (detail: string): Check => ({ ok: false, managed, receipt: status, instructions, detail });
   if (!receipt) {
-    return { ok: false, managed, receipt: status, instructions, detail: managed
-      ? "the managed service receipt is invalid" : "no managed service; the intercom command cannot resolve a pin" };
+    return fail(managed ? "the managed service receipt is invalid" : "no managed service; the intercom command cannot resolve a pin");
   }
   let files: LauncherFile[];
   try {
     files = renderLauncher({ platform: receipt.binding.platform, configRoot: root, nodeExecutable: receipt.binding.nodeExecutable });
-  } catch {
-    return { ok: false, managed, receipt: status, instructions, detail: "the launcher cannot be rendered for this config root" };
-  }
+  } catch { return fail("the launcher cannot be rendered for this config root"); }
   const launcher = { path: path.join(root, "bin", LAUNCHER_FILE), status: "" };
   const shims: Record<string, string> = {};
   for (const file of files) {

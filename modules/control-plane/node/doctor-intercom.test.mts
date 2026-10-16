@@ -14,21 +14,23 @@ import { launcherCommand } from "./launcher.mts";
 // Issue #436. The intercom check against synthetic hosts: one healthy host,
 // then one mutation at a time, each of which must fail with its own status.
 
-interface Host extends IntercomHost { paths: NodePaths; claude: string; codex: string; scratch: string }
+interface Bare { root: string; paths: NodePaths; claude: string; codex: string; scratch: string }
+type Host = Bare & IntercomHost;
 
-function host(t: test.TestContext, intercom = true): Host {
+function bare(t: test.TestContext): Bare {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-doctor-intercom-"));
   t.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
   const paths = nodePaths(path.join(scratch, "config"));
-  const claude = path.join(scratch, "claude");
-  const codex = path.join(scratch, "codex");
   fs.mkdirSync(paths.dir, { recursive: true });
-  const written = intercom ? writeIntercomHost(paths, claude, codex, scratch)
-    : { root: path.dirname(paths.dir), pin: "", receipt: undefined as never, files: {} as IntercomHost["files"] };
-  return { ...written, paths, claude, codex, scratch };
+  return { root: path.dirname(paths.dir), paths, claude: path.join(scratch, "claude"), codex: path.join(scratch, "codex"), scratch };
 }
 
-const check = (h: Host) => checkIntercom({ paths: h.paths, claudeConfigDir: h.claude, codexHome: h.codex });
+function host(t: test.TestContext): Host {
+  const b = bare(t);
+  return { ...b, ...writeIntercomHost(b.paths, b.claude, b.codex, b.scratch) };
+}
+
+const check = (h: Bare) => checkIntercom({ paths: h.paths, claudeConfigDir: h.claude, codexHome: h.codex });
 const allPresent = Object.fromEntries(INTERCOM_INSTRUCTIONS.map((kind) => [kind, "present"]));
 const bin = (h: Host, name: string) => path.join(h.root, "bin", name);
 const shimNames = process.platform === "win32" ? ["posix", "cmd", "ps1"] : ["posix"];
@@ -44,8 +46,7 @@ test("a host whose receipt, launcher, pin and instruction files agree passes", (
 });
 
 test("a node without a managed service reports managed false and fails", (t) => {
-  const h = host(t, false);
-  const result = check(h);
+  const result = check(bare(t));
   assert.deepEqual([result.ok, result.managed, result.receipt], [false, false, "missing"]);
   assert.match(String(result.detail), /no managed service/);
 });
@@ -54,7 +55,8 @@ test("an unreadable or invalid receipt fails as invalid", (t) => {
   const h = host(t);
   const receipt = path.join(h.paths.dir, "service", "receipt.json");
   fs.writeFileSync(receipt, "{");
-  assert.deepEqual([check(h).ok, check(h).receipt, check(h).managed], [false, "invalid", true]);
+  const result = check(h);
+  assert.deepEqual([result.ok, result.receipt, result.managed], [false, "invalid", true]);
   fs.writeFileSync(receipt, JSON.stringify({ ...h.receipt, binding: { ...h.receipt.binding, source: { ...h.receipt.binding.source, kind: "checkout" } } }));
   assert.equal(check(h).receipt, "invalid");
 });
