@@ -126,6 +126,21 @@ cmp_block() {
   rm -rf "$block_dir"
 }
 
+# Issue #436. CLAUDE.md and teams/kherep/ROUTING.md name the stable intercom
+# command through the __KHEREP_NODE__ placeholder. The source is rendered for
+# this config root first, as settings.json is, so only a real difference is drift.
+cmp_rendered() {
+  local rel="$1" repo="$2" live="$3" rendered_dir
+  if [ ! -f "$repo" ]; then printf 'MISSING-REPO  %s (%q)\n' "$rel" "$repo"; drift=1; return; fi
+  rendered_dir="$(mktemp -d "$EXPECTED_DIR/rendered.XXXXXX")" || { echo "RENDER-FAIL   $rel"; drift=1; return; }
+  if node "$HERE/render-profile.mts" intercom "$repo" "$rendered_dir/expected"; then
+    cmp_file "$rel" "$rendered_dir/expected" "$live"
+  else
+    echo "RENDER-FAIL   $rel"; drift=1
+  fi
+  rm -rf "$rendered_dir"
+}
+
 cmp_tree() {
   local label="$1" repo_dir="$2" live_dir="$3" f sub
   if [ ! -d "$repo_dir" ]; then echo "MISSING-REPO  $label"; drift=1; return; fi
@@ -153,7 +168,11 @@ if [ "$DRIFT_SCOPE" = "all" ]; then
       continue
     fi
     if [ "$rel" = "CLAUDE.md" ]; then
-      cmp_file "$rel" "$CLAUDE_SRC/CLAUDE.user.md" "$CLAUDE_HOME/CLAUDE.md"
+      cmp_rendered "$rel" "$CLAUDE_SRC/CLAUDE.user.md" "$CLAUDE_HOME/CLAUDE.md"
+      continue
+    fi
+    if [ "$rel" = "teams/kherep/ROUTING.md" ]; then
+      cmp_rendered "$rel" "$CLAUDE_SRC/$rel" "$CLAUDE_HOME/$rel"
       continue
     fi
     repo="$CLAUDE_SRC/$rel"; live="$CLAUDE_HOME/$rel"
