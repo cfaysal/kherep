@@ -23,6 +23,8 @@ import type { NodePolicy } from "./policy.mts";
 // unconfirmed otherwise; a held record is cleaned up after RELAY_MAX_AGE_MS
 // without a Worker status, and the outcome is then unresolved, not "never
 // sent". Every step is a synchronous file operation; no turn, no helper.
+// That bookkeeping (reconcileRelay) is also driven by the sidecars alone, in
+// every poll and whatever wake.codexFork says: codex-fork-relay-pass.mts.
 
 export interface RelayDeps {
   paths: NodePaths; policy: NodePolicy; now?: () => number; platform?: string;
@@ -41,12 +43,15 @@ const due = new Map<string, number>();
 const written = new Set<string>();
 const sentOnce = new Set<string>();
 const heldLog = new Map<string, string>();
+// The pass's memo (codex-fork-relay-pass.mts), cleared with the rest: message
+// ids that need no further bookkeeping, and failures logged once.
+export const relayPassMemo = { settled: new Set<string>(), stopped: new Set<string>() };
 // The owner's session state changes with hook events: re-checked every poll.
 const OWNER_CODES: readonly ForkRefusal[] = ["not-recorded", "task-session", "permission-mode", "permission-mode-unknown",
   "post-tool-hook-missing", "fork-not-idle"];
 
 export function resetRelayState(): void {
-  due.clear(); written.clear(); sentOnce.clear(); heldLog.clear();
+  due.clear(); written.clear(); sentOnce.clear(); heldLog.clear(); relayPassMemo.settled.clear(); relayPassMemo.stopped.clear();
 }
 export function markRelayDue(owner: string): void { due.delete(owner); }
 
@@ -88,19 +93,23 @@ function withdraw(deps: RelayDeps, a: ForkAttempt, relay: string, now: number): 
 // Step 8: the owner was first. Allowed only while relayedAt is unset.
 function supersede(deps: RelayDeps, owner: string, a: ForkAttempt, now: number): Pending {
   advanceForkAttempt(deps.paths, owner, a.messageId, "completed", "superseded", {}, now);
-  audit(deps.paths, now, owner, [a.messageId], "fork-superseded");
+  // With the section absent the attempt's state is the trail, never an audit line.
+  if (deps.policy.wake?.codexFork !== undefined) audit(deps.paths, now, owner, [a.messageId], "fork-superseded");
   return a.relayMessageId ? withdraw(deps, a, a.relayMessageId, now) : "none";
 }
 
 // Step 9 (D19): a held record past the bound without any status is removed.
-// What may have left this node stays an unresolved outcome in the sidecar.
-function cleanup(deps: RelayDeps, a: ForkAttempt, relay: string, record: OutboxRecord, now: number): boolean {
+// What may have left this node stays an unresolved outcome in the sidecar; a
+// missing sidecar is not created, another relay's is left alone, and a record
+// that is not this attempt's relay is never removed.
+function cleanup(deps: RelayDeps, owner: string, a: ForkAttempt, relay: string, record: OutboxRecord, now: number): boolean {
+  if (record.proxyOf !== a.messageId || record.fromSession !== owner) return true;
   if (!(now - Date.parse(record.createdAt) > RELAY_MAX_AGE_MS)) return false;
   const { paths } = deps;
   const sidecar = getProxied(paths.inbox, a.messageId);
   fs.rmSync(path.join(paths.outbox, `${relay}.json`), { force: true });
-  if (sidecar !== null && sidecar.relayMessageId !== relay) return true;
-  if (sentOnce.has(relay) || sidecar?.unconfirmedAt || !written.has(relay)) {
+  if (sidecar === null || sidecar.relayMessageId !== relay) return true;
+  if (sentOnce.has(relay) || sidecar.unconfirmedAt || !written.has(relay)) {
     setUnconfirmed(paths.inbox, a.messageId, claimOf(a, relay, now), iso(now));
     setUnresolved(paths.inbox, a.messageId, iso(now));
   } else removeProxied(paths.inbox, a.messageId);
@@ -131,20 +140,42 @@ function relayAttempt(deps: RelayDeps, owner: string, attempt: ForkAttempt, now:
   return "external";
 }
 
-// A superseded attempt whose record may have left: wait for a late status, then clean up.
-function heldBookkeeping(deps: RelayDeps, a: ForkAttempt, relay: string, now: number): Pending {
+// A superseded attempt whose record may have left: wait for a late status, then
+// clean up, also when the sidecar is missing or names another relay (WX443-2).
+function heldBookkeeping(deps: RelayDeps, owner: string, a: ForkAttempt, relay: string, now: number): Pending {
   const sidecar = getProxied(deps.paths.inbox, a.messageId);
-  if (!matches(sidecar, a, relay) || !sidecar.unconfirmedAt || sidecar.unresolvedAt || getSent(deps.paths, relay)) return "none";
+  if ((matches(sidecar, a, relay) && sidecar.unresolvedAt) || getSent(deps.paths, relay)) return "none";
   const record = getOutbox(deps.paths, relay);
-  return !record || cleanup(deps, a, relay, record, now) ? "none" : "external";
+  return !record || cleanup(deps, owner, a, relay, record, now) ? "none" : "external";
+}
+
+const relayable = (a: ForkAttempt): boolean => a.state === "completed" && a.answer !== undefined && a.forkId !== undefined
+  && a.relayedAt === undefined;
+
+// What runs before any send guard (design r3 corrigendum, point 1), shared by
+// the sweep and the pass: the outcome, or null while the attempt waits for a send.
+export function reconcileRelay(deps: RelayDeps, owner: string, a: ForkAttempt, now: number, stale: () => void = () => {}): Pending | null {
+  const { paths } = deps;
+  const relay = a.relayMessageId;
+  if (a.state === "superseded") return relay ? heldBookkeeping(deps, owner, a, relay, now) : "none";
+  if (!relayable(a) || (relay && getSent(paths, relay))) return "none";
+  const record = relay ? getOutbox(paths, relay) : null;
+  // A record this process did not write: a previous daemon may have sent it.
+  if (relay && record && !written.has(relay)) setUnconfirmed(paths.inbox, a.messageId, claimOf(a, relay, now), iso(now));
+  // Review R3-WX1: the owner first withdraws before any send guard can block it.
+  if (!relayMessageEligible(paths, owner, a.messageId)) return supersede(deps, owner, a, now);
+  if (now - a.attemptedAt <= RELAY_MAX_AGE_MS) return null;
+  stale();
+  if (relay && record) return cleanup(deps, owner, a, relay, record, now) ? "none" : "blocked";
+  const sidecar = getProxied(paths.inbox, a.messageId);
+  if (relay && matches(sidecar, a, relay) && !sidecar.unconfirmedAt) removeProxied(paths.inbox, a.messageId);
+  return "none";
 }
 
 function sweepOne(deps: RelayDeps, owner: string, a: ForkAttempt, now: number, log: (line: string) => void): Pending {
   const { paths } = deps;
   const relay = a.relayMessageId;
-  if (a.state === "superseded") return relay ? heldBookkeeping(deps, a, relay, now) : "none";
-  if (a.state !== "completed" || a.answer === undefined || a.forkId === undefined || a.relayedAt !== undefined) return "none";
-  const sent = relay ? getSent(paths, relay) : null;
+  const sent = relay && relayable(a) ? getSent(paths, relay) : null;
   if (sent) {
     // D18: relayedAt is the Worker's first answer recorded in sent/.
     advanceForkAttempt(paths, owner, a.messageId, "completed", "completed", { relayedAt: now }, now);
@@ -152,23 +183,13 @@ function sweepOne(deps: RelayDeps, owner: string, a: ForkAttempt, now: number, l
     log(`kherep-node: Codex fork relay answered by the control plane: ${sent.state}`);
     return "none";
   }
-  const record = relay ? getOutbox(paths, relay) : null;
-  // A record this process did not write: a previous daemon may have sent it.
-  if (relay && record && !written.has(relay)) setUnconfirmed(paths.inbox, a.messageId, claimOf(a, relay, now), iso(now));
-  // Review R3-WX1: the owner first withdraws before any send guard can block it.
-  if (!relayMessageEligible(paths, owner, a.messageId)) return supersede(deps, owner, a, now);
+  const outcome = reconcileRelay(deps, owner, a, now, () => held(owner, "fork-relay-stale", log));
+  if (outcome !== null) return outcome;
   const code = relayRefusal(guards(deps), owner, a, now);
   if (code === "message-not-eligible") return supersede(deps, owner, a, now);
-  if (code === "fork-relay-stale") {
-    held(owner, code, log);
-    if (relay && record) return cleanup(deps, a, relay, record, now) ? "none" : "blocked";
-    const sidecar = getProxied(paths.inbox, a.messageId);
-    if (relay && matches(sidecar, a, relay) && !sidecar.unconfirmedAt) removeProxied(paths.inbox, a.messageId);
-    return "none";
-  }
   if (code) {
     held(owner, code, log);
-    return record || OWNER_CODES.includes(code) ? "external" : "blocked";
+    return (relay && getOutbox(paths, relay)) || OWNER_CODES.includes(code) ? "external" : "blocked";
   }
   return relayAttempt(deps, owner, a, now, log);
 }

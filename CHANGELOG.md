@@ -48,7 +48,9 @@ increments the minor version; every other release increments the patch version.
   `fork-uncertain`, `fork-superseded`, `fork-not-idle` and
   `fork-disabled-platform` exist for the later increments; nothing writes them yet.
 - Codex fork reply producer (issue #408, third increment, darwin only, behind
-  `wake.codexFork`; nothing changes while the section is absent). For a
+  `wake.codexFork`; nothing changes while the section is absent, except that
+  relays made while it was present are still withdrawn when the owner reads and
+  cleaned up after 24 hours; nothing is sent, forked or audited). For a
   wake-authorized owner listed in `codexFork.sessions` with idle evidence and
   an accepted exact-addressed message, the daemon starts one short-lived
   `codex app-server` of the `codex` on `PATH` per message, one at a time on the
@@ -108,7 +110,12 @@ increments the minor version; every other release increments the patch version.
   or answering first withdraws the relay before any guard is consulted,
   exactly when nothing can have left the node and as unconfirmed otherwise; a
   held record without any Worker status is removed after 24 hours and the
-  outcome is then recorded as unresolved, never as not delivered. The owner's
+  outcome is then recorded as unresolved, never as not delivered. The
+  withdrawal and the cleanup run in every poll for every message with a
+  sidecar, whatever the owner's session state, and do not depend on the
+  section; a superseded relay whose sidecar is missing or names another relay
+  is cleaned up as well, and a record that is not the attempt's relay is never
+  removed. The owner's
   delivery block and `msg inbox` show the relay state (prepared, queued or
   awaiting confirmation, may have reached the control plane, queued by the
   control plane, reached the peer, could not be delivered, unresolved); only a
