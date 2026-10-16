@@ -189,7 +189,7 @@ function parseWake(section: unknown): WakePolicy | null {
     ...(nativeQueue ? { nativeQueue: true } : {}), ...(budget ? { budget } : {}), ...(codexFork ? { codexFork } : {}) };
 }
 
-// Decision D4 (open, issue #408): full Codex thread ids only; no "*" and no
+// Decision D4 (2026-10-16, issue #408): full Codex thread ids only; no "*" and no
 // names, because a fork reads the whole history of the chat. Matched without
 // case and kept in lowercase, the form of a Codex thread id, so that admission
 // compares exactly.
