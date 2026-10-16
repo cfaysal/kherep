@@ -40,7 +40,14 @@ export type AutonomyAction = "wake" | "stuck-offer" | "budget" | "depth-limit" |
   // The Codex idle reply proxy (issue #408, codex-fork-reply.mts).
   | "fork" | "fork-declined" | "fork-failed" | "fork-uncertain" | "fork-superseded" | "fork-not-idle" | "fork-disabled-platform"
   // codex-fork-relay.mts: the fork's answer went to the outbox as a proxy answer (issue #408, PR 4).
-  | "fork-relayed";
+  | "fork-relayed"
+  // codex-fork-reply.mts: a refusal before the claim, once per owner, message and code (issue #444);
+  // the admission code with the prefix fork-, the producer's own codes as they are (FORK_AUDIT).
+  | "fork-off" | "fork-kill-switch" | "fork-policy-changed" | "fork-not-recorded" | "fork-task-session" | "fork-permission-mode"
+  | "fork-permission-mode-unknown" | "fork-not-opted-in" | "fork-post-tool-hook-missing" | "fork-message-not-eligible" | "fork-depth-limit"
+  | "fork-attempt-exists" | "fork-in-flight" | "fork-attempts-unreadable" | "fork-cwd-refused" | "fork-runtime-pending"
+  | "fork-runtime-not-ready" | "fork-budget-spacing" | "fork-budget-exhausted"
+  | "fork-producer" | "fork-mcp-unknown" | "fork-features-unknown" | "fork-relay-unsupported";
 
 export const listenerDir = (paths: NodePaths): string => path.join(paths.dir, "listeners");
 export const wakeAudit = (paths: NodePaths): string => path.join(paths.dir, "wake.jsonl");

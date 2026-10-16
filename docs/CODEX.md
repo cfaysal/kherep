@@ -207,7 +207,10 @@ message:
                  "idleAfterSeconds": 90, "maxAnswerBytes": 4096 } }
 ```
 
-Absent means off. Only full thread ids are accepted (in any case, kept in
+Absent means off. The daemon reads the policy at every exchange round (every 2
+seconds) and applies it to that round: adding or removing `wake.codexFork`, or
+an owner in `wake.sessions` or `codexFork.sessions`, takes effect at the next
+round without a daemon restart (issue #444). Only full thread ids are accepted (in any case, kept in
 lowercase), never `*` or a name, and
 only `darwin` until the Windows measurements are made, and because a forced
 close on Windows cannot confirm the helper's process tree once the helper has
@@ -219,7 +222,11 @@ attempt per message and decides admission (opt-in, kill switch, enrollment,
 policy unchanged, recorded non-task owner, permission mode, platform, the Codex
 delivery hook on `PostToolUse`, idle evidence, an accepted exact-addressed
 message below the reply depth, no earlier attempt, a working directory inside
-the workspace roots, readiness and the shared turn budget). With the section
+the workspace roots, readiness and the shared turn budget). The owner's recorded
+`cwd` must lie inside `sessions.workspaceRoots`, with `sessions.enabled` and
+`codex` in `sessions.runtimes`; the fork loads `AGENTS.md` from that directory,
+so an owner started outside the approved roots is refused `cwd-refused` at
+every attempt. With the section
 present on `darwin`, the daemon starts one short-lived `codex app-server` (the
 `codex` on `PATH`, run directly, in its own process group, with
 `KHEREP_CODEX_FORK=1`) per eligible message, one at a time on the node. It
@@ -245,10 +252,19 @@ did not start fails the attempt. The owner's inbox record, progress, session
 record and thread are untouched; the owner's next turn reads the message as
 before. Each attempt writes one
 `wake.jsonl` line (`fork`, `fork-declined`, `fork-failed`, `fork-uncertain`,
-`fork-superseded`); `fork-not-idle` and `fork-disabled-platform` are written
-once per message. On another platform the only effect is the
+`fork-superseded`). Every refusal before the claim is one `wake.jsonl` line per
+owner, message and code (issue #444): `fork-disabled-platform`, `fork-not-idle`,
+`fork-cwd-refused`, `fork-permission-mode`, `fork-budget-spacing` and so on (the
+admission code with the prefix `fork-`), and the producer's own `fork-producer`,
+`fork-mcp-unknown`, `fork-features-unknown` and `fork-relay-unsupported`. A line
+carries ids and the code only, never a path or text; a line whose append failed
+is written at the next poll. On another platform the only effect is the
 `fork-disabled-platform` line. The fork spends the owner's turn budget once per
-attempt. `kherep-node doctor` prints the section with a count of opted-in
+attempt. A non-interactive `codex exec` session reports `approval_policy=never`
+to the hooks even with `-a on-request` and `--sandbox read-only` (measured
+2026-10-16, codex-cli 0.160.1), so its record carries `permissionMode:
+bypassPermissions` and admission refuses it (`fork-permission-mode`); fork
+owners are interactive sessions (TUI or Desktop). `kherep-node doctor` prints the section with a count of opted-in
 sessions and counts the attempts per state.
 
 Relay of a completed answer (issue #408, fourth increment). The daemon's sweep,

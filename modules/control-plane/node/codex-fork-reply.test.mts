@@ -51,6 +51,28 @@ test("with wake.codexFork absent nothing is read, started, written or audited (d
   assert.deepEqual(recoverForkAttempts(f.paths, T0), { recovered: 0, unreadable: [] });
 });
 
+test("an opt-in written after a poll without it is claimed at the next poll; an opt-out stops it (issue #444)", async (t) => {
+  const f = forkNode(t, {}, { fork: false });
+  const id = f.add();
+  await poll(f);
+  assert.deepEqual([f.app.runs.length, forkAttempts(f.paths, FORK_OWNER).length, forkAudit(f)], [0, 0, []]);
+  // The fixture's deps() reloads the file per poll, as the daemon's exchange round does.
+  const policy = JSON.parse(fs.readFileSync(f.paths.policy, "utf8"));
+  policy.wake.codexFork = { enabled: true, sessions: [FORK_OWNER] };
+  fs.writeFileSync(f.paths.policy, JSON.stringify(policy));
+  await poll(f);
+  assert.equal(f.app.runs.length, 1);
+  assert.deepEqual(forkAttempts(f.paths, FORK_OWNER).map((a) => [a.messageId, a.state]), [[id, "completed"]]);
+  assert.deepEqual(forkAudit(f).map((line) => [line.action, line.messageIds]), [["fork", [id]]]);
+  assert.deepEqual(turns(f), [T0]);
+  delete policy.wake.codexFork;
+  fs.writeFileSync(f.paths.policy, JSON.stringify(policy));
+  f.add();
+  await poll(f);
+  await poll(f);
+  assert.deepEqual([f.app.runs.length, forkAttempts(f.paths, FORK_OWNER).length, forkAudit(f).length], [1, 1, 1], "opt-out at the next poll");
+});
+
 test("on another platform the only effect is one fork-disabled-platform line per message", async (t) => {
   const f = forkNode(t);
   const id = f.add();

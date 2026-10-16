@@ -185,6 +185,22 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Codex fork reply gate and refusal audit (issue #444). The daemon's regular
+  exchange round handed the Codex queue the policy loaded at start, so a
+  `wake.codexFork` opt-in or opt-out, or a `wake.sessions` change, written
+  after the daemon started took effect only after a restart; the round now
+  passes the policy it read for that round, as the intake-window path already
+  did, and nothing changes while the section is absent. Every refusal of the
+  fork producer before the claim is now one `wake.jsonl` line per owner,
+  message and code: the admission code with the prefix `fork-` (`fork-cwd-refused`,
+  `fork-permission-mode`, `fork-budget-spacing`, ...) and the producer's own
+  `fork-producer`, `fork-mcp-unknown`, `fork-features-unknown` and
+  `fork-relay-unsupported`; `fork-not-idle` and `fork-disabled-platform` are
+  unchanged. A line carries ids and the code only, and a line whose append
+  failed is written at the next poll. Documentation states that a fork
+  owner's recorded working directory must lie inside the workspace roots and
+  that a `codex exec` session, which reports `bypassPermissions`, can never be
+  a fork owner.
 - Service owner probe in unit tests (issue #423): the runner deps carry the
   owner probe of a service admission (`serviceOwner`), and task starts,
   continues, closed-session resumes, Codex runs and Codex queue runs use it.
