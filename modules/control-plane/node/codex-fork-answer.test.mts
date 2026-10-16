@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import fs from "node:fs";
 import test from "node:test";
 
 import { FEATURES_STDOUT, FEATURES_STDOUT_MEASURED_ROWS, FORK_ID, FORK_OWNER, FORK_TURN } from "./codex-fork-fixture.mts";
-import { forkParams, forkPrompt, parseFeaturesList, validateForkAnswer } from "./codex-fork-process.mts";
+import { FORK_FEATURE_KEYS, forkParams, forkPrompt, parseFeaturesList, validateForkAnswer } from "./codex-fork-process.mts";
 import { ForkWatch } from "./codex-fork-watch.mts";
 import { RECORD } from "./codex-fork-run-fixture.mts";
 
@@ -66,6 +68,30 @@ test("parseFeaturesList reads the measured stages: deprecated rows, a dotted rem
     assert.equal(parseFeaturesList(`${FEATURES_STDOUT}${bad}\n`), null, `still fail-closed: ${bad}`);
   }
 });
+
+// The verbatim stdout of `codex features list` of three real binaries,
+// recorded 2026-10-16 on macOS: public feature catalogues. The same protocol
+// across versions must keep parsing (no version is pinned).
+const REAL_LISTS: [string, string, string][] = [
+  ["0.160.1", "PATH standalone", "4dbe6285cb5aa18ab44e1a07620887185463994f0f94daafb1befaccfd5a2c1c"],
+  ["0.162.0-alpha.17.2", "app bundle", "423565d3b4f30e0982d4029abb31794d94f859f02a34d9d9071018f77a3cb853"],
+  ["0.163.0", "daemon", "6dd1708362bdc7de0a50f7e4ad9087410fbfe42df7793bf9977cf6d2103ff810"],
+];
+
+for (const [version, binary, sha256] of REAL_LISTS) {
+  test(`parseFeaturesList accepts the real ${version} listing (${binary}) and finds every key a fork switches off`, () => {
+    const stdout = fs.readFileSync(new URL(`./fixtures/codex-features-list-${version}.txt`, import.meta.url), "utf8");
+    assert.equal(crypto.createHash("sha256").update(stdout).digest("hex"), sha256, "the fixture is the recorded output byte for byte");
+    const keys = parseFeaturesList(stdout);
+    assert.ok(keys, "the real listing parses");
+    for (const key of FORK_FEATURE_KEYS) assert.ok(keys.has(key), key);
+    for (const key of ["js_repl", "tool_search", "codex_hooks", "guardianv2.thread_context", "remote_models"]) assert.ok(!keys.has(key), key);
+    assert.ok(keys.has("web_search_request") && keys.has("transcript_v2"), "deprecated keys are listed");
+    const config = forkParams("o", "t", "/w", keys, []).config;
+    assert.deepEqual(Object.keys(config).filter((key) => key.startsWith("features.")).sort(),
+      FORK_FEATURE_KEYS.map((key) => `features.${key}`).sort(), "all 15 fork keys are emitted for this binary");
+  });
+}
 
 test("forkParams emits only listed feature keys and always the config paths and MCP switches", () => {
   const params = forkParams(FORK_OWNER, "turn-1", "/w", new Set(["hooks", "goals", "js_repl"]), ["alpha", "beta"]);
