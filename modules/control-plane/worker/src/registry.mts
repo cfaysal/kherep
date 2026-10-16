@@ -316,6 +316,11 @@ export class Registry extends DurableObject<Env> {
     await this.messageTx("ackMessageStatus", () => this.messages.retention.ack(nodeId, body, Date.now()));
   }
 
+  // Issue #408 (design r3 section 4.3): the push boundary of a proxy delivery re-reads its row.
+  messageQueued(messageId: string): boolean {
+    return this.metered("messageQueued", () => this.messages.isQueued(messageId));
+  }
+
   pendingMessagesFor(nodeId: string): MessageEffects {
     return this.tx("pendingMessagesFor", () => this.messages.pendingFor(nodeId, Date.now()));
   }

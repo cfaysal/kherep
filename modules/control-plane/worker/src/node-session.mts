@@ -18,7 +18,7 @@ import type { LocalControlNode } from "./task-control-routing.mts";
 import { randomToken } from "./crypto.mts";
 import { registryStub, type Env } from "./env.mts";
 import { checkAuth, CLOSE, type Attachment } from "./handshake.mts";
-import { routeEffects, type LocalNode } from "./message-routing.mts";
+import { isProxyDelivery, routeEffects, type LocalNode } from "./message-routing.mts";
 import { SessionStore, type CommandRecord } from "./session-store.mts";
 
 // Offline detection (issue #5 decision 2): while a node is online an alarm
@@ -184,7 +184,10 @@ export class NodeSession extends DurableObject<Env> {
 
   // Registry-routed message frames for this node. Returns false when the node
   // is not connected; queued messages then wait for its next authentication.
-  pushFrame(type: "message.deliver" | "message.status" | "event", body: Record<string, unknown>): boolean {
+  // Issue #408 (design r3 section 4.3): a proxy delivery re-reads its row here,
+  // in the object that sends, and is dropped unless it is still queued.
+  async pushFrame(type: "message.deliver" | "message.status" | "event", body: Record<string, unknown>): Promise<boolean> {
+    if (isProxyDelivery(type, body) && !await registryStub(this.env).messageQueued(String(body.messageId))) return false;
     const ws = this.authedSocket();
     if (ws) this.sendControl(ws, type, body);
     return ws !== null;

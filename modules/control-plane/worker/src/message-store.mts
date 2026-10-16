@@ -3,7 +3,7 @@ import {
   type MessageStatusBody, type NodeReportedState, legacyProgress,
 } from "../../protocol-messages.mts";
 import { depthExceeded, DEPTH_QUERIES, REPLY_DEPTH_EXCEEDED, replyDepth } from "./message-depth.mts";
-import { PROXY_QUERIES, PROXY_SUPERSEDED, proxyRefusal, supersededProxies } from "./message-proxy.mts";
+import { isQueued, PROXY_QUERIES, PROXY_SUPERSEDED, PROXY_SUPERSEDED_READ, proxyRefusal, supersededProxies } from "./message-proxy.mts";
 import { MessageRetention, RETENTION_QUERIES } from "./message-retention.mts";
 
 // The Registry's `messages` table (issue #31). Additive: an existing Registry
@@ -199,8 +199,16 @@ export class MessageStore {
     let record = this.get(status.messageId);
     if (!record) return { effects, receipt: this.retention.lateReceipt(nodeId, status) };
     if (record.toNode !== nodeId) return { effects, receipt: null };
+    // Issue #408 (design r3 section 4.3): a refused proxy its target reports taken reached it anyway.
+    if (record.state === "refused" && record.proxyOf !== null && (status.state === "accepted" || status.state === "delivered")) {
+      this.audit(`node:${nodeId}`, "message.proxy.late-delivery", record.toNode, { messageId: record.messageId, reported: status.state });
+    }
     if (this.mayAdvance(record.state, status.state)) {
       this.setState(record, status.state, status.reason ?? null, `node:${nodeId}`, now, effects, status.progress);
+      // Issue #408: the owner read (or refused) the original; a proxy of it not yet delivered loses.
+      if (status.state === "delivered" || status.state === "refused") {
+        this.refuseQueuedProxies(record, PROXY_SUPERSEDED_READ, `node:${nodeId}`, now, effects);
+      }
       record = this.get(status.messageId) ?? record;
     } else if (record.state === "accepted" && status.state === "accepted" && status.progress
       && (!record.progress || Date.parse(status.progress.observedAt) > Date.parse(record.progress.observedAt))) {
@@ -320,10 +328,20 @@ export class MessageStore {
     // The reply that marked the original, kept for MCP status (issue #200).
     this.sql.exec("UPDATE messages SET reply_message_id = ? WHERE id = ?", message.messageId, original.messageId);
     // Issue #408: the owner's own answer wins over a proxy answer not yet delivered.
+    this.refuseQueuedProxies(original, PROXY_SUPERSEDED, `node:${message.from.nodeId}`, now, effects);
+  }
+
+  // Issue #408 (design r3 section 4.2): only the queued proxies, never the original.
+  private refuseQueuedProxies(original: MessageRecord, reason: string, actor: string, now: number, effects: MessageEffects): void {
     for (const id of supersededProxies(this.sql, original)) {
       const proxy = this.get(id);
-      if (proxy) this.setState(proxy, "refused", PROXY_SUPERSEDED, `node:${message.from.nodeId}`, now, effects);
+      if (proxy) this.setState(proxy, "refused", reason, actor, now, effects);
     }
+  }
+
+  // Issue #408 (design r3 section 4.3): a proxy delivery goes out only while its row is queued.
+  isQueued(messageId: string): boolean {
+    return isQueued(this.sql, messageId);
   }
 
   // The reply recorded when a message was marked replied; null for other
