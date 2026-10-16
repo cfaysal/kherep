@@ -65,9 +65,8 @@ class Stop extends Error {
   constructor(reason: ForkAttemptReason) { super(reason); this.reason = reason; }
 }
 
-// force: the close must end with the group SIGKILL (a timed-out or violating turn, issue #432).
 interface Session {
-  client: AppServerClient; watch: ForkWatch; input: ForkRunInput; t: ForkTimeouts; gone: () => boolean; phase: Phase; force: boolean;
+  client: AppServerClient; watch: ForkWatch; input: ForkRunInput; t: ForkTimeouts; gone: () => boolean; phase: Phase;
 }
 
 export async function runForkAttempt(deps: { codex?: CodexDeps }, input: ForkRunInput): Promise<ForkOutcome> {
@@ -98,15 +97,17 @@ export async function runForkAttempt(deps: { codex?: CodexDeps }, input: ForkRun
   const client = new AppServerClient(child, { requestTimeoutMs: t.requestMs, graceMs: t.graceMs, forceAfterFailure: true, strict: true,
     kill: (value) => { if (child.pid !== undefined) signal(child.pid, value); }, onServerRequest: () => watch.refuse("server-request") });
   client.onNotification((note) => watch.add(note));
+  // Every violation, whenever it is detected, ends the close with the group SIGKILL.
+  watch.onChange(() => { if (watch.violation) client.escalate(); });
   const gone = (): boolean => exited || neverStarted || client.failure instanceof AppServerExitedError;
-  const session: Session = { client, watch, input, t, gone, phase: "launching", force: false };
+  const session: Session = { client, watch, input, t, gone, phase: "launching" };
   let outcome: ForkOutcome;
   try {
     outcome = await converse(session);
   } catch {
     outcome = { state: "uncertain", from: session.phase, reason: "helper-exit" };
   }
-  if (!await client.shutdown(session.force) && !neverStarted) {
+  if (!await client.shutdown() && !neverStarted) {
     deps.codex?.onUnconfirmedShutdown?.();
     retainServiceAdmission(input.admission);
     return { state: "uncertain", from: outcome.from, reason: "close-unconfirmed" };
@@ -226,7 +227,7 @@ async function turn(s: Session, forkId: string): Promise<ForkOutcome> {
   const interrupt = (): Promise<unknown> => s.client.request("turn/interrupt", { threadId: forkId, turnId }, s.t.interruptMs)
     .catch(() => undefined);
   if (end.kind === "violation" || end.kind === "timeout") {
-    s.force = true;
+    s.client.escalate();
     await interrupt();
     return end.kind === "timeout" ? uncertain("turn-timeout") : failed(s.watch.violation!);
   }

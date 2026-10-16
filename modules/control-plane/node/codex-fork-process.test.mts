@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ANSWER, FORK_ID, FORK_OWNER, FORK_TURN, LAST_TURN } from "./codex-fork-fixture.mts";
+import { ANSWER, FORK_ID, FORK_OWNER, FORK_TURN, LAST_TURN, type ForkScenario } from "./codex-fork-fixture.mts";
 import { FORK_FEATURE_KEYS } from "./codex-fork-process.mts";
 import { RECORD, runFork } from "./codex-fork-run-fixture.mts";
 import { serviceAdmissionsIdle } from "./service-drain.mts";
@@ -125,6 +125,7 @@ test("T15: a goal notification for the fork before the goal read's answer fails 
   const r = await runFork(t, { beforeForkGoal: (fork) => [{ method: "thread/goal/updated", params: { threadId: fork, goal: { status: "active" } } }] });
   assert.deepEqual(r.outcome, { state: "failed", from: "launching", reason: "fork-goal" }, "the ephemeral proof that follows is ignored");
   assert.deepEqual(r.running, []);
+  assert.deepEqual(r.run.signals, ["SIGKILL"], "a preflight violation ends the group too");
 });
 
 test("watch rules during the turn fail the attempt and interrupt the fork turn", async (t) => {
@@ -153,6 +154,7 @@ test("a server request with the id of a pending preflight request fails the atte
   assert.ok(!r.methods().includes("thread/fork"));
   const read = r.run.requests.find((m) => m.method === "thread/read")!;
   assert.ok(r.run.requests.some((m) => m.id === read.id && m.error !== undefined), "refused with the colliding id");
+  assert.deepEqual(r.run.signals, ["SIGKILL"], "a preflight violation ends the group too");
 });
 
 test("decline, interrupted and failed turns, and an invalid answer never complete", async (t) => {
@@ -206,32 +208,25 @@ test("an unexpected failure after running is uncertain from running, never a lau
   assert.equal(r.running.length, 1);
 });
 
-// Cross-review of #439, P2-1: a watch rule that fires in the same stdout chunk
-// as turn/completed, after it, or while the helper closes discards the answer.
-test("a violation in the same chunk after turn/completed discards the answer", async (t) => {
-  const cases: [string, (fork: string, turn: string) => Record<string, unknown>[]][] = [
-    ["server-request", (fork) => [{ id: 950, method: "item/commandExecution/requestApproval", params: { threadId: fork } }]],
-    ["tool-item", (fork, turn) => [{ method: "item/started", params: { threadId: fork, turnId: turn, item: { type: "commandExecution" } } }]],
-    ["unsolicited-turn", () => [{ method: "turn/started", params: { threadId: FORK_OWNER, turn: { id: "x" } } }]],
+// Cross-review of #439, P2-1 and the late-violation follow-up: a watch rule that fires in the same stdout chunk as
+// turn/completed, after it, or while the helper closes discards the answer and still ends the process group.
+test("a violation after turn/completed or during the close discards the answer and ends the group", async (t) => {
+  const request = (id: number, method: string) => (fork: string) => [{ id, method, params: { threadId: fork } }];
+  const DECLINE = JSON.stringify({ kind: "decline", text: "", code: "needs-owner" });
+  const cases: [string, Partial<ForkScenario>][] = [
+    ["server-request", { afterCompleted: request(950, "item/commandExecution/requestApproval") }],
+    ["tool-item", { afterCompleted: (fork, turn) => [{ method: "item/started", params: { threadId: fork, turnId: turn, item: { type: "commandExecution" } } }] }],
+    ["unsolicited-turn", { afterCompleted: () => [{ method: "turn/started", params: { threadId: FORK_OWNER, turn: { id: "x" } } }] }],
+    ["server-request", { onClose: request(951, "item/tool/requestUserInput") }],
+    ["tool-item", { onClose: (fork) => [{ method: "item/completed", params: { threadId: fork, item: { type: "mcpToolCall" } } }] }],
+    ["server-request", { answer: DECLINE, onClose: request(952, "item/permissions/requestApproval") }],
   ];
-  for (const [reason, afterCompleted] of cases) {
-    const r = await runFork(t, { afterCompleted });
-    assert.deepEqual(r.outcome, { state: "failed", from: "running", reason }, reason);
+  for (const [reason, scenario] of cases) {
+    const r = await runFork(t, scenario);
+    assert.deepEqual(r.outcome, { state: "failed", from: "running", reason }, JSON.stringify(scenario));
+    assert.deepEqual([r.run.ended, r.run.signals, r.unconfirmed()], [true, ["SIGKILL"], 0], `${reason}: group ended, close confirmed`);
+    assert.equal(serviceAdmissionsIdle(r.paths, testServiceOwner), true, `${reason}: released after the confirmed forced close`);
   }
-});
-
-test("a violation while the helper closes discards the answer", async (t) => {
-  const cases: [string, (fork: string) => Record<string, unknown>[]][] = [
-    ["server-request", (fork) => [{ id: 951, method: "item/tool/requestUserInput", params: { threadId: fork } }]],
-    ["tool-item", (fork) => [{ method: "item/completed", params: { threadId: fork, item: { type: "mcpToolCall" } } }]],
-  ];
-  for (const [reason, onClose] of cases) {
-    const r = await runFork(t, { onClose });
-    assert.deepEqual(r.outcome, { state: "failed", from: "running", reason }, reason);
-  }
-  const decline = await runFork(t, { answer: JSON.stringify({ kind: "decline", text: "", code: "needs-owner" }),
-    onClose: (fork) => [{ id: 952, method: "item/permissions/requestApproval", params: { threadId: fork } }] });
-  assert.deepEqual(decline.outcome, { state: "failed", from: "running", reason: "server-request" }, "a decline is discarded too");
 });
 
 // Cross-review of #439, P2-2: a turn timeout ends with the group SIGKILL even

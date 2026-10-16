@@ -10,7 +10,8 @@ import { AppServerClient, AppServerRequestError, type AppServerMessage, type App
 
 type Reply = (request: { id?: number; method: string; params?: unknown }, write: (data: string | Buffer) => void) => void;
 
-function fakeChild(reply: Reply, exitOn: { end?: boolean; term?: boolean } = { end: true }) {
+function fakeChild(reply: Reply, exitOn: { end?: boolean; term?: boolean } = { end: true },
+  onFinish?: (write: (data: string) => void) => void) {
   const stdout = new PassThrough(), stderr = new PassThrough(), stdin = new PassThrough();
   const written: Record<string, unknown>[] = [];
   const signals: string[] = [];
@@ -32,12 +33,12 @@ function fakeChild(reply: Reply, exitOn: { end?: boolean; term?: boolean } = { e
       if (message.method) reply(message, (data) => stdout.write(data));
     }
   });
-  stdin.on("finish", () => { if (exitOn.end) end(); });
+  stdin.on("finish", () => { onFinish?.((data) => stdout.write(data)); if (exitOn.end) end(); });
   const kill = (signal: NodeJS.Signals): void => {
     signals.push(signal);
     if (signal === "SIGKILL" || exitOn.term) end();
   };
-  return { child: child as never, written, signals, kill };
+  return { child: child as never, raw: child, written, signals, kill };
 }
 
 const line = (value: unknown): string => `${JSON.stringify(value)}\n`;
@@ -145,5 +146,51 @@ test("a forced close ends with SIGKILL after the grace even when the child exits
   const c = client(fake, { graceMs: 30, forceAfterFailure: true });
   await c.request("turn/interrupt", {});
   assert.equal(await c.shutdown(true), true);
+  assert.deepEqual(fake.signals, ["SIGKILL"]);
+});
+
+// Late-violation follow-up of #439: a violation seen while the close runs still
+// ends the process group, and a clean close above still sends no signal.
+const ok: Reply = (request, write) => write(line({ id: request.id, result: {} }));
+const approval = line({ id: 7, method: "item/commandExecution/requestApproval", params: {} });
+
+test("escalate during a running graceful close ends with the group SIGKILL", async () => {
+  const fake = fakeChild(ok);
+  const c = client(fake, { graceMs: 30, forceAfterFailure: true });
+  const closing = c.shutdown();
+  c.escalate();
+  assert.equal(await closing, true);
+  assert.deepEqual(fake.signals, ["SIGKILL"]);
+});
+
+test("a later shutdown(true) escalates the memoized close", async () => {
+  const fake = fakeChild(ok);
+  const c = client(fake, { graceMs: 30, forceAfterFailure: true });
+  const first = c.shutdown(), second = c.shutdown(true);
+  assert.equal(first, second);
+  assert.equal(await first, true);
+  assert.deepEqual(fake.signals, ["SIGKILL"]);
+});
+
+test("a server request written while stdin closes escalates through onServerRequest", async () => {
+  const fake = fakeChild(ok, { end: true }, (write) => write(approval));
+  let c!: AppServerClient;
+  c = client(fake, { graceMs: 30, forceAfterFailure: true, onServerRequest: () => c.escalate() });
+  assert.equal(await c.shutdown(), true);
+  assert.deepEqual(fake.signals, ["SIGKILL"]);
+});
+
+test("a server request between exit and close still ends with the group SIGKILL", async () => {
+  const fake = fakeChild(ok, { end: false });
+  let c!: AppServerClient;
+  c = client(fake, { graceMs: 30, forceAfterFailure: true, onServerRequest: () => c.escalate() });
+  const closing = c.shutdown();
+  setImmediate(() => {
+    fake.raw.exitCode = 0;
+    fake.raw.emit("exit", 0, null);
+    fake.raw.stdout.write(approval);
+    fake.raw.emit("close", 0, null);
+  });
+  assert.equal(await closing, true);
   assert.deepEqual(fake.signals, ["SIGKILL"]);
 });

@@ -440,9 +440,13 @@ cleanup used: bounded line framing with a UTF-8 decoder, request ids and
 timeouts, notifications to listeners, and every server request (a message with
 a method and an id, whatever the id) refused with `-32601`. For the fork it
 runs strict (a malformed line fails it) and, after a failure, a timed-out turn
-or a violating turn, always ends with SIGKILL to the process group, also when
-`turn/interrupt` succeeded, because the direct child's exit does not prove that
-the group is empty (issue #432). `codex-fork-process.mts` runs one attempt; a
+or a violation detected at any time, also in the chunk that carried
+`turn/completed`, while the helper closes, or after the direct helper exited,
+always ends with SIGKILL to the process group, also when `turn/interrupt`
+succeeded, because the direct child's exit does not prove that the group is
+empty (issue #432). The watch escalates the client's close at the moment it
+detects the violation, so a close that is already running still ends with the
+group SIGKILL. `codex-fork-process.mts` runs one attempt; a
 watch rule that fired at any time, also in the chunk that carried
 `turn/completed` or while the helper closed, discards the answer or decline
 (checked before the answer is accepted and again after the shutdown); `codex-fork-watch.mts` checks every notification against what is known
