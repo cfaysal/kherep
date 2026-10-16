@@ -194,7 +194,8 @@ as idle.
 
 Codex fork reply (issue #408, in progress). Nothing changes while
 `wake.codexFork` is absent; with it present only `darwin` is accepted, and the
-answer is persisted, not relayed. The section names the Codex chats whose
+answer is relayed to the peer as one labelled proxy answer while the owner stays
+idle (below). Upgrade the Worker before the nodes. The section names the Codex chats whose
 history an ephemeral read-only fork may use to answer an idle owner's peer
 message:
 
@@ -238,15 +239,68 @@ fixed reason code.
 The fork gets one bounded structured question; the daemon validates the answer
 and stores it in `codex-fork-attempts/<owner>/<message>.json`. Any approval or
 other request from the server, a tool item, a goal change or a turn the helper
-did not start fails the attempt. Nothing is sent, and the owner's inbox,
-record, progress and thread are untouched; the owner's next turn reads the
-message as before (the relay is the next increment). Each attempt writes one
+did not start fails the attempt. The owner's inbox record, progress, session
+record and thread are untouched; the owner's next turn reads the message as
+before. Each attempt writes one
 `wake.jsonl` line (`fork`, `fork-declined`, `fork-failed`, `fork-uncertain`,
 `fork-superseded`); `fork-not-idle` and `fork-disabled-platform` are written
 once per message. On another platform the only effect is the
 `fork-disabled-platform` line. The fork spends the owner's turn budget once per
 attempt. `kherep-node doctor` prints the section with a count of opted-in
 sessions and counts the attempts per state.
+
+Relay of a completed answer (issue #408, fourth increment). The daemon's sweep,
+in every poll before the inbox filter, writes one outbox record per completed
+attempt: a proxy answer to the original's sender, from the owner's session, with
+`proxyOf` naming the original, never `inReplyTo`, so the original is never
+marked replied, and with the original's reply depth plus one. Its text starts
+with a fixed header that names the owner session, the fork and the original and
+says the owner has not read the message yet. There is no stored release: the
+sweep writes the record only when the relay guards pass, and the exchange runs
+the same guards again at every send, resends included, so a guard that fails
+after the write holds the record from the next exchange round on. The guards,
+in order: the attempt at most 24 hours old (`fork-relay-stale`); the policy read
+fresh (the section present, enrolled, no kill switch, the fingerprint the
+attempt was admitted under, the owner opted in, the platform, the answer within
+`maxAnswerBytes`); the Worker capability `messaging.proxy.v1` proven by a
+directory frame of the current authenticated connection (cleared at every close
+and every authentication, never read from `directory.json`); the original still
+`accepted` for the owner; and the owner's recorded session with admission's own
+clauses (recorded and recent, not a task session, no bypass or unknown
+permission mode, the `PostToolUse` hook, idle evidence). A relay spends no turn
+and starts no helper. The send also needs the message's sidecar
+`inbox/proxied/<message>.json` to match the attempt, the relay id and the fork;
+a missing, unreadable or mismatched one holds the record. A Worker without the
+capability refuses every fork before admission (`fork-relay-unsupported`).
+
+When the owner reads or answers first, the sweep withdraws before any send guard
+is consulted: exactly (outbox record and sidecar removed) when no frame can
+have left this node, and otherwise as unconfirmed, keeping the record (never sent
+again) for a late Worker status. A held record that gets no Worker status within
+24 hours is removed; the sidecar then records `unresolvedAt`, and the outcome is
+unknown, not "not delivered": a later status is acknowledged and not recorded
+locally, and the Worker's message listing and audit may hold it. The Worker
+refuses a proxy whose original row is missing or does not match (`proxy parent
+unknown`, also for a deleted original with a tombstone), is answered
+(`original already answered`) or is not `accepted` (`original not waiting`), and
+beyond the reply depth. The owner's reply, and the owner node's `delivered` or
+`refused` report of the original, refuse every proxy of it still queued; a
+delivery frame produced before that is dropped where it is pushed. A proxy
+already accepted at the peer stays: the peer then holds both the proxy and the
+owner's reply (audit `message.proxy.late-delivery` when a refused proxy is
+reported taken); closing that needs a reservation (a later increment).
+
+`relayedAt` in the attempt means the control plane answered the relay (its first
+status in `sent/`), and the attempt is audited `fork-relayed`. The owner's next
+delivery and `msg inbox` show one line per state, derived from the sidecar, the
+outbox and `sent/`: prepared and not queued; queued locally or awaiting
+confirmation; may have reached the control plane; queued by the control plane;
+reached the peer (the only line that says not to answer again); could not be
+delivered (with the quoted reason); and no delivery status before local cleanup
+(outcome unknown). The proxy's own sent record produces no failure or receipt
+notice for the owner. The peer sees `Proxy answer for your message <id>` and
+`msg inbox` prints `proxy for: <id>`; its reply to the proxy is an ordinary
+reply to the owner's session.
 
 Measured on synthetic threads (2026-10-16, Codex 0.160.1 on `PATH`,
 0.162.0-alpha.17.2 and 0.163.0): `thread/goal/get` answers `goal: null` for an

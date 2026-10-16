@@ -91,6 +91,36 @@ increments the minor version; every other release increments the patch version.
   moved to `codex-app-server-client.mts`; it now decodes UTF-8 split across
   output chunks exactly (a split multibyte character came back as replacement
   characters before) and refuses every server request with `-32601`.
+- Codex fork reply relay (issue #408, fourth increment, darwin only, behind
+  `wake.codexFork`). A completed fork answer is relayed as one labelled proxy
+  answer to the original's sender: a new optional `proxyOf` on `message.send`
+  and `message.deliver` names the original, never together with `inReplyTo`,
+  so the original is never marked replied; the proxy is one reply hop deeper.
+  The daemon's sweep writes one outbox record per completed attempt and the
+  owner's local sidecar `inbox/proxied/<message>.json`; there is no stored
+  release, and the exchange sends the record only when the relay guards pass
+  at that send (attempt at most 24 hours old, the fresh policy with opt-in,
+  enrollment, kill switch, fingerprint, platform and answer bound, the Worker
+  capability `messaging.proxy.v1` from a `directory` frame of the current
+  authenticated connection, the original still accepted, the owner's recorded
+  session idle with its task and permission guards) and the sidecar matches
+  the attempt. A relay spends no turn and starts no helper. The owner reading
+  or answering first withdraws the relay before any guard is consulted,
+  exactly when nothing can have left the node and as unconfirmed otherwise; a
+  held record without any Worker status is removed after 24 hours and the
+  outcome is then recorded as unresolved, never as not delivered. The owner's
+  delivery block and `msg inbox` show the relay state (prepared, queued or
+  awaiting confirmation, may have reached the control plane, queued by the
+  control plane, reached the peer, could not be delivered, unresolved); only a
+  proxy that reached the peer says not to answer again. The audit action
+  `fork-relayed` and the attempt's `relayedAt` mean the Worker answered. The
+  Worker validates `proxyOf` against the live original row only (`proxy parent
+  unknown` for a missing row or any address mismatch, `original already
+  answered`, `original not waiting`), refuses a proxy still queued when the
+  owner replies or the owner node reports the original delivered or refused,
+  and re-reads the row where a proxy delivery is pushed. A proxy already
+  accepted at the peer stays (documented residual, audit
+  `message.proxy.late-delivery`); closing it needs a reservation.
 - Stable Control Plane command (issue #436, first part). `kherep-node service
   install`, `upgrade` and `rollback` write `<configRoot>/bin/kherep-node.mjs`,
   a POSIX shim `kherep-node` and, on Windows, `kherep-node.cmd` and
@@ -124,6 +154,10 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- Upgrade the Worker before the nodes for the Codex fork reply relay (issue
+  #408): the `directory` frame carries `worker.capabilities`, and a node
+  refuses every fork before admission (`fork-relay-unsupported`) while its
+  current connection has not shown `messaging.proxy.v1`.
 - Codex messaging rules allowlist the stable launcher (issue #436).
   `rules/kherep-control-plane.rules` holds one `prefix_rule` per command form:
   first `node` with `<configRoot>/bin/kherep-node.mjs` (forward slashes on
