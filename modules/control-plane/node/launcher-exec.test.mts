@@ -3,8 +3,8 @@ import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
-import { configRoot } from "./config.mts";
 import { ensureLauncher, launcherCommand, launcherPath, resolveLauncher } from "./launcher.mts";
 import { LAUNCHER_HINT, LAUNCHER_REASONS } from "./launcher-template.mts";
 import { COMMIT_A, COMMIT_B, RECORD_ENV, makePin, receiptFor, receiptPath, tempRoot, writeReceipt } from "./launcher-fixture.mts";
@@ -77,7 +77,13 @@ test("without KHEREP_CONFIG_DIR the launcher derives the config root exactly as 
   const home = path.dirname(h.root);
   const env: NodeJS.ProcessEnv = { ...process.env, APPDATA: home, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home };
   delete env.KHEREP_CONFIG_DIR;
-  const expected = path.join(configRoot(env), "control-plane", "service", "receipt.json");
+  // On macOS configRoot reads os.homedir(), which follows HOME only in a process
+  // started with it, so the expected root is derived in a child with the same env.
+  const derived = spawnSync(process.execPath, ["--input-type=module", "-e",
+    `import { configRoot } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "config.mts")).href)};`
+    + " process.stdout.write(configRoot());"], { env, encoding: "utf8" });
+  assert.equal(derived.status, 0, derived.stderr);
+  const expected = path.join(derived.stdout, "control-plane", "service", "receipt.json");
   const result = launch(h.root, ["msg", "sessions"], env);
   assert.equal(result.status, 1);
   assert.ok(result.stderr.includes(`; receipt ${expected}; `), result.stderr);
