@@ -2,7 +2,7 @@ import fs from "node:fs";
 
 import { mayContinue } from "./autonomy.mts";
 import { consumeBusyHint } from "./codex-busy-consume.mts";
-import { codexSessionRefs, isCodexSessionId, markStopContinued, recordCodexSession } from "./codex-sessions.mts";
+import { codexSessionRefs, isCodexSessionId, markStopEnded, recordCodexSession } from "./codex-sessions.mts";
 import { confirmOffered, contextOutput, deliveryContext, sessionInbox, type HookDeps } from "./deliver-core.mts";
 import { cliCommand } from "./msg-cli.mts";
 import { nodeWakeBudget } from "./policy.mts";
@@ -72,18 +72,23 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
   const mine = sessionInbox(deps.paths, refs);
   confirmOffered(deps.paths, mine);
   const arrived = mine.filter((r) => r.state === "accepted").map((r) => r.messageId);
-  if (continued === true || arrived.length === 0) return "";
+  if (continued === true || arrived.length === 0) return stopEnded(deps, sessionId);
   // A continuation is an autonomous turn: the same budget and bypass check as
   // the Claude Stop path (autonomy.mts).
   const allowed = deps.mayContinue ?? ((ids: string[]) => mayContinue(deps.paths, sessionId, mode, ids, deps.now?.() ?? Date.now(),
     nodeWakeBudget(deps.paths)));
-  if (!allowed(arrived)) return "";
-  // The turn goes on, so this Stop is no idle evidence (issue #408). A failed
-  // write leaves the continuation itself unchanged.
-  try {
-    markStopContinued(deps.paths, sessionId);
-  } catch {
-    // the record reads as a plain Stop
-  }
+  if (!allowed(arrived)) return stopEnded(deps, sessionId);
+  // The turn goes on: the record stays a Stop not marked as ended, never idle (issue #408).
   return JSON.stringify({ decision: "block", reason: CODEX_STOP_REASON });
+}
+
+// A Stop that returns no continuation ended its turn, the only idle evidence
+// (issue #408). A failed write leaves the record not idle and the output empty.
+function stopEnded(deps: HookDeps, sessionId: string): "" {
+  try {
+    markStopEnded(deps.paths, sessionId);
+  } catch {
+    // the record stays a Stop not marked as ended
+  }
+  return "";
 }

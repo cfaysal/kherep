@@ -94,6 +94,23 @@ test("a malformed, foreign or unexpected record fails every read closed", (t) =>
   assert.throws(() => forkAttempts(paths, OWNER), /snapshot/);
 });
 
+// Fable review of PR 2, M2: Finder writes .DS_Store into any directory it
+// shows; a dotfile is never a record, while a bad .json name still fails closed.
+test("a dotfile in an owner directory is skipped and a bad .json name still fails closed", (t) => {
+  const paths = setup(t);
+  claimForkAttempt(paths, claim(1));
+  const dir = forkAttemptsPath(paths, OWNER);
+  fs.writeFileSync(path.join(dir, ".DS_Store"), "Bud1");
+  assert.equal(forkAttempts(paths, OWNER).length, 1, "a .DS_Store is not a record");
+  assert.ok(claimForkAttempt(paths, claim(2)), "the store stays writable");
+  assert.deepEqual(recoverForkAttempts(paths, NOW + 1), { recovered: 2, unreadable: [] });
+  for (const [bad, error] of [["not-a-message-id.json", /snapshot/], [`${message(3)}.json`, /record/]] as const) {
+    fs.writeFileSync(path.join(dir, bad), "{}");
+    assert.throws(() => forkAttempts(paths, OWNER), error, bad);
+    fs.rmSync(path.join(dir, bad));
+  }
+});
+
 test("a full store fails closed: no claim beyond the bound, and an overfull snapshot is an error", (t) => {
   const paths = setup(t);
   const first = claimForkAttempt(paths, claim(1));

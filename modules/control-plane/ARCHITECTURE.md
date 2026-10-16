@@ -335,14 +335,15 @@ unchanged. An input without a known event keeps the previous values.
 
 ```mermaid
 flowchart LR
-  hook[SessionStart / UserPromptSubmit / Stop] --> record[lastEvent, lastEventAt; Stop also lastStopAt]
-  post[Owner PostToolUse] --> refresh[lastEvent, lastEventAt of an existing record]
-  record --> idle["idleEvidence(): Stop >= 90 s ago, seen within 12 h"]
+  hook[SessionStart / UserPromptSubmit / Stop] --> record[lastEvent, lastEventAt; Stop also lastStopAt; lastStopEnded cleared]
+  post[Owner PostToolUse] --> refresh[lastEvent, lastEventAt of an existing record; lastStopEnded cleared]
+  record --> ended[Stop without a block: markStopEnded]
+  ended --> idle["idleEvidence(): ended Stop >= 90 s ago, seen within 12 h"]
   refresh --> idle
 ```
 
 `idleEvidence()` is pure: a record is idle only when its last event is a `Stop`
-at least the threshold (default 90 s, accepted 30 s to 1 h) ago and `lastSeen`
+marked as ended (`lastStopEnded: true`), at least the threshold (default 90 s, accepted 30 s to 1 h) ago and `lastSeen`
 is within `CODEX_ACTIVE_MS`. A missing record, a record of an older hook
 without `lastEvent`, an unreadable time or an out-of-range threshold is not
 idle. No delivery path consults it yet; `msg sessions` prints the last event of
@@ -350,18 +351,23 @@ this node's Codex sessions and doctor counts records per last event. Whether
 `Stop` fires on a cancelled turn and whether an approval wait is
 distinguishable remain UNKNOWN, so the result is evidence, not proof.
 
-A `Stop` whose delivery hook returns `decision: block` continues the turn. After
-the record is written, `deliver-codex.mts` sets `lastStopContinued` through
-`markStopContinued`; `recordCodexSession` clears it at the next `Stop` or
-`UserPromptSubmit` and keeps it for every other event. `idleEvidence()` is false
-while it is set. A failed write leaves the block output unchanged.
+A `Stop` whose delivery hook returns `decision: block` continues the turn, so
+the mark fails closed: every hook event, `Stop` included, clears
+`lastStopEnded` (`recordCodexSession` and the `PostToolUse` refresh replace the
+event fields as a whole), and only after the `Stop` is recorded does
+`deliver-codex.mts` set it through `markStopEnded`, on every exit that returns
+no block (no new message, an already continued turn, a refused continuation).
+The block path never writes it. A failed mark leaves the record a `Stop`
+without the mark, which is not idle, and the hook output unchanged. An input
+without an event keeps the mark with the rest of the event fields.
 
 ## Codex fork reply: policy, attempts and admission
 
 Issue #408, second increment, not wired: no daemon path calls these modules
 and no process is started. `policy.mts` parses the optional
 `wake.codexFork` section; open decision D4 (full thread ids only) lives in
-its `FORK_SESSION` pattern and D5 (darwin only) in `FORK_PLATFORMS`. A
+its `FORK_SESSION` pattern, matched without case and kept in lowercase so
+that admission compares exactly, and D5 (darwin only) in `FORK_PLATFORMS`. A
 rejected section is left out of the parsed `wake`, so the rest of the section
 and the busy-admission fingerprint of a policy without it are unchanged.
 
@@ -369,7 +375,9 @@ and the busy-admission fingerprint of a policy without it are unchanged.
 complete `launching` record to a temp file and links it to
 `<owner>/<messageId>.json`; the link is the exclusive create, so two processes
 racing for a message create one attempt and a snapshot never reads a partial
-record. Transitions go forward only (`launching -> running -> completed |
+record. A snapshot skips every dotfile (the temp files and a Finder
+`.DS_Store`); any other name that is not a valid `<messageId>.json` record
+fails it closed. Transitions go forward only (`launching -> running -> completed |
 declined | failed | uncertain | superseded`, `completed -> superseded` before a
 relay); write-once fields never change. Per-owner exclusivity (one attempt in
 flight) relies on the daemon's serial lane, per-message exclusivity on the
