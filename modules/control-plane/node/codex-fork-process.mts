@@ -13,7 +13,7 @@ import { forkOutputSchema, forkPrompt, validateForkAnswer } from "./codex-fork-a
 import type { ForkAttemptReason } from "./codex-fork-attempts.mts";
 import { ForkWatch } from "./codex-fork-watch.mts";
 import { lastLine } from "./codex-output.mts";
-import { signalGroup, type CodexDeps } from "./codex-process.mts";
+import { signalGroupReport, type CodexDeps } from "./codex-process.mts";
 import type { QueueProducerIdentity } from "./codex-queue-binding.mts";
 import type { InboxRecord } from "./inbox.mts";
 import { retainServiceAdmission, type ServiceAdmission } from "./service-drain.mts";
@@ -92,10 +92,10 @@ export async function runForkAttempt(deps: { codex?: CodexDeps }, input: ForkRun
   });
   child.once("error", () => { if (child.pid === undefined) neverStarted = true; });
   child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString("utf8")).slice(-4096); });
-  const signal = deps.codex?.signal ?? ((pid: number, value: NodeJS.Signals) => { signalGroup(pid, value, platform); });
+  const killGroup = deps.codex?.killGroup ?? ((pid: number, value: NodeJS.Signals) => signalGroupReport(pid, value, platform));
   const watch = new ForkWatch(input.owner);
   const client = new AppServerClient(child, { requestTimeoutMs: t.requestMs, graceMs: t.graceMs, forceAfterFailure: true, strict: true,
-    kill: (value) => { if (child.pid !== undefined) signal(child.pid, value); }, onServerRequest: () => watch.refuse("server-request") });
+    kill: (value) => (child.pid === undefined ? "unconfirmed" : killGroup(child.pid, value)), onServerRequest: () => watch.refuse("server-request") });
   client.onNotification((note) => watch.add(note));
   // Every violation, whenever it is detected, ends the close with the group SIGKILL.
   watch.onChange(() => { if (watch.violation) client.escalate(); });
@@ -108,6 +108,7 @@ export async function runForkAttempt(deps: { codex?: CodexDeps }, input: ForkRun
     outcome = { state: "uncertain", from: session.phase, reason: "helper-exit" };
   }
   if (!await client.shutdown() && !neverStarted) {
+    input.log(`kherep-node: Codex fork helper close unconfirmed (${client.killReport === "unconfirmed" ? "group kill not confirmed" : "helper did not end"})`);
     deps.codex?.onUnconfirmedShutdown?.();
     retainServiceAdmission(input.admission);
     return { state: "uncertain", from: outcome.from, reason: "close-unconfirmed" };

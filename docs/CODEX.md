@@ -204,7 +204,11 @@ message:
 
 Absent means off. Only full thread ids are accepted (in any case, kept in
 lowercase), never `*` or a name, and
-only `darwin` until the Windows measurements are made. Any other shape turns off
+only `darwin` until the Windows measurements are made, and because a forced
+close on Windows cannot confirm the helper's process tree once the helper has
+exited (`taskkill /T` needs a living root); enabling Windows needs the
+per-descendant identity kill of the stop path (issue #231) in the fork, a
+separate change. Any other shape turns off
 only the fork reply; waking stays as written. The node already records one
 attempt per message and decides admission (opt-in, kill switch, enrollment,
 policy unchanged, recorded non-task owner, permission mode, platform, the Codex

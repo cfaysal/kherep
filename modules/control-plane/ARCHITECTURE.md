@@ -446,7 +446,14 @@ always ends with SIGKILL to the process group, also when `turn/interrupt`
 succeeded, because the direct child's exit does not prove that the group is
 empty (issue #432). The watch escalates the client's close at the moment it
 detects the violation, so a close that is already running still ends with the
-group SIGKILL. `codex-fork-process.mts` runs one attempt; a
+group SIGKILL. That SIGKILL is confirmed only by its report: `signalGroupReport`
+answers `sent`, or `absent` when POSIX `kill(-pgid)` states that no process of
+the group exists; a kill that fails or throws leaves the close unconfirmed, the
+attempt `uncertain/close-unconfirmed` and the service admission retained,
+whatever the direct helper did. On Windows `taskkill /T` cannot address an
+exited root, so a forced close there is unconfirmed once the helper has exited;
+the fork stays limited to darwin (`policy.mts`, `FORK_PLATFORMS`).
+`codex-fork-process.mts` runs one attempt; a
 watch rule that fired at any time, also in the chunk that carried
 `turn/completed` or while the helper closed, discards the answer or decline
 (checked before the answer is accepted and again after the shutdown); `codex-fork-watch.mts` checks every notification against what is known
