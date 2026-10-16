@@ -15,7 +15,7 @@ import type { NativeServiceSnapshot, ServiceAdapter, ServiceBinding, ServicePlat
 // Issue #436: service install, upgrade and rollback write the stable launcher,
 // whose bytes never change while its resolution follows the receipt's pin.
 
-const supported = process.platform === "win32" || process.platform === "darwin";
+const onlyManaged = { skip: !(process.platform === "win32" || process.platform === "darwin") && "managed services exist only on macOS and Windows" };
 
 function git(root: string, ...args: string[]): string {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true });
@@ -107,7 +107,7 @@ function enrolledHost(t: test.TestContext) {
   return { root, paths, workspace, repo, run: runCommand, launch };
 }
 
-test("install, upgrade and rollback keep the launcher bytes while it follows the receipt's pin", { skip: !supported && "managed services exist only on macOS and Windows" }, async (t) => {
+test("install, upgrade and rollback keep the launcher bytes while it follows the receipt's pin", onlyManaged, async (t) => {
   const h = enrolledHost(t);
   const pinOf = () => readServiceReceipt(h.paths)!.binding.source.root;
   const commitA = commitStub(h.repo, "A");
@@ -134,7 +134,7 @@ test("install, upgrade and rollback keep the launcher bytes while it follows the
   assert.deepEqual(h.launch(), { status: 7, out: { pin: "A", argv: ["msg", "send", "peer/session", "--", "a b"] } });
 });
 
-test("a launcher that cannot be written is reported as failed without undoing the activation", { skip: !supported && "managed services exist only on macOS and Windows" }, async (t) => {
+test("a launcher that cannot be written is reported as failed without undoing the activation", onlyManaged, async (t) => {
   const h = enrolledHost(t);
   commitStub(h.repo, "A");
   fs.writeFileSync(path.join(h.root, "bin"), "not a directory\n");

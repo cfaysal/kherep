@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { LAUNCHER_REASONS, LAUNCHER_SCRIPT, cmdShim, posixShim, ps1Shim } from "./launcher-template.mts";
+import { LAUNCHER_REASONS, LAUNCHER_SCRIPT, PIN_COMMIT, cmdShim, posixShim, ps1Shim } from "./launcher-template.mts";
 
 // Issue #436. The stable per-host Control Plane command. <configRoot>/bin/ holds
 // kherep-node.mjs, which reads the managed service receipt at call time and
@@ -73,7 +73,7 @@ function current(file: string): { bytes: Buffer; mode: number } | null {
 
 // Content-addressed and idempotent: a file is replaced (temporary file, then
 // rename) only when its bytes or, outside Windows, its mode differ.
-export function ensureLauncher(root: string, options: { platform: NodeJS.Platform; nodeExecutable: string }):
+export function ensureLauncher(root: string, options: Omit<LauncherInput, "configRoot">):
   { status: LauncherStatus; written: string[] } {
   const files = renderLauncher({ ...options, configRoot: root });
   const dir = path.join(root, "bin");
@@ -117,7 +117,7 @@ export function resolveLauncher(root: string, io: LauncherIo = hostIo): Launcher
   const pin = source?.root;
   if (value?.version !== 1 || source?.kind !== "pin" || source.verified !== true
     || typeof pin !== "string" || !io.path.isAbsolute(pin) || typeof node !== "string" || !io.path.isAbsolute(node)
-    || typeof source.commit !== "string" || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(source.commit)) return fail("invalid");
+    || typeof source.commit !== "string" || !PIN_COMMIT.test(source.commit)) return fail("invalid");
   if (!io.isFile(io.path.join(pin, ".kherep-source.json"))) return fail("missing-pin");
   const cli = io.path.join(pin, "modules", "control-plane", "node", "cli.mts");
   if (!io.isFile(cli)) return fail("missing-cli");
