@@ -5,6 +5,7 @@ import { NodeClient, type CommandHandlers } from "./client.mts";
 import { deliverToClosed } from "./closed-delivery.mts";
 import { codexHome } from "./codex-app.mts";
 import { forgetCodexSession } from "./codex-sessions.mts";
+import { recoverForkAttemptsAtStart } from "./codex-fork-attempts.mts";
 import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { codexIntakeWindow } from "./codex-intake-window.mts";
@@ -137,6 +138,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   for (const runtime of enabledRuntimes(policy)) void readiness.check(runtime);
   const runner: RunnerDeps = { paths, policy, log, readiness };
   recoverOperations(paths);
+  recoverForkAttemptsAtStart(paths, Date.now(), log);
   let taskControlInflight = new Set<string>();
   let mcpInflight = new Set<string>();
   if (policy.remoteMcp?.enabled !== true) {

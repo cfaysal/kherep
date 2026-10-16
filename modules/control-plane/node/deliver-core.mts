@@ -59,7 +59,8 @@ const EVENT_OFFER: Record<DeliveryEvent, OfferedBy> = { UserPromptSubmit: "promp
 
 const bytes = (text: string): number => Buffer.byteLength(text, "utf8");
 
-function block(record: InboxRecord, text: string, directory: DirectoryBody | null, tag: string, reply: string): string {
+// reply null: no reply line and no In reply to (frameForFork).
+function block(record: InboxRecord, text: string, directory: DirectoryBody | null, tag: string, reply: string | null): string {
   const id = record.messageId;
   return [
     `=== Kherep peer message ${id} [${tag}] ===`,
@@ -70,9 +71,9 @@ function block(record: InboxRecord, text: string, directory: DirectoryBody | nul
     `From: node ${nodeLabel(directory, record.from.nodeId)}, session ${record.from.session}`,
     `Sent: ${record.createdAt}`,
     `Message id: ${id}`,
-    ...(record.inReplyTo ? [`In reply to: ${record.inReplyTo}`] : []),
+    ...(record.inReplyTo && reply !== null ? [`In reply to: ${record.inReplyTo}`] : []),
     ...(record.state === "offered" ? ["Offered again: the turn that first carried it may not have completed."] : []),
-    `To reply: ${reply} --reply-to ${id} -- <reply text>`,
+    ...(reply !== null ? [`To reply: ${reply} --reply-to ${id} -- <reply text>`] : []),
     `--- message text [${tag}] ---`,
     text,
     `--- end of message text [${tag}] ---`,
@@ -146,6 +147,13 @@ export function frameRecords(paths: NodePaths, records: InboxRecord[], cli: stri
   const intro = introLine("UserPromptSubmit", tag, true);
   const blocks = fitBlocks(records, directoryOf(paths), tag, `${cli} msg send`, `${cli} msg inbox --all`, maxBytes - bytes(intro));
   return { text: [intro, ...blocks].join("\n\n"), carried: records.slice(0, blocks.length) };
+}
+
+// Issue #408: one message framed for an ephemeral fork of its owner, after the
+// peer rules and without a reply line, In reply to or any msg command: the fork
+// has no messaging authority, and nothing it writes selects a destination.
+export function frameForFork(record: InboxRecord, tag: string): string {
+  return [PEER_RULES, block(record, record.text, null, tag, null)].join("\n\n");
 }
 
 // The inbox records addressed to any of the session's references (id, name).

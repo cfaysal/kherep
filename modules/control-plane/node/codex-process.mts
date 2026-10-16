@@ -67,6 +67,11 @@ export interface CodexDeps {
   // Runs `codex <args>` for the MCP server list of intercom runs (codex-mcp.mts).
   mcpList?: McpList;
   mcpListTimeoutMs?: number;
+  // Issue #408: runs `codex features list` for the fork reply's feature filter
+  // (codex-fork-reply.mts), with the McpList runner by default.
+  featuresList?: McpList;
+  // Issue #408: whether the Codex PostToolUse hook is installed (codex-fork-admission.mts).
+  postToolHook?: () => boolean;
   // A started helper that cannot prove both exit and close must keep its
   // service admission fail-closed even when callers reduce the failure to a reason.
   onUnconfirmedShutdown?: () => void;

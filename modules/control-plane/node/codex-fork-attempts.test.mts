@@ -8,8 +8,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
-  advanceForkAttempt, claimForkAttempt, forkAttempts, forkAttemptsPath, MAX_FORK_ATTEMPTS, readForkAttempt, recoverForkAttempts,
-  type ForkClaim,
+  advanceForkAttempt, claimForkAttempt, FORK_ATTEMPT_REASONS, forkAttempts, forkAttemptsPath, MAX_FORK_ATTEMPTS, readForkAttempt,
+  recoverForkAttempts, type ForkAttemptReason, type ForkClaim,
 } from "./codex-fork-attempts.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
 
@@ -135,9 +135,28 @@ test("a restart turns launching and running records uncertain and reports owners
   claimForkAttempt(paths, claim(4, other));
   fs.writeFileSync(path.join(forkAttemptsPath(paths, other), `${message(4)}.json`), "{");
   assert.deepEqual(recoverForkAttempts(paths, NOW + 5), { recovered: 2, unreadable: [other] });
-  assert.deepEqual(forkAttempts(paths, OWNER).map((a) => [a.messageId, a.state]),
-    [[message(1), "uncertain"], [message(2), "uncertain"], [message(3), "failed"]]);
+  assert.deepEqual(forkAttempts(paths, OWNER).map((a) => [a.messageId, a.state, a.reason]),
+    [[message(1), "uncertain", "helper-exit"], [message(2), "uncertain", "helper-exit"], [message(3), "failed", undefined]]);
   assert.deepEqual(recoverForkAttempts(setup(t), NOW), { recovered: 0, unreadable: [] }, "no store, nothing to recover");
+});
+
+// Issue #408, PR 3: the cause of an attempt that did not complete is one code
+// from the fixed list, written once.
+test("reason is write-once and only a code from the fixed list", (t) => {
+  const paths = setup(t);
+  claimForkAttempt(paths, claim(1));
+  assert.ok(FORK_ATTEMPT_REASONS.includes("helper-exit") && FORK_ATTEMPT_REASONS.includes("needs-owner"));
+  assert.throws(() => advanceForkAttempt(paths, OWNER, message(1), "launching", "failed",
+    { reason: "free text" as ForkAttemptReason }, NOW), /invalid/);
+  assert.equal(readForkAttempt(paths, OWNER, message(1))?.state, "launching", "a refused update writes nothing");
+  const failed = advanceForkAttempt(paths, OWNER, message(1), "launching", "failed", { reason: "cwd-mismatch" }, NOW + 1);
+  assert.equal(failed.reason, "cwd-mismatch");
+  claimForkAttempt(paths, claim(2));
+  advanceForkAttempt(paths, OWNER, message(2), "launching", "running", { reason: "fork-shape" }, NOW);
+  assert.throws(() => advanceForkAttempt(paths, OWNER, message(2), "running", "failed", { reason: "tool-item" }, NOW), /write-once/);
+  const file = path.join(forkAttemptsPath(paths, OWNER), `${message(1)}.json`);
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), reason: "not-a-code" }));
+  assert.throws(() => readForkAttempt(paths, OWNER, message(1)), /invalid/, "a record with a foreign code fails closed");
 });
 
 function runner(t: test.TestContext, root: string, messageId: string) {
@@ -177,4 +196,36 @@ test("two independent processes racing for one message create exactly one attemp
     assert.equal(readForkAttempt(paths, OWNER, message(round))?.attemptId, winners[0]);
   }
   assert.equal(forkAttempts(paths, OWNER).length, 8);
+});
+
+test("goalProof and detail are write-once fixed codes (goal revision of 2026-10-16)", (t) => {
+  const paths = setup(t);
+  claimForkAttempt(paths, claim(1));
+  assert.throws(() => advanceForkAttempt(paths, OWNER, message(1), "launching", "running", { goalProof: "trust-me" as never }, NOW), /invalid/);
+  advanceForkAttempt(paths, OWNER, message(1), "launching", "running", { goalProof: "ephemeral-gate" }, NOW);
+  assert.throws(() => advanceForkAttempt(paths, OWNER, message(1), "running", "running", { goalProof: "goal-null" as never }, NOW));
+  claimForkAttempt(paths, claim(2));
+  assert.throws(() => advanceForkAttempt(paths, OWNER, message(2), "launching", "failed", { reason: "fork-goal", detail: "free text" as never },
+    NOW), /invalid/);
+  const failed = advanceForkAttempt(paths, OWNER, message(2), "launching", "failed", { reason: "fork-goal", detail: "fork-has-goal" }, NOW);
+  assert.deepEqual([failed.reason, failed.detail], ["fork-goal", "fork-has-goal"]);
+  assert.ok(FORK_ATTEMPT_REASONS.includes("goals-disabled"));
+  // A record on disk with a code outside the lists fails every read closed.
+  const dir = forkAttemptsPath(paths, OWNER);
+  for (const [n, field, value] of [[1, "goalProof", "goal-null"], [2, "detail", "ephemeral thread does not support goals: x"]] as const) {
+    const file = path.join(dir, `${message(n)}.json`);
+    const record = JSON.parse(fs.readFileSync(file, "utf8"));
+    fs.writeFileSync(file, JSON.stringify({ ...record, [field]: value }));
+    assert.throws(() => readForkAttempt(paths, OWNER, message(n)), /invalid/, field);
+  }
+  assert.throws(() => forkAttempts(paths, OWNER), /invalid/);
+});
+
+test("the goal proof is written in the same update as the fork id and the cutoff turn", (t) => {
+  const paths = setup(t);
+  claimForkAttempt(paths, claim(1));
+  const running = advanceForkAttempt(paths, OWNER, message(1), "launching", "running",
+    { lastTurnId: "turn-a", forkId: "fork-a", goalProof: "ephemeral-gate" }, NOW + 1);
+  assert.deepEqual([running.lastTurnId, running.forkId, running.goalProof], ["turn-a", "fork-a", "ephemeral-gate"]);
+  assert.deepEqual(readForkAttempt(paths, OWNER, message(1)), running, "one write carries all three");
 });

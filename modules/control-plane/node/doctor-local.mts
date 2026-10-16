@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { listenerDir, type ListenerLock } from "./autonomy.mts";
+import { FORK_ATTEMPT_STATES, forkAttempts, type ForkAttemptState } from "./codex-fork-attempts.mts";
 import { CODEX_ACTIVE_MS, isCodexHookEvent, isCodexSessionId, type CodexHookEvent, type CodexSessionRecord } from "./codex-sessions.mts";
 import { readConfig, type NodeConfig, type NodePaths } from "./config.mts";
 import { readDaemonState } from "./daemon-state.mts";
@@ -161,6 +162,30 @@ export function checkCodexSessions(paths: NodePaths, now: number): Check {
     lastEvent[isCodexHookEvent(record.lastEvent) ? record.lastEvent : "unknown"]++;
   }
   return { ok: true, recorded, lastEvent };
+}
+
+// Issue #408: the Codex fork reply attempts by state and the number of owners
+// whose store cannot be read completely. Counts only: no ids, answers or reasons.
+export function checkCodexForkAttempts(paths: NodePaths): Check {
+  const root = path.join(paths.dir, "codex-fork-attempts");
+  let owners: string[];
+  try {
+    owners = fs.readdirSync(root).filter((name) => !name.startsWith("."));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { ok: false, detail: "the Codex fork attempt directory is unreadable" };
+    owners = [];
+  }
+  const states = Object.fromEntries(FORK_ATTEMPT_STATES.map((state) => [state, 0])) as Record<ForkAttemptState, number>;
+  let unreadable = 0;
+  for (const owner of owners) {
+    try {
+      for (const attempt of forkAttempts(paths, owner)) states[attempt.state]++;
+    } catch {
+      unreadable++;
+    }
+  }
+  return { ok: unreadable === 0, states, unreadableOwners: unreadable,
+    ...(unreadable ? { detail: "a Codex fork attempt store cannot be read completely" } : {}) };
 }
 
 // Live: the lock's process runs and the lock is younger than the listener's

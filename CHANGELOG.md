@@ -47,6 +47,42 @@ increments the minor version; every other release increments the patch version.
   rejected one. New audit actions `fork`, `fork-declined`, `fork-failed`,
   `fork-uncertain`, `fork-superseded`, `fork-not-idle` and
   `fork-disabled-platform` exist for the later increments; nothing writes them yet.
+- Codex fork reply producer (issue #408, third increment, darwin only, behind
+  `wake.codexFork`; nothing changes while the section is absent). For a
+  wake-authorized owner listed in `codexFork.sessions` with idle evidence and
+  an accepted exact-addressed message, the daemon starts one short-lived
+  `codex app-server` of the `codex` on `PATH` per message, one at a time on the
+  node, in its own process group and with `KHEREP_CODEX_FORK=1`. It reads the
+  owner without loading it (`thread/read`, the newest turn through
+  `thread/turns/list`, which must be completed, and a goal check through
+  `thread/goal/get` that refuses an active, paused or otherwise unfinished
+  goal, and refuses `goals-disabled` when goals are off in the identity's Codex
+  config), forks it ephemerally and read-only at that turn with tools, hooks,
+  goals, web search, request-user-input and every discovered MCP server off,
+  and asks one structured answer only after `thread/goal/get` on the fork
+  answers `-32600` with exactly `ephemeral thread does not support goals:
+  <fork id>` (measured on 0.160.1, 0.162.0-alpha.17.2 and 0.163.0); any other
+  answer, `goal: null` included, fails the attempt with reason `fork-goal` and a
+  fixed detail code. No `codex` version or hash is pinned; the feature list is
+  cached per resolved path and hash. `deferGoalContinuation` is not sent: both
+  measured binaries reject it with an ephemeral fork, and it copies the goal
+  into a persisted fork. The feature keys are filtered through
+  `codex features list` and the attempt is refused when that listing or the
+  MCP listing fails. Server requests are refused with `-32601` and fail the
+  attempt, as do tool items, goal notifications for the fork and turns the
+  helper did not start. The validated answer is stored in the attempt file
+  (`codex-fork-attempts/<owner>/<message>.json`, mode 0600) with a fixed
+  `reason` code for every other outcome; nothing is relayed, and the owner's
+  inbox record, progress, session record and thread stay unchanged. The fork
+  spends the owner's autonomous-turn budget once per attempt and writes one
+  `wake.jsonl` line; on another platform the only effect is a
+  `fork-disabled-platform` line. The daemon now marks launching or running
+  attempts `uncertain` at start, the Codex delivery hook does nothing inside a
+  fork helper, and `kherep-node doctor` adds the `codexForkAttempts` check
+  (counts per state, no ids). The JSON-RPC client of the native Queue cleanup
+  moved to `codex-app-server-client.mts`; it now decodes UTF-8 split across
+  output chunks exactly (a split multibyte character came back as replacement
+  characters before) and refuses every server request with `-32601`.
 - Stable Control Plane command (issue #436, first part). `kherep-node service
   install`, `upgrade` and `rollback` write `<configRoot>/bin/kherep-node.mjs`,
   a POSIX shim `kherep-node` and, on Windows, `kherep-node.cmd` and

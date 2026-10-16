@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 
 import { codexCommand, findCodex } from "./codex-binary.mts";
 import { lastLine } from "./codex-output.mts";
@@ -135,15 +136,28 @@ export function runMcpList(file: string, codex: CodexDeps): McpList {
 }
 
 // One result per codex binary for MCP_CACHE_MS, shared by concurrent callers.
+// Issue #408: the binary is its resolved path, size and modification time, so
+// an in-place upgrade at the same path is listed again at once; a path that
+// cannot be read is its own key, as before.
 // Every consumer subscribes to uncertain helper lifetime evidence; otherwise
 // the first non-readiness caller could hide a surviving cached helper from a
 // readiness admission that joined the same Promise.
 interface McpCache {
-  file: string; at: number; result: Promise<McpOverrides>;
+  identity: string; at: number; result: Promise<McpOverrides>;
   unconfirmed: boolean; shutdownSubscribers: Set<() => void>;
 }
 let cache: McpCache | null = null;
 export const resetMcpCache = (): void => { cache = null; };
+
+function binaryIdentity(file: string): string {
+  try {
+    const real = fs.realpathSync(file);
+    const stat = fs.statSync(real);
+    return `${real}\0${stat.size}\0${stat.mtimeMs}`;
+  } catch {
+    return file;
+  }
+}
 
 function subscribeShutdown(entry: McpCache, subscriber?: () => void): void {
   if (!subscriber) return;
@@ -154,11 +168,12 @@ function subscribeShutdown(entry: McpCache, subscriber?: () => void): void {
 export async function intercomMcpOverrides(codex: CodexDeps, now: number = Date.now()): Promise<McpOverrides> {
   const file = (codex.findCodex ?? findCodex)();
   if (!file) return { reason: "codex is not installed on this node" };
-  if (cache && cache.file === file && now - cache.at < MCP_CACHE_MS) {
+  const identity = binaryIdentity(file);
+  if (cache && cache.identity === identity && now - cache.at < MCP_CACHE_MS) {
     subscribeShutdown(cache, codex.onUnconfirmedShutdown);
     return cache.result;
   }
-  const entry: McpCache = { file, at: now, result: Promise.resolve({ args: [], names: [], unnamed: 0 }),
+  const entry: McpCache = { identity, at: now, result: Promise.resolve({ args: [], names: [], unnamed: 0 }),
     unconfirmed: false, shutdownSubscribers: new Set() };
   subscribeShutdown(entry, codex.onUnconfirmedShutdown);
   const notify = (): void => {

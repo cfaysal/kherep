@@ -1,7 +1,7 @@
 import fs from "node:fs";
 
 import { mayContinue } from "./autonomy.mts";
-import { consumeBusyHint } from "./codex-busy-consume.mts";
+import { CODEX_FORK_ENV, consumeBusyHint } from "./codex-busy-consume.mts";
 import { codexSessionRefs, isCodexSessionId, markStopEnded, recordCodexSession } from "./codex-sessions.mts";
 import { confirmOffered, contextOutput, deliveryContext, sessionInbox, type HookDeps } from "./deliver-core.mts";
 import { cliCommand } from "./msg-cli.mts";
@@ -38,6 +38,7 @@ import { nodeWakeBudget } from "./policy.mts";
 //   context says to request escalation right away instead of failing first.
 
 export const CODEX_CONTEXT_BYTES = 6 * 1024;
+export { CODEX_FORK_ENV };
 export const CODEX_STOP_MARKER = "Kherep message delivery (not an error):";
 export const CODEX_STOP_REASON = "Kherep: New peer messages are waiting. Check this session's inbox and report any relevant update.";
 export const CODEX_ESCALATION_NOTE = "Run the msg command on its own, not in a pipeline or script, and request escalated "
@@ -46,7 +47,9 @@ export const CODEX_ESCALATION_NOTE = "Run the msg command on its own, not in a p
 
 // The hook's stdout for one Codex input: empty when there is nothing to say.
 // On a machine without an enrolled node it writes nothing at all.
+// Inside a fork helper (KHEREP_CODEX_FORK=1, issue #408) it writes and records nothing.
 export function deliverForCodex(input: unknown, deps: HookDeps): string {
+  if (process.env[CODEX_FORK_ENV] === "1") return "";
   if (typeof input !== "object" || input === null) return "";
   const { hook_event_name: event, session_id: sessionId, cwd, stop_hook_active: continued, permission_mode: mode } = input as Record<string, unknown>;
   if (event === "PostToolUse") return consumeBusyHint(input, deps);

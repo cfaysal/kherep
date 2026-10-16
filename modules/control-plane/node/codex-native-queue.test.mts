@@ -179,3 +179,30 @@ test("normal final close propagates an unconfirmed native shutdown after success
   assert.deepEqual(native.methods, ["initialize", "initialized", "thread/queue/list"]);
   assert.equal(listQueueBindings(node.paths).length, 1);
 });
+
+// Issue #408: the extracted client decodes byte-exact. Measured on 02cd4a2 with
+// a per-chunk toString: "grüßen" split after the first byte of "ü" came back
+// as "gr\uFFFD\uFFFDßen".
+test("a queue row split inside a multibyte character keeps its exact text", async () => {
+  const expected = "grüßen";
+  const stdout = new PassThrough(), stderr = new PassThrough(), stdin = new PassThrough();
+  const child = Object.assign(new EventEmitter(), { stdout, stderr, stdin, pid: 654, killed: false, exitCode: null as number | null,
+    signalCode: null, kill(this: { killed: boolean }) { this.killed = true; return true; } });
+  stdin.on("data", (chunk: Buffer) => {
+    for (const line of chunk.toString("utf8").trim().split("\n")) {
+      const request = JSON.parse(line) as { id?: number; method: string };
+      if (request.id === undefined) continue;
+      const result = request.method === "initialize" ? {} : { data: [{ id: QUEUE, input: expected }], nextCursor: null };
+      const bytes = Buffer.from(`${JSON.stringify({ id: request.id, result })}\n`, "utf8");
+      const split = bytes.indexOf(Buffer.from("ü", "utf8")) + 1;
+      if (request.method !== "thread/queue/list") { stdout.write(bytes); continue; }
+      assert.ok(split > 0);
+      stdout.write(bytes.subarray(0, split));
+      stdout.write(bytes.subarray(split));
+    }
+  });
+  stdin.on("finish", () => { child.exitCode = 0; child.emit("exit", 0, null); child.emit("close", 0, null); });
+  const client = await connectNativeQueue(IDENTITY, { spawn: (() => child as never) as NativeSpawn, requestTimeoutMs: 1_000 });
+  assert.equal((await client.list(OWNER)).data[0]?.input, expected);
+  await client.close();
+});

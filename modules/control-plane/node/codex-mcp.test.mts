@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
@@ -175,4 +178,31 @@ test("every cached MCP consumer receives shared unconfirmed-shutdown evidence", 
   await Promise.all([first, second]);
   assert.equal(serviceAdmissionsIdle(node.paths, testServiceOwner), false,
     "a joined readiness consumer retains its lease when the shared helper lifetime is unknown");
+});
+
+// Issue #408: an in-place upgrade at the same path (new bytes, a new MCP list)
+// is listed again within the cache window, so a new server is switched off
+// too. With the path as the only key it kept the old names for 5 minutes.
+test("a binary replaced at the same path is listed again, and an unchanged one stays cached", async (t) => {
+  resetMcpCache();
+  t.after(resetMcpCache);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-mcp-identity-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "codex");
+  fs.writeFileSync(file, "synthetic codex 0.160.1");
+  let servers = ["rovo"];
+  const calls: string[][] = [];
+  const list: McpList = async (args) => {
+    calls.push(args);
+    return fakeList(servers).list(args);
+  };
+  const deps: CodexDeps = { findCodex: () => file, mcpList: list };
+  assert.deepEqual(await intercomMcpOverrides(deps, T0), { args: mcpOffArgs(["rovo"]), names: ["rovo"], unnamed: 0 });
+  assert.deepEqual(await intercomMcpOverrides(deps, T0 + 1_000), { args: mcpOffArgs(["rovo"]), names: ["rovo"], unnamed: 0 });
+  assert.equal(calls.length, 2, "an unchanged binary is not listed again");
+  servers = ["rovo", "atlas"];
+  fs.writeFileSync(file, "synthetic codex 0.160.2 with a new MCP server");
+  fs.utimesSync(file, new Date(T0 + 2_000), new Date(T0 + 2_000));
+  const upgraded = await intercomMcpOverrides(deps, T0 + 2_000);
+  assert.deepEqual(upgraded, { args: mcpOffArgs(["rovo", "atlas"]), names: ["rovo", "atlas"], unnamed: 0 });
 });

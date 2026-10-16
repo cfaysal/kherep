@@ -17,8 +17,9 @@ import { listTasks } from "./task-records.mts";
 // Admission of one Codex fork reply (issue #408, design section 2.4): every
 // guard re-read from disk immediately before a fork would start, decided in
 // guard order with one reason code, and the owner's turn budget spent only
-// when every other guard passed. Not wired yet: no live path calls it, and it
-// starts no process. Guard 10 (producer identity) belongs to the fork producer.
+// when every other guard passed. It starts no process. The fork producer
+// (codex-fork-reply.mts) calls it after its own guards 10 to 12 (producer
+// identity, MCP discovery, feature listing), which refuse with the last three codes.
 
 export type ForkRefusal =
   | "fork-off" | "kill-switch" | "policy-changed" // 1: policy, kill switch, enrollment, fingerprint
@@ -29,7 +30,8 @@ export type ForkRefusal =
   | "message-not-eligible" | "depth-limit" | "attempt-exists" | "fork-in-flight" | "attempts-unreadable" // 6
   | "cwd-refused" // 7
   | "runtime-pending" | "runtime-not-ready" // 9, checked before the budget
-  | "budget-spacing" | "budget-exhausted"; // 8, last
+  | "budget-spacing" | "budget-exhausted" // 8, last
+  | "fork-producer" | "fork-mcp-unknown" | "fork-features-unknown"; // 10 to 12, returned by the producer before admission
 export type ForkAdmission = { ok: true; cwd: string } | { ok: false; reason: ForkRefusal };
 
 // The message keeps waiting whatever the refusal: these are existing waiting codes.
@@ -41,6 +43,7 @@ export const FORK_PROGRESS: Record<ForkRefusal, typeof MESSAGE_PROGRESS_CODES.wa
   "attempt-exists": "awaiting-user-turn", "fork-in-flight": "retry-pending", "attempts-unreadable": "awaiting-user-turn",
   "cwd-refused": "cwd-refused", "runtime-pending": "retry-pending", "runtime-not-ready": "awaiting-user-turn",
   "budget-spacing": "retry-pending", "budget-exhausted": "budget-exhausted",
+  "fork-producer": "awaiting-user-turn", "fork-mcp-unknown": "awaiting-user-turn", "fork-features-unknown": "awaiting-user-turn",
 };
 
 // Decision D10 (2026-10-16): the operator's opt-in of the full thread id in

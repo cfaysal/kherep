@@ -363,8 +363,8 @@ without an event keeps the mark with the rest of the event fields.
 
 ## Codex fork reply: policy, attempts and admission
 
-Issue #408, second increment, not wired: no daemon path calls these modules
-and no process is started. `policy.mts` parses the optional
+Issue #408, second increment; the third increment wires them (next section).
+`policy.mts` parses the optional
 `wake.codexFork` section; decision D4 of 2026-10-16 (full thread ids only) lives in
 its `FORK_SESSION` pattern, matched without case and kept in lowercase so
 that admission compares exactly, and D5 (darwin only) in `FORK_PLATFORMS`. A
@@ -402,8 +402,62 @@ restricted to Codex `PostToolUse` tables) and `idleEvidence()`; the accepted
 exact-addressed message, its depth and the attempt store; the cwd under the
 sessions policy; readiness. Only then does it spend the owner's shared turn
 budget (decision D9 of 2026-10-16). Readiness is checked before the budget, unlike the
-design's numbering, so a refused fork never spends a turn. Guard 10, the
-producer identity, belongs to the fork producer.
+design's numbering, so a refused fork never spends a turn. Guards 10 to 12, the
+producer identity, MCP discovery and the feature listing, belong to the fork
+producer and run before admission; their refusal codes (`fork-producer`,
+`fork-mcp-unknown`, `fork-features-unknown`) keep the message waiting.
+
+## Codex fork reply: producer and helper
+
+Issue #408, third increment, darwin only, behind `wake.codexFork`. With the
+section absent `scheduleForkReply` returns at its first check: no file is read,
+no process starts and nothing is written. The validated answer is persisted in
+the attempt file and not relayed.
+
+```mermaid
+flowchart TD
+  queue[codex-queue.mts queueFor: after CP hint admission] --> schedule[scheduleForkReply]
+  schedule -->|section absent| none[Nothing]
+  schedule -->|not opted in| none
+  schedule -->|other platform| platform[fork-disabled-platform audit]
+  schedule --> lane[forkLane: one helper per node, service admission]
+  lane --> guards[Guards 10-12: PATH codex identity, mcp list, features list]
+  guards --> admit[admitForkReply: guards 1-9, spends one turn]
+  admit --> claim[claimForkAttempt: launching]
+  claim --> helper[codex app-server, own group, KHEREP_CODEX_FORK=1]
+  helper --> pre[thread/read, thread/turns/list, thread/goal/get on the owner]
+  pre --> inbox{Inbox record still accepted?}
+  inbox -->|no| superseded[superseded]
+  inbox -->|yes| fork[thread/fork ephemeral read-only, thread/goal/get on the fork]
+  fork --> running[running: lastTurnId, forkId]
+  running --> turn[turn/start with outputSchema; watch rules]
+  turn --> close[close, group SIGKILL after grace]
+  close --> done[completed with answer, declined, failed or uncertain; one audit line]
+```
+
+`codex-app-server-client.mts` holds the JSON-RPC client the native Queue
+cleanup used: bounded line framing with a UTF-8 decoder, request ids and
+timeouts, notifications to listeners, and every server request (a message with
+a method and an id, whatever the id) refused with `-32601`. For the fork it
+runs strict (a malformed line fails it) and, after a failure, always ends with
+SIGKILL to the process group, because the direct child's exit does not prove
+that the group is empty (issue #432). `codex-fork-process.mts` runs one
+attempt; `codex-fork-watch.mts` checks every notification against what is known
+(the fork id, when `turn/start` was sent, the turn id), so a `turn/started` or
+`turn/completed` that arrives before the `turn/start` response is kept and
+counted once. `codex-fork-goal.mts` holds the two goal decisions of the goal
+revision, pure on the raw JSON-RPC code and message (the redacted line is for
+logs): before the fork, the owner's goal must be null or complete (goals
+disabled on the helper is `goals-disabled`, since the helper's own config gates
+the read, SOURCE-READ `thread_goal_processor.rs:258`); after it, the fork must
+be refused with exactly `ephemeral thread does not support goals: <fork id>`
+(lines 332-336), measured on Codex 0.160.1, 0.162.0-alpha.17.2 and 0.163.0.
+There is no allowlist of binaries and no switch for `goal: null`.
+`codex-fork-answer.mts` holds the prompt (`frameForFork` of `deliver-core.mts`, without
+a reply line) and the answer validation; `codex-fork-params.mts` the exact
+`thread/fork` request and the feature-list parser. The daemon recovers attempts
+at start (`recoverForkAttemptsAtStart`); hooks run inside the helper see
+`KHEREP_CODEX_FORK=1` and do nothing.
 
 ## Claude mid-turn delivery
 
