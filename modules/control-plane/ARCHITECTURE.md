@@ -685,8 +685,10 @@ the operator API. For an admission refusal it is a fixed text; for a run that fa
 after it started it is the runtime's own error line, which may name local paths. It is
 never the prompt, and only an owner that advertises the report capability receives it. Existing message delivery and its body-retention rules are unchanged.
 Fresh measurement and cached results are explicit; connectivity or missing data is
-never evidence that a process stopped. Claude process state remains unknown and its
-remote stop is unsupported until an equivalent live identity check exists.
+never evidence that a process stopped. Claude process state is measured from the `pid`
+that `claude agents --json --all` lists for the task's own background session and that
+process's start time, re-read at every status; its remote stop stays unsupported until
+the stop half of issue #437 lands.
 
 The attribution log (`attribution.jsonl`, issue #325) is host-local. The git
 `pre-push` hook (`claude/kherep/githooks/attribution-record.mts`) and
