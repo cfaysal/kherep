@@ -145,10 +145,20 @@ describe("Registry read budget", () => {
         oldestTombstone: expect.stringContaining("USING COVERING INDEX tombstones_deleted_at"),
         senderDue: expect.stringContaining("USING INDEX messages_from_node"),
         proxyParent: expect.stringContaining("USING INDEX sqlite_autoindex_messages_1"),
-        proxyTombstone: expect.stringContaining("USING INDEX sqlite_autoindex_message_tombstones_1"),
+        proxyQueued: expect.stringContaining("USING INDEX sqlite_autoindex_messages_1"),
         queuedProxies: expect.stringContaining("USING INDEX messages_to_state"),
       });
       for (const [name, plan] of plans) expect(plan, name).not.toMatch(/SCAN (messages|message_tombstones)|TEMP B-TREE/);
     });
+  });
+
+  // Issue #408, PR 4: the push boundary of a proxy delivery reads its row once.
+  it("reads one row for the queued check of a proxy delivery, however many messages the table holds", async () => {
+    await seed(SEED_SENDER, REPLAY_NODE, "proxy-budget-", M);
+    const unknown = await measure("messageQueued", (r) => r.messageQueued(crypto.randomUUID()));
+    const known = await measure("messageQueued", (r) => r.messageQueued("proxy-budget-1"));
+    expect(unknown.rowsRead).toBeLessThanOrEqual(1);
+    expect(known.rowsRead).toBeLessThanOrEqual(1);
+    expect(known.rowsWritten).toBe(0);
   });
 });
