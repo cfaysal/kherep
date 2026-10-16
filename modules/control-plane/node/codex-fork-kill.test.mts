@@ -42,10 +42,20 @@ test("an absent group confirms the close: the late item is failed and the admiss
   assert.equal(serviceAdmissionsIdle(r.paths, testServiceOwner), true);
 });
 
-// A throwing onUnconfirmedShutdown reporter must not cost the retention: the lease is kept first.
-test("a throwing unconfirmed-close reporter still leaves the admission retained and nothing escapes", async (t) => {
-  const r = await runFork(t, { hang: true, killReport: "unconfirmed" }, {},
-    { onUnconfirmedShutdown: () => { throw new Error("synthetic reporter failure"); } });
-  assert.deepEqual(r.outcome, { state: "uncertain", from: "running", reason: "close-unconfirmed" });
-  assert.equal(serviceAdmissionsIdle(r.paths, testServiceOwner), false);
+// A throwing reporter or logger must not cost the retention or the outcome: the lease is kept first, for
+// a timed-out turn, a late item and a close item.
+test("a throwing unconfirmed-close logger or reporter still leaves the admission retained and nothing escapes", async (t) => {
+  const scenarios: [string, Partial<ForkScenario>][] = [
+    ["timeout", { hang: true }], ["late-item", { afterCompleted: item }], ["close-item", { onClose: (fork) => item(fork, FORK_TURN) }],
+  ];
+  const boom = (): never => { throw new Error("synthetic reporting failure"); };
+  for (const [name, scenario] of scenarios) for (const thrower of ["logger", "reporter"] as const) {
+    // runFork resolving is itself the assertion that nothing escaped runForkAttempt as an exception.
+    const r = await runFork(t, { ...scenario, killReport: "unconfirmed" },
+      thrower === "logger" ? { log: (line) => { if (line.includes("close unconfirmed")) boom(); } } : {},
+      thrower === "reporter" ? { onUnconfirmedShutdown: boom } : {});
+    const label = `${name}/${thrower}`;
+    assert.deepEqual(r.outcome, { state: "uncertain", from: "running", reason: "close-unconfirmed" }, label);
+    assert.equal(serviceAdmissionsIdle(r.paths, testServiceOwner), false, `${label}: the lease stays`);
+  }
 });
