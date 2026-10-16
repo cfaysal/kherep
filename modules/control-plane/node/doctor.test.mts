@@ -15,6 +15,7 @@ import { runDoctor, type DoctorDeps } from "./doctor.mts";
 import { writeIntercomHost } from "./doctor-intercom-fixture.mts";
 import { writeLocalSessions } from "./exchange.mts";
 import { generateIdentity, writePrivateKey } from "./identity.mts";
+import { pinServiceSource } from "./service-source.mts";
 
 // Issue #215. Every check is driven through runDoctor against a synthetic
 // host: config directory, runtime config files and checkout in a temp dir.
@@ -286,6 +287,18 @@ test("the hook check fails for another checkout, for no hooks and for an unreada
   assert.deepEqual([none.ok, none.detail], [false, "no delivery or wake hook is installed"]);
   fs.mkdirSync(path.join(claude, "settings.json"));
   assert.equal((await runDoctor(h.deps)).checks.hooks.detail, "a runtime configuration file is unreadable");
+});
+
+// Issue #445: through the stable launcher doctor runs from the service pin,
+// while the installed hooks name the checkout the pin was made from.
+test("the hook check accepts checkout hooks when doctor runs from a pin of the same commit", async (t) => {
+  const h = host(t);
+  const pin = pinServiceSource(h.repo, path.join(h.root, "service"));
+  const hooks = (await runDoctor({ ...h.deps, repoRoot: pin.root })).checks.hooks;
+  assert.equal(hooks.ok, true, JSON.stringify(hooks));
+  assert.equal(hooks.checkout, pin.root);
+  assert.equal((hooks.claude as { checkouts?: string[] }).checkouts?.length, 2);
+  assert.equal((hooks.codex as { checkouts?: string[] }).checkouts?.length, 1);
 });
 
 test("the listener check counts live and stale listener locks only", async (t) => {
