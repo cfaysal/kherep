@@ -85,7 +85,7 @@ function scanHooks(
   }
   const scan = { present: true, ...counts, foreign: [...foreign], ...(pinned.size ? { pinned: [...pinned] } : {}),
     ...(checkouts.size ? { checkouts: [...checkouts] } : {}) };
-  return reason ? { scan, reason } : { scan };
+  return { scan, reason };
 }
 
 const UNVERIFIED = "no verified source identity";
@@ -124,7 +124,7 @@ export function sourceCache(repoRoot: string): SourceCache {
     const key = realOrResolved(root);
     if (!known.has(key)) {
       let identity: SourceIdentity | undefined;
-      try { identity = captureSourceIdentity(key, false); } catch { identity = undefined; }
+      try { identity = captureSourceIdentity(key, false); } catch { /* stays undefined */ }
       known.set(key, identity);
     }
     return known.get(key);
@@ -148,7 +148,7 @@ export function checkHooks(files: { claude: string; codex: string }, repoRoot: s
 }
 
 // Issue #408: whether the Codex config runs this checkout's delivery hook (or
-// one of a source of the same identity) on PostToolUse, which records the tool
+// that of a source of the same identity) on PostToolUse, which records the tool
 // boundaries that keep a running turn from reading idle. An unreadable config is false.
 export function codexPostToolHookInstalled(codexConfig: string, repoRoot: string): boolean {
   return (scanHooks(codexConfig, repoRoot, (text) => codexCommands(text, "PostToolUse"), sourceCache(repoRoot))?.scan.deliver ?? 0) > 0;
