@@ -412,7 +412,7 @@ producer and run before admission; their refusal codes (`fork-producer`,
 Issue #408, third increment, darwin only, behind `wake.codexFork`. With the
 section absent `scheduleForkReply` returns at its first check: no file is read,
 no process starts and nothing is written. The validated answer is persisted in
-the attempt file and not relayed.
+the attempt file; the relay below sends it to the original's sender.
 
 ```mermaid
 flowchart TD
@@ -472,6 +472,45 @@ a reply line) and the answer validation; `codex-fork-params.mts` the exact
 `thread/fork` request and the feature-list parser. The daemon recovers attempts
 at start (`recoverForkAttemptsAtStart`); hooks run inside the helper see
 `KHEREP_CODEX_FORK=1` and do nothing.
+
+## Codex fork reply: relay
+
+Issue #408, fourth increment. A `completed` attempt is sent to the original's
+sender as a proxy answer from the owner's session. The proxy carries `proxyOf`
+(the original's id) and never `inReplyTo`, so the original is never marked
+replied. The Worker stores the proxy at the original's reply depth plus one.
+docs/CODEX.md describes the states and texts the owner sees.
+
+```mermaid
+flowchart TD
+  poll[codex-queue.mts poll] --> pass[relayBookkeeping: every inbox/proxied sidecar]
+  pass --> reconcile[reconcileRelay: owner-first withdrawal, provenance-aware withdraw, 24 h cleanup]
+  poll --> sweep[relayPending: flag-gated, per owner candidate]
+  sweep --> refusal{relayRefusal: age, policy, capability, original accepted, owner state}
+  refusal -->|fails| hold[no write, record held]
+  refusal -->|passes| write[sidecar claim, then outbox record with proxyOf]
+  write --> exchange[pollExchange]
+  exchange --> gate{relaySendGate: attempt, matching sidecar, relayRefusal again}
+  gate -->|fails| hold
+  gate -->|passes| worker[Worker message.send: proxyRefusal, depth, tie-break]
+  worker --> push[routeEffects / pushFrame: messageQueued re-read before the push]
+```
+
+| Part | File | Role |
+| --- | --- | --- |
+| Bookkeeping pass | `node/codex-fork-relay-pass.mts` | `relayBookkeeping` lists `inbox/proxied/` in every poll, before the owner candidates and whether or not `wake.codexFork` is present. With no sidecar it reads only that directory. Without the flag it only withdraws and cleans up existing relays: no send, fork, new relay or audit line. |
+| Sweep and gate | `node/codex-fork-relay.mts` | `reconcileRelay` withdraws when the owner read or answered first. A removal counts as exact only when no frame can have left this node; otherwise the record is kept as unconfirmed. `relayPending` writes the claim and the outbox record. `relaySendGate` runs at every send and resend, with no stored release. |
+| Guards | `node/codex-fork-admission.mts` | `relayRefusal`, a pure function that spends no budget. It checks the attempt age against `RELAY_MAX_AGE_MS` (24 h), the fresh policy, the connection-bound Worker capability, the original still `accepted`, and the owner's recorded session (permissions, hook, idle evidence). |
+| Owner presentation | `node/inbox-proxied.mts` | Sidecar `inbox/proxied/<id>.json` and the state derived from it, the outbox and `sent/`: one line in the owner's delivery and in `msg inbox`. Only a confirmed delivery says not to answer again. |
+| Capability | `node/client.mts`, `worker/src/directory.mts` | The Worker advertises `worker.capabilities: ["messaging.proxy.v1"]` in the `directory` frame. The node keeps it only for the current authenticated connection: it is cleared at close and at `auth.ok`, and a frame from an old socket is ignored. |
+| Lineage and tie-break | `worker/src/message-proxy.mts`, `worker/src/message-store.mts` | `proxyRefusal` validates the proxy against the live original row: the row must be `accepted` and all four addresses must match. A tombstone is never consulted. The owner's reply, or a `delivered` or `refused` report of the original, refuses every queued proxy of it. |
+| Push re-read | `worker/src/message-routing.mts`, `worker/src/node-session.mts` | `messageQueued` is read again before a proxy delivery is pushed. |
+
+Residual: a proxy already accepted at the peer stays when the owner's reply
+reaches the Worker afterwards, so the peer then holds both. This is audited as
+`message.proxy.late-delivery`. Closing it needs a reservation, a later
+increment. A held record that gets no Worker status within 24 hours is removed
+and recorded as `unresolvedAt`. Its outcome is unknown, never "not delivered".
 
 ## Claude mid-turn delivery
 
