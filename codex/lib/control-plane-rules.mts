@@ -6,6 +6,10 @@ import path from "node:path";
 // `allow` means "Run the command outside the sandbox without prompting"
 // (developers.openai.com/codex/rules). The file is fully managed by Kherep: it
 // is rewritten on every install, and no other rule file is touched.
+//
+// Issue #436. One rule per command: the stable launcher of the config root
+// first, then the CLI of the installing checkout, which the daemon's task
+// prompt and the delivery hook still name until they switch to the launcher.
 
 export const CONTROL_PLANE_RULES_FILE = "kherep-control-plane.rules";
 
@@ -38,13 +42,28 @@ function list(items: string[]): string {
   return `[\n${items.map((item) => `        ${starlarkString(item)},`).join("\n")}\n    ]`;
 }
 
+// `node` and `cli` are the first two tokens as Codex splits the command a
+// runtime runs; `prefix` is that command as the match examples spell it.
+export interface RuleCommand { node: string; cli: string; prefix: string }
+
+// The launcher rule takes launcherCommand() verbatim, so its examples are the
+// exact command the instructions name. That command double-quotes a path with
+// no double quote, backslash, `$` or backtick, which a shell split undoes.
+export function launcherRule(command: string): RuleCommand {
+  const match = /^node "([^"\\$`]+)"$/.exec(command);
+  if (!match) throw new Error('the launcher command must be node "<path>"');
+  return { node: "node", cli: match[1], prefix: command };
+}
+
 // `node` is the executable as Codex tokenises the command a runtime runs.
-export function renderControlPlaneRules(cli: string, node = "node"): string {
-  const example = (...rest: string[]): string => [shellQuote(node), shellQuote(cli), ...rest].join(" ");
+export function cliRule(cli: string, node = "node"): RuleCommand {
+  return { node, cli, prefix: `${shellQuote(node)} ${shellQuote(cli)}` };
+}
+
+function prefixRule({ node, cli, prefix }: RuleCommand): string[] {
+  const example = (...rest: string[]): string => [prefix, ...rest].join(" ");
   const alternatives = `[${MSG_SUBCOMMANDS.map(starlarkString).join(", ")}]`;
   return [
-    "# Managed by Kherep (codex/install.mts). Rewritten on every install; put your own rules in another file.",
-    "# Lets registered runtimes use the Control Plane messaging CLI without an approval per message.",
     "prefix_rule(",
     `    pattern = [${starlarkString(node)}, ${starlarkString(cli)}, "msg", ${alternatives}],`,
     '    decision = "allow",',
@@ -61,6 +80,15 @@ export function renderControlPlaneRules(cli: string, node = "node"): string {
       example("msg"),
     ])},`,
     ")",
+  ];
+}
+
+export function renderControlPlaneRules(commands: readonly RuleCommand[]): string {
+  if (commands.length === 0) throw new Error("the Control Plane rules need at least one command");
+  return [
+    "# Managed by Kherep (codex/install.mts). Rewritten on every install; put your own rules in another file.",
+    "# Lets registered runtimes use the Control Plane messaging CLI without an approval per message.",
+    ...commands.flatMap(prefixRule),
     "",
   ].join("\n");
 }

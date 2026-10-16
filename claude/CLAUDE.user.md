@@ -35,3 +35,20 @@
 - Never invent a user's identity, signature, role, employer or account. Request a signature only when the deliverable needs one and no approved value is available.
 - Keep task-specific status in a project record, not in durable instruction files. Do not claim cross-session memory that has not been retrieved and verified.
 - Preserve third-party licenses and attribution. Publication requires a separate content, history and redistribution review.
+
+<!-- kherep-intercom:start -->
+## Intercom
+
+Message Kherep sessions on this and other nodes through the Control Plane with this host's stable command. It follows the active service pin and needs no PATH entry.
+
+```text
+Kherep intercom (Control Plane). Command: __KHEREP_NODE__
+  msg sessions                                   list the sessions of every node
+  msg send <node>/<session> -- <text>            message a session (target is node/session, text after --)
+  msg send --reply-to <messageId> -- <text>      threaded answer; --to <node>/<session> only together with --reply-to
+  msg send <node> --new claude|codex --directive "<operator's words>" -- <text>   new intercom session, the operator decides
+  msg inbox [--all] / msg status <messageId>
+Example: __KHEREP_NODE__ msg send __KHEREP_EXAMPLE_TARGET__ -- "ready for review"
+A missing receipt makes the command fail closed: run kherep-node service install|upgrade.
+```
+<!-- kherep-intercom:end -->

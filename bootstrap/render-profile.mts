@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Renders the host-specific files bootstrap/install.sh writes: the merged
-// settings pair and the local-inference config.
+// settings pair, the local-inference config and the intercom instructions.
 // Path rewriting lives in render-profile-paths.mts, the merge in
 // render-profile-settings.mts.
 
@@ -9,6 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { retireCentralBrainHooks } from "./central-brain-retirement.mts";
+import { intercomValues, renderIntercom } from "./render-intercom.mts";
 import { substituteTemplatePaths, toBashPath, workspaceEnvPath } from "./render-profile-paths.mts";
 import { filterMacPermissions, filterManagedDisallowedPermissions, mergeSettings, unique, type Settings } from "./render-profile-settings.mts";
 import { readRetiredHomeEntries, retireHookCommands, unwireMovedHooks } from "./retired-hooks.mts";
@@ -121,11 +122,22 @@ export function renderLocalInference(args: string[]): void {
   writeJson(outputFile, mergeLocalInferenceConfig(profile, source, existing));
 }
 
+// Issue #436. CLAUDE.md and ROUTING.md with this host's intercom command; the
+// rendered copy keeps the source's mode, and install.sh installs it.
+export function renderIntercomFile(args: string[]): void {
+  const [sourceFile, outputFile] = args;
+  if (!sourceFile || !outputFile) throw new Error("intercom usage: <source> <output>");
+  const rendered = renderIntercom(fs.readFileSync(sourceFile, "utf8"), intercomValues());
+  fs.mkdirSync(path.dirname(outputFile), { recursive: true });
+  fs.writeFileSync(outputFile, rendered, { mode: fs.statSync(sourceFile).mode & 0o777 });
+}
+
 function main(argv: string[]): void {
   const [mode, ...args] = argv;
   if (mode === "settings") renderSettings(args);
   else if (mode === "local-inference") renderLocalInference(args);
-  else throw new Error("mode must be settings or local-inference");
+  else if (mode === "intercom") renderIntercomFile(args);
+  else throw new Error("mode must be settings, local-inference or intercom");
 }
 
 // Node loads the main module from its real path, so a script started through a
