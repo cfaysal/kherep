@@ -57,12 +57,14 @@ test("missing Codex start identity is identity_unknown and Claude stop is unsupp
   const unknown = await executeTaskControl(operation("status"), { nodeId: TARGET, paths: node.paths, runner: node.deps(), now: () => T0 });
   assert.equal(unknown.errorCode, "identity_unknown");
   assert.equal(unknown.stopSupported, false);
-  writeTask(node.paths, record(node, { runtime: "claude", pid: undefined, pidStart: undefined }));
+  // Issue #437, PR 1: Claude status measures the listed process (task-control-claude.test.mts); its stop stays unsupported.
+  writeTask(node.paths, record(node, { runtime: "claude", pid: undefined, pidStart: undefined, shortId: "b0000001" }));
+  node.rows.push({ id: "b0000001", kind: "background", name: "task-3f2a1b0c", state: "working" });
   const status = { ...operation("status"), runtime: "claude" as const };
   const measured = await executeTaskControl(status, { nodeId: TARGET, paths: node.paths, runner: node.deps(), now: () => T0 });
   assert.equal(measured.state, "succeeded");
   assert.equal(measured.taskState, "running");
-  assert.equal(measured.processState, "unknown");
+  assert.equal(measured.processState, "idle");
   const stop = { ...operation("stop", "a".repeat(64)), runtime: "claude" as const };
   const unsupported = await executeTaskControl(stop, { nodeId: TARGET, paths: node.paths, runner: node.deps(), now: () => T0 });
   assert.equal(unsupported.errorCode, "unsupported_runtime");

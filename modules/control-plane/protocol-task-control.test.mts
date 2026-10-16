@@ -132,6 +132,19 @@ test("query results carry the reported task state and reason only with an operat
     stopSupported: false, stopConfirmed: false, reportedReason: "r" }), false, "a target result stays unchanged");
 });
 
+test("a Claude status result with a measured run is a valid target result (issue #437)", () => {
+  const status = { name: "task.control.result", operationId: OPERATION, taskId: TASK, state: "succeeded", runtime: "claude",
+    taskState: "running", processState: "running", runVersion: RUN, observedAt: "2026-10-17T10:00:00.000Z", freshness: "fresh",
+    stopSupported: true, stopConfirmed: false };
+  assert.equal(isTaskControlResultBody(status), true);
+  assert.equal(isTaskControlResultBody({ ...status, taskState: "done", processState: "idle", stopSupported: false }), true);
+  const { runVersion: _omitted, ...withoutRun } = status;
+  assert.equal(isTaskControlResultBody({ ...withoutRun, processState: "idle", stopSupported: false }), true);
+  assert.equal(isTaskControlResultBody({ ...withoutRun, state: "failed", processState: "unknown", stopSupported: false,
+    errorCode: "identity_unknown" }), true);
+  assert.equal(isTaskControlResultBody({ ...status, runVersion: "A".repeat(64) }), false);
+});
+
 test("all fixed node and Worker error codes are accepted without raw error text", () => {
   assert.deepEqual([...TASK_CONTROL_ERROR_CODES], [
     "invalid_frame", "capability_required", "source_not_found", "source_target_mismatch", "source_operator_owned",

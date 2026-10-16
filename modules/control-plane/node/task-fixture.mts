@@ -15,6 +15,8 @@ import { readReport, removeReport, reportIds } from "./task-records.mts";
 // workspace root, a policy with a sessions section, and a fake claude that
 // never runs anything. It answers `--bg` (and `--resume <id> --bg`, in place)
 // with the documented `backgrounded · <id> · <name>` line and `agents --json --all` with its rows.
+// After livePids(first), each new row also carries the `pid` and `status` the
+// listing shows "While the process is alive" (issue #437); by default it has neither.
 
 export const T0 = Date.UTC(2026, 8, 25, 12);
 export const TASK = "3f2a1b0c-0000-4000-8000-000000000001";
@@ -48,6 +50,7 @@ export function taskNode(t: test.TestContext, sessions: Record<string, unknown> 
   let clock = T0;
   let next = 0;
   let failWith: string | null = null;
+  let livePid: number | null = null;
   const exec = async (file: string, args: string[], options: ExecOptions): Promise<string> => {
     calls.push({ file, args, options });
     if (failWith) throw new Error(failWith);
@@ -58,7 +61,8 @@ export function taskNode(t: test.TestContext, sessions: Record<string, unknown> 
     // A resume continues the session under its own id (a copy is set up by the test).
     const resumed = args[0] === "--resume" ? args[1] : undefined;
     rows.push({ id: short, sessionId: resumed ?? `5e55${short}-0000-4000-8000-000000000000`, ...(args.includes("--name") ? { name } : {}),
-      state: "working", kind: "background", cwd: options.cwd, startedAt: clock });
+      state: "working", kind: "background", cwd: options.cwd, startedAt: clock,
+      ...(livePid === null ? {} : { pid: livePid++, status: "busy" }) });
     return `Starting background service…\nbackgrounded · ${short}${args.includes("--name") ? ` · ${name}` : ""}\n  claude agents   list sessions\n`;
   };
   const deps = (): RunnerDeps => ({
@@ -75,6 +79,7 @@ export function taskNode(t: test.TestContext, sessions: Record<string, unknown> 
     root, workspace, paths, calls, rows, deps, reports,
     tick: (ms: number) => { clock += ms; },
     failNext: (message: string | null) => { failWith = message; },
+    livePids: (first: number | null) => { livePid = first; },
   };
 }
 

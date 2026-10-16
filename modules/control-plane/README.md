@@ -521,8 +521,17 @@ acknowledged it) and shows the newest settled status answer this node holds as
 `lastStatus`.
 
 `task stop` first obtains status and then submits a stop for that exact run.
-Confirmed remote stop is supported for Codex. Claude task-record status is
-available, but its process state is `unknown` and remote stop is unsupported.
+Confirmed remote stop is supported for Codex. Claude status measures the
+process behind the task's background session: the `pid` that `claude agents
+--json --all` lists while the process is alive, and that process's start time.
+The node re-reads both at every status, because the supervisor may stop and
+restart a session's process, so a restart is a new run with a new run version.
+Only a `working` or `blocked` session with a live process is `running`. A
+finished session whose process still runs, or a `working` or `blocked` one
+without a live process, is `idle`; an ended one without a process is `closed`.
+A failed listing, an unreadable start time, or a row that is not the task's
+own background session (by kind, short id, session id or name) is
+`identity_unknown`. Remote stop for Claude remains unsupported.
 A stop succeeds only after the target verifies that the captured Codex process
 tree ended. A changed run, uncertain identity, failed termination or recovery
 state cannot produce `stopConfirmed: true`. Durable stop intent prevents an

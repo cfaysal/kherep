@@ -9,6 +9,7 @@ import { getMessage } from "./inbox.mts";
 import { readRegistrationAuthority } from "./task-control-store.mts";
 import { loadPolicy } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
+import { measureClaude } from "./task-control-claude.mts";
 import { runVersionOf, taskRuntime } from "./task-control-run.mts";
 import { readTask, writeTask, type TaskRecord } from "./task-records.mts";
 import { readRefusal, type RefusalRecord } from "./task-refusals.mts";
@@ -55,12 +56,15 @@ function currentPolicy(context: TaskControlContext) {
   return loadPolicy(configured);
 }
 
-function measured(execute: TaskControlExecuteBody, record: TaskRecord, context: TaskControlContext,
-  observedAt: string): TaskControlResultBody {
+async function measured(execute: TaskControlExecuteBody, record: TaskRecord, context: TaskControlContext,
+  observedAt: string): Promise<TaskControlResultBody> {
   if (execute.runtime === "claude") {
+    const claude = await measureClaude(record, context.runner, context.now?.() ?? Date.now());
+    if (claude.errorCode) return failure(execute, record, observedAt, claude.errorCode);
     return { name: "task.control.result", operationId: execute.operationId, taskId: execute.taskId, state: "succeeded",
-      runtime: "claude", taskState: taskStateOf(record), processState: "unknown",
-      observedAt, freshness: "fresh", stopSupported: false, stopConfirmed: false };
+      runtime: "claude", taskState: taskStateOf(record), processState: claude.processState,
+      ...(claude.runVersion ? { runVersion: claude.runVersion } : {}),
+      observedAt, freshness: "fresh", stopSupported: claude.stopSupported, stopConfirmed: false };
   }
   const runVersion = runVersionOf(record);
   if (!runVersion) return failure(execute, record, observedAt, "identity_unknown");
@@ -117,7 +121,7 @@ export async function executeTaskControl(execute: TaskControlExecuteBody, contex
   if (readExit(codexFiles(context.paths, marked.taskId)) !== null) {
     return failure(execute, record, observedAt, "recovery_required", "unknown");
   }
-  const status = measured(execute, record, context, observedAt);
+  const status = await measured(execute, record, context, observedAt);
   if (status.state !== "succeeded" || status.processState !== "running") {
     return failure(execute, record, observedAt, status.errorCode ?? "stale_run", "unknown", status.processState);
   }
