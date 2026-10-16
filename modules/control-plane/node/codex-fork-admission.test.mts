@@ -9,7 +9,7 @@ import { audit, listenerDir, takeTurn, wakeAudit, type AutonomyAction } from "./
 import { busyPolicyFingerprint } from "./codex-busy-policy.mts";
 import { admitForkReply, FORK_PROGRESS, type ForkAdmissionDeps, type ForkRefusal } from "./codex-fork-admission.mts";
 import { advanceForkAttempt, claimForkAttempt, forkAttemptsPath } from "./codex-fork-attempts.mts";
-import { CODEX_ACTIVE_MS, markStopContinued, recordCodexSession, refreshCodexEvent } from "./codex-sessions.mts";
+import { CODEX_ACTIVE_MS, markStopEnded, recordCodexSession, refreshCodexEvent } from "./codex-sessions.mts";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { MAX_REPLY_DEPTH, readJson, storeMessage, writeJsonAtomic } from "./inbox.mts";
 import { readPolicy } from "./policy.mts";
@@ -43,6 +43,7 @@ function fixture(t: test.TestContext): Fixture {
     sessions: { enabled: true, runtimes: ["codex"], workspaceRoots: [work] } };
   fs.writeFileSync(paths.policy, JSON.stringify(policy));
   recordCodexSession(paths, OWNER, work, STOP, "default", "Stop");
+  markStopEnded(paths, OWNER);
   storeMessage(paths.inbox, { messageId: MSG, from: { nodeId: PEER, session: "build" }, toSession: OWNER, text: "synthetic question",
     createdAt: new Date(STOP).toISOString() }, STOP);
   return { paths, work, policy, fingerprint: busyPolicyFingerprint(readPolicy(paths.policy)!),
@@ -73,6 +74,12 @@ test("an idle opted-in owner with an accepted exact-addressed message is admitte
   assert.deepEqual(turns(f), { turns: [NOW] });
 });
 
+test("an owner listed in uppercase in codexFork.sessions is opted in (L3)", (t) => {
+  const f = fixture(t);
+  rewritePolicy(f, (p) => { p.wake.codexFork.sessions = [OWNER.toUpperCase()]; });
+  assert.deepEqual(admit(f), { ok: true, cwd: f.work });
+});
+
 const CASES: [string, ForkRefusal, (f: Fixture) => void][] = [
   ["no codexFork section", "fork-off", (f) => rewritePolicy(f, (p) => { delete p.wake.codexFork; })],
   ["a malformed codexFork section", "fork-off", (f) => rewritePolicy(f, (p) => { p.wake.codexFork.sessions = ["*"]; })],
@@ -100,7 +107,7 @@ const CASES: [string, ForkRefusal, (f: Fixture) => void][] = [
   ["a last event that is not a Stop", "fork-not-idle", (f) => { refreshCodexEvent(f.paths, OWNER, "PostToolUse", NOW - 60_000); }],
   ["a Stop more recent than idleAfterSeconds", "fork-not-idle",
     (f) => rewritePolicy(f, (p) => { p.wake.codexFork.idleAfterSeconds = 3600; })],
-  ["a Stop that continued the turn", "fork-not-idle", (f) => { markStopContinued(f.paths, OWNER); }],
+  ["a Stop not marked as ended (a continuation or a failed mark)", "fork-not-idle", (f) => patchSession(f, { lastStopEnded: undefined })],
   ["no message", "message-not-eligible", (f) => fs.rmSync(path.join(f.paths.inbox, `${MSG}.json`))],
   ["a message already offered", "message-not-eligible", (f) => patchMessage(f, { state: "offered" })],
   ["a message addressed by name", "message-not-eligible", (f) => patchMessage(f, { toSession: "codex-00000001" })],

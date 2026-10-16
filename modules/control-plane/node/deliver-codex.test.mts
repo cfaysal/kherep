@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
+import { CODEX_IDLE_AFTER_MS, idleEvidence, readCodexSession } from "./codex-sessions.mts";
 import { CODEX_CONTEXT_BYTES, CODEX_ESCALATION_NOTE, CODEX_STOP_REASON, deliverForCodex } from "./deliver-codex.mts";
 import { MAX_OFFERS, REOFFER_AFTER_MS } from "./deliver-core.mts";
 import { hookRuntime } from "./deliver-hook.mts";
@@ -189,16 +190,52 @@ test("each delivery hook event records itself as the session's last event, Stop 
   assert.deepEqual([record()?.lastEvent, record()?.lastEventAt, record()?.lastStopAt], ["Stop", at(clock), at(clock)]);
 });
 
-test("a Stop that blocks marks the session as continued; the continued Stop clears it (issue #408)", (t) => {
+// Fable review of PR 2, M1: only a Stop that returns no continuation is marked
+// as ended, in a write of its own after the Stop is recorded; a blocking Stop
+// and a failed mark leave the record a Stop that is never idle.
+test("a Stop that blocks is never idle; one that does not block is idle after the threshold (issue #408)", (t) => {
   const paths = setup(t);
-  const record = () => readJson<Record<string, unknown>>(path.join(paths.codexSessions, `${SELF}.json`));
+  const record = () => readCodexSession(paths, SELF);
   hook(paths, "UserPromptSubmit");
   assert.equal(stop(paths), "");
-  assert.equal(record()?.lastStopContinued, undefined, "a Stop without new messages does not block");
+  assert.equal(record()?.lastStopEnded, true, "a Stop without new messages ends the turn");
+  assert.equal(idleEvidence(record(), clock + CODEX_IDLE_AFTER_MS - 1), false, "not before the threshold");
+  assert.equal(idleEvidence(record(), clock + CODEX_IDLE_AFTER_MS), true, "idle after the threshold");
   inbox(paths, 1);
   clock += 60_000;
   assert.equal(JSON.parse(stop(paths)).decision, "block");
-  assert.equal(record()?.lastStopContinued, true);
+  assert.equal(record()?.lastEvent, "Stop");
+  assert.equal(record()?.lastStopEnded, undefined, "a blocking Stop is not marked");
+  assert.equal(idleEvidence(record(), clock + 10 * CODEX_IDLE_AFTER_MS), false, "a blocking Stop never yields idle");
   assert.equal(stop(paths, true), "");
-  assert.equal(record()?.lastStopContinued, undefined);
+  assert.equal(record()?.lastStopEnded, true, "the continued Stop that returns nothing ends the turn");
+});
+
+test("a failed mark leaves the Stop not idle and the hook output unchanged (issue #408)", (t) => {
+  const paths = setup(t);
+  const sessionFile = path.join(paths.codexSessions, `${SELF}.json`);
+  // The second write of the record in one Stop is the mark; it fails.
+  const failMark = () => {
+    let writes = 0;
+    const rename = fs.renameSync;
+    return t.mock.method(fs, "renameSync", (from: fs.PathLike, to: fs.PathLike) => {
+      if (to === sessionFile && ++writes === 2) throw Object.assign(new Error("synthetic write failure"), { code: "EIO" });
+      return rename(from, to);
+    });
+  };
+  const run = (deps: Partial<Parameters<typeof deliverForCodex>[1]> = {}) => deliverForCodex(
+    { session_id: SELF, cwd: "/work/repo", hook_event_name: "Stop", stop_hook_active: false },
+    { paths, nonce: () => "t0k3n", replyCommand: CLI, now: () => clock, ...deps });
+  hook(paths, "UserPromptSubmit");
+  let mock = failMark();
+  assert.equal(run(), "", "no messages: the output stays empty");
+  mock.mock.restore();
+  assert.equal(readCodexSession(paths, SELF)?.lastEvent, "Stop");
+  assert.equal(idleEvidence(readCodexSession(paths, SELF), clock + 10 * CODEX_IDLE_AFTER_MS), false, "early exit");
+  inbox(paths, 2);
+  mock = failMark();
+  assert.equal(run({ mayContinue: () => false }), "", "a refused continuation: the output stays empty");
+  mock.mock.restore();
+  assert.equal(readCodexSession(paths, SELF)?.lastEvent, "Stop");
+  assert.equal(idleEvidence(readCodexSession(paths, SELF), clock + 10 * CODEX_IDLE_AFTER_MS), false, "refused continuation");
 });

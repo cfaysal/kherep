@@ -36,10 +36,13 @@ increments the minor version; every other release increments the patch version.
   one reason code and spends the owner's turn budget only when every other
   guard passed; it refuses unless the Codex delivery hook is installed on
   `PostToolUse`, reads a hook payload's `permission_mode` before the recorded
-  one and treats `lastSeen` as approximate. A Codex `Stop` that returned a
-  blocking continuation now records `lastStopContinued` in the session record,
-  cleared by the next `Stop` that does not block or by `UserPromptSubmit`;
-  `idleEvidence()` is false while it is set. `kherep-node doctor` prints a
+  one and treats `lastSeen` as approximate. Idle evidence now fails closed on
+  `Stop` continuations: the Codex `Stop` hook marks the session record with
+  `lastStopEnded` after recording the `Stop`, on every exit that returns no
+  blocking continuation, every hook event clears the mark, and
+  `idleEvidence()` requires it, so a blocking `Stop` or a failed mark is never
+  idle. The attempt store skips dotfiles such as `.DS_Store`, and
+  `codexFork.sessions` ids are matched without case and kept in lowercase. `kherep-node doctor` prints a
   written `wake.codexFork` section with a count of opted-in sessions and fails a
   rejected one. New audit actions `fork`, `fork-declined`, `fork-failed`,
   `fork-uncertain`, `fork-superseded`, `fork-not-idle` and

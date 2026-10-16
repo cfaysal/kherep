@@ -190,7 +190,9 @@ function parseWake(section: unknown): WakePolicy | null {
 }
 
 // Decision D4 (open, issue #408): full Codex thread ids only; no "*" and no
-// names, because a fork reads the whole history of the chat.
+// names, because a fork reads the whole history of the chat. Matched without
+// case and kept in lowercase, the form of a Codex thread id, so that admission
+// compares exactly.
 const FORK_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // Decision D5: darwin only until the Windows measurements (design section 3.2, PR 5).
 const FORK_PLATFORMS = ["darwin"];
@@ -215,8 +217,8 @@ function parseCodexFork(value: unknown): CodexForkPolicy | null {
   };
   const idleAfterSeconds = number("idleAfterSeconds"), maxAnswerBytes = number("maxAnswerBytes");
   if (idleAfterSeconds === null || maxAnswerBytes === null) return null;
-  return { enabled: true, sessions: [...new Set(sessions as string[])], platforms: [...new Set(platforms as string[])],
-    idleAfterSeconds, maxAnswerBytes };
+  return { enabled: true, sessions: [...new Set((sessions as string[]).map((id) => id.toLowerCase()))],
+    platforms: [...new Set(platforms as string[])], idleAfterSeconds, maxAnswerBytes };
 }
 
 // Hard bounds (issue #259), so that a policy can loosen the budget but never remove it.

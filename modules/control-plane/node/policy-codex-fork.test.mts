@@ -43,6 +43,15 @@ test("a valid codexFork section is kept with its defaults filled in", (t) => {
   assert.notEqual(busyPolicyFingerprint(policy), busyPolicyFingerprint(parse(t, WAKE)), "a change invalidates admissions");
 });
 
+// Fable review of PR 2, L3: ids match without case and are kept in lowercase,
+// so that admission's exact comparison finds an id written in uppercase.
+test("an uppercase codexFork session id is kept in lowercase", (t) => {
+  const lower = parse(t, { ...WAKE, codexFork: { enabled: true, sessions: [OWNER] } });
+  const upper = parse(t, { ...WAKE, codexFork: { enabled: true, sessions: [OWNER.toUpperCase(), OWNER] } });
+  assert.deepEqual(upper.wake?.codexFork?.sessions, [OWNER]);
+  assert.equal(busyPolicyFingerprint(upper), busyPolicyFingerprint(lower), "the same policy as the lowercase id");
+});
+
 test("every malformed codexFork shape disables only codexFork", (t) => {
   const base = { enabled: true, sessions: [OWNER] };
   for (const codexFork of [

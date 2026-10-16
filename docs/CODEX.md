@@ -176,14 +176,16 @@ Idle evidence (issue #408): the node's record of each Codex session keeps the
 last hook event that reached it and when, plus the time of the last `Stop`.
 The original owner's `PostToolUse` refreshes the event of an existing record
 only; a subagent's call writes nothing. A session counts as idle only when its
-last event is a `Stop` at least 90 seconds old and it was seen within 12 hours.
+last event is a `Stop` that ended its turn at least 90 seconds ago and it was
+seen within 12 hours.
 This is evidence, not proof, and nothing acts on it yet: `msg sessions` shows
 the last event of this node's Codex sessions and `kherep-node doctor` counts
 them per event. Whether `Stop` fires for a cancelled turn, and whether an
-approval wait can be told apart, is UNKNOWN. A `Stop` whose hook returned a
-blocking continuation ends no turn: the record keeps `lastStopContinued` until
-the next `Stop` that does not block or `UserPromptSubmit`, and the session does
-not count as idle meanwhile.
+approval wait can be told apart, is UNKNOWN. A `Stop` counts as ending its
+turn only once the hook marks it with `lastStopEnded`, after recording it, on
+every exit that returns no blocking continuation; every hook event clears the
+mark. A `Stop` that blocked, or whose mark could not be written, does not count
+as idle.
 
 Codex fork reply (issue #408, in progress; nothing acts on it in this version).
 An opt-in `wake.codexFork` section names the Codex chats whose history an
@@ -195,7 +197,8 @@ ephemeral read-only fork may later use to answer an idle owner's peer message:
                  "idleAfterSeconds": 90, "maxAnswerBytes": 4096 } }
 ```
 
-Absent means off. Only full thread ids are accepted, never `*` or a name, and
+Absent means off. Only full thread ids are accepted (in any case, kept in
+lowercase), never `*` or a name, and
 only `darwin` until the Windows measurements are made. Any other shape turns off
 only the fork reply; waking stays as written. The node already records one
 attempt per message and decides admission (opt-in, kill switch, enrollment,
