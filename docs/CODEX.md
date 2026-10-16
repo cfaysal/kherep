@@ -183,7 +183,9 @@ This is evidence, not proof. Only the opt-in Codex fork reply below acts on it;
 `kherep-node doctor` counts them per event. A turn ended by native
 `turn/interrupt` fires no `Stop` (measured on Codex 0.162.0-alpha.17.2 and
 0.163.0), so an interrupted turn leaves the session not idle until a later
-turn completes; the Desktop stop button and CLI Escape are not measured.
+turn completes. CLI Escape fires no `Stop` either (measured on macOS with a
+positive `Stop` control); the Desktop stop button is not
+measured.
 Whether an approval wait can be told apart is UNKNOWN. A `Stop` counts as ending its
 turn only once the hook marks it with `lastStopEnded`, after recording it, on
 every exit that returns no blocking continuation; every hook event clears the
@@ -252,14 +254,20 @@ owner no server has loaded and the exact ephemeral refusal for a fork, both
 answer "goals feature is disabled" with goals off, and a fork turn with the
 output schema runs with no turn or goal event the helper did not start.
 
-Not yet measured: until the macOS live acceptance passes, the fork reply is
-measured on synthetic threads only, and no real chat belongs in
-`codexFork.sessions`. Open are goal isolation with an active goal set on the
-owner; zero hook events with `features.hooks=false` alone; a fork of a Desktop-loaded owner
-(rollout hash, no new chat or Queue card in the Desktop UI); the real
-account's authentication without a login or token-refresh request; the real
-model catalog and plugins; MCP startup notifications; latency on a long
-rollout; and whether the Desktop stop button or CLI Escape fire `Stop`.
+Measured on macOS, on synthetic threads only, with the real
+`codex` on `PATH` (0.160.1), the bundled binary (0.162.0-alpha.17.2) and the
+daemon's (0.163.0) and the existing login: the fork reply completes with no
+server request and no authentication request; a long rollout (1.7 MB) forks;
+with `features.hooks=false` the fork adds no hook event; a synthetic
+Desktop-created owner is declined (`needs-owner`) with its rollout unchanged;
+MCP servers start for the fork. No real chat belongs in `codexFork.sessions`.
+Still open are goal isolation with an active goal set on the owner; a fork of
+an owner loaded by the Desktop app and the absence of a new chat or Queue card
+in its UI; the Desktop stop button; the native renewal of the login; the real
+model catalog and plugins as a separate measurement; and an installed daemon
+with the fork switched on. The fork stays `darwin` only: on Windows,
+`taskkill /T` cannot reach the descendants of a helper that already exited,
+so the close there is never confirmed.
 
 Admission and a metadata claim leave messages `accepted`. Explicit
 `msg inbox --receive` offers only the messages actually returned; normal confirming
