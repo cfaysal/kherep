@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,9 +9,10 @@ import { pathToFileURL } from "node:url";
 
 import { nodePaths } from "./config.mts";
 import { acquireServiceLock } from "./service-records.mts";
+import { createServiceOwnerProbe } from "./service-owner-probe.mts";
 import {
   beginServiceDrain, defaultServiceOwnerProbe, serviceAdmissionsIdle, serviceDrainFile, waitForServiceAdmission,
-  withServiceAdmission, type ServiceOwnerProbe,
+  withServiceAdmission, type ServiceAdmissionBlocker, type ServiceOwnerProbe,
 } from "./service-drain.mts";
 
 test("a service drain blocks new admissions and observes an admission that already holds a lease", async (t) => {
@@ -169,4 +171,80 @@ test("concurrent processes serialize stale-owner reclaim", { timeout: 30_000 }, 
   const results = (await bounded(Promise.all(contenders), 15_000)).sort();
   assert.equal(results.filter(value => value === "owned").length, 1, results.join(" | "));
   assert.equal(results.filter(value => value.startsWith("blocked:")).length, 1, results.join(" | "));
+});
+
+test("Windows creation-time proof reclaims admissions, drain and lock despite unreadable SID", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-service-partial-owner-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = nodePaths(root);
+  const stale = { version: 1 as const, pid: 4242, startedAt: "2026-10-14T10:00:00.000Z", owner: "S-1-5-21-1-2-3-1001" };
+  const current = { ...stale, pid: 4343 };
+  let startedAt = "2026-10-14T18:30:00.000Z";
+  let observations = 0;
+  const native = createServiceOwnerProbe({ platform: "win32", spawn: (_command, _args, options) => {
+    assert.equal(options.env?.KHEREP_OWNER_PID, "4242");
+    observations += 1;
+    return { pid: 0, output: [], status: 0, signal: null, stderr: "",
+      stdout: JSON.stringify({ status: "found", startedAt, owner: null }) };
+  } });
+  const probe: ServiceOwnerProbe = { current: () => current, active: native.active };
+  const dir = path.join(paths.dir, "service", "admissions");
+  const lease = path.join(dir, "synthetic-lease");
+  fs.mkdirSync(dir, { recursive: true });
+  const bytes = `${JSON.stringify(stale)}\n`;
+  fs.writeFileSync(lease, bytes, { mode: 0o600 });
+  assert.equal(serviceAdmissionsIdle(paths, probe), true);
+  assert.equal(fs.existsSync(lease), false);
+  for (const file of [serviceDrainFile(paths), path.join(paths.dir, "service", "transaction.lock")]) {
+    fs.writeFileSync(file, bytes, { mode: 0o600 });
+    const before = observations;
+    const release = file === serviceDrainFile(paths) ? beginServiceDrain(paths, probe) : acquireServiceLock(paths, probe);
+    assert.equal(observations - before, 2, "shared reclaim rechecks the stale generation under its reclaim lock");
+    assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).pid, current.pid);
+    release();
+    assert.equal(fs.existsSync(file), false);
+  }
+  startedAt = stale.startedAt;
+  fs.writeFileSync(lease, bytes, { mode: 0o600 });
+  assert.throws(() => serviceAdmissionsIdle(paths, probe), { message: "service admission lease owner cannot be verified" });
+  assert.equal(fs.readFileSync(lease, "utf8"), bytes);
+});
+
+test("admission stale-owner recovery retains bytes changed during the probe", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-service-admission-race-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = nodePaths(root);
+  const dir = path.join(paths.dir, "service", "admissions");
+  const lease = path.join(dir, "synthetic-lease");
+  const owner = { version: 1 as const, pid: 4242, startedAt: "2026-10-14T10:00:00.000Z", owner: "synthetic" };
+  const replacement = `${JSON.stringify({ ...owner, pid: 4444 })}\n`;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(lease, JSON.stringify(owner), { mode: 0o600 });
+  const probe: ServiceOwnerProbe = { current: () => ({ ...owner, pid: 4343 }), active: () => {
+    fs.writeFileSync(lease, replacement);
+    return false;
+  } };
+  assert.throws(() => serviceAdmissionsIdle(paths, probe), /owner changed during verification/);
+  assert.equal(fs.readFileSync(lease, "utf8"), replacement);
+});
+
+test("both active-owner paths report only a safe admission descriptor", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-service-admission-descriptor-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = nodePaths(root);
+  const dir = path.join(paths.dir, "service", "admissions");
+  const name = "RAW-FILENAME-CANARY with spaces";
+  const owner = { version: 1 as const, pid: 4242, startedAt: "2026-10-14T12:00:00+02:00", owner: "RAW-OWNER-CANARY" };
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, name), JSON.stringify(owner), { mode: 0o600 });
+  for (const exactCurrent of [true, false]) {
+    const blocked: ServiceAdmissionBlocker[] = [];
+    const probe: ServiceOwnerProbe = { current: () => ({ ...owner, pid: exactCurrent ? owner.pid : 4343 }), active: () => {
+      assert.equal(exactCurrent, false, "the current owner bypasses the active probe"); return true;
+    } };
+    assert.equal(serviceAdmissionsIdle(paths, probe, blocker => blocked.push(blocker)), false);
+    assert.deepEqual(blocked, [{ leaseId: crypto.createHash("sha256").update(name).digest("hex").slice(0, 12),
+      pid: 4242, startedAt: "2026-10-14T10:00:00.000Z" }]);
+    assert.doesNotMatch(JSON.stringify(blocked), /RAW-|with spaces|control-plane|admissions/);
+  }
 });

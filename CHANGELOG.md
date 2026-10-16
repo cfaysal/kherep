@@ -185,6 +185,10 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Windows stale service-owner recovery (issue #442): valid process creation time
+  can prove PID reuse when the SID is unreadable, using the existing two-second
+  tolerance. Active or uncertain owners still block recovery. Admission waits
+  identify the first blocker by opaque lease fingerprint, PID and process start.
 - Service owner probe in unit tests (issue #423): the runner deps carry the
   owner probe of a service admission (`serviceOwner`), and task starts,
   continues, closed-session resumes, Codex runs and Codex queue runs use it.
