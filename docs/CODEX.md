@@ -180,7 +180,31 @@ last event is a `Stop` at least 90 seconds old and it was seen within 12 hours.
 This is evidence, not proof, and nothing acts on it yet: `msg sessions` shows
 the last event of this node's Codex sessions and `kherep-node doctor` counts
 them per event. Whether `Stop` fires for a cancelled turn, and whether an
-approval wait can be told apart, is UNKNOWN.
+approval wait can be told apart, is UNKNOWN. A `Stop` whose hook returned a
+blocking continuation ends no turn: the record keeps `lastStopContinued` until
+the next `Stop` that does not block or `UserPromptSubmit`, and the session does
+not count as idle meanwhile.
+
+Codex fork reply (issue #408, in progress; nothing acts on it in this version).
+An opt-in `wake.codexFork` section names the Codex chats whose history an
+ephemeral read-only fork may later use to answer an idle owner's peer message:
+
+```json
+"wake": { "enabled": true, "sessions": ["*"],
+  "codexFork": { "enabled": true, "sessions": ["<full thread id>"], "platforms": ["darwin"],
+                 "idleAfterSeconds": 90, "maxAnswerBytes": 4096 } }
+```
+
+Absent means off. Only full thread ids are accepted, never `*` or a name, and
+only `darwin` until the Windows measurements are made. Any other shape turns off
+only the fork reply; waking stays as written. The node already records one
+attempt per message and decides admission (opt-in, kill switch, enrollment,
+policy unchanged, recorded non-task owner, permission mode, platform, the Codex
+delivery hook on `PostToolUse`, idle evidence, an accepted exact-addressed
+message below the reply depth, no earlier attempt, a working directory inside
+the workspace roots, readiness and the shared turn budget), but no daemon path
+calls it and no fork process exists yet. `kherep-node doctor` prints the
+section with a count of opted-in sessions.
 
 Admission and a metadata claim leave messages `accepted`. Explicit
 `msg inbox --receive` offers only the messages actually returned; normal confirming

@@ -207,6 +207,28 @@ test("the policy check names the source of the wake and messaging sections", asy
   assert.deepEqual([policy.wake, policy.messagingRules], [{ enabled: false }, 0]);
 });
 
+// Issue #408: a written wake.codexFork section is printed with its effective
+// values and a count of opted-in sessions, never their ids; a rejected one
+// fails the check, while wake itself stays as written.
+test("the policy check prints a written codexFork section and fails a rejected one", async (t) => {
+  const h = host(t);
+  const owner = "01a0db74-0000-7000-8000-000000000001";
+  const check = async (codexFork: unknown) => {
+    fs.writeFileSync(h.paths.policy, JSON.stringify({ version: 1, allowedCommands: [], wake: { enabled: true, sessions: ["build"], codexFork } }));
+    return (await runDoctor(h.deps)).checks.policy;
+  };
+  let policy = await check({ enabled: true, sessions: [owner] });
+  assert.deepEqual([policy.ok, (policy.wake as Record<string, unknown>).codexFork],
+    [true, { enabled: true, sessions: 1, platforms: ["darwin"], idleAfterSeconds: 90, maxAnswerBytes: 4096 }]);
+  assert.equal(JSON.stringify(policy).includes(owner), false, "session ids stay out of the report");
+  policy = await check({ enabled: true, sessions: ["*"] });
+  assert.deepEqual([policy.ok, (policy.wake as Record<string, unknown>).enabled, (policy.wake as Record<string, unknown>).codexFork],
+    [false, true, { enabled: false, rejected: true }]);
+  assert.match(String(policy.detail), /codexFork/);
+  policy = await check({ enabled: false });
+  assert.deepEqual([policy.ok, (policy.wake as Record<string, unknown>).codexFork], [true, { enabled: false }]);
+});
+
 test("the runtime check fails without any runtime and when a configured runtime is missing or silent", async (t) => {
   const h = host(t);
   const runtimes = async (deps: Partial<DoctorDeps>) => (await runDoctor({ ...h.deps, ...deps })).checks.runtimes;

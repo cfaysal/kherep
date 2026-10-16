@@ -350,6 +350,53 @@ this node's Codex sessions and doctor counts records per last event. Whether
 `Stop` fires on a cancelled turn and whether an approval wait is
 distinguishable remain UNKNOWN, so the result is evidence, not proof.
 
+A `Stop` whose delivery hook returns `decision: block` continues the turn. After
+the record is written, `deliver-codex.mts` sets `lastStopContinued` through
+`markStopContinued`; `recordCodexSession` clears it at the next `Stop` or
+`UserPromptSubmit` and keeps it for every other event. `idleEvidence()` is false
+while it is set. A failed write leaves the block output unchanged.
+
+## Codex fork reply: policy, attempts and admission
+
+Issue #408, second increment, not wired: no daemon path calls these modules
+and no process is started. `policy.mts` parses the optional
+`wake.codexFork` section; open decision D4 (full thread ids only) lives in
+its `FORK_SESSION` pattern and D5 (darwin only) in `FORK_PLATFORMS`. A
+rejected section is left out of the parsed `wake`, so the rest of the section
+and the busy-admission fingerprint of a policy without it are unchanged.
+
+`codex-fork-attempts.mts` is the store of design section 2.8. A claim writes the
+complete `launching` record to a temp file and links it to
+`<owner>/<messageId>.json`; the link is the exclusive create, so two processes
+racing for a message create one attempt and a snapshot never reads a partial
+record. Transitions go forward only (`launching -> running -> completed |
+declined | failed | uncertain | superseded`, `completed -> superseded` before a
+relay); write-once fields never change. Per-owner exclusivity (one attempt in
+flight) relies on the daemon's serial lane, per-message exclusivity on the
+file system.
+
+```mermaid
+flowchart TD
+  gather[Re-read policy, kill switch, enrollment, session record, tasks, inbox record, attempts, hook config, readiness] --> decide
+  decide{Guards in order} -->|first failing guard| refuse[Reason code; progress stays an existing waiting code]
+  decide -->|all passed| budget{takeTurn}
+  budget -->|ok| admit[Admitted with resolved cwd]
+  budget -->|spacing / exhausted| refuse
+```
+
+`codex-fork-admission.mts` re-reads every input, then decides in guard order:
+section, kill switch and enrollment, policy fingerprint; the recorded non-task
+owner (a hook payload's `permission_mode` wins over the recorded mode, and
+`lastSeen` only bounds the active window); the full-id opt-in (open decision
+D10: the opt-in is the grant, the `codexApp` grant never is); the platform;
+`codexPostToolHookInstalled` (`doctor-hooks.mts`, the doctor hook scanner
+restricted to Codex `PostToolUse` tables) and `idleEvidence()`; the accepted
+exact-addressed message, its depth and the attempt store; the cwd under the
+sessions policy; readiness. Only then does it spend the owner's shared turn
+budget (open decision D9). Readiness is checked before the budget, unlike the
+design's numbering, so a refused fork never spends a turn. Guard 10, the
+producer identity, belongs to the fork producer.
+
 ## Claude mid-turn delivery
 
 Claude Code has no CP ticket: its delivery hook reads the Inbox directly. Besides

@@ -23,6 +23,27 @@ increments the minor version; every other release increments the patch version.
   `msg sessions` prints `last event <event> at <time>` for this node's Codex
   sessions, and `kherep-node doctor` adds the `codexSessions` check with counts
   per last event and no session ids. Message delivery is unchanged.
+- Codex fork reply policy, attempt store and admission (issue #408, second
+  increment; nothing is wired and no process is started). The opt-in
+  `wake.codexFork` policy section (`enabled`, `sessions` by full thread id
+  only, `platforms` `["darwin"]` only, `idleAfterSeconds` 30 to 3600, default
+  90, `maxAnswerBytes` 256 to 8192, default 4096) is off when absent; any
+  malformed shape turns off only the fork reply and leaves the rest of `wake`
+  as written. A new attempt store (`codex-fork-attempts/<owner>/<message>.json`)
+  claims each message once with an exclusive create, moves states forward only,
+  fails every read closed and turns launching or running attempts `uncertain`
+  at recovery. A new admission decides the guards of the design in order with
+  one reason code and spends the owner's turn budget only when every other
+  guard passed; it refuses unless the Codex delivery hook is installed on
+  `PostToolUse`, reads a hook payload's `permission_mode` before the recorded
+  one and treats `lastSeen` as approximate. A Codex `Stop` that returned a
+  blocking continuation now records `lastStopContinued` in the session record,
+  cleared by the next `Stop` that does not block or by `UserPromptSubmit`;
+  `idleEvidence()` is false while it is set. `kherep-node doctor` prints a
+  written `wake.codexFork` section with a count of opted-in sessions and fails a
+  rejected one. New audit actions `fork`, `fork-declined`, `fork-failed`,
+  `fork-uncertain`, `fork-superseded`, `fork-not-idle` and
+  `fork-disabled-platform` exist for the later increments; nothing writes them yet.
 
 ### Changed
 
