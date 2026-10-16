@@ -41,3 +41,11 @@ test("an absent group confirms the close: the late item is failed and the admiss
   assert.deepEqual([r.run.signals, r.unconfirmed()], [["SIGKILL"], 0]);
   assert.equal(serviceAdmissionsIdle(r.paths, testServiceOwner), true);
 });
+
+// A throwing onUnconfirmedShutdown reporter must not cost the retention: the lease is kept first.
+test("a throwing unconfirmed-close reporter still leaves the admission retained and nothing escapes", async (t) => {
+  const r = await runFork(t, { hang: true, killReport: "unconfirmed" }, {},
+    { onUnconfirmedShutdown: () => { throw new Error("synthetic reporter failure"); } });
+  assert.deepEqual(r.outcome, { state: "uncertain", from: "running", reason: "close-unconfirmed" });
+  assert.equal(serviceAdmissionsIdle(r.paths, testServiceOwner), false);
+});
