@@ -205,3 +205,45 @@ test("an unexpected failure after running is uncertain from running, never a lau
   assert.deepEqual(r.outcome, { state: "uncertain", from: "running", reason: "helper-exit" });
   assert.equal(r.running.length, 1);
 });
+
+// Cross-review of #439, P2-1: a watch rule that fires in the same stdout chunk
+// as turn/completed, after it, or while the helper closes discards the answer.
+test("a violation in the same chunk after turn/completed discards the answer", async (t) => {
+  const cases: [string, (fork: string, turn: string) => Record<string, unknown>[]][] = [
+    ["server-request", (fork) => [{ id: 950, method: "item/commandExecution/requestApproval", params: { threadId: fork } }]],
+    ["tool-item", (fork, turn) => [{ method: "item/started", params: { threadId: fork, turnId: turn, item: { type: "commandExecution" } } }]],
+    ["unsolicited-turn", () => [{ method: "turn/started", params: { threadId: FORK_OWNER, turn: { id: "x" } } }]],
+  ];
+  for (const [reason, afterCompleted] of cases) {
+    const r = await runFork(t, { afterCompleted });
+    assert.deepEqual(r.outcome, { state: "failed", from: "running", reason }, reason);
+  }
+});
+
+test("a violation while the helper closes discards the answer", async (t) => {
+  const cases: [string, (fork: string) => Record<string, unknown>[]][] = [
+    ["server-request", (fork) => [{ id: 951, method: "item/tool/requestUserInput", params: { threadId: fork } }]],
+    ["tool-item", (fork) => [{ method: "item/completed", params: { threadId: fork, item: { type: "mcpToolCall" } } }]],
+  ];
+  for (const [reason, onClose] of cases) {
+    const r = await runFork(t, { onClose });
+    assert.deepEqual(r.outcome, { state: "failed", from: "running", reason }, reason);
+  }
+  const decline = await runFork(t, { answer: JSON.stringify({ kind: "decline", text: "", code: "needs-owner" }),
+    onClose: (fork) => [{ id: 952, method: "item/permissions/requestApproval", params: { threadId: fork } }] });
+  assert.deepEqual(decline.outcome, { state: "failed", from: "running", reason: "server-request" }, "a decline is discarded too");
+});
+
+// Cross-review of #439, P2-2: a turn timeout ends with the group SIGKILL even
+// when turn/interrupt succeeds and the direct child ends on stdin end.
+test("a timed-out turn ends with the group SIGKILL after a successful interrupt, never settled early", async (t) => {
+  const r = await runFork(t, { hang: true });
+  assert.deepEqual(r.outcome, { state: "uncertain", from: "running", reason: "turn-timeout" });
+  // The fake answers turn/interrupt with a result: the interrupt succeeded.
+  assert.ok(r.methods().includes("turn/interrupt"));
+  assert.ok(r.run.ended, "the direct child ended on stdin end");
+  assert.deepEqual(r.run.signals, ["SIGKILL"], "the group still gets SIGKILL before the attempt settles");
+  const violated = await runFork(t, { hang: true, during: (fork) => [{ method: "thread/goal/updated", params: { threadId: fork } }] });
+  assert.deepEqual(violated.outcome, { state: "failed", from: "running", reason: "fork-goal" });
+  assert.deepEqual(violated.run.signals, ["SIGKILL"], "a violating turn is ended the same way");
+});

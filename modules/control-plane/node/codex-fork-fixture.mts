@@ -38,6 +38,11 @@ export interface ForkScenario {
   ownerGoalReply?: GoalReply; forkGoalReply?: GoalReply | "hang";
   // Notifications sent between the fork's goal/get request and its reply.
   beforeForkGoal?: (fork: string) => Message[];
+  // Sent in the same stdout write as turn/completed, right after it; the turn's
+  // notifications then come a few milliseconds later, while the client waits.
+  afterCompleted?: (fork: string, turn: string) => Message[];
+  // Sent when stdin ends, before the process ends: during close.
+  onClose?: (fork: string) => Message[];
   // A {error} entry answers that method with the error instead.
   errors?: Record<string, { code: number; message: string }>;
   forkThread?: Record<string, unknown>; forkTop?: Record<string, unknown>;
@@ -125,7 +130,14 @@ export function fakeAppServer(scenario: ForkScenario) {
         const turn = (): void => {
           send(started);
           for (const note of scenario.during?.(fork, FORK_TURN) ?? []) send(note);
-          if (!scenario.hang) { for (const note of turnNotes()) send(note); send(completed(scenario.turnStatus ?? "completed")); }
+          if (scenario.hang) return;
+          const rest = (): void => {
+            for (const note of turnNotes()) send(note);
+            const tail = [completed(scenario.turnStatus ?? "completed"), ...(scenario.afterCompleted?.(fork, FORK_TURN) ?? [])];
+            if (!run.ended) stdout.write(tail.map((message) => `${JSON.stringify(message)}\n`).join(""));
+          };
+          if (scenario.afterCompleted) setTimeout(rest, 10);
+          else rest();
         };
         if (method === "turn/start" && scenario.early) turn();
         if (method === "thread/goal/get") {
@@ -141,7 +153,10 @@ export function fakeAppServer(scenario: ForkScenario) {
         if (method === "turn/interrupt" && scenario.hang) send(completed("interrupted"));
       }
     });
-    stdin.on("finish", () => { if (!scenario.ignoreEnd) child.end(); });
+    stdin.on("finish", () => {
+      for (const note of scenario.onClose?.(fork) ?? []) send(note);
+      if (!scenario.ignoreEnd) setImmediate(() => child.end());
+    });
     return child as never;
   }) as AppServerSpawn;
   const signal = (pid: number, value: NodeJS.Signals): void => {

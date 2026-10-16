@@ -139,3 +139,11 @@ test("a clean close ends stdin and sends no signal; an unconfirmed one reports f
   assert.equal(await s.shutdown(), false);
   assert.deepEqual(stuck.signals, ["SIGKILL"]);
 });
+
+test("a forced close ends with SIGKILL after the grace even when the child exits on stdin end (issue #439 review)", async () => {
+  const fake = fakeChild((request, write) => write(line({ id: request.id, result: {} })));
+  const c = client(fake, { graceMs: 30, forceAfterFailure: true });
+  await c.request("turn/interrupt", {});
+  assert.equal(await c.shutdown(true), true);
+  assert.deepEqual(fake.signals, ["SIGKILL"]);
+});
