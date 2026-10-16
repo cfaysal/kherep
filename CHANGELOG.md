@@ -217,6 +217,17 @@ increments the minor version; every other release increments the patch version.
   daemon`, starts with an ISO 8601 timestamp. A Windows kill such as
   `taskkill /F` still cannot be caught; Claude probes stay attached to the
   daemon there.
+- Doctor hook check from a source pin (issue #445): `kherep-node doctor` run
+  through the stable launcher runs from the active service pin, so the Claude
+  `deliver-hook.mts` and `wake-hook.mts` entries that `install.sh` wrote from a
+  checkout counted as another checkout even at the same commit. A hook in a
+  checkout whose source identity (commit and tree, no tracked changes) matches
+  the pin the doctor runs from now counts as this checkout and is listed under
+  `checkouts`, symmetric to the existing `pinned` rule; the identity of each
+  root is read once per run. A checkout at another commit or with tracked
+  changes is still another checkout, and `detail` now names the reason
+  (`commit differs`, `source tree differs`, which side has tracked changes, or
+  `no verified source identity`).
 
 ## [0.3.0] - 2026-10-15
 

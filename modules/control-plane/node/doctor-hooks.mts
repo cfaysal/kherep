@@ -56,75 +56,100 @@ function realOrResolved(file: string): string {
   try { return fs.realpathSync.native(expanded); } catch { return path.resolve(expanded); }
 }
 
-type HookScan = { present: boolean; deliver: number; wake: number; foreign: string[]; pinned?: string[] };
+type HookScan = { present: boolean; deliver: number; wake: number; foreign: string[]; pinned?: string[]; checkouts?: string[] };
 
+// The scan as reported, and the reason of its first foreign hook (not reported in the scan).
 function scanHooks(
-  file: string, repoRoot: string, commandsOf: (text: string) => string[], checkoutSource: () => SourceIdentity | undefined,
-): HookScan | null {
+  file: string, repoRoot: string, commandsOf: (text: string) => string[], cache: SourceCache,
+): { scan: HookScan; reason?: string } | null {
   let commands: string[];
   try {
     commands = commandsOf(fs.readFileSync(file, "utf8"));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { present: false, deliver: 0, wake: 0, foreign: [] };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { scan: { present: false, deliver: 0, wake: 0, foreign: [] } };
     return null;
   }
   const counts = { deliver: 0, wake: 0 };
   const foreign = new Set<string>();
   const pinned = new Set<string>();
+  const checkouts = new Set<string>();
+  let reason: string | undefined;
   for (const found of commands.flatMap(hookPaths)) {
     const kind = /deliver-hook\.mts$/.test(found) ? "deliver" : "wake";
     const expected = path.join(repoRoot, "modules", "control-plane", "node", `${kind}-hook.mts`);
-    if (realOrResolved(found) === realOrResolved(expected)) counts[kind]++;
-    else if (pinsCheckout(found, kind, checkoutSource)) { counts[kind]++; pinned.add(found); }
-    else foreign.add(found);
+    if (realOrResolved(found) === realOrResolved(expected)) { counts[kind]++; continue; }
+    const same = sameSource(found, kind, cache);
+    if ("reason" in same) { foreign.add(found); reason ??= same.reason; continue; }
+    counts[kind]++;
+    (same.kind === "pin" ? pinned : checkouts).add(found);
   }
-  return { present: true, ...counts, foreign: [...foreign], ...(pinned.size ? { pinned: [...pinned] } : {}) };
+  const scan = { present: true, ...counts, foreign: [...foreign], ...(pinned.size ? { pinned: [...pinned] } : {}),
+    ...(checkouts.size ? { checkouts: [...checkouts] } : {}) };
+  return reason ? { scan, reason } : { scan };
 }
 
-// The hook file exists in a complete verified source pin equivalent to the
-// invoking checkout. A directory name alone is never source evidence.
-function pinsCheckout(
-  found: string, kind: "deliver" | "wake", checkoutSource: () => SourceIdentity | undefined,
-): boolean {
+const UNVERIFIED = "no verified source identity";
+
+// Issue #445, symmetric to #397: the hook file is the hook of a source root (a
+// complete verified source pin under source-pins/, or a clean checkout) whose
+// identity, commit and tree, matches the invoking source. A directory name
+// alone is never source evidence. Any failure refuses, with its reason.
+function sameSource(found: string, kind: "deliver" | "wake", cache: SourceCache): { kind: "pin" | "checkout" } | { reason: string } {
   try {
     const hook = fs.realpathSync.native(expand(found));
-    if (!fs.statSync(hook).isFile()) return false;
+    if (!fs.statSync(hook).isFile()) return { reason: UNVERIFIED };
     const root = path.resolve(path.dirname(hook), "..", "..", "..");
-    const expected = path.join(root, "modules", "control-plane", "node", `${kind}-hook.mts`);
-    if (path.basename(path.dirname(root)) !== "source-pins" || hook !== expected) return false;
-    const checkout = checkoutSource();
-    return checkout ? compareSourceIdentity(checkout, captureSourceIdentity(root)).status === "match" : false;
-  } catch { return false; }
+    if (hook !== path.join(root, "modules", "control-plane", "node", `${kind}-hook.mts`)) return { reason: UNVERIFIED };
+    const actual = cache.of(root);
+    if (!actual || (actual.kind === "pin" && path.basename(path.dirname(root)) !== "source-pins")) return { reason: UNVERIFIED };
+    const invoking = cache.invoking();
+    if (!invoking) return { reason: UNVERIFIED };
+    if (!invoking.verified) return { reason: "the invoking source has tracked changes" };
+    if (!actual.verified) return { reason: "the hook's source has tracked changes" };
+    const compared = compareSourceIdentity(invoking, actual);
+    if (compared.status === "match") return { kind: actual.kind };
+    if (compared.status === "mismatch") return { reason: compared.reason === "commit" ? "commit differs" : "source tree differs" };
+    return { reason: UNVERIFIED };
+  } catch { return { reason: UNVERIFIED }; }
 }
 
-// The checkout's source identity, read at most once, and only when a hook names a source pin.
-function lazySource(repoRoot: string): () => SourceIdentity | undefined {
-  let source: { value?: SourceIdentity } | undefined;
-  return () => {
-    if (source) return source.value;
-    try { source = { value: captureSourceIdentity(repoRoot, false) }; } catch { source = {}; }
-    return source.value;
+type SourceCache = { invoking: () => SourceIdentity | undefined; of: (root: string) => SourceIdentity | undefined };
+
+// Source identities of one run, read at most once per real root and only when
+// a hook names another root; a failed read stays undefined for the run. A
+// dirty checkout yields verified: false rather than an error.
+export function sourceCache(repoRoot: string): SourceCache {
+  const known = new Map<string, SourceIdentity | undefined>();
+  const of = (root: string): SourceIdentity | undefined => {
+    const key = realOrResolved(root);
+    if (!known.has(key)) {
+      let identity: SourceIdentity | undefined;
+      try { identity = captureSourceIdentity(key, false); } catch { identity = undefined; }
+      known.set(key, identity);
+    }
+    return known.get(key);
   };
+  return { invoking: () => of(repoRoot), of };
 }
 
-// ok: at least one hook is installed and every hook command names this checkout
-// or a source pin of its commit.
+// ok: at least one hook is installed and every hook command names this source,
+// or a source pin or checkout of the same identity.
 export function checkHooks(files: { claude: string; codex: string }, repoRoot: string): Check {
-  const checkoutSource = lazySource(repoRoot);
-  const claude = scanHooks(files.claude, repoRoot, claudeCommands, checkoutSource);
-  const codex = scanHooks(files.codex, repoRoot, codexCommands, checkoutSource);
+  const cache = sourceCache(repoRoot);
+  const claude = scanHooks(files.claude, repoRoot, claudeCommands, cache);
+  const codex = scanHooks(files.codex, repoRoot, codexCommands, cache);
   if (!claude || !codex) return { ok: false, detail: "a runtime configuration file is unreadable" };
-  const foreign = claude.foreign.length + codex.foreign.length;
-  const total = claude.deliver + claude.wake + codex.deliver + codex.wake + foreign;
+  const foreign = claude.scan.foreign.length + codex.scan.foreign.length;
+  const total = claude.scan.deliver + claude.scan.wake + codex.scan.deliver + codex.scan.wake + foreign;
   let detail: string | undefined;
-  if (foreign > 0) detail = "a hook command names another checkout";
+  if (foreign > 0) detail = `a hook command names another checkout: ${claude.reason ?? codex.reason ?? UNVERIFIED}`;
   else if (total === 0) detail = "no delivery or wake hook is installed";
-  return { ok: foreign === 0 && total > 0, checkout: repoRoot, claude, codex, ...(detail ? { detail } : {}) };
+  return { ok: foreign === 0 && total > 0, checkout: repoRoot, claude: claude.scan, codex: codex.scan, ...(detail ? { detail } : {}) };
 }
 
 // Issue #408: whether the Codex config runs this checkout's delivery hook (or
-// a source pin of its commit) on PostToolUse, which records the tool
+// one of a source of the same identity) on PostToolUse, which records the tool
 // boundaries that keep a running turn from reading idle. An unreadable config is false.
 export function codexPostToolHookInstalled(codexConfig: string, repoRoot: string): boolean {
-  return (scanHooks(codexConfig, repoRoot, (text) => codexCommands(text, "PostToolUse"), lazySource(repoRoot))?.deliver ?? 0) > 0;
+  return (scanHooks(codexConfig, repoRoot, (text) => codexCommands(text, "PostToolUse"), sourceCache(repoRoot))?.scan.deliver ?? 0) > 0;
 }

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { checkHooks, codexPostToolHookInstalled, hookPaths } from "./doctor-hooks.mts";
+import { checkHooks, codexPostToolHookInstalled, hookPaths, sourceCache } from "./doctor-hooks.mts";
 import { pinServiceSource } from "./service-source.mts";
 
 // Issue #215 review: only the script path of a hook command counts and is
@@ -204,8 +204,117 @@ test("a source pin of another commit, a missing pin and another checkout still c
     const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
     assert.equal(check.ok, false, hook);
     assert.deepEqual(check.codex, { present: true, deliver: 0, wake: 0, foreign: [hook] });
-    assert.equal(check.detail, "a hook command names another checkout");
+    assert.match(String(check.detail), /^a hook command names another checkout: /);
   }
+});
+
+// Issue #445: doctor runs from a verified source pin, the Claude hooks name
+// the checkout it was made from. Same commit and tree count, either direction.
+const hasGit = () => spawnSync("git", ["--version"], { windowsHide: true }).status === 0;
+const detailOf = (reason: string) => `a hook command names another checkout: ${reason}`;
+
+function pinnedRepo(t: test.TestContext) {
+  const f = files(t);
+  const commit = commitCheckout(f.repo);
+  const pin = pinServiceSource(f.repo, path.join(path.dirname(f.repo), "service"));
+  const deliver = path.join(f.hooks, "deliver-hook.mts");
+  const wake = path.join(f.hooks, "wake-hook.mts");
+  fs.writeFileSync(f.claude, settings([`node "${deliver}"`, `node "${wake}" --timeout 86400`]));
+  return { ...f, commit, pin: pin.root, deliver, wake };
+}
+
+test("a Claude hook in a checkout of the pinned commit counts when doctor runs from the pin", (t) => {
+  if (!hasGit()) return t.skip("git is not available");
+  const f = pinnedRepo(t);
+  const check = checkHooks({ claude: f.claude, codex: f.codex }, f.pin);
+  assert.equal(check.ok, true, JSON.stringify(check));
+  assert.deepEqual(check.claude, { present: true, deliver: 1, wake: 1, foreign: [], checkouts: [f.deliver, f.wake] });
+  assert.deepEqual(check.codex, { present: false, deliver: 0, wake: 0, foreign: [] });
+  assert.equal(check.checkout, f.pin);
+  assert.equal(check.detail, undefined);
+});
+
+test("the live shape: Codex hooks name the pin, Claude hooks name the checkout, both count", (t) => {
+  if (!hasGit()) return t.skip("git is not available");
+  const f = pinnedRepo(t);
+  fs.writeFileSync(f.codex, codexHook(path.join(f.pin, "modules", "control-plane", "node", "deliver-hook.mts")));
+  const check = checkHooks({ claude: f.claude, codex: f.codex }, f.pin);
+  assert.equal(check.ok, true, JSON.stringify(check));
+  assert.deepEqual(check.codex, { present: true, deliver: 1, wake: 0, foreign: [] });
+  assert.deepEqual((check.claude as { checkouts?: string[] }).checkouts, [f.deliver, f.wake]);
+});
+
+test("a checkout at another commit stays foreign and the detail names the commit", (t) => {
+  if (!hasGit()) return t.skip("git is not available");
+  const f = pinnedRepo(t);
+  fs.writeFileSync(f.wake, "changed");
+  git(f.repo, "add", ".");
+  const tree = git(f.repo, "write-tree");
+  const next = git(f.repo, "-c", "user.name=Kherep Fixture", "-c", "user.email=fixture@example.invalid",
+    "commit-tree", tree, "-p", f.commit, "-m", "fixture 2");
+  git(f.repo, "update-ref", "HEAD", next);
+  const check = checkHooks({ claude: f.claude, codex: f.codex }, f.pin);
+  assert.equal(check.ok, false);
+  assert.deepEqual(check.claude, { present: true, deliver: 0, wake: 0, foreign: [f.deliver, f.wake] });
+  assert.equal(check.detail, detailOf("commit differs"));
+});
+
+test("a checkout with tracked changes stays foreign until the change is reverted", (t) => {
+  if (!hasGit()) return t.skip("git is not available");
+  const f = pinnedRepo(t);
+  fs.writeFileSync(f.wake, "uncommitted");
+  const dirty = checkHooks({ claude: f.claude, codex: f.codex }, f.pin);
+  assert.equal(dirty.ok, false);
+  assert.deepEqual(dirty.claude, { present: true, deliver: 0, wake: 0, foreign: [f.deliver, f.wake] });
+  assert.equal(dirty.detail, detailOf("the hook's source has tracked changes"));
+  git(f.repo, "checkout", "--", ".");
+  const clean = checkHooks({ claude: f.claude, codex: f.codex }, f.pin);
+  assert.equal(clean.ok, true, JSON.stringify(clean));
+});
+
+test("a dirty invoking checkout makes a same-identity pin hook foreign and the detail names the invoking side", (t) => {
+  if (!hasGit()) return t.skip("git is not available");
+  const f = pinnedRepo(t);
+  fs.rmSync(f.claude);
+  const pinHook = path.join(f.pin, "modules", "control-plane", "node", "deliver-hook.mts");
+  fs.writeFileSync(f.codex, codexHook(pinHook));
+  fs.writeFileSync(f.wake, "uncommitted");
+  const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
+  assert.equal(check.ok, false);
+  assert.deepEqual(check.codex, { present: true, deliver: 0, wake: 0, foreign: [pinHook] });
+  assert.equal(check.detail, detailOf("the invoking source has tracked changes"));
+});
+
+test("a path that is not a hook of the checkout, a missing hook and a directory stay foreign", (t) => {
+  if (!hasGit()) return t.skip("git is not available");
+  const f = pinnedRepo(t);
+  const other = path.join(f.repo, "modules", "control-plane", "other", "deliver-hook.mts");
+  fs.mkdirSync(path.dirname(other), { recursive: true });
+  fs.writeFileSync(other, "");
+  const directory = path.join(path.dirname(f.repo), "dir", "modules", "control-plane", "node", "deliver-hook.mts");
+  fs.mkdirSync(directory, { recursive: true });
+  for (const hook of [other, path.join(f.repo, "missing", "deliver-hook.mts"), directory]) {
+    fs.writeFileSync(f.claude, settings([`node "${hook}"`]));
+    const check = checkHooks({ claude: f.claude, codex: f.codex }, f.pin);
+    assert.equal(check.ok, false, hook);
+    assert.deepEqual(check.claude, { present: true, deliver: 0, wake: 0, foreign: [hook] });
+    assert.equal(check.detail, detailOf("no verified source identity"));
+  }
+});
+
+test("the source identity of a root is captured once per doctor run", (t) => {
+  if (!hasGit()) return t.skip("git is not available");
+  const f = pinnedRepo(t);
+  const cache = sourceCache(f.pin);
+  const first = cache.of(f.repo);
+  assert.equal(first?.verified, true);
+  fs.writeFileSync(f.wake, "uncommitted");
+  assert.deepEqual(cache.of(f.repo), first);
+  assert.equal(sourceCache(f.pin).of(f.repo)?.verified, false);
+  const nowhere = path.join(path.dirname(f.repo), "nowhere");
+  assert.equal(cache.of(nowhere), undefined);
+  assert.equal(cache.of(nowhere), undefined);
+  assert.equal(cache.invoking()?.kind, "pin");
 });
 
 // Issue #388: the delivery entry in the all-tools PostToolUse group counts as
