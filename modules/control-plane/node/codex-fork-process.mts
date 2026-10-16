@@ -88,7 +88,8 @@ export async function runForkAttempt(deps: { codex?: CodexDeps }, input: ForkRun
   child.once("exit", (code, signal) => {
     exited = true;
     const line = lastLine(stderr);
-    input.log(`kherep-node: Codex fork helper ended (${String(code ?? signal)})${line ? `: ${line}` : ""}`);
+    // Inside an EventEmitter listener: a throwing logger must not become an uncaught exception.
+    try { input.log(`kherep-node: Codex fork helper ended (${String(code ?? signal)})${line ? `: ${line}` : ""}`); } catch { /* the exit is recorded */ }
   });
   child.once("error", () => { if (child.pid === undefined) neverStarted = true; });
   child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString("utf8")).slice(-4096); });

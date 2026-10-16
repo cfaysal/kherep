@@ -59,3 +59,11 @@ test("a throwing unconfirmed-close logger or reporter still leaves the admission
     assert.equal(serviceAdmissionsIdle(r.paths, testServiceOwner), false, `${label}: the lease stays`);
   }
 });
+
+// The helper's exit line is logged inside an EventEmitter listener: a logger that throws there must not
+// surface as an uncaught exception, and the attempt keeps its normal outcome.
+test("a logger that throws on the helper's exit line changes neither the outcome nor the close", async (t) => {
+  const r = await runFork(t, {}, { log: (line) => { if (line.includes("helper ended")) throw new Error("synthetic logger failure"); } });
+  assert.equal(r.outcome.state, "completed");
+  assert.equal(serviceAdmissionsIdle(r.paths, testServiceOwner), true);
+});
