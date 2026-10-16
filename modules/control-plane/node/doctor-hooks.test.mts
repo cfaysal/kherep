@@ -220,7 +220,8 @@ function pinnedRepo(t: test.TestContext) {
   const deliver = path.join(f.hooks, "deliver-hook.mts");
   const wake = path.join(f.hooks, "wake-hook.mts");
   fs.writeFileSync(f.claude, settings([`node "${deliver}"`, `node "${wake}" --timeout 86400`]));
-  return { ...f, commit, pin: pin.root, deliver, wake };
+  const pinDeliver = path.join(pin.root, "modules", "control-plane", "node", "deliver-hook.mts");
+  return { ...f, commit, pin: pin.root, pinDeliver, deliver, wake };
 }
 
 test("a Claude hook in a checkout of the pinned commit counts when doctor runs from the pin", (t) => {
@@ -237,7 +238,7 @@ test("a Claude hook in a checkout of the pinned commit counts when doctor runs f
 test("the live shape: Codex hooks name the pin, Claude hooks name the checkout, both count", (t) => {
   if (!hasGit()) return t.skip("git is not available");
   const f = pinnedRepo(t);
-  fs.writeFileSync(f.codex, codexHook(path.join(f.pin, "modules", "control-plane", "node", "deliver-hook.mts")));
+  fs.writeFileSync(f.codex, codexHook(f.pinDeliver));
   const check = checkHooks({ claude: f.claude, codex: f.codex }, f.pin);
   assert.equal(check.ok, true, JSON.stringify(check));
   assert.deepEqual(check.codex, { present: true, deliver: 1, wake: 0, foreign: [] });
@@ -276,12 +277,11 @@ test("a dirty invoking checkout makes a same-identity pin hook foreign and the d
   if (!hasGit()) return t.skip("git is not available");
   const f = pinnedRepo(t);
   fs.rmSync(f.claude);
-  const pinHook = path.join(f.pin, "modules", "control-plane", "node", "deliver-hook.mts");
-  fs.writeFileSync(f.codex, codexHook(pinHook));
+  fs.writeFileSync(f.codex, codexHook(f.pinDeliver));
   fs.writeFileSync(f.wake, "uncommitted");
   const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
   assert.equal(check.ok, false);
-  assert.deepEqual(check.codex, { present: true, deliver: 0, wake: 0, foreign: [pinHook] });
+  assert.deepEqual(check.codex, { present: true, deliver: 0, wake: 0, foreign: [f.pinDeliver] });
   assert.equal(check.detail, detailOf("the invoking source has tracked changes"));
 });
 
