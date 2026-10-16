@@ -34,7 +34,12 @@ export interface AcceptRule { session: string; from: string[] }
 export interface TurnBudget { perHour: number; perDay: number; spacingMs: number }
 export const DEFAULT_TURN_BUDGET: TurnBudget = { perHour: 20, perDay: 100, spacingMs: 30_000 };
 export interface WakeBudget { perHour?: number; perDay?: number; spacingSeconds?: number }
-export interface WakePolicy { enabled: true; sessions: string[]; codexApp?: boolean; replies?: boolean; nativeQueue?: boolean; budget?: WakeBudget }
+export interface WakePolicy {
+  enabled: true; sessions: string[]; codexApp?: boolean; replies?: boolean; nativeQueue?: boolean; budget?: WakeBudget;
+  codexFork?: CodexForkPolicy;
+}
+// codexFork (issue #408): the idle reply proxy (codex-fork-admission.mts), off unless present and valid.
+export interface CodexForkPolicy { enabled: true; sessions: string[]; platforms: string[]; idleAfterSeconds: number; maxAnswerBytes: number }
 // resumeClosed (issue #102): a message for a known session of this node that
 // is no longer running resumes it, or starts an intercom session instead
 // (closed-delivery.mts). Only the boolean true enables it.
@@ -168,18 +173,50 @@ export function acceptsMessage(policy: NodePolicy, toSession: string, fromNodeId
 // replies must be booleans when present; with either true the list may be
 // empty or absent. nativeQueue must be a boolean when present and grants
 // nothing (issue #429). A budget that parseBudget rejects disables it as well.
+// A codexFork section that parseCodexFork rejects is left out (issue #408).
 function parseWake(section: unknown): WakePolicy | null {
   if (typeof section !== "object" || section === null) return null;
-  const { enabled, sessions, codexApp, replies, nativeQueue, budget: rawBudget } = section as { enabled?: unknown; sessions?: unknown;
-    codexApp?: unknown; replies?: unknown; nativeQueue?: unknown; budget?: unknown };
+  const { enabled, sessions, codexApp, replies, nativeQueue, budget: rawBudget, codexFork: rawFork } = section as { enabled?: unknown;
+    sessions?: unknown; codexApp?: unknown; replies?: unknown; nativeQueue?: unknown; budget?: unknown; codexFork?: unknown };
   if (enabled !== true || [codexApp, replies, nativeQueue].some((flag) => flag !== undefined && typeof flag !== "boolean")) return null;
   const budget = rawBudget === undefined ? undefined : parseBudget(rawBudget);
   if (budget === null) return null;
   const granted = codexApp === true || replies === true;
   const list = sessions === undefined && granted ? [] : sessions;
   if (!Array.isArray(list) || !list.every(isSessionRef) || (list.length === 0 && !granted)) return null;
+  const codexFork = parseCodexFork(rawFork);
   return { enabled: true, sessions: [...list] as string[], ...(codexApp ? { codexApp: true } : {}), ...(replies ? { replies: true } : {}),
-    ...(nativeQueue ? { nativeQueue: true } : {}), ...(budget ? { budget } : {}) };
+    ...(nativeQueue ? { nativeQueue: true } : {}), ...(budget ? { budget } : {}), ...(codexFork ? { codexFork } : {}) };
+}
+
+// Decision D4 (open, issue #408): full Codex thread ids only; no "*" and no
+// names, because a fork reads the whole history of the chat.
+const FORK_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Decision D5: darwin only until the Windows measurements (design section 3.2, PR 5).
+const FORK_PLATFORMS = ["darwin"];
+const FORK_NUMBERS = { idleAfterSeconds: { min: 30, max: 3600, fallback: 90 }, maxAnswerBytes: { min: 256, max: 8192, fallback: 4096 } };
+const FORK_KEYS = ["enabled", "sessions", "platforms", ...Object.keys(FORK_NUMBERS)];
+
+// Only the known keys, enabled true, a non-empty list of full ids, platforms
+// from FORK_PLATFORMS and integers within FORK_NUMBERS; anything else is null,
+// which turns the fork reply off and leaves the rest of wake as written.
+function parseCodexFork(value: unknown): CodexForkPolicy | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const fields = value as Record<string, unknown>;
+  if (Object.keys(fields).some((key) => !FORK_KEYS.includes(key))) return null;
+  const { enabled, sessions, platforms = FORK_PLATFORMS } = fields;
+  if (enabled !== true || !Array.isArray(sessions) || sessions.length === 0
+    || !sessions.every((id) => typeof id === "string" && FORK_SESSION.test(id))) return null;
+  if (!Array.isArray(platforms) || platforms.length === 0 || !platforms.every((p) => FORK_PLATFORMS.includes(p))) return null;
+  const number = (key: keyof typeof FORK_NUMBERS): number | null => {
+    const { min, max, fallback } = FORK_NUMBERS[key];
+    const n = fields[key] === undefined ? fallback : fields[key];
+    return typeof n === "number" && Number.isInteger(n) && n >= min && n <= max ? n : null;
+  };
+  const idleAfterSeconds = number("idleAfterSeconds"), maxAnswerBytes = number("maxAnswerBytes");
+  if (idleAfterSeconds === null || maxAnswerBytes === null) return null;
+  return { enabled: true, sessions: [...new Set(sessions as string[])], platforms: [...new Set(platforms as string[])],
+    idleAfterSeconds, maxAnswerBytes };
 }
 
 // Hard bounds (issue #259), so that a policy can loosen the budget but never remove it.

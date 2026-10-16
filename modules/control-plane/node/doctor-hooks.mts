@@ -31,13 +31,15 @@ function claudeCommands(text: string): string[] {
 }
 
 // Codex config: command and commandWindows keys inside [hooks.*] or
-// [[hooks.*]] tables, as TOML basic strings (JSON-compatible escapes).
-function codexCommands(text: string): string[] {
+// [[hooks.*]] tables, as TOML basic strings (JSON-compatible escapes); with
+// event, only those of that event's tables.
+function codexCommands(text: string, event?: string): string[] {
   const commands: string[] = [];
+  const table = event ? new RegExp(`^hooks\\.${event}(?:\\.|$)`) : /^hooks\./;
   let inHooks = false;
   for (const line of text.split(/\r?\n/)) {
     const header = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*$/.exec(line);
-    if (header) { inHooks = /^hooks\./.test(header[1]); continue; }
+    if (header) { inHooks = table.test(header[1]); continue; }
     const entry = inHooks ? /^\s*command(?:Windows)?\s*=\s*("(?:[^"\\]|\\.)*")\s*$/.exec(line) : null;
     if (!entry) continue;
     try { commands.push(JSON.parse(entry[1]) as string); } catch { /* not a JSON-compatible string */ }
@@ -95,16 +97,20 @@ function pinsCheckout(
   } catch { return false; }
 }
 
-// ok: at least one hook is installed and every hook command names this checkout
-// or a source pin of its commit.
-export function checkHooks(files: { claude: string; codex: string }, repoRoot: string): Check {
-  // Read at most once, and only when a hook names a source pin.
+// The checkout's source identity, read at most once, and only when a hook names a source pin.
+function lazySource(repoRoot: string): () => SourceIdentity | undefined {
   let source: { value?: SourceIdentity } | undefined;
-  const checkoutSource = (): SourceIdentity | undefined => {
+  return () => {
     if (source) return source.value;
     try { source = { value: captureSourceIdentity(repoRoot, false) }; } catch { source = {}; }
     return source.value;
   };
+}
+
+// ok: at least one hook is installed and every hook command names this checkout
+// or a source pin of its commit.
+export function checkHooks(files: { claude: string; codex: string }, repoRoot: string): Check {
+  const checkoutSource = lazySource(repoRoot);
   const claude = scanHooks(files.claude, repoRoot, claudeCommands, checkoutSource);
   const codex = scanHooks(files.codex, repoRoot, codexCommands, checkoutSource);
   if (!claude || !codex) return { ok: false, detail: "a runtime configuration file is unreadable" };
@@ -114,4 +120,11 @@ export function checkHooks(files: { claude: string; codex: string }, repoRoot: s
   if (foreign > 0) detail = "a hook command names another checkout";
   else if (total === 0) detail = "no delivery or wake hook is installed";
   return { ok: foreign === 0 && total > 0, checkout: repoRoot, claude, codex, ...(detail ? { detail } : {}) };
+}
+
+// Issue #408: whether the Codex config runs this checkout's delivery hook (or
+// a source pin of its commit) on PostToolUse, which records the tool
+// boundaries that keep a running turn from reading idle. An unreadable config is false.
+export function codexPostToolHookInstalled(codexConfig: string, repoRoot: string): boolean {
+  return (scanHooks(codexConfig, repoRoot, (text) => codexCommands(text, "PostToolUse"), lazySource(repoRoot))?.deliver ?? 0) > 0;
 }

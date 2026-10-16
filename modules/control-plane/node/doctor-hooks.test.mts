@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { checkHooks, hookPaths } from "./doctor-hooks.mts";
+import { checkHooks, codexPostToolHookInstalled, hookPaths } from "./doctor-hooks.mts";
 import { pinServiceSource } from "./service-source.mts";
 
 // Issue #215 review: only the script path of a hook command counts and is
@@ -221,4 +221,26 @@ test("a delivery hook on PostToolUse counts like those on the turn-boundary even
   const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
   assert.equal(check.ok, true, JSON.stringify(check));
   assert.deepEqual(check.claude, { present: true, deliver: 4, wake: 0, foreign: [] });
+});
+
+// Issue #408 (Fable review of PR 1, point 1b): Stop is idle evidence only on a
+// host whose Codex config runs this checkout's delivery hook on PostToolUse;
+// on an older install a turn with tool calls would read idle after its Stop.
+test("codexPostToolHookInstalled is true only for this checkout's delivery hook in a Codex PostToolUse group", (t) => {
+  const f = files(t);
+  const group = (event: string, hook: string): string => [`[[hooks.${event}]]`, 'matcher = ".*"', "", `[[hooks.${event}.hooks]]`,
+    'type = "command"', `command = ${JSON.stringify(`"/usr/bin/node" "${hook}" "--runtime" "codex"`)}`, "timeout = 10", ""].join("\n");
+  const deliver = path.join(f.hooks, "deliver-hook.mts");
+  assert.equal(codexPostToolHookInstalled(f.codex, f.repo), false, "no config file");
+  fs.writeFileSync(f.codex, [group("Stop", deliver), group("UserPromptSubmit", deliver)].join("\n"));
+  assert.equal(codexPostToolHookInstalled(f.codex, f.repo), false, "delivery on the turn boundaries only");
+  fs.writeFileSync(f.codex, group("PostToolUse", path.join(f.hooks, "wake-hook.mts")));
+  assert.equal(codexPostToolHookInstalled(f.codex, f.repo), false, "another hook on PostToolUse");
+  fs.writeFileSync(f.codex, group("PostToolUse", "/old/modules/control-plane/node/deliver-hook.mts"));
+  assert.equal(codexPostToolHookInstalled(f.codex, f.repo), false, "another checkout's delivery hook");
+  fs.writeFileSync(f.codex, [group("Stop", deliver), group("PostToolUse", deliver)].join("\n"));
+  assert.equal(codexPostToolHookInstalled(f.codex, f.repo), true);
+  fs.rmSync(f.codex);
+  fs.mkdirSync(f.codex);
+  assert.equal(codexPostToolHookInstalled(f.codex, f.repo), false, "an unreadable config");
 });
