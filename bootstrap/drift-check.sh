@@ -172,7 +172,7 @@ if [ "$DRIFT_SCOPE" = "all" ]; then
       continue
     fi
     if [ "$rel" = "teams/kherep/ROUTING.md" ]; then
-      cmp_rendered "$rel" "$CLAUDE_SRC/$rel" "$CLAUDE_HOME/$rel"
+      cmp_rendered "$rel" "$CLAUDE_SRC/teams/kherep/ROUTING.md" "$CLAUDE_HOME/teams/kherep/ROUTING.md"
       continue
     fi
     repo="$CLAUDE_SRC/$rel"; live="$CLAUDE_HOME/$rel"

@@ -11,8 +11,8 @@
  *   - every entry of bootstrap/manifest/files.txt is relative to CLAUDE_HOME and
  *     maps to claude/<rel>; directory entries cover their whole subtree, because
  *     the script walks them with cmp_tree
- *   - settings.json and CLAUDE.md are special-cased there and here: the live
- *     names differ from the sources they are built from
+ *   - settings.json, CLAUDE.md and teams/kherep/ROUTING.md are special-cased
+ *     there and here: install.sh builds them from their sources
  *   - the runtime and project pairs the script compares outside the manifest loop
  * drift-managed-path-watch.test.mts parses the cmp_file/cmp_tree invocations out
  * of the script and asserts this map covers every live target they name, so the
@@ -41,7 +41,9 @@ export function fixedPairs(home: string, workspace: string): ManagedPair[] {
   const pairs: ManagedPair[] = [
     // drift-check.sh:103-109 - the manifest lists the live-side names.
     { live: joinPathLike(home, "settings.json"), source: "claude/settings.user.json", rendered: true },
-    { live: joinPathLike(home, "CLAUDE.md"), source: "claude/CLAUDE.user.md" },
+    // Issue #436. Both name this host's intercom command, rendered in by install.sh.
+    { live: joinPathLike(home, "CLAUDE.md"), source: "claude/CLAUDE.user.md", rendered: true },
+    { live: joinPathLike(home, "teams/kherep/ROUTING.md"), source: "claude/teams/kherep/ROUTING.md", rendered: true },
     // drift-check.sh:118-125 - runtime modules, installed outside claude/.
     { live: joinPathLike(home, "kherep/local-inference/runner.mts"), source: "modules/local-inference/runner.mts" },
     { live: joinPathLike(home, "kherep/local-inference/lib"), source: "modules/local-inference/lib" },
@@ -154,6 +156,8 @@ export function fixedPairs(home: string, workspace: string): ManagedPair[] {
   ]);
 }
 
+const RENDERED_ENTRIES = new Set(["settings.json", "CLAUDE.md", "teams/kherep/ROUTING.md"]);
+
 export function manifestPairs(home: string, workspace: string): ManagedPair[] {
   if (!workspace) return [];
   const checkout = checkoutFor({}, home, { KHEREP_WORKSPACE: workspace });
@@ -168,8 +172,8 @@ export function manifestPairs(home: string, workspace: string): ManagedPair[] {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    // Both are special-cased in fixedPairs with their real sources, exactly as
+    // These are special-cased in fixedPairs with their real sources, exactly as
     // drift-check.sh special-cases them inside the same loop.
-    .filter((rel) => rel !== "settings.json" && rel !== "CLAUDE.md")
+    .filter((rel) => !RENDERED_ENTRIES.has(rel))
     .map((rel) => ({ live: joinPathLike(home, rel), source: `claude/${rel}` }));
 }

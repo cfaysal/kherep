@@ -123,6 +123,19 @@ test("a workspace rule file says that only its block is managed", () => {
   assert.doesNotMatch(contextOf(run(path.join(HOME, "CLAUDE.md"))) ?? "", /kherep-project-rules/);
 });
 
+// Issue #436. install.sh renders the intercom command into CLAUDE.md and the
+// Kherep routing file, so like settings.json they are built from their source.
+test("a file install.sh renders says the edit belongs in its source", () => {
+  for (const [live, source] of [[path.join(HOME, "CLAUDE.md"), "claude/CLAUDE.user.md"],
+    [path.join(HOME, "teams", "kherep", "ROUTING.md"), "claude/teams/kherep/ROUTING.md"],
+    [path.join(HOME, "settings.json"), "claude/settings.user.json"]]) {
+    const context = contextOf(run(live)) ?? "";
+    assert.ok(context.includes(`kherep/${source}\n`), `${live}: ${context}`);
+    assert.match(context, /BUILT from that source/, live);
+  }
+  assert.doesNotMatch(contextOf(run(path.join(HOME, "hooks", "commit-guard.mts"))) ?? "", /BUILT/);
+});
+
 test("backslashes, upper case and a . segment still match", () => {
   const shouted = path.join(HOME, "HOOKS", "Commit-Guard.mts").replace(/\//g, "\\").toUpperCase();
   assert.ok(names(shouted, "claude/hooks/"), "a shouted Windows path is not recognised");
@@ -168,7 +181,7 @@ function argsOf(line: string): string[] {
 function invocationsOf(script: string): Invocation[] {
   const found: Invocation[] = [];
   for (const line of script.replace(/\\\r?\n\s*/g, " ").split(/\r?\n/)) {
-    const m = /^\s*(cmp_file|cmp_tree|cmp_block)\s+(.+)$/.exec(line);
+    const m = /^\s*(cmp_file|cmp_tree|cmp_block|cmp_rendered)\s+(.+)$/.exec(line);
     if (!m) continue;
     const args = argsOf(m[2]);
     if (args.length < 3) continue; // function definition / malformed - not a call
