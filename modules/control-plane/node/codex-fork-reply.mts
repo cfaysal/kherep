@@ -125,8 +125,8 @@ async function attempt(deps: RunnerDeps, owner: string, messageIds: string[], fi
   const messageId = oldestAccepted(deps, owner, messageIds);
   if (!messageId) return;
   const codex: CodexDeps = { ...deps.codex, onUnconfirmedShutdown: () => {
-    deps.codex?.onUnconfirmedShutdown?.();
     retainServiceAdmission(admission);
+    deps.codex?.onUnconfirmedShutdown?.();
   } };
   const guards = await forkGuards(deps, codex, log);
   if (!guards.ok) {

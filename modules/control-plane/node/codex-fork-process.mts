@@ -109,8 +109,9 @@ export async function runForkAttempt(deps: { codex?: CodexDeps }, input: ForkRun
   }
   if (!await client.shutdown() && !neverStarted) {
     input.log(`kherep-node: Codex fork helper close unconfirmed (${client.killReport === "unconfirmed" ? "group kill not confirmed" : "helper did not end"})`);
-    deps.codex?.onUnconfirmedShutdown?.();
+    // The lease first: a reporter that throws must not cost the retention.
     retainServiceAdmission(input.admission);
+    try { deps.codex?.onUnconfirmedShutdown?.(); } catch { /* the retention above holds */ }
     return { state: "uncertain", from: outcome.from, reason: "close-unconfirmed" };
   }
   return discardOnViolation(outcome, watch);
