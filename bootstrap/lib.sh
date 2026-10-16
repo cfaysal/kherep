@@ -25,6 +25,16 @@ portable_paths() {
   ' "$f" "$tmp" "$CLAUDE_HOME" "$REPO_ROOT" && mv "$tmp" "$f"
 }
 
+# Issue #436. The reverse of the intercom render (render-intercom.mts): this
+# host's launcher command and example target back to __KHEREP_NODE__ and
+# __KHEREP_EXAMPLE_TARGET__, so a captured file names neither the config root
+# nor the node. A config root the command cannot quote fails the capture.
+portable_intercom() {
+  local f="$1" tmp
+  tmp="$(mktemp)"
+  node "$REPO_ROOT/bootstrap/render-profile.mts" intercom-capture "$f" "$tmp" && mv "$tmp" "$f"
+}
+
 # Copy a manifest entry (file or dir) from $2 root to $3 root, preserving rel path $1.
 copy_entry() {
   local rel="$1" from="$2" to="$3"

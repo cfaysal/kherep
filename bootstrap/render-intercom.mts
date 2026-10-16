@@ -32,3 +32,13 @@ export function intercomValues(root: string = configRoot(), platform: NodeJS.Pla
 export function renderIntercom(text: string, values: IntercomValues): string {
   return text.split(INTERCOM_COMMAND).join(values.command).split(INTERCOM_EXAMPLE_TARGET).join(values.exampleTarget);
 }
+
+// The reverse for capture.sh: this host's command, and the example target
+// where the command sends to it, back to their placeholders, so a captured
+// CLAUDE.md or ROUTING.md carries neither the config root nor the node name
+// into the shared source. captureIntercom(renderIntercom(source)) is source.
+export function captureIntercom(text: string, values: IntercomValues): string {
+  return text.split(`${values.command} msg send ${values.exampleTarget}`)
+    .join(`${INTERCOM_COMMAND} msg send ${INTERCOM_EXAMPLE_TARGET}`)
+    .split(values.command).join(INTERCOM_COMMAND);
+}

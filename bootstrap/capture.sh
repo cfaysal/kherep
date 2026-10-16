@@ -33,6 +33,9 @@ else
   cp -a "$CLAUDE_HOME/settings.json" "$CLAUDE_SRC/settings.user.json"; portable_paths "$CLAUDE_SRC/settings.user.json"
 fi
 cp -a "$CLAUDE_HOME/CLAUDE.md"     "$CLAUDE_SRC/CLAUDE.user.md"
+# Issue #436. Both name this host's intercom command; the source keeps the placeholders.
+portable_intercom "$CLAUDE_SRC/CLAUDE.user.md"
+portable_intercom "$CLAUDE_SRC/teams/kherep/ROUTING.md"
 # project-scoped settings + CLAUDE live in the Work workspace
 WS="$(kherep_shell_path "$(kherep_env WORKSPACE "$(kherep_default_workspace)")")"
 kherep_validate_shell_path KHEREP_WORKSPACE "$WS" || exit $?

@@ -9,7 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { retireCentralBrainHooks } from "./central-brain-retirement.mts";
-import { intercomValues, renderIntercom } from "./render-intercom.mts";
+import { captureIntercom, intercomValues, renderIntercom } from "./render-intercom.mts";
 import { substituteTemplatePaths, toBashPath, workspaceEnvPath } from "./render-profile-paths.mts";
 import { filterMacPermissions, filterManagedDisallowedPermissions, mergeSettings, unique, type Settings } from "./render-profile-settings.mts";
 import { readRetiredHomeEntries, retireHookCommands, unwireMovedHooks } from "./retired-hooks.mts";
@@ -132,12 +132,22 @@ export function renderIntercomFile(args: string[]): void {
   fs.writeFileSync(outputFile, rendered, { mode: fs.statSync(sourceFile).mode & 0o777 });
 }
 
+// Issue #436. The reverse, for capture.sh: a live CLAUDE.md or ROUTING.md back
+// to the shared source form, without this host's config root or node name.
+export function captureIntercomFile(args: string[]): void {
+  const [liveFile, outputFile] = args;
+  if (!liveFile || !outputFile) throw new Error("intercom-capture usage: <live> <output>");
+  const captured = captureIntercom(fs.readFileSync(liveFile, "utf8"), intercomValues());
+  fs.writeFileSync(outputFile, captured, { mode: fs.statSync(liveFile).mode & 0o777 });
+}
+
 function main(argv: string[]): void {
   const [mode, ...args] = argv;
   if (mode === "settings") renderSettings(args);
   else if (mode === "local-inference") renderLocalInference(args);
   else if (mode === "intercom") renderIntercomFile(args);
-  else throw new Error("mode must be settings, local-inference or intercom");
+  else if (mode === "intercom-capture") captureIntercomFile(args);
+  else throw new Error("mode must be settings, local-inference, intercom or intercom-capture");
 }
 
 // Node loads the main module from its real path, so a script started through a
