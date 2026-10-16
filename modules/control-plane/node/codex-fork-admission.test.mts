@@ -7,8 +7,10 @@ import test from "node:test";
 import { MESSAGE_PROGRESS_CODES } from "../protocol-messages.mts";
 import { audit, listenerDir, takeTurn, wakeAudit, type AutonomyAction } from "./autonomy.mts";
 import { busyPolicyFingerprint } from "./codex-busy-policy.mts";
-import { admitForkReply, FORK_PROGRESS, type ForkAdmissionDeps, type ForkRefusal } from "./codex-fork-admission.mts";
-import { advanceForkAttempt, claimForkAttempt, forkAttemptsPath } from "./codex-fork-attempts.mts";
+import {
+  admitForkReply, FORK_PROGRESS, RELAY_MAX_AGE_MS, relayRefusal, type ForkAdmissionDeps, type ForkRefusal,
+} from "./codex-fork-admission.mts";
+import { advanceForkAttempt, claimForkAttempt, forkAttemptsPath, type ForkAttempt } from "./codex-fork-attempts.mts";
 import { CODEX_ACTIVE_MS, markStopEnded, recordCodexSession, refreshCodexEvent } from "./codex-sessions.mts";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { MAX_REPLY_DEPTH, readJson, storeMessage, writeJsonAtomic } from "./inbox.mts";
@@ -180,4 +182,59 @@ test("the fork audit actions are metadata lines like every other wake decision",
   const lines = fs.readFileSync(wakeAudit(f.paths), "utf8").trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(lines.map((line) => line.action), actions);
   assert.deepEqual(Object.keys(lines[0]), ["ts", "sessionId", "messageIds", "action"]);
+});
+
+// Issue #408, PR 4, design r3 section 2.3: the relay guards, one pure function
+// for the sweep and the send gate, in their contract order. Every guard is
+// broken at first and repaired in order; admission's attempt, cwd, readiness
+// and budget clauses never apply, and nothing spends a turn.
+test("relayRefusal returns its codes in order and never an admission-only code", (t) => {
+  const f = fixture(t);
+  const kill = path.join(f.paths.dir, "wake.disabled");
+  const attempt = { version: 1, attemptId: "00000000-0000-4000-8000-0000000000a1", owner: OWNER, messageId: MSG,
+    attemptedAt: NOW - RELAY_MAX_AGE_MS - 1, policyFingerprint: "x", producer: {}, state: "completed", updatedAt: NOW, forkId: "fork-a",
+    answer: "Green." } as ForkAttempt;
+  let capabilities: readonly string[] | null = null;
+  const deps = { ...f.deps, workerCapabilities: () => capabilities };
+  const task = (session: string) => writeTask(f.paths, { taskId: "00000000-0000-4000-8000-0000000000f1", runtime: "codex",
+    name: "task-000000f1", cwd: f.work, permissionMode: "auto", state: "running", startedAt: new Date(NOW).toISOString(),
+    deadline: new Date(NOW + 60_000).toISOString(), updatedAt: new Date(NOW).toISOString(), sessionId: session }, NOW);
+  // Conditions that only admission refuses hold throughout.
+  patchSession(f, { cwd: os.tmpdir() });
+  deps.readiness = readiness(null);
+  claimForkAttempt(f.paths, { owner: OWNER, messageId: "00000000-0000-4000-8000-000000000002", attemptedAt: NOW - 1,
+    policyFingerprint: f.fingerprint, producer: {} });
+  assert.equal(takeTurn(f.paths, OWNER, NOW - 1_000), "ok");
+  const before = turns(f);
+  const fork = f.policy.wake.codexFork;
+  rewritePolicy(f, (p) => { delete p.wake.codexFork; }, false);
+  fs.writeFileSync(kill, "");
+  patchMessage(f, { state: "offered" });
+  patchSession(f, { lastSeen: new Date(NOW + 1).toISOString(), permissionMode: "bypassPermissions", lastStopEnded: undefined });
+  task(OWNER);
+  deps.platform = "win32";
+  deps.postToolHook = () => false;
+  const repairs: [ForkRefusal | null, () => void][] = [
+    ["fork-relay-stale", () => { attempt.attemptedAt = NOW - 1_000; }],
+    ["fork-off", () => rewritePolicy(f, (p) => { p.wake.codexFork = { ...fork, sessions: [OTHER] }; }, false)],
+    ["kill-switch", () => fs.rmSync(kill)],
+    ["policy-changed", () => { attempt.policyFingerprint = busyPolicyFingerprint(readPolicy(f.paths.policy, true)!); }],
+    ["not-opted-in", () => { rewritePolicy(f, (p) => { p.wake.codexFork.sessions = [OWNER]; }); attempt.policyFingerprint = f.fingerprint; }],
+    ["fork-disabled-platform", () => { deps.platform = "darwin"; }],
+    ["fork-relay-unsupported", () => { capabilities = ["messaging.proxy.v1"]; }],
+    ["message-not-eligible", () => patchMessage(f, { state: "accepted" })],
+    ["not-recorded", () => patchSession(f, { lastSeen: new Date(STOP).toISOString() })],
+    ["task-session", () => task(OTHER)],
+    ["permission-mode", () => patchSession(f, { permissionMode: undefined })],
+    ["permission-mode-unknown", () => patchSession(f, { permissionMode: "default" })],
+    ["post-tool-hook-missing", () => { deps.postToolHook = () => true; }],
+    ["fork-not-idle", () => markStopEnded(f.paths, OWNER)],
+    [null, () => {}],
+  ];
+  for (const [code, repair] of repairs) {
+    assert.equal(relayRefusal(deps, OWNER, attempt, NOW), code);
+    repair();
+  }
+  assert.deepEqual(turns(f), before, "no turn is spent");
+  assert.equal(relayRefusal(deps, OWNER, { ...attempt, answer: "x".repeat(8_193) }, NOW), "policy-changed", "the answer bound");
 });

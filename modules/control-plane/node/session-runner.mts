@@ -56,6 +56,9 @@ export interface RunnerDeps {
   // Issue #423: the owner of a service admission; tests replace the default,
   // whose Windows identity lookup starts PowerShell.
   serviceOwner?: ServiceOwnerProbe;
+  // Issue #408, PR 4: the Worker capabilities proven on the current
+  // connection (client.mts workerCapabilities); null or absent: none proven.
+  workerCapabilities?: () => readonly string[] | null;
 }
 
 // Rejects with the CLI's own stderr (or stdout), never with the command line,

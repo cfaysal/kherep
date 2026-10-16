@@ -40,6 +40,9 @@ export type SentRecord = Partial<OutboxRecord> & {
   messageId: string; state: SentState; reason?: string; progress?: MessageProgress; updatedAt: string; noticedAt?: string;
 };
 export interface LocalSession { sessionId: string; name?: string; runtime?: string; state?: string }
+// Issue #408, PR 4 (design r3 section 2.5): the send gate of proxy answers.
+// allow decides at each send, resends included; sent is told each send.
+export interface ProxySend { allow(record: OutboxRecord, now: number): boolean; sent(messageId: string): void }
 
 const fileOf = (dir: string, messageId: string): string => path.join(dir, `${messageId}.json`);
 
@@ -247,9 +250,11 @@ function reportKey(record: { messageId: string; state: string; progress?: Messag
 // last went out on this connection; the backoff schedule (send-schedule.mts)
 // lives beside it. A status report is due at once for each new (state,
 // progress), later with the same backoff. send returns false when the socket
-// is gone; nothing counts as sent or reported unless it went out.
+// is gone; nothing counts as sent or reported unless it went out. A proxy
+// answer (proxyOf) goes out only when proxySend allows it at that moment;
+// without proxySend it is held.
 export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Map<string, number>, send: (frame: string) => boolean,
-  now: number = Date.now(), random: () => number = Math.random): void {
+  now: number = Date.now(), random: () => number = Math.random, proxySend?: ProxySend): void {
   const sendAll = (frames: string[]): boolean => frames.length > 0 && frames.every(send);
   const schedule = sendSchedule(inflight);
   if (directoryDue(schedule, now) && takeDirectoryRequest(paths) && sendAll(client.directoryRequest())) schedule.directorySentAt = now;
@@ -272,10 +277,12 @@ export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Map
       recordSent(paths, messageId, "error", "invalid outbox record");
       continue;
     }
+    if (body.proxyOf && !proxySend?.allow(record!, now)) continue;
     // The Worker deduplicates by messageId, so a resend is safe.
     if (sendAll(client.sendMessage(body))) {
       inflight.set(messageId, now);
       schedule.outbox.sent(messageId, now, random);
+      if (body.proxyOf) proxySend?.sent(messageId);
     }
   }
   const pending = unreportedStatuses(paths.inbox, now);

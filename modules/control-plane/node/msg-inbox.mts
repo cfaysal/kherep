@@ -4,7 +4,7 @@ import { deliveryContext } from "./deliver-core.mts";
 import type { NodePaths } from "./config.mts";
 import { readDirectory, type LocalSession, type SentRecord } from "./exchange.mts";
 import { listInbox, readJson, type InboxRecord } from "./inbox.mts";
-import { getProxied, type ProxiedRecord } from "./inbox-proxied.mts";
+import { failureReason, getProxied, relayStateOf } from "./inbox-proxied.mts";
 import type { MsgArgs, MsgContext } from "./msg-cli.mts";
 import { NO_SESSION, nodeLabel, senderSession, sessionIdFromEnv } from "./msg-resolve.mts";
 import { repliesTo } from "./sent-notices.mts";
@@ -72,9 +72,10 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
     io.out(r.messageId + "  " + r.state + "  " + r.createdAt);
     io.out("  from: node " + nodeLabel(directory, r.from.nodeId) + ", session " + r.from.session);
     if (r.inReplyTo) io.out("  in reply to: " + r.inReplyTo);
-    // Issue #408: a proxy answer a fork of this session sent, and one received.
-    const proxied = proxiedOf(io.paths, r.messageId);
-    if (proxied) io.out(`  proxy answer sent: ${proxied.relayMessageId} at ${proxied.at}`);
+    // Issue #408: the relay state of a proxy answer a fork of this session prepared, and one received.
+    const relay = relayStateOf(io.paths, r.messageId);
+    if (relay) io.out(`  proxy answer: ${relay.state} ${relay.relayMessageId} at ${relay.sent?.updatedAt ?? claimedAt(io.paths, r.messageId)}`
+      + (relay.state === "failed" ? ` ${JSON.stringify(failureReason(relay.sent))}` : ""));
     if (r.proxyOf) io.out("  proxy for: " + r.proxyOf);
     if (r.closedTo !== undefined) io.out("  forwarded to: session " + r.toSession);
     if (r.delivery) {
@@ -87,9 +88,9 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
   return 0;
 }
 
-// Display only: an unreadable sidecar prints no line.
-function proxiedOf(paths: NodePaths, messageId: string): ProxiedRecord | null {
-  try { return getProxied(paths.inbox, messageId); } catch { return null; }
+// Display only: the time of the sidecar's claim.
+function claimedAt(paths: NodePaths, messageId: string): string {
+  try { return getProxied(paths.inbox, messageId)?.at ?? "unknown"; } catch { return "unknown"; }
 }
 
 // Issue #417: which path made the record's last offer, and when; nothing before any offer.

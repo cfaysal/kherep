@@ -6,6 +6,7 @@ import { deliverToClosed } from "./closed-delivery.mts";
 import { codexHome } from "./codex-app.mts";
 import { forgetCodexSession } from "./codex-sessions.mts";
 import { recoverForkAttemptsAtStart } from "./codex-fork-attempts.mts";
+import { relaySendGate } from "./codex-fork-relay.mts";
 import { pollCodexQueue } from "./codex-queue.mts";
 import { pollCodexInbound } from "./codex-wake.mts";
 import { codexIntakeWindow } from "./codex-intake-window.mts";
@@ -136,7 +137,10 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // Issue #427: unless a seeded ready verdict (issue #420), a drain or an install pause defers it,
   // the first check runs the Windows identity lookup before connect().
   for (const runtime of enabledRuntimes(policy)) void readiness.check(runtime);
-  const runner: RunnerDeps = { paths, policy, log, readiness };
+  // Issue #408, PR 4: the capability proven on the current connection, read lazily from the client below.
+  const runner: RunnerDeps = { paths, policy, log, readiness, workerCapabilities: () => client.workerCapabilities };
+  // The proxy answers' send gate: every relay guard at every send (codex-fork-relay.mts).
+  const proxySend = relaySendGate(runner);
   recoverOperations(paths);
   recoverForkAttemptsAtStart(paths, Date.now(), log);
   let taskControlInflight = new Set<string>();
@@ -253,7 +257,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           let published = publishRegistration(await client.refreshPolicy(applied));
           observeClaudeDeliveryProgress({ ...runner, policy: current });
           observeCodexTaskProgress(runner);
-          pollExchange(client, paths, inflight, send);
+          pollExchange(client, paths, inflight, send, Date.now(), Math.random, proxySend);
           pollTasks(client, paths, policy, requestsInflight, send);
           const enabled = current.sessions?.enabled === true && current.sessions.ownTaskControl === true
             && current.sessions.runtimes.length > 0;
@@ -270,7 +274,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           const window = published ? codexIntakeWindow({ client, paths, policyFile: config.policyFile, policy: applied,
             connected: () => !stopped && socket === ws && ws.readyState === WebSocket.OPEN,
             send: frame => !stopped && socket === ws && send(frame),
-            exchange: () => pollExchange(client, paths, inflight, send),
+            exchange: () => pollExchange(client, paths, inflight, send, Date.now(), Math.random, proxySend),
             queue: () => pollCodexQueue({ ...runner, policy: applied }, log), defer: handleFrame, log }) : null;
           intakeWindow = window;
           try { await pollCodexInbound(runner, log); }
@@ -307,7 +311,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
       chain = chain.then(async () => {
         publishRegistration(await client.refreshPolicy(loadPolicy(config.policyFile)));
         const wasAuthed = client.authenticated;
-        const frames = await client.onFrame(data);
+        // Issue #408 (design r3 section 3.3): live is decided when the lane reaches the frame.
+        const frames = await client.onFrame(data, socket === ws && ws.readyState === WebSocket.OPEN);
         let sent = true;
         for (const frame of frames) if (!send(frame)) { sent = false; break; }
         if (!wasAuthed && client.authenticated && sent) client.registrationSent();

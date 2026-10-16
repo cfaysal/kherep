@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { OPERATOR_NODE_ID, type MESSAGE_PROGRESS_CODES } from "../protocol-messages.mts";
+import { MESSAGING_PROXY_CAPABILITY, OPERATOR_NODE_ID, type MESSAGE_PROGRESS_CODES } from "../protocol-messages.mts";
 import { bypassesPermissions, takeTurn } from "./autonomy.mts";
 import { codexHome } from "./codex-app.mts";
 import { busyPolicyFingerprint, busyWakeDisabled } from "./codex-busy-policy.mts";
@@ -32,7 +32,8 @@ export type ForkRefusal =
   | "runtime-pending" | "runtime-not-ready" // 9, checked before the budget
   | "budget-spacing" | "budget-exhausted" // 8, last
   | "fork-producer" | "fork-mcp-unknown" | "fork-features-unknown" // 10 to 12, returned by the producer before admission
-  | "fork-relay-unsupported"; // 13 (issue #408, PR 4): the Worker cannot take a proxy answer; also before admission
+  | "fork-relay-unsupported" // 13 (issue #408, PR 4): the Worker cannot take a proxy answer; also before admission
+  | "fork-relay-stale"; // PR 4, relay only: a completed answer older than RELAY_MAX_AGE_MS is never sent
 export type ForkAdmission = { ok: true; cwd: string } | { ok: false; reason: ForkRefusal };
 
 // The message keeps waiting whatever the refusal: these are existing waiting codes.
@@ -45,8 +46,13 @@ export const FORK_PROGRESS: Record<ForkRefusal, typeof MESSAGE_PROGRESS_CODES.wa
   "cwd-refused": "cwd-refused", "runtime-pending": "retry-pending", "runtime-not-ready": "awaiting-user-turn",
   "budget-spacing": "retry-pending", "budget-exhausted": "budget-exhausted",
   "fork-producer": "awaiting-user-turn", "fork-mcp-unknown": "awaiting-user-turn", "fork-features-unknown": "awaiting-user-turn",
-  "fork-relay-unsupported": "awaiting-user-turn",
+  "fork-relay-unsupported": "awaiting-user-turn", "fork-relay-stale": "awaiting-user-turn",
 };
+
+// Decision D17: a completed answer is relayed within this bound from
+// attemptedAt, the Worker's MESSAGE_TTL_MS; the held record's cleanup (D19)
+// uses the same bound.
+export const RELAY_MAX_AGE_MS = 24 * 60 * 60_000;
 
 // Decision D10 (2026-10-16): the operator's opt-in of the full thread id in
 // wake.codexFork.sessions is the grant to fork that chat's history; the
@@ -76,7 +82,8 @@ function readOr<T>(read: () => T, failed: T): T {
   try { return read(); } catch { return failed; }
 }
 
-function gather(deps: ForkAdmissionDeps, owner: string, messageId: string, fingerprint: string): Facts {
+// full false: the relay's subset, without the attempt store and readiness, which only admission reads.
+function gather(deps: ForkAdmissionDeps, owner: string, messageId: string, fingerprint: string, full = true): Facts {
   const { paths } = deps;
   const session = readOr(() => readCodexSession(paths, owner), null);
   return {
@@ -85,8 +92,8 @@ function gather(deps: ForkAdmissionDeps, owner: string, messageId: string, finge
     policy: readPolicy(paths.policy, true), session, taskSession: readOr(() => listTasks(paths).some((task) => task.sessionId === owner), true),
     mode: deps.payload && Object.hasOwn(deps.payload, "permission_mode") ? deps.payload.permission_mode : session?.permissionMode,
     postToolHook: readOr(deps.postToolHook ?? (() => codexPostToolHookInstalled(path.join(codexHome(), "config.toml"), REPO_ROOT)), false),
-    message: readOr(() => getMessage(paths.inbox, messageId), null), attempts: readOr(() => forkAttempts(paths, owner), null),
-    readiness: notReadyNow(deps.readiness, "codex"), realpath: deps.realpath,
+    message: readOr(() => getMessage(paths.inbox, messageId), null), attempts: full ? readOr(() => forkAttempts(paths, owner), null) : null,
+    readiness: full ? notReadyNow(deps.readiness, "codex") : null, realpath: deps.realpath,
   };
 }
 
@@ -102,13 +109,15 @@ function sessionRefusal(f: Facts, policy: NodePolicy): ForkRefusal | null {
   return mode === undefined && !explicitlyListed(policy, [f.owner]) ? "permission-mode-unknown" : null;
 }
 
+// The operator API cannot be answered with msg send, nor by a proxy answer.
+const eligible = (m: InboxRecord | null, owner: string): m is InboxRecord => m?.state === "accepted" && m.toSession === owner
+  && m.taskId === undefined && m.from.nodeId !== OPERATOR_NODE_ID;
+const depthOk = (m: InboxRecord): boolean => Number.isSafeInteger(m.depth ?? 0) && (m.depth ?? 0) >= 0 && (m.depth ?? 0) < MAX_REPLY_DEPTH;
+
 function messageRefusal(f: Facts): ForkRefusal | null {
-  const m = f.message, depth = m?.depth ?? 0;
-  // The operator API cannot be answered with msg send, nor by a proxy answer.
-  if (m?.state !== "accepted" || m.toSession !== f.owner || m.taskId !== undefined || m.from.nodeId === OPERATOR_NODE_ID) {
-    return "message-not-eligible";
-  }
-  if (!Number.isSafeInteger(depth) || depth < 0 || depth >= MAX_REPLY_DEPTH) return "depth-limit";
+  const m = f.message;
+  if (!eligible(m, f.owner)) return "message-not-eligible";
+  if (!depthOk(m)) return "depth-limit";
   if (!f.attempts || f.attempts.length >= MAX_FORK_ATTEMPTS) return "attempts-unreadable";
   if (f.attempts.some((a) => a.messageId === m.messageId)) return "attempt-exists";
   return f.attempts.some((a) => a.state === "launching" || a.state === "running") ? "fork-in-flight" : null;
@@ -147,4 +156,38 @@ export function admitForkReply(deps: ForkAdmissionDeps, owner: string, messageId
   const budget = takeTurn(deps.paths, owner, facts.now, forkBudget(facts.policy!));
   if (budget === "ok") return decision;
   return { ok: false, reason: budget === "exhausted" ? "budget-exhausted" : "budget-spacing" };
+}
+
+// RG-4 alone (issue #408, PR 4, design r3 section 2.3 and review R3-WX1): the
+// original is still the owner's to read. The relay sweep withdraws on this
+// before any send guard is consulted: stopping a send needs no authorization.
+export function relayMessageEligible(paths: NodePaths, owner: string, messageId: string): boolean {
+  const m = readOr(() => getMessage(paths.inbox, messageId), null);
+  return eligible(m, owner) && depthOk(m);
+}
+
+export type RelayGuardDeps = ForkAdmissionDeps & { workerCapabilities?: () => readonly string[] | null };
+
+// The relay guards of design r3 section 2.3, one pure function for the sweep
+// and the exchange's send gate: no budget, no process, no attempt, cwd or
+// readiness clause. The codes and their order are the contract: RG-1 age,
+// RG-2 fresh policy (enrollment, kill switch, fingerprint, opt-in, platform,
+// answer bound), RG-3 the capability of the current connection, RG-4 the
+// original, RG-5 the owner's recorded session with admission's own clauses.
+export function relayRefusal(deps: RelayGuardDeps, owner: string, attempt: ForkAttempt, now: number): ForkRefusal | null {
+  if (!(now - attempt.attemptedAt <= RELAY_MAX_AGE_MS)) return "fork-relay-stale";
+  const f = gather({ ...deps, now: () => now, payload: undefined }, owner, attempt.messageId, attempt.policyFingerprint, false);
+  const policy = f.policy, fork = policy?.wake?.codexFork;
+  if (!f.enrolled || !policy || !fork) return "fork-off";
+  if (f.killSwitch) return "kill-switch";
+  if (busyPolicyFingerprint(policy) !== f.fingerprint) return "policy-changed";
+  if (!forkOptedIn(policy, owner)) return "not-opted-in";
+  if (!fork.platforms.includes(f.platform)) return "fork-disabled-platform";
+  if (typeof attempt.answer !== "string" || Buffer.byteLength(attempt.answer, "utf8") > fork.maxAnswerBytes) return "policy-changed";
+  if (deps.workerCapabilities?.()?.includes(MESSAGING_PROXY_CAPABILITY) !== true) return "fork-relay-unsupported";
+  if (!eligible(f.message, owner) || !depthOk(f.message)) return "message-not-eligible";
+  const session = sessionRefusal(f, policy);
+  if (session) return session;
+  if (!f.postToolHook) return "post-tool-hook-missing";
+  return idleEvidence(f.session, now, fork.idleAfterSeconds * 1000) ? null : "fork-not-idle";
 }

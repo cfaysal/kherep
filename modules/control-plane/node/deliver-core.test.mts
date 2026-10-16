@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { deliveryContext, frameForFork, frameRecords } from "./deliver-core.mts";
+import { getSent, recordSent, writeOutbox } from "./exchange.mts";
 import { storeMessage } from "./inbox.mts";
-import { claimProxied } from "./inbox-proxied.mts";
+import { claimProxied, setUnconfirmed, setUnresolved } from "./inbox-proxied.mts";
+
 import { RECORD } from "./codex-fork-run-fixture.mts";
 import { taskNode } from "./task-fixture.mts";
 
@@ -25,21 +27,73 @@ test("the owner's own framing still carries the reply line and In reply to", (t)
   assert.match(text, /In reply to: 40800000-0000-4000-8000-000000000009/);
 });
 
-// Issue #408, PR 4: the owner sees that a proxy answer went out; the peer sees
-// what a received proxy answers. The fork's own framing carries neither.
-test("with a proxied sidecar the owner's block names the proxy answer and still carries the reply line", (t) => {
+/// Issue #408, PR 4, design r3 section 2.6: the owner's line is derived from
+// the relay's state on disk (sidecar, outbox, sent/), never from the sidecar
+// alone. Only a proxy that reached the peer says "do not answer". The fork's
+// own framing carries none of it.
+const RELAY = "40800001-0000-4000-8000-0000000000f1";
+const P = "A proxy answer by an ephemeral fork of this session";
+const PENDING = `${P} is prepared for this message and not queued yet (relay ${RELAY}). `
+  + "Answer if the message needs one; your reply withdraws it.";
+const HANDED = `${P} is queued locally or awaiting confirmation for this message (relay ${RELAY}); delivery is not confirmed. `
+  + "Answer if the message needs one; an answer already delivered cannot be withdrawn.";
+const TAKEN = `${P} was queued by the control plane for this message (relay ${RELAY}) and had not reached the peer at its last status; `
+  + "if you reply before it does, the control plane refuses the proxy.";
+const UNCONFIRMED = `${P} may have reached the control plane for this message (relay ${RELAY}); delivery is not confirmed. `
+  + "Answer if the message needs one; an answer already delivered cannot be withdrawn.";
+const UNRESOLVED = `No delivery status was recorded for a proxy answer by an ephemeral fork of this session before local cleanup `
+  + `(relay ${RELAY}); the outcome is unknown. The control plane may retain further evidence. Answer if the message needs one.`;
+
+function owner(t: test.TestContext) {
   const node = taskNode(t);
   storeMessage(node.paths.inbox, { ...RECORD }, Date.parse(RECORD.receivedAt));
-  const relay = "40800001-0000-4000-8000-0000000000f1";
   const at = new Date(Date.parse(RECORD.receivedAt) + 1000).toISOString();
-  claimProxied(node.paths.inbox, RECORD.messageId, { relayMessageId: relay, forkId: "fork-a", attemptId: "40800001-0000-4000-8000-0000000000f2", at });
-  const line = `A proxy answer was already sent for this message at ${at} (message ${relay}) by an ephemeral fork of this session; `
+  const fields = { relayMessageId: RELAY, forkId: "fork-a", attemptId: "40800001-0000-4000-8000-0000000000f2", at };
+  claimProxied(node.paths.inbox, RECORD.messageId, fields);
+  const outbox = () => writeOutbox(node.paths, { messageId: RELAY, fromSession: RECORD.toSession, to: RECORD.from, text: "x",
+    proxyOf: RECORD.messageId, createdAt: at });
+  const context = () => deliveryContext("UserPromptSubmit", [RECORD.toSession], { paths: node.paths, replyCommand: "kherep-node",
+    nonce: () => "n0nce" });
+  const framed = () => frameRecords(node.paths, [RECORD], "kherep-node", 8 * 1024).text;
+  return { node, fields, at, outbox, context, framed };
+}
+const expectLine = (text: string, line: string): void => {
+  assert.ok(text.includes(`Message id: ${RECORD.messageId}\nIn reply to: ${RECORD.inReplyTo}\n${line}\n`), text);
+  assert.match(text, /To reply: kherep-node msg send --reply-to 40800001-0000-4000-8000-000000000001 -- <reply text>/);
+};
+
+test("the owner's line follows the relay state: pending, handed, unconfirmed, taken, delivered", (t) => {
+  const o = owner(t);
+  const first = o.context();
+  expectLine(first, PENDING);
+  assert.doesNotMatch(first, /do not answer/);
+  o.outbox();
+  expectLine(o.framed(), HANDED);
+  setUnconfirmed(o.node.paths.inbox, RECORD.messageId, o.fields, o.at);
+  expectLine(o.framed(), UNCONFIRMED);
+  recordSent(o.node.paths, RELAY, "queued", undefined, Date.parse(o.at));
+  expectLine(o.framed(), TAKEN);
+  recordSent(o.node.paths, RELAY, "accepted", undefined, Date.parse(o.at) + 5);
+  const delivered = `${P} reached the peer for this message at ${getSent(o.node.paths, RELAY)!.updatedAt} (relay ${RELAY}); `
     + "do not answer again unless the user asks.";
-  const context = deliveryContext("UserPromptSubmit", [RECORD.toSession], { paths: node.paths, replyCommand: "kherep-node", nonce: () => "n0nce" });
-  assert.ok(context.includes(`Message id: ${RECORD.messageId}\nIn reply to: ${RECORD.inReplyTo}\n${line}\n`), context);
-  assert.match(context, /To reply: kherep-node msg send --reply-to 40800001-0000-4000-8000-000000000001 -- <reply text>/);
-  assert.ok(frameRecords(node.paths, [RECORD], "kherep-node", 8 * 1024).text.includes(line));
+  expectLine(o.framed(), delivered);
   assert.doesNotMatch(frameForFork(RECORD, "n0nce"), /proxy answer/i);
+});
+
+test("a refused or rejected proxy is a failed line with the quoted reason; after the cleanup the line is unresolved", (t) => {
+  for (const [state, reason] of [["refused", "proxy parent unknown"], ["error", "invalid message.send body"]] as const) {
+    const o = owner(t);
+    o.outbox();
+    recordSent(o.node.paths, RELAY, state, reason);
+    const line = `${P} could not be delivered for this message (relay ${RELAY}, ${state}: ${JSON.stringify(reason)}); `
+      + "answer if the message needs one.";
+    expectLine(o.framed(), line);
+    expectLine(o.context(), line);
+  }
+  const o = owner(t);
+  setUnconfirmed(o.node.paths.inbox, RECORD.messageId, o.fields, o.at);
+  setUnresolved(o.node.paths.inbox, RECORD.messageId, o.at);
+  expectLine(o.framed(), UNRESOLVED);
 });
 
 test("a received proxy answer names the message it answers; the fork's framing does not", (t) => {
