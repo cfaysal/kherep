@@ -77,13 +77,14 @@ export function readForkAttempt(paths: NodePaths, owner: string, messageId: stri
 }
 
 // Every attempt of an owner as one complete bounded snapshot. A missing
-// directory is an empty store; a leftover temp file of an atomic write is skipped.
+// directory is an empty store; a dotfile, such as a leftover temp file of an
+// atomic write or a Finder .DS_Store, is skipped.
 export function forkAttempts(paths: NodePaths, owner: string): ForkAttempt[] {
   const dir = forkAttemptsPath(paths, owner);
   let names: string[];
   try {
     if (!fs.lstatSync(dir).isDirectory()) throw new Error("invalid fork attempt directory");
-    names = fs.readdirSync(dir).filter((name) => !/^\..+\.tmp$/.test(name));
+    names = fs.readdirSync(dir).filter((name) => !name.startsWith("."));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;

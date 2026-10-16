@@ -6,7 +6,7 @@ import test from "node:test";
 
 import {
   CODEX_ACTIVE_MS, CODEX_IDLE_AFTER_MS, CODEX_RETENTION_MS, codexSessionName, codexSessionRefs, idleEvidence, isCodexSession,
-  listCodexSessions, listCodexTaskSessions, markStopContinued, readCodexSession, recordCodexSession, refreshCodexEvent,
+  listCodexSessions, listCodexTaskSessions, markStopEnded, readCodexSession, recordCodexSession, refreshCodexEvent,
   type CodexSessionRecord,
 } from "./codex-sessions.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
@@ -183,15 +183,18 @@ test("a refresh changes only the event of an existing record and never creates o
   assert.equal(refreshCodexEvent(paths, "../escape", "PostToolUse", NOW), false);
 });
 
-test("idleEvidence: only a Stop at least idleAfterMs ago of a session seen within the active window is idle", () => {
+test("idleEvidence: only an ended Stop at least idleAfterMs ago of a session seen within the active window is idle", () => {
   const stopAt = NOW - CODEX_IDLE_AFTER_MS;
   const stopped: CodexSessionRecord = { sessionId: CODEX, runtime: "codex", lastSeen: new Date(stopAt).toISOString(),
-    lastEvent: "Stop", lastEventAt: new Date(stopAt).toISOString(), lastStopAt: new Date(stopAt).toISOString() };
+    lastEvent: "Stop", lastEventAt: new Date(stopAt).toISOString(), lastStopAt: new Date(stopAt).toISOString(), lastStopEnded: true };
   assert.equal(CODEX_IDLE_AFTER_MS, 90_000);
   assert.equal(idleEvidence(stopped, NOW), true, "a Stop exactly idleAfterMs ago");
   assert.equal(idleEvidence(null, NOW), false, "no record");
   const { lastEvent: _event, ...older } = stopped;
   assert.equal(idleEvidence(older, NOW), false, "a record without lastEvent is unknown");
+  const { lastStopEnded: _ended, ...unmarked } = stopped;
+  assert.equal(idleEvidence(unmarked, NOW), false, "a Stop not marked as ended is unknown");
+  assert.equal(idleEvidence({ ...stopped, lastStopEnded: "yes" as unknown as true }, NOW), false, "only true marks a Stop as ended");
   for (const event of ["SessionStart", "UserPromptSubmit", "PostToolUse"] as const) {
     assert.equal(idleEvidence({ ...stopped, lastEvent: event }, NOW), false, event);
   }
@@ -208,28 +211,47 @@ test("idleEvidence: only a Stop at least idleAfterMs ago of a session seen withi
   assert.equal(idleEvidence({ ...stopped, lastSeen: "not a time" }, NOW), false, "unreadable lastSeen");
 });
 
-// Fable review of PR 1, point 1: a Stop that returned a blocking continuation
-// ends no turn. The flag keeps such a session from reading idle until a Stop
-// that does not block or a UserPromptSubmit clears it.
-test("a Stop that continued the turn is never idle until a later Stop or UserPromptSubmit clears the flag", (t) => {
+// Fable review of PR 1, point 1, and of PR 2, M1: a Stop is idle evidence
+// only once the hook marks it as ended, so a failed mark or a blocking
+// continuation leaves it unknown. Every hook event clears the mark.
+test("a Stop is idle only once marked as ended, and every hook event clears the mark", (t) => {
   const paths = setup(t);
   const later = NOW + 10 * CODEX_IDLE_AFTER_MS;
-  assert.equal(markStopContinued(paths, CODEX), false, "no record to mark");
+  assert.equal(markStopEnded(paths, CODEX), false, "no record to mark");
   assert.equal(fs.existsSync(file(paths, CODEX)), false, "no record is created");
   recordCodexSession(paths, CODEX, "/work/repo", NOW, "default", "Stop");
-  assert.equal(idleEvidence(readCodexSession(paths, CODEX), later), true);
-  assert.equal(markStopContinued(paths, CODEX), true);
-  assert.equal(readCodexSession(paths, CODEX)?.lastStopContinued, true);
-  assert.equal(idleEvidence(readCodexSession(paths, CODEX), later), false, "a continued Stop is not idle");
-  recordCodexSession(paths, CODEX, "/work/repo", NOW + 1000, undefined, "SessionStart");
-  recordCodexSession(paths, CODEX, "/work/repo", NOW + 2000, undefined, undefined);
-  refreshCodexEvent(paths, CODEX, "PostToolUse", NOW + 3000);
-  assert.equal(readCodexSession(paths, CODEX)?.lastStopContinued, true, "only Stop and UserPromptSubmit clear it");
-  recordCodexSession(paths, CODEX, "/work/repo", NOW + 4000, undefined, "Stop");
-  assert.equal(readCodexSession(paths, CODEX)?.lastStopContinued, undefined, "a Stop that does not block clears it");
-  assert.equal(idleEvidence(readCodexSession(paths, CODEX), later), true);
-  markStopContinued(paths, CODEX);
-  recordCodexSession(paths, CODEX, "/work/repo", NOW + 5000, undefined, "UserPromptSubmit");
-  assert.equal(readCodexSession(paths, CODEX)?.lastStopContinued, undefined, "a UserPromptSubmit clears it");
-  assert.equal(markStopContinued(paths, "../escape"), false);
+  assert.equal(readCodexSession(paths, CODEX)?.lastStopEnded, undefined, "a Stop starts without the mark");
+  assert.equal(idleEvidence(readCodexSession(paths, CODEX), later), false, "an unmarked Stop is not idle");
+  assert.equal(markStopEnded(paths, CODEX), true);
+  assert.equal(readCodexSession(paths, CODEX)?.lastStopEnded, true);
+  assert.equal(idleEvidence(readCodexSession(paths, CODEX), later), true, "an ended Stop is idle");
+  recordCodexSession(paths, CODEX, "/work/repo", NOW + 1000, undefined, undefined);
+  assert.equal(readCodexSession(paths, CODEX)?.lastStopEnded, true, "an input without an event keeps it");
+  for (const event of ["SessionStart", "UserPromptSubmit", "Stop"] as const) {
+    markStopEnded(paths, CODEX);
+    recordCodexSession(paths, CODEX, "/work/repo", NOW + 2000, undefined, event);
+    assert.equal(readCodexSession(paths, CODEX)?.lastStopEnded, undefined, `${event} clears it`);
+  }
+  markStopEnded(paths, CODEX);
+  assert.equal(refreshCodexEvent(paths, CODEX, "PostToolUse", NOW + 3000), true);
+  assert.equal(readCodexSession(paths, CODEX)?.lastStopEnded, undefined, "a PostToolUse refresh clears it");
+  assert.equal(markStopEnded(paths, "../escape"), false);
+});
+
+// Fable review of PR 2, L4: a refresh replaces the event fields as a whole, so
+// it clears exactly what recordCodexSession clears for the same event.
+test("a refresh clears the event fields its event clears, as recordCodexSession does", (t) => {
+  const paths = setup(t);
+  recordCodexSession(paths, CODEX, "/work/repo", NOW, "default", "Stop");
+  markStopEnded(paths, CODEX);
+  for (const event of ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"] as const) {
+    markStopEnded(paths, CODEX);
+    const before = readCodexSession(paths, CODEX)!;
+    refreshCodexEvent(paths, CODEX, event, NOW + 1000);
+    const refreshed = readCodexSession(paths, CODEX);
+    fs.writeFileSync(file(paths, CODEX), JSON.stringify(before));
+    recordCodexSession(paths, CODEX, before.cwd, NOW + 1000, undefined, event);
+    assert.deepEqual({ ...refreshed, lastSeen: undefined }, { ...readCodexSession(paths, CODEX), lastSeen: undefined }, event);
+    assert.equal(refreshed?.lastStopEnded, undefined, event);
+  }
 });
