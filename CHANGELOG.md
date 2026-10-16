@@ -47,6 +47,20 @@ increments the minor version; every other release increments the patch version.
   rejected one. New audit actions `fork`, `fork-declined`, `fork-failed`,
   `fork-uncertain`, `fork-superseded`, `fork-not-idle` and
   `fork-disabled-platform` exist for the later increments; nothing writes them yet.
+- Stable Control Plane command (issue #436, first part). `kherep-node service
+  install`, `upgrade` and `rollback` write `<configRoot>/bin/kherep-node.mjs`,
+  a POSIX shim `kherep-node` and, on Windows, `kherep-node.cmd` and
+  `kherep-node.ps1`. `node "<configRoot>/bin/kherep-node.mjs" <args>` reads
+  the managed service receipt at every call and runs the receipt's Node
+  executable with the active pin's `modules/control-plane/node/cli.mts`,
+  passing the arguments, stdio and exit code through, so the command keeps
+  working across upgrade and rollback without a reinstall. The files never
+  name a pin and import nothing from one; they are rewritten only when their
+  bytes differ, and the JSON result of the three service commands reports
+  `launcher` as `written`, `unchanged` or `failed`. A missing or invalid
+  receipt, a missing pin or a pin without the CLI exits 1 with a fixed message
+  and no fallback. PATH is not changed, and the instructions, Codex rules and
+  doctor check follow separately.
 
 ### Changed
 

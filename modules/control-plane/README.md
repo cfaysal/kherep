@@ -740,6 +740,40 @@ succeeds only for a running, authenticated daemon with the exact managed
 process, source, config and service binding. It does not modify Claude Code or
 Codex hooks.
 
+`service install`, `upgrade` and `rollback` also write the stable command to
+`bin/` under the config directory (issue #436): `kherep-node.mjs`, a POSIX shim
+`kherep-node` and, on Windows, `kherep-node.cmd` and `kherep-node.ps1`. Agents
+and scripts run
+
+```sh
+node "<config directory>/bin/kherep-node.mjs" msg sessions
+```
+
+with forward slashes on Windows (`node "C:/Users/<user>/AppData/Roaming/kherep/bin/kherep-node.mjs"`)
+and the path in double quotes, since the macOS default contains a space. The
+command needs no PATH entry, no `.cmd` resolution and no PowerShell call
+operator; nothing changes PATH, and the shims are for operators who add `bin/`
+themselves. At every call the launcher reads `control-plane/service/receipt.json`
+of the config directory (derived as below) and runs the receipt's Node
+executable with the active pin's `modules/control-plane/node/cli.mts`, passing
+the arguments, stdio and exit code through. Its files never name a pin, so
+upgrade and rollback change only the receipt and the launcher keeps its bytes;
+it imports nothing from a pin and leaves digest verification to the service
+transaction. A missing or unreadable receipt, one that names no verified pin, a
+missing pin or a pin without the CLI exits 1 with
+`kherep-node: <reason>; receipt <path>; run "kherep-node service install|upgrade" from a clean checkout`,
+with no fallback to a checkout or to `node` on PATH. A rollback to a legacy
+service without a prior receipt keeps the launcher, which then fails closed.
+The files are rewritten only when their bytes differ, and the JSON result of the
+three commands reports `launcher` as `written`, `unchanged` or `failed`; a
+failed write does not undo the activation.
+
+The command works from Git Bash with and without path conversion, but Git Bash
+still rewrites a `/`-leading argument such as `--cwd /Users/...` before Node
+sees it: set `MSYS_NO_PATHCONV=1` or use PowerShell for those. PowerShell drops
+a literal `--` before the `.ps1` shim sees it, so message text that starts with
+`-` needs the canonical command or `kherep-node.cmd`.
+
 Readiness probes, session discovery and native Codex Queue reconciliation take
 the same admission when their lane actually executes. Work queued before a
 drain waits and resumes without consuming attempt or budget records or
