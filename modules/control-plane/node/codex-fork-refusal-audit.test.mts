@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { audit, listenerDir, wakeAudit } from "./autonomy.mts";
-import { FORK_AUDIT, FORK_PROGRESS, type ForkRefusal } from "./codex-fork-admission.mts";
+import { FORK_AUDIT, FORK_PROGRESS, type ForkRefusal, type PreClaimRefusal } from "./codex-fork-admission.mts";
 import { forkAttempts } from "./codex-fork-attempts.mts";
 import { FORK_OWNER, forkNode } from "./codex-fork-fixture.mts";
 import { forkTestTimeouts, resetForkFeatureCache } from "./codex-fork-reply.mts";
@@ -45,6 +45,8 @@ const outsideIdle = (f: Node, owner = FORK_OWNER): string => {
 };
 const busy = (f: Node): void => { recordCodexSession(f.paths, FORK_OWNER, f.cwd, T0 - 60_000, "default", "UserPromptSubmit"); };
 const actionsOf = (f: Node): string[] => forkAudit(f).map((line) => line.action);
+const actionIds = (f: Node): [string, string[]][] => forkAudit(f).map((line) => [line.action, line.messageIds]);
+const claimed = (f: Node): boolean => fs.existsSync(path.join(f.paths.dir, "codex-fork-attempts"));
 
 test("an owner whose cwd is outside the workspace roots gets fork-cwd-refused once, with no path in the record", async (t) => {
   const f = forkNode(t);
@@ -52,10 +54,10 @@ test("an owner whose cwd is outside the workspace roots gets fork-cwd-refused on
   const outside = outsideIdle(f);
   await poll(f);
   await poll(f);
-  assert.deepEqual(forkAudit(f).map((line) => [line.action, line.messageIds]), [["fork-cwd-refused", [id]]]);
+  assert.deepEqual(actionIds(f), [["fork-cwd-refused", [id]]]);
   assert.deepEqual(Object.keys(forkAudit(f)[0]!), ["ts", "sessionId", "messageIds", "action"], "metadata only");
   assert.deepEqual([f.app.runs.length, turns(f)], [0, []], "no helper, no spent turn");
-  assert.equal(fs.existsSync(path.join(f.paths.dir, "codex-fork-attempts")), false, "no claim");
+  assert.equal(claimed(f), false, "no claim");
   for (const text of [outside, f.cwd, "workspace roots", "Is the build green"]) {
     assert.equal(rawAudit(f).includes(text), false, `the audit carries no ${text}`);
   }
@@ -80,7 +82,7 @@ test("guards 10 to 13 refuse with their own audit code, once per message", async
     const extra = setup(f);
     await poll(f, extra);
     await poll(f, extra);
-    assert.deepEqual(forkAudit(f).map((line) => [line.action, line.messageIds]), [[expected, [id]]], name);
+    assert.deepEqual(actionIds(f), [[expected, [id]]], name);
     assert.deepEqual([f.app.runs.length, forkAttempts(f.paths, FORK_OWNER).length, turns(f)], [0, 0, []], name);
   }
 });
@@ -110,12 +112,11 @@ test("the forgotten message is not audited again for the owner's next message", 
   const second = f.add();
   outsideIdle(f);
   await poll(f);
-  assert.deepEqual(forkAudit(f).map((line) => [line.action, line.messageIds]), [["fork-cwd-refused", [first]]]);
+  assert.deepEqual(actionIds(f), [["fork-cwd-refused", [first]]]);
   markOffered(f.paths.inbox, first, T0);
   await poll(f);
   await poll(f);
-  assert.deepEqual(forkAudit(f).map((line) => [line.action, line.messageIds]),
-    [["fork-cwd-refused", [first]], ["fork-cwd-refused", [second]]]);
+  assert.deepEqual(actionIds(f), [["fork-cwd-refused", [first]], ["fork-cwd-refused", [second]]]);
 });
 
 test("a failed audit append is not deduplicated: the next poll audits the same code again", async (t) => {
@@ -127,12 +128,12 @@ test("a failed audit append is not deduplicated: the next poll audits the same c
   await poll(f);
   fs.rmdirSync(wakeAudit(f.paths));
   await poll(f);
-  assert.deepEqual(forkAudit(f).map((line) => [line.action, line.messageIds]), [["fork-cwd-refused", [id]]], "the next poll writes");
+  assert.deepEqual(actionIds(f), [["fork-cwd-refused", [id]]], "the next poll writes");
   await poll(f);
   await poll(f);
-  assert.deepEqual(forkAudit(f).map((line) => [line.action, line.messageIds]), [["fork-cwd-refused", [id]]], "further polls dedup");
+  assert.deepEqual(actionIds(f), [["fork-cwd-refused", [id]]], "further polls dedup");
   assert.deepEqual([f.app.runs.length, turns(f)], [0, []], "no helper, no spent turn");
-  assert.equal(fs.existsSync(path.join(f.paths.dir, "codex-fork-attempts")), false, "no claim");
+  assert.equal(claimed(f), false, "no claim");
 });
 
 test("the dedup key is owner and message: a readdressed message id is audited for each owner, cleanup is per owner", async (t) => {
@@ -167,22 +168,23 @@ test("with wake.codexFork absent nothing is written: the pre-claim audit changes
   await poll(f);
   await poll(f);
   assert.deepEqual(forkAudit(f), []);
-  assert.equal(fs.existsSync(path.join(f.paths.dir, "codex-fork-attempts")), false);
+  assert.equal(claimed(f), false);
   assert.deepEqual(f.calls, []);
 });
 
 test("every pre-claim refusal maps to a fork- audit action and no pre-claim code is left out", (t) => {
-  const reasons = (Object.keys(FORK_PROGRESS) as ForkRefusal[]).filter((reason) => reason !== "fork-relay-stale");
+  const reasons = (Object.keys(FORK_PROGRESS) as ForkRefusal[])
+    .filter((reason): reason is PreClaimRefusal => reason !== "fork-relay-stale");
   assert.deepEqual(Object.keys(FORK_AUDIT).sort(), [...reasons].sort());
   const f = forkNode(t);
   const id = f.add();
   for (const reason of reasons) {
-    const action = FORK_AUDIT[reason as keyof typeof FORK_AUDIT];
+    const action = FORK_AUDIT[reason];
     assert.ok(action.startsWith("fork-"), reason);
     assert.equal(action, reason.startsWith("fork-") ? reason : `fork-${reason}`, reason);
     audit(f.paths, T0, FORK_OWNER, [id], action);
   }
   const lines = forkAudit(f);
-  assert.deepEqual(lines.map((line) => line.action), reasons.map((reason) => FORK_AUDIT[reason as keyof typeof FORK_AUDIT]));
+  assert.deepEqual(lines.map((line) => line.action), reasons.map((reason) => FORK_AUDIT[reason]));
   for (const line of lines) assert.deepEqual(Object.keys(line), ["ts", "sessionId", "messageIds", "action"], line.action);
 });
