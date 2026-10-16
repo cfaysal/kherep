@@ -356,6 +356,41 @@ the native definition, environment or native command output.
 These service commands do not edit runtime hook configuration; run `kherep-node
 doctor` and update an independently managed stale hook binding separately.
 
+### Intercom command
+
+Agent sessions reach the Control Plane through one command per host (issue
+#436):
+
+```sh
+node "<config directory>/bin/kherep-node.mjs" msg sessions
+```
+
+The config directory is `KHEREP_CONFIG_DIR` or the per-OS location
+(`%APPDATA%\kherep` on Windows, `~/Library/Application Support/kherep` on
+macOS). The path is written with forward slashes on Windows and always in
+double quotes, since the macOS default contains a space. `service install`,
+`upgrade` and `rollback` write the launcher; at every call it reads the managed
+service receipt and runs the CLI of the active pin, so the command keeps
+working across upgrade and rollback. Without a valid receipt, or when the pin
+or its CLI is missing, it exits 1 with a fixed message and does not fall back
+to a checkout. Nothing changes PATH.
+
+Both installers render this command into the always-loaded instructions: the
+Claude installer into the managed `<!-- kherep-intercom:start -->` block of
+`~/.claude/CLAUDE.md` and into `~/.claude/teams/kherep/ROUTING.md`, the Codex
+installer into the `<!-- kherep:start -->` block of `<CODEX_HOME>/AGENTS.md`,
+into `<CODEX_HOME>/orchestra/ROUTING.md` and into the rules file (see
+[Codex integration](CODEX.md#verify-and-upgrade)). The example names this node
+from `control-plane/node.json` when it is enrolled and `peer/session`
+otherwise. The installers render the command when they run, so after changing
+`KHEREP_CONFIG_DIR` or enrolling the node, run both installers again. A config
+directory that no shell can quote (a double quote, `` ` `` or `$`, on Windows
+also `'` or `%`) stops either installer before it changes a file.
+
+From Git Bash, Git Bash still rewrites a `/`-leading argument such as `--cwd
+/Users/...` before Node sees it; set `MSYS_NO_PATHCONV=1` for that call or use
+PowerShell.
+
 Compare managed source and installed files in both directions before replacing an existing setup. Preserve operator edits and inspect an isolated candidate with read-only settings fixtures.
 
 The installer records backups through managed transactions. Verify recovery in a disposable candidate and retain the recorded backup. Never recursively remove a configuration home to repair an installation.

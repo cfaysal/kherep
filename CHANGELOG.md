@@ -61,9 +61,32 @@ increments the minor version; every other release increments the patch version.
   receipt, a missing pin or a pin without the CLI exits 1 with a fixed message
   and no fallback. PATH is not changed, and the instructions, Codex rules and
   doctor check follow separately.
+- Intercom instructions (issue #436, second part). Both installers render the
+  host's command, `node "<configRoot>/bin/kherep-node.mjs"`, into the
+  always-loaded instructions: `bootstrap/install.sh` into a managed
+  `<!-- kherep-intercom:start -->` block of `~/.claude/CLAUDE.md` and into
+  `~/.claude/teams/kherep/ROUTING.md`, `codex/install.mts` into the
+  `<!-- kherep:start -->` block of `AGENTS.md` and into
+  `orchestra/ROUTING.md`. The block lists `msg sessions`, `msg send
+  <node>/<session> -- <text>`, `--reply-to`, `--new ... --directive`, `msg
+  inbox` and `msg status` with one example, which names this node from
+  `node.json` when it is enrolled. The sources carry the placeholders
+  `__KHEREP_NODE__` and `__KHEREP_EXAMPLE_TARGET__`, rendered by
+  `render-profile.mts intercom`; operator text outside the Codex block keeps
+  its bytes, and a config directory no shell can quote stops either installer
+  before it writes. The installers do not write the launcher itself, and
+  `drift-check.sh` and `kherep-node doctor` do not yet compare the rendered
+  files.
 
 ### Changed
 
+- Codex messaging rules allowlist the stable launcher (issue #436).
+  `rules/kherep-control-plane.rules` holds one `prefix_rule` per command form:
+  first `node` with `<configRoot>/bin/kherep-node.mjs` (forward slashes on
+  Windows), whose examples are the exact intercom command, then the previous
+  rule for the installing checkout's `cli.mts`, unchanged, which the daemon's
+  task prompt and the delivery hook still name. `renderControlPlaneRules` takes
+  a list of `launcherRule()` and `cliRule()` commands.
 - Native Codex Queue pointer producer off by default (issue #429). The
   exact-owner producer that submits a fixed `codex queue` pointer for an
   authorized Codex owner now runs only with `"nativeQueue": true` in the node
