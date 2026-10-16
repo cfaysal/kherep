@@ -439,10 +439,13 @@ flowchart TD
 cleanup used: bounded line framing with a UTF-8 decoder, request ids and
 timeouts, notifications to listeners, and every server request (a message with
 a method and an id, whatever the id) refused with `-32601`. For the fork it
-runs strict (a malformed line fails it) and, after a failure, always ends with
-SIGKILL to the process group, because the direct child's exit does not prove
-that the group is empty (issue #432). `codex-fork-process.mts` runs one
-attempt; `codex-fork-watch.mts` checks every notification against what is known
+runs strict (a malformed line fails it) and, after a failure, a timed-out turn
+or a violating turn, always ends with SIGKILL to the process group, also when
+`turn/interrupt` succeeded, because the direct child's exit does not prove that
+the group is empty (issue #432). `codex-fork-process.mts` runs one attempt; a
+watch rule that fired at any time, also in the chunk that carried
+`turn/completed` or while the helper closed, discards the answer or decline
+(checked before the answer is accepted and again after the shutdown); `codex-fork-watch.mts` checks every notification against what is known
 (the fork id, when `turn/start` was sent, the turn id), so a `turn/started` or
 `turn/completed` that arrives before the `turn/start` response is kept and
 counted once. `codex-fork-goal.mts` holds the two goal decisions of the goal
