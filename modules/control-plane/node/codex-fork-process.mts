@@ -108,9 +108,11 @@ export async function runForkAttempt(deps: { codex?: CodexDeps }, input: ForkRun
     outcome = { state: "uncertain", from: session.phase, reason: "helper-exit" };
   }
   if (!await client.shutdown() && !neverStarted) {
-    input.log(`kherep-node: Codex fork helper close unconfirmed (${client.killReport === "unconfirmed" ? "group kill not confirmed" : "helper did not end"})`);
-    // The lease first: a reporter that throws must not cost the retention.
+    // The lease first: a logger or reporter that throws must cost neither the retention nor the outcome.
     retainServiceAdmission(input.admission);
+    try {
+      input.log(`kherep-node: Codex fork helper close unconfirmed (${client.killReport === "unconfirmed" ? "group kill not confirmed" : "helper did not end"})`);
+    } catch { /* the retention above holds */ }
     try { deps.codex?.onUnconfirmedShutdown?.(); } catch { /* the retention above holds */ }
     return { state: "uncertain", from: outcome.from, reason: "close-unconfirmed" };
   }
