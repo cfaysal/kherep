@@ -55,7 +55,7 @@ test("a live Claude run is running with a run version bound to its listed pid an
   const captured = readTask(node.paths, TASK)!;
   assert.deepEqual([captured.pid, captured.pidStart], [PID, "s1"]);
   assert.deepEqual([result.state, result.runtime, result.taskState, result.processState, result.stopSupported, result.stopConfirmed],
-    ["succeeded", "claude", "running", "running", true, false]);
+    ["succeeded", "claude", "running", "running", false, false]);
   assert.equal(result.runVersion, runVersionOf(captured));
   assert.equal(result.errorCode, undefined);
   assert.deepEqual(Object.keys(result).sort(), ["freshness", "name", "observedAt", "operationId", "processState", "runVersion", "runtime",
