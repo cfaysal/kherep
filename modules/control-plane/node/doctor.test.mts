@@ -11,6 +11,7 @@ import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { daemonStateFile } from "./daemon-state.mts";
 import { captureSourceIdentity } from "./daemon-source.mts";
 import { runDoctor, type DoctorDeps } from "./doctor.mts";
+import { writeIntercomHost } from "./doctor-intercom-fixture.mts";
 import { writeLocalSessions } from "./exchange.mts";
 import { generateIdentity, writePrivateKey } from "./identity.mts";
 
@@ -53,6 +54,7 @@ function host(t: test.TestContext): Host {
   fs.mkdirSync(claude);
   fs.mkdirSync(codex);
   writeHooks(claude, codex, repo);
+  writeIntercomHost(paths, claude, codex, root);
   const deps: DoctorDeps = {
     paths, repoRoot: repo, claudeConfigDir: claude, codexHome: codex, now: () => Date.parse("2026-10-04T12:00:00.000Z"),
     pidAlive: (pid) => pid === LIVE_PID,
@@ -96,6 +98,7 @@ test("a healthy host passes every check and reports versions without secrets", a
     liveListedListeners: { verified: 0, missing: 0, unreadable: 0, stale: 0, mismatched: 0 },
   });
   assert.equal((report.checks.daemon.source as { status: string }).status, "match");
+  assert.deepEqual([report.checks.intercom.ok, report.checks.intercom.managed, report.checks.intercom.resolves], [true, true, "match"]);
   const text = JSON.stringify(report);
   for (const secret of ["SYNTHETIC_SECRET", "PRIVATE KEY", h.pem.split("\n")[1]]) assert.equal(text.includes(secret), false);
 });
@@ -325,6 +328,8 @@ test("kherep-node doctor prints JSON and exits 1 on a host that is not enrolled"
   const result = spawnSync(process.execPath, [cli, "doctor"], { encoding: "utf8", timeout: 60_000,
     env: { ...process.env, KHEREP_CONFIG_DIR: root, CLAUDE_CONFIG_DIR: root, CODEX_HOME: root, HOME: root, PATH: "" } });
   assert.equal(result.status, 1, result.stderr);
-  const report = JSON.parse(result.stdout) as { ok: boolean; checks: Record<string, { ok: boolean }> };
+  const report = JSON.parse(result.stdout) as { ok: boolean; checks: Record<string, { ok: boolean; managed?: boolean }> };
   assert.deepEqual([report.ok, report.checks.enrollment.ok, report.checks.daemon.ok], [false, false, false]);
+  // Issue #436: no managed service, so the intercom command cannot resolve a pin.
+  assert.deepEqual([report.checks.intercom.ok, report.checks.intercom.managed], [false, false]);
 });

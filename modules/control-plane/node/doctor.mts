@@ -6,6 +6,7 @@ import type { NodePaths } from "./config.mts";
 import { pidAlive } from "./daemon-state.mts";
 import { checkRuntimes, checkWorker, findRuntime, runtimeVersion, type VersionOf } from "./doctor-host.mts";
 import { checkHooks } from "./doctor-hooks.mts";
+import { checkIntercom } from "./doctor-intercom.mts";
 import {
   checkCodexSessions, checkDaemon, checkEnrollment, checkListeners, checkPolicy, checkWakeReadiness, daemonReadiness, type Check,
 } from "./doctor-local.mts";
@@ -50,6 +51,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   const { check: enrollment, config } = checkEnrollment(deps.paths);
   const { check: policy, policy: parsed } = checkPolicy(config?.policyFile ?? deps.paths.policy);
   const now = deps.now?.() ?? Date.now();
+  const claudeConfigDir = deps.claudeConfigDir ?? defaultConfigDir();
+  const codex = deps.codexHome ?? codexHome();
   const checks: Record<string, Check> = {
     enrollment,
     daemon: checkDaemon(deps.paths, alive, repoRoot),
@@ -58,9 +61,11 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     runtimes: await checkRuntimes(parsed?.sessions?.enabled ? parsed.sessions.runtimes : [],
       deps.find ?? findRuntime, deps.versionOf ?? runtimeVersion, daemonReadiness(deps.paths, alive), now),
     hooks: checkHooks({
-      claude: path.join(deps.claudeConfigDir ?? defaultConfigDir(), "settings.json"),
-      codex: path.join(deps.codexHome ?? codexHome(), "config.toml"),
+      claude: path.join(claudeConfigDir, "settings.json"),
+      codex: path.join(codex, "config.toml"),
     }, repoRoot),
+    // Issue #436: the stable intercom command and the files that name it.
+    intercom: checkIntercom({ paths: deps.paths, claudeConfigDir, codexHome: codex }),
     listeners: checkListeners(deps.paths, alive, now),
     wakeReadiness: checkWakeReadiness(deps.paths, parsed, alive, now),
     codexSessions: checkCodexSessions(deps.paths, now),
