@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import { MESSAGING_PROXY_CAPABILITY, OPERATOR_NODE_ID, type MESSAGE_PROGRESS_CODES } from "../protocol-messages.mts";
-import { bypassesPermissions, takeTurn } from "./autonomy.mts";
+import { bypassesPermissions, takeTurn, type AutonomyAction } from "./autonomy.mts";
 import { codexHome } from "./codex-app.mts";
 import { busyPolicyFingerprint, busyWakeDisabled } from "./codex-busy-policy.mts";
 import { forkAttempts, MAX_FORK_ATTEMPTS, type ForkAttempt } from "./codex-fork-attempts.mts";
@@ -34,7 +34,9 @@ export type ForkRefusal =
   | "fork-producer" | "fork-mcp-unknown" | "fork-features-unknown" // 10 to 12, returned by the producer before admission
   | "fork-relay-unsupported" // 13 (issue #408, PR 4): the Worker cannot take a proxy answer; also before admission
   | "fork-relay-stale"; // PR 4, relay only: a completed answer older than RELAY_MAX_AGE_MS is never sent
-export type ForkAdmission = { ok: true; cwd: string } | { ok: false; reason: ForkRefusal };
+// Issue #444: every code but the relay's own can refuse before the claim.
+export type PreClaimRefusal = Exclude<ForkRefusal, "fork-relay-stale">;
+export type ForkAdmission = { ok: true; cwd: string } | { ok: false; reason: PreClaimRefusal };
 
 // The message keeps waiting whatever the refusal: these are existing waiting codes.
 export const FORK_PROGRESS: Record<ForkRefusal, typeof MESSAGE_PROGRESS_CODES.waiting[number]> = {
@@ -47,6 +49,21 @@ export const FORK_PROGRESS: Record<ForkRefusal, typeof MESSAGE_PROGRESS_CODES.wa
   "budget-spacing": "retry-pending", "budget-exhausted": "budget-exhausted",
   "fork-producer": "awaiting-user-turn", "fork-mcp-unknown": "awaiting-user-turn", "fork-features-unknown": "awaiting-user-turn",
   "fork-relay-unsupported": "awaiting-user-turn", "fork-relay-stale": "awaiting-user-turn",
+};
+
+// Issue #444: the wake.jsonl action of a refusal before the claim, one fixed code each:
+// the admission code prefixed with fork-, the producer's own codes as they are.
+export const FORK_AUDIT: Record<PreClaimRefusal, AutonomyAction> = {
+  "fork-off": "fork-off", "kill-switch": "fork-kill-switch", "policy-changed": "fork-policy-changed",
+  "not-recorded": "fork-not-recorded", "task-session": "fork-task-session", "permission-mode": "fork-permission-mode",
+  "permission-mode-unknown": "fork-permission-mode-unknown", "not-opted-in": "fork-not-opted-in",
+  "fork-disabled-platform": "fork-disabled-platform", "post-tool-hook-missing": "fork-post-tool-hook-missing",
+  "fork-not-idle": "fork-not-idle", "message-not-eligible": "fork-message-not-eligible", "depth-limit": "fork-depth-limit",
+  "attempt-exists": "fork-attempt-exists", "fork-in-flight": "fork-in-flight", "attempts-unreadable": "fork-attempts-unreadable",
+  "cwd-refused": "fork-cwd-refused", "runtime-pending": "fork-runtime-pending", "runtime-not-ready": "fork-runtime-not-ready",
+  "budget-spacing": "fork-budget-spacing", "budget-exhausted": "fork-budget-exhausted",
+  "fork-producer": "fork-producer", "fork-mcp-unknown": "fork-mcp-unknown", "fork-features-unknown": "fork-features-unknown",
+  "fork-relay-unsupported": "fork-relay-unsupported",
 };
 
 // Decision D17: a completed answer is relayed within this bound from
@@ -99,7 +116,7 @@ function gather(deps: ForkAdmissionDeps, owner: string, messageId: string, finge
 
 // lastSeen is approximate (lock-free hook writes, PostToolUse never moves it):
 // it only bounds the active window, and one in the future fails closed.
-function sessionRefusal(f: Facts, policy: NodePolicy): ForkRefusal | null {
+function sessionRefusal(f: Facts, policy: NodePolicy): PreClaimRefusal | null {
   const seen = Date.parse(f.session?.lastSeen ?? "");
   if (f.session?.sessionId !== f.owner || f.session.runtime !== CODEX_RUNTIME || !Number.isFinite(seen) || seen > f.now
     || f.now - seen > CODEX_ACTIVE_MS) return "not-recorded";
@@ -114,7 +131,7 @@ const eligible = (m: InboxRecord | null, owner: string): m is InboxRecord => m?.
   && m.taskId === undefined && m.from.nodeId !== OPERATOR_NODE_ID;
 const depthOk = (m: InboxRecord): boolean => Number.isSafeInteger(m.depth ?? 0) && (m.depth ?? 0) >= 0 && (m.depth ?? 0) < MAX_REPLY_DEPTH;
 
-function messageRefusal(f: Facts): ForkRefusal | null {
+function messageRefusal(f: Facts): PreClaimRefusal | null {
   const m = f.message;
   if (!eligible(m, f.owner)) return "message-not-eligible";
   if (!depthOk(m)) return "depth-limit";
@@ -125,7 +142,7 @@ function messageRefusal(f: Facts): ForkRefusal | null {
 
 // Guards 1 to 7 and 9 of design section 2.4, in order, without side effects.
 function decide(f: Facts): ForkAdmission {
-  const refuse = (reason: ForkRefusal): ForkAdmission => ({ ok: false, reason });
+  const refuse = (reason: PreClaimRefusal): ForkAdmission => ({ ok: false, reason });
   const policy = f.policy, fork = policy?.wake?.codexFork;
   if (!f.enrolled || !policy || !fork) return refuse("fork-off");
   if (f.killSwitch) return refuse("kill-switch");
