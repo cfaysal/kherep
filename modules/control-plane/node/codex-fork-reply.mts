@@ -4,7 +4,7 @@ import { MESSAGING_PROXY_CAPABILITY } from "../protocol-messages.mts";
 import { audit, type AutonomyAction } from "./autonomy.mts";
 import { findCodex } from "./codex-binary.mts";
 import { busyPolicyFingerprint } from "./codex-busy-policy.mts";
-import { admitForkReply, type ForkRefusal } from "./codex-fork-admission.mts";
+import { admitForkReply, FORK_AUDIT, type PreClaimRefusal } from "./codex-fork-admission.mts";
 import { advanceForkAttempt, claimForkAttempt, readForkAttempt } from "./codex-fork-attempts.mts";
 import { parseFeaturesList } from "./codex-fork-params.mts";
 import { markRelayDue } from "./codex-fork-relay.mts";
@@ -24,24 +24,32 @@ import { retainServiceAdmission, waitForServiceAdmission, type ServiceAdmission 
 // answer in the attempt file; the relay sweep (codex-fork-relay.mts, PR 4)
 // then hands it to the exchange as one labelled proxy answer. No inbox, progress or session record
 // changes. With wake.codexFork absent nothing past the first check runs.
+// Every refusal before the claim is one wake.jsonl line, fork- and the code (issue #444).
 
 const pending = new Map<string, Promise<void>>();
 let forkLane: Promise<void> = Promise.resolve();
 // Tests only: shorter step timeouts for the helper.
 export const forkTestTimeouts: { value?: Partial<ForkTimeouts> } = {};
 
-// fork-not-idle and fork-disabled-platform once per message and action. Not
-// note() of codex-wake.mts: it keeps one action per message, so the hint
-// path's own "wake" note in between would audit the same refusal again.
-const noted = new Map<string, { owner: string; action: AutonomyAction }>();
+// Every pre-claim refusal once per owner, message and code (issue #444), whatever
+// other codes the same message saw in between. Not note() of codex-wake.mts: it
+// keeps one action per message, so the hint path's own "wake" note in between
+// would audit the same refusal again. Not audited: no due message, a pending
+// lane, an owner not opted in, an unreadable file, a message with an attempt
+// (the attempt file is the record) and a lost claim race (the file exists).
+// A code counts as noted only once its line was appended: a failed append is retried.
+// Keyed by owner, then message: the inbox can readdress a message id to another session.
+const noted = new Map<string, Map<string, Set<AutonomyAction>>>();
 function noteOnce(deps: RunnerDeps, owner: string, messageIds: string[], action: AutonomyAction): void {
-  const fresh = messageIds.filter((id) => noted.get(id)?.action !== action);
+  const mine = noted.get(owner) ?? new Map<string, Set<AutonomyAction>>();
+  const fresh = messageIds.filter((id) => !mine.get(id)?.has(action));
   if (fresh.length === 0) return;
-  for (const id of fresh) noted.set(id, { owner, action });
   audit(deps.paths, deps.now?.() ?? Date.now(), owner, fresh, action);
+  for (const id of fresh) mine.set(id, (mine.get(id) ?? new Set<AutonomyAction>()).add(action));
+  noted.set(owner, mine);
 }
 
-const refusedLog = new Map<string, ForkRefusal>();
+const refusedLog = new Map<string, PreClaimRefusal>();
 
 export async function forkReplyIdle(): Promise<void> {
   while (pending.size) await Promise.all([...pending.values()]);
@@ -49,8 +57,12 @@ export async function forkReplyIdle(): Promise<void> {
 
 export function scheduleForkReply(deps: RunnerDeps, owner: string, messageIds: string[], log: (line: string) => void): void {
   if (deps.policy.wake?.codexFork === undefined) return;
-  // A message no longer due for this owner is never noted again.
-  for (const [id, entry] of noted) if (entry.owner === owner && !messageIds.includes(id)) noted.delete(id);
+  // A message no longer due for this owner is forgotten for this owner only.
+  const mine = noted.get(owner);
+  if (mine) {
+    for (const id of mine.keys()) if (!messageIds.includes(id)) mine.delete(id);
+    if (mine.size === 0) noted.delete(owner);
+  }
   if (messageIds.length === 0) return;
   const key = path.join(deps.paths.dir, owner);
   if (pending.has(key)) return;
@@ -85,7 +97,7 @@ function forkFeatures(file: string, identity: string, codex: CodexDeps, now: num
 }
 
 export type ForkGuards = { ok: true; producer: QueueProducerIdentity; mcpNames: string[]; features: Set<string> }
-  | { ok: false; reason: ForkRefusal };
+  | { ok: false; reason: PreClaimRefusal };
 
 // Guards 10 to 13, before admission, so a refusal spends no turn.
 export async function forkGuards(deps: RunnerDeps, codex: CodexDeps, log: (line: string) => void): Promise<ForkGuards> {
@@ -135,19 +147,17 @@ async function attempt(deps: RunnerDeps, owner: string, messageIds: string[], fi
   } };
   const guards = await forkGuards(deps, codex, log);
   if (!guards.ok) {
-    // A missing or changed capability is visible: one log line per owner and code, a fixed code only.
+    // A missing or changed capability is visible: one log line per owner and code, a fixed code only,
+    // and one audit line per owner, message and code (issue #444).
     if (refusedLog.get(owner) !== guards.reason) log(`kherep-node: Codex fork reply refused before admission: ${guards.reason}`);
     refusedLog.set(owner, guards.reason);
-    return;
+    return noteOnce(deps, owner, [messageId], FORK_AUDIT[guards.reason]);
   }
   refusedLog.delete(owner);
   const now = (): number => deps.now?.() ?? Date.now();
   const decision = admitForkReply({ paths: deps.paths, now: deps.now, platform: deps.platform, readiness: deps.readiness,
     realpath: deps.realpath, postToolHook: deps.codex?.postToolHook }, owner, messageId, fingerprint);
-  if (!decision.ok) {
-    if (decision.reason === "fork-not-idle" || decision.reason === "fork-disabled-platform") noteOnce(deps, owner, [messageId], decision.reason);
-    return;
-  }
+  if (!decision.ok) return noteOnce(deps, owner, [messageId], FORK_AUDIT[decision.reason]);
   const claim = claimForkAttempt(deps.paths, { owner, messageId, attemptedAt: now(), policyFingerprint: fingerprint,
     producer: { ...guards.producer } });
   if (!claim) return;

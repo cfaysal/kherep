@@ -49,6 +49,7 @@ test("a policy edited between schedule and admission refuses: no helper and no c
   fs.writeFileSync(f.paths.policy, JSON.stringify(policy));
   await codexQueueIdle();
   assert.deepEqual([f.app.runs.length, forkAttempts(f.paths, FORK_OWNER).length], [0, 0]);
+  assert.deepEqual(actions(f.paths).filter((action) => action.startsWith("fork")), ["fork-policy-changed"], "issue #444");
 });
 
 test("a service drain holds the helper until it ends", async (t) => {

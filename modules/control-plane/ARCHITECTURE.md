@@ -419,7 +419,12 @@ producer and run before admission; their refusal codes (`fork-producer`,
 
 Issue #408, third increment, darwin only, behind `wake.codexFork`. With the
 section absent `scheduleForkReply` returns at its first check: no file is read,
-no process starts and nothing is written. The validated answer is persisted in
+no process starts and nothing is written. The daemon hands every exchange round
+the policy it read for that round (`daemon.mts`, issue #444), so the first check
+follows `policy.json` without a restart; the fresh read at the second check and
+in admission are unchanged. Every refusal before the claim is one `fork-<code>`
+audit line per owner, message and code, recorded as written only after the
+append succeeded. The validated answer is persisted in
 the attempt file; the relay below sends it to the original's sender.
 
 ```mermaid
@@ -431,6 +436,8 @@ flowchart TD
   schedule --> lane[forkLane: one helper per node, service admission]
   lane --> guards[Guards 10-12: PATH codex identity, mcp list, features list]
   guards --> admit[admitForkReply: guards 1-9, spends one turn]
+  guards -->|refused| refused[fork-code audit, once per owner, message and code]
+  admit -->|refused| refused
   admit --> claim[claimForkAttempt: launching]
   claim --> helper[codex app-server, own group, KHEREP_CODEX_FORK=1]
   helper --> pre[thread/read, thread/turns/list, thread/goal/get on the owner]

@@ -281,7 +281,9 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           finally { await window?.drain(); intakeWindow = null; }
           // ... and wake idle interactive Codex sessions with a pointer (issue #66).
           // Not awaited: queue runs have their own lane and never block this chain.
-          pollCodexQueue(runner, log);
+          // Issue #444: the policy of this round, as the intake window already passes it; the fork
+          // gate and the queue's own authorization follow the file at the next poll.
+          pollCodexQueue({ ...runner, policy: applied }, log);
         })
           .catch((error: unknown) => log(`kherep-node: message exchange failed: ${String(error)}`))
           .finally(() => { exchangePending = false; });
