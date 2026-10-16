@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 
 import type { SessionContinueArgs, SessionStartArgs, SessionStopArgs } from "../protocol-tasks.mts";
 import { continueCodex, startCodex, stopCodex } from "./codex-runner.mts";
-import type { CodexDeps } from "./codex-process.mts";
+import { startTimeOf, type CodexDeps } from "./codex-process.mts";
 import type { NodePaths } from "./config.mts";
 import { taskCliCommand } from "./msg-cli.mts";
 import type { NodePolicy } from "./policy.mts";
@@ -28,7 +28,11 @@ import { withServiceAdmission, type ServiceOwnerProbe } from "./service-drain.mt
 // - `claude --resume <full session id> --bg "<prompt>"` continues a session,
 //   in place or as a copy under a new id; `claude stop <id>` takes the short id.
 // - `claude agents --json --all` lists sessions with `id` (short), `sessionId`,
-//   `name` and `state` (working, blocked, done, failed, stopped).
+//   `name` and `state` (working, blocked, done, failed, stopped); `kind`
+//   (interactive, background) always, and `pid` and `status` (busy, waiting,
+//   idle) "While the process is alive" (agent-view, fetched 2026-10-17). A
+//   launch records that pid and its start time (issue #437); status re-reads
+//   both, since the supervisor may stop and restart a session's process.
 // A task with runtime codex goes to codex-runner.mts instead (issue #63).
 // --name stays task-<8> even for a labelled task (issue #74): findRow falls
 // back to that name to map the session before its short id is known, and the
@@ -101,6 +105,23 @@ export function mapIds(record: TaskRecord, row: Record<string, unknown> | undefi
   return { ...(confirmed ? rest : record), ...(sessionId ? { sessionId } : {}), ...(shortId ? { shortId } : {}) };
 }
 
+// The pid a listing row shows while the session's process is alive (issue #437).
+export const rowPid = (row: Record<string, unknown> | undefined): number | undefined =>
+  typeof row?.pid === "number" && Number.isSafeInteger(row.pid) && row.pid > 0 ? row.pid : undefined;
+
+// The listed process and its start time, best effort: a start time that
+// cannot be read leaves the identity to the next status (task-control-claude.mts).
+function withProcess(deps: RunnerDeps, record: TaskRecord, row: Record<string, unknown> | undefined): TaskRecord {
+  const pid = rowPid(row);
+  if (pid === undefined) return record;
+  try {
+    const pidStart = startTimeOf(deps.codex ?? {}, pid);
+    return pidStart === null ? record : { ...record, pid, pidStart };
+  } catch {
+    return record;
+  }
+}
+
 // Runs `claude ... --bg ...` and records the task with the short id it
 // printed; the full session id follows from `claude agents --json --all`.
 // The record is written before the run with mappingPendingSince and no short
@@ -123,9 +144,12 @@ async function background(deps: RunnerDeps, launched: TaskRecord, args: string[]
     writeTask(deps.paths, { ...launched, state: "failed", reason: "no session id printed" });
     return refuse(deps, record.taskId, `claude --bg printed no session id: ${trim(output)}`);
   }
-  let mapped: TaskRecord = { ...record, shortId, state: "started" };
+  // Every launch is a new run: a continue drops the previous run's process identity.
+  const { pid, pidStart, descendants, ...launch } = record;
+  let mapped: TaskRecord = { ...launch, shortId, state: "started" };
   try {
-    mapped = mapIds(mapped, findRow(await agentRows(deps), mapped));
+    const row = findRow(await agentRows(deps), mapped);
+    mapped = withProcess(deps, mapIds(mapped, row), row);
   } catch {
     // mapped later by the watch round
   }

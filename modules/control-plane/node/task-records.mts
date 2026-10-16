@@ -23,7 +23,10 @@ export interface TaskRecord {
   // sessionId the full id from `claude agents --json`, for `claude --resume`.
   // Codex: sessionId is the thread_id of `thread.started`, for `codex exec
   // resume`; pid and pidStart (the process start time) identify the process
-  // to stop, since a pid alone may be reused.
+  // to stop, since a pid alone may be reused. Claude (issue #437): pid is the
+  // process `claude agents --json` lists for the session while it is alive and
+  // pidStart its start time, recorded at launch and re-captured by status when
+  // the supervisor restarted the process (task-control-claude.mts).
   shortId?: string; sessionId?: string; requestedBy?: string; sourceRequestId?: string; reason?: string;
   // The display label of the session (issue #74), shown in the directory
   // instead of the name; the name stays task-<8>.

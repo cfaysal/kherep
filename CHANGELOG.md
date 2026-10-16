@@ -182,6 +182,17 @@ increments the minor version; every other release increments the patch version.
   hints are unchanged, and pointers already submitted are still retired at
   confirming Stop and on poll rounds. `kherep-node doctor` shows the flag as
   `checks.policy.wake.nativeQueue`; it never fails the policy check.
+- Owner task status measures Claude Code background tasks (issue #437, first
+  part). `task status` for a Claude task no longer answers process state
+  `unknown`: the target reads the `pid` that `claude agents --json --all` lists
+  for the task's own background session while its process is alive, binds a
+  run version to that pid and its start time, and records both on the task
+  (at launch, and again when the supervisor restarted the process). A live
+  `working` or `blocked` session is `running`; a session without a live
+  process, or a finished one whose process still runs, is `idle` or `closed`;
+  a failed listing or a row that is not the task's own background session is
+  `identity_unknown`. Remote stop for Claude stays unsupported
+  (`unsupported_runtime`); no process is signalled.
 
 ### Fixed
 

@@ -11,7 +11,7 @@ import type { Readiness } from "./runtime-readiness.mts";
 import { beginServiceDrain, serviceAdmissionsIdle } from "./service-drain.mts";
 import { continueTask, startTask, stopTask } from "./session-runner.mts";
 import { startArgs, TASK, taskId, taskNode, testServiceOwner } from "./task-fixture.mts";
-import { readTask } from "./task-records.mts";
+import { readTask, writeTask } from "./task-records.mts";
 
 const FRAMED = `Task ${TASK} from the operator via the Kherep Control Plane: fix the flaky test\n\nWhen you are done, report with: `
   + `kherep-node task done ${TASK} --summary "...". Coordinate with other sessions of this task through \`kherep-node msg\` `
@@ -207,4 +207,24 @@ test("a delegated start persists the exact source request provenance", async (t)
   const sourceRequestId = "30000000-0000-4000-8000-000000000001";
   await startTask(startArgs(TASK, { requestedBy: "00000000-0000-4000-8000-0000000000bb/owner", directive: "run it", sourceRequestId }), node.deps());
   assert.equal(readTask(node.paths, TASK)?.sourceRequestId, sourceRequestId);
+});
+
+test("a start records the listed pid and its start time; a continue replaces them (issue #437)", async (t) => {
+  const node = taskNode(t);
+  node.livePids(4_100_000);
+  const starts = new Map([[4_100_000, "s1"], [4_100_001, "s2"]]);
+  const deps = { ...node.deps(), codex: { processStart: (pid: number) => starts.get(pid) ?? null } };
+  await startTask(startArgs(), deps);
+  const started = readTask(node.paths, TASK)!;
+  assert.deepEqual([started.shortId, started.pid, started.pidStart], ["b0000000", 4_100_000, "s1"]);
+  writeTask(node.paths, { ...started, state: "done", descendants: [{ pid: 4_100_009, start: "c" }] });
+  await continueTask({ taskId: TASK, prompt: "again" }, deps);
+  const resumed = readTask(node.paths, TASK)!;
+  assert.deepEqual([resumed.shortId, resumed.pid, resumed.pidStart, resumed.descendants], ["b0000001", 4_100_001, "s2", undefined]);
+  // A start time that cannot be read leaves the identity to the next status; the mapping stands.
+  writeTask(node.paths, { ...resumed, state: "done" });
+  await continueTask({ taskId: TASK, prompt: "once more" }, { ...deps, codex: { processStart: () => { throw new Error("no ps"); } } });
+  const unread = readTask(node.paths, TASK)!;
+  assert.deepEqual([unread.shortId, unread.sessionId, unread.pid, unread.pidStart], ["b0000002", started.sessionId, undefined, undefined]);
+  assert.equal(unread.mappingPendingSince, undefined);
 });
