@@ -3,7 +3,9 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
-import { AppServerClient, AppServerRequestError, type AppServerMessage, type AppServerOptions } from "./codex-app-server-client.mts";
+import {
+  AppServerClient, AppServerRequestError, type AppServerMessage, type AppServerOptions, type KillReport,
+} from "./codex-app-server-client.mts";
 
 // Issue #408, PR 3: the JSON-RPC client extracted from the native Queue client.
 // Every case runs on an in-memory child; nothing starts a process.
@@ -34,9 +36,10 @@ function fakeChild(reply: Reply, exitOn: { end?: boolean; term?: boolean } = { e
     }
   });
   stdin.on("finish", () => { onFinish?.((data) => stdout.write(data)); if (exitOn.end) end(); });
-  const kill = (signal: NodeJS.Signals): void => {
+  const kill = (signal: NodeJS.Signals): KillReport => {
     signals.push(signal);
     if (signal === "SIGKILL" || exitOn.term) end();
+    return "sent";
   };
   return { child: child as never, raw: child, written, signals, kill };
 }
@@ -135,7 +138,7 @@ test("a clean close ends stdin and sends no signal; an unconfirmed one reports f
   assert.equal(await c.shutdown(), true);
   assert.deepEqual(clean.signals, []);
   const stuck = fakeChild(() => {}, { end: false });
-  const kill = (signal: NodeJS.Signals): void => { stuck.signals.push(signal); };
+  const kill = (signal: NodeJS.Signals): KillReport => { stuck.signals.push(signal); return "sent"; };
   const s = client(stuck, { graceMs: 20, kill });
   assert.equal(await s.shutdown(), false);
   assert.deepEqual(stuck.signals, ["SIGKILL"]);
@@ -193,4 +196,50 @@ test("a server request between exit and close still ends with the group SIGKILL"
   });
   assert.equal(await closing, true);
   assert.deepEqual(fake.signals, ["SIGKILL"]);
+});
+
+// Failed-kill follow-up of #439: the close confirms the target of the forced
+// kill. A group kill the adapter does not confirm (or that throws) never
+// confirms the close, whatever the direct child did.
+const reporting = (fake: ReturnType<typeof fakeChild>, kind: KillReport | "throw") => (signal: NodeJS.Signals): KillReport => {
+  fake.signals.push(signal);
+  if (kind === "throw") throw new Error("synthetic group kill failure");
+  return kind;
+};
+
+test("a forced kill that reports unconfirmed or throws ends the close unconfirmed, whether the child exited or not", async (t) => {
+  for (const kind of ["unconfirmed", "throw"] as const) for (const exited of [true, false]) {
+    await t.test(`${kind}/exited=${exited}`, async () => {
+      const fake = fakeChild(ok, { end: exited });
+      const c = client(fake, { graceMs: 20, forceAfterFailure: true, kill: reporting(fake, kind) });
+      assert.equal(await c.shutdown(true), false);
+      assert.deepEqual(fake.signals, ["SIGKILL"]);
+      assert.equal(c.killReport, "unconfirmed");
+    });
+  }
+});
+
+test("a throwing kill on the SIGTERM path of fail() does not escape", async () => {
+  const fake = fakeChild(() => {}, { term: false });
+  const c = client(fake, { requestTimeoutMs: 20, graceMs: 20, forceAfterFailure: true, kill: reporting(fake, "throw") });
+  await assert.rejects(c.request("thread/read", {}), /timed out/);
+  assert.equal(await c.shutdown(), false);
+  assert.deepEqual(fake.signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("absent confirms with the child's exit and close", async () => {
+  const fake = fakeChild(ok);
+  const c = client(fake, { graceMs: 20, kill: reporting(fake, "absent") });
+  assert.equal(await c.shutdown(true), true);
+  assert.equal(c.killReport, "absent");
+  const stuck = fakeChild(ok, { end: false });
+  assert.equal(await client(stuck, { graceMs: 20, kill: reporting(stuck, "absent") }).shutdown(true), false);
+});
+
+test("without a kill option the direct child's kill is reported sent", async () => {
+  const stuck = fakeChild(() => {}, { end: false });
+  const c = new AppServerClient(stuck.child, { requestTimeoutMs: 200, graceMs: 20 });
+  assert.equal(await c.shutdown(), false);
+  assert.deepEqual(stuck.signals, ["SIGKILL"], "child.kill was called once with SIGKILL");
+  assert.equal(c.killReport, "sent");
 });

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { PermissionMode } from "../protocol-tasks.mts";
+import type { KillReport } from "./codex-app-server-client.mts";
 import { codexCommand, type CodexCommand } from "./codex-binary.mts";
 import type { LoadedThreads } from "./codex-daemon.mts";
 import type { McpList } from "./codex-mcp.mts";
@@ -47,6 +48,8 @@ export interface CodexDeps {
   processStart?: (pid: number) => string | null;
   // Signals the process group of pid, or with scope "process" only pid.
   signal?: (pid: number, signal: NodeJS.Signals, scope?: SignalScope) => void;
+  // Issue #408: the fork reply's group kill with its report (codex-fork-process.mts); signalGroupReport by default.
+  killGroup?: (pid: number, signal: NodeJS.Signals) => KillReport;
   processTree?: (root: number) => ProcessIdentity[];
   processRelations?: () => ProcessRelation[];
   graceMs?: number;
@@ -224,17 +227,22 @@ const runHidden: Run = (file, args) => execFileSync(file, args, { windowsHide: t
 // SIGTERM or SIGKILL to the process group (the negative pid) or, on Windows,
 // taskkill for the process tree (/T; /F for SIGKILL). Either way it reaches
 // codex behind the npm launcher too. A process that is gone is no error.
-export function signalGroup(pid: number, signal: NodeJS.Signals, platform: NodeJS.Platform = process.platform,
-  run: Run = runHidden): boolean {
+export const signalGroup = (pid: number, signal: NodeJS.Signals, platform?: NodeJS.Platform, run?: Run): boolean =>
+  signalGroupReport(pid, signal, platform, run) === "sent";
+
+// The same signal with its report (codex-app-server-client.mts): "absent" only
+// when POSIX kill(-pgid) answers ESRCH, the kernel's statement that no process
+// of the group exists. Windows taskkill /T cannot tell an exited root with
+// living descendants from an empty tree (issue #231), so a failure there is
+// "unconfirmed", never "absent".
+export function signalGroupReport(pid: number, signal: NodeJS.Signals, platform: NodeJS.Platform = process.platform,
+  run: Run = runHidden): KillReport {
   try {
-    if (platform === "win32") {
-      run("taskkill", ["/PID", String(pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])]);
-    } else {
-      process.kill(-pid, signal);
-    }
-    return true;
-  } catch {
-    return false;
+    if (platform === "win32") run("taskkill", ["/PID", String(pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])]);
+    else process.kill(-pid, signal);
+    return "sent";
+  } catch (error) {
+    return platform !== "win32" && (error as NodeJS.ErrnoException).code === "ESRCH" ? "absent" : "unconfirmed";
   }
 }
 

@@ -15,6 +15,10 @@ import { lastLine } from "./codex-output.mts";
 export const MAX_APP_SERVER_LINE_BYTES = 1024 * 1024;
 export type AppServerSpawn = (file: string, args: string[], options: SpawnOptions) => ChildProcessWithoutNullStreams;
 export interface AppServerMessage { method: string; params?: unknown; id?: unknown }
+// What the kill path reports about its target: "sent" (the signal reached a live
+// target), "absent" (the OS states that no process of the target exists), or
+// "unconfirmed" (not sent, or unknown). A kill that throws is "unconfirmed".
+export type KillReport = "sent" | "absent" | "unconfirmed";
 export const SERVER_REQUEST_REFUSAL = { code: -32601, message: "kherep fork reply has no approval authority" };
 
 // A rejected request: the method only in the message. detail is a redacted
@@ -43,12 +47,13 @@ export class AppServerExitedError extends Error {
   constructor() { super("Codex app server exited"); }
 }
 
-// graceMs: each of the two waits of close. kill: the signal path (the child
-// itself by default). forceAfterFailure: after a failure, close always ends
-// with SIGKILL, because the direct child's exit does not prove that its
-// process group is empty (issue #432). strict: an unparsable line fails the client.
+// graceMs: each of the two waits of close. kill: the signal path with its report
+// (the child itself by default, reported sent). forceAfterFailure: after a
+// failure, close always ends with SIGKILL, because the direct child's exit does
+// not prove that its process group is empty (issue #432). strict: an
+// unparsable line fails the client.
 export interface AppServerOptions {
-  requestTimeoutMs: number; graceMs?: number; kill?: (signal: NodeJS.Signals) => void; forceAfterFailure?: boolean; strict?: boolean;
+  requestTimeoutMs: number; graceMs?: number; kill?: (signal: NodeJS.Signals) => KillReport; forceAfterFailure?: boolean; strict?: boolean;
   onServerRequest?: (message: AppServerMessage) => void;
 }
 interface Pending { method: string; resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }
@@ -68,6 +73,8 @@ export class AppServerClient {
   private exited = false;
   private closed = false;
   private forced = false;
+  // The report of the forced SIGKILL of the close, null before it was sent.
+  killReport: KillReport | null = null;
   private notificationListeners: ((message: AppServerMessage) => void)[] = [];
   private failureListeners: ((error: Error) => void)[] = [];
 
@@ -107,9 +114,11 @@ export class AppServerClient {
     if (this.child.exitCode === null && this.child.signalCode === null && !this.child.killed) this.kill("SIGTERM");
   }
 
-  private kill(signal: NodeJS.Signals): void {
-    if (this.options.kill) this.options.kill(signal);
-    else this.child.kill(signal);
+  // Without a kill option the direct child is the target, and its own exit and
+  // close (what waitForShutdown measures) confirm the kill, so it reports "sent".
+  private kill(signal: NodeJS.Signals): KillReport {
+    if (!this.options.kill) { this.child.kill(signal); return "sent"; }
+    try { return this.options.kill(signal); } catch { return "unconfirmed"; }
   }
 
   private write(message: unknown): void {
@@ -202,7 +211,8 @@ export class AppServerClient {
     this.child.stdin.end();
     const grace = this.options.graceMs ?? 125;
     if (await this.waitForShutdown(grace) && !this.forced) return true;
-    this.kill("SIGKILL");
-    return this.waitForShutdown(grace);
+    // Fail closed: a group kill the OS did not confirm leaves the group unknown, whatever the direct child did.
+    this.killReport = this.kill("SIGKILL");
+    return this.killReport !== "unconfirmed" && await this.waitForShutdown(grace);
   }
 }

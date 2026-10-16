@@ -4,7 +4,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import type test from "node:test";
 
-import type { AppServerSpawn } from "./codex-app-server-client.mts";
+import type { AppServerSpawn, KillReport } from "./codex-app-server-client.mts";
 import { codexNode } from "./codex-fixture.mts";
 import type { CodexDeps } from "./codex-process.mts";
 import { markStopEnded, recordCodexSession } from "./codex-sessions.mts";
@@ -58,6 +58,8 @@ export interface ForkScenario {
   onRequest?: (method: string, params: Record<string, any>) => void;
   // stdin end does not end the process; only SIGKILL does, unless neverExit.
   ignoreEnd?: boolean; neverExit?: boolean; exitOnTerm?: boolean;
+  // The report of every group signal; "throw" makes the seam throw; sent by default.
+  killReport?: KillReport | "throw";
 }
 export interface ForkRun {
   file: string; args: string[]; cwd?: string; env: NodeJS.ProcessEnv; detached?: boolean; requests: Message[]; signals: string[];
@@ -159,13 +161,16 @@ export function fakeAppServer(scenario: ForkScenario) {
     });
     return child as never;
   }) as AppServerSpawn;
-  const signal = (pid: number, value: NodeJS.Signals): void => {
+  // A signal that was not sent must not end the fake: only "sent" ends it.
+  const killGroup = (pid: number, value: NodeJS.Signals): KillReport => {
     const index = children.findIndex((child) => child.pid === pid);
     runs[index]?.signals.push(value);
-    if (scenario.neverExit) return;
-    if (value === "SIGKILL" || scenario.exitOnTerm) children[index]?.end(value);
+    if (scenario.killReport === "throw") throw new Error("synthetic group kill failure");
+    const report = scenario.killReport ?? "sent";
+    if (report === "sent" && !scenario.neverExit && (value === "SIGKILL" || scenario.exitOnTerm)) children[index]?.end(value);
+    return report;
   };
-  return { spawn, signal, runs };
+  return { spawn, killGroup, runs };
 }
 
 // Synthetic `codex features list` output in the measured shape (name, stage, enabled).
@@ -209,7 +214,7 @@ export function forkNode(t: test.TestContext, scenario: Partial<ForkScenario> = 
   const calls: string[][] = [];
   let featuresStdout = FEATURES_STDOUT, featuresCode = 0, featuresStderr = "";
   const codex: CodexDeps = {
-    findCodex: () => binary, home, spawn: app.spawn as never, signal: app.signal, postToolHook: () => true,
+    findCodex: () => binary, home, spawn: app.spawn as never, killGroup: app.killGroup, postToolHook: () => true,
     featuresList: async (args): Promise<McpListResult> => {
       calls.push(args);
       return { code: featuresCode, stdout: featuresStdout, stderr: featuresStderr };

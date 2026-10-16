@@ -74,7 +74,10 @@ increments the minor version; every other release increments the patch version.
   attempt, as do tool items, goal notifications for the fork and turns the
   helper did not start, whenever they arrive, also after `turn/completed` or
   while the helper closes; a timed-out turn or any violation, also one detected
-  while the helper closes, ends with SIGKILL of the helper's process group.
+  while the helper closes, ends with SIGKILL of the helper's process group,
+  and that kill confirms the close only when the OS reports it sent or the
+  group absent; a failed or throwing group kill ends the attempt
+  `uncertain/close-unconfirmed` with the service admission retained.
   The validated answer is stored in the attempt file
   (`codex-fork-attempts/<owner>/<message>.json`, mode 0600) with a fixed
   `reason` code for every other outcome; nothing is relayed, and the owner's
