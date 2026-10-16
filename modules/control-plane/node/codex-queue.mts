@@ -18,6 +18,7 @@ import type { RunnerDeps } from "./session-runner.mts";
 import { listTasks } from "./task-records.mts";
 import { killSwitch } from "./wake-hook.mts";
 import { nativeQueueIdle, scheduleNativeQueue, scheduleNativeReconciliation } from "./codex-queue-producer.mts";
+import { forkReplyIdle, scheduleForkReply } from "./codex-fork-reply.mts";
 
 // Admit a compact CP hint for the authorized original Codex owner. The
 // synchronous original-owner hook consumes it at a supported tool boundary;
@@ -35,6 +36,7 @@ export async function codexQueueIdle(): Promise<void> {
     await current;
     await probesSettled();
     await nativeQueueIdle();
+    await forkReplyIdle();
     if (current === lane) return;
   }
 }
@@ -157,6 +159,9 @@ function queueFor(deps: RunnerDeps, sessionId: string, live: string[], selectInb
   }
   scheduleNativeQueue(deps, sessionId, due.filter((record) => record.toSession === sessionId)
     .map((record) => record.messageId), grant, log);
+  // Issue #408: off unless wake.codexFork is present; it needs the same wake
+  // authorization and, on top, the owner's full id in codexFork.sessions.
+  scheduleForkReply(deps, sessionId, due.filter((record) => record.toSession === sessionId).map((record) => record.messageId), log);
   const valid = previous && !previous.invalidated && previous.ticket.admittedAt <= now && now < previous.ticket.expiresAt
     && previous.ticket.policyFingerprint === busyPolicyFingerprint(policy);
   const pending = valid && previous.publishedAt !== undefined

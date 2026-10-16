@@ -9,12 +9,18 @@ import { contextOutput, type HookDeps } from "./deliver-core.mts";
 import { getMessage, MAX_REPLY_DEPTH } from "./inbox.mts";
 import { explicitlyListed, readPolicy } from "./policy.mts";
 
+// Issue #408: set in the environment of a Codex fork helper and inherited by its
+// hook children (codex-fork-process.mts); the Codex hooks then do nothing.
+export const CODEX_FORK_ENV = "KHEREP_CODEX_FORK";
+
 const HINT = "Kherep: New peer messages are waiting. Check this session's inbox and report any relevant update.";
 
 // A metadata hint in the current original-owner turn. No discovery, offers,
 // receipts, session ranking updates or extra turn budget at a tool boundary;
 // the only other write is the owner record's last event.
+// Nothing inside a fork helper (KHEREP_CODEX_FORK=1, issue #408).
 export function consumeBusyHint(input: unknown, deps: HookDeps): string {
+  if (process.env[CODEX_FORK_ENV] === "1") return "";
   if (!input || typeof input !== "object" || Array.isArray(input)) return "";
   const payload = input as Record<string, unknown>, owner = payload.session_id;
   if (typeof owner !== "string" || !postToolOriginalOwner(payload, owner)) return "";

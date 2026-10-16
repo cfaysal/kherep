@@ -8,7 +8,7 @@ import { checkRuntimes, checkWorker, findRuntime, runtimeVersion, type VersionOf
 import { checkHooks } from "./doctor-hooks.mts";
 import { checkIntercom } from "./doctor-intercom.mts";
 import {
-  checkCodexSessions, checkDaemon, checkEnrollment, checkListeners, checkPolicy, checkWakeReadiness, daemonReadiness, type Check,
+  checkCodexForkAttempts, checkCodexSessions, checkDaemon, checkEnrollment, checkListeners, checkPolicy, checkWakeReadiness, daemonReadiness, type Check,
 } from "./doctor-local.mts";
 import { defaultConfigDir } from "./launch-mode.mts";
 
@@ -69,6 +69,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     listeners: checkListeners(deps.paths, alive, now),
     wakeReadiness: checkWakeReadiness(deps.paths, parsed, alive, now),
     codexSessions: checkCodexSessions(deps.paths, now),
+    codexForkAttempts: checkCodexForkAttempts(deps.paths),
   };
   return { ok: Object.values(checks).every((check) => check.ok), version: checkoutVersion(repoRoot), checks };
 }

@@ -162,6 +162,14 @@ test("every refusal maps to an existing waiting progress code", () => {
   assert.ok(waiting.includes(FORK_PROGRESS["budget-spacing"]) && waiting.includes(FORK_PROGRESS["budget-exhausted"]));
 });
 
+// Issue #408, PR 3: guards 10 to 12 refuse in the fork producer before admission;
+// the message keeps waiting for the owner's next turn.
+test("the producer's refusals before admission map to awaiting-user-turn", () => {
+  for (const reason of ["fork-producer", "fork-mcp-unknown", "fork-features-unknown"] as const) {
+    assert.equal(FORK_PROGRESS[reason], "awaiting-user-turn", reason);
+  }
+});
+
 test("the fork audit actions are metadata lines like every other wake decision", (t) => {
   const f = fixture(t);
   const actions: AutonomyAction[] = ["fork", "fork-declined", "fork-failed", "fork-uncertain", "fork-superseded", "fork-not-idle",

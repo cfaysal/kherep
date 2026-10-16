@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { listenerDir } from "./autonomy.mts";
+import { advanceForkAttempt, claimForkAttempt, forkAttemptsPath } from "./codex-fork-attempts.mts";
 import { CODEX_ACTIVE_MS, recordCodexSession } from "./codex-sessions.mts";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { daemonStateFile } from "./daemon-state.mts";
@@ -332,4 +333,25 @@ test("kherep-node doctor prints JSON and exits 1 on a host that is not enrolled"
   assert.deepEqual([report.ok, report.checks.enrollment.ok, report.checks.daemon.ok], [false, false, false]);
   // Issue #436: no managed service, so the intercom command cannot resolve a pin.
   assert.deepEqual([report.checks.intercom.ok, report.checks.intercom.managed], [false, false]);
+});
+
+test("the Codex fork attempt check counts attempts by state and unreadable owners, without ids or answers (issue #408)", async (t) => {
+  const h = host(t);
+  const states = { launching: 0, running: 0, completed: 0, declined: 0, failed: 0, uncertain: 0, superseded: 0 };
+  assert.deepEqual((await runDoctor(h.deps)).checks.codexForkAttempts, { ok: true, states, unreadableOwners: 0 });
+  assert.equal(fs.existsSync(path.join(h.paths.dir, "codex-fork-attempts")), false, "doctor creates no store");
+  const owner = "019a0000-0000-7000-8000-0000000000b1", other = "019a0000-0000-7000-8000-0000000000b2";
+  const message = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
+  const claim = (who: string, n: number) => claimForkAttempt(h.paths, { owner: who, messageId: message(n), attemptedAt: 1,
+    policyFingerprint: "a".repeat(64), producer: { route: "local" } });
+  claim(owner, 1);
+  claim(owner, 2);
+  advanceForkAttempt(h.paths, owner, message(2), "launching", "running", {}, 2);
+  advanceForkAttempt(h.paths, owner, message(2), "running", "completed", { answer: "synthetic private answer" }, 3);
+  claim(other, 3);
+  fs.writeFileSync(path.join(forkAttemptsPath(h.paths, other), `${message(3)}.json`), "{");
+  const report = await runDoctor(h.deps);
+  assert.deepEqual(report.checks.codexForkAttempts, { ok: false, states: { ...states, launching: 1, completed: 1 }, unreadableOwners: 1,
+    detail: "a Codex fork attempt store cannot be read completely" });
+  for (const secret of [owner, other, message(1), "synthetic private answer"]) assert.equal(JSON.stringify(report).includes(secret), false);
 });

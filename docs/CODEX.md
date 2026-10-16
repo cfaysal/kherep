@@ -178,18 +178,23 @@ The original owner's `PostToolUse` refreshes the event of an existing record
 only; a subagent's call writes nothing. A session counts as idle only when its
 last event is a `Stop` that ended its turn at least 90 seconds ago and it was
 seen within 12 hours.
-This is evidence, not proof, and nothing acts on it yet: `msg sessions` shows
-the last event of this node's Codex sessions and `kherep-node doctor` counts
-them per event. Whether `Stop` fires for a cancelled turn, and whether an
-approval wait can be told apart, is UNKNOWN. A `Stop` counts as ending its
+This is evidence, not proof. Only the opt-in Codex fork reply below acts on it;
+`msg sessions` shows the last event of this node's Codex sessions and
+`kherep-node doctor` counts them per event. A turn ended by native
+`turn/interrupt` fires no `Stop` (measured on Codex 0.162.0-alpha.17.2 and
+0.163.0), so an interrupted turn leaves the session not idle until a later
+turn completes; the Desktop stop button and CLI Escape are not measured.
+Whether an approval wait can be told apart is UNKNOWN. A `Stop` counts as ending its
 turn only once the hook marks it with `lastStopEnded`, after recording it, on
 every exit that returns no blocking continuation; every hook event clears the
 mark. A `Stop` that blocked, or whose mark could not be written, does not count
 as idle.
 
-Codex fork reply (issue #408, in progress; nothing acts on it in this version).
-An opt-in `wake.codexFork` section names the Codex chats whose history an
-ephemeral read-only fork may later use to answer an idle owner's peer message:
+Codex fork reply (issue #408, in progress). Nothing changes while
+`wake.codexFork` is absent; with it present only `darwin` is accepted, and the
+answer is persisted, not relayed. The section names the Codex chats whose
+history an ephemeral read-only fork may use to answer an idle owner's peer
+message:
 
 ```json
 "wake": { "enabled": true, "sessions": ["*"],
@@ -205,9 +210,52 @@ attempt per message and decides admission (opt-in, kill switch, enrollment,
 policy unchanged, recorded non-task owner, permission mode, platform, the Codex
 delivery hook on `PostToolUse`, idle evidence, an accepted exact-addressed
 message below the reply depth, no earlier attempt, a working directory inside
-the workspace roots, readiness and the shared turn budget), but no daemon path
-calls it and no fork process exists yet. `kherep-node doctor` prints the
-section with a count of opted-in sessions.
+the workspace roots, readiness and the shared turn budget). With the section
+present on `darwin`, the daemon starts one short-lived `codex app-server` (the
+`codex` on `PATH`, run directly, in its own process group, with
+`KHEREP_CODEX_FORK=1`) per eligible message, one at a time on the node. It
+reads the owner without loading it (`thread/read`; the newest turn through
+`thread/turns/list`, which must be `completed`; and `thread/goal/get`, which
+must show no goal or a complete one). It then forks the idle owner ephemerally
+at that turn with tools, hooks, goals, web search, request-user-input and every
+discovered MCP server off. `deferGoalContinuation` is never sent: it cannot be
+combined with an ephemeral fork, and it copies the goal into a persisted one.
+The fork is driven only after `thread/goal/get` on it answers `-32600` with
+exactly `ephemeral thread does not support goals: <fork id>`, the server's
+statement that the fork cannot hold a goal; any other answer, `goal: null`
+included, fails the attempt. Both goal reads need goals enabled in the Codex
+config of the identity (the default): with goals disabled the helper cannot
+read the owner's goal, and every attempt refuses `goals-disabled` after its
+admission. No version or hash of `codex` is pinned: an upgrade that answers the
+same way keeps working, and one that answers differently fails visibly with a
+fixed reason code.
+The fork gets one bounded structured question; the daemon validates the answer
+and stores it in `codex-fork-attempts/<owner>/<message>.json`. Any approval or
+other request from the server, a tool item, a goal change or a turn the helper
+did not start fails the attempt. Nothing is sent, and the owner's inbox,
+record, progress and thread are untouched; the owner's next turn reads the
+message as before (the relay is the next increment). Each attempt writes one
+`wake.jsonl` line (`fork`, `fork-declined`, `fork-failed`, `fork-uncertain`,
+`fork-superseded`); `fork-not-idle` and `fork-disabled-platform` are written
+once per message. On another platform the only effect is the
+`fork-disabled-platform` line. The fork spends the owner's turn budget once per
+attempt. `kherep-node doctor` prints the section with a count of opted-in
+sessions and counts the attempts per state.
+
+Measured on synthetic threads (2026-10-16, Codex 0.160.1 on `PATH`,
+0.162.0-alpha.17.2 and 0.163.0): `thread/goal/get` answers `goal: null` for an
+owner no server has loaded and the exact ephemeral refusal for a fork, both
+answer "goals feature is disabled" with goals off, and a fork turn with the
+output schema runs with no turn or goal event the helper did not start.
+
+Not yet measured: until the macOS live acceptance passes, the fork reply is
+measured on synthetic threads only, and no real chat belongs in
+`codexFork.sessions`. Open are goal isolation with an active goal set on the
+owner; zero hook events with `features.hooks=false` alone; a fork of a Desktop-loaded owner
+(rollout hash, no new chat or Queue card in the Desktop UI); the real
+account's authentication without a login or token-refresh request; the real
+model catalog and plugins; MCP startup notifications; latency on a long
+rollout; and whether the Desktop stop button or CLI Escape fire `Stop`.
 
 Admission and a metadata claim leave messages `accepted`. Explicit
 `msg inbox --receive` offers only the messages actually returned; normal confirming

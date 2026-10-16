@@ -7,7 +7,7 @@ import { markListenerIdle, mayContinue } from "./autonomy.mts";
 import { nodePaths, readConfig } from "./config.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
 import { reconcileNativeQueues } from "./codex-native-reconcile.mts";
-import { deliverForCodex } from "./deliver-codex.mts";
+import { CODEX_FORK_ENV, deliverForCodex } from "./deliver-codex.mts";
 import { contextOutput, deliveryContext, retryOffered, sessionInbox, type HookDeps } from "./deliver-core.mts";
 import { midTurnOutput } from "./deliver-midturn.mts";
 import { localSessionName } from "./exchange.mts";
@@ -104,6 +104,8 @@ export async function runCodexHook(stdin: string, deps: HookDeps, write: (text: 
   warn: (line: string) => void,
   reconcile: (owner: string) => Promise<void> = (owner) => reconcileNativeQueues(deps.paths, owner)): Promise<void> {
   runHook(stdin, deps, write, warn, "codex");
+  // A hook of a Codex fork helper reconciles nothing (issue #408).
+  if (process.env[CODEX_FORK_ENV] === "1") return;
   try {
     const input: unknown = JSON.parse(stdin);
     if (typeof input !== "object" || input === null) return;

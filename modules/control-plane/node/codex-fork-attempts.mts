@@ -5,6 +5,7 @@ import path from "node:path";
 import { isMessageId } from "../protocol-messages.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
+import { FORK_GOAL_DETAILS, type ForkGoalDetail, type ForkGoalProof } from "./codex-fork-goal.mts";
 import { writeJsonAtomic } from "./inbox.mts";
 
 // The Codex fork reply's attempt store (issue #408, design section 2.8):
@@ -14,22 +15,35 @@ import { writeJsonAtomic } from "./inbox.mts";
 // owner (one attempt in flight) the daemon's serial lane does. Attempts are
 // never deleted. A malformed, foreign or unreadable record, an unexpected file
 // and a store past its bound fail every read closed: nothing reads as absent.
-// Not wired yet: nothing on a live path claims an attempt in this version.
+// The fork producer (codex-fork-reply.mts) claims and advances attempts; the
+// daemon recovers them at start.
 
 export const FORK_ATTEMPT_STATES = ["launching", "running", "completed", "declined", "failed", "uncertain", "superseded"] as const;
 export type ForkAttemptState = typeof FORK_ATTEMPT_STATES[number];
 export const MAX_FORK_ATTEMPTS = 1_024;
+// Why an attempt ended other than completed (issue #408, design section 6.1):
+// the fixed codes of the fork producer and of recovery, written once.
+export const FORK_ATTEMPT_REASONS = ["initialize", "cwd-mismatch", "last-turn-not-completed", "owner-goal", "goals-disabled", "goal-unknown",
+  "fork-rejected", "fork-shape", "fork-goal", "server-request", "tool-item", "unsolicited-turn", "mcp-started", "hook-ran",
+  "turn-interrupted", "turn-failed", "turn-timeout", "answer-invalid", "helper-exit", "close-unconfirmed", "needs-owner",
+  "insufficient-context"] as const;
+export type ForkAttemptReason = typeof FORK_ATTEMPT_REASONS[number];
 const MAX_RECORD_BYTES = 64 * 1024;
 
-// Immutable after the claim: attemptId to producer. Write-once: lastTurnId to relayedAt.
+// Immutable after the claim: attemptId to producer. Write-once: lastTurnId to
+// detail. goalProof: how the fork was shown to hold no goal; detail: the fixed
+// code of a failed post-fork goal check (codex-fork-goal.mts).
 export interface ForkAttempt {
   version: 1; attemptId: string; owner: string; messageId: string; attemptedAt: number; policyFingerprint: string;
   producer: Record<string, unknown>; state: ForkAttemptState; updatedAt: number;
-  lastTurnId?: string; forkId?: string; answer?: string; relayMessageId?: string; relayedAt?: number;
+  lastTurnId?: string; forkId?: string; answer?: string; relayMessageId?: string; relayedAt?: number; reason?: ForkAttemptReason;
+  goalProof?: ForkGoalProof; detail?: ForkGoalDetail;
 }
 export type ForkClaim = Pick<ForkAttempt, "owner" | "messageId" | "attemptedAt" | "policyFingerprint" | "producer">;
-export type ForkResult = Partial<Pick<ForkAttempt, "lastTurnId" | "forkId" | "answer" | "relayMessageId" | "relayedAt">>;
-const WRITE_ONCE = ["lastTurnId", "forkId", "answer", "relayMessageId", "relayedAt"] as const;
+export type ForkResult = Partial<Pick<ForkAttempt, "lastTurnId" | "forkId" | "answer" | "relayMessageId" | "relayedAt" | "reason"
+  | "goalProof" | "detail">>;
+const WRITE_ONCE = ["lastTurnId", "forkId", "answer", "relayMessageId", "relayedAt", "reason", "goalProof", "detail"] as const;
+const GOAL_PROOFS: readonly unknown[] = ["ephemeral-gate"];
 
 // A state may be rewritten with itself to add a write-once field. Terminal
 // states never change: uncertain, failed, declined and superseded never relaunch.
@@ -54,6 +68,9 @@ function valid(value: ForkAttempt | null, owner: string, messageId: string): val
     && value.policyFingerprint.length > 0 && typeof value.producer === "object" && value.producer !== null && !Array.isArray(value.producer)
     && FORK_ATTEMPT_STATES.includes(value.state) && text(value.lastTurnId) && text(value.forkId) && text(value.answer)
     && (value.relayMessageId === undefined || isMessageId(value.relayMessageId)) && (value.relayedAt === undefined || time(value.relayedAt))
+    && (value.reason === undefined || FORK_ATTEMPT_REASONS.includes(value.reason))
+    && (value.goalProof === undefined || GOAL_PROOFS.includes(value.goalProof))
+    && (value.detail === undefined || FORK_GOAL_DETAILS.includes(value.detail))
     && (value.state !== "completed" || typeof value.answer === "string");
 }
 
@@ -144,7 +161,7 @@ export function advanceForkAttempt(paths: NodePaths, owner: string, messageId: s
 }
 
 // At daemon start: no process of a previous daemon is still answering, so a
-// launching or running attempt is uncertain and never relaunches. unreadable:
+// launching or running attempt is uncertain (reason helper-exit) and never relaunches. unreadable:
 // owners whose store could not be read completely; their attempts stay as they are.
 export function recoverForkAttempts(paths: NodePaths, now: number): { recovered: number; unreadable: string[] } {
   const root = path.join(paths.dir, "codex-fork-attempts");
@@ -161,7 +178,7 @@ export function recoverForkAttempts(paths: NodePaths, now: number): { recovered:
     try {
       for (const attempt of forkAttempts(paths, owner)) {
         if (attempt.state !== "launching" && attempt.state !== "running") continue;
-        advanceForkAttempt(paths, owner, attempt.messageId, attempt.state, "uncertain", {}, now);
+        advanceForkAttempt(paths, owner, attempt.messageId, attempt.state, "uncertain", { reason: "helper-exit" }, now);
         recovered++;
       }
     } catch {
@@ -169,4 +186,17 @@ export function recoverForkAttempts(paths: NodePaths, now: number): { recovered:
     }
   }
   return { recovered, unreadable };
+}
+
+// Issue #408, design section 6.1: recovery at daemon start, one log line when
+// it changed or could not read something; without a store it writes nothing.
+export function recoverForkAttemptsAtStart(paths: NodePaths, now: number, log: (line: string) => void): void {
+  try {
+    const { recovered, unreadable } = recoverForkAttempts(paths, now);
+    if (recovered || unreadable.length) {
+      log(`kherep-node: ${recovered} Codex fork attempts marked uncertain; ${unreadable.length} owners unreadable`);
+    }
+  } catch (error) {
+    log(`kherep-node: Codex fork attempt recovery failed: ${String((error as Error).message ?? error)}`);
+  }
 }
