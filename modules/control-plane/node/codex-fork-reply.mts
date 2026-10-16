@@ -4,7 +4,7 @@ import { audit, type AutonomyAction } from "./autonomy.mts";
 import { findCodex } from "./codex-binary.mts";
 import { busyPolicyFingerprint } from "./codex-busy-policy.mts";
 import { admitForkReply, type ForkRefusal } from "./codex-fork-admission.mts";
-import { advanceForkAttempt, claimForkAttempt, readForkAttempt, type ForkResult } from "./codex-fork-attempts.mts";
+import { advanceForkAttempt, claimForkAttempt, readForkAttempt } from "./codex-fork-attempts.mts";
 import { parseFeaturesList } from "./codex-fork-params.mts";
 import { APP_SERVER_ARGS, runForkAttempt, type ForkOutcome, type ForkTimeouts } from "./codex-fork-process.mts";
 import { intercomMcpOverrides, MCP_CACHE_MS, runMcpList } from "./codex-mcp.mts";
@@ -148,22 +148,18 @@ async function attempt(deps: RunnerDeps, owner: string, messageIds: string[], fi
   if (!claim) return;
   // A record gone or read since admission: the owner was first.
   const record = getMessage(deps.paths.inbox, messageId);
-  let outcome: ForkOutcome = { state: "superseded", from: "launching" };
-  if (record?.state === "accepted") try {
-    outcome = await runForkAttempt({ codex }, { owner, cwd: decision.cwd, producer: guards.producer, features: guards.features,
+  const outcome: ForkOutcome = record?.state !== "accepted" ? { state: "superseded", from: "launching" }
+    : await runForkAttempt({ codex }, { owner, cwd: decision.cwd, producer: guards.producer, features: guards.features,
       mcpNames: guards.mcpNames, record, maxAnswerBytes, admission, log, timeouts: forkTestTimeouts.value, realpath: deps.realpath,
       stillAccepted: () => getMessage(deps.paths.inbox, messageId)?.state === "accepted",
       running: (lastTurnId, forkId, goalProof) => {
         advanceForkAttempt(deps.paths, owner, messageId, "launching", "running", { lastTurnId, forkId, goalProof }, now());
-      } });
-  } catch {
-    outcome = { state: "uncertain", from: "launching", reason: "helper-exit" };
-  }
-  const fields: ForkResult = outcome.state === "completed" ? { answer: outcome.answer }
-    : "reason" in outcome ? { reason: outcome.reason, ...("detail" in outcome ? { detail: outcome.detail } : {}) } : {};
+      } }).catch((): ForkOutcome => ({ state: "uncertain", from: "launching", reason: "helper-exit" }));
+  // Each outcome carries exactly its write-once fields: answer, or reason and detail.
+  const { state, from, ...fields } = outcome;
   try {
-    advanceForkAttempt(deps.paths, owner, messageId, outcome.from, outcome.state, fields, now());
+    advanceForkAttempt(deps.paths, owner, messageId, from, state, fields, now());
   } finally {
-    audit(deps.paths, now(), owner, [messageId], AUDIT[outcome.state]);
+    audit(deps.paths, now(), owner, [messageId], AUDIT[state]);
   }
 }
