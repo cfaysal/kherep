@@ -211,11 +211,13 @@ increments the minor version; every other release increments the patch version.
   `fork-permission-mode`, `fork-budget-spacing`, ...) and the producer's own
   `fork-producer`, `fork-mcp-unknown`, `fork-features-unknown` and
   `fork-relay-unsupported`; `fork-not-idle` and `fork-disabled-platform` are
-  unchanged. A line carries ids and the code only, and a line whose append
-  failed is written at the next poll. Documentation states that a fork
-  owner's recorded working directory must lie inside the workspace roots and
-  that a `codex exec` session, which reports `bypassPermissions`, can never be
-  a fork owner.
+  unchanged. A line carries ids and the code only. A line whose append
+  failed is not marked as noted, so the next poll that meets the same
+  refusal writes it again once the audit file is writable. Documentation
+  states that a fork owner's recorded working directory must lie inside the
+  workspace roots and that a `codex exec` session reports `bypassPermissions`
+  and is therefore refused as a fork owner (measured 2026-10-16 with
+  codex-cli 0.160.1).
 - Service owner probe in unit tests (issue #423): the runner deps carry the
   owner probe of a service admission (`serviceOwner`), and task starts,
   continues, closed-session resumes, Codex runs and Codex queue runs use it.

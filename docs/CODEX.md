@@ -257,8 +257,9 @@ owner, message and code (issue #444): `fork-disabled-platform`, `fork-not-idle`,
 `fork-cwd-refused`, `fork-permission-mode`, `fork-budget-spacing` and so on (the
 admission code with the prefix `fork-`), and the producer's own `fork-producer`,
 `fork-mcp-unknown`, `fork-features-unknown` and `fork-relay-unsupported`. A line
-carries ids and the code only, never a path or text; a line whose append failed
-is written at the next poll. On another platform the only effect is the
+carries ids and the code only, never a path or text. A line whose append failed
+is not marked as noted: the next poll that meets the same refusal writes it
+again once the audit file is writable. On another platform the only effect is the
 `fork-disabled-platform` line. The fork spends the owner's turn budget once per
 attempt. A non-interactive `codex exec` session reports `approval_policy=never`
 to the hooks even with `-a on-request` and `--sandbox read-only` (measured
