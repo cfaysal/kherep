@@ -42,8 +42,8 @@ test("renderIntercom substitutes exactly the two intercom placeholders and is id
 test("intercomValues names the launcher of the config root and this node from node.json", (t) => {
   const root = tempRoot(t);
   assert.deepEqual(intercomValues(root), { command: launcherCommand(root), exampleTarget: "peer/session" });
-  enroll(root, "sekhmet");
-  assert.deepEqual(intercomValues(root), { command: launcherCommand(root), exampleTarget: "sekhmet/maestro" });
+  enroll(root, "node-a");
+  assert.deepEqual(intercomValues(root), { command: launcherCommand(root), exampleTarget: "node-a/maestro" });
   enroll(root, "not a node name");
   assert.equal(intercomValues(root).exampleTarget, "peer/session");
   fs.writeFileSync(path.join(root, "control-plane", "node.json"), "{ unreadable");
