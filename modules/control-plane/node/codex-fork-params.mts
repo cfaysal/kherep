@@ -21,7 +21,13 @@ export function forkParams(owner: string, lastTurnId: string, cwd: string, featu
     approvalPolicy: "on-request", config };
 }
 
-const FEATURE_LINE = /^(\S+)\s+(stable|experimental|under development|removed)\s+(true|false)\s*$/;
+// The stages are a closed list: MEASURED 2026-10-16 on the raw stdout of Codex
+// 0.160.1, 0.162.0-alpha.17.2 and 0.163.0, which also list `deprecated`
+// (transcript_v2, use_legacy_landlock, web_search_cached, web_search_request)
+// and dotted keys (guardianv2.thread_context). Any other stage word fails the
+// listing. A deprecated key is listed and so counts as present, like stable or
+// experimental; only a removed key does not.
+const FEATURE_LINE = /^(\S+)\s+(stable|experimental|under development|deprecated|removed)\s+(true|false)\s*$/;
 
 // The keys a `codex features list` output lists as not removed, or null for an
 // output with any other non-empty line or with no key at all.
