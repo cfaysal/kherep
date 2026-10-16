@@ -14,6 +14,7 @@ export interface LifecycleDependencies {
   timeoutMs?: number;
   now?: () => string;
   verifySource?: (identity: SourceIdentity) => boolean;
+  reportAdmissionWait?: (message: string) => void;
 }
 
 const exact = (left: Buffer, right: Buffer): boolean => left.equals(right);
@@ -31,14 +32,15 @@ export function lifecycleDefaults(deps: LifecycleDependencies) {
     }) };
 }
 
-async function poll<T>(timeout: number, sleep: (ms: number) => Promise<void>, check: () => Promise<T | null>): Promise<T> {
+async function poll<T>(timeout: number, sleep: (ms: number) => Promise<void>, check: () => Promise<T | null>,
+  timeoutMessage = () => "managed service verification timed out"): Promise<T> {
   const deadline = Date.now() + timeout;
   do {
     const value = await check();
     if (value !== null) return value;
     await sleep(100);
   } while (Date.now() <= deadline);
-  throw new Error("managed service verification timed out");
+  throw new Error(timeoutMessage());
 }
 
 export async function proveStopped(pid: number | undefined, deps: ReturnType<typeof lifecycleDefaults>): Promise<void> {
@@ -50,7 +52,15 @@ export async function prepareStop(
   binding: ServiceBinding, expected: DaemonState | null, input: LifecycleDependencies, sourceRoot?: string,
 ): Promise<void> {
   const deps = lifecycleDefaults(input);
-  await poll(deps.timeout, deps.sleep, async () => serviceAdmissionsIdle(input.paths) ? true : null);
+  let lastBlocker: string | undefined;
+  const report = input.reportAdmissionWait ?? console.error;
+  await poll(deps.timeout, deps.sleep, async () => serviceAdmissionsIdle(input.paths, undefined, blocker => {
+    const descriptor = `lease=${blocker.leaseId} pid=${blocker.pid} processStartedAt=${blocker.startedAt}`;
+    if (descriptor !== lastBlocker) {
+      lastBlocker = descriptor;
+      report(`waiting for service admission: ${descriptor}`);
+    }
+  }) ? true : null, () => `managed service admission wait timed out${lastBlocker ? `; ${lastBlocker}` : ""}`);
   if (!expected) { await input.adapter.preflightStop(binding, undefined); return; }
   const current = deps.readState(input.paths);
   if (!current || current.pid !== expected.pid || current.startedAt !== expected.startedAt) {

@@ -11,6 +11,7 @@ const root = (paths: NodePaths): string => path.join(paths.dir, "service");
 export const serviceDrainFile = (paths: NodePaths): string => path.join(root(paths), "drain");
 const admissions = (paths: NodePaths): string => path.join(root(paths), "admissions");
 export interface ServiceAdmission { readonly root: string }
+export interface ServiceAdmissionBlocker { leaseId: string; pid: number; startedAt: string }
 const activeAdmissions = new WeakSet<ServiceAdmission>();
 const retainedAdmissions = new WeakSet<ServiceAdmission>();
 
@@ -135,7 +136,9 @@ export function beginServiceDrain(paths: NodePaths, probe?: ServiceOwnerProbe): 
   return acquireServiceOwnerFile(serviceDrainFile(paths), "another managed service drain is already active", probe);
 }
 
-export function serviceAdmissionsIdle(paths: NodePaths, probe: ServiceOwnerProbe = defaultServiceOwnerProbe): boolean {
+export function serviceAdmissionsIdle(
+  paths: NodePaths, probe: ServiceOwnerProbe = defaultServiceOwnerProbe, onBlocked?: (blocker: ServiceAdmissionBlocker) => void,
+): boolean {
   try {
     const current = probe.current();
     for (const name of fs.readdirSync(admissions(paths))) {
@@ -146,10 +149,17 @@ export function serviceAdmissionsIdle(paths: NodePaths, probe: ServiceOwnerProbe
         if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
         throw new Error("service admission lease owner cannot be verified");
       }
+      const blocked = (): false => {
+        try {
+          onBlocked?.({ leaseId: crypto.createHash("sha256").update(name).digest("hex").slice(0, 12),
+            pid: existing.owner.pid, startedAt: new Date(Date.parse(existing.owner.startedAt)).toISOString() });
+        } catch { /* Diagnostic failure cannot change the admission decision. */ }
+        return false;
+      };
       if (existing.owner.pid === current.pid && existing.owner.startedAt === current.startedAt
-        && existing.owner.owner === current.owner) return false;
+        && existing.owner.owner === current.owner) return blocked();
       const active = probe.active(existing.owner);
-      if (active === true) return false;
+      if (active === true) return blocked();
       if (active === "unknown") throw new Error("service admission lease owner cannot be verified");
       try {
         if (fs.readFileSync(file, "utf8") !== existing.bytes) throw new Error("service admission lease owner changed during verification");
