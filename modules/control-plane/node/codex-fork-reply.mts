@@ -35,7 +35,7 @@ export const forkTestTimeouts: { value?: Partial<ForkTimeouts> } = {};
 // other codes the same message saw in between. Not note() of codex-wake.mts: it
 // keeps one action per message, so the hint path's own "wake" note in between
 // would audit the same refusal again. Not audited: no due message, a pending
-// lane, an owner not opted in, an unreadable file, a message with an attempt
+// lane, an owner the scheduler finds not opted in, an unreadable file, a message with an attempt
 // (the attempt file is the record) and a lost claim race (the file exists).
 // A code counts as noted only once its line was appended: a failed append is retried.
 // Keyed by owner, then message: the inbox can readdress a message id to another session.
