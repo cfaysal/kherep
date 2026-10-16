@@ -909,8 +909,10 @@ JS
   [ ! -e "$C/backups/bootstrap/.install.lock" ] || fail "deps failure kept the install lock"
   cmp "$C/statusline-command.sh" "$HERE/../claude/statusline-command.sh" >/dev/null ||
     fail "deps failure did not leave the managed file installed"
+  # Issue #436: the install rendered the intercom command for this config root,
+  # so drift-check renders against the same one.
   HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
-    bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
+    KHEREP_CONFIG_DIR="$config" bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
     { cat "$ROOT/drift.log"; fail "drift-check failed after a committed install with a failed deps phase"; }
 }
 
