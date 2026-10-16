@@ -15,6 +15,8 @@ export const LAUNCHER_REASONS = Object.freeze({
 
 export const LAUNCHER_HINT = `run "kherep-node service install|upgrade" from a clean checkout`;
 
+export const PIN_COMMIT = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
 const HEADER = "Managed by Kherep (issue #436): the stable Control Plane command. Rewritten by kherep-node service; do not edit.";
 
 // The config root is derived as config.mts configRoot() does, so the CLI the
@@ -56,7 +58,7 @@ function resolve() {
   if (receipt?.version !== 1 || source?.kind !== "pin" || source.verified !== true
     || typeof source.root !== "string" || !path.isAbsolute(source.root)
     || typeof binding.nodeExecutable !== "string" || !path.isAbsolute(binding.nodeExecutable)
-    || typeof source.commit !== "string" || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(source.commit)) fail("invalid");
+    || typeof source.commit !== "string" || !${PIN_COMMIT}.test(source.commit)) fail("invalid");
   if (!isFile(path.join(source.root, ".kherep-source.json"))) fail("missing-pin");
   const cli = path.join(source.root, "modules", "control-plane", "node", "cli.mts");
   if (!isFile(cli)) fail("missing-cli");

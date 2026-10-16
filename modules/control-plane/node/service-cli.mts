@@ -5,7 +5,7 @@ import { parseArgs } from "node:util";
 import { configRoot, nodePaths, readConfig } from "./config.mts";
 import { pidAlive, readDaemonState, type DaemonState } from "./daemon-state.mts";
 import { captureSourceIdentity, compareSourceIdentity, runtimeSourceRoot } from "./daemon-source.mts";
-import { ensureLauncher } from "./launcher.mts";
+import { ensureLauncher, type LauncherStatus } from "./launcher.mts";
 import type { LifecycleDependencies } from "./service-lifecycle.mts";
 import { servicePlatform, serviceSelector, supportedServicePlatform } from "./service-platform.mts";
 import { readServiceReceipt, serviceRoot, snapshotDigests, type ServiceReceipt } from "./service-records.mts";
@@ -102,7 +102,7 @@ function safeResult(value: Awaited<ReturnType<typeof activateManagedService>>, a
 // just wrote, outside the transaction: a failed write is reported and leaves the
 // activation in place. Without a receipt (a rollback to a legacy service) the
 // launcher still exists and fails closed.
-function refreshLauncher(root: string, readReceipt: () => ServiceReceipt | null): "written" | "unchanged" | "failed" {
+function refreshLauncher(root: string, readReceipt: () => ServiceReceipt | null): LauncherStatus | "failed" {
   try {
     const binding = readReceipt()?.binding;
     return ensureLauncher(root, { platform: binding?.platform ?? supportedServicePlatform(),

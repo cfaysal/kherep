@@ -7,6 +7,8 @@ import type test from "node:test";
 // Nothing here touches a real config root: every root is a fresh mkdtemp.
 
 export const RECORD_ENV = "KHEREP_LAUNCHER_TEST_RECORD";
+export const COMMIT_A = "a".repeat(40);
+export const COMMIT_B = "b".repeat(40);
 
 // A stub Control Plane CLI: names its pin, echoes its argv, records that it ran
 // and exits 7, so a test can see which pin the launcher chose and that the

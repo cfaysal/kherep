@@ -8,7 +8,7 @@ import {
   LAUNCHER_FILE, ensureLauncher, launcherCommand, launcherPath, renderLauncher, resolveLauncher, type LauncherIo,
 } from "./launcher.mts";
 import { LAUNCHER_SCRIPT } from "./launcher-template.mts";
-import { launcherBytes, makePin, receiptFor, receiptPath, tempRoot, writeReceipt } from "./launcher-fixture.mts";
+import { COMMIT_A, COMMIT_B, launcherBytes, makePin, receiptFor, receiptPath, tempRoot, writeReceipt } from "./launcher-fixture.mts";
 import { serviceRoot } from "./service-records.mts";
 
 // Issue #436: the stable launcher, rendered, written and resolved.
@@ -101,19 +101,19 @@ test("resolveLauncher follows the receipt and fails closed with a distinct reaso
   assert.deepEqual(resolveLauncher(root), { ok: false, reason: "missing", receipt });
   writeReceipt(root, "{ not json");
   assert.deepEqual(resolveLauncher(root), { ok: false, reason: "invalid", receipt });
-  const pin = makePin(root, "a".repeat(40), "A");
-  writeReceipt(root, receiptFor(pin, "a".repeat(40), process.execPath, "checkout"));
+  const pin = makePin(root, COMMIT_A, "A");
+  writeReceipt(root, receiptFor(pin, COMMIT_A, process.execPath, "checkout"));
   assert.deepEqual(resolveLauncher(root), { ok: false, reason: "invalid", receipt });
-  writeReceipt(root, receiptFor("relative/pin", "a".repeat(40)));
+  writeReceipt(root, receiptFor("relative/pin", COMMIT_A));
   assert.deepEqual(resolveLauncher(root), { ok: false, reason: "invalid", receipt });
   writeReceipt(root, receiptFor(pin, "not-a-commit"));
   assert.deepEqual(resolveLauncher(root), { ok: false, reason: "invalid", receipt });
-  writeReceipt(root, receiptFor(path.join(root, "gone"), "a".repeat(40)));
+  writeReceipt(root, receiptFor(path.join(root, "gone"), COMMIT_A));
   assert.deepEqual(resolveLauncher(root), { ok: false, reason: "missing-pin", receipt });
-  const bare = makePin(root, "b".repeat(40), "B", { cli: false });
-  writeReceipt(root, receiptFor(bare, "b".repeat(40)));
+  const bare = makePin(root, COMMIT_B, "B", { cli: false });
+  writeReceipt(root, receiptFor(bare, COMMIT_B));
   assert.deepEqual(resolveLauncher(root), { ok: false, reason: "missing-cli", receipt });
-  writeReceipt(root, receiptFor(pin, "a".repeat(40)));
+  writeReceipt(root, receiptFor(pin, COMMIT_A));
   assert.deepEqual(resolveLauncher(root), { ok: true, receipt, pin, nodeExecutable: process.execPath,
     cli: path.join(pin, "modules", "control-plane", "node", "cli.mts") });
 });
@@ -138,7 +138,7 @@ for (const [platform, flavor, root, node] of [
       files.set(flavor.join(dir, "modules", "control-plane", "node", "cli.mts"), "");
       return dir;
     };
-    const [a, b] = [pin("a".repeat(40)), pin("b".repeat(40))];
+    const [a, b] = [pin(COMMIT_A), pin(COMMIT_B)];
     const rendered: unknown[] = [];
     const resolved: unknown[] = [];
     for (const [dir, commit] of [[a, "a"], [b, "b"], [a, "a"]] as const) {

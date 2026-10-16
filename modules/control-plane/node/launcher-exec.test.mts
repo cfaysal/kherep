@@ -7,7 +7,7 @@ import test from "node:test";
 import { configRoot } from "./config.mts";
 import { ensureLauncher, launcherCommand, launcherPath, resolveLauncher } from "./launcher.mts";
 import { LAUNCHER_HINT, LAUNCHER_REASONS } from "./launcher-template.mts";
-import { RECORD_ENV, makePin, receiptFor, receiptPath, tempRoot, writeReceipt } from "./launcher-fixture.mts";
+import { COMMIT_A, COMMIT_B, RECORD_ENV, makePin, receiptFor, receiptPath, tempRoot, writeReceipt } from "./launcher-fixture.mts";
 import { withNodeOnPath } from "./task-env.mts";
 
 // Issue #436: the generated kherep-node.mjs and its shims, executed for real
@@ -37,8 +37,8 @@ function available(command: string, args: string[]): boolean {
 
 test("the launcher runs the receipt's pin with the argument vector verbatim and passes exit code 7 back", (t) => {
   const h = host(t);
-  const pin = makePin(h.root, "a".repeat(40), "A");
-  writeReceipt(h.root, receiptFor(pin, "a".repeat(40)));
+  const pin = makePin(h.root, COMMIT_A, "A");
+  writeReceipt(h.root, receiptFor(pin, COMMIT_A));
   const result = launch(h.root, ARGS, h.env);
   assert.equal(result.status, 7, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), { pin: "A", argv: ARGS });
@@ -52,20 +52,22 @@ test("every failed resolution exits 1 with the fixed message and starts no child
     assert.equal(result.status, 1, reason);
     assert.equal(result.stdout, "");
     assert.equal(result.stderr, `kherep-node: ${LAUNCHER_REASONS[reason]}; receipt ${receiptPath(h.root)}; ${LAUNCHER_HINT}\n`);
-    const resolved = resolveLauncher(h.root);
-    if (reason !== "spawn") assert.equal(resolved.ok ? "ok" : resolved.reason, reason, "resolveLauncher agrees");
+    if (reason !== "spawn") {
+      const resolved = resolveLauncher(h.root);
+      assert.equal(resolved.ok ? "ok" : resolved.reason, reason, "resolveLauncher agrees");
+    }
   };
   expect("missing");
   writeReceipt(h.root, "{ corrupt");
   expect("invalid");
-  const pin = makePin(h.root, "a".repeat(40), "A");
-  writeReceipt(h.root, receiptFor(pin, "a".repeat(40), process.execPath, "checkout"));
+  const pin = makePin(h.root, COMMIT_A, "A");
+  writeReceipt(h.root, receiptFor(pin, COMMIT_A, process.execPath, "checkout"));
   expect("invalid");
-  writeReceipt(h.root, receiptFor(path.join(h.root, "gone"), "a".repeat(40)));
+  writeReceipt(h.root, receiptFor(path.join(h.root, "gone"), COMMIT_A));
   expect("missing-pin");
-  writeReceipt(h.root, receiptFor(makePin(h.root, "b".repeat(40), "B", { cli: false }), "b".repeat(40)));
+  writeReceipt(h.root, receiptFor(makePin(h.root, COMMIT_B, "B", { cli: false }), COMMIT_B));
   expect("missing-cli");
-  writeReceipt(h.root, receiptFor(pin, "a".repeat(40), path.join(h.root, "no-such-node")));
+  writeReceipt(h.root, receiptFor(pin, COMMIT_A, path.join(h.root, "no-such-node")));
   expect("spawn");
   assert.equal(h.ran(), "", "no stub ran");
 });
@@ -84,7 +86,7 @@ test("without KHEREP_CONFIG_DIR the launcher derives the config root exactly as 
 test("the POSIX shim runs the launcher from a root with a space", (t) => {
   if (!available("sh", ["-c", "exit 0"])) { t.skip("sh is not available on this host"); return; }
   const h = host(t);
-  writeReceipt(h.root, receiptFor(makePin(h.root, "a".repeat(40), "A"), "a".repeat(40)));
+  writeReceipt(h.root, receiptFor(makePin(h.root, COMMIT_A, "A"), COMMIT_A));
   const result = run("sh", [path.join(h.root, "bin", "kherep-node"), ...ARGS], { env: h.env });
   assert.equal(result.status, 7, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), { pin: "A", argv: ARGS });
@@ -98,7 +100,7 @@ test("the canonical command and the shim survive Git Bash path conversion", (t) 
   if (process.platform !== "win32") { t.skip("Git Bash path conversion exists only on Windows"); return; }
   if (!available("sh", ["-c", "exit 0"])) { t.skip("Git Bash sh is not available on this host"); return; }
   const h = host(t);
-  writeReceipt(h.root, receiptFor(makePin(h.root, "a".repeat(40), "A"), "a".repeat(40)));
+  writeReceipt(h.root, receiptFor(makePin(h.root, COMMIT_A, "A"), COMMIT_A));
   const env = withNodeOnPath(h.env);
   for (const conversion of ["default", "off"] as const) {
     const shellEnv = { ...env, ...(conversion === "off" ? { MSYS_NO_PATHCONV: "1" } : {}) };
@@ -117,7 +119,7 @@ test("the canonical command and the shim survive Git Bash path conversion", (t) 
 test("the cmd shim passes arguments and the exit code through", (t) => {
   if (process.platform !== "win32") { t.skip("cmd.exe exists only on Windows"); return; }
   const h = host(t);
-  writeReceipt(h.root, receiptFor(makePin(h.root, "a".repeat(40), "A"), "a".repeat(40)));
+  writeReceipt(h.root, receiptFor(makePin(h.root, COMMIT_A, "A"), COMMIT_A));
   const shim = path.join(h.root, "bin", "kherep-node.cmd");
   const line = `""${shim}" msg send peer/session -- "ready for review""`;
   const result = run(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", line], { env: h.env, windowsVerbatimArguments: true });
@@ -130,7 +132,7 @@ test("the PowerShell shim passes arguments and the exit code through", (t) => {
   const shell = ["pwsh", "powershell"].find(name => available(name, ["-NoProfile", "-Command", "exit 0"]));
   if (!shell) { t.skip("no PowerShell on this host"); return; }
   const h = host(t);
-  writeReceipt(h.root, receiptFor(makePin(h.root, "a".repeat(40), "A"), "a".repeat(40)));
+  writeReceipt(h.root, receiptFor(makePin(h.root, COMMIT_A, "A"), COMMIT_A));
   const shim = path.join(h.root, "bin", "kherep-node.ps1").replaceAll("'", "''");
   const result = run(shell, ["-NoProfile", "-NonInteractive", "-Command",
     `& '${shim}' msg send peer/session 'ready for review'; exit $LASTEXITCODE`], { env: h.env });
