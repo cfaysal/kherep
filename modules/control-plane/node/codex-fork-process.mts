@@ -65,7 +65,10 @@ class Stop extends Error {
   constructor(reason: ForkAttemptReason) { super(reason); this.reason = reason; }
 }
 
-interface Session { client: AppServerClient; watch: ForkWatch; input: ForkRunInput; t: ForkTimeouts; gone: () => boolean; phase: Phase }
+// force: the close must end with the group SIGKILL (a timed-out or violating turn, issue #432).
+interface Session {
+  client: AppServerClient; watch: ForkWatch; input: ForkRunInput; t: ForkTimeouts; gone: () => boolean; phase: Phase; force: boolean;
+}
 
 export async function runForkAttempt(deps: { codex?: CodexDeps }, input: ForkRunInput): Promise<ForkOutcome> {
   const t = { ...TIMEOUTS, ...input.timeouts };
@@ -96,19 +99,26 @@ export async function runForkAttempt(deps: { codex?: CodexDeps }, input: ForkRun
     kill: (value) => { if (child.pid !== undefined) signal(child.pid, value); }, onServerRequest: () => watch.refuse("server-request") });
   client.onNotification((note) => watch.add(note));
   const gone = (): boolean => exited || neverStarted || client.failure instanceof AppServerExitedError;
-  const session: Session = { client, watch, input, t, gone, phase: "launching" };
+  const session: Session = { client, watch, input, t, gone, phase: "launching", force: false };
   let outcome: ForkOutcome;
   try {
     outcome = await converse(session);
   } catch {
     outcome = { state: "uncertain", from: session.phase, reason: "helper-exit" };
   }
-  if (!await client.shutdown() && !neverStarted) {
+  if (!await client.shutdown(session.force) && !neverStarted) {
     deps.codex?.onUnconfirmedShutdown?.();
     retainServiceAdmission(input.admission);
     return { state: "uncertain", from: outcome.from, reason: "close-unconfirmed" };
   }
-  return outcome;
+  return discardOnViolation(outcome, watch);
+}
+
+// A watch rule that fired at any time, also in the stdout chunk that carried
+// turn/completed or while the helper closed, discards an answer or a decline.
+function discardOnViolation(outcome: ForkOutcome, watch: ForkWatch): ForkOutcome {
+  if (!watch.violation || (outcome.state !== "completed" && outcome.state !== "declined")) return outcome;
+  return { state: "failed", from: outcome.from, reason: watch.violation };
 }
 
 async function ask(s: Session, method: string, params: unknown, ms: number, reason: ForkAttemptReason): Promise<unknown> {
@@ -215,9 +225,13 @@ async function turn(s: Session, forkId: string): Promise<ForkOutcome> {
   const end = await waitTurn(s, forkId, turnId);
   const interrupt = (): Promise<unknown> => s.client.request("turn/interrupt", { threadId: forkId, turnId }, s.t.interruptMs)
     .catch(() => undefined);
-  if (end.kind === "violation") { await interrupt(); return failed(s.watch.violation!); }
-  if (end.kind === "timeout") { await interrupt(); return uncertain("turn-timeout"); }
+  if (end.kind === "violation" || end.kind === "timeout") {
+    s.force = true;
+    await interrupt();
+    return end.kind === "timeout" ? uncertain("turn-timeout") : failed(s.watch.violation!);
+  }
   if (end.kind === "gone") return uncertain("helper-exit");
+  if (s.watch.violation) return failed(s.watch.violation);
   const answer = validateForkAnswer(s.watch.notifications, end.params, forkId, turnId, s.input.maxAnswerBytes);
   if (answer.kind === "answer") return { state: "completed", from: "running", answer: answer.text };
   if (answer.kind === "decline") return { state: "declined", from: "running", reason: answer.code };

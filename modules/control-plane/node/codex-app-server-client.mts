@@ -183,13 +183,14 @@ export class AppServerClient {
     });
   }
 
-  // True when both exit and close of the child were seen.
-  shutdown(): Promise<boolean> {
-    return this.closing ??= this.shutdownOnce();
+  // True when both exit and close of the child were seen. force: end with
+  // SIGKILL whatever the child does, as after a failure (a timed-out turn).
+  shutdown(force = false): Promise<boolean> {
+    return this.closing ??= this.shutdownOnce(force);
   }
 
-  private async shutdownOnce(): Promise<boolean> {
-    const forced = this.options.forceAfterFailure === true && this.failed !== null;
+  private async shutdownOnce(force: boolean): Promise<boolean> {
+    const forced = force || (this.options.forceAfterFailure === true && this.failed !== null);
     this.rejectPending(new Error("Codex app server closed"));
     this.child.stdin.end();
     const grace = this.options.graceMs ?? 125;
