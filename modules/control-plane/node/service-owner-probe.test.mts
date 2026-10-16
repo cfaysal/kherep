@@ -81,3 +81,54 @@ test("outside Windows the identity is the user name and starts no PowerShell", (
   assert.equal(probe.current().owner, os.userInfo().username);
   assert.deepEqual(calls, []);
 });
+
+const recorded = { version: 1 as const, pid: 4242, startedAt: "2026-10-14T10:00:00.000Z", owner: SID };
+
+test("a different Windows process start proves a stale generation without readable SID (issue #442)", () => {
+  for (const owner of [null, undefined, "invalid", 42]) {
+    for (const offset of [30_600_000, 2_001, -2_001]) {
+      const startedAt = new Date(Date.parse(recorded.startedAt) + offset).toISOString();
+      const { probe } = scripted(found(JSON.stringify({ status: "found", startedAt, owner })));
+      assert.equal(probe.active(recorded), false, `offset=${offset}, SID=${owner}`);
+    }
+  }
+});
+
+test("unreadable SID within the unchanged two-second tolerance stays unknown", () => {
+  for (const offset of [0, 1_999, -1_999, 2_000, -2_000]) {
+    const startedAt = new Date(Date.parse(recorded.startedAt) + offset).toISOString();
+    for (const owner of [null, undefined, "invalid"]) {
+      const { probe } = scripted(found(JSON.stringify({ status: "found", startedAt, owner })));
+      assert.equal(probe.active(recorded), "unknown", `offset=${offset}, SID=${owner}`);
+    }
+    const matching = scripted(found(JSON.stringify({ status: "found", startedAt, owner: SID.toLowerCase() })));
+    assert.equal(matching.probe.active(recorded), true);
+    const different = scripted(found(JSON.stringify({ status: "found", startedAt, owner: "S-1-5-21-1-2-3-1002" })));
+    assert.equal(different.probe.active(recorded), false);
+  }
+});
+
+test("invalid evidence stays unknown rather than proving stale ownership", () => {
+  for (const observation of [
+    { status: "unknown", startedAt: "2026-10-14T18:30:00.000Z" },
+    { status: "unexpected", startedAt: "2026-10-14T18:30:00.000Z" },
+    ...[undefined, null, 42, "invalid", "Infinity"].map(startedAt => ({ status: "found", startedAt, owner: SID })),
+  ]) {
+    assert.equal(scripted(found(JSON.stringify(observation))).probe.active(recorded), "unknown");
+  }
+  assert.equal(scripted(found("not JSON")).probe.active(recorded), "unknown");
+  assert.equal(scripted(found(JSON.stringify({ status: "missing" }))).probe.active(recorded), false);
+  for (const owner of [{ ...recorded, startedAt: "invalid" }, { ...recorded, owner: "EXAMPLE\\legacy-account" }]) {
+    const { probe, calls } = scripted(found(JSON.stringify({ status: "missing" })));
+    assert.equal(probe.active(owner), "unknown");
+    assert.equal(calls.length, 0, "invalid stored provenance is rejected before native lookup");
+  }
+});
+
+test("failed and timed-out native children cannot supply partial start proof", () => {
+  const stdout = JSON.stringify({ status: "found", startedAt: "2026-10-14T18:30:00.000Z", owner: null });
+  for (const result of [{ status: 1, stdout }, { ...timedOutResult(), stdout }]) {
+    const { probe } = scripted(result, result);
+    assert.equal(probe.active(recorded), "unknown");
+  }
+});

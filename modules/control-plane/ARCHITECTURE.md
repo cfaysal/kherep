@@ -64,6 +64,14 @@ rollback independently read back restored bytes and restart only a verified
 prior source. An uncertain absence or historical mutable-source drift stays
 unknown and does not authorize another process stop.
 
+Windows owner probes preserve a valid process creation time even when the SID
+cannot be read. A start-time difference greater than the existing two-second
+tolerance independently proves the recorded generation stale; within that
+tolerance an unreadable SID remains unknown and blocks recovery. Admission waits
+report only an opaque lease fingerprint, PID and normalized recorded process
+start time, immediately and when the first blocker changes. The admission timeout
+includes the last blocker; owner uncertainty still fails closed immediately.
+
 Every daemon path that can start a readiness helper, session discovery or
 native Codex Queue/app-server helper acquires the same service admission at
 actual lane execution. Queued work rechecks after scheduling and waits through
