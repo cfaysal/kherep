@@ -43,12 +43,12 @@ export const FORK_PROGRESS: Record<ForkRefusal, typeof MESSAGE_PROGRESS_CODES.wa
   "budget-spacing": "retry-pending", "budget-exhausted": "budget-exhausted",
 };
 
-// Decision D10 (open): the operator's opt-in of the full thread id in
+// Decision D10 (2026-10-16): the operator's opt-in of the full thread id in
 // wake.codexFork.sessions is the grant to fork that chat's history; the
 // automatic codexApp grant and "*" in wake.sessions never are (D4: full ids only).
 const forkOptedIn = (policy: NodePolicy, owner: string): boolean => policy.wake?.codexFork?.sessions.includes(owner) === true;
 
-// Decision D9 (open): a fork spends the owner's existing autonomous-turn budget.
+// Decision D9 (2026-10-16): a fork spends the owner's existing autonomous-turn budget.
 const forkBudget = (policy: NodePolicy) => wakeBudget(policy);
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..", "..");

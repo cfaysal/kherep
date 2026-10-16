@@ -365,7 +365,7 @@ without an event keeps the mark with the rest of the event fields.
 
 Issue #408, second increment, not wired: no daemon path calls these modules
 and no process is started. `policy.mts` parses the optional
-`wake.codexFork` section; open decision D4 (full thread ids only) lives in
+`wake.codexFork` section; decision D4 of 2026-10-16 (full thread ids only) lives in
 its `FORK_SESSION` pattern, matched without case and kept in lowercase so
 that admission compares exactly, and D5 (darwin only) in `FORK_PLATFORMS`. A
 rejected section is left out of the parsed `wake`, so the rest of the section
@@ -395,13 +395,13 @@ flowchart TD
 `codex-fork-admission.mts` re-reads every input, then decides in guard order:
 section, kill switch and enrollment, policy fingerprint; the recorded non-task
 owner (a hook payload's `permission_mode` wins over the recorded mode, and
-`lastSeen` only bounds the active window); the full-id opt-in (open decision
+`lastSeen` only bounds the active window); the full-id opt-in (decision
 D10: the opt-in is the grant, the `codexApp` grant never is); the platform;
 `codexPostToolHookInstalled` (`doctor-hooks.mts`, the doctor hook scanner
 restricted to Codex `PostToolUse` tables) and `idleEvidence()`; the accepted
 exact-addressed message, its depth and the attempt store; the cwd under the
 sessions policy; readiness. Only then does it spend the owner's shared turn
-budget (open decision D9). Readiness is checked before the budget, unlike the
+budget (decision D9 of 2026-10-16). Readiness is checked before the budget, unlike the
 design's numbering, so a refused fork never spends a turn. Guard 10, the
 producer identity, belongs to the fork producer.
 
