@@ -4,7 +4,7 @@ import path from "node:path";
 import type { NodePaths } from "./config.mts";
 import { captureSourceIdentity, compareSourceIdentity } from "./daemon-source.mts";
 import type { Check } from "./doctor-local.mts";
-import { INTERCOM_INSTRUCTIONS, expectedIntercomText, intercomInstructionFiles } from "./intercom-instructions.mts";
+import { INTERCOM_INSTRUCTIONS, expectedIntercomText, intercomCommand, intercomInstructionFiles } from "./intercom-instructions.mts";
 import { LAUNCHER_FILE, renderLauncher, resolveLauncher, type LauncherFile } from "./launcher.mts";
 import { LAUNCHER_REASONS } from "./launcher-template.mts";
 import { readServiceReceipt, type ServiceReceipt } from "./service-records.mts";
@@ -35,12 +35,12 @@ function isFile(file: string): boolean {
 }
 
 // Present: the file holds the exact expected text (intercom-instructions.mts).
-function instructionStatuses(deps: IntercomDeps, root: string): Record<string, string> {
+function instructionStatuses(deps: IntercomDeps, command: string): Record<string, string> {
   const files = intercomInstructionFiles(deps.claudeConfigDir, deps.codexHome);
   return Object.fromEntries(INTERCOM_INSTRUCTIONS.map((kind) => {
     const bytes = read(files[kind]);
     if (typeof bytes === "string") return [kind, bytes];
-    return [kind, bytes.toString("utf8").includes(expectedIntercomText(kind, root)) ? "present" : "stale"];
+    return [kind, bytes.toString("utf8").includes(expectedIntercomText(kind, command)) ? "present" : "stale"];
   }));
 }
 
@@ -69,9 +69,13 @@ const RESOLVE_DETAIL: Readonly<Record<Exclude<Resolves, "match">, string>> = {
 
 export function checkIntercom(deps: IntercomDeps): Check {
   const root = path.dirname(deps.paths.dir);
-  const instructions = instructionStatuses(deps, root);
   const { status, receipt } = receiptOf(deps.paths);
   const managed = status !== "missing";
+  let command: string;
+  try { command = intercomCommand(root); } catch {
+    return { ok: false, managed, receipt: status, detail: "the intercom command cannot be rendered for this config root" };
+  }
+  const instructions = instructionStatuses(deps, command);
   const fail = (detail: string): Check => ({ ok: false, managed, receipt: status, instructions, detail });
   if (!receipt) {
     return fail(managed ? "the managed service receipt is invalid" : "no managed service; the intercom command cannot resolve a pin");
