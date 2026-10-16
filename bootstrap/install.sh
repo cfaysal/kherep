@@ -190,6 +190,13 @@ for rules in CLAUDE AGENTS; do
   node "$REPO_ROOT/bootstrap/project-rules-block.mts" render \
     "$CLAUDE_SRC/$rules.project.md" "$WS/$rules.md" "$PREFLIGHT_DIR/project-$rules.md"
 done
+# Issue #436. CLAUDE.md and ROUTING.md name this host's intercom command, the
+# stable launcher under the Control Plane config directory (render-intercom.mts).
+# Rendered here so a config root no shell can quote stops the run before the
+# first live mutation.
+node "$REPO_ROOT/bootstrap/render-profile.mts" intercom "$CLAUDE_SRC/CLAUDE.user.md" "$PREFLIGHT_DIR/CLAUDE.md"
+node "$REPO_ROOT/bootstrap/render-profile.mts" intercom \
+  "$CLAUDE_SRC/teams/kherep/ROUTING.md" "$PREFLIGHT_DIR/teams/kherep/ROUTING.md"
 
 # Decrypt and validate the complete bundle before the first live mutation.
 # Decrypted YAML stays in the sops->node pipe; decoded staging files are mode
@@ -207,6 +214,11 @@ transaction_begin "$INSTALL_BACKUP" "$CLAUDE_HOME" "$WS"
 while IFS= read -r rel || [ -n "$rel" ]; do
   [ -z "$rel" ] && continue
   case "$rel" in settings.json|CLAUDE.md) continue;; esac
+  # Issue #436. Rendered in the preflight, installed from there.
+  if [ "$rel" = "teams/kherep/ROUTING.md" ]; then
+    install_entry "$rel" "$PREFLIGHT_DIR" "$CLAUDE_HOME" "$INSTALL_BACKUP"
+    continue
+  fi
   install_entry "$rel" "$CLAUDE_SRC" "$CLAUDE_HOME" "$INSTALL_BACKUP"
 done < "$REPO_ROOT/bootstrap/manifest/files.txt"
 install_path "kherep/githooks/commit-policy" "$PREFLIGHT_DIR/commit-policy" \
@@ -215,7 +227,7 @@ echo "install: commit policy -> $(grep '^work_item_required=' "$PREFLIGHT_DIR/co
 install_path "kherep/confluence.json" "$PREFLIGHT_DIR/confluence.json" \
   "$CLAUDE_HOME/kherep/confluence.json" "$INSTALL_BACKUP/kherep/confluence.json"
 echo "install: Confluence broker command -> $CLAUDE_HOME/kherep/confluence.json"
-install_path "CLAUDE.md" "$CLAUDE_SRC/CLAUDE.user.md" "$CLAUDE_HOME/CLAUDE.md" "$INSTALL_BACKUP/CLAUDE.md"
+install_path "CLAUDE.md" "$PREFLIGHT_DIR/CLAUDE.md" "$CLAUDE_HOME/CLAUDE.md" "$INSTALL_BACKUP/CLAUDE.md"
 install_path "project/CLAUDE.md" "$PREFLIGHT_DIR/project-CLAUDE.md" "$WS/CLAUDE.md" "$INSTALL_BACKUP/project/CLAUDE.md"
 # AGENTS.md is what binds the Codex runtime. It existed live since months with no
 # versioned source at all (OP-686): not in the manifest, never installed, and

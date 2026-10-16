@@ -5,10 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
+import { launcherCommand } from "../../modules/control-plane/node/launcher.mts";
 import { install } from "../install.mts";
 import type { Capabilities } from "./contracts.mts";
 import {
-  CONTROL_PLANE_RULES_FILE, MSG_SUBCOMMANDS, controlPlaneCli, controlPlaneRulesPath,
+  CONTROL_PLANE_RULES_FILE, MSG_SUBCOMMANDS, cliRule, controlPlaneCli, controlPlaneRulesPath, launcherRule,
   renderControlPlaneRules, starlarkString,
 } from "./control-plane-rules.mts";
 
@@ -21,7 +22,7 @@ function pattern(rules: string): string {
 }
 
 test("the Windows rule escapes backslashes in the pattern and single-quotes the path in the examples", () => {
-  const rules = renderControlPlaneRules(WINDOWS_CLI);
+  const rules = renderControlPlaneRules([cliRule(WINDOWS_CLI)]);
   const escaped = String.raw`D:\\work\\kherep\\modules\\control-plane\\node\\cli.mts`;
 
   assert.equal(pattern(rules), `pattern = ["node", "${escaped}", "msg", ["send", "sessions", "inbox", "status"]],`);
@@ -31,7 +32,7 @@ test("the Windows rule escapes backslashes in the pattern and single-quotes the 
 });
 
 test("the POSIX rule names the path as it is", () => {
-  const rules = renderControlPlaneRules(POSIX_CLI);
+  const rules = renderControlPlaneRules([cliRule(POSIX_CLI)]);
 
   assert.equal(pattern(rules), `pattern = ["node", "${POSIX_CLI}", "msg", ["send", "sessions", "inbox", "status"]],`);
   assert.ok(rules.includes(`"'node' '${POSIX_CLI}' msg send peer/session -- hello",`));
@@ -41,16 +42,51 @@ test("the POSIX rule names the path as it is", () => {
 test("Starlark strings escape backslashes and double quotes and refuse control characters", () => {
   assert.equal(starlarkString(String.raw`a\b"c`), String.raw`"a\\b\"c"`);
   assert.throws(() => starlarkString("a\nb"), /Control characters/);
-  const rules = renderControlPlaneRules(`/opt/it's "kherep"/cli.mts`);
+  const rules = renderControlPlaneRules([cliRule(`/opt/it's "kherep"/cli.mts`)]);
   assert.ok(rules.includes(String.raw`"/opt/it's \"kherep\"/cli.mts"`));
   assert.ok(rules.includes(String.raw`'/opt/it'\"'\"'s \"kherep\"/cli.mts'`));
 });
 
 test("only the four msg subcommands are allowed", () => {
   assert.deepEqual([...MSG_SUBCOMMANDS], ["send", "sessions", "inbox", "status"]);
-  const rules = renderControlPlaneRules(POSIX_CLI);
+  const rules = renderControlPlaneRules([cliRule(POSIX_CLI)]);
   assert.equal(rules.match(/prefix_rule\(/g)?.length, 1);
   assert.equal(rules.match(/decision = /g)?.length, 1);
+});
+
+// Issue #436.
+const WINDOWS_ROOT = String.raw`C:\Users\a\AppData\Roaming\kherep`;
+const MAC_ROOT = "/Users/a/Library/Application Support/kherep";
+
+test("the launcher rule comes first and its examples are the exact launcher command", () => {
+  const command = launcherCommand(WINDOWS_ROOT, "win32");
+  const rules = renderControlPlaneRules([launcherRule(command), cliRule(WINDOWS_CLI)]);
+  const patterns = rules.split("\n").filter((line) => line.trimStart().startsWith("pattern = "));
+  assert.deepEqual(patterns.map((line) => line.trim()), [
+    'pattern = ["node", "C:/Users/a/AppData/Roaming/kherep/bin/kherep-node.mjs", "msg", ["send", "sessions", "inbox", "status"]],',
+    pattern(renderControlPlaneRules([cliRule(WINDOWS_CLI)])),
+  ]);
+  assert.ok(rules.includes(`        ${starlarkString(`${command} msg sessions`)},`));
+  assert.ok(rules.includes(`        ${starlarkString(`${command} msg send peer/session -- hello`)},`));
+  assert.equal(rules.match(/prefix_rule\(/g)?.length, 2);
+  assert.equal(rules.match(/# Managed by Kherep/g)?.length, 1);
+  // The checkout rule keeps the bytes it had as the only rule.
+  const legacy = renderControlPlaneRules([cliRule(WINDOWS_CLI)]);
+  assert.ok(rules.endsWith(legacy.slice(legacy.indexOf("prefix_rule("))));
+});
+
+test("a macOS launcher path with a space stays one double-quoted token", () => {
+  const command = launcherCommand(MAC_ROOT, "darwin");
+  const rule = launcherRule(command);
+  assert.deepEqual(rule, { node: "node", cli: `${MAC_ROOT}/bin/kherep-node.mjs`, prefix: command });
+  assert.ok(renderControlPlaneRules([rule]).includes(String.raw`"node \"/Users/a/Library/Application Support/kherep/bin/kherep-node.mjs\" msg inbox --all",`));
+});
+
+test("launcherRule accepts only the launcher command shape", () => {
+  for (const value of ["node /x/kherep-node.mjs", `node "/x/a"b.mjs"`, String.raw`node "C:\x\kherep-node.mjs"`, `node "/x/$HOME.mjs"`, `"node" "/x/kherep-node.mjs"`]) {
+    assert.throws(() => launcherRule(value), /launcher command/, value);
+  }
+  assert.throws(() => renderControlPlaneRules([]), /at least one command/);
 });
 
 const codex = spawnSync("codex", ["--version"], { encoding: "utf8" });
@@ -66,13 +102,28 @@ for (const [platform, cli] of [["Windows", WINDOWS_CLI], ["POSIX", POSIX_CLI], [
   test(`codex execpolicy loads the ${platform} rule and allows only msg subcommands`, { skip: !codexAvailable && "codex is not on PATH" }, () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-rules-"));
     const file = path.join(dir, CONTROL_PLANE_RULES_FILE);
-    fs.writeFileSync(file, renderControlPlaneRules(cli));
+    fs.writeFileSync(file, renderControlPlaneRules([cliRule(cli)]));
 
     for (const sub of MSG_SUBCOMMANDS) {
       assert.match(check(file, "node", cli, "msg", sub, "x"), /"decision":\s*"allow"/);
     }
     for (const other of [["task", "new", "--title", "x"], ["node", "unenroll"], ["msg", "reply", "x"]]) {
       assert.doesNotMatch(check(file, "node", cli, ...other), /"decision"/);
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+}
+
+// Issue #436. Both rules in one file, as the installer writes them.
+for (const [platform, root] of [["Windows", WINDOWS_ROOT], ["macOS", MAC_ROOT]] as const) {
+  test(`codex execpolicy loads the ${platform} launcher rule beside the checkout rule`, { skip: !codexAvailable && "codex is not on PATH" }, () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-rules-"));
+    const file = path.join(dir, CONTROL_PLANE_RULES_FILE);
+    const launcher = launcherRule(launcherCommand(root, platform === "Windows" ? "win32" : "darwin"));
+    fs.writeFileSync(file, renderControlPlaneRules([launcher, cliRule(POSIX_CLI)]));
+    for (const cli of [launcher.cli, POSIX_CLI]) {
+      assert.match(check(file, "node", cli, "msg", "send", "peer/session", "--", "x"), /"decision":\s*"allow"/);
+      assert.doesNotMatch(check(file, "node", cli, "task", "new", "--title", "x"), /"decision"/);
     }
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -97,6 +148,7 @@ function fixture() {
       skipPluginRegistration: true, installAtlassianTools: false,
       resolveRegistryRuntime: () => "fixture",
       runCodex: (): string => "ok",
+      controlPlaneOutbox: path.join(root, "kherep config", "control-plane", "outbox"),
     },
   };
 }
@@ -107,7 +159,8 @@ test("install writes the managed rule file and leaves other rule files byte-iden
   const defaultRules = path.join(codexHome, "rules", "default.rules");
   fs.mkdirSync(path.dirname(defaultRules), { recursive: true });
   fs.writeFileSync(defaultRules, own);
-  const expected = renderControlPlaneRules(controlPlaneCli(path.resolve(import.meta.dirname, "..", "..")));
+  const expected = renderControlPlaneRules([launcherRule(launcherCommand(path.join(root, "kherep config"))),
+    cliRule(controlPlaneCli(path.resolve(import.meta.dirname, "..", "..")))]);
 
   install(options);
   assert.equal(fs.readFileSync(controlPlaneRulesPath(codexHome), "utf8"), expected);

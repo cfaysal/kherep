@@ -11,6 +11,7 @@ import { nativeWorkspacePath } from "../lib/workspace-path.mts";
 import { resolveTarget as resolveCredentialTarget } from "../bootstrap/atl-credential-format.mts";
 import { ATLASSIAN_MCP_SERVER, resolveTokenBinding, tokenBindingProblem } from "../lib/atlassian-mcp-binding.mts";
 import { mergeLocalInferenceConfig } from "../bootstrap/render-profile.mts";
+import { intercomValues, renderIntercom } from "../bootstrap/render-intercom.mts";
 import * as registryBridgeModule from "../modules/mcp-auth-bridge/registry-http-wrapper.mts";
 import { setPluginEnabled } from "./lib/plugin-config.mts";
 import {
@@ -19,7 +20,7 @@ import {
 import { componentHash } from "./lib/component-hash.mts";
 import { prepareManagedConfig } from "./lib/config-preservation.mts";
 import type { Capabilities, McpCompatibilityOptions, PluginMcpServer, RunCodex } from "./lib/contracts.mts";
-import { controlPlaneCli, controlPlaneRulesPath, renderControlPlaneRules } from "./lib/control-plane-rules.mts";
+import { cliRule, controlPlaneCli, controlPlaneRulesPath, launcherRule, renderControlPlaneRules } from "./lib/control-plane-rules.mts";
 import { controlPlaneOutbox } from "./lib/outbox-writable-root.mts";
 import { InstallTransaction } from "./lib/install-transaction.mts";
 import * as localPlugin from "./lib/local-plugin.mts";
@@ -332,6 +333,9 @@ export function install(options: InstallOptions = {}) {
     intentHook: path.join(targets.messagingClient, "node", "mcp-intent-hook.mts"),
     configRoot: path.dirname(path.dirname(controlPlaneOutboxPath)),
   };
+  // Issue #436. The intercom command of that config root, for the AGENTS.md
+  // block, ROUTING.md and the rules; an unquotable root stops here, before any write.
+  const intercom = intercomValues(messagingClient.configRoot);
   const managedConfigOptions = {
     memoryProvider: memoryProvider.provider,
     // OP-1429. A block an older installer wrote for the retired Central Brain is
@@ -418,7 +422,7 @@ export function install(options: InstallOptions = {}) {
 
     transaction.copyFile(sources.contextHook, targets.contextHook);
     transaction.copyFile(path.join(sourceRoot, "lib", "memory-provider.mts"), path.join(codexHome, "lib", "memory-provider.mts"));
-    transaction.copyFile(sources.routing, targets.routing);
+    transaction.writeFile(targets.routing, renderIntercom(fs.readFileSync(sources.routing, "utf8"), intercom));
     transaction.copyFile(sources.registryBridge, targets.registryBridge);
     transaction.copyFile(sources.registryRuntime, targets.registryRuntime);
     transaction.copyFile(sources.localInferenceRunner, path.join(targets.localInference, "runner.mts"));
@@ -481,7 +485,11 @@ export function install(options: InstallOptions = {}) {
     transaction.copyFile(sources.obsCandidatePolicy, path.join(targets.hookDir, "obs-candidate-policy.mts"));
     transaction.remove(targets.memoryNotifyHook);
     // Issue #72. Beside the deliver hook: the msg CLI from the same checkout.
-    transaction.writeFile(controlPlaneRulesPath(codexHome), renderControlPlaneRules(controlPlaneCli(repoRoot)));
+    // Issue #436. The stable launcher first; the checkout CLI stays until the
+    // task prompt and the delivery hook name the launcher too.
+    transaction.writeFile(controlPlaneRulesPath(codexHome), renderControlPlaneRules([
+      launcherRule(intercom.command), cliRule(controlPlaneCli(repoRoot)),
+    ]));
     for (const relative of RETIRED_TARGETS) transaction.remove(path.join(codexHome, relative));
 
     const projection = parityProjection.project({
@@ -494,7 +502,8 @@ export function install(options: InstallOptions = {}) {
     });
 
     const existingAgents = fs.existsSync(targets.agents) ? fs.readFileSync(targets.agents, "utf8") : "";
-    let agents = setMarkedBlock(existingAgents, AGENTS_START, AGENTS_END, fs.readFileSync(sources.agents, "utf8"));
+    let agents = setMarkedBlock(existingAgents, AGENTS_START, AGENTS_END,
+      renderIntercom(fs.readFileSync(sources.agents, "utf8"), intercom));
     agents = setMarkedBlock(agents, USER_START, USER_END, fs.readFileSync(sources.userAgents, "utf8"));
     transaction.writeFile(targets.agents, agents);
 

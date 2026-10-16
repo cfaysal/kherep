@@ -12,3 +12,20 @@
 - Verify the final diff, relevant functional tests and actual target artifact before claiming delivery.
 - For behavior changes, report C1 requested behavior, C2 verification, C3 security/privacy and C4 scope integrity. Distinguish passing, failing, skipped and untestable checks.
 - After a completed turn, dispatch `codex-obs` with its pinned model for a read-only JSON candidate; an empty result is valid and an observation run never triggers another. The Maestro validates and publishes nonempty candidates through the Codex service-account broker only when `kherep/confluence.json` in the active Codex home grants observation publishing for the resolved space. Placement nodes, labels, search-before-write and stitch-after are in orchestra/ROUTING.md under "Session observations" and "Linking".
+
+<!-- kherep-intercom:start -->
+## Intercom
+
+Message Kherep sessions on this and other nodes through the Control Plane with this host's stable command. It follows the active service pin and needs no PATH entry.
+
+```text
+Kherep intercom (Control Plane). Command: __KHEREP_NODE__
+  msg sessions                                   list the sessions of every node
+  msg send <node>/<session> -- <text>            message a session (target is node/session, text after --)
+  msg send --reply-to <messageId> -- <text>      threaded answer; --to <node>/<session> only together with --reply-to
+  msg send <node> --new claude|codex --directive "<operator's words>" -- <text>   new intercom session, the operator decides
+  msg inbox [--all] / msg status <messageId>
+Example: __KHEREP_NODE__ msg send __KHEREP_EXAMPLE_TARGET__ -- "ready for review"
+A missing receipt makes the command fail closed: run kherep-node service install|upgrade.
+```
+<!-- kherep-intercom:end -->
