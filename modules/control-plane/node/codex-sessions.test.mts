@@ -6,7 +6,8 @@ import test from "node:test";
 
 import {
   CODEX_ACTIVE_MS, CODEX_IDLE_AFTER_MS, CODEX_RETENTION_MS, codexSessionName, codexSessionRefs, idleEvidence, isCodexSession,
-  listCodexSessions, listCodexTaskSessions, readCodexSession, recordCodexSession, refreshCodexEvent, type CodexSessionRecord,
+  listCodexSessions, listCodexTaskSessions, markStopContinued, readCodexSession, recordCodexSession, refreshCodexEvent,
+  type CodexSessionRecord,
 } from "./codex-sessions.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
 import { readLocalSessions, recordingSessions, writeLocalSessions } from "./exchange.mts";
@@ -205,4 +206,30 @@ test("idleEvidence: only a Stop at least idleAfterMs ago of a session seen withi
   assert.equal(idleEvidence(stopped, stopAt + CODEX_ACTIVE_MS), true, "seen exactly at the end of the active window");
   assert.equal(idleEvidence(stopped, stopAt + CODEX_ACTIVE_MS + 1), false, "not seen within the active window");
   assert.equal(idleEvidence({ ...stopped, lastSeen: "not a time" }, NOW), false, "unreadable lastSeen");
+});
+
+// Fable review of PR 1, point 1: a Stop that returned a blocking continuation
+// ends no turn. The flag keeps such a session from reading idle until a Stop
+// that does not block or a UserPromptSubmit clears it.
+test("a Stop that continued the turn is never idle until a later Stop or UserPromptSubmit clears the flag", (t) => {
+  const paths = setup(t);
+  const later = NOW + 10 * CODEX_IDLE_AFTER_MS;
+  assert.equal(markStopContinued(paths, CODEX), false, "no record to mark");
+  assert.equal(fs.existsSync(file(paths, CODEX)), false, "no record is created");
+  recordCodexSession(paths, CODEX, "/work/repo", NOW, "default", "Stop");
+  assert.equal(idleEvidence(readCodexSession(paths, CODEX), later), true);
+  assert.equal(markStopContinued(paths, CODEX), true);
+  assert.equal(readCodexSession(paths, CODEX)?.lastStopContinued, true);
+  assert.equal(idleEvidence(readCodexSession(paths, CODEX), later), false, "a continued Stop is not idle");
+  recordCodexSession(paths, CODEX, "/work/repo", NOW + 1000, undefined, "SessionStart");
+  recordCodexSession(paths, CODEX, "/work/repo", NOW + 2000, undefined, undefined);
+  refreshCodexEvent(paths, CODEX, "PostToolUse", NOW + 3000);
+  assert.equal(readCodexSession(paths, CODEX)?.lastStopContinued, true, "only Stop and UserPromptSubmit clear it");
+  recordCodexSession(paths, CODEX, "/work/repo", NOW + 4000, undefined, "Stop");
+  assert.equal(readCodexSession(paths, CODEX)?.lastStopContinued, undefined, "a Stop that does not block clears it");
+  assert.equal(idleEvidence(readCodexSession(paths, CODEX), later), true);
+  markStopContinued(paths, CODEX);
+  recordCodexSession(paths, CODEX, "/work/repo", NOW + 5000, undefined, "UserPromptSubmit");
+  assert.equal(readCodexSession(paths, CODEX)?.lastStopContinued, undefined, "a UserPromptSubmit clears it");
+  assert.equal(markStopContinued(paths, "../escape"), false);
 });

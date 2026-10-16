@@ -30,9 +30,11 @@ export const isCodexHookEvent = (value: unknown): value is CodexHookEvent => COD
 // lastEvent and lastEventAt: the last hook event and its time; lastStopAt: the
 // time of the last Stop. All three are kept when a later input has no event; a
 // record without lastEvent (an older hook) is unknown, never idle.
+// lastStopContinued: the last Stop returned a blocking continuation, so the
+// turn goes on; set by markStopContinued, cleared by the next Stop or UserPromptSubmit.
 export interface CodexSessionRecord {
   sessionId: string; cwd?: string; lastSeen: string; runtime: typeof CODEX_RUNTIME; permissionMode?: string;
-  lastEvent?: CodexHookEvent; lastEventAt?: string; lastStopAt?: string;
+  lastEvent?: CodexHookEvent; lastEventAt?: string; lastStopAt?: string; lastStopContinued?: true;
 }
 
 // Idle evidence (issue #408): the last event is a Stop at least idleAfterMs
@@ -45,12 +47,12 @@ const IDLE_AFTER_MAX_MS = 3_600_000;
 
 export function idleEvidence(record: CodexSessionRecord | null | undefined, now: number, idleAfterMs: number = CODEX_IDLE_AFTER_MS): boolean {
   if (!Number.isSafeInteger(idleAfterMs) || idleAfterMs < IDLE_AFTER_MIN_MS || idleAfterMs > IDLE_AFTER_MAX_MS) return false;
-  if (record?.lastEvent !== "Stop") return false;
+  if (record?.lastEvent !== "Stop" || record.lastStopContinued !== undefined) return false;
   const stoppedAt = Date.parse(record.lastStopAt ?? ""), seenAt = Date.parse(record.lastSeen);
   return now - stoppedAt >= idleAfterMs && now - seenAt <= CODEX_ACTIVE_MS;
 }
 
-type EventFields = Pick<CodexSessionRecord, "lastEvent" | "lastEventAt" | "lastStopAt">;
+type EventFields = Pick<CodexSessionRecord, "lastEvent" | "lastEventAt" | "lastStopAt" | "lastStopContinued">;
 
 // A hook event replaces the last event (a Stop also the stop time); anything
 // else keeps the previous record's valid event fields.
@@ -61,7 +63,9 @@ function eventFields(previous: CodexSessionRecord | null, event: unknown, now: n
   const lastEvent = isCodexHookEvent(event) ? event : keptEvent;
   const lastEventAt = isCodexHookEvent(event) ? at : validTime(previous?.lastEventAt);
   const lastStopAt = event === "Stop" ? at : validTime(previous?.lastStopAt);
-  return { ...(lastEvent ? { lastEvent } : {}), ...(lastEventAt ? { lastEventAt } : {}), ...(lastStopAt ? { lastStopAt } : {}) };
+  const continued = event !== "Stop" && event !== "UserPromptSubmit" && previous?.lastStopContinued === true;
+  return { ...(lastEvent ? { lastEvent } : {}), ...(lastEventAt ? { lastEventAt } : {}), ...(lastStopAt ? { lastStopAt } : {}),
+    ...(continued ? { lastStopContinued: true } : {}) };
 }
 
 // Session ids name files, so only plain file-name characters are accepted.
@@ -153,10 +157,20 @@ export function recordCodexSession(paths: NodePaths, sessionId: string, cwd: unk
 // existing record and nothing else, so a tool boundary never creates a session
 // or moves lastSeen. false: no record of this session to refresh.
 export function refreshCodexEvent(paths: NodePaths, sessionId: string, event: CodexHookEvent, now: number = Date.now()): boolean {
+  return updateRecord(paths, sessionId, (previous) => ({ ...previous, ...eventFields(previous, event, now) }));
+}
+
+// Issue #408: the Stop just recorded returned a blocking continuation, so it
+// ended no turn and is no idle evidence. false: no record of this session.
+export function markStopContinued(paths: NodePaths, sessionId: string): boolean {
+  return updateRecord(paths, sessionId, (previous) => ({ ...previous, lastStopContinued: true }));
+}
+
+function updateRecord(paths: NodePaths, sessionId: string, change: (previous: CodexSessionRecord) => CodexSessionRecord): boolean {
   if (!isCodexSessionId(sessionId)) return false;
   const previous = readCodexSession(paths, sessionId);
   if (previous?.sessionId !== sessionId || previous.runtime !== CODEX_RUNTIME || !Number.isFinite(Date.parse(previous.lastSeen ?? ""))) return false;
-  writeJsonAtomic(fileOf(paths, sessionId), { ...previous, ...eventFields(previous, event, now) });
+  writeJsonAtomic(fileOf(paths, sessionId), change(previous));
   return true;
 }
 

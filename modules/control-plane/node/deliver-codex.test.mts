@@ -188,3 +188,17 @@ test("each delivery hook event records itself as the session's last event, Stop 
   assert.equal(stop(paths), "");
   assert.deepEqual([record()?.lastEvent, record()?.lastEventAt, record()?.lastStopAt], ["Stop", at(clock), at(clock)]);
 });
+
+test("a Stop that blocks marks the session as continued; the continued Stop clears it (issue #408)", (t) => {
+  const paths = setup(t);
+  const record = () => readJson<Record<string, unknown>>(path.join(paths.codexSessions, `${SELF}.json`));
+  hook(paths, "UserPromptSubmit");
+  assert.equal(stop(paths), "");
+  assert.equal(record()?.lastStopContinued, undefined, "a Stop without new messages does not block");
+  inbox(paths, 1);
+  clock += 60_000;
+  assert.equal(JSON.parse(stop(paths)).decision, "block");
+  assert.equal(record()?.lastStopContinued, true);
+  assert.equal(stop(paths, true), "");
+  assert.equal(record()?.lastStopContinued, undefined);
+});

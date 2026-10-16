@@ -36,7 +36,9 @@ export type AutonomyAction = "wake" | "stuck-offer" | "budget" | "depth-limit" |
   // codex-wake.mts: the policy refused the task's working directory; the messages wait (issue #244).
   | "cwd-refused"
   // wake-hook.mts: a headless run (claude -p) ended its listener before the first poll (issue #235).
-  | "headless";
+  | "headless"
+  // The Codex idle reply proxy (issue #408, codex-fork-admission.mts); not wired yet.
+  | "fork" | "fork-declined" | "fork-failed" | "fork-uncertain" | "fork-superseded" | "fork-not-idle" | "fork-disabled-platform";
 
 export const listenerDir = (paths: NodePaths): string => path.join(paths.dir, "listeners");
 export const wakeAudit = (paths: NodePaths): string => path.join(paths.dir, "wake.jsonl");

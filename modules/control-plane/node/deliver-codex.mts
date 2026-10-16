@@ -2,7 +2,7 @@ import fs from "node:fs";
 
 import { mayContinue } from "./autonomy.mts";
 import { consumeBusyHint } from "./codex-busy-consume.mts";
-import { codexSessionRefs, isCodexSessionId, recordCodexSession } from "./codex-sessions.mts";
+import { codexSessionRefs, isCodexSessionId, markStopContinued, recordCodexSession } from "./codex-sessions.mts";
 import { confirmOffered, contextOutput, deliveryContext, sessionInbox, type HookDeps } from "./deliver-core.mts";
 import { cliCommand } from "./msg-cli.mts";
 import { nodeWakeBudget } from "./policy.mts";
@@ -78,5 +78,12 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
   const allowed = deps.mayContinue ?? ((ids: string[]) => mayContinue(deps.paths, sessionId, mode, ids, deps.now?.() ?? Date.now(),
     nodeWakeBudget(deps.paths)));
   if (!allowed(arrived)) return "";
+  // The turn goes on, so this Stop is no idle evidence (issue #408). A failed
+  // write leaves the continuation itself unchanged.
+  try {
+    markStopContinued(deps.paths, sessionId);
+  } catch {
+    // the record reads as a plain Stop
+  }
   return JSON.stringify({ decision: "block", reason: CODEX_STOP_REASON });
 }
