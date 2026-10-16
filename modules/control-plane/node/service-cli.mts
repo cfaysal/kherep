@@ -5,6 +5,8 @@ import { parseArgs } from "node:util";
 import { configRoot, nodePaths, readConfig } from "./config.mts";
 import { pidAlive, readDaemonState, type DaemonState } from "./daemon-state.mts";
 import { captureSourceIdentity, compareSourceIdentity, runtimeSourceRoot } from "./daemon-source.mts";
+import { ensureLauncher } from "./launcher.mts";
+import type { LifecycleDependencies } from "./service-lifecycle.mts";
 import { servicePlatform, serviceSelector, supportedServicePlatform } from "./service-platform.mts";
 import { readServiceReceipt, serviceRoot, snapshotDigests, type ServiceReceipt } from "./service-records.mts";
 import { activateManagedService, rollbackManagedService } from "./service-transaction.mts";
@@ -30,6 +32,7 @@ interface ServiceCliDependencies {
   adapterFor?: typeof servicePlatform;
   readState?: (paths: ReturnType<typeof nodePaths>) => DaemonState | null;
   alive?: (pid: unknown) => boolean;
+  lifecycle?: Omit<LifecycleDependencies, "paths" | "adapter">;
 }
 
 const SERVICE_FAILURE_CODES = new Set(["SERVICE_ACTIVATION_FAILED", "SERVICE_ROLLBACK_FAILED"]);
@@ -95,11 +98,28 @@ function safeResult(value: Awaited<ReturnType<typeof activateManagedService>>, a
     ...(value.backupId ? { backupId: value.backupId } : {}) };
 }
 
+// Issue #436. The stable launcher is derived from the receipt the transaction
+// just wrote, outside the transaction: a failed write is reported and leaves the
+// activation in place. Without a receipt (a rollback to a legacy service) the
+// launcher still exists and fails closed.
+function refreshLauncher(root: string, readReceipt: () => ServiceReceipt | null): "written" | "unchanged" | "failed" {
+  try {
+    const binding = readReceipt()?.binding;
+    return ensureLauncher(root, { platform: binding?.platform ?? supportedServicePlatform(),
+      nodeExecutable: binding?.nodeExecutable ?? process.execPath }).status;
+  } catch { return "failed"; }
+}
+
 export async function runService(argv: string[], dependencies: ServiceCliDependencies = {}): Promise<number> {
   const command = parseServiceCommand(argv);
   const root = dependencies.root ?? configRoot();
   const paths = nodePaths(root);
-  const receipt = (dependencies.readReceipt ?? readServiceReceipt)(paths);
+  const readReceipt = () => (dependencies.readReceipt ?? readServiceReceipt)(paths);
+  const receipt = readReceipt();
+  const report = (value: Awaited<ReturnType<typeof activateManagedService>>, action: string): number => {
+    console.log(JSON.stringify({ ...safeResult(value, action), launcher: refreshLauncher(root, readReceipt) }, null, 2));
+    return 0;
+  };
   if (command.action === "status") {
     if (!receipt) { console.log(JSON.stringify({ ok: true, managed: false }, null, 2)); return 0; }
     const adapter = (dependencies.adapterFor ?? servicePlatform)(serviceRoot(paths), receipt.binding.platform);
@@ -134,9 +154,8 @@ export async function runService(argv: string[], dependencies: ServiceCliDepende
     const binding = installedBinding(command, root);
     const adapter = (dependencies.adapterFor ?? servicePlatform)(serviceRoot(paths), binding.platform);
     const result = await activateManagedService({ mode: "install", binding, sourceRoot: command.source ?? runtimeSourceRoot(),
-      adopt: command.adopt, explicitServiceName: command.explicitServiceName }, { paths, adapter });
-    console.log(JSON.stringify(safeResult(result, "install"), null, 2));
-    return 0;
+      adopt: command.adopt, explicitServiceName: command.explicitServiceName }, { ...dependencies.lifecycle, paths, adapter });
+    return report(result, "install");
   }
   if (!receipt) throw new Error("managed service receipt is missing; install or adopt first");
   const adapter = (dependencies.adapterFor ?? servicePlatform)(serviceRoot(paths), receipt.binding.platform);
@@ -144,11 +163,9 @@ export async function runService(argv: string[], dependencies: ServiceCliDepende
     const sourceRoot = command.source ?? runtimeSourceRoot();
     const checkout = captureSourceIdentity(sourceRoot);
     const binding = { ...receipt.binding, source: checkout };
-    const result = await activateManagedService({ mode: "upgrade", binding, sourceRoot }, { paths, adapter });
-    console.log(JSON.stringify(safeResult(result, "upgrade"), null, 2));
-    return 0;
+    const result = await activateManagedService({ mode: "upgrade", binding, sourceRoot }, { ...dependencies.lifecycle, paths, adapter });
+    return report(result, "upgrade");
   }
-  const result = await rollbackManagedService({ binding: receipt.binding }, { paths, adapter });
-  console.log(JSON.stringify(safeResult(result, "rollback"), null, 2));
-  return 0;
+  const result = await rollbackManagedService({ binding: receipt.binding }, { ...dependencies.lifecycle, paths, adapter });
+  return report(result, "rollback");
 }
