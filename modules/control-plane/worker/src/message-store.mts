@@ -3,6 +3,7 @@ import {
   type MessageStatusBody, type NodeReportedState, legacyProgress,
 } from "../../protocol-messages.mts";
 import { depthExceeded, DEPTH_QUERIES, REPLY_DEPTH_EXCEEDED, replyDepth } from "./message-depth.mts";
+import { PROXY_QUERIES, PROXY_SUPERSEDED, proxyRefusal, supersededProxies } from "./message-proxy.mts";
 import { MessageRetention, RETENTION_QUERIES } from "./message-retention.mts";
 
 // The Registry's `messages` table (issue #31). Additive: an existing Registry
@@ -44,11 +45,14 @@ const RANK: Partial<Record<MessageState, number>> = { queued: 0, accepted: 1, de
 
 export interface MessageRecord {
   messageId: string; fromNode: string; fromSession: string; toNode: string; toSession: string; inReplyTo: string | null;
-  state: MessageState; reason: string | null; progress: MessageProgress | null;
+  proxyOf: string | null; state: MessageState; reason: string | null; progress: MessageProgress | null;
   createdAt: number; updatedAt: number; expiresAt: number;
 }
 
-export interface NewMessage { messageId: string; from: MessageAddress; to: MessageAddress; text: string; inReplyTo?: string; taskId?: string }
+// proxyOf: a proxy answer (message-proxy.mts, issue #408), never with inReplyTo.
+export interface NewMessage {
+  messageId: string; from: MessageAddress; to: MessageAddress; text: string; inReplyTo?: string; taskId?: string; proxyOf?: string;
+}
 
 // Frames the caller must push to nodes after the SQL work is done.
 export interface MessageEffects {
@@ -63,7 +67,7 @@ type Audit = (actor: string, action: string, target: string | null, detail: unkn
 // Registered capabilities of an enrolled, non-revoked node, or null.
 type Capabilities = (nodeId: string) => string[] | null;
 
-const COLUMNS = "id, from_node, from_session, to_node, to_session, in_reply_to, state, reason, progress_phase, progress_code, progress_observed_at, progress_retry_at, created_at, updated_at, expires_at";
+const COLUMNS = "id, from_node, from_session, to_node, to_session, in_reply_to, proxy_of, state, reason, progress_phase, progress_code, progress_observed_at, progress_retry_at, created_at, updated_at, expires_at";
 
 // The queries that run on every send, status report and sender reconnect.
 // Each names its index of SCHEMA (INDEXED BY fails the query rather than fall
@@ -79,14 +83,14 @@ export const HOT_MESSAGE_QUERIES = {
   expireDue: { sql: EXPIRE_DUE, args: [0] },
   nextExpiry: { sql: NEXT_EXPIRY, args: [] },
   statusPage: { sql: STATUS_PAGE, args: ["node", 0, 128] },
-  ...DEPTH_QUERIES, ...RETENTION_QUERIES,
+  ...DEPTH_QUERIES, ...RETENTION_QUERIES, ...PROXY_QUERIES,
 } as const;
 
 function toRecord(row: Record<string, SqlStorageValue>): MessageRecord {
   return {
     messageId: String(row.id), fromNode: String(row.from_node), fromSession: String(row.from_session),
     toNode: String(row.to_node), toSession: String(row.to_session), inReplyTo: row.in_reply_to as string | null,
-    state: row.state as MessageState, reason: row.reason as string | null,
+    proxyOf: (row.proxy_of ?? null) as string | null, state: row.state as MessageState, reason: row.reason as string | null,
     progress: row.progress_phase === null || row.progress_phase === undefined ? null : {
       phase: String(row.progress_phase) as MessageProgress["phase"], code: String(row.progress_code) as MessageProgress["code"],
       observedAt: String(row.progress_observed_at),
@@ -110,6 +114,7 @@ function deliverBodyOf(row: Record<string, SqlStorageValue>): MessageDeliverBody
     messageId: String(row.id), from: { nodeId: String(row.from_node), session: String(row.from_session) },
     toSession: String(row.to_session), text: String(row.text),
     ...(row.in_reply_to === null ? {} : { inReplyTo: String(row.in_reply_to) }),
+    ...(row.proxy_of === null || row.proxy_of === undefined ? {} : { proxyOf: String(row.proxy_of) }),
     ...(row.task_id === null || row.task_id === undefined ? {} : { taskId: String(row.task_id) }),
     createdAt: new Date(Number(row.created_at)).toISOString(),
   };
@@ -135,7 +140,7 @@ export class MessageStore {
     if (!columns.includes("task_id")) this.sql.exec("ALTER TABLE messages ADD COLUMN task_id TEXT");
     for (const [name, type] of [["progress_phase", "TEXT"], ["progress_code", "TEXT"], ["progress_observed_at", "TEXT"],
       ["progress_retry_at", "TEXT"], ["reply_message_id", "TEXT"], ["depth", "INTEGER"], ["delete_after", "INTEGER"],
-      ["deletable", "INTEGER"]] as const) {
+      ["deletable", "INTEGER"], ["proxy_of", "TEXT"]] as const) {
       if (!columns.includes(name)) this.sql.exec(`ALTER TABLE messages ADD COLUMN ${name} ${type}`);
     }
     this.retention = new MessageRetention(sql, audit, capabilities);
@@ -152,11 +157,15 @@ export class MessageStore {
     }
     const settled = this.retention.resend(message.messageId, message.from.nodeId);
     if (settled) return settled.ok ? { ...settled, effects } : settled;
+    if (message.proxyOf !== undefined && message.inReplyTo !== undefined) return { ok: false, error: "a proxy answer is not a reply" };
     const target = message.to.nodeId;
     const capabilities = this.capabilities(target);
-    const depth = replyDepth(this.sql, message.inReplyTo);
+    // A proxy answer is one hop deeper than its original, like a reply.
+    const depth = replyDepth(this.sql, message.inReplyTo ?? message.proxyOf);
+    const proxy = message.proxyOf === undefined ? null : proxyRefusal(this.sql, message.proxyOf, message.from, message.to);
     let reason: string | null = null;
-    if (depthExceeded(depth)) reason = REPLY_DEPTH_EXCEEDED;
+    if (proxy !== null) reason = proxy;
+    else if (depthExceeded(depth)) reason = REPLY_DEPTH_EXCEEDED;
     else if (capabilities === null) reason = "unknown or revoked target node";
     else if (!capabilities.includes(MESSAGING_CAPABILITY)) reason = `target node lacks ${MESSAGING_CAPABILITY}`;
     else if (this.queuedCount(target) >= MAX_QUEUED_PER_NODE) reason = `more than ${MAX_QUEUED_PER_NODE} queued messages for the target node`;
@@ -164,15 +173,17 @@ export class MessageStore {
 
     // deletable = 1: a row this Worker version stored, which it may delete (#308).
     this.sql.exec(`INSERT INTO messages (id, from_node, from_session, to_node, to_session, in_reply_to, text, state, reason,
-      created_at, updated_at, expires_at, task_id, depth, deletable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      created_at, updated_at, expires_at, task_id, depth, deletable, proxy_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       message.messageId, message.from.nodeId, message.from.session, target, message.to.session, message.inReplyTo ?? null,
-      state === "queued" ? message.text : null, state, reason, now, now, now + MESSAGE_TTL_MS, message.taskId ?? null, depth);
+      state === "queued" ? message.text : null, state, reason, now, now, now + MESSAGE_TTL_MS, message.taskId ?? null, depth,
+      message.proxyOf ?? null);
     this.retention.finalized(message.messageId, message.from.nodeId, state, now);
     this.audit(actor, "message.send", target, { messageId: message.messageId, toSession: message.to.session, state, reason });
     if (state === "queued") {
       effects.deliveries.push({ nodeId: target, body: {
         messageId: message.messageId, from: { nodeId: message.from.nodeId, session: message.from.session }, toSession: message.to.session, text: message.text,
         ...(message.inReplyTo === undefined ? {} : { inReplyTo: message.inReplyTo }),
+        ...(message.proxyOf === undefined ? {} : { proxyOf: message.proxyOf }),
         ...(message.taskId === undefined ? {} : { taskId: message.taskId }), createdAt: new Date(now).toISOString(),
       } });
       this.markReplied(message, now, effects);
@@ -212,7 +223,7 @@ export class MessageStore {
   // limit bounds this set independently of sender-status history.
   pendingFor(nodeId: string, now: number): MessageEffects {
     const effects = this.expireDue(now);
-    const rows = this.sql.exec(`SELECT id, from_node, from_session, to_session, in_reply_to, text, created_at, task_id FROM messages
+    const rows = this.sql.exec(`SELECT id, from_node, from_session, to_session, in_reply_to, proxy_of, text, created_at, task_id FROM messages
       WHERE to_node = ? AND state = 'queued' ORDER BY created_at, rowid`, nodeId).toArray();
     for (const row of rows) effects.deliveries.push({ nodeId, body: deliverBodyOf(row) });
     return effects;
@@ -308,6 +319,11 @@ export class MessageStore {
     this.setState(original, "replied", null, `node:${message.from.nodeId}`, now, effects);
     // The reply that marked the original, kept for MCP status (issue #200).
     this.sql.exec("UPDATE messages SET reply_message_id = ? WHERE id = ?", message.messageId, original.messageId);
+    // Issue #408: the owner's own answer wins over a proxy answer not yet delivered.
+    for (const id of supersededProxies(this.sql, original)) {
+      const proxy = this.get(id);
+      if (proxy) this.setState(proxy, "refused", PROXY_SUPERSEDED, `node:${message.from.nodeId}`, now, effects);
+    }
   }
 
   // The reply recorded when a message was marked replied; null for other

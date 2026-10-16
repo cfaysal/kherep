@@ -7,6 +7,9 @@ import { isNodeId, isSessionInfo, type SessionInfo } from "./protocol.mts";
 // A node advertises this capability when it can take message.deliver. The
 // Worker routes only to nodes that registered it.
 export const MESSAGING_CAPABILITY = "messaging.v1";
+// Issue #408, PR 4: a Worker that validates proxyOf names this in the directory
+// frame's worker.capabilities; a node relays a proxy answer only to such a Worker.
+export const MESSAGING_PROXY_CAPABILITY = "messaging.proxy.v1";
 
 // The sender node id of a message that an operator sent through the API.
 export const OPERATOR_NODE_ID = "operator";
@@ -79,12 +82,15 @@ export interface MessageAddress { nodeId: string; session: string }
 // node -> Worker. The sender node is always the authenticated connection;
 // the body has no field for it. taskId (item 5): the task the message belongs
 // to; the session started for that task may be woken by it (task grant).
+// proxyOf (issue #408): a proxy answer to that message, one hop deeper, never
+// a reply; never together with inReplyTo.
 export interface MessageSendBody {
-  messageId: string; fromSession: string; to: MessageAddress; text: string; inReplyTo?: string; taskId?: string;
+  messageId: string; fromSession: string; to: MessageAddress; text: string; inReplyTo?: string; taskId?: string; proxyOf?: string;
 }
 // Worker -> target node.
 export interface MessageDeliverBody {
   messageId: string; from: MessageAddress; toSession: string; text: string; inReplyTo?: string; createdAt: string; taskId?: string;
+  proxyOf?: string;
 }
 // node -> Worker (target reports progress) and Worker -> sending node.
 export interface MessageStatusBody { messageId: string; state: MessageState; reason?: string; progress?: MessageProgress }
@@ -151,14 +157,19 @@ function isOptionalReplyTo(value: unknown): boolean {
   return value === undefined || isMessageId(value);
 }
 
+// At most one lineage: a reply (inReplyTo) or a proxy answer (proxyOf).
+function isLineage(body: Record<string, unknown>): boolean {
+  return isOptionalReplyTo(body.inReplyTo) && isOptionalReplyTo(body.proxyOf) && !(body.inReplyTo !== undefined && body.proxyOf !== undefined);
+}
+
 export function isMessageSendBody(body: unknown): body is MessageSendBody {
   return isObject(body) && isMessageId(body.messageId) && isSessionRef(body.fromSession) && isMessageAddress(body.to)
-    && isMessageText(body.text) && isOptionalReplyTo(body.inReplyTo) && isOptionalReplyTo(body.taskId);
+    && isMessageText(body.text) && isLineage(body) && isOptionalReplyTo(body.taskId);
 }
 
 export function isMessageDeliverBody(body: unknown): body is MessageDeliverBody {
   return isObject(body) && isMessageId(body.messageId) && isMessageAddress(body.from, true) && isSessionRef(body.toSession)
-    && isMessageText(body.text) && isOptionalReplyTo(body.inReplyTo) && isOptionalReplyTo(body.taskId)
+    && isMessageText(body.text) && isLineage(body) && isOptionalReplyTo(body.taskId)
     && typeof body.createdAt === "string" && !Number.isNaN(Date.parse(body.createdAt));
 }
 
@@ -223,7 +234,10 @@ export const MAX_DIRECTORY_SESSIONS = 1024;
 export interface DirectoryNode { nodeId: string; name: string; status: string }
 export type DirectorySession = Omit<SessionInfo, "startedAt"> & { nodeId: string };
 // truncated is set when the Worker left sessions out to stay within one frame.
-export interface DirectoryBody { nodes: DirectoryNode[]; sessions: DirectorySession[]; fetchedAt: string; truncated?: boolean }
+// worker (issue #408): what the Worker itself supports; an older node ignores it.
+export interface DirectoryBody {
+  nodes: DirectoryNode[]; sessions: DirectorySession[]; fetchedAt: string; truncated?: boolean; worker?: { capabilities: string[] };
+}
 
 export function isDirectoryGetBody(body: unknown): body is Record<string, never> {
   return isObject(body) && Object.keys(body).length === 0;
@@ -241,5 +255,7 @@ export function isDirectoryBody(body: unknown): body is DirectoryBody {
   return isObject(body) && Array.isArray(body.nodes) && body.nodes.length <= MAX_DIRECTORY_NODES && body.nodes.every(isDirectoryNode)
     && Array.isArray(body.sessions) && body.sessions.length <= MAX_DIRECTORY_SESSIONS && body.sessions.every(isDirectorySession)
     && typeof body.fetchedAt === "string" && !Number.isNaN(Date.parse(body.fetchedAt))
-    && (body.truncated === undefined || typeof body.truncated === "boolean");
+    && (body.truncated === undefined || typeof body.truncated === "boolean")
+    && (body.worker === undefined || (isObject(body.worker) && Array.isArray(body.worker.capabilities)
+      && body.worker.capabilities.length <= 64 && body.worker.capabilities.every((c) => isText(c, 64))));
 }

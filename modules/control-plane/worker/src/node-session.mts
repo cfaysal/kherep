@@ -239,7 +239,8 @@ export class NodeSession extends DurableObject<Env> {
         if (!isMessageSendBody(body)) return this.sendControl(ws, "error", { error: "invalid message.send body" });
         // The sender is the authenticated connection, never a field of the body.
         const result = await registry.sendMessage({ messageId: body.messageId, from: { nodeId, session: body.fromSession },
-          to: { nodeId: body.to.nodeId, session: body.to.session }, text: body.text, inReplyTo: body.inReplyTo, taskId: body.taskId },
+          to: { nodeId: body.to.nodeId, session: body.to.session }, text: body.text, inReplyTo: body.inReplyTo, taskId: body.taskId,
+          proxyOf: body.proxyOf },
         `node:${nodeId}`);
         if (!result.ok) return this.sendControl(ws, "error", { error: result.error, messageId: body.messageId });
         this.sendControl(ws, "message.status", { ...result.status });

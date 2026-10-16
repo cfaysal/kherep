@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { makeEnvelope, MAX_FRAME_BYTES } from "../../protocol.mts";
-import { isDirectoryBody, type DirectoryBody } from "../../protocol-messages.mts";
+import { isDirectoryBody, MESSAGING_PROXY_CAPABILITY, type DirectoryBody } from "../../protocol-messages.mts";
 import { directoryBody } from "../src/directory.mts";
 import { authenticate, enroll, newKey, registry } from "./helpers.mts";
 
@@ -33,6 +33,8 @@ describe("directory frames", () => {
       [{ nodeId: bId, sessionId: "s-b", runtime: "claude-code", state: "idle", name: "review", cwd: "/work" }]);
     expect(body.sessions.some((s) => s.nodeId === cId)).toBe(false);
     expect(body.truncated).toBeUndefined();
+    // Issue #408, PR 4: a node relays a proxy answer only to a Worker that names this.
+    expect(body.worker).toEqual({ capabilities: [MESSAGING_PROXY_CAPABILITY] });
 
     socket.send(makeEnvelope("directory.get", { everything: true }, 2, 0));
     expect(await socket.next()).toMatchObject({ type: "error", body: { error: "invalid directory.get body" } });

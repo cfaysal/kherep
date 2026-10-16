@@ -4,6 +4,7 @@ import { deliveryContext } from "./deliver-core.mts";
 import type { NodePaths } from "./config.mts";
 import { readDirectory, type LocalSession, type SentRecord } from "./exchange.mts";
 import { listInbox, readJson, type InboxRecord } from "./inbox.mts";
+import { getProxied, type ProxiedRecord } from "./inbox-proxied.mts";
 import type { MsgArgs, MsgContext } from "./msg-cli.mts";
 import { NO_SESSION, nodeLabel, senderSession, sessionIdFromEnv } from "./msg-resolve.mts";
 import { repliesTo } from "./sent-notices.mts";
@@ -71,6 +72,10 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
     io.out(r.messageId + "  " + r.state + "  " + r.createdAt);
     io.out("  from: node " + nodeLabel(directory, r.from.nodeId) + ", session " + r.from.session);
     if (r.inReplyTo) io.out("  in reply to: " + r.inReplyTo);
+    // Issue #408: a proxy answer a fork of this session sent, and one received.
+    const proxied = proxiedOf(io.paths, r.messageId);
+    if (proxied) io.out(`  proxy answer sent: ${proxied.relayMessageId} at ${proxied.at}`);
+    if (r.proxyOf) io.out("  proxy for: " + r.proxyOf);
     if (r.closedTo !== undefined) io.out("  forwarded to: session " + r.toSession);
     if (r.delivery) {
       io.out("  delivery task: " + r.delivery.taskId);
@@ -80,6 +85,11 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
     for (const line of r.text.split("\n")) io.out("  | " + line);
   }
   return 0;
+}
+
+// Display only: an unreadable sidecar prints no line.
+function proxiedOf(paths: NodePaths, messageId: string): ProxiedRecord | null {
+  try { return getProxied(paths.inbox, messageId); } catch { return null; }
 }
 
 // Issue #417: which path made the record's last offer, and when; nothing before any offer.

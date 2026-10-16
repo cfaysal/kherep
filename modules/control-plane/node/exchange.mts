@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { SessionInfo } from "../protocol.mts";
-import { isDirectoryBody, isMessageId, isMessageSendBody, type DirectoryBody, type MessageProgress, type MessageSendBody } from "../protocol-messages.mts";
+import {
+  isDirectoryBody, isMessageId, isMessageSendBody, type DirectoryBody, type MessageDeliverBody, type MessageProgress, type MessageSendBody,
+} from "../protocol-messages.mts";
 import type { ClientOptions, NodeClient, SentState } from "./client.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import {
@@ -117,6 +119,12 @@ export function replyDepth(paths: NodePaths, inReplyTo: string | undefined): num
   }
 }
 
+// A delivered reply or proxy answer (issue #408) is one hop deeper than the
+// message of this node it answers.
+export function deliveryDepth(paths: NodePaths, body: MessageDeliverBody): number {
+  return replyDepth(paths, body.proxyOf ?? body.inReplyTo);
+}
+
 export function markNoticed(paths: NodePaths, messageId: string, now: number = Date.now()): void {
   const record = getSent(paths, messageId);
   if (record) writeJsonAtomic(fileOf(paths.sent, messageId), { ...record, noticedAt: new Date(now).toISOString() });
@@ -222,7 +230,8 @@ export function exchangeOptions(paths: NodePaths, now: () => number = Date.now):
 
 function toSendBody(record: OutboxRecord): MessageSendBody | null {
   const body: MessageSendBody = { messageId: record.messageId, fromSession: record.fromSession, to: record.to, text: record.text,
-    ...(record.inReplyTo ? { inReplyTo: record.inReplyTo } : {}), ...(record.taskId ? { taskId: record.taskId } : {}) };
+    ...(record.inReplyTo ? { inReplyTo: record.inReplyTo } : {}), ...(record.proxyOf ? { proxyOf: record.proxyOf } : {}),
+    ...(record.taskId ? { taskId: record.taskId } : {}) };
   return isMessageSendBody(body) ? body : null;
 }
 

@@ -8,6 +8,7 @@ import type { AppServerSpawn, KillReport } from "./codex-app-server-client.mts";
 import { codexNode } from "./codex-fixture.mts";
 import type { CodexDeps } from "./codex-process.mts";
 import { markStopEnded, recordCodexSession } from "./codex-sessions.mts";
+import { writeDirectory } from "./exchange.mts";
 import { storeMessage } from "./inbox.mts";
 import type { McpListResult } from "./codex-mcp.mts";
 import { T0 } from "./task-fixture.mts";
@@ -24,7 +25,7 @@ export const FORK_TURN = "01a0db74-0000-7000-8000-00000000a002";
 export const ANSWER = JSON.stringify({ kind: "answer", text: "The build is green on main.", code: "none" });
 // Unique in the process: the wake audit deduplicates by message id.
 let serial = 0;
-const PEER = { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "public-synthetic-peer" };
+export const PEER = { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "public-synthetic-peer" };
 
 type Message = { id?: number | string; method?: string; params?: Record<string, any>; result?: unknown; error?: unknown };
 export type GoalReply = { result: unknown } | { error: { code: number; message: string } };
@@ -193,8 +194,12 @@ export const FEATURES_STDOUT_MEASURED_ROWS = FEATURES_STDOUT.replace(/\n$/, "\n"
 export const FEATURES_STDERR_WARNING = "WARNING: synthetic warning a real binary prints on stderr\n";
 
 // A node with an opted-in, idle Codex owner and one accepted message for it.
-export function forkNode(t: test.TestContext, scenario: Partial<ForkScenario> = {}, options: { fork?: boolean; platform?: string } = {}) {
+// capability: false leaves the Worker's messaging.proxy.v1 out of directory.json (PR 4).
+export function forkNode(t: test.TestContext, scenario: Partial<ForkScenario> = {},
+  options: { fork?: boolean; platform?: string; capability?: boolean } = {}) {
   const node = codexNode(t);
+  writeDirectory(node.paths, { nodes: [], sessions: [], fetchedAt: new Date(T0).toISOString(),
+    ...(options.capability === false ? {} : { worker: { capabilities: ["messaging.proxy.v1"] } }) });
   const cwd = fs.realpathSync.native(node.workspace);
   const home = path.join(node.root, "synthetic-codex-home");
   fs.mkdirSync(home);

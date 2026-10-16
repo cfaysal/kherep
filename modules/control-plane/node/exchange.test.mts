@@ -9,7 +9,7 @@ import type { DirectoryBody, MessageProgress } from "../protocol-messages.mts";
 import { NodeClient } from "./client.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
 import {
-  exchangeOptions, getSent, pollExchange, readDirectory, readLocalSessions, recordSent, recordingSessions, requestDirectory, SEND_RETRY_MS,
+  deliveryDepth, exchangeOptions, getSent, pollExchange, readDirectory, readLocalSessions, recordSent, recordingSessions, requestDirectory, SEND_RETRY_MS,
   writeOutbox, type OutboxRecord,
 } from "./exchange.mts";
 import { generateIdentity } from "./identity.mts";
@@ -326,4 +326,26 @@ test("records every successful session listing in sessions.json and keeps it on 
   fail = true;
   await assert.rejects(list());
   assert.equal(readLocalSessions(paths).length, 2);
+});
+
+test("issue #408 relay: a proxy answer goes out with proxyOf; a record with both lineage fields is an error", async (t) => {
+  const paths = tempPaths(t);
+  const { client } = await connected(paths);
+  writeOutbox(paths, { ...outbox(paths), proxyOf: ID_B, depth: 1 });
+  const [frame] = poll(client, paths);
+  assert.deepEqual(frame?.body, { messageId: ID_A, fromSession: "review", to: { nodeId: PEER, session: "build" }, text: "hello", proxyOf: ID_B });
+  const both = "00000000-0000-4000-8000-0000000000c3";
+  recordSent(paths, ID_A, "queued");
+  writeOutbox(paths, { ...outbox(paths, both), proxyOf: ID_B, inReplyTo: ID_A });
+  assert.deepEqual(poll(client, paths), []);
+  assert.deepEqual([getSent(paths, both)?.state, getSent(paths, both)?.reason], ["error", "invalid outbox record"]);
+});
+
+test("issue #408 relay: an arriving proxy is one hop deeper than this node's sent original", (t) => {
+  const paths = tempPaths(t);
+  writeOutbox(paths, { ...outbox(paths), depth: 2 });
+  recordSent(paths, ID_A, "queued");
+  const body = { messageId: ID_B, from: { nodeId: PEER, session: "build" }, toSession: "review", text: "x", createdAt: new Date(0).toISOString() };
+  assert.deepEqual([deliveryDepth(paths, { ...body, proxyOf: ID_A }), deliveryDepth(paths, { ...body, inReplyTo: ID_A }),
+    deliveryDepth(paths, body)], [3, 3, 0]);
 });

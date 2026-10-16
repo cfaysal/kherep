@@ -112,6 +112,8 @@ const CASES: [string, ForkRefusal, (f: Fixture) => void][] = [
   ["a message already offered", "message-not-eligible", (f) => patchMessage(f, { state: "offered" })],
   ["a message addressed by name", "message-not-eligible", (f) => patchMessage(f, { toSession: "codex-00000001" })],
   ["a task message", "message-not-eligible", (f) => patchMessage(f, { taskId: "00000000-0000-4000-8000-0000000000f1" })],
+  // Issue #408, PR 4: msg send cannot answer the operator API either.
+  ["a message from the operator API", "message-not-eligible", (f) => patchMessage(f, { from: { nodeId: "operator", session: "operator" } })],
   ["a reply at the depth limit", "depth-limit", (f) => patchMessage(f, { depth: MAX_REPLY_DEPTH })],
   ["an earlier failed attempt for the message", "attempt-exists", (f) => {
     claimForkAttempt(f.paths, { owner: OWNER, messageId: MSG, attemptedAt: NOW - 1, policyFingerprint: f.fingerprint, producer: {} });
@@ -165,7 +167,7 @@ test("every refusal maps to an existing waiting progress code", () => {
 // Issue #408, PR 3: guards 10 to 12 refuse in the fork producer before admission;
 // the message keeps waiting for the owner's next turn.
 test("the producer's refusals before admission map to awaiting-user-turn", () => {
-  for (const reason of ["fork-producer", "fork-mcp-unknown", "fork-features-unknown"] as const) {
+  for (const reason of ["fork-producer", "fork-mcp-unknown", "fork-features-unknown", "fork-relay-unsupported"] as const) {
     assert.equal(FORK_PROGRESS[reason], "awaiting-user-turn", reason);
   }
 });
@@ -173,7 +175,7 @@ test("the producer's refusals before admission map to awaiting-user-turn", () =>
 test("the fork audit actions are metadata lines like every other wake decision", (t) => {
   const f = fixture(t);
   const actions: AutonomyAction[] = ["fork", "fork-declined", "fork-failed", "fork-uncertain", "fork-superseded", "fork-not-idle",
-    "fork-disabled-platform"];
+    "fork-disabled-platform", "fork-relayed"];
   for (const action of actions) audit(f.paths, NOW, OWNER, [MSG], action);
   const lines = fs.readFileSync(wakeAudit(f.paths), "utf8").trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(lines.map((line) => line.action), actions);
