@@ -282,15 +282,19 @@ increments the minor version; every other release increments the patch version.
   after `ok: true`. Upgrade and rollback report success only after the native
   service reads back with the expected bytes and, when it should run, as running
   with the healthy daemon still recorded. The stop proof waits up to 75 seconds
-  instead of 30, beyond the launchd `ExitTimeOut`. A stop that fails before it
-  takes effect leaves the live service untouched and reports `restored`; a
-  failure before any definition was written releases the drain marker. Failures
-  add a fixed `stage` and, for an `unknown` recovery, a fixed `blocker`; the
-  error message is still never printed. `service status` reports `drain`
-  (`none`, `active`, `stale` or `unknown`), fails on a stale drain and names
-  the recovery `service upgrade --source "<pin root>"`, also for a stopped
-  service with a dead recorded daemon, which `upgrade` now accepts instead of
-  refusing the stale record.
+  instead of 30, beyond the launchd `ExitTimeOut`. A macOS stop refused before
+  `launchctl bootout` runs leaves the live service untouched and reports
+  `restored`; any other stop failure is treated as possibly effective and is
+  never reported `restored` without proof. An `unknown` recovery releases the
+  drain marker only when no definition write was attempted and the daemon told
+  to stop is gone. Failures add a fixed `stage` and, for an `unknown` recovery,
+  a fixed `blocker`; the error message is still never printed. `service status`
+  reports `drain` (`none`, `active`, `stale` or `unknown`) and fails on a stale
+  or unverifiable drain. It names the recovery `service upgrade --source <clean
+  checkout at <commit>>` for a stale drain and for a stopped service with a dead
+  recorded daemon, which `upgrade` now accepts instead of refusing the stale
+  record, and asks to inspect the drain owner file when its owner cannot be
+  verified. Status prints no local path or pid.
 
 - Message intake no longer waits for runtime work (refs #441; the
   sender-visible signal for a node that does not drain is a follow-up). A

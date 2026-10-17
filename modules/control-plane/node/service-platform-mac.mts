@@ -10,7 +10,7 @@ import {
   runMacCommand, sameMacLaunchAgent,
   type MacCommand, type MacLaunchAgentProbe,
 } from "./service-platform-mac-native.mts";
-import { attestMacNoContextStop } from "./service-platform-mac-stop.mts";
+import { attestMacNoContextStop, beforeStopEffect } from "./service-platform-mac-stop.mts";
 import type { NativeServiceSnapshot, ServiceAdapter, ServiceBinding, ServiceStopContext } from "./service-types.mts";
 
 export { MAC_EXECUTABLE_PROBE, macAclAbsent } from "./service-platform-mac-native.mts";
@@ -226,20 +226,16 @@ export class MacServiceAdapter implements ServiceAdapter {
   async remove(binding: ServiceBinding): Promise<void> { fs.rmSync(this.#file(binding.serviceName), { force: true }); }
   async stop(binding: ServiceBinding, expected: ServiceStopContext | undefined): Promise<void> {
     const serviceName = binding.serviceName;
-    if (!expected) {
-      const native = attestMacNoContextStop(this.#run, this.#uid, binding, this.#file(serviceName));
-      if (native.kind === "absent") return;
-      const result = this.#run("launchctl", ["bootout", launchTarget(this.#uid, serviceName)]);
-      if (result.status !== 0) throw new Error("launchctl could not prove the selected service stopped");
-      return;
-    }
-    const native = this.#probe(binding);
-    if (native.kind === "absent") {
-      throw new Error("selected LaunchAgent process is unavailable");
-    }
     const file = this.#file(serviceName);
-    attestMacLaunchAgent(native, file, undefined, expected.pid);
-    attestMacLaunchAgent(native, file, readMacPlist(this.#run, file), expected.pid);
+    const native = beforeStopEffect(() => {
+      if (!expected) return attestMacNoContextStop(this.#run, this.#uid, binding, file);
+      const selected = this.#probe(binding);
+      if (selected.kind === "absent") throw new Error("selected LaunchAgent process is unavailable");
+      attestMacLaunchAgent(selected, file, undefined, expected.pid);
+      attestMacLaunchAgent(selected, file, readMacPlist(this.#run, file), expected.pid);
+      return selected;
+    });
+    if (!expected && native.kind === "absent") return;
     const result = this.#run("launchctl", ["bootout", launchTarget(this.#uid, serviceName)]);
     if (result.status !== 0) throw new Error("launchctl could not prove the selected service stopped");
   }

@@ -42,6 +42,8 @@ export interface NativeServiceSnapshot {
 
 export const FAILED_WRITE_SNAPSHOT = Symbol("failed-service-write-snapshot");
 export type FailedServiceWrite = Error & { [FAILED_WRITE_SNAPSHOT]?: NativeServiceSnapshot };
+// A stop error with this code was raised before the adapter took any native effect (#472).
+export const STOP_NOT_ISSUED = "STOP_NOT_ISSUED";
 export interface ServiceStopContext { pid: number; startedAt: string; sourceRoot?: string }
 
 export interface ServiceAdapter {

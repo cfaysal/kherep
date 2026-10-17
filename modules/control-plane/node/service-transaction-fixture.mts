@@ -9,7 +9,7 @@ import type { DaemonState } from "./daemon-state.mts";
 import { snapshotDigests, writeServiceReceipt } from "./service-records.mts";
 import { claimServiceLaunchPermit } from "./service-launch-permit.mts";
 import {
-  FAILED_WRITE_SNAPSHOT, type NativeServiceSnapshot, type ServiceAdapter, type ServiceBinding, type ServiceStopContext,
+  FAILED_WRITE_SNAPSHOT, STOP_NOT_ISSUED, type NativeServiceSnapshot, type ServiceAdapter, type ServiceBinding, type ServiceStopContext,
 } from "./service-types.mts";
 
 export const source = (root: string, char: string) => ({ root, commit: char.repeat(40), digest: char.repeat(64), kind: "pin" as const, verified: true });
@@ -36,6 +36,9 @@ export class FakeAdapter implements ServiceAdapter {
   failStopBeforeEffect = false;
   stopKeepsPidAlive = false;
   startWithoutLoad = false;
+  stopThrowsAfterEffect = false;
+  reportPid = true;
+  disconnectAfterHealth = false;
   strictPreflightGeneration = false;
   strictStopGeneration = false;
   detachedSupervisor = false;
@@ -76,6 +79,9 @@ export class FakeAdapter implements ServiceAdapter {
   }
   async processOwned(pid: number, binding: ServiceBinding, _startedAt: string, sourceRoot?: string) {
     this.events.push(`owned:${pid}${sourceRoot ? `:${sourceRoot}` : ""}`);
+    if (this.disconnectAfterHealth && pid === 42 && this.state?.pid === 42) {
+      this.state = { ...this.state, disconnectedAt: "2026-10-14T11:00:02.000Z" };
+    }
     if (this.failCandidateHealth && binding.source.commit === this.candidate.source.commit
       && this.events.some(event => event === "start:RAW_NEW_XML" || event === "start:NATIVE_NEW_XML")) return false;
     if (this.failPriorHealth && binding.source.commit === this.old.source.commit
@@ -116,7 +122,8 @@ export class FakeAdapter implements ServiceAdapter {
   async stop(binding: ServiceBinding, expected: ServiceStopContext | undefined) {
     this.events.push("stop");
     this.stopCalls.push({ binding, expected });
-    if (this.failStopBeforeEffect) throw new Error("synthetic stop failure before effect");
+    if (this.failStopBeforeEffect) throw Object.assign(new Error("synthetic stop failure before effect"), { code: STOP_NOT_ISSUED });
+    if (this.stopThrowsAfterEffect) throw new Error("synthetic stop failure after the native stop took effect");
     if (this.stopKeepsPidAlive) return;
     if (this.failCandidateRecoveryStop && binding.source.commit === this.candidate.source.commit && expected?.pid === 42) {
       throw new Error("synthetic candidate stop failure");
@@ -155,7 +162,10 @@ export class FakeAdapter implements ServiceAdapter {
         service: { name: this.candidate.serviceName, platform: "win32", taskPath: this.candidate.taskPath } }
       : { pid: 41, startedAt: "2026-10-14T10:00:00.000Z", connectedAt: "2026-10-14T10:00:01.000Z", source: this.old.source,
         ...(definition === "MANAGED_OLD_XML" ? { service: { name: this.old.serviceName, platform: "win32" as const, taskPath: this.old.taskPath } } : {}) };
-    if (this.snapshot && !this.startWithoutLoad) { this.snapshot.running = true; this.snapshot.pid = this.state.pid; }
+    if (this.snapshot && !this.startWithoutLoad) {
+      this.snapshot.running = true;
+      if (this.reportPid) this.snapshot.pid = this.state.pid;
+    }
   }
 }
 

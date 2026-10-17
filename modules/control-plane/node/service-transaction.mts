@@ -15,7 +15,7 @@ import {
   type LifecycleDependencies,
 } from "./service-lifecycle.mts";
 import {
-  assertSettled, exact, failedWriteSnapshot, receiptFor, recoveryBlocker, sameBinding, serviceFailure, type ServiceStage,
+  assertSettled, exact, failedWriteSnapshot, receiptFor, recoveryBlocker, sameBinding, serviceFailure, stopNotIssued, type ServiceStage,
 } from "./service-transaction-support.mts";
 import type { NativeServiceSnapshot, ServiceBinding } from "./service-types.mts";
 
@@ -109,8 +109,7 @@ export async function activateManagedService(options: ActivateOptions, input: De
     let clearLaunchPermit = () => {};
     let drainSafeToRelease = true;
     let mutationStarted = false;
-    let stopIssued = false, writeAttempted = false;
-    let stage: ServiceStage = "stop";
+    let stopIssued = false, writeAttempted = false, stage: ServiceStage = "stop";
     let candidateSnapshot: NativeServiceSnapshot | undefined;
     try {
       if (existing) {
@@ -122,10 +121,10 @@ export async function activateManagedService(options: ActivateOptions, input: De
         mutationStarted = true;
         const sourceRoot = oldBinding ? undefined : legacySourceRoot;
         if (existing.running === true) {
+          stopIssued = true;
           await input.adapter.stop(oldBinding ?? binding, oldState ? {
             pid: oldState.pid, startedAt: oldState.startedAt, ...(sourceRoot ? { sourceRoot } : {}),
           } : undefined);
-          stopIssued = true;
           stage = "prove-stopped";
           await proveStopped(oldState?.pid, deps);
         }
@@ -153,15 +152,16 @@ export async function activateManagedService(options: ActivateOptions, input: De
     } catch (cause) {
       if (!mutationStarted) throw cause;
       candidateSnapshot ??= failedWriteSnapshot(cause);
-      let recovery = "unknown";
-      let blocker: string | undefined;
+      if (stopNotIssued(stage, cause)) stopIssued = false;
+      let recovery = "unknown", blocker: string | undefined;
       try {
         if (existing) await restorePrior({ binding, previous: existing, previousBinding: oldBinding,
           previousPid: oldState?.pid, deps: input, candidate: candidateSnapshot, priorStopIssued: stopIssued });
         else await removeFresh(binding, input);
         recovery = "restored";
       } catch (error) { blocker = recoveryBlocker(error); }
-      if (recovery === "unknown" && writeAttempted) drainSafeToRelease = false;
+      // #472: keep the drain once a write was attempted or while a daemon told to stop is still alive.
+      if (recovery === "unknown" && (writeAttempted || (stopIssued && deps.alive(oldState?.pid)))) drainSafeToRelease = false;
       throw serviceFailure("SERVICE_ACTIVATION_FAILED", cause, recovery, stage, blocker);
     } finally { clearLaunchPermit(); if (drainSafeToRelease) endDrain(); }
   } finally { release(); }
@@ -194,8 +194,7 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
     let clearLaunchPermit = () => {};
     let drainSafeToRelease = true;
     let mutationStarted = false;
-    let stopIssued = false, writeAttempted = false;
-    let stage: ServiceStage = "stop";
+    let stopIssued = false, writeAttempted = false, stage: ServiceStage = "stop";
     let previousSnapshot: NativeServiceSnapshot | undefined;
     // #472: a running node stays running even when the backup was taken from a stopped service.
     const shouldRun = current.running === true || previous.running === true;
@@ -207,8 +206,8 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
       await verifyStopOwnership(currentBinding, runningState, input);
       mutationStarted = true;
       if (current.running === true) {
-        await input.adapter.stop(currentBinding, state ? { pid: state.pid, startedAt: state.startedAt } : undefined);
         stopIssued = true;
+        await input.adapter.stop(currentBinding, state ? { pid: state.pid, startedAt: state.startedAt } : undefined);
         stage = "prove-stopped";
         await proveStopped(state?.pid, deps);
       }
@@ -235,14 +234,14 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
     } catch (cause) {
       if (!mutationStarted) throw cause;
       previousSnapshot ??= failedWriteSnapshot(cause);
-      let recovery = "unknown";
-      let blocker: string | undefined;
+      if (stopNotIssued(stage, cause)) stopIssued = false;
+      let recovery = "unknown", blocker: string | undefined;
       try {
         await restorePrior({ binding: priorBinding, previous: current, previousBinding: currentBinding,
           previousPid: state?.pid, deps: input, candidate: previousSnapshot, priorStopIssued: stopIssued });
         recovery = "restored";
       } catch (error) { blocker = recoveryBlocker(error); }
-      if (recovery === "unknown" && writeAttempted) drainSafeToRelease = false;
+      if (recovery === "unknown" && (writeAttempted || (stopIssued && deps.alive(state?.pid)))) drainSafeToRelease = false;
       void safety;
       throw serviceFailure("SERVICE_ROLLBACK_FAILED", cause, recovery, stage, blocker);
     } finally { clearLaunchPermit(); if (drainSafeToRelease) endDrain(); }

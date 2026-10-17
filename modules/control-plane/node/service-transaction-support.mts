@@ -2,7 +2,7 @@ import type { DaemonState } from "./daemon-state.mts";
 import { lifecycleDefaults, type LifecycleDependencies } from "./service-lifecycle.mts";
 import { snapshotDigests, type ServiceBackup, type ServiceReceipt } from "./service-records.mts";
 import {
-  FAILED_WRITE_SNAPSHOT, type FailedServiceWrite, type NativeServiceSnapshot, type ServiceBinding,
+  FAILED_WRITE_SNAPSHOT, STOP_NOT_ISSUED, type FailedServiceWrite, type NativeServiceSnapshot, type ServiceBinding,
 } from "./service-types.mts";
 
 export const SERVICE_STAGES = ["stop", "prove-stopped", "write", "verify", "start", "health", "settle", "receipt"] as const;
@@ -41,6 +41,10 @@ export async function assertSettled(input: LifecycleDependencies, binding: Servi
   }
   return snapshot;
 }
+
+// #472: a stop counts as issued unless the adapter tagged its failure as raised before any native effect.
+export const stopNotIssued = (stage: ServiceStage, cause: unknown): boolean =>
+  stage === "stop" && (cause as { code?: unknown } | null)?.code === STOP_NOT_ISSUED;
 
 export function recoveryBlocker(error: unknown): string {
   const code = (error as { code?: unknown } | null)?.code;

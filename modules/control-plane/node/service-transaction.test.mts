@@ -395,12 +395,14 @@ test("rollback refuses ok when the restored service is not running after start",
   await activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps);
   h.adapter.startWithoutLoad = true;
   await assert.rejects(rollbackManagedService({ binding: h.candidate }, h.deps),
-    (error: ServiceFailure) => error.code === "SERVICE_ROLLBACK_FAILED" && error.stage === "settle");
+    (error: ServiceFailure) => error.code === "SERVICE_ROLLBACK_FAILED" && error.stage === "settle"
+      && error.recovery === "unknown" && error.blocker === "RECOVERY_ABSENCE_UNPROVEN");
   assert.equal(readServiceReceipt(h.paths)?.binding.source.commit, h.candidate.source.commit,
     "the prior receipt is written only after the restored service is verified running");
+  assert.equal(drainExists(h), true, "an unproven recovery after a definition write keeps admissions drained");
 });
 
-test("a stop that never completes reports its stage and leaves no drain", async (t) => {
+test("a stop that never completes reports its stage and keeps the drain while its daemon lives", async (t) => {
   const h = setup(t);
   seedManaged(h);
   await activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps);
@@ -410,8 +412,22 @@ test("a stop that never completes reports its stage and leaves no drain", async 
     (error: ServiceFailure) => error.code === "SERVICE_ROLLBACK_FAILED" && error.recovery === "unknown"
       && error.stage === "prove-stopped" && error.blocker === "RECOVERY_ABSENCE_UNPROVEN");
   assert.equal(h.adapter.events.includes("write:MANAGED_OLD_XML"), false, "the prior definition is never written");
-  assert.equal(drainExists(h), false, "a rollback that wrote no definition releases its drain");
+  assert.equal(drainExists(h), true, "a daemon told to stop that is still alive keeps admissions drained");
   assert.equal(readServiceReceipt(h.paths)?.binding.source.commit, h.candidate.source.commit);
+});
+
+test("a stop that never completes releases the drain once its daemon has exited", async (t) => {
+  const h = setup(t);
+  seedManaged(h);
+  await activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps);
+  h.adapter.events.length = 0;
+  h.adapter.stopKeepsPidAlive = true;
+  const exitedDuringRecovery = () => h.adapter.events.includes("write:RAW_NEW_XML");
+  await assert.rejects(rollbackManagedService({ binding: h.candidate }, { ...h.deps,
+    pidAlive: (pid: unknown) => (pid === 42 && h.adapter.candidatePidAlive && !exitedDuringRecovery()) || (pid === 41 && h.adapter.oldPidAlive) }),
+  (error: ServiceFailure) => error.recovery === "unknown" && error.stage === "prove-stopped");
+  assert.equal(h.adapter.events.includes("write:MANAGED_OLD_XML"), false);
+  assert.equal(drainExists(h), false, "no definition was written and the stopped daemon is gone");
 });
 
 test("a stop that throws before taking effect restores the live prior without restarting it", async (t) => {
@@ -429,6 +445,19 @@ test("a stop that throws before taking effect restores the live prior without re
   assert.equal(h.adapter.snapshot?.running, true);
   assert.equal(h.adapter.candidatePidAlive, true);
   assert.equal(drainExists(h), false);
+});
+
+test("a stop that throws after taking effect is never reported restored", async (t) => {
+  const h = setup(t);
+  seedManaged(h);
+  await activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps);
+  h.adapter.events.length = 0;
+  h.adapter.stopThrowsAfterEffect = true;
+  await assert.rejects(rollbackManagedService({ binding: h.candidate }, h.deps),
+    (error: ServiceFailure) => error.code === "SERVICE_ROLLBACK_FAILED" && error.recovery === "unknown"
+      && error.stage === "stop" && error.blocker === "RECOVERY_ABSENCE_UNPROVEN");
+  assert.equal(h.adapter.events.includes("write:MANAGED_OLD_XML"), false);
+  assert.equal(drainExists(h), true, "the daemon told to stop is still alive");
 });
 
 test("upgrade proceeds over a stale daemon record when the service is stopped and its daemon is dead", async (t) => {
@@ -468,4 +497,23 @@ test("stop verification uses the stop timeout", async (t) => {
   assert.equal(readServiceReceipt(h.paths)?.binding.source.commit, h.old.source.commit,
     "a daemon that exits after the general 50 ms budget but within the stop budget completes the rollback");
   assert.equal(h.adapter.state?.pid, 41);
+});
+
+test("settle verification without a native pid still checks the recorded daemon", async (t) => {
+  const settled = setup(t);
+  seedManaged(settled);
+  settled.adapter.reportPid = false;
+  await activateManagedService({ mode: "upgrade", binding: settled.candidate }, settled.deps);
+  assert.equal(settled.adapter.platform, "win32");
+  assert.equal(settled.adapter.snapshot?.pid, undefined, "the Scheduler snapshot carries no daemon pid");
+  assert.equal(readServiceReceipt(settled.paths)?.binding.source.commit, settled.candidate.source.commit);
+
+  const disconnected = setup(t);
+  seedManaged(disconnected);
+  disconnected.adapter.reportPid = false;
+  disconnected.adapter.disconnectAfterHealth = true;
+  await assert.rejects(activateManagedService({ mode: "upgrade", binding: disconnected.candidate }, disconnected.deps),
+    (error: ServiceFailure) => error.code === "SERVICE_ACTIVATION_FAILED" && error.stage === "settle"
+      && /does not match the recorded daemon/.test(error.message));
+  assert.equal(readServiceReceipt(disconnected.paths)?.binding.source.commit, disconnected.old.source.commit);
 });
