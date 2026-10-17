@@ -63,8 +63,9 @@ export async function stopClaude(record: TaskRecord, runVersion: string, runner:
     try {
       await stopIdentities(deps, null, identities);
     } catch (error) {
-      if (!messageOf(error).startsWith("process tree did not stop")) throw error;
-      log(messageOf(error));
+      const message = messageOf(error);
+      if (!message.startsWith("process tree did not stop")) throw error;
+      log(message);
       return refused("stop_failed", "failed", "running");
     }
   }
