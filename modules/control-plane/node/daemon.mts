@@ -18,7 +18,7 @@ import { captureRuntimeSourceIdentity } from "./daemon-source.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
 import { observeClaudeDeliveryProgress, observeCodexTaskProgress } from "./delivery-progress.mts";
 import {
-  deliveryDepth, DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions,
+  deliveryDepth, DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions, type ProxySend,
 } from "./exchange.mts";
 import { readPrivateKey } from "./identity.mts";
 import { installPaused, markedProbe, noticeInterruptedProbe } from "./install-pause.mts";
@@ -139,8 +139,6 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   for (const runtime of enabledRuntimes(policy)) void readiness.check(runtime);
   // Issue #408, PR 4: the capability proven on the current connection, read lazily from the client below.
   const runner: RunnerDeps = { paths, policy, log, readiness, workerCapabilities: () => client.workerCapabilities };
-  // The proxy answers' send gate: every relay guard at every send (codex-fork-relay.mts).
-  const proxySend = relaySendGate(runner);
   recoverOperations(paths);
   recoverForkAttemptsAtStart(paths, Date.now(), log);
   let taskControlInflight = new Set<string>();
@@ -254,10 +252,12 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         chain = chain.then(async () => {
           const current = loadPolicy(config.policyFile);
           let applied = current;
+          // Issue #444: the gate's presence check follows the round's policy, as the queue does; the relay guards read the file.
+          const proxySend = (): ProxySend => relaySendGate({ ...runner, policy: applied }, log);
           let published = publishRegistration(await client.refreshPolicy(applied));
           observeClaudeDeliveryProgress({ ...runner, policy: current });
           observeCodexTaskProgress(runner);
-          pollExchange(client, paths, inflight, send, Date.now(), Math.random, proxySend);
+          pollExchange(client, paths, inflight, send, Date.now(), Math.random, proxySend());
           pollTasks(client, paths, policy, requestsInflight, send);
           const enabled = current.sessions?.enabled === true && current.sessions.ownTaskControl === true
             && current.sessions.runtimes.length > 0;
@@ -274,7 +274,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           const window = published ? codexIntakeWindow({ client, paths, policyFile: config.policyFile, policy: applied,
             connected: () => !stopped && socket === ws && ws.readyState === WebSocket.OPEN,
             send: frame => !stopped && socket === ws && send(frame),
-            exchange: () => pollExchange(client, paths, inflight, send, Date.now(), Math.random, proxySend),
+            exchange: () => pollExchange(client, paths, inflight, send, Date.now(), Math.random, proxySend()),
             queue: () => pollCodexQueue({ ...runner, policy: applied }, log), defer: handleFrame, log }) : null;
           intakeWindow = window;
           try { await pollCodexInbound(runner, log); }

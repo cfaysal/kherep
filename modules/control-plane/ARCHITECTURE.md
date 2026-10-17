@@ -430,7 +430,8 @@ section absent `scheduleForkReply` returns at its first check: no file is read,
 no process starts and nothing is written. The daemon hands every exchange round
 the policy it read for that round (`daemon.mts`, issue #444), so the first check
 follows `policy.json` without a restart; the fresh read at the second check and
-in admission are unchanged. Every refusal before the claim is one `fork-<code>`
+in admission are unchanged, and the exchange's send gate is built from the same
+round's policy. Every refusal before the claim is one `fork-<code>`
 audit line per owner, message and code, recorded as written only after the
 append succeeded. The validated answer is persisted in
 the attempt file; the relay below sends it to the original's sender.
@@ -522,7 +523,7 @@ flowchart TD
 | Part | File | Role |
 | --- | --- | --- |
 | Bookkeeping pass | `node/codex-fork-relay-pass.mts` | `relayBookkeeping` lists `inbox/proxied/` in every poll, before the owner candidates and whether or not `wake.codexFork` is present. With no sidecar it reads only that directory. Without the flag it only withdraws and cleans up existing relays: no send, fork, new relay or audit line. |
-| Sweep and gate | `node/codex-fork-relay.mts` | `reconcileRelay` withdraws when the owner read or answered first. A removal counts as exact only when no frame can have left this node; otherwise the record is kept as unconfirmed. `relayPending` writes the claim and the outbox record. `relaySendGate` runs at every send and resend, with no stored release. |
+| Sweep and gate | `node/codex-fork-relay.mts` | `reconcileRelay` withdraws when the owner read or answered first. A removal counts as exact only when no frame can have left this node; otherwise the record is kept as unconfirmed. `relayPending` writes the claim and the outbox record. `relaySendGate` runs at every send and resend, with no stored release; it is built per exchange round from the round's policy; a guard hold is logged once per relay and code. |
 | Guards | `node/codex-fork-admission.mts` | `relayRefusal`, a pure function that spends no budget. It checks the attempt age against `RELAY_MAX_AGE_MS` (24 h), the fresh policy, the connection-bound Worker capability, the original still `accepted`, and the owner's recorded session (permissions, hook, idle evidence). |
 | Owner presentation | `node/inbox-proxied.mts` | Sidecar `inbox/proxied/<id>.json` and the state derived from it, the outbox and `sent/`: one line in the owner's delivery and in `msg inbox`. Only a confirmed delivery says not to answer again. |
 | Capability | `node/client.mts`, `worker/src/directory.mts` | The Worker advertises `worker.capabilities: ["messaging.proxy.v1"]` in the `directory` frame. The node keeps it only for the current authenticated connection: it is cleared at close and at `auth.ok`, and a frame from an old socket is ignored. |

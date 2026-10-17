@@ -208,7 +208,7 @@ message:
 ```
 
 Absent means off. The daemon reads the policy at every exchange round (every 2
-seconds) and applies it to that round: adding or removing `wake.codexFork`, or
+seconds) and applies it to that round, the exchange's send gate included: adding or removing `wake.codexFork`, or
 an owner in `wake.sessions` or `codexFork.sessions`, takes effect at the next
 round without a daemon restart (issue #444). Only full thread ids are accepted (in any case, kept in
 lowercase), never `*` or a name, and

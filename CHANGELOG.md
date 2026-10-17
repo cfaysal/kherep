@@ -266,7 +266,13 @@ increments the minor version; every other release increments the patch version.
   states that a fork owner's recorded working directory must lie inside the
   workspace roots and that a `codex exec` session reports `bypassPermissions`
   and is therefore refused as a fork owner (measured 2026-10-16 with
-  codex-cli 0.160.1).
+  codex-cli 0.160.1). The exchange's proxy send gate was still built once at
+  start from the startup policy, so a `wake.codexFork` opt-in written later
+  left every completed proxy answer in the outbox silently (measured
+  2026-10-17); the gate is now built per exchange round from the round's
+  policy, and a record held by a relay guard is logged once per relay and code
+  as `Codex fork relay send held: <code>`; nothing is audited and nothing
+  changes while the section is absent.
 - Service owner probe in unit tests (issue #423): the runner deps carry the
   owner probe of a service admission (`serviceOwner`), and task starts,
   continues, closed-session resumes, Codex runs and Codex queue runs use it.
