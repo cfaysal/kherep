@@ -12,7 +12,7 @@ import { acquireServiceLock } from "./service-records.mts";
 import { createServiceOwnerProbe } from "./service-owner-probe.mts";
 import { reclaimContenderProgram } from "./service-reclaim-outcome-fixture.mts";
 import {
-  beginServiceDrain, defaultServiceOwnerProbe, serviceAdmissionsIdle, serviceDrainFile, waitForServiceAdmission,
+  beginServiceDrain, defaultServiceOwnerProbe, describeServiceDrain, serviceAdmissionsIdle, serviceDrainFile, waitForServiceAdmission,
   withServiceAdmission, type ServiceAdmissionBlocker, type ServiceOwnerProbe,
 } from "./service-drain.mts";
 
@@ -243,4 +243,24 @@ test("both active-owner paths report only a safe admission descriptor", (t) => {
       pid: 4242, startedAt: "2026-10-14T10:00:00.000Z" }]);
     assert.doesNotMatch(JSON.stringify(blocked), /RAW-|with spaces|control-plane|admissions/);
   }
+});
+
+test("describeServiceDrain distinguishes none, active and stale", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-service-describe-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = nodePaths(root);
+  const owner = { version: 1 as const, pid: 41, startedAt: "2026-10-14T10:00:00.000Z", owner: "operator" };
+  let active: boolean | "unknown" = true;
+  const probe: ServiceOwnerProbe = { current: () => owner, active: () => active };
+  assert.equal(describeServiceDrain(paths, probe), "none");
+  fs.mkdirSync(path.dirname(serviceDrainFile(paths)), { recursive: true });
+  fs.writeFileSync(serviceDrainFile(paths), JSON.stringify(owner), { mode: 0o600 });
+  assert.equal(describeServiceDrain(paths, probe), "active");
+  active = false;
+  assert.equal(describeServiceDrain(paths, probe), "stale");
+  assert.equal(fs.existsSync(serviceDrainFile(paths)), true, "describing a stale drain never removes it");
+  active = "unknown";
+  assert.equal(describeServiceDrain(paths, probe), "unknown");
+  fs.writeFileSync(serviceDrainFile(paths), "not json", { mode: 0o600 });
+  assert.equal(describeServiceDrain(paths, probe), "unknown");
 });

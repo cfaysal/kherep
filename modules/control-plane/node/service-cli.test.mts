@@ -4,7 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
+import { nodePaths } from "./config.mts";
 import { defaultServiceName, parseServiceCommand, runService, safeServiceFailure } from "./service-cli.mts";
+import { serviceDrainFile, type ServiceOwnerProbe } from "./service-drain.mts";
+import { snapshotDigests } from "./service-records.mts";
 import type { ServiceAdapter, ServiceBinding } from "./service-types.mts";
 
 test("service install parses an explicit adopted nested Windows task", () => {
@@ -70,6 +73,66 @@ test("service status rejects stopped, unauthenticated and foreign recorded daemo
       assert.equal(report.ok, false, item.name);
       assert.equal("pid" in report, false, `${item.name} must not expose a pid`);
     }
+  } finally {
+    console.log = originalLog;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("service failures pass only a fixed stage and recovery blocker", () => {
+  const raw = "private native stderr with environment and definition";
+  assert.deepEqual(safeServiceFailure({ code: "SERVICE_ROLLBACK_FAILED", recovery: "unknown", message: raw,
+    stage: "prove-stopped", blocker: "RECOVERY_ABSENCE_UNPROVEN" }),
+  { ok: false, code: "SERVICE_ROLLBACK_FAILED", recovery: "unknown", stage: "prove-stopped", blocker: "RECOVERY_ABSENCE_UNPROVEN" });
+  const dropped = safeServiceFailure({ code: "SERVICE_ROLLBACK_FAILED", recovery: "restored", message: raw,
+    stage: raw, blocker: `RECOVERY_ ${raw}` });
+  assert.deepEqual(dropped, { ok: false, code: "SERVICE_ROLLBACK_FAILED", recovery: "restored" });
+  assert.equal(JSON.stringify(dropped).includes(raw), false);
+  assert.equal(safeServiceFailure({ code: "SERVICE_ACTIVATION_FAILED", recovery: "unknown", blocker: "ENOENT" })?.blocker, undefined);
+});
+
+test("service status reports a stale drain and its recovery", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-service-drain-status-"));
+  const source = { root: path.join(root, "source pin"), commit: "a".repeat(40), digest: "b".repeat(64), kind: "pin" as const, verified: true };
+  const binding: ServiceBinding = { platform: "win32", serviceName: "Node", taskPath: "\\Kherep", workspace: path.join(root, "work"),
+    configRoot: root, nodeExecutable: process.execPath, source };
+  const snapshot = { definition: Buffer.from("definition"), security: Buffer.from("security"), running: true as boolean | "unknown" };
+  const adapter = { read: async () => snapshot, processOwned: async () => true } as unknown as ServiceAdapter;
+  const receipt = { version: 1 as const, binding, ...snapshotDigests(snapshot), activatedAt: new Date().toISOString() };
+  const state = { pid: 1234, startedAt: "2026-10-14T18:00:00.000Z", connectedAt: "2026-10-14T18:00:01.000Z", source,
+    service: { name: binding.serviceName, platform: binding.platform, taskPath: binding.taskPath } };
+  const owner = { version: 1 as const, pid: 4321, startedAt: "2026-10-14T18:05:00.000Z", owner: "operator" };
+  const ownerProbe: ServiceOwnerProbe = { current: () => owner, active: () => false };
+  let alive = true;
+  const originalLog = console.log;
+  const status = async (): Promise<{ exit: number; report: Record<string, unknown> }> => {
+    let output = "";
+    console.log = value => { output = String(value); };
+    const exit = await runService(["status"], { root, readReceipt: () => receipt, adapterFor: () => adapter,
+      readState: () => state, alive: () => alive, ownerProbe });
+    return { exit, report: JSON.parse(output) as Record<string, unknown> };
+  };
+  try {
+    const clean = await status();
+    assert.equal(clean.exit, 0);
+    assert.equal(clean.report.drain, "none");
+    assert.equal("recovery" in clean.report, false);
+    const drain = serviceDrainFile(nodePaths(root));
+    fs.mkdirSync(path.dirname(drain), { recursive: true });
+    fs.writeFileSync(drain, JSON.stringify(owner), { mode: 0o600 });
+    const stale = await status();
+    assert.equal(stale.exit, 1);
+    assert.equal(stale.report.ok, false);
+    assert.equal(stale.report.drain, "stale");
+    assert.equal(stale.report.recovery, `kherep-node service upgrade --source "${source.root}" reclaims the stale drain`);
+    assert.equal(JSON.stringify(stale.report).includes(String(owner.pid)), false, "the drain owner pid is not reported");
+    fs.rmSync(drain);
+    snapshot.running = false;
+    alive = false;
+    const stopped = await status();
+    assert.equal(stopped.report.ok, false);
+    assert.equal(stopped.report.recovery, `kherep-node service upgrade --source "${source.root}"`);
+    assert.equal("pid" in stopped.report, false);
   } finally {
     console.log = originalLog;
     fs.rmSync(root, { recursive: true, force: true });

@@ -276,6 +276,22 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Managed service rollback (fixes #472). A rollback now starts the restored
+  service whenever the current or the backed-up service was running, so a
+  backup taken from a stopped service no longer leaves a running node unloaded
+  after `ok: true`. Upgrade and rollback report success only after the native
+  service reads back with the expected bytes and, when it should run, as running
+  with the healthy daemon still recorded. The stop proof waits up to 75 seconds
+  instead of 30, beyond the launchd `ExitTimeOut`. A stop that fails before it
+  takes effect leaves the live service untouched and reports `restored`; a
+  failure before any definition was written releases the drain marker. Failures
+  add a fixed `stage` and, for an `unknown` recovery, a fixed `blocker`; the
+  error message is still never printed. `service status` reports `drain`
+  (`none`, `active`, `stale` or `unknown`), fails on a stale drain and names
+  the recovery `service upgrade --source "<pin root>"`, also for a stopped
+  service with a dead recorded daemon, which `upgrade` now accepts instead of
+  refusing the stale record.
+
 - Message intake no longer waits for runtime work (refs #441; the
   sender-visible signal for a node that does not drain is a follow-up). A
   `message.deliver` frame of an authenticated connection is stored on an

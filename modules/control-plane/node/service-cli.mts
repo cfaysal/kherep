@@ -6,10 +6,12 @@ import { configRoot, nodePaths, readConfig } from "./config.mts";
 import { pidAlive, readDaemonState, type DaemonState } from "./daemon-state.mts";
 import { captureSourceIdentity, compareSourceIdentity, runtimeSourceRoot } from "./daemon-source.mts";
 import { ensureLauncher, type LauncherStatus } from "./launcher.mts";
+import { describeServiceDrain, type ServiceOwnerProbe } from "./service-drain.mts";
 import type { LifecycleDependencies } from "./service-lifecycle.mts";
 import { servicePlatform, serviceSelector, supportedServicePlatform } from "./service-platform.mts";
 import { readServiceReceipt, serviceRoot, snapshotDigests, type ServiceReceipt } from "./service-records.mts";
 import { activateManagedService, rollbackManagedService } from "./service-transaction.mts";
+import { SERVICE_STAGES, type ServiceStage } from "./service-transaction-support.mts";
 import type { ServiceBinding } from "./service-types.mts";
 
 export const SERVICE_USAGE = `  kherep-node service install --workspace <absolute> [--source <clean checkout>] [--service-name <name>] [--task-path <path>] [--adopt]
@@ -33,15 +35,21 @@ interface ServiceCliDependencies {
   readState?: (paths: ReturnType<typeof nodePaths>) => DaemonState | null;
   alive?: (pid: unknown) => boolean;
   lifecycle?: Omit<LifecycleDependencies, "paths" | "adapter">;
+  ownerProbe?: ServiceOwnerProbe;
 }
 
 const SERVICE_FAILURE_CODES = new Set(["SERVICE_ACTIVATION_FAILED", "SERVICE_ROLLBACK_FAILED"]);
-export function safeServiceFailure(error: unknown): { ok: false; code: string; recovery: "restored" | "unknown" } | null {
+const SERVICE_STAGE_SET = new Set<string>(SERVICE_STAGES);
+interface SafeServiceFailure { ok: false; code: string; recovery: "restored" | "unknown"; stage?: ServiceStage; blocker?: string }
+// Only fixed fields leave the process; the error message may carry native output and is never printed.
+export function safeServiceFailure(error: unknown): SafeServiceFailure | null {
   if (!error || typeof error !== "object") return null;
-  const value = error as { code?: unknown; recovery?: unknown };
+  const value = error as { code?: unknown; recovery?: unknown; stage?: unknown; blocker?: unknown };
   if (typeof value.code !== "string" || !SERVICE_FAILURE_CODES.has(value.code)
     || (value.recovery !== "restored" && value.recovery !== "unknown")) return null;
-  return { ok: false, code: value.code, recovery: value.recovery };
+  return { ok: false, code: value.code, recovery: value.recovery,
+    ...(typeof value.stage === "string" && SERVICE_STAGE_SET.has(value.stage) ? { stage: value.stage as ServiceStage } : {}),
+    ...(typeof value.blocker === "string" && /^RECOVERY_[A-Z_]{1,40}$/.test(value.blocker) ? { blocker: value.blocker } : {}) };
 }
 
 export function parseServiceCommand(argv: string[]): ServiceCommand {
@@ -139,12 +147,18 @@ export async function runService(argv: string[], dependencies: ServiceCliDepende
       try { ownership = await adapter.processOwned(state.pid, receipt.binding, state.startedAt); } catch { ownership = false; }
     }
     const runtimeMatch = native?.running === true && authenticated && bindingMatch && ownership;
-    const report = { ok: definitionMatch === true && source.status === "match" && runtimeMatch, managed: true,
+    // Issue #472: a drain left by a dead controller blocks admissions until an upgrade reclaims it.
+    const drain = describeServiceDrain(paths, dependencies.ownerProbe);
+    const staleDrain = drain === "stale" || drain === "unknown";
+    const upgrade = `kherep-node service upgrade --source "${receipt.binding.source.root}"`;
+    const recovery = staleDrain ? `${upgrade} reclaims the stale drain`
+      : native?.running === false && (!state || !alive(state.pid)) ? upgrade : undefined;
+    const report = { ok: definitionMatch === true && source.status === "match" && runtimeMatch && !staleDrain, managed: true,
       serviceName: receipt.binding.serviceName, platform: receipt.binding.platform,
       ...(receipt.binding.taskPath ? { taskPath: receipt.binding.taskPath } : {}), running: native?.running ?? "unknown",
       definition: native ? (definitionMatch ? "match" : "mismatch") : "missing", source: source.status,
       authentication: authenticated ? "connected" : state?.disconnectedAt ? "disconnected" : "unknown",
-      ownership: ownership ? "match" : "unknown" };
+      ownership: ownership ? "match" : "unknown", drain, ...(recovery ? { recovery } : {}) };
     console.log(JSON.stringify(report, null, 2));
     return report.ok ? 0 : 1;
   }

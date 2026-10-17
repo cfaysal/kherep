@@ -360,7 +360,30 @@ backup records the prior loaded source as `unknown`; failure recovery restores
 and reads back the exact native bytes but does not restart that unknown source.
 After a mutating command fails, the CLI reports only a fixed service failure
 code and the measured recovery state, `restored` or `unknown`; it does not print
-the native definition, environment or native command output.
+the native definition, environment or native command output. It adds the
+`stage` that failed (`stop`, `prove-stopped`, `write`, `verify`, `start`,
+`health`, `settle` or `receipt`) and, for an `unknown` recovery, a fixed
+`blocker` such as `RECOVERY_ABSENCE_UNPROVEN` (issue #472).
+
+A rollback keeps a running node running: it starts the restored definition
+when the current service or the backed-up one was running, also when the backup
+was taken from a stopped service. Upgrade and rollback report success only after
+they read the native service back with the exact expected bytes and, when it
+should run, as running with the daemon that passed the health check still
+recorded. The stop proof waits up to 75 seconds for the old daemon to exit,
+longer than the 60-second launchd `ExitTimeOut`. A stop that fails before it
+takes effect leaves the running service untouched and reports `restored`. A
+failure before any definition was written releases the drain marker, also when
+its recovery is `unknown`.
+
+`service status` also reports `drain`: `none`, `active`, `stale` or `unknown`.
+A stale or unverifiable drain, left by a controller that exited during a
+transaction, blocks new session admissions; status then fails and names the
+recovery `kherep-node service upgrade --source "<pin root>"`, which reclaims the
+stale drain. A stopped service whose recorded daemon is dead gets the same
+recovery: upgrade accepts a stale daemon record while the service is stopped,
+and still refuses a live daemon outside it or a running service whose daemon
+does not match the receipt.
 These service commands do not edit runtime hook configuration; run `kherep-node
 doctor` and update an independently managed stale hook binding separately.
 

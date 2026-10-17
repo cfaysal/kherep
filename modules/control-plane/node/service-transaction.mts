@@ -5,7 +5,7 @@ import type { DaemonState } from "./daemon-state.mts";
 import type { SourceIdentity } from "./daemon-source.mts";
 import {
   acquireServiceLock, readServiceBackup, readServiceReceipt, removeServiceReceipt, saveServiceBackup,
-  serviceRoot, snapshotDigests, writeServiceReceipt, type ServiceBackup, type ServiceReceipt,
+  serviceRoot, snapshotDigests, writeServiceReceipt,
 } from "./service-records.mts";
 import { pinServiceSource } from "./service-source.mts";
 import { beginServiceDrain } from "./service-drain.mts";
@@ -15,8 +15,9 @@ import {
   type LifecycleDependencies,
 } from "./service-lifecycle.mts";
 import {
-  FAILED_WRITE_SNAPSHOT, type FailedServiceWrite, type NativeServiceSnapshot, type ServiceAdapter, type ServiceBinding,
-} from "./service-types.mts";
+  assertSettled, exact, failedWriteSnapshot, receiptFor, recoveryBlocker, sameBinding, serviceFailure, type ServiceStage,
+} from "./service-transaction-support.mts";
+import type { NativeServiceSnapshot, ServiceBinding } from "./service-types.mts";
 
 export { readServiceReceipt } from "./service-records.mts";
 
@@ -26,20 +27,6 @@ interface ActivateOptions {
   mode: "install" | "upgrade"; binding: ServiceBinding; sourceRoot?: string; adopt?: boolean; explicitServiceName?: boolean;
 }
 interface Result { serviceName: string; taskPath?: string; platform: string; source: SourceIdentity; backupId?: string; recovery?: string }
-const sameBinding = (left: ServiceBinding, right: ServiceBinding): boolean => left.serviceName === right.serviceName
-  && left.taskPath === right.taskPath && left.platform === right.platform && left.workspace === right.workspace
-  && left.configRoot === right.configRoot && left.nodeExecutable === right.nodeExecutable && left.logFile === right.logFile;
-const exact = (left: Buffer, right: Buffer): boolean => left.equals(right);
-
-function failedWriteSnapshot(cause: unknown): NativeServiceSnapshot | undefined {
-  if (!(cause instanceof Error)) return undefined;
-  const snapshot = (cause as FailedServiceWrite)[FAILED_WRITE_SNAPSHOT];
-  return snapshot && Buffer.isBuffer(snapshot.definition) && Buffer.isBuffer(snapshot.security) ? snapshot : undefined;
-}
-
-function receiptFor(binding: ServiceBinding, snapshot: NativeServiceSnapshot, now: string, backup?: ServiceBackup): ServiceReceipt {
-  return { version: 1, binding, ...snapshotDigests(snapshot), activatedAt: now, ...(backup ? { previousBackup: backup.id } : {}) };
-}
 export async function activateManagedService(options: ActivateOptions, input: Dependencies): Promise<Result> {
   const release = acquireServiceLock(input.paths);
   try {
@@ -84,7 +71,8 @@ export async function activateManagedService(options: ActivateOptions, input: De
     let oldBinding: ServiceBinding | undefined = receipt?.binding;
     if (existing) {
       oldState = recordedBefore;
-      if (receipt && (!oldState?.source?.verified || !sourceMatches(receipt.binding.source, oldState.source)
+      // #472: only a running service must match its daemon record; a live daemon beside a stopped one is refused above.
+      if (receipt && existing.running === true && (!oldState?.source?.verified || !sourceMatches(receipt.binding.source, oldState.source)
         || oldState.service?.name !== receipt.binding.serviceName || oldState.service.platform !== receipt.binding.platform
         || oldState.service.taskPath !== receipt.binding.taskPath)) {
         throw new Error("running daemon does not match the managed service receipt");
@@ -121,6 +109,8 @@ export async function activateManagedService(options: ActivateOptions, input: De
     let clearLaunchPermit = () => {};
     let drainSafeToRelease = true;
     let mutationStarted = false;
+    let stopIssued = false, writeAttempted = false;
+    let stage: ServiceStage = "stop";
     let candidateSnapshot: NativeServiceSnapshot | undefined;
     try {
       if (existing) {
@@ -131,26 +121,32 @@ export async function activateManagedService(options: ActivateOptions, input: De
         await verifyStopOwnership(oldBinding ?? binding, runningState, input, oldBinding ? undefined : legacySourceRoot);
         mutationStarted = true;
         const sourceRoot = oldBinding ? undefined : legacySourceRoot;
-        if (existing.running === true) await input.adapter.stop(oldBinding ?? binding, oldState ? {
-          pid: oldState.pid, startedAt: oldState.startedAt, ...(sourceRoot ? { sourceRoot } : {}),
-        } : undefined);
-        if (existing.running === true) await proveStopped(oldState?.pid, deps);
+        if (existing.running === true) {
+          await input.adapter.stop(oldBinding ?? binding, oldState ? {
+            pid: oldState.pid, startedAt: oldState.startedAt, ...(sourceRoot ? { sourceRoot } : {}),
+          } : undefined);
+          stopIssued = true;
+          stage = "prove-stopped";
+          await proveStopped(oldState?.pid, deps);
+        }
       }
       mutationStarted = true;
+      stage = "write"; writeAttempted = true;
       await input.adapter.write(binding, definition, security);
+      stage = "verify";
       const written = await input.adapter.read(binding);
       if (!written) throw new Error("managed service definition was not created");
       candidateSnapshot = written;
       if (existing && !exact(written.security, security)) throw new Error("native service security changed during write");
       await input.adapter.validateManaged(written, binding);
+      stage = "start";
       if (binding.platform === "win32") clearLaunchPermit = issueServiceLaunchPermit(input.paths, binding);
       await input.adapter.start(binding);
-      await healthy(binding, oldState?.pid, input);
-      const active = await input.adapter.read(binding);
-      if (!active) throw new Error("managed service definition disappeared after activation");
-      if (!exact(active.definition, written.definition) || !exact(active.security, written.security)) {
-        throw new Error("managed service definition changed during activation");
-      }
+      stage = "health";
+      const healthyState = await healthy(binding, oldState?.pid, input);
+      stage = "settle";
+      const active = await assertSettled(input, binding, written, healthyState, true);
+      stage = "receipt";
       writeServiceReceipt(input.paths, receiptFor(binding, active, deps.now(), backup));
       return { serviceName: binding.serviceName, ...(binding.taskPath ? { taskPath: binding.taskPath } : {}),
         platform: binding.platform, source: binding.source, ...(backup ? { backupId: backup.id } : {}) };
@@ -158,18 +154,15 @@ export async function activateManagedService(options: ActivateOptions, input: De
       if (!mutationStarted) throw cause;
       candidateSnapshot ??= failedWriteSnapshot(cause);
       let recovery = "unknown";
+      let blocker: string | undefined;
       try {
         if (existing) await restorePrior({ binding, previous: existing, previousBinding: oldBinding,
-          previousPid: oldState?.pid, deps: input, candidate: candidateSnapshot });
+          previousPid: oldState?.pid, deps: input, candidate: candidateSnapshot, priorStopIssued: stopIssued });
         else await removeFresh(binding, input);
         recovery = "restored";
-      } catch { recovery = "unknown"; }
-      if (recovery === "unknown") drainSafeToRelease = false;
-      const error = new Error(cause instanceof Error ? cause.message : "managed service activation failed") as Error
-        & { code: "SERVICE_ACTIVATION_FAILED"; recovery: string };
-      error.code = "SERVICE_ACTIVATION_FAILED";
-      error.recovery = recovery;
-      throw error;
+      } catch (error) { blocker = recoveryBlocker(error); }
+      if (recovery === "unknown" && writeAttempted) drainSafeToRelease = false;
+      throw serviceFailure("SERVICE_ACTIVATION_FAILED", cause, recovery, stage, blocker);
     } finally { clearLaunchPermit(); if (drainSafeToRelease) endDrain(); }
   } finally { release(); }
 }
@@ -201,7 +194,11 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
     let clearLaunchPermit = () => {};
     let drainSafeToRelease = true;
     let mutationStarted = false;
+    let stopIssued = false, writeAttempted = false;
+    let stage: ServiceStage = "stop";
     let previousSnapshot: NativeServiceSnapshot | undefined;
+    // #472: a running node stays running even when the backup was taken from a stopped service.
+    const shouldRun = current.running === true || previous.running === true;
     try {
       endDrain = beginServiceDrain(input.paths);
       const runningState = current.running === true ? state : null;
@@ -211,16 +208,27 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
       mutationStarted = true;
       if (current.running === true) {
         await input.adapter.stop(currentBinding, state ? { pid: state.pid, startedAt: state.startedAt } : undefined);
+        stopIssued = true;
+        stage = "prove-stopped";
         await proveStopped(state?.pid, deps);
       }
+      stage = "write"; writeAttempted = true;
       await input.adapter.write(currentBinding, previous.definition, previous.security);
+      stage = "verify";
       previousSnapshot = await verifyExact(input.adapter, currentBinding, previous);
-      if (previous.running === true) {
+      let healthyState: DaemonState | undefined;
+      if (shouldRun) {
+        stage = "start";
         if (priorBinding.platform === "win32" && priorBinding.supervisorGeneration) {
           clearLaunchPermit = issueServiceLaunchPermit(input.paths, priorBinding);
         }
-        await input.adapter.start(priorBinding); await healthy(priorBinding, state?.pid, input, true);
+        await input.adapter.start(priorBinding);
+        stage = "health";
+        healthyState = await healthy(priorBinding, state?.pid, input, !backup.priorReceipt);
       }
+      stage = "settle";
+      await assertSettled(input, currentBinding, previous, healthyState, shouldRun);
+      stage = "receipt";
       if (backup.priorReceipt) writeServiceReceipt(input.paths, backup.priorReceipt); else removeServiceReceipt(input.paths);
       return { serviceName: priorBinding.serviceName, ...(priorBinding.taskPath ? { taskPath: priorBinding.taskPath } : {}),
         platform: priorBinding.platform, source: priorBinding.source, backupId: backup.id };
@@ -228,18 +236,15 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
       if (!mutationStarted) throw cause;
       previousSnapshot ??= failedWriteSnapshot(cause);
       let recovery = "unknown";
+      let blocker: string | undefined;
       try {
         await restorePrior({ binding: priorBinding, previous: current, previousBinding: currentBinding,
-          previousPid: state?.pid, deps: input, candidate: previousSnapshot });
+          previousPid: state?.pid, deps: input, candidate: previousSnapshot, priorStopIssued: stopIssued });
         recovery = "restored";
-      } catch { /* unknown */ }
-      if (recovery === "unknown") drainSafeToRelease = false;
-      const error = new Error(cause instanceof Error ? cause.message : "managed service rollback failed") as Error
-        & { code: "SERVICE_ROLLBACK_FAILED"; recovery: string };
-      error.code = "SERVICE_ROLLBACK_FAILED";
-      error.recovery = recovery;
+      } catch (error) { blocker = recoveryBlocker(error); }
+      if (recovery === "unknown" && writeAttempted) drainSafeToRelease = false;
       void safety;
-      throw error;
+      throw serviceFailure("SERVICE_ROLLBACK_FAILED", cause, recovery, stage, blocker);
     } finally { clearLaunchPermit(); if (drainSafeToRelease) endDrain(); }
   } finally { release(); }
 }

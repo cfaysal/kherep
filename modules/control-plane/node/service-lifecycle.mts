@@ -12,12 +12,16 @@ export interface LifecycleDependencies {
   pidAlive?: (pid: unknown) => boolean;
   sleep?: (milliseconds: number) => Promise<void>;
   timeoutMs?: number;
+  stopTimeoutMs?: number;
   now?: () => string;
   verifySource?: (identity: SourceIdentity) => boolean;
   reportAdmissionWait?: (message: string) => void;
 }
 
+// launchd ExitTimeOut (60 s) plus a margin: a daemon may wait ~50 s for a probe before it exits (#472).
+export const STOP_TIMEOUT_MS = 75_000;
 const exact = (left: Buffer, right: Buffer): boolean => left.equals(right);
+const recoveryError = (code: string, message: string): Error & { code: string } => Object.assign(new Error(message), { code });
 const wait = (milliseconds: number): Promise<void> => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 export function sourceMatches(expected: SourceIdentity, actual: SourceIdentity | undefined): boolean {
@@ -26,7 +30,8 @@ export function sourceMatches(expected: SourceIdentity, actual: SourceIdentity |
 
 export function lifecycleDefaults(deps: LifecycleDependencies) {
   return { readState: deps.readDaemonState ?? defaultReadDaemonState, alive: deps.pidAlive ?? defaultPidAlive,
-    sleep: deps.sleep ?? wait, timeout: deps.timeoutMs ?? 30_000, now: deps.now ?? (() => new Date().toISOString()),
+    sleep: deps.sleep ?? wait, timeout: deps.timeoutMs ?? 30_000,
+    stopTimeout: deps.stopTimeoutMs ?? deps.timeoutMs ?? STOP_TIMEOUT_MS, now: deps.now ?? (() => new Date().toISOString()),
     verifySource: deps.verifySource ?? ((identity: SourceIdentity) => {
       try { return sourceMatches(identity, captureSourceIdentity(identity.root, false)); } catch { return false; }
     }) };
@@ -45,7 +50,7 @@ async function poll<T>(timeout: number, sleep: (ms: number) => Promise<void>, ch
 
 export async function proveStopped(pid: number | undefined, deps: ReturnType<typeof lifecycleDefaults>): Promise<void> {
   if (pid === undefined) return;
-  await poll(deps.timeout, deps.sleep, async () => deps.alive(pid) ? null : true);
+  await poll(deps.stopTimeout, deps.sleep, async () => deps.alive(pid) ? null : true);
 }
 
 export async function prepareStop(
@@ -136,6 +141,7 @@ export interface RecoveryInput {
   previousPid?: number;
   deps: LifecycleDependencies;
   candidate?: NativeServiceSnapshot;
+  priorStopIssued?: boolean;
 }
 
 export async function restorePrior(input: RecoveryInput): Promise<void> {
@@ -147,7 +153,13 @@ export async function restorePrior(input: RecoveryInput): Promise<void> {
     const candidateBytes = input.candidate && exact(native.definition, input.candidate.definition)
       && exact(native.security, input.candidate.security);
     const priorBytes = exact(native.definition, input.previous.definition) && exact(native.security, input.previous.security);
-    if (!candidateBytes && !priorBytes) throw new Error("selected service changed during recovery");
+    if (!candidateBytes && !priorBytes) throw recoveryError("RECOVERY_SERVICE_CHANGED", "selected service changed during recovery");
+    if (native.running === true && priorBytes && !candidateBytes && !input.priorStopIssued && candidateState
+      && candidateState.pid === input.previousPid && runtime.alive(candidateState.pid)
+      && await input.deps.adapter.processOwned(candidateState.pid, input.previousBinding ?? input.binding, candidateState.startedAt)) {
+      await verifyExact(input.deps.adapter, input.binding, input.previous); // prior is live and untouched (#472)
+      return;
+    }
     const stoppedBinding = candidateBytes ? input.binding : (input.previousBinding ?? input.binding);
     if (candidateBytes && native.running !== false) {
       try {
@@ -170,10 +182,10 @@ export async function restorePrior(input: RecoveryInput): Promise<void> {
   }
   await input.deps.adapter.write(input.binding, input.previous.definition, input.previous.security);
   await verifyExact(input.deps.adapter, input.binding, input.previous);
-  if (!absenceProven) throw new Error("candidate absence cannot be verified for recovery");
+  if (!absenceProven) throw recoveryError("RECOVERY_ABSENCE_UNPROVEN", "candidate absence cannot be verified for recovery");
   if (input.previous.running === true) {
     if (!input.previousBinding || !runtime.verifySource(input.previousBinding.source)) {
-      throw new Error("previous source or candidate absence cannot be verified for recovery");
+      throw recoveryError("RECOVERY_PRIOR_UNVERIFIED", "previous source or candidate absence cannot be verified for recovery");
     }
     const clearPermit = input.previousBinding.platform === "win32" && input.previousBinding.supervisorGeneration
       ? issueServiceLaunchPermit(input.deps.paths, input.previousBinding) : () => {};
