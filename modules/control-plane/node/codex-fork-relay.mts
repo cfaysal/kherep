@@ -85,6 +85,7 @@ function withdraw(deps: RelayDeps, a: ForkAttempt, relay: string, now: number): 
   const record = getOutbox(paths, relay) !== null;
   if (!sentOnce.has(relay) && !sidecar?.unconfirmedAt && (!record || written.has(relay))) {
     fs.rmSync(path.join(paths.outbox, `${relay}.json`), { force: true });
+    sendHeld.delete(relay);
     if (own) removeProxied(paths.inbox, a.messageId);
     return "none";
   }
@@ -110,6 +111,7 @@ function cleanup(deps: RelayDeps, owner: string, a: ForkAttempt, relay: string, 
   const { paths } = deps;
   const sidecar = getProxied(paths.inbox, a.messageId);
   fs.rmSync(path.join(paths.outbox, `${relay}.json`), { force: true });
+  sendHeld.delete(relay);
   if (sidecar === null || sidecar.relayMessageId !== relay) return true;
   if (sentOnce.has(relay) || sidecar.unconfirmedAt || !written.has(relay)) {
     setUnconfirmed(paths.inbox, a.messageId, claimOf(a, relay, now), iso(now));

@@ -88,7 +88,11 @@ test("a wake.codexFork opt-in written after start reaches the exchange's send ga
   const round = async (): Promise<void> => {
     const before = refreshes;
     tick();
-    await until(() => refreshes > before, "the round ran");
+    // A tick during a running round is coalesced; tick again until this round starts.
+    await until(() => {
+      if (refreshes === before) tick();
+      return refreshes > before;
+    }, "the round ran");
     await new Promise((resolve) => setTimeout(resolve, 50));
     await flush();
     await codexQueueIdle();
