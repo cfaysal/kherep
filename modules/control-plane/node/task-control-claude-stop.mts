@@ -18,7 +18,9 @@ import { readTask, type TaskRecord } from "./task-records.mts";
 // members after `claude stop` and before each signal, signals only survivors
 // by pid while each keeps its captured start, and never the session process:
 // alive after the grace it is `stop_failed`, unsignalled. Windows stays
-// refused until measured there.
+// refused (issue #460, measured): a Git Bash tool command's parent is an
+// intermediate process that already exited, so the command is not in the tree
+// of the listed session process, and it and its shell outlive `claude stop`.
 
 export type ClaudeStopOutcome = { taskState: TaskControlTaskState }
   | { errorCode: TaskControlErrorCode; state: "failed" | "unknown"; processState: TaskControlProcessState };

@@ -566,9 +566,14 @@ in the meantime is `stale_run` with the new run recorded for the next status. A
 process whose ancestors all ended before a capture, for example a background
 job left by a command that finished during the grace period, is not reached;
 this is the limit of the Codex stop as well (issues #231, #233). On Windows the
-Claude stop stays refused (`unsupported_runtime`, `stopSupported: false`) until
-the listed process, its tree and `claude stop` through `cmd.exe` are measured
-there.
+Claude stop stays refused (`unsupported_runtime`, `stopSupported: false`, issue
+#460). Measured on Claude Code 2.1.289: the listed pid is the session process
+and `claude stop` ends it within about 2 s, but the Bash tool runs a command
+through Git Bash (MSYS), whose intermediate process exits, so the command's
+parent is gone and it is not in the captured tree; the command and its shell
+chain outlived `claude stop`, and a confirmed stop would confirm while the
+command still runs. Lifting the refusal needs a capture that does not depend on
+the parent chain, for example a job object or the MSYS process table.
 The stop was measured on macOS; Linux runs the same code path and is not
 measured separately.
 A stop succeeds only after the target verifies that the captured process
