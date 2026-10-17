@@ -62,8 +62,7 @@ function withTwgOnPath(
     ]
     : [pathApi.join(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin"];
   const key = (win ? Object.keys(base).find((k) => k.toUpperCase() === "PATH") : undefined) ?? "PATH";
-  const current = base[key] ?? "";
-  return { ...base, [key]: [...(current ? [current] : []), ...dirs].join(pathApi.delimiter) };
+  return { ...base, [key]: [base[key], ...dirs].filter(Boolean).join(pathApi.delimiter) };
 }
 
 export interface SemanticDeps {
