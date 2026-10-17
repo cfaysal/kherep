@@ -11,6 +11,20 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Codex fork refusal metadata (issue #477). A JSON-RPC error response to
+  `initialize`, `thread/read`, `thread/turns/list` or `thread/fork` during a
+  fork attempt is now recorded as one content-free daemon log line:
+  `kherep-node: Codex fork helper refused <method> (code <code|none>, <shape>,
+  sha256 <12 hex>, mentions <list|none>)`. The code appears only when it is an
+  integer; the shape is `missing`, `empty`, `text` or `overlong`; the hash is
+  the first 12 hex digits of the SHA-256 of the message; the mentions say
+  which of the owner id, the newest turn id, the working directory, the Codex
+  home and the word `kherep` the message contains. No text of the message
+  enters the attempt, the audit, the log or the relay, no file holds it, and no
+  persisted field is added: the attempt's reason code, `wake.jsonl`, `doctor`
+  and the relay are unchanged. A throwing logger changes neither the reason,
+  the close nor the service admission lease.
+
 - Intake visibility (refs #441). `kherep-node doctor` adds the `intakeLatency`
   check: for messages stored in the last two hours, `observed`,
   `maxLatencySeconds` (control-plane accept to local store), `overThreshold`
