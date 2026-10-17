@@ -9,7 +9,7 @@ import { managedArguments } from "./service-definitions.mts";
 import { removeFresh, restorePrior } from "./service-lifecycle.mts";
 import { MacServiceAdapter } from "./service-platform-mac.mts";
 import { attestMacLaunchAgent, type MacCommand, type MacCommandResult } from "./service-platform-mac-native.mts";
-import type { ServiceAdapter, ServiceBinding } from "./service-types.mts";
+import { STOP_NOT_ISSUED, type ServiceAdapter, type ServiceBinding } from "./service-types.mts";
 
 const label = "org.kherep.synthetic.final";
 const result = (status: number, stdout = "", stderr = ""): MacCommandResult => ({ status, stdout, stderr });
@@ -53,7 +53,7 @@ test("Mac loaded optional paths require matching configured presence and value",
   }
 });
 
-interface RunnerOptions { inventory: MacCommandResult; observedArgs?: string[]; appearPid?: number; absent?: boolean }
+interface RunnerOptions { inventory: MacCommandResult; observedArgs?: string[]; appearPid?: number; absent?: boolean; bootoutStatus?: number }
 
 function runner(f: ReturnType<typeof fixture>, options: RunnerOptions, calls: string[]): MacCommand {
   let bootedOut = false;
@@ -72,7 +72,7 @@ function runner(f: ReturnType<typeof fixture>, options: RunnerOptions, calls: st
     if (file === "launchctl" && args[0] === "print" && args[1] === `gui/${f.stat.uid}`) {
       return result(0, `gui/${f.stat.uid} = {\n}\n`);
     }
-    if (file === "launchctl" && args[0] === "bootout") { bootedOut = true; return result(0); }
+    if (file === "launchctl" && args[0] === "bootout") { bootedOut = true; return result(options.bootoutStatus ?? 0); }
     if (file === "plutil") return result(0, JSON.stringify(mac));
     if (file === "/bin/ls") return result(0, "-rw------- 1 operator staff 1 Oct 14 10:00 service.plist\n");
     if (file === "ps" && args[0] === "-ww" && args[1] === "-axo") return options.inventory;
@@ -110,9 +110,21 @@ test("Mac direct no-context stop refuses absent-job orphan and a pid appearing a
     const calls: string[] = [];
     const adapter = new MacServiceAdapter(path.join(f.root, "service-direct"), f.home, f.stat.uid, f.stat.gid,
       runner(f, options, calls));
-    await assert.rejects(() => adapter.stop(f.binding, undefined));
+    await assert.rejects(() => adapter.stop(f.binding, undefined), (error: Error & { code?: string }) => error.code === STOP_NOT_ISSUED,
+      "a refusal before bootout is tagged as a stop without native effect");
     assert.equal(calls.some(call => call.includes(" bootout ")), false);
   }
+});
+
+test("Mac stop leaves a failed bootout untagged because launchd may already be stopping the job", async (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  const calls: string[] = [];
+  const adapter = new MacServiceAdapter(path.join(f.root, "service-bootout"), f.home, f.stat.uid, f.stat.gid,
+    runner(f, { inventory: result(0, `123 ${f.stat.uid} /usr/bin/unrelated\n`), bootoutStatus: 5 }, calls));
+  await assert.rejects(() => adapter.stop(f.binding, undefined), (error: Error & { code?: string }) => error.code === undefined
+    && /could not prove the selected service stopped/.test(error.message));
+  assert.equal(calls.filter(call => call.includes(" bootout ")).length, 1);
 });
 
 test("Mac lifecycle removes a pid-less loaded candidate only after clean inventory", async (t) => {

@@ -150,9 +150,10 @@ export async function runService(argv: string[], dependencies: ServiceCliDepende
     // Issue #472: a drain left by a dead controller blocks admissions until an upgrade reclaims it.
     const drain = describeServiceDrain(paths, dependencies.ownerProbe);
     const staleDrain = drain === "stale" || drain === "unknown";
-    const upgrade = `kherep-node service upgrade --source "${receipt.binding.source.root}"`;
-    const recovery = staleDrain ? `${upgrade} reclaims the stale drain`
-      : native?.running === false && (!state || !alive(state.pid)) ? upgrade : undefined;
+    const upgrade = `kherep-node service upgrade --source <clean checkout at ${receipt.binding.source.commit}>`;
+    const recovery = drain === "unknown" ? "the service drain owner cannot be verified; inspect the service/drain owner file"
+      : drain === "stale" ? `${upgrade} reclaims the stale drain`
+        : native?.running === false && (!state || !alive(state.pid)) ? upgrade : undefined;
     const report = { ok: definitionMatch === true && source.status === "match" && runtimeMatch && !staleDrain, managed: true,
       serviceName: receipt.binding.serviceName, platform: receipt.binding.platform,
       ...(receipt.binding.taskPath ? { taskPath: receipt.binding.taskPath } : {}), running: native?.running ?? "unknown",

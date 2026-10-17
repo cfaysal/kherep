@@ -102,7 +102,8 @@ test("service status reports a stale drain and its recovery", async () => {
   const state = { pid: 1234, startedAt: "2026-10-14T18:00:00.000Z", connectedAt: "2026-10-14T18:00:01.000Z", source,
     service: { name: binding.serviceName, platform: binding.platform, taskPath: binding.taskPath } };
   const owner = { version: 1 as const, pid: 4321, startedAt: "2026-10-14T18:05:00.000Z", owner: "operator" };
-  const ownerProbe: ServiceOwnerProbe = { current: () => owner, active: () => false };
+  let ownerActive: boolean | "unknown" = false;
+  const ownerProbe: ServiceOwnerProbe = { current: () => owner, active: () => ownerActive };
   let alive = true;
   const originalLog = console.log;
   const status = async (): Promise<{ exit: number; report: Record<string, unknown> }> => {
@@ -124,14 +125,22 @@ test("service status reports a stale drain and its recovery", async () => {
     assert.equal(stale.exit, 1);
     assert.equal(stale.report.ok, false);
     assert.equal(stale.report.drain, "stale");
-    assert.equal(stale.report.recovery, `kherep-node service upgrade --source "${source.root}" reclaims the stale drain`);
+    assert.equal(stale.report.recovery, `kherep-node service upgrade --source <clean checkout at ${source.commit}> reclaims the stale drain`);
     assert.equal(JSON.stringify(stale.report).includes(String(owner.pid)), false, "the drain owner pid is not reported");
+    assert.equal(JSON.stringify(stale.report).includes(root), false, "status prints no local path");
+    ownerActive = "unknown";
+    const unverified = await status();
+    assert.equal(unverified.report.ok, false);
+    assert.equal(unverified.report.drain, "unknown");
+    assert.match(String(unverified.report.recovery), /drain owner cannot be verified; inspect the service\/drain owner file/);
+    assert.doesNotMatch(String(unverified.report.recovery), /upgrade/);
     fs.rmSync(drain);
     snapshot.running = false;
     alive = false;
     const stopped = await status();
     assert.equal(stopped.report.ok, false);
-    assert.equal(stopped.report.recovery, `kherep-node service upgrade --source "${source.root}"`);
+    assert.equal(stopped.report.recovery, `kherep-node service upgrade --source <clean checkout at ${source.commit}>`);
+    assert.equal(JSON.stringify(stopped.report).includes(root), false);
     assert.equal("pid" in stopped.report, false);
   } finally {
     console.log = originalLog;

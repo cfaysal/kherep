@@ -371,19 +371,24 @@ was taken from a stopped service. Upgrade and rollback report success only after
 they read the native service back with the exact expected bytes and, when it
 should run, as running with the daemon that passed the health check still
 recorded. The stop proof waits up to 75 seconds for the old daemon to exit,
-longer than the 60-second launchd `ExitTimeOut`. A stop that fails before it
-takes effect leaves the running service untouched and reports `restored`. A
-failure before any definition was written releases the drain marker, also when
-its recovery is `unknown`.
+longer than the 60-second launchd `ExitTimeOut`. On macOS a stop refused before
+`launchctl bootout` runs leaves the running service untouched and reports
+`restored`; any other stop failure counts as a stop that may have taken effect,
+so its recovery is never reported `restored` without proof. An `unknown`
+recovery keeps the drain marker once a definition write was attempted or while
+the daemon told to stop is still alive, and releases it otherwise.
 
 `service status` also reports `drain`: `none`, `active`, `stale` or `unknown`.
 A stale or unverifiable drain, left by a controller that exited during a
-transaction, blocks new session admissions; status then fails and names the
-recovery `kherep-node service upgrade --source "<pin root>"`, which reclaims the
-stale drain. A stopped service whose recorded daemon is dead gets the same
-recovery: upgrade accepts a stale daemon record while the service is stopped,
-and still refuses a live daemon outside it or a running service whose daemon
-does not match the receipt.
+transaction, blocks new session admissions, and status then fails. For a stale
+drain it names the recovery `kherep-node service upgrade --source <clean
+checkout at <commit>>` with the receipt's commit, which reclaims the drain. For
+an `unknown` drain, whose owner cannot be verified, it asks to inspect the
+`service/drain` owner file instead, since an upgrade refuses that drain too. A
+stopped service whose recorded daemon is dead gets the upgrade recovery: upgrade
+accepts a stale daemon record while the service is stopped, and still refuses a
+live daemon outside it or a running service whose daemon does not match the
+receipt. Status prints the commit, never a local path or pid.
 These service commands do not edit runtime hook configuration; run `kherep-node
 doctor` and update an independently managed stale hook binding separately.
 

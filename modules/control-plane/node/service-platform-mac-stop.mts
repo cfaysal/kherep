@@ -3,7 +3,7 @@ import {
   attestMacLaunchAgent, attestMacProcessAbsence, probeMacLaunchAgent, readMacPlist, sameMacLaunchAgent,
   type MacCommand, type MacLaunchAgentProbe,
 } from "./service-platform-mac-native.mts";
-import type { ServiceBinding } from "./service-types.mts";
+import { STOP_NOT_ISSUED, type ServiceBinding } from "./service-types.mts";
 
 export function attestMacNoContextStop(
   run: MacCommand, uid: number, binding: ServiceBinding, file: string,
@@ -26,4 +26,12 @@ export function attestMacNoContextStop(
     attestMacLaunchAgent(after, file, readMacPlist(run, file));
   }
   return after;
+}
+
+// Issue #472: only a failure raised before `launchctl bootout` runs may be reported as a stop with no effect.
+export function beforeStopEffect<T>(attest: () => T): T {
+  try { return attest(); }
+  catch (error) {
+    throw Object.assign(error instanceof Error ? error : new Error("LaunchAgent stop preflight failed"), { code: STOP_NOT_ISSUED });
+  }
 }
