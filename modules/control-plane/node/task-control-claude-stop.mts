@@ -143,7 +143,7 @@ export async function stopClaude(record: TaskRecord, runVersion: string, runner:
     log("the session is running again after the stop");
     return refused("stale_run", "unknown", "running");
   }
-  if (after.errorCode) log("the listing after the stop failed; every captured process ended");
+  if (after.errorCode) log("the measurement after the stop failed; every captured process ended");
   const latest = readTask(runner.paths, record.taskId);
   if (!latest || latest.pid !== current.pid || latest.pidStart !== current.pidStart) return refused("stale_run", "unknown");
   return { taskState: markClaudeStopped(runner, latest, "stopped by task owner").state };

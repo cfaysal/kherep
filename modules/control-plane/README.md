@@ -533,7 +533,8 @@ without a live process, is `idle`; an ended one without a process is `closed`. A
 row that lists no `pid`, or a missing row, is measured from the pid and start
 time recorded on the task: `closed` needs that process ended (start time null or
 changed), while it lives the session is `idle` (or `running` for a `working` or
-`blocked` row), and an unreadable start time is `identity_unknown`. A
+`blocked` row; a missing row answers from the task state, `idle` for an ended
+task and otherwise `unknown`), and an unreadable start time is `identity_unknown`. A
 failed listing, an unreadable start time, or a row that is not the task's own
 background session (by kind, short id, session id or name) is
 `identity_unknown`. A Claude stop re-measures the run, captures the session
