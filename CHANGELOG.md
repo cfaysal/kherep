@@ -197,6 +197,20 @@ increments the minor version; every other release increments the patch version.
   (measured on macOS). On Windows the Claude stop stays refused
   (`unsupported_runtime`, `stopSupported: false`) until the listed process, its
   tree and `claude stop` through `cmd.exe` are measured there.
+- Sender-visible intake per node (Refs #441). The `directory` frame gives each
+  node an additive `intake` record: `oldestQueuedAt` and `queued`, its queue at
+  the control plane, and `lastAcceptedAt`, the Worker's time of the node's last
+  report that took one of its messages out of `queued` (new column
+  `nodes.last_accepted_at`, added on the Registry's next start). A node the
+  Worker did not measure has no record and reads UNKNOWN, never an empty
+  queue. The frame limit is unchanged: an oversized directory drops sessions,
+  then intake, then nodes from the end, and marks itself truncated; equal node
+  names list in id order. `msg sessions` prints an `intake:` line under each
+  node, `NOT DRAINING` once its oldest queued message is older than 5 minutes,
+  and `msg status` names the target's intake while a message is queued. The
+  new `queueDrain` doctor check reports this node's queue from the last
+  directory, `ok: false, measured: false` whenever it was not measured. Older
+  nodes accept the new frame; deploy the Worker before the nodes.
 
 ### Changed
 

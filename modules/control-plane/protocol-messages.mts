@@ -231,7 +231,17 @@ export function isMessageStatusAckBody(body: unknown): body is MessageStatusAckB
 export const MAX_DIRECTORY_NODES = 256;
 export const MAX_DIRECTORY_SESSIONS = 1024;
 
-export interface DirectoryNode { nodeId: string; name: string; status: string }
+// intake (issue #441; reader rules in protocol-intake.mts, which the closed MCP
+// client graph does not carry): absent when the Worker did not measure the queue.
+export interface DirectoryNodeIntake { lastAcceptedAt: string | null; oldestQueuedAt: string | null; queued: number }
+export interface DirectoryNode { nodeId: string; name: string; status: string; intake?: DirectoryNodeIntake }
+export const MAX_INTAKE_QUEUED = 10_000;
+
+export function isDirectoryNodeIntake(value: unknown): value is DirectoryNodeIntake {
+  return isObject(value) && only(value, ["lastAcceptedAt", "oldestQueuedAt", "queued"])
+    && (value.lastAcceptedAt === null || isIsoInstant(value.lastAcceptedAt)) && (value.oldestQueuedAt === null || isIsoInstant(value.oldestQueuedAt))
+    && Number.isSafeInteger(value.queued) && (value.queued as number) >= 0 && (value.queued as number) <= MAX_INTAKE_QUEUED;
+}
 export type DirectorySession = Omit<SessionInfo, "startedAt"> & { nodeId: string };
 // truncated is set when the Worker left sessions out to stay within one frame.
 // worker (issue #408): what the Worker itself supports; an older node ignores it.
@@ -244,7 +254,8 @@ export function isDirectoryGetBody(body: unknown): body is Record<string, never>
 }
 
 function isDirectoryNode(value: unknown): value is DirectoryNode {
-  return isObject(value) && isNodeId(value.nodeId) && isText(value.name, 128) && isText(value.status, 32);
+  return isObject(value) && isNodeId(value.nodeId) && isText(value.name, 128) && isText(value.status, 32)
+    && (value.intake === undefined || isDirectoryNodeIntake(value.intake));
 }
 
 function isDirectorySession(value: unknown): value is DirectorySession {

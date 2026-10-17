@@ -3,6 +3,7 @@ import { CODEX_RUNTIME, isCodexHookEvent, readCodexSession } from "./codex-sessi
 import { readConfig } from "./config.mts";
 import { readDirectory, requestDirectory } from "./exchange.mts";
 import type { Io } from "./msg-cli.mts";
+import { intakeLine, NOT_DRAINING_NOTE } from "./msg-intake.mts";
 import { currentSession, DIRECTORY_STALE_MS, KHEREP_SESSION_ENV, senderSession, SESSION_ENV } from "./msg-resolve.mts";
 
 // kherep-node msg sessions and the directory read that every msg verb shares.
@@ -65,8 +66,13 @@ export function sessions(io: Io, from?: string): number {
   if (!directory) return 1;
   const nodeId = readConfig(io.paths.config)?.nodeId;
   let background = false;
+  let stalled = false;
   for (const node of directory.nodes) {
     io.out(`${node.name} (${node.nodeId}) ${node.status}${node.nodeId === nodeId ? " [this node]" : ""}`);
+    // Issue #441: the control plane's queue for the node, apart from its connection.
+    const intake = intakeLine(node, directory, io.now());
+    stalled ||= intake.stalled;
+    io.out(intake.line);
     const list = directory.sessions.filter((s) => s.nodeId === node.nodeId);
     if (list.length === 0) io.out("    no sessions reported");
     for (const s of list) {
@@ -85,5 +91,6 @@ export function sessions(io: Io, from?: string): number {
     io.out("([background task] runs as a Control Plane task, not as a desktop app chat, and the desktop apps may not list it; "
       + "`kherep-node attach <node>/<session id>` prints the command that opens its transcript, `kherep-node task status <taskId>` reads its status)");
   }
+  if (stalled) io.out(NOT_DRAINING_NOTE);
   return 0;
 }

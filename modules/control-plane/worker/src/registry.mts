@@ -1,7 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 
 import type { NodeFacts, RuntimeInfo, SessionInfo } from "../../protocol.mts";
-import type { DirectoryBody, MessageStatusAckBody, MessageStatusBody, NodeReportedState } from "../../protocol-messages.mts";
+import type { DirectoryNodeIntake } from "../../protocol-intake.mts";
+import { MAX_DIRECTORY_NODES, type DirectoryBody, type MessageStatusAckBody, type MessageStatusBody, type NodeReportedState } from "../../protocol-messages.mts";
 import type {
   TaskControlRegisterBody, TaskControlResultBody, TaskControlSubmitBody,
 } from "../../protocol-task-control.mts";
@@ -14,6 +15,7 @@ import { earliest, type MessageStatusView } from "./message-retention.mts";
 import { TaskStore, type CreateResult, type NewTask, type TaskRow } from "./task-store.mts";
 import { TaskControlRegistry } from "./task-control-registry.mts";
 import { McpRegistry, type McpOutcome } from "./mcp-registry.mts";
+import { intakeRows, recordTaken } from "./node-intake.mts";
 import { SqlMeter, type SqlRows } from "./sql-meter.mts";
 import {
   CLAUDE_MCP_CAPABILITY, REMOTE_MCP_CAPABILITY, type McpInboxItem, type McpIntentClaim, type McpIntentRegistration,
@@ -40,8 +42,10 @@ export class Registry extends DurableObject<Env> {
   private readonly taskControl: TaskControlRegistry;
   private readonly mcp: McpRegistry;
   // Directory rows, read again after any write to nodes, runtimes or sessions
-  // (issue #308): every node asks every minute and on each `msg` call.
-  private directoryRows: { nodes: Record<string, SqlStorageValue>[]; sessions: ReturnType<Registry["listSessions"]> } | null = null;
+  // (issue #308) and, for the queue heads, after any message transaction
+  // (issue #441): every node asks every minute and on each `msg` call.
+  private directoryRows: { nodes: Record<string, SqlStorageValue>[]; sessions: ReturnType<Registry["listSessions"]>;
+    intake: Map<string, DirectoryNodeIntake> } | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -149,13 +153,17 @@ export class Registry extends DurableObject<Env> {
   // The directory frame (issue #31, step 3a): non-revoked nodes and their
   // sessions. Not audited: nodes ask for it every minute, and it carries no
   // message content.
+  // One row past MAX_DIRECTORY_NODES only marks the directory truncated; the
+  // queue heads are read for the listed nodes alone (issue #441). The id
+  // breaks ties between equal names, so the listed prefix is deterministic.
   directory(): DirectoryBody {
     return this.metered("directory", () => {
-      this.directoryRows ??= {
-        nodes: this.sql.exec("SELECT id, name, status FROM nodes WHERE revoked_at IS NULL ORDER BY name").toArray(),
-        sessions: this.listSessions(),
-      };
-      return directoryBody(this.directoryRows.nodes, this.directoryRows.sessions, Date.now());
+      if (!this.directoryRows) {
+        const nodes = this.sql.exec(`SELECT id, name, status, last_accepted_at FROM nodes WHERE revoked_at IS NULL
+          ORDER BY name, id LIMIT ?`, MAX_DIRECTORY_NODES + 1).toArray();
+        this.directoryRows = { nodes, sessions: this.listSessions(), intake: intakeRows(this.sql, nodes.slice(0, MAX_DIRECTORY_NODES)) };
+      }
+      return directoryBody(this.directoryRows.nodes, this.directoryRows.sessions, Date.now(), this.directoryRows.intake);
     });
   }
 
@@ -307,8 +315,14 @@ export class Registry extends DurableObject<Env> {
     });
   }
 
+  // A report that took a message out of queued is this node's last intake (issue #441).
   async reportMessageStatus(nodeId: string, status: MessageStatusBody & { state: NodeReportedState }) {
-    return this.messageTx("reportMessageStatus", () => this.messages.report(nodeId, status, Date.now()));
+    return this.messageTx("reportMessageStatus", () => {
+      const now = Date.now();
+      const result = this.messages.report(nodeId, status, now);
+      if (result.advancedFrom === "queued") recordTaken(this.sql, nodeId, now);
+      return result;
+    });
   }
 
   // The sender acknowledged a final status: the row may go (#308).
@@ -322,6 +336,7 @@ export class Registry extends DurableObject<Env> {
   }
 
   pendingMessagesFor(nodeId: string): MessageEffects {
+    this.directoryRows = null; // expiry may drain a queue (issue #441)
     return this.tx("pendingMessagesFor", () => this.messages.pendingFor(nodeId, Date.now()));
   }
 
@@ -433,7 +448,9 @@ export class Registry extends DurableObject<Env> {
 
   // A message transaction and the earliest queued expiry or retention deadline,
   // read in the same measured region; arming the alarm afterwards is storage, not SQL.
+  // Every queue change runs here, so the cached queue heads go (issue #441).
   private async messageTx<T>(path: string, run: () => T): Promise<T> {
+    this.directoryRows = null;
     const { result, next } = this.metered(path, () => {
       const result = this.ctx.storage.transactionSync(run);
       return { result, next: earliest(this.messages.nextExpiry(), this.messages.retention.nextDue()) };

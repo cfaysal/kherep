@@ -53,11 +53,19 @@ CREATE TABLE IF NOT EXISTS audit (
 // leaves a table from an earlier deployment as it was, so each column is added
 // when PRAGMA table_info does not list it yet. Safe to run on every start.
 export const ADDED_SESSION_COLUMNS = ["name", "cwd", "kind", "label", "title"] as const;
+// Issue #441: last_accepted_at (ms), the Worker's time of the node's last report
+// that moved one of its messages out of queued (node-intake.mts). NODE_COLUMNS
+// leaves it out, so the operator API is unchanged.
+export const ADDED_NODE_COLUMNS = ["last_accepted_at"] as const;
 
 export function migrateRegistry(sql: SqlStorage): void {
   const present = new Set(sql.exec("PRAGMA table_info(sessions)").toArray().map((column) => String(column.name)));
   for (const column of ADDED_SESSION_COLUMNS) {
     if (!present.has(column)) sql.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
+  }
+  const nodeColumns = new Set(sql.exec("PRAGMA table_info(nodes)").toArray().map((column) => String(column.name)));
+  for (const column of ADDED_NODE_COLUMNS) {
+    if (!nodeColumns.has(column)) sql.exec(`ALTER TABLE nodes ADD COLUMN ${column} INTEGER`);
   }
 }
 

@@ -5,6 +5,7 @@ import { codexHome } from "./codex-app.mts";
 import type { NodePaths } from "./config.mts";
 import { pidAlive } from "./daemon-state.mts";
 import { checkRuntimes, checkWorker, findRuntime, runtimeVersion, type VersionOf } from "./doctor-host.mts";
+import { checkQueueDrain } from "./doctor-drain.mts";
 import { checkHooks } from "./doctor-hooks.mts";
 import { checkIntakeLatency } from "./doctor-intake.mts";
 import { checkIntercom } from "./doctor-intercom.mts";
@@ -73,6 +74,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     // Issue #441: control-plane accept to local store, last two hours; only messages that arrived.
     intakeLatency: checkIntakeLatency(deps.paths, now),
     codexForkAttempts: checkCodexForkAttempts(deps.paths),
+    // Issue #441: the control plane's queue for this node, as of the last directory.
+    queueDrain: checkQueueDrain(deps.paths, now),
   };
   return { ok: Object.values(checks).every((check) => check.ok), version: checkoutVersion(repoRoot), checks };
 }
