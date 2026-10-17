@@ -55,10 +55,9 @@ export interface DaemonHandle { stop(): void; done: Promise<void> }
 const enabledRuntimes = (policy: NodePolicy): TaskRuntime[] =>
   (policy.sessions?.enabled ? policy.sessions.runtimes : []).filter(isTaskRuntime);
 
-// runner: with it, the session commands of item 5 (the client runs them only
-// when the policy enables sessions).
+// runner: read per command (issue #463); the client runs them only when the policy enables sessions.
 export function commandHandlers(config: NodeConfig, startedAt: number,
-  sessions: () => Promise<SessionInfo[]> = () => listSessions(), runner?: RunnerDeps,
+  sessions: () => Promise<SessionInfo[]> = () => listSessions(), runner?: () => RunnerDeps,
   runtimes: () => ReturnType<typeof discoverRuntimes> = () => discoverRuntimes()): CommandHandlers {
   return {
     "node.status": async () => ({
@@ -68,9 +67,9 @@ export function commandHandlers(config: NodeConfig, startedAt: number,
     // A failed listing rejects, and the command result reports ok:false.
     "session.list": sessions,
     ...(runner ? {
-      "session.start": (args) => startTask(args, runner),
-      "session.stop": (args) => stopTask(args, runner),
-      "session.continue": (args) => continueTask(args, runner),
+      "session.start": (args) => startTask(args, runner()),
+      "session.stop": (args) => stopTask(args, runner()),
+      "session.continue": (args) => continueTask(args, runner()),
     } satisfies Partial<CommandHandlers> : {}),
   };
 }
@@ -139,6 +138,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   for (const runtime of enabledRuntimes(policy)) void readiness.check(runtime);
   // Issue #408, PR 4: the capability proven on the current connection, read lazily from the client below.
   const runner: RunnerDeps = { paths, policy, log, readiness, workerCapabilities: () => client.workerCapabilities };
+  const live = (): RunnerDeps => ({ ...runner, policy: loadPolicy(config.policyFile) });
   recoverOperations(paths);
   recoverForkAttemptsAtStart(paths, Date.now(), log);
   let taskControlInflight = new Set<string>();
@@ -147,7 +147,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     try { disableMcp(paths, mcpInflight); } catch (error) { log(`kherep-node: remote MCP cleanup failed: ${String(error)}`); }
   }
   const client = new NodeClient({
-    nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions, runner, runtimeDiscovery),
+    nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions, live, runtimeDiscovery),
     facts: detectFacts, runtimes: runtimeDiscovery, readyRuntimes: () => readiness.ready(),
     sessions, deferInitialSessions: true,
     storeMessage: (body) => { storeMessage(paths.inbox, body, Date.now(), deliveryDepth(paths, body)); },
@@ -236,7 +236,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
             if (socket !== ws || ws.readyState !== WebSocket.OPEN) return;
             if (listed && !controller.signal.aborted) await recordAndPublishSessions(client, paths, listed, send, log, controller.signal);
             await watchTasks(runner, log);
-            await deliverToClosed(runner, log);
+            await deliverToClosed(live(), log);
           }).catch((error: unknown) => log(`kherep-node: session snapshot failed: ${String(error)}`));
           return chain;
         }).finally(() => {
@@ -258,7 +258,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           observeClaudeDeliveryProgress({ ...runner, policy: current });
           observeCodexTaskProgress(runner);
           pollExchange(client, paths, inflight, send, Date.now(), Math.random, proxySend());
-          pollTasks(client, paths, policy, requestsInflight, send);
+          pollTasks(client, paths, applied, requestsInflight, send);
           const enabled = current.sessions?.enabled === true && current.sessions.ownTaskControl === true
             && current.sessions.runtimes.length > 0;
           pollTaskControl(client, paths, taskControlInflight, send, Date.now(), enabled);
@@ -277,12 +277,11 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
             exchange: () => pollExchange(client, paths, inflight, send, Date.now(), Math.random, proxySend()),
             queue: () => pollCodexQueue({ ...runner, policy: applied }, log), defer: handleFrame, log }) : null;
           intakeWindow = window;
-          try { await pollCodexInbound(runner, log); }
+          try { await pollCodexInbound({ ...runner, policy: applied }, log); }
           finally { await window?.drain(); intakeWindow = null; }
           // ... and wake idle interactive Codex sessions with a pointer (issue #66).
           // Not awaited: queue runs have their own lane and never block this chain.
-          // Issue #444: the policy of this round, as the intake window already passes it; the fork
-          // gate and the queue's own authorization follow the file at the next poll.
+          // Issue #444: this round's policy, as the intake window passes it; the fork gate and queue authorization re-read the file.
           pollCodexQueue({ ...runner, policy: applied }, log);
         })
           .catch((error: unknown) => log(`kherep-node: message exchange failed: ${String(error)}`))
