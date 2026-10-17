@@ -44,8 +44,12 @@ function confirmed(execute: TaskControlExecuteBody, taskState: TaskControlTaskSt
     stopSupported: true, stopConfirmed: true };
 }
 
-const stopErrorCode = (error: unknown, message = String((error as Error).message ?? error)): TaskControlErrorCode =>
-  message.includes("changed while stop") ? "stale_run" : message.includes("identity") ? "identity_unknown" : "stop_failed";
+function stopErrorCode(error: unknown): TaskControlErrorCode {
+  const message = String((error as Error).message ?? error);
+  if (message.includes("changed while stop")) return "stale_run";
+  if (message.includes("identity")) return "identity_unknown";
+  return "stop_failed";
+}
 
 function provenanceError(execute: TaskControlExecuteBody, record: Pick<TaskRecord, "sourceRequestId" | "requestedBy">,
   paths: NodePaths): TaskControlErrorCode | undefined {
