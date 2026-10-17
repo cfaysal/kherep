@@ -124,7 +124,7 @@ function allStopped(deps: CodexDeps, identities: ProcessIdentity[]): boolean {
 }
 
 // Both runtimes use these helpers (issue #437): the Claude stop waits on the
-// identities it captured before `claude stop` (task-control-claude-stop.mts).
+// identities it captured and re-captured (task-control-claude-stop.mts).
 export async function waitStopped(deps: CodexDeps, identities: ProcessIdentity[], timeoutMs: number): Promise<boolean> {
   const until = Date.now() + timeoutMs;
   do {
@@ -155,8 +155,9 @@ function sender(deps: CodexDeps): Send {
 // that still has its captured start time; a reused pid is never signalled.
 // Returns why something got no signal or a send failed; the wait that follows
 // decides whether the tree stopped. Without a root (issue #233) only the
-// verified identities are signalled, each by its pid.
-function signalPhase(deps: CodexDeps, root: ProcessIdentity | null, identities: ProcessIdentity[], signal: NodeJS.Signals): string[] {
+// verified identities are signalled, each by its pid. The Claude stop (issue
+// #437) calls it with root null, on a tree re-captured before each phase.
+export function signalPhase(deps: CodexDeps, root: ProcessIdentity | null, identities: ProcessIdentity[], signal: NodeJS.Signals): string[] {
   const send = sender(deps);
   const notes: string[] = [];
   const attempt = (pid: number, scope: SignalScope): void => {

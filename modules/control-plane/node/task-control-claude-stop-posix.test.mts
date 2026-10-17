@@ -13,8 +13,10 @@ import { writeTask } from "./task-records.mts";
 // shell command in its own process group, as Claude Code's Bash tool does.
 // The fake `claude stop` ends the root only, the way the measured `claude
 // stop` ends the session and leaves a running shell command alive. The
-// confirmed stop still ends the child, by its own pid; the node never
-// signals the root. Only processes this test spawned are signalled.
+// confirmed stop still ends the child, by its own pid; the node re-captures
+// the tree from its live members after `claude stop` and before each signal,
+// and never signals the root. Only processes this test spawned are
+// signalled, the detached child only after an identity check.
 const CHILD = `const c = require("node:child_process").spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
 console.log(c.pid);
 setInterval(() => {}, 1000);`;
@@ -35,25 +37,27 @@ async function session(t: test.TestContext) {
   const root = spawn(process.execPath, ["-e", CHILD], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
   const [line] = await once(root.stdout!, "data") as [Buffer];
   const child = Number(line.toString().trim());
+  assert.ok(Number.isInteger(child) && child > 0);
+  const childStart = processStart(child);
+  assert.notEqual(childStart, null);
+  // Only this test's processes: the root is the held child (Node resolves its
+  // identity, kill() after its exit is a no-op), the detached child only while
+  // it still has the start read at spawn.
   t.after(() => {
-    for (const pid of [child, root.pid!]) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // already ended
-      }
+    root.kill("SIGKILL");
+    try {
+      if (processStart(child) === childStart) process.kill(child, "SIGKILL");
+    } catch {
+      // ended between the read and the kill, or ps failed: nothing to end
     }
   });
-  assert.ok(Number.isInteger(child) && child > 0);
-  return { root: root.pid!, child };
+  return { root: root.pid!, child, childStart };
 }
 
 for (const spy of [false, true]) {
   test(`a confirmed Claude stop ends a shell command that outlives claude stop${spy ? ", by its own pid only" : ""} (issue #437)`,
     { skip: process.platform === "win32" ? "POSIX process groups" : false }, async (t) => {
-      const { root, child } = await session(t);
-      const childStart = processStart(child);
-      assert.notEqual(childStart, null);
+      const { root, child, childStart } = await session(t);
       const node = taskNode(t, { runtimes: ["claude"], ownTaskControl: true });
       const rootStart = processStart(root);
       const stops: string[] = [];
