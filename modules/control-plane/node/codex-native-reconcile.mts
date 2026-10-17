@@ -11,7 +11,7 @@ export async function reconcileNativeQueues(paths: NodePaths, owner: string,
   await waitForServiceAdmission(paths, async active => {
     try { await reconcileAdmitted(paths, owner, options); }
     catch (error) {
-      if (error instanceof NativeQueueShutdownError) retainServiceAdmission(active);
+      if (error instanceof NativeQueueShutdownError) retainServiceAdmission(active, error.whenStopped);
       throw error;
     }
   }, { admission });

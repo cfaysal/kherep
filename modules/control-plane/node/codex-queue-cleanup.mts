@@ -13,9 +13,11 @@ export interface NativeQueueClient {
 }
 
 export class NativeQueueShutdownError extends Error {
-  constructor() {
-    super("Codex queue cleanup shutdown failed");
+  readonly whenStopped?: Promise<void>;
+  constructor(whenStopped?: Promise<void>, options?: ErrorOptions) {
+    super("Codex queue cleanup shutdown failed", options);
     this.name = "NativeQueueShutdownError";
+    this.whenStopped = whenStopped;
   }
 }
 
@@ -135,7 +137,7 @@ export async function cleanupOwnedQueues(paths: NodePaths, current: QueueProduce
       work,
       new Promise<never>((_, reject) => { timer = setTimeout(() => {
         active = false;
-        timeoutClose = client?.close() ?? Promise.resolve();
+        timeoutClose = Promise.resolve().then(() => client?.close());
         const timedOut = (): void => reject(new Error("Codex queue cleanup timed out"));
         void timeoutClose.then(timedOut, timedOut);
       }, timeoutMs); }),
@@ -147,7 +149,7 @@ export async function cleanupOwnedQueues(paths: NodePaths, current: QueueProduce
       if (client) await work.catch(() => {});
       if (shutdownFailure) {
         if (shutdownFailure instanceof NativeQueueShutdownError) throw shutdownFailure;
-        throw new NativeQueueShutdownError();
+        throw new NativeQueueShutdownError(undefined, { cause: shutdownFailure });
       }
     }
     if (error instanceof NativeQueueShutdownError) throw error;

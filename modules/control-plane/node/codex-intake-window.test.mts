@@ -5,7 +5,7 @@ import test from "node:test";
 import fs from "node:fs";
 import { DEFAULT_POLICY, readPolicy } from "./policy.mts";
 
-for (const scenario of ["progress", "refresh", "excluded", "drift", "missing", "malformed", "close", "stop", "drain", "admitted-drift", "publication"]) {
+for (const scenario of ["progress", "retained-admission", "refresh", "excluded", "drift", "missing", "malformed", "close", "stop", "drain", "admitted-drift", "publication"]) {
   test(`held Codex intake: ${scenario}`, () => {
     const result = execFileSync(process.execPath, ["--experimental-test-module-mocks",
       path.join(import.meta.dirname, "codex-intake-window-fixture.mts"), scenario], { encoding: "utf8", timeout: 15_000 });

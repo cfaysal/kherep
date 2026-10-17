@@ -36,7 +36,7 @@ mock.module(new URL("./daemon-source.mts", import.meta.url).href, { namedExports
   captureRuntimeSourceIdentity: () => ({ root: path.resolve(import.meta.dirname, "..", "..", ".."),
     commit: "0".repeat(40), digest: "0".repeat(64), kind: "checkout" as const, verified: true as const }),
 } });
-const { defaultServiceOwnerProbe } = await import("./service-drain.mts");
+const { defaultServiceOwnerProbe, withServiceAdmission, retainServiceAdmission, serviceAdmissionsIdle } = await import("./service-drain.mts");
 mock.method(defaultServiceOwnerProbe, "current", () => ({ version: 1 as const, pid: process.pid,
   startedAt: "2026-01-01T00:00:00.000Z", owner: "S-1-5-21-1-2-3-1001" }));
 for (const method of ["spawn", "execFile", "execFileSync", "spawnSync", "exec", "execSync"] as const) {
@@ -162,7 +162,7 @@ try {
       release(); await flush();
     }
     console.log("INTAKE_WINDOW_PASS");
-  } else if (scenario !== "progress" && scenario !== "refresh") {
+  } else if (!["progress", "refresh", "retained-admission"].includes(scenario)) {
     // Enqueue then invalidate synchronously, before the pump's promise job.
     socket.message(frame("message.deliver", body(10)));
     socket.message(frame("mcp.intent.receipt", { requestId: id(11), ok: true, expiresAt: Date.now() + 1000, version: 1 }));
@@ -194,6 +194,12 @@ try {
     assert.equal(exited, 1);
     console.log("INTAKE_WINDOW_PASS");
   } else {
+  let completeStopped: (() => void) | undefined;
+  if (scenario === "retained-admission") {
+    const whenStopped = new Promise<void>(resolve => { completeStopped = resolve; });
+    await withServiceAdmission(paths, async admission => retainServiceAdmission(admission, whenStopped));
+    assert.equal(serviceAdmissionsIdle(paths), false);
+  }
   storeMessage(paths.inbox, body(1)); markDelivered(paths.inbox, id(1));
   writeOutbox(paths, { messageId: id(2), fromSession: "synthetic-peer", to: { nodeId: NODE, session: SID },
     text: "synthetic outbound", createdAt: new Date().toISOString() });
@@ -219,9 +225,17 @@ try {
   assert.deepEqual(getMessage(paths.inbox, id(4)), before); assert.equal(queues.length, 0);
   assert.ok(frames.every((f, i) => !i || f.seq > frames[i - 1].seq));
   assert.ok(frames.every(f => f.ack === 0));
+  if (completeStopped) {
+    assert.equal(serviceAdmissionsIdle(paths), false); completeStopped(); await flush();
+    assert.equal(serviceAdmissionsIdle(paths), true); assert.equal(exited, 0);
+    socket.message(frame("message.deliver", body(7))); await flush(); await codexQueueIdle();
+    assert.equal(getMessage(paths.inbox, id(7))?.state, "accepted");
+    assert.equal(getMessage(paths.inbox, id(6)), null); assert.equal(frames.some(f => f.type === "command.ack"), false);
+  }
   release(); await flush();
   assert.equal(exited, 1); assert.ok(getMessage(paths.inbox, id(6)));
   assert.ok(frames.some(f => f.type === "command.ack"));
+  assert.ok(frames.every((f, i) => !i || f.seq > frames[i - 1].seq));
   console.log("INTAKE_WINDOW_PASS");
   }
 } finally {
