@@ -226,11 +226,11 @@ export async function reportStitch(
   let unchanged = 0;
   for (const [pageId, orphanIds] of assignment) {
     const storage = await pageStorage(deps.session, pageId);
-    const merged = [...new Set([...existingRelated(storage), ...orphanIds])]
-      .filter((id) => id !== pageId && index.byId.has(id));
-    const rows = merged.map((id) => index.byId.get(id)!);
-    const next = withRelated(storage, relatedSection(deps.spaceKey, rows));
-    if (next === storage) { unchanged += 1; continue; }
+    const linked = existingRelated(storage);
+    const merged = [...new Set([...linked, ...orphanIds])].filter((id) => id !== pageId && index.byId.has(id));
+    // Issue #479: Confluence may hand our block back re-serialized; the ids decide.
+    if (merged.length === linked.length && merged.every((id) => linked.includes(id))) { unchanged += 1; continue; }
+    const next = withRelated(storage, relatedSection(deps.spaceKey, merged.map((id) => index.byId.get(id)!)));
     if (!options.dryRun) {
       await deps.update(pageId, next, "OP-1409 link the pages nothing pointed at");
     }
