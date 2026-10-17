@@ -16,6 +16,7 @@ Provide these environment variables to the runtime invoking the broker. Keep act
 | `KHEREP_ATL_ISSUE_TYPES` | Non-empty JSON object mapping work-item type names to their numeric ID strings |
 | `KHEREP_ATL_CRED_FILE_CODEX` | External service-account binding used only by the Codex broker |
 | `KHEREP_ATL_CRED_FILE_CLAUDE` | External service-account binding used only by the Claude broker |
+| `KHEREP_TWG_BIN` | Optional absolute path of the twg executable used by the Confluence brokers' semantic search; without it `twg` is searched on PATH and then in the documented install directories |
 
 For example, `{"Task":"10001"}` illustrates the type-map format. The name and ID must come from the configured site; the example is not a default. Jira's REST API retains `project` and `issue` terminology.
 

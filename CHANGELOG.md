@@ -265,6 +265,15 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Semantic search finds twg off PATH (issue #478). The Confluence brokers'
+  `related`, `stitch` and `search` spawn `twg` with the documented install
+  directories appended to PATH (`~/.local/bin`, `/opt/homebrew/bin`,
+  `/usr/local/bin`; on Windows `%LOCALAPPDATA%\Programs\twg\bin` and
+  `%ProgramFiles%\twg`), and honour `KHEREP_TWG_BIN` (an absolute path, the
+  same variable as the Teamwork Graph wrapper; a relative or empty value is
+  refused without spawning). A trimmed background-session PATH no longer turns
+  every run into UNKNOWN; a CLI that is still not found reports `semantic
+  search did not run`, never zero results.
 - Message intake no longer waits for runtime work (refs #441; the
   sender-visible signal for a node that does not drain is a follow-up). A
   `message.deliver` frame of an authenticated connection is stored on an
