@@ -21,7 +21,8 @@ import { parsePsTable, parseWindowsTable, type ProcessTable } from "./launch-mod
 //   other CODEX_* names (a Claude plugin sets CODEX_COMPANION_*) are no marker.
 // - KHEREP_SESSION_ID: the node sets it for the Codex runs it starts, without
 //   CLAUDE_CODE_SESSION_ID (codex-process.mts).
-// - CLAUDE_PID: Claude Code's own pid in its subprocesses; only the nested case reads it.
+// - CLAUDE_PID: Claude Code's own pid in its subprocesses; only the nested case
+//   reads it, and Claude wins there only below a recognised codex program.
 
 export const CODEX_THREAD_ENV = "CODEX_THREAD_ID";
 export const CLAUDE_PID_ENV = "CLAUDE_PID";
@@ -53,13 +54,16 @@ export const TASK_THREAD_MISMATCH = "KHEREP_SESSION_ID names a node task whose C
   + "a Codex started inside a node task's shell is another session and cannot send as the task";
 export const BAD_THREAD_ID = "CODEX_THREAD_ID is not a plain session id; nothing was sent";
 
-// One process listing, read synchronously so that the callers stay synchronous; null when it cannot be taken.
+// One process listing, read synchronously so that the callers stay synchronous;
+// null when it cannot be taken. On macOS and Linux the table holds each
+// process's executable (ps comm: the full path on macOS, spaces included; the
+// name on Linux), not its arguments; on Windows the command line.
 export function readProcessTableSync(platform: NodeJS.Platform = process.platform): ProcessTable | null {
   try {
     const [file, args] = platform === "win32"
       ? ["powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
         "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress"]]
-      : ["ps", ["-A", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "args="]];
+      : ["ps", ["-A", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "comm="]];
     const run = spawnSync(file, args, { timeout: LIST_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024, windowsHide: true, encoding: "utf8" });
     if (run.error || run.status !== 0) return null;
     const table = platform === "win32" ? parseWindowsTable(run.stdout) : parsePsTable(run.stdout);
@@ -75,13 +79,17 @@ export function processTableOnce(platform: NodeJS.Platform = process.platform): 
   return () => (table === undefined ? (table = readProcessTableSync(platform)) : table);
 }
 
-function isCodexProgram(args: string, platform: NodeJS.Platform): boolean {
-  const program = (platform === "win32" ? windowsArgv(args) : args.trim().split(/\s+/))[0] ?? "";
+function isCodexProgram(command: string, platform: NodeJS.Platform): boolean {
+  const program = platform === "win32" ? windowsArgv(command)[0] ?? "" : command.trim();
   return /^codex(\.exe)?$/i.test((platform === "win32" ? path.win32 : path.posix).basename(program));
 }
 
-// The nearest runtime above pid: the Claude Code process (CLAUDE_PID) or a
-// codex program, whichever comes first; null when the walk cannot tell.
+// The nearest runtime above pid, fail-closed: a codex program met first is
+// Codex. The Claude Code process (CLAUDE_PID) met first is Claude only when a
+// codex program sits above it, which proves a Claude started from a Codex
+// tool; otherwise an unrecognised Codex (a renamed binary, a path the split
+// cannot read) could sit below it, so the walk cannot tell. Also null for a
+// missing or unreadable process on the way.
 function nearestRuntime(env: NodeJS.ProcessEnv, deps: IdentityDeps): Runtime | null {
   const claudePid = Number(env[CLAUDE_PID_ENV]);
   if (!Number.isInteger(claudePid) || claudePid <= 1) return null;
@@ -94,12 +102,14 @@ function nearestRuntime(env: NodeJS.ProcessEnv, deps: IdentityDeps): Runtime | n
   }
   if (!table) return null;
   let pid = table.get(deps.pid ?? process.pid)?.ppid;
+  let claudeBelow = false;
   for (let step = 0; pid !== undefined && pid > 1 && step < NESTED_MAX_ANCESTORS; step++) {
-    if (pid === claudePid) return "claude";
     const entry = table.get(pid);
+    if (!entry) return null;
+    if (pid === claudePid) claudeBelow = true;
     // A command line that cannot be read could be a codex.
-    if (!entry || entry.args === null) return null;
-    if (isCodexProgram(entry.args, platform)) return "codex";
+    else if (entry.args === null) return null;
+    else if (isCodexProgram(entry.args, platform)) return claudeBelow ? "claude" : "codex";
     pid = entry.ppid;
   }
   return null;

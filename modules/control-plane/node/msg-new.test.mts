@@ -9,6 +9,7 @@ import { writeDirectory, writeLocalSessions } from "./exchange.mts";
 import { generateIdentity } from "./identity.mts";
 import { parseMsgArgs, runMsg } from "./msg-cli.mts";
 import { DIRECTIVE_REQUIRED } from "./msg-new.mts";
+import { NESTED_RUNTIME } from "./msg-resolve.mts";
 import { loadPolicy } from "./policy.mts";
 import { startTask } from "./session-runner.mts";
 import { listSessions } from "./sessions.mts";
@@ -177,4 +178,15 @@ test("msg send --new from a Codex thread under Claude labels the task intercom: 
   assert.match(err[0], /is still pending/);
   const record = readRequest(node.paths, requestIds(node.paths)[0]);
   assert.deepEqual([record?.label, record?.requestedBy, record?.requestedBySessionId], ["intercom: codex@n", THREAD, THREAD]);
+});
+
+test("msg send --new refuses an undecidable nesting with the fixed reason and writes no request (issue #471)", async (t) => {
+  const node = taskNode(t, { delegate: { request: true } });
+  writeDirectory(node.paths, DIRECTORY);
+  const err: string[] = [];
+  const out: string[] = [];
+  const code = await runMsg(["send", "sekhmet", "--new", "claude", ...D, "--", "hi"], { paths: node.paths, env: NESTED_ENV,
+    now: () => T0, out: (l) => out.push(l), err: (l) => err.push(l), sleep: async () => {}, processTable: () => null });
+  assert.deepEqual([code, out, err], [1, [], [`kherep-node msg: ${NESTED_RUNTIME}`]]);
+  assert.deepEqual(requestIds(node.paths), []);
 });

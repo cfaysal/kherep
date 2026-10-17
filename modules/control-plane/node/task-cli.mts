@@ -67,7 +67,10 @@ export function runTaskArgs({ positionals, values }: TaskArgs, given: TaskContex
     const [taskId] = rest;
     const record = isTaskId(taskId) ? readTask(paths, taskId) : null;
     if (!record) return fail(`task ${taskId} was not started on this node`);
-    const self = sessionIdFromEnv(env, context);
+    // A session the runtime rule refuses (issue #471) reports nothing; only no session at all is the operator.
+    const identity = sessionIdentity(paths, env, context);
+    if (!identity.ok && identity.code !== "none") return fail(identity.error);
+    const self = identity.ok ? identity.id : undefined;
     const own = taskForSession(paths, self);
     if (self && own?.taskId !== taskId) return fail(`this session was not started for task ${taskId}`);
     const summary = values.summary;
@@ -96,7 +99,7 @@ export function runTaskArgs({ positionals, values }: TaskArgs, given: TaskContex
 // Why this session may not request a task, or null: the checks `task new` and
 // `msg send --new` share (no chains, the node's delegate.request, no active task).
 export function delegationBlocked(paths: NodePaths, env: NodeJS.ProcessEnv, from?: string, deps?: IdentityDeps): string | null {
-  if (taskForSession(paths, sessionIdFromEnv(env, deps)) || (from && taskForSession(paths, from))) return NO_CHAINS;
+  if (taskForSession(paths, sessionIdFromEnv(paths, env, deps)) || (from && taskForSession(paths, from))) return NO_CHAINS;
   const policy = loadPolicy(readConfig(paths.config)?.policyFile ?? paths.policy);
   if (!policy.sessions?.delegate.request) return NOT_DELEGATING;
   return hasActiveTask(paths) ? TASKS_ACTIVE : null;

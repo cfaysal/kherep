@@ -24,9 +24,9 @@ export function sessionIdentity(paths: NodePaths, env: NodeJS.ProcessEnv, deps: 
   return runtimeIdentity(env, { ...deps, taskThreadOf: (session) => taskForSession(paths, session)?.sessionId });
 }
 
-// This session's id from the environment, or undefined when the runtime cannot tell it.
-export function sessionIdFromEnv(env: NodeJS.ProcessEnv, deps?: IdentityDeps): string | undefined {
-  const identity = runtimeIdentity(env, deps);
+// This session's id from the environment, or undefined when sessionIdentity refuses.
+export function sessionIdFromEnv(paths: NodePaths, env: NodeJS.ProcessEnv, deps?: IdentityDeps): string | undefined {
+  const identity = sessionIdentity(paths, env, deps);
   return identity.ok ? identity.id : undefined;
 }
 

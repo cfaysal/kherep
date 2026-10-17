@@ -700,10 +700,13 @@ variable, in this order:
 1. Only `CODEX_THREAD_ID` (Codex sets it for its shell commands): Codex.
 2. Only `CLAUDE_CODE_SESSION_ID`: Claude Code. Other `CODEX_*` names are no marker.
 3. Neither, but `KHEREP_SESSION_ID`: a Codex run the node started.
-4. Both: the process is nested, and the nearest runtime ancestor decides, the
-   Claude Code process (`CLAUDE_PID`) or a `codex` program, within 12 steps of
-   one process listing. No listing, no `CLAUDE_PID`, an unreadable command line
-   or no runtime found refuses with a fixed reason.
+4. Both: the process is nested, and one process listing decides within 12
+   steps up (the executable, `ps comm`, on macOS and Linux; the command line on
+   Windows). A `codex` program met first is Codex. The Claude Code process
+   (`CLAUDE_PID`) met first is Claude only when a `codex` program sits above
+   it; otherwise an unrecognised Codex (a renamed binary, an unreadable path)
+   could sit below it. No listing, no valid `CLAUDE_PID`, a missing or
+   unreadable process on the way, or no decision refuses with a fixed reason.
 5. Identity: Claude Code's id; for Codex the node's `KHEREP_SESSION_ID`, refused
    when the task's known thread differs from `CODEX_THREAD_ID`, else
    `CODEX_THREAD_ID`, which must be a plain id.

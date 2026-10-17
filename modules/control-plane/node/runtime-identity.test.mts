@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { BAD_THREAD_ID, NESTED_RUNTIME, NO_SESSION, runtimeIdentity, TASK_THREAD_MISMATCH } from "./runtime-identity.mts";
-import { claudeUnderCodex, codexUnderClaude, NESTED_ENV, table, THREAD } from "./runtime-fixture.mts";
+import { CLAUDE_PID, claudeUnderCodex, codexUnderClaude, NESTED_ENV, table, THREAD } from "./runtime-fixture.mts";
 
 // Issue #471: the runtime of the calling process decides first, then its identity.
 const LEAF = 400;
@@ -24,14 +24,37 @@ test("both markers without a decidable ancestry refuse with the fixed nested-run
   assert.deepEqual(runtimeIdentity(NESTED_ENV, { pid: LEAF, processTable: () => null }), refused);
   // Thirteen shells between the leaf and the codex process: beyond the walk's bound.
   const shells: [number, number, string][] = Array.from({ length: 13 }, (_, i) => [1000 + i, 1001 + i, "/bin/bash"]);
-  const deep = table([[LEAF, 1000, "node msg"], ...shells, [1013, 1, "codex exec"]]);
+  const deep = table([[LEAF, 1000, "node"], ...shells, [1013, 1, "codex"]]);
   assert.deepEqual(runtimeIdentity(NESTED_ENV, { pid: LEAF, processTable: () => deep }), refused);
   // A command line that cannot be read could hide a codex: no guess past it.
-  const unreadable = table([[LEAF, 300, "node msg"], [300, 200, null], [200, 1, "codex exec"]]);
+  const unreadable = table([[LEAF, 300, "node"], [300, 200, null], [200, 1, "codex"]]);
   assert.deepEqual(runtimeIdentity(NESTED_ENV, { pid: LEAF, processTable: () => unreadable }), refused);
   // Without CLAUDE_PID the Claude Code process cannot be placed in the chain.
   const { CLAUDE_PID: _, ...noPid } = NESTED_ENV;
   assert.deepEqual(runtimeIdentity(noPid, { pid: LEAF, processTable: untouched }), refused);
+  // A CLAUDE_PID that is not a process id places nothing either.
+  for (const pid of ["abc", "1.5", "-4", "1", ""]) {
+    assert.deepEqual(runtimeIdentity({ ...NESTED_ENV, CLAUDE_PID: pid }, { pid: LEAF, processTable: untouched }), refused, pid);
+  }
+});
+
+test("the Claude Code process met first is Claude only below a recognised codex, so an unrecognised Codex is refused, not taken as Claude", () => {
+  const refused = { ok: false, code: "nested-undecided", error: NESTED_RUNTIME };
+  const codex = { ok: true, runtime: "codex", id: THREAD, source: "CODEX_THREAD_ID" };
+  const claude = { ok: true, runtime: "claude", id: "s-self", source: "CLAUDE_CODE_SESSION_ID" };
+  const identity = (processTable: () => ReturnType<typeof table>, platform: NodeJS.Platform = "darwin") =>
+    runtimeIdentity(NESTED_ENV, { pid: LEAF, processTable, platform });
+  // A renamed Codex binary between the leaf and Claude Code: before, the walk met CLAUDE_PID and spoke for Claude.
+  assert.deepEqual(identity(() => codexUnderClaude(LEAF, "/opt/codex/codex-aarch64-apple-darwin")), refused);
+  // A Windows command line with an unquoted path that has a space: the split cannot read the program.
+  const unquoted = table([[Number(CLAUDE_PID), 1, "claude.exe"], [150, Number(CLAUDE_PID), "bash.exe"],
+    [200, 150, "C:\\Program Files\\Codex\\codex.exe exec"], [300, 200, "powershell.exe"], [LEAF, 300, "node.exe"]]);
+  assert.deepEqual(identity(() => unquoted, "win32"), refused);
+  // On macOS ps comm keeps a path with spaces whole, so its codex is recognised.
+  assert.deepEqual(identity(() => codexUnderClaude(LEAF, "/Applications/Codex Tools.app/Contents/MacOS/codex")), codex);
+  // The reverse nesting stays Claude, also with a spaced path; without a codex above Claude it is refused.
+  assert.deepEqual(identity(() => claudeUnderCodex(LEAF, "/Applications/Codex Tools.app/Contents/MacOS/codex")), claude);
+  assert.deepEqual(identity(() => claudeUnderCodex(LEAF, "/opt/codex/codex-aarch64-apple-darwin")), refused);
 });
 
 test("only CLAUDE_CODE_SESSION_ID, with CODEX_COMPANION_* names present, is a Claude session without reading the process table", () => {

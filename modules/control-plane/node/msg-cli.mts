@@ -197,7 +197,7 @@ async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<
 
   // A session started for a task tags its messages with that task (item 5).
   // A task the Worker does not know (issue #102) tags nothing.
-  const own = taskForSession(io.paths, sessionIdFromEnv(io.env, io));
+  const own = taskForSession(io.paths, sessionIdFromEnv(io.paths, io.env, io));
   taskId = (own && !own.local ? own.taskId : undefined) ?? taskId;
   const record: OutboxRecord = { messageId: crypto.randomUUID(), fromSession: from.value,
     fromSessionId: senderSessionId(io.paths, io.env, from.value, io), to, text,

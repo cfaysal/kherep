@@ -299,8 +299,9 @@ increments the minor version; every other release increments the patch version.
   `CLAUDE_CODE_SESSION_ID`; the CLI used to prefer that variable and spoke for the
   Claude session. It now decides the runtime first: `CODEX_THREAD_ID`, which Codex
   sets for its shell commands, names a Codex thread; `CLAUDE_CODE_SESSION_ID` names a
-  Claude session only when no Codex thread variable is present or the nearest
-  runtime ancestor is the Claude Code process (`CLAUDE_PID`); `KHEREP_SESSION_ID`
+  Claude session only when no Codex thread variable is present or the Claude
+  Code process (`CLAUDE_PID`) sits between the command and a recognised `codex`
+  program in the process ancestry; `KHEREP_SESSION_ID`
   keeps naming the node's own Codex runs and is checked against the task's thread.
   When both runtimes are in the environment and the process ancestry cannot order
   them, the command refuses with a fixed reason and writes nothing instead of
