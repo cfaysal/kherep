@@ -10,6 +10,7 @@ import { readRegistrationAuthority } from "./task-control-store.mts";
 import { loadPolicy } from "./policy.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { measureClaude } from "./task-control-claude.mts";
+import { stopClaude } from "./task-control-claude-stop.mts";
 import { runVersionOf, taskRuntime } from "./task-control-run.mts";
 import { readTask, writeTask, type TaskRecord } from "./task-records.mts";
 import { readRefusal, type RefusalRecord } from "./task-refusals.mts";
@@ -34,6 +35,17 @@ function failure(execute: TaskControlExecuteBody, record: Pick<TaskRecord, "stat
     stopSupported: false, stopConfirmed: false, errorCode,
   };
 }
+
+// A stop confirmed by the target: every captured identity of the run ended.
+function confirmed(execute: TaskControlExecuteBody, taskState: TaskControlTaskState, runVersion: string,
+  observedAt: string): TaskControlResultBody {
+  return { name: "task.control.result", operationId: execute.operationId, taskId: execute.taskId, state: "succeeded",
+    runtime: execute.runtime, taskState, processState: "closed", runVersion, observedAt, freshness: "fresh",
+    stopSupported: true, stopConfirmed: true };
+}
+
+const stopErrorCode = (error: unknown, message = String((error as Error).message ?? error)): TaskControlErrorCode =>
+  message.includes("changed while stop") ? "stale_run" : message.includes("identity") ? "identity_unknown" : "stop_failed";
 
 function provenanceError(execute: TaskControlExecuteBody, record: Pick<TaskRecord, "sourceRequestId" | "requestedBy">,
   paths: NodePaths): TaskControlErrorCode | undefined {
@@ -107,16 +119,25 @@ export async function executeTaskControl(execute: TaskControlExecuteBody, contex
   const provenance = provenanceError(execute, record, context.paths);
   if (provenance) return failure(execute, record, observedAt, provenance, "denied");
   if (execute.action === "status") return measured(execute, record, context, observedAt);
-  if (execute.runtime !== "codex") return failure(execute, record, observedAt, "unsupported_runtime");
+  // Both runtimes: the exact run the owner measured, and the owner intent persisted against it
+  // before any effect. A daemon restart recovers the operation without automatically signalling it.
   const runVersion = runVersionOf(record);
   if (!runVersion) return failure(execute, record, observedAt, "identity_unknown");
   if (execute.expectedRunVersion !== runVersion) return failure(execute, record, observedAt, "stale_run", "denied");
-  // Persist the owner intent against this exact run before any effect. A
-  // daemon restart recovers the operation without automatically signalling it.
-  const markerAt = context.now?.() ?? Date.now();
+  const clock = (): number => context.now?.() ?? Date.now();
+  const markerAt = clock();
   const marked = writeTask(context.paths, { ...record,
     ...(record.operatorStoppedAt ? {} : { operatorStoppedAt: new Date(markerAt).toISOString() }),
     taskControlRecoveryRunVersion: runVersion }, markerAt);
+  const stamp = (): string => new Date(clock()).toISOString();
+  const runner = { ...context.runner, policy };
+  if (execute.runtime === "claude") {
+    const outcome = await stopClaude(marked, runVersion, runner, clock)
+      .catch((error: unknown) => ({ errorCode: stopErrorCode(error), state: "failed" as const, processState: "unknown" as const }));
+    return "errorCode" in outcome
+      ? failure(execute, readTask(context.paths, record.taskId), stamp(), outcome.errorCode, outcome.state, outcome.processState)
+      : confirmed(execute, outcome.taskState, runVersion, stamp());
+  }
   // exit.json proves the root callback ran, not that every captured child ended.
   if (readExit(codexFiles(context.paths, marked.taskId)) !== null) {
     return failure(execute, record, observedAt, "recovery_required", "unknown");
@@ -126,16 +147,10 @@ export async function executeTaskControl(execute: TaskControlExecuteBody, contex
     return failure(execute, record, observedAt, status.errorCode ?? "stale_run", "unknown", status.processState);
   }
   try {
-    const runner = { ...context.runner, policy };
     const stopped = await stopCodex({ taskId: record.taskId }, runner, "stopped by task owner", true);
     const fresh = readTask(context.paths, record.taskId);
-    return { name: "task.control.result", operationId: execute.operationId, taskId: execute.taskId, state: "succeeded",
-      runtime: "codex", taskState: fresh?.state ?? stopped.state as TaskControlTaskState, processState: "closed", runVersion,
-      observedAt: new Date(context.now?.() ?? Date.now()).toISOString(), freshness: "fresh", stopSupported: true, stopConfirmed: true };
+    return confirmed(execute, fresh?.state ?? stopped.state as TaskControlTaskState, runVersion, stamp());
   } catch (error) {
-    const message = String((error as Error).message ?? error);
-    const code: TaskControlErrorCode = message.includes("changed while stop") ? "stale_run"
-      : message.includes("identity") ? "identity_unknown" : "stop_failed";
-    return failure(execute, readTask(context.paths, record.taskId), new Date(context.now?.() ?? Date.now()).toISOString(), code);
+    return failure(execute, readTask(context.paths, record.taskId), stamp(), stopErrorCode(error));
   }
 }

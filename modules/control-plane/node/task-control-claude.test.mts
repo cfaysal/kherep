@@ -7,9 +7,10 @@ import { executeTaskControl, runVersionOf } from "./task-control-local.mts";
 import { taskNode, TASK, T0 } from "./task-fixture.mts";
 import { readTask, writeTask, type TaskRecord } from "./task-records.mts";
 
-// Issue #437, PR 1: the status of a Claude task measures the process behind
-// its background session, from the pid `claude agents --json --all` lists and
-// that process's start time. A Claude stop stays unsupported in this change.
+// Issue #437: the status of a Claude task measures the process behind its
+// background session, from the pid `claude agents --json --all` lists and that
+// process's start time. The confirmed stop is tested in
+// task-control-claude-stop.test.mts; on Windows it stays refused.
 
 const OWNER = "00000000-0000-4000-8000-0000000000bb";
 const TARGET = "00000000-0000-4000-8000-0000000000aa";
@@ -55,7 +56,7 @@ test("a live Claude run is running with a run version bound to its listed pid an
   const captured = readTask(node.paths, TASK)!;
   assert.deepEqual([captured.pid, captured.pidStart], [PID, "s1"]);
   assert.deepEqual([result.state, result.runtime, result.taskState, result.processState, result.stopSupported, result.stopConfirmed],
-    ["succeeded", "claude", "running", "running", false, false]);
+    ["succeeded", "claude", "running", "running", true, false]);
   assert.equal(result.runVersion, runVersionOf(captured));
   assert.equal(result.errorCode, undefined);
   assert.deepEqual(Object.keys(result).sort(), ["freshness", "name", "observedAt", "operationId", "processState", "runVersion", "runtime",
@@ -145,15 +146,23 @@ test("a row that is not the task's own background session is never measured as s
   assert.deepEqual(signals, []);
 });
 
-test("a Claude stop stays unsupported and signals nothing, even for a running run", async (t) => {
+// Issue #437, PR 2: the stop is measured on macOS only; Windows keeps refusing
+// it until the listed process, its tree and `claude stop` through cmd.exe are
+// measured there. The shared checks still run first and record the intent.
+test("on Windows a Claude stop stays refused and signals nothing, even for a running run", async (t) => {
   const { node, context, signals } = setup(t);
+  const windows = { ...context, runner: { ...context.runner, platform: "win32" as const } };
   writeTask(node.paths, record(node));
   node.rows.push(row());
-  const status = await executeTaskControl(operation("status"), context);
-  const stop = await executeTaskControl(operation("stop", status.runVersion), context);
-  assert.deepEqual([stop.state, stop.errorCode, stop.stopConfirmed], ["failed", "unsupported_runtime", false]);
-  assert.equal(readTask(node.paths, TASK)?.state, "running");
+  const status = await executeTaskControl(operation("status"), windows);
+  assert.deepEqual([status.processState, status.stopSupported], ["running", false]);
+  const stale = await executeTaskControl(operation("stop", "b".repeat(64)), windows);
+  assert.deepEqual([stale.state, stale.errorCode], ["denied", "stale_run"]);
   assert.equal(readTask(node.paths, TASK)?.operatorStoppedAt, undefined);
+  const stop = await executeTaskControl(operation("stop", status.runVersion), windows);
+  assert.deepEqual([stop.state, stop.errorCode, stop.stopConfirmed, stop.stopSupported], ["failed", "unsupported_runtime", false, false]);
+  assert.equal(readTask(node.paths, TASK)?.state, "running");
+  assert.ok(readTask(node.paths, TASK)?.operatorStoppedAt, "the shared checks record the owner intent before the gate");
   assert.equal(node.calls.some((call) => call.args[0] === "stop"), false);
   assert.deepEqual(signals, []);
 });

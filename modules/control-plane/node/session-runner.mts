@@ -33,6 +33,10 @@ import { withServiceAdmission, type ServiceOwnerProbe } from "./service-drain.mt
 //   idle) "While the process is alive" (agent-view, fetched 2026-10-17). A
 //   launch records that pid and its start time (issue #437); status re-reads
 //   both, since the supervisor may stop and restart a session's process.
+// - `claude stop` returns before the session's process ended, and the listing
+//   shows the session stopped without a pid at once; a running shell command
+//   is not ended (issue #437, measured on macOS). The owner's confirmed stop,
+//   which waits for every captured process, lives in task-control-claude-stop.mts.
 // A task with runtime codex goes to codex-runner.mts instead (issue #63).
 // --name stays task-<8> even for a labelled task (issue #74): findRow falls
 // back to that name to map the session before its short id is known, and the
@@ -221,10 +225,17 @@ export async function stopTask(args: SessionStopArgs, deps: RunnerDeps, reason =
   if (record.runtime === "codex") return stopCodex(args, deps, reason);
   if (!record.shortId) throw new Error("the task's session id is not known yet");
   await runClaude(deps, ["stop", record.shortId]);
+  const saved = markClaudeStopped(deps, record, reason);
+  return { taskId: saved.taskId, state: saved.state };
+}
+
+// The state write and report after a Claude stop (stopTask and the confirmed
+// owner stop): a task whose session already reported done stays done.
+export function markClaudeStopped(deps: RunnerDeps, record: TaskRecord, reason: string): TaskRecord {
   const reportedDone = record.state === "done";
   const saved = writeTask(deps.paths, { ...record, state: reportedDone ? "done" : "stopped", reason, running: undefined }, deps.now?.());
   if (!reportedDone) {
     queueReport(deps.paths, { taskId: saved.taskId, state: "stopped", reason, ...(saved.sessionId ? { sessionId: saved.sessionId } : {}) });
   }
-  return { taskId: saved.taskId, state: saved.state };
+  return saved;
 }

@@ -123,7 +123,9 @@ function allStopped(deps: CodexDeps, identities: ProcessIdentity[]): boolean {
   return identities.every(({ pid, start }) => startTimeOf(deps, pid) !== start);
 }
 
-async function waitStopped(deps: CodexDeps, identities: ProcessIdentity[], timeoutMs: number): Promise<boolean> {
+// Both runtimes use these helpers (issue #437): the Claude stop waits on the
+// identities it captured before `claude stop` (task-control-claude-stop.mts).
+export async function waitStopped(deps: CodexDeps, identities: ProcessIdentity[], timeoutMs: number): Promise<boolean> {
   const until = Date.now() + timeoutMs;
   do {
     if (allStopped(deps, identities)) return true;

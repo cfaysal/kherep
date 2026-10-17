@@ -158,6 +158,26 @@ increments the minor version; every other release increments the patch version.
   before it writes. The installers do not write the launcher itself, and
   `drift-check.sh` and `kherep-node doctor` do not yet compare the rendered
   files.
+- Confirmed remote stop for Claude Code background tasks (issue #437, second
+  part). `task stop` and `msg stop` for a Claude task the node started now stop
+  the measured run and confirm it. The target re-measures the run, captures the
+  session process and every descendant with its start time (a shell command runs
+  in its own process group and is captured by parent, not by group), runs
+  `claude stop <short id>`, the supported stop, and waits for every captured
+  identity to end; the listing shows the session `stopped` without a `pid` while
+  its process still lives, so the row is never the evidence. A process that
+  outlives the grace period, in practice a shell command the stop does not end,
+  is signalled by its own pid, SIGTERM then SIGKILL, only while it still has its
+  captured start time; the session process is never signalled before `claude
+  stop`, because the supervisor restarts a process that ended unexpectedly.
+  `stopConfirmed: true` only when every captured identity ended; a `claude stop`
+  that fails or a survivor after SIGKILL is `stop_failed`, a session the
+  supervisor restarted in the meantime is `stale_run` with the new run recorded
+  for the next status. Status offers the stop (`stopSupported: true`) for a
+  `working` or `blocked` session with a live process on macOS and Linux
+  (measured on macOS). On Windows the Claude stop stays refused
+  (`unsupported_runtime`, `stopSupported: false`) until the listed process, its
+  tree and `claude stop` through `cmd.exe` are measured there.
 
 ### Changed
 
@@ -191,8 +211,7 @@ increments the minor version; every other release increments the patch version.
   `working` or `blocked` session is `running`; a session without a live
   process, or a finished one whose process still runs, is `idle` or `closed`;
   a failed listing or a row that is not the task's own background session is
-  `identity_unknown`. Remote stop for Claude stays unsupported
-  (`unsupported_runtime`); no process is signalled.
+  `identity_unknown`. The stop followed in the second part (see Added).
 
 ### Fixed
 
