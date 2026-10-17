@@ -1,7 +1,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { MESSAGE_STATUS_ACK, MESSAGING_CAPABILITY } from "../../protocol-messages.mts";
+import { MAX_DIRECTORY_NODES, MESSAGE_STATUS_ACK, MESSAGING_CAPABILITY } from "../../protocol-messages.mts";
 import { HOT_MESSAGE_QUERIES } from "../src/message-store.mts";
 import { RETENTION_BATCH } from "../src/message-retention.mts";
 import type { Registry } from "../src/registry.mts";
@@ -147,6 +147,8 @@ describe("Registry read budget", () => {
         proxyParent: expect.stringContaining("USING INDEX sqlite_autoindex_messages_1"),
         proxyQueued: expect.stringContaining("USING INDEX sqlite_autoindex_messages_1"),
         queuedProxies: expect.stringContaining("USING INDEX messages_to_state"),
+        // Issue #441: the queue head of one listed node in the directory.
+        queueHead: expect.stringContaining("messages_to_state"),
       });
       for (const [name, plan] of plans) expect(plan, name).not.toMatch(/SCAN (messages|message_tombstones)|TEMP B-TREE/);
     });
@@ -160,5 +162,37 @@ describe("Registry read budget", () => {
     expect(unknown.rowsRead).toBeLessThanOrEqual(1);
     expect(known.rowsRead).toBeLessThanOrEqual(1);
     expect(known.rowsWritten).toBe(0);
+  });
+
+  // Issue #441: the per-node queue seeks run over the listed nodes only, however many are enrolled.
+  it("bounds the directory rebuild by the listed population and orders equal names by id", async () => {
+    const extra = 10;
+    const total = MAX_DIRECTORY_NODES + extra;
+    const idOf = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+    const counts = await runInDurableObject(registry(), (_instance, state) => {
+      const sql = state.storage.sql;
+      // Equal names, inserted in descending id order: only the id tie-break gives the listed prefix.
+      for (let i = total; i >= 1; i--) {
+        sql.exec("INSERT INTO nodes (id, name, status, capabilities, enrolled_at) VALUES (?, 'aaa-bulk', 'online', '[]', 0)", idOf(i));
+        // Every listed node holds 3 queued rows; every unlisted one holds 100, so a seek over them would show.
+        const queued = i <= MAX_DIRECTORY_NODES ? 3 : 100;
+        sql.exec(`WITH RECURSIVE n(k) AS (SELECT 1 UNION ALL SELECT k + 1 FROM n WHERE k < ?)
+          INSERT INTO messages (id, from_node, from_session, to_node, to_session, text, state, created_at, updated_at, expires_at)
+          SELECT ? || '-' || k, ?, 's', ?, 't', 'x', 'queued', ? + k, ? + k, ? FROM n`,
+        queued, idOf(i), SEED_SENDER, idOf(i), 1_000 * i, 1_000 * i, Date.now() + DAY);
+      }
+      const n = (table: string) => Number(sql.exec(`SELECT COUNT(*) AS n FROM ${table}`).one().n);
+      return { nodes: n("nodes"), sessions: n("sessions") };
+    });
+    // Any message transaction invalidates the cached directory.
+    await registry().ackMessageStatus(SEED_SENDER, { name: MESSAGE_STATUS_ACK, messageId: crypto.randomUUID(), state: "delivered" });
+    let body: Awaited<ReturnType<Registry["directory"]>> | null = null;
+    const rebuilt = await measure("directory", (r) => { body = r.directory(); });
+    expect(rebuilt.rowsRead).toBeLessThanOrEqual(counts.sessions + counts.nodes + MAX_DIRECTORY_NODES * 4);
+    const listed = body!.nodes;
+    expect([listed.length, body!.truncated]).toEqual([MAX_DIRECTORY_NODES, true]);
+    expect(listed.map((n) => n.nodeId)).toEqual(Array.from({ length: MAX_DIRECTORY_NODES }, (_, i) => idOf(i + 1)));
+    expect(listed.every((n, i) => n.intake?.queued === 3 && n.intake.oldestQueuedAt === new Date(1_000 * (i + 1) + 1).toISOString())).toBe(true);
+    expect((await measure("directory", (r) => r.directory())).rowsRead).toBe(0);
   });
 });

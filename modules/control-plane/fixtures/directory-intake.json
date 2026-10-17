@@ -1,0 +1,27 @@
+{
+  "directory": {
+    "nodes": [
+      { "nodeId": "00000000-0000-4000-8000-0000000001a1", "name": "node-unknown", "status": "online" },
+      { "nodeId": "00000000-0000-4000-8000-0000000001a2", "name": "node-empty-new", "status": "online",
+        "intake": { "lastAcceptedAt": null, "oldestQueuedAt": null, "queued": 0 } },
+      { "nodeId": "00000000-0000-4000-8000-0000000001a3", "name": "node-empty", "status": "online",
+        "intake": { "lastAcceptedAt": "2026-10-17T09:57:30.000Z", "oldestQueuedAt": null, "queued": 0 } },
+      { "nodeId": "00000000-0000-4000-8000-0000000001a4", "name": "node-waiting", "status": "offline",
+        "intake": { "lastAcceptedAt": "2026-10-17T09:57:30.000Z", "oldestQueuedAt": "2026-10-17T09:59:50.000Z", "queued": 2 } },
+      { "nodeId": "00000000-0000-4000-8000-0000000001a5", "name": "node-stalled", "status": "online",
+        "intake": { "lastAcceptedAt": "2026-10-17T09:35:30.000Z", "oldestQueuedAt": "2026-10-17T09:48:30.000Z", "queued": 3 } }
+    ],
+    "sessions": [],
+    "fetchedAt": "2026-10-17T10:00:00.000Z"
+  },
+  "truncated": {
+    "nodes": [
+      { "nodeId": "00000000-0000-4000-8000-0000000001a5", "name": "node-stalled", "status": "online",
+        "intake": { "lastAcceptedAt": "2026-10-17T09:35:30.000Z", "oldestQueuedAt": "2026-10-17T09:48:30.000Z", "queued": 3 } },
+      { "nodeId": "00000000-0000-4000-8000-0000000001a1", "name": "node-unknown", "status": "online" }
+    ],
+    "sessions": [],
+    "fetchedAt": "2026-10-17T10:00:00.000Z",
+    "truncated": true
+  }
+}
