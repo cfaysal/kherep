@@ -8,6 +8,7 @@ import { listQueueBindings, saveQueueBinding, type QueueProducerIdentity } from 
 import { cleanupOwnedQueues, NativeQueueShutdownError } from "./codex-queue-cleanup.mts";
 import { markDelivered, storeMessage } from "./inbox.mts";
 import { taskNode } from "./task-fixture.mts";
+import { nonExitingNative } from "./codex-native-reconcile-fixture.mts";
 
 const OWNER = "01a121f0-d3b1-7383-852c-b4405eae3161";
 const QUEUE = "019d0000-0000-7000-8000-000000000001";
@@ -30,28 +31,16 @@ function storedBinding(t: test.TestContext) {
   return node;
 }
 
-function nonExitingNative(reply: (request: { id?: number; method: string }) => { result?: unknown; error?: unknown } | undefined) {
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  const stdin = new PassThrough();
-  const methods: string[] = [];
-  let pending = "";
-  stdin.on("data", (chunk) => {
-    pending += chunk.toString("utf8");
-    for (;;) {
-      const end = pending.indexOf("\n");
-      if (end < 0) break;
-      const request = JSON.parse(pending.slice(0, end)) as { id?: number; method: string };
-      pending = pending.slice(end + 1);
-      methods.push(request.method);
-      const response = reply(request);
-      if (response && request.id !== undefined) stdout.write(`${JSON.stringify({ id: request.id, ...response })}\n`);
-    }
-  });
-  const child = Object.assign(new EventEmitter(), { stdout, stderr, stdin, pid: 987, killed: false,
-    exitCode: null as number | null, signalCode: null,
-    kill(this: { killed: boolean }) { this.killed = true; return true; } });
-  return { methods, spawn: (() => child as never) as NativeSpawn };
+const flush = async () => { await new Promise<void>(resolve => setImmediate(resolve)); };
+async function shutdownEvidence(error: unknown, native: ReturnType<typeof nonExitingNative>, first: "exit" | "close") {
+  assert.ok(error instanceof NativeQueueShutdownError);
+  assert.ok(error.whenStopped instanceof Promise);
+  let stopped = false;
+  void error.whenStopped.then(() => { stopped = true; });
+  native.child.emit("error", new Error("synthetic uncertainty")); await flush(); assert.equal(stopped, false);
+  native.child.emit(first, 0, null); await flush(); assert.equal(stopped, false);
+  native.child.emit(first === "exit" ? "close" : "exit", 0, null); await flush(); assert.equal(stopped, true);
+  native.child.emit("exit", 0, null); native.child.emit("close", 0, null); await flush(); assert.equal(stopped, true);
 }
 
 test("native client uses only initialize and public paginated queue list/delete on one bounded connection", async () => {
@@ -157,9 +146,10 @@ test("total cleanup timeout drains pending initialization and delayed process ex
 test("initialize failure propagates an unconfirmed native shutdown", async (t) => {
   const node = storedBinding(t);
   const native = nonExitingNative((request) => request.method === "initialize" ? { error: { message: "rejected" } } : undefined);
-  await assert.rejects(cleanupOwnedQueues(node.paths, IDENTITY,
+  const failure = await cleanupOwnedQueues(node.paths, IDENTITY,
     (opened) => connectNativeQueue(IDENTITY, { spawn: native.spawn, requestTimeoutMs: 1_000, opened }),
-    { owner: OWNER, timeoutMs: 1_000 }), NativeQueueShutdownError);
+    { owner: OWNER, timeoutMs: 1_000 }).catch(error => error);
+  await shutdownEvidence(failure, native, "exit");
   assert.deepEqual(native.methods, ["initialize"]);
   assert.equal(listQueueBindings(node.paths).length, 1);
 });
@@ -173,11 +163,41 @@ test("normal final close propagates an unconfirmed native shutdown after success
     }
     return undefined;
   });
-  await assert.rejects(cleanupOwnedQueues(node.paths, IDENTITY,
+  const failure = await cleanupOwnedQueues(node.paths, IDENTITY,
     (opened) => connectNativeQueue(IDENTITY, { spawn: native.spawn, requestTimeoutMs: 1_000, opened }),
-    { owner: OWNER, timeoutMs: 1_000 }), NativeQueueShutdownError);
+    { owner: OWNER, timeoutMs: 1_000 }).catch(error => error);
+  await shutdownEvidence(failure, native, "close");
   assert.deepEqual(native.methods, ["initialize", "initialized", "thread/queue/list"]);
   assert.equal(listQueueBindings(node.paths).length, 1);
+});
+
+test("cleanup deadline and throwing kill preserve late evidence without further queue RPC", async t => {
+  for (const kind of ["deadline", "deadline-kill-throws", "initialize-kill-throws"]) await t.test(kind, async t => {
+    const node = storedBinding(t), cause = kind === "deadline" ? undefined : new Error("synthetic kill failure");
+    const native = nonExitingNative(() => kind === "initialize-kill-throws" ? { error: { message: "rejected" } } : undefined, cause);
+    const error = await cleanupOwnedQueues(node.paths, IDENTITY,
+      opened => connectNativeQueue(IDENTITY, { spawn: native.spawn, requestTimeoutMs: 1_000, opened }),
+      { owner: OWNER, timeoutMs: kind === "initialize-kill-throws" ? 1_000 : 10 }).catch(error => error);
+    assert.ok(error instanceof NativeQueueShutdownError);
+    if (cause) assert.equal(error.cause, cause);
+    const before = [...native.methods];
+    native.child.stdout.write(`${JSON.stringify({ id: 0, result: {} })}\n`);
+    await shutdownEvidence(error, native, "exit");
+    assert.deepEqual(native.methods, before); assert.deepEqual(before, ["initialize"]);
+    assert.equal(listQueueBindings(node.paths).length, 1);
+  });
+});
+
+test("a foreign failing close is wrapped with cause and supplies no shutdown evidence", async t => {
+  const node = storedBinding(t), cause = new Error("synthetic close failure", { cause: new NativeQueueShutdownError(Promise.resolve()) });
+  let release!: () => void;
+  const pending = new Promise<{ data: []; nextCursor: null }>(resolve => { release = () => resolve({ data: [], nextCursor: null }); });
+  const error = await cleanupOwnedQueues(node.paths, IDENTITY, async opened => {
+    const client = { list: () => pending, delete: async () => ({ deleted: false }), close() { release(); throw cause; } };
+    opened(client); return client;
+  }, { owner: OWNER, timeoutMs: 10 }).catch(error => error);
+  assert.ok(error instanceof NativeQueueShutdownError);
+  assert.equal(error.cause, cause); assert.equal(error.whenStopped, undefined);
 });
 
 // Issue #408: the extracted client decodes byte-exact. Measured on 02cd4a2 with

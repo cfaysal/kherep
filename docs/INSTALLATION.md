@@ -335,8 +335,12 @@ The daemon also takes an admission before readiness probes, session discovery,
 native Queue submission and native Queue reconciliation actually execute.
 Queued work waits through a drain without spending a turn budget, writing an
 attempt or publishing an empty result. Nested Queue work reuses the same opaque
-admission. Its lease remains until the helper process has exited and closed;
-an unconfirmed shutdown remains a fail-closed lease.
+admission. Its lease remains until the operation finishes and the helper process
+has exited and closed. Direct native Queue reconciliation can release a retained
+lease after that same child's later `exit` and `close` confirm every held helper
+stopped. Missing or rejected evidence and permanent holds keep blocking. This
+does not certify Queue deletion or recover historical leases without helper
+identity; those still require positive stale-owner proof.
 
 Exported Windows task definitions, configured macOS plist bytes and their
 security metadata are backed up before mutation and kept after rollback.

@@ -1,17 +1,46 @@
 import fs from "node:fs";
 import path from "node:path";
 import type test from "node:test";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { taskNode, T0 } from "./task-fixture.mts";
 import { recordCodexSession } from "./codex-sessions.mts";
 import { nativeAttemptsPath } from "./codex-native-attempts.mts";
 import { queueProducerIdentity } from "./codex-queue-context.mts";
 import { storeMessage, markDelivered, writeJsonAtomic } from "./inbox.mts";
 import type { NativeQueueClient, QueueRow } from "./codex-queue-cleanup.mts";
-import type { connectNativeQueue } from "./codex-native-queue.mts";
+import type { connectNativeQueue, NativeSpawn } from "./codex-native-queue.mts";
+import type { ServiceOwnerProbe } from "./service-drain.mts";
 
 export const OWNER = "01a121f0-d3b1-7383-852c-b4405eae3161";
 export const QUEUE = "019d0000-0000-7000-8000-000000000001";
 export const id = (n: number): string => `9e57000${n}-0000-4000-8000-000000000000`;
+export const testServiceOwner: ServiceOwnerProbe = {
+  current: () => ({ version: 1, pid: 4242, startedAt: "2026-01-01T00:00:00.000Z", owner: "synthetic" }), active: () => true,
+};
+
+export function nonExitingNative(
+  reply: (request: { id?: number; method: string }) => { result?: unknown; error?: unknown } | undefined, killFailure?: Error,
+) {
+  const stdout = new PassThrough(), stderr = new PassThrough(), stdin = new PassThrough();
+  const methods: string[] = [];
+  let pending = "";
+  stdin.on("data", chunk => {
+    pending += chunk.toString("utf8");
+    for (;;) {
+      const end = pending.indexOf("\n");
+      if (end < 0) break;
+      const request = JSON.parse(pending.slice(0, end)) as { id?: number; method: string };
+      pending = pending.slice(end + 1); methods.push(request.method);
+      const response = reply(request);
+      if (response && request.id !== undefined) stdout.write(`${JSON.stringify({ id: request.id, ...response })}\n`);
+    }
+  });
+  const child = Object.assign(new EventEmitter(), { stdout, stderr, stdin, pid: 987, killed: false,
+    exitCode: null as number | null, signalCode: null,
+    kill(this: { killed: boolean }) { this.killed = true; if (killFailure) throw killFailure; return true; } });
+  return { methods, child, spawn: (() => child as never) as NativeSpawn };
+}
 
 export function nativeReconcileFixture(t: test.TestContext, count = 1) {
   const node = taskNode(t);

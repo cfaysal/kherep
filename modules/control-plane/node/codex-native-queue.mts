@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-import { AppServerClient, MAX_APP_SERVER_LINE_BYTES, type AppServerSpawn } from "./codex-app-server-client.mts";
+import { AppServerClient, MAX_APP_SERVER_LINE_BYTES, type AppServerOptions, type AppServerSpawn } from "./codex-app-server-client.mts";
 import type { NodePaths } from "./config.mts";
 import {
   cleanupOwnedQueues, deliveredQueueBindings, sameIdentity, NativeQueueShutdownError,
@@ -24,6 +24,18 @@ function object(value: unknown): value is Record<string, unknown> {
 }
 
 class StdioQueueClient extends AppServerClient implements NativeQueueClient {
+  private whenStopped: Promise<void>;
+
+  constructor(child: ReturnType<NativeSpawn>, options: AppServerOptions) {
+    super(child, options);
+    this.whenStopped = new Promise(resolve => {
+      let exited = false, closed = false;
+      const check = (): void => { if (exited && closed) resolve(); };
+      child.once("exit", () => { exited = true; check(); });
+      child.once("close", () => { closed = true; check(); });
+    });
+  }
+
   async list(owner: string, cursor?: string): Promise<QueuePage> {
     const result = await this.request("thread/queue/list", { threadId: owner, ...(cursor ? { cursor } : {}), limit: 100 });
     if (!object(result) || !Array.isArray(result.data)
@@ -41,7 +53,10 @@ class StdioQueueClient extends AppServerClient implements NativeQueueClient {
   }
 
   async close(): Promise<void> {
-    if (!await this.shutdown()) throw new NativeQueueShutdownError();
+    let stopped: boolean;
+    try { stopped = await this.shutdown(); }
+    catch (cause) { throw new NativeQueueShutdownError(this.whenStopped, { cause }); }
+    if (!stopped) throw new NativeQueueShutdownError(this.whenStopped);
   }
 }
 

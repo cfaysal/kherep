@@ -78,9 +78,13 @@ actual lane execution. Queued work rechecks after scheduling and waits through
 the drain without consuming attempt or turn-budget state or publishing an
 empty discovery/readiness result. Nested Queue submission and reconciliation
 continue the opaque admission instead of reacquiring it. The lease is released
-only after the helper has both exited and closed its streams. If shutdown cannot
-be confirmed, its lease remains as a fail-closed blocker until positive
-stale-owner recovery.
+only after the operation finishes and the helper has both exited and closed its
+streams. Direct native Queue reconciliation retains the same child's later
+`exit` and `close` evidence after an unconfirmed shutdown. Its lease can then
+release once every retained helper is confirmed stopped; this proves helper
+lifetime only and does not certify Queue deletion. Rejected or missing evidence
+and permanent holds remain fail-closed. Historical leases lack helper identity
+and cannot use this recovery path; they still need positive stale-owner proof.
 
 ## Codex intake peer progress
 

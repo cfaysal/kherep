@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 import { nodePaths } from "./config.mts";
 import { acquireServiceLock } from "./service-records.mts";
 import { createServiceOwnerProbe } from "./service-owner-probe.mts";
+import { reclaimContenderProgram } from "./service-reclaim-outcome-fixture.mts";
 import {
   beginServiceDrain, defaultServiceOwnerProbe, serviceAdmissionsIdle, serviceDrainFile, waitForServiceAdmission,
   withServiceAdmission, type ServiceAdmissionBlocker, type ServiceOwnerProbe,
@@ -135,12 +136,7 @@ test("concurrent processes serialize stale-owner reclaim", { timeout: 30_000 }, 
   const moduleUrl = pathToFileURL(path.resolve("modules/control-plane/node/service-drain.mts")).href;
   const stalePid = 2_000_000_000;
   fs.writeFileSync(file, `${JSON.stringify({ ...defaultServiceOwnerProbe.current(), pid: stalePid, startedAt: "2000-01-01T00:00:00.000Z" })}\n`);
-  const program = (outcome: string) => `import fs from "node:fs";import{acquireServiceOwnerFile,defaultServiceOwnerProbe as p}from ${JSON.stringify(moduleUrl)};`
-    + `while(!fs.existsSync(${JSON.stringify(gate)}))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);`
-    + `const probe={current:()=>p.current(),active:o=>o.pid===${stalePid}?false:p.active(o)};`
-    + `try{const release=acquireServiceOwnerFile(${JSON.stringify(file)},"synthetic active",probe);fs.writeFileSync(${JSON.stringify(outcome)},"owned",{flag:"wx"});console.log("owned");`
-    + `while(!fs.existsSync(${JSON.stringify(releaseGate)}))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);`
-    + `release()}catch(error){fs.writeFileSync(${JSON.stringify(outcome)},"blocked",{flag:"wx"});console.log("blocked:"+error.message)}`;
+  const program = (outcome: string) => reclaimContenderProgram({ outcome, gate, releaseGate, file, moduleUrl, stalePid });
   const run = (outcome: string) => {
     const child = spawn(process.execPath, ["--input-type=module", "--eval", program(outcome)], { stdio: ["ignore", "pipe", "pipe"] });
     children.push(child);

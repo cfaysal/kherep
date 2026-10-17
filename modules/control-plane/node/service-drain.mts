@@ -13,7 +13,12 @@ const admissions = (paths: NodePaths): string => path.join(root(paths), "admissi
 export interface ServiceAdmission { readonly root: string }
 export interface ServiceAdmissionBlocker { leaseId: string; pid: number; startedAt: string }
 const activeAdmissions = new WeakSet<ServiceAdmission>();
-const retainedAdmissions = new WeakSet<ServiceAdmission>();
+interface AdmissionState { finished: boolean; permanent: boolean; pending: Set<Promise<void>>; release(): void }
+const admissionStates = new WeakMap<ServiceAdmission, AdmissionState>();
+
+function releaseFinishedAdmission(state: AdmissionState): void {
+  if (state.finished && !state.permanent && state.pending.size === 0) state.release();
+}
 
 export class ServiceDrainActiveError extends Error {
   constructor() { super("managed service upgrade is draining new session admissions"); }
@@ -86,16 +91,19 @@ export async function withServiceAdmission<T>(
   fs.fsyncSync(handle);
   fs.closeSync(handle);
   const admission = Object.freeze({ root: path.resolve(paths.dir) });
+  const state: AdmissionState = { finished: false, permanent: false, pending: new Set(), release: () => {
+    try { if (fs.readFileSync(lease, "utf8") === bytes) fs.rmSync(lease); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  } };
+  admissionStates.set(admission, state);
   activeAdmissions.add(admission);
   try {
     if (fs.existsSync(drain)) throw new ServiceDrainActiveError();
     return await operation(admission);
   } finally {
     activeAdmissions.delete(admission);
-    if (!retainedAdmissions.has(admission)) {
-      try { if (fs.readFileSync(lease, "utf8") === bytes) fs.rmSync(lease); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    }
+    state.finished = true;
+    releaseFinishedAdmission(state);
   }
 }
 
@@ -107,9 +115,17 @@ export async function continueServiceAdmission<T>(
   return withServiceAdmission(paths, operation, probe);
 }
 
-export function retainServiceAdmission(admission: ServiceAdmission): void {
+export function retainServiceAdmission(admission: ServiceAdmission, whenStopped?: Promise<void>): void {
   if (!activeAdmissions.has(admission)) throw new Error("service admission is not active");
-  retainedAdmissions.add(admission);
+  const state = admissionStates.get(admission)!;
+  if (!whenStopped) { state.permanent = true; return; }
+  if (state.pending.has(whenStopped)) return;
+  state.pending.add(whenStopped);
+  void whenStopped.then(() => {
+    state.pending.delete(whenStopped);
+    // A late cleanup failure leaves the on-disk lease blocking the drain.
+    try { releaseFinishedAdmission(state); } catch { /* no positive release */ }
+  }, () => { /* rejected observation is not proof of shutdown */ });
 }
 
 export async function waitForServiceAdmission<T>(

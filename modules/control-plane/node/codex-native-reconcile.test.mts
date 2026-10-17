@@ -4,7 +4,10 @@ import path from "node:path";
 import test from "node:test";
 import { nativeQueueGroups } from "./codex-native-attempts.mts";
 import { reconcileNativeQueues } from "./codex-native-reconcile.mts";
-import { nativeReconcileFixture as fixture, OWNER, QUEUE, id } from "./codex-native-reconcile-fixture.mts";
+import { nativeReconcileFixture as fixture, nonExitingNative, testServiceOwner, OWNER, QUEUE, id } from "./codex-native-reconcile-fixture.mts";
+import { connectNativeQueue } from "./codex-native-queue.mts";
+import { NativeQueueShutdownError } from "./codex-queue-cleanup.mts";
+import { retainServiceAdmission, serviceAdmissionsIdle, withServiceAdmission } from "./service-drain.mts";
 import { runCodexHook } from "./deliver-hook.mts";
 import { getMessage, markOffered, storeMessage, writeJsonAtomic } from "./inbox.mts";
 
@@ -127,4 +130,43 @@ test("already absent, delete false and incomplete reads retain safe outcome dist
     assert.equal(nativeQueueGroups(f.paths, OWNER).length, kind === "absent" ? 0 : 1);
     assert.ok(fs.existsSync(f.attempt(id(1))));
   });
+});
+
+test("native reconciliation releases only its own admission after the same child's exit and close", async t => {
+  for (const first of ["exit", "close"] as const) await t.test(first, async t => {
+    const f = fixture(t), native = nonExitingNative(request => request.method === "initialize" ? { result: {} }
+      : request.method === "thread/queue/list" ? { result: { data: [{ id: QUEUE, input: "foreign" }], nextCursor: null } } : undefined);
+    const before = fs.readFileSync(f.attempt(id(1)), "utf8");
+    const open: typeof connectNativeQueue = (identity, options) => connectNativeQueue(identity, { ...options, spawn: native.spawn });
+    await assert.rejects(withServiceAdmission(f.paths,
+      admission => reconcileNativeQueues(f.paths, OWNER, { open, timeoutMs: 1_000 }, admission), testServiceOwner), NativeQueueShutdownError);
+    assert.equal(serviceAdmissionsIdle(f.paths, testServiceOwner), false);
+    native.child.emit(first, 0, null); await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(serviceAdmissionsIdle(f.paths, testServiceOwner), false);
+    native.child.emit(first === "exit" ? "close" : "exit", 0, null);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(serviceAdmissionsIdle(f.paths, testServiceOwner), true);
+    assert.deepEqual(native.methods, ["initialize", "initialized", "thread/queue/list"]);
+    assert.equal(fs.readFileSync(f.attempt(id(1)), "utf8"), before);
+    assert.equal(nativeQueueGroups(f.paths, OWNER).length, 1, "shutdown evidence cannot retire an unmatched Queue card");
+  });
+});
+
+test("shutdown evidence cannot release another admission and an unproven shutdown remains blocked", async t => {
+  const f = fixture(t);
+  let stopped!: () => void;
+  const whenStopped = new Promise<void>(resolve => { stopped = resolve; });
+  const failure = new NativeQueueShutdownError(whenStopped);
+  f.client.close = async () => { throw failure; }; f.setRows([{ id: QUEUE, input: "foreign" }]);
+  await withServiceAdmission(f.paths, async admission => retainServiceAdmission(admission), testServiceOwner);
+  await assert.rejects(withServiceAdmission(f.paths,
+    admission => reconcileNativeQueues(f.paths, OWNER, { open: f.open }, admission), testServiceOwner), error => error === failure);
+  const dir = path.join(f.paths.dir, "service", "admissions");
+  assert.equal(fs.readdirSync(dir).length, 2);
+  stopped(); await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(fs.readdirSync(dir).length, 1); assert.equal(serviceAdmissionsIdle(f.paths, testServiceOwner), false);
+  f.client.close = async () => { throw new NativeQueueShutdownError(); };
+  await assert.rejects(withServiceAdmission(f.paths,
+    admission => reconcileNativeQueues(f.paths, OWNER, { open: f.open }, admission), testServiceOwner), NativeQueueShutdownError);
+  assert.equal(fs.readdirSync(dir).length, 2);
 });

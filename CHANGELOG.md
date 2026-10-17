@@ -221,6 +221,13 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Retained admission recovery for direct native Codex Queue reconciliation
+  (Refs #442). After an unconfirmed shutdown, the same helper's later `exit` and
+  `close` can release its lease once the operation and every held helper have
+  finished. Unknown, rejected and permanent holds stay blocked. Late shutdown
+  evidence does not certify Queue cleanup, and historical leases without helper
+  identity still require positive stale-owner proof.
+
 - Claude task status no longer answers `closed` while the recorded process
   lives (issue #454). When the `claude agents --json --all` row lists no `pid`,
   as it does right after `claude stop` while the session process still runs
