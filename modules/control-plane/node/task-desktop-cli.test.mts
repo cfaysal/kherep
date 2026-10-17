@@ -6,7 +6,9 @@ import test from "node:test";
 import { CODEX_ACTIVE_MS, recordCodexSession } from "./codex-sessions.mts";
 import { parseTaskArgs, runTaskArgs } from "./task-cli.mts";
 import { TASK, T0, taskNode } from "./task-fixture.mts";
-import { readRequest, writeTask } from "./task-records.mts";
+import { readRequest, readTask, writeTask } from "./task-records.mts";
+import { NESTED_RUNTIME } from "./msg-resolve.mts";
+import { CLAUDE_PID, codexUnderClaude, NESTED_ENV } from "./runtime-fixture.mts";
 
 const CODEX = "019a2b3c-4d5e-7f60-8123-456789abcdef";
 const args = (from = CODEX) => ["new", "--from", from, "--title", "Synthetic check", "--directive", "Run this check",
@@ -132,4 +134,39 @@ test("explicit sender cannot request work while another task is active on the no
     cwd: node.workspace, permissionMode: "auto", startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60_000).toISOString(),
     state: "running", updatedAt: new Date(T0).toISOString(), running: true }, T0);
   assert.match(run(node).err[0], /runs task sessions/);
+});
+
+test("task new --from <own recorded thread> with an inherited Claude id is not a conflict (issue #471)", t => {
+  const node = taskNode(t, { delegate: { request: true } });
+  recordCodexSession(node.paths, CODEX, node.workspace, T0);
+  const out: string[] = [], err: string[] = [];
+  const nested = { CLAUDE_CODE_SESSION_ID: "s-claude", CLAUDE_PID, CODEX_THREAD_ID: CODEX };
+  const code = runTaskArgs(parseTaskArgs(args()), { paths: node.paths, env: nested, now: () => T0,
+    out: line => out.push(line), err: line => err.push(line), processTable: codexUnderClaude });
+  assert.equal(code, 0, err.join("\n"));
+  assert.deepEqual([readRequest(node.paths, out[0])?.requestedBy, readRequest(node.paths, out[0])?.requestedBySessionId], [CODEX, CODEX]);
+  // Another recorded thread is still a conflict with this thread's own id.
+  const other = "019a2b3c-4d5e-7f60-8123-000000000099";
+  recordCodexSession(node.paths, other, node.workspace, T0);
+  const conflict = runTaskArgs(parseTaskArgs(args(other)), { paths: node.paths, env: nested, now: () => T0,
+    out: () => {}, err: line => err.push(line), processTable: codexUnderClaude });
+  assert.equal(conflict, 1);
+  assert.match(err.at(-1) ?? "", /conflicts with the current runtime session/);
+});
+
+test("task new and task done refuse an undecidable nesting with the fixed reason and write nothing (issue #471)", t => {
+  const node = taskNode(t, { delegate: { request: true } });
+  const err: string[] = [], out: string[] = [];
+  const context = { paths: node.paths, env: NESTED_ENV, now: () => T0, out: (line: string) => out.push(line),
+    err: (line: string) => err.push(line), processTable: () => null };
+  const request = ["new", "--title", "Synthetic check", "--directive", "Run this check", "--", "Perform the synthetic check"];
+  assert.equal(runTaskArgs(parseTaskArgs(request), context), 1);
+  assert.deepEqual([out, err], [[], [`kherep-node task: ${NESTED_RUNTIME}`]]);
+  assert.equal(fs.existsSync(node.paths.taskRequests) ? fs.readdirSync(node.paths.taskRequests).length : 0, 0);
+  writeTask(node.paths, { taskId: TASK, runtime: "codex", name: "task-test", sessionId: "s-self", cwd: node.workspace,
+    permissionMode: "auto", startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60_000).toISOString(), state: "running",
+    updatedAt: new Date(T0).toISOString(), running: true }, T0);
+  assert.equal(runTaskArgs(parseTaskArgs(["done", TASK]), context), 1);
+  assert.equal(err.at(-1), `kherep-node task: ${NESTED_RUNTIME}`);
+  assert.equal(readTask(node.paths, TASK)?.state, "running");
 });

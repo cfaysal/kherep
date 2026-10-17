@@ -8,7 +8,7 @@ import type { NodePaths } from "./config.mts";
 import { getOutbox, getSent, writeOutbox, type OutboxRecord, type SentRecord } from "./exchange.mts";
 import { getMessage, markAnswered } from "./inbox.mts";
 import {
-  KHEREP_SESSION_ENV, resolveSendTarget, senderSession, senderSessionId, SESSION_ENV, sessionIdFromEnv,
+  CODEX_THREAD_ENV, KHEREP_SESSION_ENV, processTableOnce, resolveSendTarget, senderSession, senderSessionId, SESSION_ENV, sessionIdFromEnv, type IdentityDeps,
 } from "./msg-resolve.mts";
 import { inbox, offerLine, replyLines } from "./msg-inbox.mts";
 import { targetLine } from "./msg-intake.mts";
@@ -55,8 +55,7 @@ export const MSG_USAGE = `usage:
   kherep-node msg inbox [--from <codex-session-id>] [--all | --receive]
   kherep-node msg status <messageId>
   kherep-node msg stop <taskId | sent messageId | owned requestId> [--expected-run-version <run version>] [--wait <seconds>]
-A Codex session passes --from <its full session id>; Claude Code sessions and the node's Codex runs are named by
-${SESSION_ENV} or ${KHEREP_SESSION_ENV}.`;
+Without --from the session is named by ${SESSION_ENV} (Claude Code), ${CODEX_THREAD_ENV} (Codex) or ${KHEREP_SESSION_ENV} (the node's Codex runs).`;
 
 const FINAL_OK = ["accepted", "delivered", "replied"];
 const WAIT_POLL_MS = 250;
@@ -105,6 +104,7 @@ export interface MsgContext {
   out?: (line: string) => void;
   err?: (line: string) => void;
   sleep?: (ms: number) => Promise<void>;
+  processTable?: IdentityDeps["processTable"]; // tests inject one; the default lists processes once, only for a nesting
 }
 
 export type Io = Required<MsgContext>;
@@ -136,7 +136,7 @@ export function runMsg(argv: string[], context: MsgContext): Promise<number> {
 // has no node:util parseArgs.
 export async function runMsgArgs({ positionals, values }: MsgArgs, context: MsgContext): Promise<number> {
   const io: Io = {
-    paths: context.paths, env: context.env, now: context.now ?? Date.now,
+    paths: context.paths, env: context.env, now: context.now ?? Date.now, processTable: context.processTable ?? processTableOnce(),
     out: context.out ?? ((line) => console.log(line)), err: context.err ?? ((line) => console.error(line)),
     sleep: context.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
   };
@@ -190,17 +190,17 @@ async function send(io: Io, rest: string[], values: MsgArgs["values"]): Promise<
   }
   const text = words.join(" ");
   if (!isMessageText(text)) return fail(io, `message text must be 1 to ${MAX_MESSAGE_TEXT} characters`);
-  const from = senderSession(io.paths, io.env, values.from, io.now());
+  const from = senderSession(io.paths, io.env, values.from, io.now(), io);
   if (!from.ok) return fail(io, from.error);
   const wait = values.wait === undefined ? 0 : Number(values.wait);
   if (!Number.isFinite(wait) || wait < 0) return fail(io, `--wait needs a number of seconds, got "${values.wait}"`);
 
   // A session started for a task tags its messages with that task (item 5).
   // A task the Worker does not know (issue #102) tags nothing.
-  const own = taskForSession(io.paths, sessionIdFromEnv(io.env));
+  const own = taskForSession(io.paths, sessionIdFromEnv(io.paths, io.env, io));
   taskId = (own && !own.local ? own.taskId : undefined) ?? taskId;
   const record: OutboxRecord = { messageId: crypto.randomUUID(), fromSession: from.value,
-    fromSessionId: senderSessionId(io.paths, io.env, from.value), to, text,
+    fromSessionId: senderSessionId(io.paths, io.env, from.value, io), to, text,
     ...(replyTo ? { inReplyTo: replyTo } : {}), ...(taskId ? { taskId } : {}), createdAt: new Date(io.now()).toISOString(), depth };
   writeOutbox(io.paths, record);
   if (replyTo) markAnswered(io.paths.inbox, replyTo);

@@ -7,7 +7,9 @@ import {
 } from "../protocol-tasks.mts";
 import { readConfig, type NodePaths } from "./config.mts";
 import { CODEX_ACTIVE_MS, readCodexSession } from "./codex-sessions.mts";
-import { KHEREP_SESSION_ENV, senderSession, senderSessionId, SESSION_ENV, sessionIdFromEnv } from "./msg-resolve.mts";
+import {
+  CODEX_THREAD_ENV, KHEREP_SESSION_ENV, processTableOnce, senderSession, senderSessionId, SESSION_ENV, sessionIdentity, sessionIdFromEnv, type IdentityDeps,
+} from "./msg-resolve.mts";
 import { loadPolicy } from "./policy.mts";
 import { listTaskLines, resolveTaskDetail } from "./task-detail.mts";
 import { NO_CHAINS, NOT_DELEGATING, TASKS_ACTIVE } from "./task-exchange.mts";
@@ -35,7 +37,10 @@ export interface TaskArgs {
   values: { summary?: string; title?: string; directive?: string; from?: string; node?: string; runtime?: string; os?: string; cwd?: string; capability?: string[] };
 }
 
-export interface TaskContext { paths: NodePaths; env: NodeJS.ProcessEnv; now?: () => number; out?: (line: string) => void; err?: (line: string) => void }
+export interface TaskContext {
+  paths: NodePaths; env: NodeJS.ProcessEnv; now?: () => number; out?: (line: string) => void; err?: (line: string) => void;
+  processTable?: IdentityDeps["processTable"];
+}
 
 export function parseTaskArgs(argv: string[]): TaskArgs {
   return parseArgs({
@@ -46,7 +51,9 @@ export function parseTaskArgs(argv: string[]): TaskArgs {
 }
 
 // Runs parsed arguments; the Worker tests call it directly (no node:util there).
-export function runTaskArgs({ positionals, values }: TaskArgs, context: TaskContext): number {
+export function runTaskArgs({ positionals, values }: TaskArgs, given: TaskContext): number {
+  // One process listing per command, taken only for a nesting (issue #471).
+  const context = { ...given, processTable: given.processTable ?? processTableOnce() };
   const out = context.out ?? ((line: string) => console.log(line));
   const err = context.err ?? ((line: string) => console.error(line));
   const now = context.now ?? Date.now;
@@ -60,7 +67,10 @@ export function runTaskArgs({ positionals, values }: TaskArgs, context: TaskCont
     const [taskId] = rest;
     const record = isTaskId(taskId) ? readTask(paths, taskId) : null;
     if (!record) return fail(`task ${taskId} was not started on this node`);
-    const self = sessionIdFromEnv(env);
+    // A session the runtime rule refuses (issue #471) reports nothing; only no session at all is the operator.
+    const identity = sessionIdentity(paths, env, context);
+    if (!identity.ok && identity.code !== "none") return fail(identity.error);
+    const self = identity.ok ? identity.id : undefined;
     const own = taskForSession(paths, self);
     if (self && own?.taskId !== taskId) return fail(`this session was not started for task ${taskId}`);
     const summary = values.summary;
@@ -88,8 +98,8 @@ export function runTaskArgs({ positionals, values }: TaskArgs, context: TaskCont
 
 // Why this session may not request a task, or null: the checks `task new` and
 // `msg send --new` share (no chains, the node's delegate.request, no active task).
-export function delegationBlocked(paths: NodePaths, env: NodeJS.ProcessEnv, from?: string): string | null {
-  if (taskForSession(paths, sessionIdFromEnv(env)) || (from && taskForSession(paths, from))) return NO_CHAINS;
+export function delegationBlocked(paths: NodePaths, env: NodeJS.ProcessEnv, from?: string, deps?: IdentityDeps): string | null {
+  if (taskForSession(paths, sessionIdFromEnv(paths, env, deps)) || (from && taskForSession(paths, from))) return NO_CHAINS;
   const policy = loadPolicy(readConfig(paths.config)?.policyFile ?? paths.policy);
   if (!policy.sessions?.delegate.request) return NOT_DELEGATING;
   return hasActiveTask(paths) ? TASKS_ACTIVE : null;
@@ -101,7 +111,10 @@ function newTask(context: TaskContext, words: string[], values: TaskArgs["values
   if (values.node !== undefined && !isNodeId(values.node)) return fail("--node requires a full target node id");
   if (values.from !== undefined) {
     if (!isTaskId(values.from)) return fail("--from requires a full recorded Codex session id");
-    if ([env[SESSION_ENV], env[KHEREP_SESSION_ENV]]
+    // Issue #471: a CLAUDE_CODE_SESSION_ID a Codex thread inherited is no marker of this session.
+    const identity = sessionIdentity(paths, env, context);
+    const inherited = env[CODEX_THREAD_ENV] && !(identity.ok && identity.runtime === "claude");
+    if ([inherited ? undefined : env[SESSION_ENV], env[KHEREP_SESSION_ENV], identity.ok ? identity.id : undefined]
       .some(session => session !== undefined && session !== values.from)) {
       return fail("--from conflicts with the current runtime session");
     }
@@ -114,10 +127,10 @@ function newTask(context: TaskContext, words: string[], values: TaskArgs["values
     } catch { /* A failed hook-record read cannot establish sender identity. */ }
     if (!valid) return fail("--from requires a complete recent Codex hook record");
   }
-  const blocked = delegationBlocked(paths, env, values.from);
+  const blocked = delegationBlocked(paths, env, values.from, context);
   if (blocked) return fail(blocked);
   // Keep the exact id rather than a short alias that another recorded chat may share.
-  const from = values.from !== undefined ? { ok: true as const, value: values.from } : senderSession(paths, env);
+  const from = values.from !== undefined ? { ok: true as const, value: values.from } : senderSession(paths, env, undefined, now(), context);
   if (!from.ok) return fail(from.error);
   const directive = values.directive ?? "";
   if (directive.trim() === "" || directive.length > MAX_DIRECTIVE) {
@@ -133,7 +146,7 @@ function newTask(context: TaskContext, words: string[], values: TaskArgs["values
   if (!isTaskText(text) || !isTaskRequirements(requirements)) return fail("task text or requirements are invalid");
   const requestId = crypto.randomUUID();
   writeRequest(paths, { requestId, title: values.title, text, requirements, directive, requestedBy: from.value,
-    requestedBySessionId: senderSessionId(paths, env, from.value), createdAt: new Date(now()).toISOString(), state: "pending" });
+    requestedBySessionId: senderSessionId(paths, env, from.value, context), createdAt: new Date(now()).toISOString(), state: "pending" });
   out(requestId);
   return 0;
 }

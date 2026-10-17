@@ -11,7 +11,9 @@ import { getOutbox, recordSent, writeDirectory, writeLocalSessions } from "./exc
 import { getMessage, markDelivered, markOffered, storeMessage } from "./inbox.mts";
 import { writeTask } from "./task-records.mts";
 import { runMsg } from "./msg-cli.mts";
-import { resolveTarget } from "./msg-resolve.mts";
+import { NESTED_RUNTIME, resolveTarget } from "./msg-resolve.mts";
+import type { ProcessTable } from "./launch-mode.mts";
+import { claudeUnderCodex, codexUnderClaude, NESTED_ENV, THREAD } from "./runtime-fixture.mts";
 
 const SELF = "00000000-0000-4000-8000-0000000000aa";
 const PEER = "00000000-0000-4000-8000-0000000000cc";
@@ -49,10 +51,11 @@ function setup(t: test.TestContext, directory: DirectoryBody | null = DIRECTORY)
   return paths;
 }
 
-async function run(paths: NodePaths, argv: string[], env: NodeJS.ProcessEnv = ENV, now = NOW) {
+async function run(paths: NodePaths, argv: string[], env: NodeJS.ProcessEnv = ENV, now = NOW, processTable?: () => ProcessTable | null) {
   const out: string[] = [];
   const err: string[] = [];
-  const code = await runMsg(argv, { paths, env, now: () => now, out: (l) => out.push(l), err: (l) => err.push(l), sleep: async () => {} });
+  const code = await runMsg(argv, { paths, env, now: () => now, out: (l) => out.push(l), err: (l) => err.push(l), sleep: async () => {},
+    processTable });
   return { code, out: out.join("\n"), err: err.join("\n") };
 }
 
@@ -189,7 +192,7 @@ test("msg send writes an outbox record from this session's name and prints the m
   assert.deepEqual(await sender(["--from", "review"]), ["review", "s-self"]);
   const anonymous = await run(paths, ["send", "node-b/docs", "x"], {});
   assert.equal(anonymous.code, 1);
-  assert.match(anonymous.err, /neither CLAUDE_CODE_SESSION_ID \(Claude Code\) nor KHEREP_SESSION_ID \(the node's Codex runs\) is set; a Codex session passes --from/);
+  assert.match(anonymous.err, /none of CLAUDE_CODE_SESSION_ID \(Claude Code\), CODEX_THREAD_ID \(Codex\) or KHEREP_SESSION_ID \(the node's Codex runs\) is set; a Codex session may pass --from/);
   // Issue #200: --from is never taken as typed. Another name, with or without a session variable, is refused and nothing is written.
   for (const variables of [{}, ENV, { KHEREP_SESSION_ID: "s-self" }]) {
     const posed = await run(paths, ["send", "--from", "ops", "node-b/docs", "x"], variables);
@@ -372,7 +375,7 @@ test("msg sessions marks background tasks and the session --from names (issue #1
   assert.equal(unverified.code, 1);
   assert.match(unverified.err, /not a verified sender/);
   const anonymous = await run(paths, ["sessions"], {});
-  assert.match(anonymous.out, /neither CLAUDE_CODE_SESSION_ID nor KHEREP_SESSION_ID is set and no --from was given, so none is marked/);});
+  assert.match(anonymous.out, /none of CLAUDE_CODE_SESSION_ID, CODEX_THREAD_ID or KHEREP_SESSION_ID names this session and no --from was given, so none is marked/);});
 
 test("msg sessions shows the last recorded hook event of this node's Codex sessions (issue #408)", async (t) => {
   const codex = "019a2b3c-4d5e-7f60-8123-456789abcdef";
@@ -427,4 +430,53 @@ test("msg status names an unusable closed-session cwd, not the target policy (is
   assert.deepEqual([status.code, status.out], [0, `${sent} accepted: the last closed-session delivery attempt was refused: the closed `
     + "session's working directory is not usable on the target node (not absolute, missing, or outside its workspace roots); the message "
     + `stays queued and is tried again each round [waiting/cwd-refused; observed ${observed}] (updated ${observed})`]);
+});
+
+// Issue #471: a Codex process started from a Claude Code tool inherits CLAUDE_CODE_SESSION_ID.
+test("msg send from a codex exec started inside a Claude Code tool is sent by the Codex thread, also for --reply-to (issue #471)", async (t) => {
+  const paths = setup(t);
+  // An exec thread has no hook record (codex-sessions/), so nothing is recorded here.
+  const sent = await run(paths, ["send", "node-b/docs", "hello"], NESTED_ENV, NOW, codexUnderClaude);
+  assert.equal(sent.code, 0, sent.err);
+  assert.deepEqual([getOutbox(paths, sent.out)?.fromSession, getOutbox(paths, sent.out)?.fromSessionId], [THREAD, THREAD]);
+  storeMessage(paths.inbox, { messageId: INCOMING, from: { nodeId: PEER, session: "build" }, toSession: THREAD, text: "done?",
+    createdAt: new Date(0).toISOString() }, NOW);
+  const reply = await run(paths, ["send", "--reply-to", INCOMING, "yes"], NESTED_ENV, NOW, codexUnderClaude);
+  assert.equal(reply.code, 0, reply.err);
+  assert.deepEqual([getOutbox(paths, reply.out)?.fromSession, getOutbox(paths, reply.out)?.fromSessionId], [THREAD, THREAD]);
+  const listed = await run(paths, ["sessions"], NESTED_ENV, NOW, codexUnderClaude);
+  assert.equal(listed.code, 0, listed.err);
+  assert.ok(listed.out.includes("    review  s-self  busy  claude-code  /work/a"), listed.out);
+});
+
+test("msg send refuses an undecidable nesting with the fixed reason and writes nothing (issue #471)", async (t) => {
+  const paths = setup(t);
+  const refused = await run(paths, ["send", "node-b/docs", "hello"], NESTED_ENV, NOW, () => null);
+  assert.deepEqual([refused.code, refused.out, refused.err], [1, "", `kherep-node msg: ${NESTED_RUNTIME}`]);
+  assert.deepEqual(fs.existsSync(paths.outbox) ? fs.readdirSync(paths.outbox) : [], []);
+});
+
+test("a claude -p started inside a Codex tool sends as its own Claude session (issue #471)", async (t) => {
+  const paths = setup(t);
+  const sent = await run(paths, ["send", "node-b/docs", "hello"], NESTED_ENV, NOW, claudeUnderCodex);
+  assert.equal(sent.code, 0, sent.err);
+  assert.deepEqual([getOutbox(paths, sent.out)?.fromSession, getOutbox(paths, sent.out)?.fromSessionId], ["review", "s-self"]);
+});
+
+test("msg send --from <own thread> inside that thread needs no hook record; --from <other recorded thread> still needs one (issue #471)", async (t) => {
+  const paths = setup(t);
+  const other = "019a2b3c-4d5e-7f60-8123-000000000099";
+  const thread = { CODEX_THREAD_ID: THREAD };
+  const own = await run(paths, ["send", "--from", THREAD, "node-b/docs", "hello"], thread);
+  assert.equal(own.code, 0, own.err);
+  assert.deepEqual([getOutbox(paths, own.out)?.fromSession, getOutbox(paths, own.out)?.fromSessionId], [THREAD, THREAD]);
+  const implicit = await run(paths, ["send", "node-b/docs", "hello"], thread);
+  assert.equal(getOutbox(paths, implicit.out)?.fromSession, THREAD);
+  const unrecorded = await run(paths, ["send", "--from", other, "node-b/docs", "hello"], thread);
+  assert.equal(unrecorded.code, 1);
+  assert.match(unrecorded.err, /is not a verified sender/);
+  recordCodexSession(paths, other, "/work/b", NOW);
+  const recorded = await run(paths, ["send", "--from", other, "node-b/docs", "hello"], thread);
+  assert.equal(recorded.code, 0, recorded.err);
+  assert.equal(getOutbox(paths, recorded.out)?.fromSession, other);
 });

@@ -9,6 +9,7 @@ import { nodePaths, type NodePaths } from "./config.mts";
 import { writeLocalSessions } from "./exchange.mts";
 import { getMessage, markClosedAttempt, markDelivered, markRefused, setDeliveryTask, storeMessage } from "./inbox.mts";
 import { runMsg } from "./msg-cli.mts";
+import { CLAUDE_PID, codexUnderClaude } from "./runtime-fixture.mts";
 
 const SESSION = "019a2b3c-4d5e-7f60-8123-456789abcdef";
 const ALIAS = "codex-89abcdef";
@@ -203,5 +204,19 @@ test("Codex inbox needs a verified sender: a recent hook record and no other nod
   const out: string[] = [];
   const err: string[] = [];
   assert.equal(await runMsg(["inbox"], { paths, env: {}, now: () => NOW, out: line => out.push(line), err: line => err.push(line) }), 1);
-  assert.match(err.join("\n"), /neither CLAUDE_CODE_SESSION_ID \(Claude Code\) nor KHEREP_SESSION_ID .* passes --from <its full session id>/);
+  assert.match(err.join("\n"), /none of CLAUDE_CODE_SESSION_ID \(Claude Code\), CODEX_THREAD_ID \(Codex\) or KHEREP_SESSION_ID .* may pass --from <its full session id>/);
+});
+
+test("msg inbox without --from inside a Codex thread lists that thread's messages (issue #471)", async (t) => {
+  const paths = setup(t);
+  for (const [id, toSession, text] of [[MESSAGE, SESSION, "for the thread"], [SECOND, "s-claude", "for the Claude session"]]) {
+    storeMessage(paths.inbox, { messageId: id, from: { nodeId: PEER, session: "codex-peer" }, toSession, text, createdAt: new Date(NOW).toISOString() }, NOW);
+  }
+  const out: string[] = [];
+  const err: string[] = [];
+  const nested = { CLAUDE_CODE_SESSION_ID: "s-claude", CLAUDE_PID, CODEX_THREAD_ID: SESSION };
+  assert.equal(await runMsg(["inbox"], { paths, env: nested, now: () => NOW, out: line => out.push(line), err: line => err.push(line),
+    processTable: codexUnderClaude }), 0, err.join("\n"));
+  assert.match(out.join("\n"), /\| for the thread/);
+  assert.doesNotMatch(out.join("\n"), /for the Claude session/);
 });
