@@ -221,6 +221,19 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Claude task status no longer answers `closed` while the recorded process
+  lives (issue #454). When the `claude agents --json --all` row lists no `pid`,
+  as it does right after `claude stop` while the session process still runs
+  (measured), or when the row is missing, the target now reads the start time
+  of the pid recorded on the task: equal, the process lives and the status
+  answers `idle` for an ended session (`running` for a `working` or `blocked`
+  row) with its run version; null or changed, the process ended and the answer
+  stays `closed` or `idle` as before; unreadable, it is `identity_unknown`. A
+  stop that ended `stop_failed` with the session process alive is followed by
+  `idle`, then `closed` once the process ended, and a stop meanwhile is
+  `stale_run`. The confirmed stop is unchanged: every captured identity has
+  ended before its post-stop check, which still detects a restart only by a
+  newly listed pid.
 - Windows stale service-owner recovery (issue #442): valid process creation time
   can prove PID reuse when the SID is unreadable, using the existing two-second
   tolerance. Active or uncertain owners still block recovery. Admission waits

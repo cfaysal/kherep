@@ -694,7 +694,8 @@ never the prompt, and only an owner that advertises the report capability receiv
 Fresh measurement and cached results are explicit; connectivity or missing data is
 never evidence that a process stopped. Claude process state is measured from the `pid`
 that `claude agents --json --all` lists for the task's own background session and that
-process's start time, re-read at every status. A Claude stop captures that process and
+process's start time, re-read at every status, or, when the row lists no `pid`, from the pid
+and start time recorded on the task (issue #454). A Claude stop captures that process and
 its descendants with their start times before `claude stop <short id>`, waits for every
 captured identity to end, re-captures the tree from its live members before each signal
 and signals only survivors, each by verified identity, never the session process; it is

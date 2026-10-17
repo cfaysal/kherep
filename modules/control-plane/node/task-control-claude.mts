@@ -15,7 +15,9 @@ import { readTask, writeTask, type TaskRecord } from "./task-records.mts";
 // never read. The supervisor may stop and restart a session's process, so
 // every status re-reads both; a restart is a new run with a new run version.
 // After `claude stop` the row shows no pid and state stopped while the process
-// still lives (measured on macOS), so the row is never evidence of an exit.
+// still lives (measured on macOS), so the row is never evidence of an exit: a
+// row without pid, or a missing row, is measured from the pid and start time
+// recorded on the task (issue #454).
 
 export interface ClaudeMeasurement {
   processState: TaskControlProcessState;
@@ -45,6 +47,33 @@ function withoutProcess(state: unknown): ClaudeMeasurement {
   return { processState: "unknown", stopSupported: false };
 }
 
+// A live process: the row's state says whether its run is still going. A
+// finished run whose process the supervisor has not ended yet is not signalled.
+function withProcess(record: TaskRecord, runner: RunnerDeps, state: unknown): ClaudeMeasurement {
+  const runVersion = runVersionOf(record)!;
+  // Status never offers a stop the target refuses: the stop is measured on
+  // macOS, Linux runs the same path, and Windows refuses it until measured there.
+  const supported = (runner.platform ?? process.platform) !== "win32";
+  if (LIVE.includes(state)) return { processState: "running", stopSupported: supported, runVersion };
+  return { processState: ENDED.includes(state) ? "idle" : "unknown", stopSupported: false, runVersion };
+}
+
+// No listed pid (the row right after `claude stop`, measured) or no row: the
+// identity recorded on the task is the evidence (issue #454). Its start time
+// still equal means the recorded process lives; null or changed means it
+// ended, and only then is the session without a process; an unreadable start
+// time is identity_unknown, never closed.
+function recorded(record: TaskRecord, runner: RunnerDeps, state: unknown): ClaudeMeasurement {
+  if (record.pid === undefined || record.pidStart === undefined) return withoutProcess(state);
+  let start: string | null;
+  try {
+    start = startTimeOf(runner.codex ?? {}, record.pid);
+  } catch {
+    return UNKNOWN_IDENTITY;
+  }
+  return start === record.pidStart ? withProcess(record, runner, state) : withoutProcess(state);
+}
+
 // Records a changed identity on the current record, never on the copy read
 // before the listing; the previous run's descendants no longer apply.
 function capture(paths: RunnerDeps["paths"], record: TaskRecord, pid: number, pidStart: string, now: number): TaskRecord {
@@ -64,11 +93,12 @@ export async function measureClaude(record: TaskRecord, runner: RunnerDeps, now:
     return UNKNOWN_IDENTITY;
   }
   const row = rows.find((r) => r.id === record.shortId);
-  // The listing includes ended sessions (--all): absence is no evidence of an exit.
-  if (!row) return { processState: ENDED.includes(record.state) ? "closed" : "unknown", stopSupported: false };
+  // The listing includes ended sessions (--all): absence is no evidence of an
+  // exit; the record's task state stands in for the row's.
+  if (!row) return recorded(record, runner, record.state);
   if (!ownsRow(record, row)) return UNKNOWN_IDENTITY;
   const pid = rowPid(row);
-  if (pid === undefined) return withoutProcess(row.state);
+  if (pid === undefined) return recorded(record, runner, row.state);
   let pidStart: string | null;
   try {
     pidStart = startTimeOf(runner.codex ?? {}, pid);
@@ -76,11 +106,5 @@ export async function measureClaude(record: TaskRecord, runner: RunnerDeps, now:
     return UNKNOWN_IDENTITY;
   }
   if (pidStart === null) return withoutProcess(row.state); // ended between the listing and the read
-  const runVersion = runVersionOf(capture(runner.paths, record, pid, pidStart, now))!;
-  // Status never offers a stop the target refuses: the stop is measured on
-  // macOS, Linux runs the same path, and Windows refuses it until measured there.
-  const supported = (runner.platform ?? process.platform) !== "win32";
-  if (LIVE.includes(row.state)) return { processState: "running", stopSupported: supported, runVersion };
-  // A finished run whose process the supervisor has not ended yet is not signalled.
-  return { processState: ENDED.includes(row.state) ? "idle" : "unknown", stopSupported: false, runVersion };
+  return withProcess(capture(runner.paths, record, pid, pidStart, now), runner, row.state);
 }

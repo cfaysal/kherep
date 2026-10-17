@@ -530,6 +530,10 @@ session's process, so a restart is a new run with a new run version. Only a
 `working` or `blocked` session with a live process is `running` and stoppable. A
 finished session whose process still runs, or a `working` or `blocked` one
 without a live process, is `idle`; an ended one without a process is `closed`. A
+row that lists no `pid`, or a missing row, is measured from the pid and start
+time recorded on the task: `closed` needs that process ended (start time null or
+changed), while it lives the session is `idle` (or `running` for a `working` or
+`blocked` row), and an unreadable start time is `identity_unknown`. A
 failed listing, an unreadable start time, or a row that is not the task's own
 background session (by kind, short id, session id or name) is
 `identity_unknown`. A Claude stop re-measures the run, captures the session
@@ -549,8 +553,10 @@ returns, and if it still lives after the grace period the stop ends
 `stop_failed` with `processState` `running` without a signal, because the
 supervisor's reaction to a signalled session is not measured and ending its
 commands while it lives is no stop; the listing then shows the session `stopped`
-without a `pid`, so a later status answers `closed` for a process that lives,
-and the operator ends it locally. The stop is confirmed only when every captured
+without a `pid`, so a later status measures the recorded pid and start time
+instead and answers `idle` while that process lives and `closed` once it ended
+(issue #454); a `task stop` meanwhile is `stale_run`, and the operator ends a
+lingering process locally. The stop is confirmed only when every captured
 identity ended; a `claude stop` that fails, a survivor after SIGKILL, or a tree
 that passes 256 processes is `stop_failed`, a session the supervisor restarted
 in the meantime is `stale_run` with the new run recorded for the next status. A

@@ -90,6 +90,7 @@ test("a confirmed Claude stop: claude stop ends the captured tree, nothing is si
   assert.ok(saved.operatorStoppedAt);
   assert.equal(saved.taskControlRecoveryRunVersion, measured.runVersion);
   assert.deepEqual(stopCalls(), [["stop", SHORT]]);
+  assert.equal(node.rows[0].pid, undefined, "the listing after the stop shows no pid; the recorded identity ended, so no restart is reported");
   const order = node.calls.map((call) => call.args[0]);
   assert.ok(order.indexOf("agents") < order.indexOf("stop"), "claude stop runs after a fresh listing");
   assert.deepEqual(signals, []);
@@ -187,6 +188,24 @@ test("a session process alive after the grace gets no signal and no confirmation
   }
 });
 
+test("after a stop_failed with the session process alive, status answers idle until the process ended, never closed (issue #454)",
+  async (t) => {
+    const { node, starts, status, stop, stopCalls, task } = setup(t);
+    const measured = await status();
+    assert.deepEqual(outcome(await stop(measured.runVersion)), FAILED_RUNNING); // R-1: nothing ended
+    assert.equal(node.rows[0].pid, undefined, "the row lists no pid after claude stop");
+    const alive = await status();
+    assert.deepEqual([alive.state, alive.processState, alive.stopSupported, alive.runVersion],
+      ["succeeded", "idle", false, measured.runVersion]);
+    assert.deepEqual([task().pid, task().pidStart], [PID, "s1"], "the recorded identity is unchanged");
+    const retry = await stop(measured.runVersion);
+    assert.deepEqual([retry.errorCode, retry.processState, retry.stopConfirmed], ["stale_run", "idle", false]);
+    assert.equal(stopCalls().length, 1, "no second claude stop on a stopped session");
+    starts.clear();
+    const ended = await status();
+    assert.deepEqual([ended.processState, ended.runVersion], ["closed", undefined]);
+  });
+
 test("a failed re-capture after claude stop is stop_failed with nothing signalled (R-2)", async (t) => {
   const { node, codex, starts, signals, logs, status, stop } = setup(t);
   node.onStop(() => {
@@ -250,6 +269,8 @@ test("a finished run is stale_run without a stop (10)", async (t) => {
   assert.deepEqual([done.stopCalls(), done.signals], [[], []]);
   const failed = setup(t, { state: "failed", pid: PID, pidStart: "s1" });
   failed.node.rows.splice(0, 1);
+  assert.equal((await failed.status()).processState, "idle", "the recorded process still lives (issue #454)");
+  failed.starts.delete(PID);
   assert.equal((await failed.status()).processState, "closed");
   const closed = await failed.stop(runVersionOf(failed.task()));
   assert.deepEqual([closed.errorCode, closed.processState], ["stale_run", "closed"]);

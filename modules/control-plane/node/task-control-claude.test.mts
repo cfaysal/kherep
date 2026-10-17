@@ -105,6 +105,65 @@ test("a Claude session without a live process is idle or closed, never stoppable
   }
 });
 
+const NO_PID = { pid: undefined, status: undefined };
+
+test("a row without pid while the recorded process lives is idle or running, never closed (issue #454)", async (t) => {
+  const { node, context } = setup(t);
+  const cases: [Partial<TaskRecord>, Record<string, unknown> | null, string, boolean][] = [
+    [{ state: "running" }, row({ state: "stopped", ...NO_PID }), "idle", false],
+    [{ state: "done" }, row({ state: "done", ...NO_PID }), "idle", false],
+    [{ state: "running" }, row({ state: "working", ...NO_PID }), "running", true],
+    [{ state: "failed" }, null, "idle", false],
+    [{ state: "running" }, null, "unknown", false],
+  ];
+  for (const [extra, listed, processState, stopSupported] of cases) {
+    const written = writeTask(node.paths, record(node, { pid: PID, pidStart: "s1", ...extra }));
+    node.rows.splice(0, node.rows.length, ...(listed ? [listed] : []));
+    const result = await executeTaskControl(operation("status"), context);
+    const label = JSON.stringify([extra, listed?.state ?? null]);
+    assert.deepEqual([result.state, result.processState, result.stopSupported, result.runVersion],
+      ["succeeded", processState, stopSupported, runVersionOf(written)], label);
+    assert.deepEqual(readTask(node.paths, TASK), written, label);
+  }
+});
+
+test("a row without pid whose recorded process ended or was reused is closed or idle, as a session without a process (issue #454)",
+  async (t) => {
+    for (const starts of [new Map<number, string>(), new Map([[PID, "s2"]])]) {
+      const { node, context } = setup(t, starts);
+      const cases: [Partial<TaskRecord>, Record<string, unknown> | null, string][] = [
+        [{ state: "running" }, row({ state: "stopped", ...NO_PID }), "closed"],
+        [{ state: "running" }, row({ state: "blocked", ...NO_PID }), "idle"],
+        [{ state: "stopped" }, null, "closed"],
+        [{ state: "running" }, null, "unknown"],
+      ];
+      for (const [extra, listed, processState] of cases) {
+        const written = writeTask(node.paths, record(node, { pid: PID, pidStart: "s1", ...extra }));
+        node.rows.splice(0, node.rows.length, ...(listed ? [listed] : []));
+        const result = await executeTaskControl(operation("status"), context);
+        const label = JSON.stringify([[...starts], extra, listed?.state ?? null]);
+        assert.deepEqual([result.state, result.processState, result.stopSupported, result.runVersion],
+          ["succeeded", processState, false, undefined], label);
+        assert.deepEqual(readTask(node.paths, TASK), written, label);
+      }
+    }
+  });
+
+test("an unreadable start time of the recorded process behind a row without pid is identity_unknown, never closed (issue #454)",
+  async (t) => {
+    const { node, context, failStartRead } = setup(t);
+    failStartRead();
+    for (const listed of [row({ state: "stopped", ...NO_PID }), null]) {
+      const written = writeTask(node.paths, record(node, { pid: PID, pidStart: "s1" }));
+      node.rows.splice(0, node.rows.length, ...(listed ? [listed] : []));
+      const result = await executeTaskControl(operation("status"), context);
+      const label = JSON.stringify(listed?.state ?? null);
+      assert.deepEqual([result.state, result.errorCode, result.processState, result.stopSupported, result.runVersion],
+        ["failed", "identity_unknown", "unknown", false, undefined], label);
+      assert.deepEqual(readTask(node.paths, TASK), written, label);
+    }
+  });
+
 test("a failed listing, a malformed listing, an unreadable start time or an unmapped launch is identity_unknown and writes nothing",
   async (t) => {
     const { node, context, failStartRead } = setup(t);
