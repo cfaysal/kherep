@@ -404,7 +404,7 @@ managed service, they keep naming the CLI of the running code. The Codex rules
 file holds only the launcher rule, so a Codex session on a host without a
 managed service asks for approval per `msg` command. Upgrade in this order:
 first `kherep-node service upgrade` to a pin that contains this change, so the
-daemon and the hooks name the launcher, then run `codex/install.mts`, which
+daemon names the launcher, then run `codex/install.mts`, which
 rewrites the rules file and drops the rule for the checkout's `cli.mts`.
 `kherep-node doctor` reports a rules file that still carries that rule as
 `stale`.
