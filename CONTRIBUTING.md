@@ -38,6 +38,8 @@ Track changes to Kherep in the repository's GitHub Issues. Open or reference an 
 
 Changes reach `main` only through a pull request, which is merged by rebase.
 
+The repository deletes a pull request's branch when the pull request is merged. A pull request closed without merging keeps its branch, for example one replaced by a new pull request after a rebase. Close such a pull request with `gh pr close <number> --delete-branch`, or delete its branch right after closing it. Its commits stay reachable from the closed pull request.
+
 Keep organization-specific policy, personal configuration and credentials outside the reusable product. The work-item and commit conventions of a workspace where Kherep is installed apply to that workspace's repositories, not to contributions to Kherep.
 
 Preserve upstream license notices and attribution when changing bundled third-party material.
