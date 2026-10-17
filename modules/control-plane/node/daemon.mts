@@ -214,7 +214,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     mcpInflight = new Set<string>();
     const send = (frame: string): boolean => {
       if (ws.readyState !== WebSocket.OPEN) return false;
-      ws.send(frame);
+      ws.send(client.stamp(frame)); // issue #441: the only path to the socket; stamps the wire seq
       return true;
     };
     const publishRegistration = (frames: string[]): boolean => {

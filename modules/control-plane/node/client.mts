@@ -30,6 +30,8 @@ export type CommandHandlers = Record<Phase1Command, () => Promise<unknown>>
 // The state of a message this node sent: a Worker state, or error when the
 // Worker rejected the message.send frame itself.
 export type SentState = MessageState | "error";
+// Issue #441: the bytes a stamp can add (seq and ack each grow to at most 16 digits).
+export const STAMP_MARGIN = 32;
 
 export interface ClientOptions {
   nodeId: string;
@@ -87,7 +89,10 @@ export class NodeClient {
   private credentialRequestPending: string | null = null;
   // The ready runtimes the last register frame carried, as JSON.
   private advertisedReady: string | undefined;
-  private seq = 0;
+  // Issue #441: built numbers frames in build order (provisional); sent is the
+  // wire seq, assigned by stamp() at the daemon's single send step.
+  private built = 0;
+  private sent = 0;
   // Highest command seq processed. Survives reconnects within this process so
   // the auth message tells the server what not to resend.
   private processedSeq = 0;
@@ -219,7 +224,7 @@ export class NodeClient {
           const response = this.frame("mcp.inbox.response", items
             ? { requestId: body.requestId, ok: true, items }
             : { requestId: body.requestId, ok: false, error: "local inbox reader is unavailable" });
-          if (Buffer.byteLength(response, "utf8") > MAX_FRAME_BYTES) {
+          if (Buffer.byteLength(response, "utf8") + STAMP_MARGIN > MAX_FRAME_BYTES) {
             return [this.frame("mcp.inbox.response", { requestId: body.requestId, ok: false, error: MCP_INBOX_TOO_LARGE })];
           }
           if (items) {
@@ -237,6 +242,8 @@ export class NodeClient {
         // that names the message.
         const { messageId, error } = envelope.body as { messageId?: unknown; error?: unknown };
         if (isMessageId(messageId)) this.callback(messageId, () => this.options.sentUpdate?.(messageId, "error", String(error).slice(0, 256)));
+        // Issue #441: otherwise the one signal that a frame bypassed the stamp or was malformed.
+        else this.options.log?.(`kherep-node: control plane rejected a frame: ${String(error).slice(0, 256)}`);
         return [];
       }
       default:
@@ -435,7 +442,21 @@ export class NodeClient {
   }
 
   private frame(type: MessageType, body: Record<string, unknown>, sequenced = true): string {
-    return JSON.stringify(makeEnvelope(type, body, sequenced ? ++this.seq : 0, this.processedSeq));
+    return JSON.stringify(makeEnvelope(type, body, sequenced ? ++this.built : 0, this.processedSeq));
+  }
+
+  // Issue #441: the seq a built frame carries is provisional. The daemon stamps
+  // the wire seq and the current cumulative ack at its single send step, so
+  // frames from any lane reach the Worker in strictly increasing order whatever
+  // promise hops lie between building and sending. Unsequenced frames (seq 0)
+  // keep seq 0 and get the current ack. An unparseable frame is sent as is.
+  stamp(frame: string): string {
+    let envelope: { seq?: unknown; ack?: unknown } & Record<string, unknown>;
+    try { envelope = JSON.parse(frame); } catch { return frame; }
+    if (typeof envelope?.seq !== "number") return frame;
+    if (envelope.seq > 0) envelope.seq = ++this.sent;
+    envelope.ack = this.processedSeq;
+    return JSON.stringify(envelope);
   }
 
   private readyRuntimes(): readonly TaskRuntime[] {

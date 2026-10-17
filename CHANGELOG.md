@@ -245,7 +245,11 @@ increments the minor version; every other release increments the patch version.
   command counted as processed in the `ack` field of node frames, only after
   its handler: a status sent meanwhile can neither make the Worker drop the
   ack nor ack the command early, which would drop its resend after a daemon
-  crash. A
+  crash. The wire seq and ack are now stamped at the daemon's single send
+  step instead of when a frame is built, so a frame of one lane sent after a
+  higher-numbered frame of the other is no longer dropped by the Worker (a
+  lost command result); the MCP inbox response keeps 32 bytes of margin for
+  the stamp, and a Worker error frame naming no message is logged. A
   synchronous child process still blocks the event loop: one
   `watchCodexTasks` pass can run several in a row, so a delivery can still
   wait for their sum, each bounded by 10 seconds.
