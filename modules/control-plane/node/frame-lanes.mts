@@ -87,8 +87,9 @@ function logSlowIntake(options: IntakeOptions, data: string, arrivedAt: number):
   if (!(Date.now() - Date.parse(body.createdAt) > slowMs)) return;
   let record: ReturnType<typeof getMessage>;
   try { record = getMessage(options.inbox, body.messageId); } catch { return; }
-  const receivedAt = record ? Date.parse(record.receivedAt) : NaN;
-  if (!record || !(receivedAt >= arrivedAt)) return; // not stored, or stored by an earlier arrival
+  if (!record) return; // not stored
+  const receivedAt = Date.parse(record.receivedAt);
+  if (!(receivedAt >= arrivedAt)) return; // stored by an earlier arrival
   const total = receivedAt - Date.parse(record.createdAt);
   if (!(total > slowMs)) return;
   const seconds = (ms: number): string => (ms / 1000).toFixed(1);

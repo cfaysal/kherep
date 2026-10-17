@@ -12,11 +12,11 @@ import { readTask } from "./task-records.mts";
 
 // Issue #441: the same single parse also routes a message.deliver frame to the
 // daemon's intake lane, so storing a message never waits for runtime work.
-export type FrameKind = { kind: "deliver" } | { kind: "other" } | { kind: "command"; runtime: TaskRuntime | null };
+export type FrameRoute = { kind: "deliver" } | { kind: "other" } | { kind: "command"; runtime: TaskRuntime | null };
 
 // session.start names its runtime; session.continue runs the runtime of the
 // task record this node keeps (claude for records written before issue #63).
-export function routeFrame(data: string, paths: NodePaths): FrameKind {
+export function routeFrame(data: string, paths: NodePaths): FrameRoute {
   const parsed = parseEnvelope(data);
   if (parsed.ok && parsed.envelope.type === "message.deliver") return { kind: "deliver" };
   if (!parsed.ok || parsed.envelope.type !== "command") return { kind: "other" };

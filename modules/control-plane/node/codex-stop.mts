@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { timedSync } from "./sync-timing.mts";
 
 import { holdsChild, signalGroup, signalProcess, startTimeOf, type CodexDeps, type SignalScope } from "./codex-process.mts";
+import { timedSync } from "./sync-timing.mts";
 
 export interface ProcessIdentity { pid: number; start: string }
 export interface ProcessRelation { pid: number; ppid: number }
