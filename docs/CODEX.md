@@ -216,8 +216,9 @@ only `darwin`. Windows was measured and stays off (issue #464): the Codex CLI
 refused `thread/fork` with `-32600` for a Desktop-created owner (cause
 unknown), the helper's process tree cannot be proven contained, and a forced
 close cannot confirm the helper's process tree once the helper has exited
-(`taskkill /T` needs a living root), so a failed attempt would keep the
-service admission lease. Enabling Windows needs the per-descendant identity
+(`taskkill /T` needs a living root), so an attempt whose close is forced
+after the helper exited would keep the service admission lease (the measured
+clean refusal closed normally and kept none). Enabling Windows needs the per-descendant identity
 kill of the stop path (issue #231) in the fork, a containment capture from
 creation on, and a cause for the refused fork, a separate change. Any other shape turns off
 only the fork reply; waking stays as written. The node already records one
