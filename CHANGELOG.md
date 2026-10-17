@@ -241,8 +241,11 @@ increments the minor version; every other release increments the patch version.
   awaits CLI stops and starts, task control and listings of up to 60 seconds
   each. Policy acceptance, the store, the refusal and the no-answer-on-store-
   failure rule are unchanged; a delivery before its connection's `auth.ok` was
-  handled still waits behind it. A command ack is now allocated after its
-  handler, so a status sent meanwhile cannot make the Worker drop the ack. A
+  handled still waits behind it. A command ack is now allocated, and the
+  command counted as processed in the `ack` field of node frames, only after
+  its handler: a status sent meanwhile can neither make the Worker drop the
+  ack nor ack the command early, which would drop its resend after a daemon
+  crash. A
   synchronous child process still blocks the event loop: one
   `watchCodexTasks` pass can run several in a row, so a delivery can still
   wait for their sum, each bounded by 10 seconds.

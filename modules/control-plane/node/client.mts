@@ -400,8 +400,15 @@ export class NodeClient {
     // At-least-once delivery: a resent command that was already processed is
     // only acknowledged again, never executed twice.
     if (envelope.seq <= this.processedSeq) return [this.frame("command.ack", { commandId })];
-    this.processedSeq = envelope.seq;
-    const ack = (): string => this.frame("command.ack", { commandId });
+    // Issue #441: processed once the frames that answer it exist. Every frame
+    // carries processedSeq as its ack, and a status sent on the intake lane
+    // while the handler runs must not let the Worker drop its resend copy.
+    // The daemon's frame lane runs one command at a time, so a resend waits
+    // behind the handler and then takes the duplicate branch above.
+    const ack = (): string => {
+      this.processedSeq = Math.max(this.processedSeq, envelope.seq);
+      return this.frame("command.ack", { commandId });
+    };
     if (!isAllowed(this.policy, command)) return [ack(), this.failedResult(commandId, command, args, "rejected by local policy")];
     const handler = this.options.handlers[command] as ((args?: unknown) => Promise<unknown>) | undefined;
     if (!isCommandArgs(command, args) || !handler) {

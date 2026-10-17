@@ -111,8 +111,12 @@ when the store fails) and the publication of its frames. Until `auth.ok` of a
 connection has been handled, a delivery stays on the original lane behind it, so
 none is handled unauthenticated and dropped. The window keeps its own lane and
 defers frames it cannot process through the same dispatcher. A command ack is
-allocated after its handler, so a status the intake lane sends meanwhile cannot
-carry a higher seq and make the Worker drop the ack. A synchronous child process
+allocated after its handler, and only then does the command count as processed
+(the `ack` every node frame carries), so a status the intake lane sends
+meanwhile neither carries a higher seq that makes the Worker drop the ack nor
+acks the command early and lets the Worker drop its resend copy; a resend
+waits behind the handler on the original lane and is only acknowledged. A
+synchronous child process
 still blocks the event loop and thereby every lane: one `watchCodexTasks` pass
 can run several PowerShell children in a row, so a delivery can wait for their
 sum, each bounded by its 10 second timeout. The daemon logs a lane item over
