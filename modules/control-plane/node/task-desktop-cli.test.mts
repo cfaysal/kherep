@@ -7,6 +7,7 @@ import { CODEX_ACTIVE_MS, recordCodexSession } from "./codex-sessions.mts";
 import { parseTaskArgs, runTaskArgs } from "./task-cli.mts";
 import { TASK, T0, taskNode } from "./task-fixture.mts";
 import { readRequest, writeTask } from "./task-records.mts";
+import { CLAUDE_PID, codexUnderClaude } from "./runtime-fixture.mts";
 
 const CODEX = "019a2b3c-4d5e-7f60-8123-456789abcdef";
 const args = (from = CODEX) => ["new", "--from", from, "--title", "Synthetic check", "--directive", "Run this check",
@@ -132,4 +133,22 @@ test("explicit sender cannot request work while another task is active on the no
     cwd: node.workspace, permissionMode: "auto", startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60_000).toISOString(),
     state: "running", updatedAt: new Date(T0).toISOString(), running: true }, T0);
   assert.match(run(node).err[0], /runs task sessions/);
+});
+
+test("task new --from <own recorded thread> with an inherited Claude id is not a conflict (issue #471)", t => {
+  const node = taskNode(t, { delegate: { request: true } });
+  recordCodexSession(node.paths, CODEX, node.workspace, T0);
+  const out: string[] = [], err: string[] = [];
+  const nested = { CLAUDE_CODE_SESSION_ID: "s-claude", CLAUDE_PID, CODEX_THREAD_ID: CODEX };
+  const code = runTaskArgs(parseTaskArgs(args()), { paths: node.paths, env: nested, now: () => T0,
+    out: line => out.push(line), err: line => err.push(line), processTable: codexUnderClaude });
+  assert.equal(code, 0, err.join("\n"));
+  assert.deepEqual([readRequest(node.paths, out[0])?.requestedBy, readRequest(node.paths, out[0])?.requestedBySessionId], [CODEX, CODEX]);
+  // Another recorded thread is still a conflict with this thread's own id.
+  const other = "019a2b3c-4d5e-7f60-8123-000000000099";
+  recordCodexSession(node.paths, other, node.workspace, T0);
+  const conflict = runTaskArgs(parseTaskArgs(args(other)), { paths: node.paths, env: nested, now: () => T0,
+    out: () => {}, err: line => err.push(line), processTable: codexUnderClaude });
+  assert.equal(conflict, 1);
+  assert.match(err.at(-1) ?? "", /conflicts with the current runtime session/);
 });

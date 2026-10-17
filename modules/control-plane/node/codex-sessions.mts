@@ -8,8 +8,8 @@ import { readJson, writeJsonAtomic } from "./inbox.mts";
 import { isActive, listTasks } from "./task-records.mts";
 
 // Codex session discovery (issue #31, step 4). Codex has no documented session
-// listing and no documented environment variable with the session id, but every
-// hook input carries session_id and cwd (https://learn.chatgpt.com/docs/hooks.md,
+// listing and documents no session id variable (CODEX_THREAD_ID is source-defined,
+// runtime-identity.mts), but every hook input carries session_id and cwd (https://learn.chatgpt.com/docs/hooks.md,
 // "Common input fields"). The delivery hook therefore records each Codex
 // session it sees in codex-sessions/<session_id>.json, and the daemon lists the
 // sessions seen recently.

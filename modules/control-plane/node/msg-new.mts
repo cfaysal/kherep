@@ -5,7 +5,7 @@ import type { DirectoryBody } from "../protocol-messages.mts";
 import { isCodexSession } from "./codex-sessions.mts";
 import { readConfig, type NodePaths } from "./config.mts";
 import { cwdProblem, nodePathStyle } from "./cwd-guard.mts";
-import { KHEREP_SESSION_ENV, NO_SESSION, resolveNode, senderSession, senderSessionId, SESSION_ENV } from "./msg-resolve.mts";
+import { resolveNode, senderSession, senderSessionId, sessionIdentity, type IdentityDeps, type Resolved } from "./msg-resolve.mts";
 import { delegationBlocked } from "./task-cli.mts";
 import { readRequest, writeRequest } from "./task-records.mts";
 
@@ -24,17 +24,17 @@ const POLL_MS = 250;
 
 export interface NewIo {
   paths: NodePaths; env: NodeJS.ProcessEnv; now: () => number; out: (line: string) => void; err: (line: string) => void;
-  sleep: (ms: number) => Promise<void>;
+  sleep: (ms: number) => Promise<void>; processTable?: IdentityDeps["processTable"];
 }
 
 export interface NewValues { new?: string; cwd?: string; directive?: string; from?: string; wait?: string }
 
-// This session's runtime: Codex when --from names a recorded Codex session or
-// the node set KHEREP_SESSION_ID alone, Claude when Claude Code set its id.
-export function ownRuntime(paths: NodePaths, env: NodeJS.ProcessEnv, from?: string): TaskRuntime | null {
-  if (from !== undefined && isCodexSession(paths, from)) return "codex";
-  if (env[SESSION_ENV]) return "claude";
-  return env[KHEREP_SESSION_ENV] ? "codex" : null;
+// This session's runtime: Codex when --from names a recorded Codex session,
+// otherwise the runtime that runs this process (issue #471, sessionIdentity).
+export function ownRuntime(paths: NodePaths, env: NodeJS.ProcessEnv, from?: string, deps?: IdentityDeps): Resolved<TaskRuntime> {
+  if (from !== undefined && isCodexSession(paths, from)) return { ok: true, value: "codex" };
+  const identity = sessionIdentity(paths, env, deps);
+  return identity.ok ? { ok: true, value: identity.runtime } : { ok: false, error: identity.error };
 }
 
 export async function sendNew(io: NewIo, directory: DirectoryBody, target: string, words: string[], values: NewValues): Promise<number> {
@@ -44,7 +44,7 @@ export async function sendNew(io: NewIo, directory: DirectoryBody, target: strin
   const directive = values.directive;
   if (directive === undefined || directive.trim() === "") return fail(DIRECTIVE_REQUIRED);
   if (directive.length > MAX_DIRECTIVE) return fail(`--directive must be at most ${MAX_DIRECTIVE} characters`);
-  const blocked = delegationBlocked(io.paths, io.env);
+  const blocked = delegationBlocked(io.paths, io.env, undefined, io);
   if (blocked) return fail(blocked);
   const node = resolveNode(directory, target);
   if (!node.ok) return fail(node.error);
@@ -54,11 +54,11 @@ export async function sendNew(io: NewIo, directory: DirectoryBody, target: strin
   const config = readConfig(io.paths.config);
   const selfName = directory.nodes.find((n) => n.nodeId === config?.nodeId)?.name ?? config?.name;
   // A sender that cannot be verified starts nothing (issue #200).
-  const from = senderSession(io.paths, io.env, values.from, io.now());
+  const from = senderSession(io.paths, io.env, values.from, io.now(), io);
   if (!from.ok) return fail(from.error);
-  const own = ownRuntime(io.paths, io.env, values.from);
-  if (!own) return fail(NO_SESSION);
-  const label = intercomLabel(own, selfName ?? "");
+  const own = ownRuntime(io.paths, io.env, values.from, io);
+  if (!own.ok) return fail(own.error);
+  const label = intercomLabel(own.value, selfName ?? "");
   if (!selfName || !isTaskLabel(label)) {
     return fail(`this node's name "${selfName ?? ""}" cannot form a label (letters, digits, space, : @ - _ . and at most 64 characters)`);
   }
@@ -70,7 +70,7 @@ export async function sendNew(io: NewIo, directory: DirectoryBody, target: strin
   if (!Number.isFinite(wait) || wait < 0) return fail(`--wait needs a number of seconds, got "${values.wait}"`);
   const requestId = crypto.randomUUID();
   writeRequest(io.paths, { requestId, title: label, text, requirements, directive, requestedBy: from.value,
-    requestedBySessionId: senderSessionId(io.paths, io.env, from.value), label, createdAt: new Date(io.now()).toISOString(), state: "pending" });
+    requestedBySessionId: senderSessionId(io.paths, io.env, from.value, io), label, createdAt: new Date(io.now()).toISOString(), state: "pending" });
   return waitForTask(io, requestId, wait * 1000, fail, node.value.name);
 }
 

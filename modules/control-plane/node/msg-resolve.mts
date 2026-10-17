@@ -2,7 +2,11 @@ import { OPERATOR_NODE_ID, type DirectoryBody, type DirectoryNode, type MessageA
 import { CODEX_ACTIVE_MS, isCodexSession, readCodexSession } from "./codex-sessions.mts";
 import type { NodePaths } from "./config.mts";
 import { localSessionName } from "./exchange.mts";
+import { runtimeIdentity, type IdentityDeps, type RuntimeIdentity } from "./runtime-identity.mts";
 import { taskForSession } from "./task-records.mts";
+
+export { BAD_THREAD_ID, CODEX_THREAD_ENV, NESTED_RUNTIME, NO_SESSION, processTableOnce, TASK_THREAD_MISMATCH } from "./runtime-identity.mts";
+export type { IdentityDeps } from "./runtime-identity.mts";
 
 // Name resolution shared by the msg CLI and the delivery hook (issue #31, step 3a).
 
@@ -13,26 +17,32 @@ export const SESSION_ENV = "CLAUDE_CODE_SESSION_ID";
 // (issue #63), to the thread id, or to the task's name before that is known.
 export const KHEREP_SESSION_ENV = "KHEREP_SESSION_ID";
 
-// This session's id from the environment: Claude Code's variable, else Kherep's.
-export const sessionIdFromEnv = (env: NodeJS.ProcessEnv): string | undefined => env[SESSION_ENV] || env[KHEREP_SESSION_ENV] || undefined;
+// This session's runtime and id (issue #471): the runtime that runs the
+// process decides, then its own variable (runtime-identity.mts). A node task's
+// KHEREP_SESSION_ID is checked against the task's Codex thread.
+export function sessionIdentity(paths: NodePaths, env: NodeJS.ProcessEnv, deps: IdentityDeps = {}): RuntimeIdentity {
+  return runtimeIdentity(env, { ...deps, taskThreadOf: (session) => taskForSession(paths, session)?.sessionId });
+}
+
+// This session's id from the environment, or undefined when the runtime cannot tell it.
+export function sessionIdFromEnv(env: NodeJS.ProcessEnv, deps?: IdentityDeps): string | undefined {
+  const identity = runtimeIdentity(env, deps);
+  return identity.ok ? identity.id : undefined;
+}
 
 // A directory older than this is reported as stale.
 export const DIRECTORY_STALE_MS = 3 * 60_000;
 
 export type Resolved<T> = { ok: true; value: T } | { ok: false; error: string };
 
-// This session's id and its name from sessions.json, or null without the env.
-export function currentSession(paths: NodePaths, env: NodeJS.ProcessEnv): { id: string; name?: string } | null {
-  const id = sessionIdFromEnv(env);
-  if (!id) return null;
-  const name = localSessionName(paths, id);
-  return name ? { id, name } : { id };
+// This session's id and its name from sessions.json, or null on any refusal
+// (sessionIdentity gives the reason).
+export function currentSession(paths: NodePaths, env: NodeJS.ProcessEnv, deps?: IdentityDeps): { id: string; name?: string } | null {
+  const identity = sessionIdentity(paths, env, deps);
+  if (!identity.ok) return null;
+  const name = localSessionName(paths, identity.id);
+  return name ? { id: identity.id, name } : { id: identity.id };
 }
-
-// Without --from, the sender is the session a runtime variable names. Codex
-// documents no such variable for its own sessions, so they pass --from.
-export const NO_SESSION = `cannot tell which session this is: neither ${SESSION_ENV} (Claude Code) nor ${KHEREP_SESSION_ENV} `
-  + "(the node's Codex runs) is set; a Codex session passes --from <its full session id>";
 
 // A full Codex session id that a Kherep hook recorded within CODEX_ACTIVE_MS.
 // A failed read establishes no identity.
@@ -49,21 +59,25 @@ function recentCodexSession(paths: NodePaths, sessionId: string, now: number): b
 
 // The sender session (issue #200). CLI identity stays what this node's
 // processes report (README, Security model), but it is taken only from a source
-// the node can check, never as typed: the runtime variable; --from naming that
-// same session by id or name; or --from with the full id of a Codex session a
-// hook recorded within 12 hours, while a node-set KHEREP_SESSION_ID, if any,
-// names the task run of that thread. The hook record is the identity there: an
-// inherited CLAUDE_CODE_SESSION_ID (a Codex started from a Claude Code tool or
-// plugin) is ambient and proves nothing about the caller, so it neither verifies
-// nor vetoes it; refusing would break every command the Codex hooks emit.
-// Without --from, recorded Codex senders use their full session id, which also
-// binds native MCP reply chains; other runtimes keep named senders.
-export function senderSession(paths: NodePaths, env: NodeJS.ProcessEnv, from?: string, now: number = Date.now()): Resolved<string> {
-  const session = currentSession(paths, env);
+// the node can check, never as typed: the runtime's own variable (issue #471,
+// sessionIdentity); --from naming that same session by id or name; or --from
+// with the full id of a Codex session a hook recorded within 12 hours, while a
+// node-set KHEREP_SESSION_ID, if any, names the task run of that thread. The
+// hook record is the identity there: when the runtime cannot be told, as for a
+// nesting the process ancestry does not order, nothing in the environment
+// verifies or vetoes it; refusing would break every command the Codex hooks emit.
+// Without --from, Codex senders named by CODEX_THREAD_ID or recorded by a hook
+// use their full session id, which also binds native MCP reply chains; other
+// runtimes keep named senders.
+export function senderSession(paths: NodePaths, env: NodeJS.ProcessEnv, from?: string, now: number = Date.now(),
+  deps?: IdentityDeps): Resolved<string> {
   if (from === undefined) {
-    if (!session) return { ok: false, error: NO_SESSION };
-    return { ok: true, value: isCodexSession(paths, session.id) ? session.id : session.name ?? session.id };
+    const identity = sessionIdentity(paths, env, deps);
+    if (!identity.ok) return { ok: false, error: identity.error };
+    if (identity.source === "CODEX_THREAD_ID" || isCodexSession(paths, identity.id)) return { ok: true, value: identity.id };
+    return { ok: true, value: localSessionName(paths, identity.id) ?? identity.id };
   }
+  const session = currentSession(paths, env, deps);
   if (session && (from === session.id || from === session.name)) return { ok: true, value: from };
   const nodeRunSession = env[KHEREP_SESSION_ENV];
   if (recentCodexSession(paths, from, now)
@@ -77,8 +91,8 @@ export function senderSession(paths: NodePaths, env: NodeJS.ProcessEnv, from?: s
 // when the sender is this session by id or name, otherwise the sender as is, a
 // verified Codex session id, which is never bound to the session of an
 // inherited CLAUDE_CODE_SESSION_ID.
-export function senderSessionId(paths: NodePaths, env: NodeJS.ProcessEnv, sender: string): string {
-  const session = currentSession(paths, env);
+export function senderSessionId(paths: NodePaths, env: NodeJS.ProcessEnv, sender: string, deps?: IdentityDeps): string {
+  const session = currentSession(paths, env, deps);
   return session && (sender === session.id || sender === session.name) ? session.id : sender;
 }
 
