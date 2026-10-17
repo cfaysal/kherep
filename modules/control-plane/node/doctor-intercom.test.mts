@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { cliRule, controlPlaneCli, launcherRule, renderControlPlaneRules } from "../../../codex/lib/control-plane-rules.mts";
+import { install } from "../../../codex/install.mts";
+import type { Capabilities } from "../../../codex/lib/contracts.mts";
+import { launcherRule, renderControlPlaneRules, type RuleCommand } from "../../../codex/lib/control-plane-rules.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
 import { checkIntercom } from "./doctor-intercom.mts";
 import { instructionText, writeIntercomHost, type IntercomHost } from "./doctor-intercom-fixture.mts";
@@ -13,6 +15,8 @@ import { launcherCommand } from "./launcher.mts";
 
 // Issue #436. The intercom check against synthetic hosts: one healthy host,
 // then one mutation at a time, each of which must fail with its own status.
+
+const REPO = path.resolve(import.meta.dirname, "..", "..", "..");
 
 interface Bare { root: string; paths: NodePaths; claude: string; codex: string; scratch: string }
 type Host = Bare & IntercomHost;
@@ -128,7 +132,11 @@ test("each instruction file is reported stale, missing or unreadable on its own"
   }
 });
 
-test("a rules file without the launcher rule as the installer writes it is stale", (t) => {
+// The rule an installer before PR D wrote for its checkout's cli.mts: single-quoted examples.
+const legacyRule = (cli: string): RuleCommand => ({ node: "node", cli, prefix: `'node' '${cli}'` });
+const pinCli = (h: Host): string => path.join(h.pin, "modules", "control-plane", "node", "cli.mts");
+
+test("a rules file other than the launcher rule alone, as the installer writes it, is stale", (t) => {
   const h = host(t);
   const command = intercomCommand(h.root);
   const codexRules = (rules: string): string => {
@@ -136,11 +144,33 @@ test("a rules file without the launcher rule as the installer writes it is stale
     return (check(h).instructions as Record<string, string>).codexRules;
   };
   // Only the checkout or pin CLI, as before issue #436.
-  assert.equal(codexRules(renderControlPlaneRules([cliRule(controlPlaneCli(h.pin))])), "stale");
+  assert.equal(codexRules(renderControlPlaneRules([legacyRule(pinCli(h))])), "stale");
   // The launcher path with the shell-quoted examples of a CLI rule: same pattern, other Starlark.
-  assert.equal(codexRules(renderControlPlaneRules([cliRule(launcherRule(command).cli)])), "stale");
+  assert.equal(codexRules(renderControlPlaneRules([legacyRule(launcherRule(command).cli)])), "stale");
+  // The launcher rule beside the legacy checkout rule, as PR B and PR C wrote it.
+  assert.equal(codexRules(renderControlPlaneRules([launcherRule(command), legacyRule(pinCli(h))])), "stale");
+  assert.equal(check(h).ok, false);
+  assert.equal(codexRules(`${renderControlPlaneRules([launcherRule(command)])}# operator line\n`), "stale");
   assert.equal(codexRules(renderControlPlaneRules([launcherRule(command)])), "present");
   assert.equal(check(h).ok, true);
+});
+
+test("a reinstall over a legacy two-rule file leaves the launcher rule alone and doctor present", (t) => {
+  const h = host(t);
+  const command = intercomCommand(h.root);
+  fs.writeFileSync(h.files.codexRules, renderControlPlaneRules([launcherRule(command), legacyRule(pinCli(h))]));
+  assert.equal((check(h).instructions as Record<string, string>).codexRules, "stale");
+  const capabilities = JSON.parse(fs.readFileSync(path.join(REPO, "codex", "parity", "capabilities.json"), "utf8")) as Capabilities;
+  const registry = path.join(h.scratch, "claude.json");
+  fs.writeFileSync(registry, JSON.stringify({ mcpServers: Object.fromEntries(
+    capabilities.mcpServers.map((name) => [name, { type: "http", url: `https://example.test/${name}` }])) }), { mode: 0o600 });
+  install({ codexHome: h.codex, claudeRegistryFile: registry, claudeConfigDir: h.claude, workspace: path.join(h.scratch, "workspace"),
+    nodePath: process.execPath, log: (): void => {}, skipPluginRegistration: true, installAtlassianTools: false,
+    resolveRegistryRuntime: () => "fixture", runCodex: (): string => "ok", controlPlaneOutbox: h.paths.outbox });
+  const rules = fs.readFileSync(h.files.codexRules, "utf8");
+  assert.equal(rules.match(/prefix_rule\(/g)?.length, 1);
+  assert.equal(rules.includes("cli.mts"), false);
+  assert.deepEqual([check(h).ok, check(h).instructions], [true, allPresent]);
 });
 
 test("an unrendered placeholder in an instruction file is stale", (t) => {
@@ -159,14 +189,16 @@ test("the report holds paths and fixed statuses, never file contents", (t) => {
     h.receipt.binding.source.commit, "Kherep intercom", "prefix_rule"]) assert.equal(text.includes(value), false, value);
 });
 
-test("the expected text is the installers' command and the launcher's whole prefix_rule", (t) => {
+test("the expected text is the installers' command and the whole rules file with the launcher rule alone", (t) => {
   const h = host(t);
   const command = intercomCommand(h.root);
   assert.equal(command, launcherCommand(h.root));
   for (const kind of INTERCOM_INSTRUCTIONS) assert.ok(instructionText(kind, h.root).includes(expectedIntercomText(kind, command)), kind);
   assert.equal(expectedIntercomText("claudeUser", command), command);
   const rule = expectedIntercomText("codexRules", command);
-  assert.match(rule, /^prefix_rule\(\n {4}pattern = \["node", "[^"]+kherep-node\.mjs", "msg", \[/);
+  assert.equal(rule, instructionText("codexRules", h.root));
+  assert.match(rule, /^# Managed by Kherep[^\n]*\n#[^\n]*\nprefix_rule\(\n {4}pattern = \["node", "[^"]+kherep-node\.mjs", "msg", \[/);
+  assert.equal(rule.match(/prefix_rule\(/g)?.length, 1);
   assert.ok(rule.includes(`"${command.replaceAll('"', '\\"')} msg sessions",`), rule);
   assert.ok(rule.endsWith(")\n"));
   const win = String.raw`C:\Users\Synthetic\AppData\Roaming\kherep`;

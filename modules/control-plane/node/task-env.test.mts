@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { writeIntercomHost } from "./doctor-intercom-fixture.mts";
+import { launcherCommand } from "./launcher.mts";
 import { CLI_PATH, taskCliCommand } from "./msg-cli.mts";
 import { startTask } from "./session-runner.mts";
 import { withNodeOnPath } from "./task-env.mts";
@@ -72,6 +74,19 @@ test("a started task is framed with the daemon's own node and CLI by default", a
   assert.ok(prompt.includes(`Answer it with: '${process.execPath}' '${CLI_PATH}' msg send ${REQUESTER} -- "<answer>". `), prompt);
 });
 
+// Issue #436, PR D: on a host whose managed launcher resolves, the frame names
+// the stable launcher instead of the daemon's own CLI.
+test("a started task on a host with a resolving launcher names the launcher", async (t) => {
+  const node = taskNode(t, { delegate: { accept: true } });
+  writeIntercomHost(node.paths, path.join(node.root, "claude"), path.join(node.root, "codex"), node.root);
+  const { cli: _cli, ...deps } = node.deps();
+  await startTask(startArgs(TASK, { requestedBy: REQUESTER, directive: "Yes", label: INTERCOM.label }), { ...deps, platform: process.platform });
+  const prompt = node.calls.find((c) => c.args[0] === "--bg")!.args[5];
+  const command = launcherCommand(node.root);
+  assert.ok(prompt.includes(`Answer it with: ${command} msg send ${REQUESTER} -- "<answer>". `), prompt);
+  assert.ok(!prompt.includes(CLI_PATH), prompt);
+});
+
 // The rendered win32 command runs in Git Bash and in PowerShell against a fake
 // CLI that prints its arguments. Each shell is skipped when absent; a bash that
 // is not Git Bash on Windows (the WSL launcher) counts as absent.
@@ -88,9 +103,15 @@ for (const [shell, flags] of shells) {
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const cli = path.join(dir, "fake cli.mjs");
     fs.writeFileSync(cli, "console.log(JSON.stringify(process.argv.slice(2)));\n");
-    const command = `${taskCliCommand("win32", process.execPath, cli)} msg send ${REQUESTER} -- "the answer"`;
-    const result = run(command);
-    assert.equal(result.status, 0, `${command}\n${result.stderr}`);
-    assert.deepEqual(JSON.parse(result.stdout.trim()), ["msg", "send", REQUESTER, "--", "the answer"]);
+    // The launcher form (issue #436): bare node and a double-quoted path with a space.
+    const root = path.join(dir, "Application Support", "kherep");
+    fs.mkdirSync(path.join(root, "bin"), { recursive: true });
+    fs.copyFileSync(cli, path.join(root, "bin", "kherep-node.mjs"));
+    for (const prefix of [taskCliCommand("win32", process.execPath, cli), launcherCommand(root)]) {
+      const command = `${prefix} msg send ${REQUESTER} -- "the answer"`;
+      const result = run(command);
+      assert.equal(result.status, 0, `${command}\n${result.stderr}`);
+      assert.deepEqual(JSON.parse(result.stdout.trim()), ["msg", "send", REQUESTER, "--", "the answer"]);
+    }
   });
 }

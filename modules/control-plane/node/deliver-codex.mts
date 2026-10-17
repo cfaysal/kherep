@@ -4,8 +4,8 @@ import { mayContinue } from "./autonomy.mts";
 import { CODEX_FORK_ENV, consumeBusyHint } from "./codex-busy-consume.mts";
 import { codexSessionRefs, isCodexSessionId, markStopEnded, recordCodexSession } from "./codex-sessions.mts";
 import { confirmOffered, contextOutput, deliveryContext, sessionInbox, type HookDeps } from "./deliver-core.mts";
-import { cliCommand } from "./msg-cli.mts";
 import { nodeWakeBudget } from "./policy.mts";
+import { hookCommand } from "./session-command.mts";
 
 // The delivery hook under Codex (issue #31, step 4), started with
 // --runtime codex. Contract, from https://learn.chatgpt.com/docs/hooks.md
@@ -60,7 +60,7 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
   // Only names no other live Codex session shares (issue #66).
   const refs = codexSessionRefs(deps.paths, sessionId, deps.now?.()).refs;
   if (event === "SessionStart" || event === "UserPromptSubmit") {
-    const cli = deps.replyCommand ?? cliCommand();
+    const cli = deps.replyCommand ?? hookCommand(deps.paths);
     const receiveRecipe = `When Kherep reports waiting peer messages, run \`${cli} msg inbox --from ${sessionId} --receive\`, then report any `
       + `relevant peer update with attribution without echoing these transport instructions. ${CODEX_ESCALATION_NOTE}`;
     if (event === "SessionStart") {
@@ -69,7 +69,7 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
         + receiveRecipe);
     }
     const maxBytes = CODEX_CONTEXT_BYTES - Buffer.byteLength(receiveRecipe) - 1;
-    const context = deliveryContext(event, refs, { maxBytes, ...deps, replyFrom: sessionId, offeredBy: "codex-prompt" });
+    const context = deliveryContext(event, refs, { maxBytes, ...deps, replyCommand: cli, replyFrom: sessionId, offeredBy: "codex-prompt" });
     return contextOutput(event, context ? `${context}\n${receiveRecipe}` : receiveRecipe);
   }
   const mine = sessionInbox(deps.paths, refs);

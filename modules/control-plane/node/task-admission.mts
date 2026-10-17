@@ -1,5 +1,5 @@
 import { DELEGATED_PERMISSION_MODES, type SessionStartArgs } from "../protocol-tasks.mts";
-import { taskCliCommand } from "./msg-cli.mts";
+import { taskCommand } from "./session-command.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { isActive, listTasks, queueReport, type TaskRecord } from "./task-records.mts";
 import { framePrompt, resolveCwd } from "./task-prompt.mts";
@@ -64,7 +64,7 @@ export function admitStart(args: SessionStartArgs, deps: RunnerDeps): Admitted {
   };
   let cli: string;
   try {
-    cli = deps.cli ?? taskCliCommand(deps.platform);
+    cli = deps.cli ?? taskCommand(deps.paths, { platform: deps.platform });
   } catch (error) {
     return refuse(deps, args.taskId, String((error as Error).message));
   }

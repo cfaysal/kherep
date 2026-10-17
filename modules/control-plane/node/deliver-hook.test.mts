@@ -9,8 +9,11 @@ import { fileURLToPath } from "node:url";
 import { TURN_SPACING_MS } from "./autonomy.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
 import { deliverForHook, MAX_CONTEXT_BYTES, MAX_MESSAGES_PER_CALL, runHook } from "./deliver-hook.mts";
+import { writeIntercomHost } from "./doctor-intercom-fixture.mts";
 import { writeDirectory, writeLocalSessions } from "./exchange.mts";
 import { getMessage, listInbox, storeMessage } from "./inbox.mts";
+import { launcherCommand } from "./launcher.mts";
+import { CLI_PATH } from "./msg-cli.mts";
 
 // Some Node releases the engines range admits, 24.1.0 among them, print this
 // warning when a child loads a .mts file. Only this exact pair of lines is
@@ -80,6 +83,24 @@ test("UserPromptSubmit adds the framed messages as additionalContext and offers 
   assert.equal(hook(paths, "Stop"), "");
   for (const messageId of [byName, byId]) assert.equal(getMessage(paths.inbox, messageId)?.state, "delivered");
   assert.equal(hook(paths, "UserPromptSubmit"), "", "delivered messages are not injected again");
+});
+
+// Issue #436, PR D: without a replyCommand the recipe names the stable launcher
+// when the host's launcher resolves, otherwise this checkout's CLI.
+test("the reply recipe names the launcher on a managed host and the CLI elsewhere", (t) => {
+  const context = (paths: NodePaths): string => (JSON.parse(deliverForHook({ session_id: "s-self", hook_event_name: "UserPromptSubmit" },
+    { paths, nonce: () => "t0k3n" })) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
+  const plain = setup(t);
+  inbox(plain, 1);
+  assert.ok(context(plain).includes(`To reply: node "${CLI_PATH}" msg send --reply-to ${id(1)} -- <reply text>`));
+
+  const managed = setup(t);
+  const root = path.dirname(managed.dir);
+  writeIntercomHost(managed, path.join(root, "claude"), path.join(root, "codex"), root);
+  inbox(managed, 2);
+  const text = context(managed);
+  assert.ok(text.includes(`To reply: ${launcherCommand(root)} msg send --reply-to ${id(2)} -- <reply text>`), text);
+  assert.ok(!text.includes(CLI_PATH), text);
 });
 
 test("Stop continues the session only for new messages, so a second Stop stays silent", (t) => {

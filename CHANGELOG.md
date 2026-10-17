@@ -192,12 +192,20 @@ increments the minor version; every other release increments the patch version.
   refuses every fork before admission (`fork-relay-unsupported`) while its
   current connection has not shown `messaging.proxy.v1`.
 - Codex messaging rules allowlist the stable launcher (issue #436).
-  `rules/kherep-control-plane.rules` holds one `prefix_rule` per command form:
-  first `node` with `<configRoot>/bin/kherep-node.mjs` (forward slashes on
-  Windows), whose examples are the exact intercom command, then the previous
-  rule for the installing checkout's `cli.mts`, unchanged, which the daemon's
-  task prompt and the delivery hook still name. `renderControlPlaneRules` takes
-  a list of `launcherRule()` and `cliRule()` commands.
+  `rules/kherep-control-plane.rules` holds one `prefix_rule`, for `node` with
+  `<configRoot>/bin/kherep-node.mjs` (forward slashes on Windows), whose
+  examples are the exact intercom command. `renderControlPlaneRules` takes a
+  list of `launcherRule()` commands.
+- Task prompts and delivery hook recipes name the stable launcher (issue
+  #436). On a host whose managed launcher resolves, the daemon's task and
+  intercom prompts and the Claude and Codex delivery hooks' reply and receive
+  commands name `node "<configRoot>/bin/kherep-node.mjs"`; elsewhere they keep
+  naming the running code's `cli.mts`. The rules file no longer carries the
+  rule for the installing checkout's `cli.mts`, and `cliRule()` and
+  `controlPlaneCli()` are removed; `kherep-node doctor` now reports a rules file
+  that is not exactly the launcher rule as `stale`. Upgrade the service to a
+  pin with this change first, then run `codex/install.mts`. A Codex session on
+  a host without a managed service asks for approval per `msg` command.
 - Native Codex Queue pointer producer off by default (issue #429). The
   exact-owner producer that submits a fixed `codex queue` pointer for an
   authorized Codex owner now runs only with `"nativeQueue": true` in the node

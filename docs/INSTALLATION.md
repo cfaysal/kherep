@@ -395,6 +395,20 @@ otherwise. The installers render the command when they run, so after changing
 directory that no shell can quote (a double quote, `` ` `` or `$`, on Windows
 also `'` or `%`) stops either installer before it changes a file.
 
+The daemon names the same command in what it writes for sessions: the task
+prompt of a started or continued task, the intercom prompt of a resumed or new
+intercom session, and the delivery hooks' reply and receive recipes. It does so
+when the host's managed launcher resolves (a valid receipt, the pin and its CLI
+present, and the launcher file in place); otherwise, as on a node without a
+managed service, they keep naming the CLI of the running code. The Codex rules
+file holds only the launcher rule, so a Codex session on a host without a
+managed service asks for approval per `msg` command. Upgrade in this order:
+first `kherep-node service upgrade` to a pin that contains this change, so the
+daemon and the hooks name the launcher, then run `codex/install.mts`, which
+rewrites the rules file and drops the rule for the checkout's `cli.mts`.
+`kherep-node doctor` reports a rules file that still carries that rule as
+`stale`.
+
 From Git Bash, Git Bash still rewrites a `/`-leading argument such as `--cwd
 /Users/...` before Node sees it; set `MSYS_NO_PATHCONV=1` for that call or use
 PowerShell.

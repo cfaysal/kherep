@@ -9,8 +9,8 @@ import { deliveryContext, frameRecords, sessionInbox } from "./deliver-core.mts"
 import { attachDelivery, updateDeliverySession } from "./delivery-identity.mts";
 import { addLocalSession, readDirectory } from "./exchange.mts";
 import { getMessage, markClosedAttempt, markOffered, markRetry, readdress, setMessageProgress, type InboxRecord } from "./inbox.mts";
-import { taskCliCommand } from "./msg-cli.mts";
 import { withServiceAdmission, type ServiceAdmission } from "./service-drain.mts";
+import { taskCommand } from "./session-command.mts";
 import { agentRows, BACKGROUNDED, mapIds, runClaude, startTask, type RunnerDeps } from "./session-runner.mts";
 import { CLAUDE_RUNTIME } from "./sessions.mts";
 import { queueReport, readTask, senderOf, writeTask, type TaskRecord } from "./task-records.mts";
@@ -160,7 +160,7 @@ export async function startIntercom(deps: RunnerDeps, target: ClosedTarget, reco
   let text: string;
   let carried: InboxRecord[];
   try {
-    ({ text, carried } = frameRecords(deps.paths, records, deps.cli ?? taskCliCommand(deps.platform), MAX_TASK_TEXT));
+    ({ text, carried } = frameRecords(deps.paths, records, deps.cli ?? taskCommand(deps.paths, { platform: deps.platform }), MAX_TASK_TEXT));
   } catch (error) {
     return reasonOf(error);
   }

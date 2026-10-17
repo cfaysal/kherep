@@ -4,9 +4,9 @@ import type { SessionContinueArgs, SessionStartArgs, SessionStopArgs } from "../
 import { continueCodex, startCodex, stopCodex } from "./codex-runner.mts";
 import { startTimeOf, type CodexDeps } from "./codex-process.mts";
 import type { NodePaths } from "./config.mts";
-import { taskCliCommand } from "./msg-cli.mts";
 import type { NodePolicy } from "./policy.mts";
 import { notReady, type Readiness } from "./runtime-readiness.mts";
+import { taskCommand } from "./session-command.mts";
 import { claudeCall, findClaude, LIST_TIMEOUT_MS, type Exec } from "./sessions.mts";
 import { admitStart, overLimit, refuse, trim, type Admitted } from "./task-admission.mts";
 import { withNodeOnPath, withoutSessionMarkers } from "./task-env.mts";
@@ -212,7 +212,7 @@ export async function continueTask(args: SessionContinueArgs, deps: RunnerDeps):
     const restarted: TaskRecord = { ...record, state: "started", reason: undefined,
       deadline: new Date(now + deps.policy.sessions.maxRuntimeMinutes * 60_000).toISOString() };
     const saved = await background(deps, restarted, ["--resume", record.sessionId, "--bg", "--permission-mode", record.permissionMode,
-      frameFollowUp(args.taskId, args.prompt, deps.cli ?? taskCliCommand(deps.platform))]);
+      frameFollowUp(args.taskId, args.prompt, deps.cli ?? taskCommand(deps.paths, { platform: deps.platform }))]);
     return { taskId: saved.taskId, state: saved.state };
   }, deps.serviceOwner);
 }

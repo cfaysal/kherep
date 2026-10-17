@@ -10,9 +10,9 @@ import { terminate } from "./codex-stop.mts";
 import { ensureDir } from "./config.mts";
 import { permanentFallbackFailure } from "./delivery-failure.mts";
 import { getMessage, markDelivered, markRefused, markRetry } from "./inbox.mts";
-import { taskCliCommand } from "./msg-cli.mts";
 import { notReady } from "./runtime-readiness.mts";
 import { continueServiceAdmission, retainServiceAdmission, type ServiceAdmission } from "./service-drain.mts";
+import { taskCommand } from "./session-command.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit, refuse, trim } from "./task-admission.mts";
 import { isActive, queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
@@ -136,7 +136,7 @@ export async function continueCodex(
   if (!cwd.ok) throw new Error(cwd.reason);
   const blocked = await notReady(deps.readiness, "codex");
   if (blocked) throw new Error(blocked);
-  const prompt = frameFollowUp(args.taskId, args.prompt, deps.cli ?? taskCliCommand(deps.platform), "codex");
+  const prompt = frameFollowUp(args.taskId, args.prompt, deps.cli ?? taskCommand(deps.paths, { platform: deps.platform }), "codex");
   const { operatorStoppedAt: _operatorStoppedAt, taskControlRecoveryRunVersion: _taskControlRecoveryRunVersion, ...resumable } = record;
   const restarted: TaskRecord = { ...resumable, cwd: cwd.cwd, state: "started", reason: undefined, pid: undefined, pidStart: undefined,
     deadline: new Date(now + deps.policy.sessions.maxRuntimeMinutes * 60_000).toISOString() };

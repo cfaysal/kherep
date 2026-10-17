@@ -60,9 +60,9 @@ test("the AGENTS.md block, ROUTING.md and the rules name the launcher; operator 
   assert.ok(routing.includes(`\`${command} msg sessions\``));
   assert.doesNotMatch(`${agents}${routing}`, /__KHEREP_[A-Z_]+__/);
   const rules = fs.readFileSync(controlPlaneRulesPath(codexHome), "utf8");
-  const launcher = rules.indexOf(starlarkString(`${command} msg sessions`));
-  const checkout = rules.indexOf(path.join("modules", "control-plane", "node", "cli.mts").replace(/\\/g, "\\\\"));
-  assert.ok(launcher > 0 && checkout > launcher, "the launcher rule comes before the checkout rule");
+  assert.ok(rules.includes(starlarkString(`${command} msg sessions`)), "the launcher rule");
+  assert.equal(rules.match(/prefix_rule\(/g)?.length, 1, "the launcher rule alone");
+  assert.equal(rules.includes("cli.mts"), false, "no rule for the checkout CLI");
 
   install(options);
   assert.equal(fs.readFileSync(agentsFile, "utf8"), agents, "a reinstall is idempotent");

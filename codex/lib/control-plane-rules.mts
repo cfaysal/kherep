@@ -7,19 +7,16 @@ import path from "node:path";
 // (developers.openai.com/codex/rules). The file is fully managed by Kherep: it
 // is rewritten on every install, and no other rule file is touched.
 //
-// Issue #436. One rule per command: the stable launcher of the config root
-// first, then the CLI of the installing checkout, which the daemon's task
-// prompt and the delivery hook still name until they switch to the launcher.
+// Issue #436. The file holds one rule, for the stable launcher of the config
+// root: the task prompt, the delivery hook and the instructions all name it.
+// The rule for the installing checkout's cli.mts is gone; a reinstall rewrites
+// the whole file, so an older file loses it.
 
 export const CONTROL_PLANE_RULES_FILE = "kherep-control-plane.rules";
 
 // Only the messaging subcommands. `task`, `node` and every other command of the
 // CLI keep asking.
 export const MSG_SUBCOMMANDS = Object.freeze(["send", "sessions", "inbox", "status"] as const);
-
-export function controlPlaneCli(repoRoot: string): string {
-  return path.join(repoRoot, "modules", "control-plane", "node", "cli.mts");
-}
 
 export function controlPlaneRulesPath(codexHome: string): string {
   return path.join(codexHome, "rules", CONTROL_PLANE_RULES_FILE);
@@ -30,12 +27,6 @@ export function controlPlaneRulesPath(codexHome: string): string {
 export function starlarkString(value: string): string {
   if (/[\u0000-\u001f\u007f]/.test(value)) throw new Error("Control characters are not allowed in a Codex rule string");
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-// Codex shell-splits the match/not_match examples, so a Windows path with
-// backslashes has to be single-quoted there or the rule file fails to load.
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
 function list(items: string[]): string {
@@ -53,11 +44,6 @@ export function launcherRule(command: string): RuleCommand {
   const match = /^node "([^"\\$`]+)"$/.exec(command);
   if (!match) throw new Error('the launcher command must be node "<path>"');
   return { node: "node", cli: match[1], prefix: command };
-}
-
-// `node` is the executable as Codex tokenises the command a runtime runs.
-export function cliRule(cli: string, node = "node"): RuleCommand {
-  return { node, cli, prefix: `${shellQuote(node)} ${shellQuote(cli)}` };
 }
 
 function prefixRule({ node, cli, prefix }: RuleCommand): string[] {

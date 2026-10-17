@@ -6,8 +6,8 @@ import {
   listInbox, markDelivered, markOffered, markRefused, markRetry, MAX_REPLY_DEPTH, type InboxRecord, type OfferedBy,
 } from "./inbox.mts";
 import { proxiedLine, relayStateOf, type RelayState } from "./inbox-proxied.mts";
-import { cliCommand } from "./msg-cli.mts";
 import { nodeLabel } from "./msg-resolve.mts";
+import { hookCommand } from "./session-command.mts";
 import { failureNotice, noticesIntro, receiptNotice, stillUnnoticed, unnoticedNotices, type SentNotices } from "./sent-notices.mts";
 
 // The runtime-independent part of the delivery hook (issue #31): which inbox
@@ -216,7 +216,7 @@ export function deliveryContext(event: DeliveryEvent, refs: string[], deps: Hook
 
   const directory = directoryOf(paths);
   const tag = deps.nonce?.() ?? newTag();
-  const cli = deps.replyCommand ?? cliCommand();
+  const cli = deps.replyCommand ?? hookCommand(paths);
   const reply = `${cli} msg send${deps.replyFrom ? ` --from ${deps.replyFrom}` : ""}`;
   const shown = waiting.slice(0, MAX_MESSAGES_PER_CALL - failures.length);
   const failed = failures.length === 0 ? [] : [failures.map((r) => failureNotice(r, directory)).join("\n")];
