@@ -78,10 +78,10 @@ export function relayNode(t: test.TestContext, options: { capability?: boolean }
     // The real poll and lane: sweep, then the fork producer for messages without an attempt.
     poll: async (extra: CodexDeps = {}) => { pollCodexQueue(deps(extra), log); await codexQueueIdle(); },
     // One exchange round with the gate; the message.send bodies that went out.
-    exchange: async (extra: CodexDeps = {}): Promise<MessageSendBody[]> => {
+    exchange: async (extra: CodexDeps = {}, gate = relaySendGate(deps(extra), log)): Promise<MessageSendBody[]> => {
       await authenticated;
       const sent: string[] = [];
-      pollExchange(client, f.paths, inflight, (frame) => { sent.push(frame); return true; }, now(), () => 0, relaySendGate(deps(extra)));
+      pollExchange(client, f.paths, inflight, (frame) => { sent.push(frame); return true; }, now(), () => 0, gate);
       return decode(sent).filter((e) => e.type === "message.send").map((e) => e.body as unknown as MessageSendBody);
     },
     // A Worker status frame for a message this node sent; the frames the client answered.

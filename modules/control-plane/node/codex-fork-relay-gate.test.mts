@@ -6,7 +6,7 @@ import { RELAY_MAX_AGE_MS } from "./codex-fork-admission.mts";
 import { forkAttempts } from "./codex-fork-attempts.mts";
 import { FORK_OWNER } from "./codex-fork-fixture.mts";
 import { relayNode, type RelayNode } from "./codex-fork-relay-fixture.mts";
-import { markRelayDue } from "./codex-fork-relay.mts";
+import { markRelayDue, relaySendGate } from "./codex-fork-relay.mts";
 import { getSent, SEND_RETRY_MS } from "./exchange.mts";
 import { markAnswered } from "./inbox.mts";
 
@@ -78,4 +78,38 @@ test("a held record whose original the owner answered is never sent; the sweep w
   n.sweep();
   assert.deepEqual([forkAttempts(n.paths, FORK_OWNER)[0]!.state, n.outbox(), getSent(n.paths, relay)], ["superseded", [], null]);
   assert.deepEqual(await n.exchange(), []);
+});
+
+const sendHeld = (n: RelayNode): string[] => n.logs.filter((line) => line.includes("send held:"));
+
+test("a gate built before the opt-in holds; one built from the policy as applied sends (issue #444)", async (t) => {
+  const n = relayNode(t);
+  const policy = fs.readFileSync(n.paths.policy, "utf8");
+  n.policy((p) => { delete p.wake.codexFork; });
+  const stale = relaySendGate(n.deps(), n.log);
+  fs.writeFileSync(n.paths.policy, policy);
+  n.seed(n.add());
+  n.sweep();
+  const relay = forkAttempts(n.paths, FORK_OWNER)[0]!.relayMessageId!;
+  assert.deepEqual(n.outbox(), [`${relay}.json`]);
+  assert.deepEqual(await n.exchange({}, stale), [], "the startup policy's absent section holds every proxy answer");
+  assert.deepEqual(sendHeld(n), [], "the presence check is silent");
+  assert.deepEqual((await n.exchange()).map((body) => body.messageId), [relay]);
+});
+
+test("an opt-out after the gate was built is refused by the fresh guards and logged once", async (t) => {
+  const { n, relay, policy } = written(t);
+  const gate = relaySendGate(n.deps(), n.log);
+  n.policy((p) => { p.wake.codexFork.sessions = ["01a0db74-0000-7000-8000-0000000000ff"]; });
+  assert.deepEqual(await n.exchange({}, gate), []);
+  assert.deepEqual(await n.exchange({}, gate), []);
+  // The fingerprint covers codexFork.sessions, and RG-2 checks it before the opt-in.
+  assert.deepEqual(sendHeld(n), ["kherep-node: Codex fork relay send held: policy-changed"], "once per relay and code");
+  assert.deepEqual(n.outbox(), [`${relay}.json`]);
+  n.policy((p) => { delete p.wake.codexFork; });
+  assert.deepEqual(await n.exchange({}, gate), []);
+  assert.deepEqual(sendHeld(n).slice(1), ["kherep-node: Codex fork relay send held: fork-off"]);
+  fs.writeFileSync(n.paths.policy, policy);
+  assert.deepEqual((await n.exchange({}, gate)).map((body) => body.messageId), [relay]);
+  assert.equal(sendHeld(n).length, 2);
 });

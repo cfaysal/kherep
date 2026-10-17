@@ -43,6 +43,8 @@ const due = new Map<string, number>();
 const written = new Set<string>();
 const sentOnce = new Set<string>();
 const heldLog = new Map<string, string>();
+// Per relay id: the guard code the send gate last logged a hold for.
+const sendHeld = new Map<string, string>();
 // The pass's memo (codex-fork-relay-pass.mts), cleared with the rest: message
 // ids that need no further bookkeeping, and failures logged once.
 export const relayPassMemo = { settled: new Set<string>(), stopped: new Set<string>() };
@@ -51,7 +53,7 @@ const OWNER_CODES: readonly ForkRefusal[] = ["not-recorded", "task-session", "pe
   "post-tool-hook-missing", "fork-not-idle"];
 
 export function resetRelayState(): void {
-  due.clear(); written.clear(); sentOnce.clear(); heldLog.clear(); relayPassMemo.settled.clear(); relayPassMemo.stopped.clear();
+  due.clear(); written.clear(); sentOnce.clear(); heldLog.clear(); sendHeld.clear(); relayPassMemo.settled.clear(); relayPassMemo.stopped.clear();
 }
 export function markRelayDue(owner: string): void { due.delete(owner); }
 
@@ -219,7 +221,7 @@ export function relayPending(deps: RelayDeps, owner: string, log: (line: string)
 
 // The exchange's proxy send gate (design r3 section 2.5, review R3-2): the
 // attempt, the matching sidecar claim and every relay guard at this send.
-export function relaySendGate(deps: RelayDeps): ProxySend {
+export function relaySendGate(deps: RelayDeps, log: (line: string) => void = () => {}): ProxySend {
   return {
     allow(record, now) {
       if (deps.policy.wake?.codexFork === undefined || !record.proxyOf || record.fromSession !== record.fromSessionId) return false;
@@ -228,7 +230,14 @@ export function relaySendGate(deps: RelayDeps): ProxySend {
         if (a?.state !== "completed" || a.answer === undefined || a.forkId === undefined || a.relayMessageId !== record.messageId) return false;
         const claim = getProxied(deps.paths.inbox, record.proxyOf);
         if (!matches(claim, a, record.messageId) || claim.unresolvedAt) return false;
-        return relayRefusal(guards(deps), record.fromSession, a, now) === null;
+        const code = relayRefusal(guards(deps), record.fromSession, a, now);
+        if (code) {
+          if (sendHeld.get(record.messageId) !== code) log(`kherep-node: Codex fork relay send held: ${code}`);
+          sendHeld.set(record.messageId, code);
+          return false;
+        }
+        sendHeld.delete(record.messageId);
+        return true;
       } catch {
         return false;
       }
