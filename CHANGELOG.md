@@ -303,6 +303,16 @@ increments the minor version; every other release increments the patch version.
   install locations. The order mirrors `modules/twg/runtime/resolve-binary.mts`.
   A set but unusable `KHEREP_TWG_BIN` and a CLI found nowhere both end as a
   search that did not run (UNKNOWN), as before.
+- `stitch` idempotence (fixes #479). A second `stitch --space <key> --id <id>`
+  on the same orphan could write the same link again on every run: whether a
+  neighbour was already linked was decided by comparing the regenerated body
+  with the stored one byte for byte, so a `Related pages` block that came back
+  in a different serialization never compared equal. The check now compares the
+  page ids the block links with the ids the run would write, and a neighbour
+  that already links all of them is `unchanged`. The sibling flag was not the
+  cause: it only annotates the `link` trace line. The block format is
+  unchanged; a renamed title of an already linked page is no longer refreshed
+  on its own, only when the block is rewritten for another reason.
 - Managed service rollback (fixes #472). A rollback now starts the restored
   service whenever the current or the backed-up service was running, so a
   backup taken from a stopped service no longer leaves a running node unloaded
