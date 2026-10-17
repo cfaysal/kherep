@@ -152,6 +152,19 @@ export function beginServiceDrain(paths: NodePaths, probe?: ServiceOwnerProbe): 
   return acquireServiceOwnerFile(serviceDrainFile(paths), "another managed service drain is already active", probe);
 }
 
+// Issue #472: read-only. Only the next upgrade or rollback reclaims a stale drain.
+export function describeServiceDrain(
+  paths: NodePaths, probe: ServiceOwnerProbe = defaultServiceOwnerProbe,
+): "none" | "active" | "stale" | "unknown" {
+  let existing: ReturnType<typeof readOwner>;
+  try { existing = readOwner(serviceDrainFile(paths)); }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? "none" : "unknown"; }
+  try {
+    const active = probe.active(existing.owner);
+    return active === true ? "active" : active === false ? "stale" : "unknown";
+  } catch { return "unknown"; }
+}
+
 export function serviceAdmissionsIdle(
   paths: NodePaths, probe: ServiceOwnerProbe = defaultServiceOwnerProbe, onBlocked?: (blocker: ServiceAdmissionBlocker) => void,
 ): boolean {

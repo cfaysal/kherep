@@ -1,185 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { nodePaths } from "./config.mts";
-import type { DaemonState } from "./daemon-state.mts";
-import { readServiceBackup, snapshotDigests, writeServiceReceipt } from "./service-records.mts";
-import { claimServiceLaunchPermit } from "./service-launch-permit.mts";
+import { readServiceBackup, snapshotDigests } from "./service-records.mts";
+import { STOP_TIMEOUT_MS, lifecycleDefaults } from "./service-lifecycle.mts";
 import { activateManagedService, readServiceReceipt, rollbackManagedService } from "./service-transaction.mts";
-import {
-  FAILED_WRITE_SNAPSHOT, type NativeServiceSnapshot, type ServiceAdapter, type ServiceBinding, type ServiceStopContext,
-} from "./service-types.mts";
-
-const source = (root: string, char: string) => ({ root, commit: char.repeat(40), digest: char.repeat(64), kind: "pin" as const, verified: true });
-
-class FakeAdapter implements ServiceAdapter {
-  readonly platform = "win32" as const;
-  events: string[] = [];
-  preflightCalls: Array<{ binding: ServiceBinding; expected: ServiceStopContext | undefined }> = [];
-  stopCalls: Array<{ binding: ServiceBinding; expected: ServiceStopContext | undefined }> = [];
-  snapshot: NativeServiceSnapshot | null;
-  owned = true;
-  failCandidateStart = false;
-  failCandidateAfterState = false;
-  candidateRunningUnknown = false;
-  canonicalizeCandidate = false;
-  rejectCandidateValidation = false;
-  rejectExistingValidation = false;
-  failWriteAfterMutation = false;
-  failWriteBeforeMutation = false;
-  foreignAfterWriteFailure = false;
-  failCandidateHealth = false;
-  failCandidateRecoveryStop = false;
-  failPriorHealth = false;
-  strictPreflightGeneration = false;
-  strictStopGeneration = false;
-  detachedSupervisor = false;
-  adoptionRootAvailable = true;
-  descendants = 0;
-  mutateDuringPreflight = false;
-  adoptNodeExecutable: string;
-  state: DaemonState | null;
-  oldPidAlive = true;
-  candidatePidAlive = true;
-  readonly old: ServiceBinding;
-  readonly candidate: ServiceBinding;
-  constructor(old: ServiceBinding, candidate: ServiceBinding) {
-    this.old = old;
-    this.candidate = candidate;
-    this.adoptNodeExecutable = candidate.nodeExecutable;
-    this.snapshot = { definition: Buffer.from("RAW_OLD_XML"), security: Buffer.from("RAW_OLD_SDDL"), running: true, pid: 41 };
-    this.state = { pid: 41, startedAt: "2026-10-14T10:00:00.000Z", connectedAt: "2026-10-14T10:00:01.000Z", source: old.source };
-  }
-  async currentUser() { return "EXAMPLE\\operator"; }
-  async read() { return this.snapshot && { ...this.snapshot, definition: Buffer.from(this.snapshot.definition), security: Buffer.from(this.snapshot.security) }; }
-  async fresh() { this.events.push("fresh"); return Buffer.from("RAW_NEW_XML"); }
-  async adopted() { this.events.push("adopt"); return Buffer.from("RAW_NEW_XML"); }
-  async retargeted() { this.events.push("retarget"); return Buffer.from("RAW_NEW_XML"); }
-  async adoptionNode() { return this.adoptNodeExecutable; }
-  async adoptionSourceRoot() {
-    if (!this.adoptionRootAvailable) throw new Error("legacy source root is unavailable");
-    return this.old.source.root;
-  }
-  async adoptionLogFile() { return this.old.logFile; }
-  async freshSecurity() { return Buffer.alloc(0); }
-  async validateManaged(snapshot: NativeServiceSnapshot, binding: ServiceBinding) {
-    if (this.rejectExistingValidation && binding.source.commit === this.old.source.commit) throw new Error("service must have exactly one logon trigger and no other triggers");
-    if (this.rejectCandidateValidation && binding.source.commit === this.candidate.source.commit) throw new Error("rejected candidate");
-    if (binding.source.commit === this.candidate.source.commit && !["RAW_NEW_XML", "NATIVE_NEW_XML"].includes(snapshot.definition.toString())) {
-      throw new Error("wrong candidate");
-    }
-  }
-  async processOwned(pid: number, binding: ServiceBinding, _startedAt: string, sourceRoot?: string) {
-    this.events.push(`owned:${pid}${sourceRoot ? `:${sourceRoot}` : ""}`);
-    if (this.failCandidateHealth && binding.source.commit === this.candidate.source.commit
-      && this.events.some(event => event === "start:RAW_NEW_XML" || event === "start:NATIVE_NEW_XML")) return false;
-    if (this.failPriorHealth && binding.source.commit === this.old.source.commit
-      && this.events.includes("start:MANAGED_OLD_XML")) return false;
-    return this.owned;
-  }
-  async preflightStop(binding: ServiceBinding, expected: ServiceStopContext | undefined) {
-    this.events.push(`preflight:${expected?.pid ?? "gap"}`);
-    this.preflightCalls.push({ binding, expected });
-    if (this.strictPreflightGeneration && this.snapshot?.definition.toString() === "MANAGED_OLD_XML"
-      && binding.supervisorGeneration !== this.old.supervisorGeneration) throw new Error("prior preflight generation differs");
-    if (!expected && this.detachedSupervisor) throw new Error("detached managed supervisor remains");
-    if (this.descendants > 0) throw new Error("STOP_BLOCKED_NATIVE_DESCENDANTS");
-    if (this.mutateDuringPreflight && this.snapshot) {
-      this.snapshot.definition = Buffer.from("UNEXPECTED_XML");
-      this.snapshot.security = Buffer.from("UNEXPECTED_SDDL");
-    }
-  }
-  async write(_binding: ServiceBinding, definition: Buffer, security: Buffer) {
-    this.events.push(`write:${definition.toString()}`);
-    if (definition.toString() === "RAW_NEW_XML" && this.failWriteBeforeMutation) {
-      throw new Error("synthetic native write failed before mutation");
-    }
-    const candidate = definition.toString() === "RAW_NEW_XML" && this.canonicalizeCandidate;
-    this.snapshot = { definition: candidate ? Buffer.from("NATIVE_NEW_XML") : Buffer.from(definition),
-      security: candidate ? Buffer.from("NATIVE_NEW_SDDL") : Buffer.from(security), running: false };
-    if (definition.toString() === "RAW_NEW_XML" && this.failWriteAfterMutation) {
-      const associated = this.snapshot;
-      if (this.foreignAfterWriteFailure) {
-        this.snapshot = { definition: Buffer.from("FOREIGN_XML"), security: Buffer.from("FOREIGN_SDDL"), running: false };
-      }
-      const error = new Error("synthetic native security readback failure");
-      Object.defineProperty(error, FAILED_WRITE_SNAPSHOT, { value: associated });
-      throw error;
-    }
-  }
-  async remove() { this.events.push("remove"); this.snapshot = null; }
-  async stop(binding: ServiceBinding, expected: ServiceStopContext | undefined) {
-    this.events.push("stop");
-    this.stopCalls.push({ binding, expected });
-    if (this.failCandidateRecoveryStop && binding.source.commit === this.candidate.source.commit && expected?.pid === 42) {
-      throw new Error("synthetic candidate stop failure");
-    }
-    if (this.strictStopGeneration && this.snapshot?.definition.toString() === "MANAGED_OLD_XML"
-      && binding.supervisorGeneration !== this.old.supervisorGeneration) {
-      throw new Error("candidate supervisor generation differs");
-    }
-    if (this.snapshot) this.snapshot.running = false;
-    if (expected?.pid === 42) this.candidatePidAlive = false;
-    else this.oldPidAlive = false;
-  }
-  async start(binding: ServiceBinding) {
-    if (binding.platform === "win32" && binding.supervisorGeneration) {
-      assert.equal(claimServiceLaunchPermit(nodePaths(binding.configRoot), binding), true,
-        "native start receives one exact generation-bound permit");
-    }
-    const definition = this.snapshot?.definition.toString();
-    this.events.push(`start:${definition}`);
-    if ((definition === "RAW_NEW_XML" || definition === "NATIVE_NEW_XML") && this.failCandidateStart) {
-      if (this.snapshot && this.candidateRunningUnknown) this.snapshot.running = "unknown";
-      if (this.failCandidateAfterState) {
-        if (this.snapshot) this.snapshot.running = true;
-        this.oldPidAlive = false;
-        this.candidatePidAlive = true;
-        this.state = { pid: 42, startedAt: "2026-10-14T11:00:00.000Z", connectedAt: "2026-10-14T11:00:01.000Z",
-          source: this.candidate.source, service: { name: this.candidate.serviceName, platform: "win32", taskPath: this.candidate.taskPath } };
-      }
-      throw new Error("synthetic start failure");
-    }
-    if (this.snapshot) this.snapshot.running = true;
-    const candidate = definition === "RAW_NEW_XML" || definition === "NATIVE_NEW_XML";
-    this.oldPidAlive = !candidate;
-    this.candidatePidAlive = candidate;
-    this.state = candidate
-      ? { pid: 42, startedAt: "2026-10-14T11:00:00.000Z", connectedAt: "2026-10-14T11:00:01.000Z", source: this.candidate.source,
-        service: { name: this.candidate.serviceName, platform: "win32", taskPath: this.candidate.taskPath } }
-      : { pid: 41, startedAt: "2026-10-14T10:00:00.000Z", connectedAt: "2026-10-14T10:00:01.000Z", source: this.old.source };
-  }
-}
-
-function seedManaged(h: ReturnType<typeof setup>): void {
-  h.adapter.snapshot = { definition: Buffer.from("MANAGED_OLD_XML"), security: Buffer.from("PRESERVED_SDDL"), running: true, pid: 41 };
-  h.adapter.state = { pid: 41, startedAt: "2026-10-14T10:00:00.000Z", connectedAt: "2026-10-14T10:00:01.000Z",
-    source: h.old.source, service: { name: h.old.serviceName, platform: h.old.platform, taskPath: h.old.taskPath } };
-  writeServiceReceipt(h.paths, { version: 1, binding: h.old, ...snapshotDigests(h.adapter.snapshot), activatedAt: "2026-10-14T10:00:02.000Z" });
-}
-
-function setup(t: test.TestContext) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-service-transaction-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const paths = nodePaths(root);
-  fs.mkdirSync(paths.dir, { recursive: true });
-  const common = { serviceName: "KherepNode", taskPath: "\\Kherep\\", platform: "win32" as const,
-    workspace: path.join(root, "workspace"), configRoot: root, nodeExecutable: process.execPath,
-    logFile: path.join(root, "legacy-daemon.log"), supervisorGeneration: "11111111-1111-4111-8111-111111111111" };
-  const old = { ...common, source: source(path.join(root, "old-pin"), "a") };
-  const candidate = { ...common, source: source(path.join(root, "new-pin"), "b") };
-  for (const pin of [old.source.root, candidate.source.root]) fs.mkdirSync(pin, { recursive: true });
-  const adapter = new FakeAdapter(old, candidate);
-  let sourceValid = true;
-  const deps = { paths, adapter, readDaemonState: () => adapter.state,
-    pidAlive: (pid: unknown) => (pid === 42 && adapter.candidatePidAlive) || (pid === 41 && adapter.oldPidAlive),
-    sleep: async () => {}, timeoutMs: 50,
-    verifySource: () => sourceValid };
-  return { paths, old, candidate, adapter, deps, setSourceValid: (value: boolean) => { sourceValid = value; } };
-}
+import type { NativeServiceSnapshot } from "./service-types.mts";
+import { seedManaged, setup, source } from "./service-transaction-fixture.mts";
 
 test("adoption proves ownership, backs up exact native bytes, stops before write and verifies the candidate", async (t) => {
   const h = setup(t);
@@ -536,4 +364,108 @@ test("rollback refuses a drifted mutable legacy source and a held transaction lo
   fs.writeFileSync(lock, "held");
   await assert.rejects(activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps), /transaction is already active/);
   assert.ok(activated.backupId);
+});
+
+type ServiceFailure = Error & { code?: string; recovery?: string; stage?: string; blocker?: string };
+const drainExists = (h: ReturnType<typeof setup>): boolean => fs.existsSync(path.join(h.paths.dir, "service", "drain"));
+async function upgradedFromStopped(h: ReturnType<typeof setup>): Promise<void> {
+  seedManaged(h);
+  h.adapter.snapshot!.running = false;
+  delete h.adapter.snapshot!.pid;
+  h.adapter.oldPidAlive = false;
+  await activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps);
+}
+
+test("rollback starts the prior service when the backup was taken from a stopped service", async (t) => {
+  const h = setup(t);
+  await upgradedFromStopped(h);
+  assert.equal(readServiceBackup(h.paths, readServiceReceipt(h.paths)!.previousBackup!).backup.wasRunning, false);
+  await rollbackManagedService({ binding: h.candidate }, h.deps);
+  assert.ok(h.adapter.events.includes("start:MANAGED_OLD_XML"), "a running current service stays running after rollback");
+  assert.equal(h.adapter.snapshot?.definition.toString(), "MANAGED_OLD_XML");
+  assert.equal(h.adapter.snapshot?.running, true);
+  assert.equal(h.adapter.state?.pid, 41);
+  assert.equal(readServiceReceipt(h.paths)?.binding.source.commit, h.old.source.commit);
+  assert.equal(drainExists(h), false);
+});
+
+test("rollback refuses ok when the restored service is not running after start", async (t) => {
+  const h = setup(t);
+  seedManaged(h);
+  await activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps);
+  h.adapter.startWithoutLoad = true;
+  await assert.rejects(rollbackManagedService({ binding: h.candidate }, h.deps),
+    (error: ServiceFailure) => error.code === "SERVICE_ROLLBACK_FAILED" && error.stage === "settle");
+  assert.equal(readServiceReceipt(h.paths)?.binding.source.commit, h.candidate.source.commit,
+    "the prior receipt is written only after the restored service is verified running");
+});
+
+test("a stop that never completes reports its stage and leaves no drain", async (t) => {
+  const h = setup(t);
+  seedManaged(h);
+  await activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps);
+  h.adapter.events.length = 0;
+  h.adapter.stopKeepsPidAlive = true;
+  await assert.rejects(rollbackManagedService({ binding: h.candidate }, h.deps),
+    (error: ServiceFailure) => error.code === "SERVICE_ROLLBACK_FAILED" && error.recovery === "unknown"
+      && error.stage === "prove-stopped" && error.blocker === "RECOVERY_ABSENCE_UNPROVEN");
+  assert.equal(h.adapter.events.includes("write:MANAGED_OLD_XML"), false, "the prior definition is never written");
+  assert.equal(drainExists(h), false, "a rollback that wrote no definition releases its drain");
+  assert.equal(readServiceReceipt(h.paths)?.binding.source.commit, h.candidate.source.commit);
+});
+
+test("a stop that throws before taking effect restores the live prior without restarting it", async (t) => {
+  const h = setup(t);
+  seedManaged(h);
+  await activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps);
+  h.adapter.events.length = 0;
+  h.adapter.failStopBeforeEffect = true;
+  await assert.rejects(rollbackManagedService({ binding: h.candidate }, h.deps),
+    (error: ServiceFailure) => error.code === "SERVICE_ROLLBACK_FAILED" && error.recovery === "restored"
+      && error.stage === "stop" && error.blocker === undefined);
+  assert.equal(h.adapter.events.some(event => event.startsWith("write:")), false);
+  assert.equal(h.adapter.events.some(event => event.startsWith("start:")), false);
+  assert.equal(h.adapter.snapshot?.definition.toString(), "RAW_NEW_XML");
+  assert.equal(h.adapter.snapshot?.running, true);
+  assert.equal(h.adapter.candidatePidAlive, true);
+  assert.equal(drainExists(h), false);
+});
+
+test("upgrade proceeds over a stale daemon record when the service is stopped and its daemon is dead", async (t) => {
+  const h = setup(t);
+  seedManaged(h);
+  h.adapter.snapshot!.running = false;
+  delete h.adapter.snapshot!.pid;
+  h.adapter.oldPidAlive = false;
+  h.adapter.state = { ...h.adapter.state!, source: source(path.join(h.paths.dir, "other-pin"), "c") };
+  await activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps);
+  assert.equal(readServiceReceipt(h.paths)?.binding.source.commit, h.candidate.source.commit);
+  assert.equal(h.adapter.snapshot?.running, true);
+  assert.equal(h.adapter.state?.pid, 42);
+});
+
+test("upgrade still refuses a stale daemon record while the service is running", async (t) => {
+  const h = setup(t);
+  seedManaged(h);
+  h.adapter.state = { ...h.adapter.state!, source: source(path.join(h.paths.dir, "other-pin"), "c") };
+  await assert.rejects(activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps),
+    /running daemon does not match the managed service receipt/);
+  assert.equal(h.adapter.events.includes("stop"), false);
+});
+
+test("stop verification uses the stop timeout", async (t) => {
+  const h = setup(t);
+  assert.equal(lifecycleDefaults({ paths: h.paths, adapter: h.adapter }).stopTimeout, STOP_TIMEOUT_MS);
+  assert.ok(STOP_TIMEOUT_MS > 60_000, "the stop budget outlasts the launchd ExitTimeOut");
+  assert.equal(lifecycleDefaults({ paths: h.paths, adapter: h.adapter, timeoutMs: 50 }).stopTimeout, 50);
+  seedManaged(h);
+  await activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps);
+  h.adapter.stopKeepsPidAlive = true;
+  const exited = setTimeout(() => { h.adapter.candidatePidAlive = false; h.adapter.snapshot!.running = false; }, 150);
+  t.after(() => clearTimeout(exited));
+  await rollbackManagedService({ binding: h.candidate }, { ...h.deps, stopTimeoutMs: 5_000,
+    sleep: (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, Math.min(milliseconds, 5))) });
+  assert.equal(readServiceReceipt(h.paths)?.binding.source.commit, h.old.source.commit,
+    "a daemon that exits after the general 50 ms budget but within the stop budget completes the rollback");
+  assert.equal(h.adapter.state?.pid, 41);
 });
