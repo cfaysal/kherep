@@ -116,15 +116,15 @@ export async function stopClaude(record: TaskRecord, runVersion: string, runner:
   const grace = deps.graceMs ?? 5_000;
   let capped: boolean;
   try {
-    let tree: ProcessIdentity[];
-    ({ tree, capped } = grownTree(deps, identities));
-    if (!await waitStopped(deps, tree, grace)) {
+    const grown = grownTree(deps, identities);
+    capped = grown.capped;
+    if (!await waitStopped(deps, grown.tree, grace)) {
       if (startTimeOf(deps, root.pid) === root.start) {
         log("the session process still runs after claude stop; nothing signalled");
         return refused("stop_failed", "failed", "running");
       }
       log("processes outlived claude stop; signalling each by its pid");
-      if ((await endSurvivors(deps, tree, grace)).capped) capped = true;
+      if ((await endSurvivors(deps, grown.tree, grace)).capped) capped = true;
     }
   } catch (error) {
     const message = messageOf(error);

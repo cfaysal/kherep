@@ -234,7 +234,7 @@ test("a row without pid while the processes live is no evidence: survivors after
   for (const pid of [MCP, SH]) ends.set(pid, "never");
   node.onStop(() => { starts.delete(PID); });
   const result = await stop((await status()).runVersion);
-  assert.deepEqual([result.state, result.errorCode, result.processState, result.stopConfirmed], ["failed", "stop_failed", "running", false]);
+  assert.deepEqual(outcome(result), FAILED_RUNNING);
   assert.equal(node.rows[0].pid, undefined, "the row shows no pid while the processes live");
   assert.deepEqual([task().state, Boolean(task().operatorStoppedAt)], ["running", true]);
   assert.deepEqual(signals, [[MCP, "SIGTERM", "process"], [SH, "SIGTERM", "process"], [MCP, "SIGKILL", "process"], [SH, "SIGKILL", "process"]]);
