@@ -16,7 +16,6 @@ export interface SessionCommandDeps {
   // The node executable and CLI path of the fallback task command.
   node?: string; cli?: string;
   io?: LauncherIo;
-  isFile?: (file: string) => boolean;
 }
 
 function hostIsFile(file: string): boolean {
@@ -31,7 +30,7 @@ export function launcherOrNull(paths: NodePaths, deps: SessionCommandDeps = {}):
   let command: string;
   try { command = launcherCommand(root, platform); } catch { return null; }
   if (!resolveLauncher(root, deps.io).ok) return null;
-  const isFile = deps.isFile ?? deps.io?.isFile ?? hostIsFile;
+  const isFile = deps.io?.isFile ?? hostIsFile;
   return isFile(launcherPath(root, platform)) ? command : null;
 }
 
