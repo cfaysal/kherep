@@ -85,7 +85,13 @@ export function codexNode(t: test.TestContext, sessions: Record<string, unknown>
   const log = path.join(bin, "runs.jsonl");
   const fake = path.join(bin, "codex");
   fs.writeFileSync(fake, SCRIPT(log), { mode: 0o755 });
-  const runs = (): FakeRun[] => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l) as FakeRun) : []);
+  // Only complete, non-empty lines count as recorded starts (issue #452).
+  const runs = (): FakeRun[] => {
+    if (!fs.existsSync(log)) return [];
+    const text = fs.readFileSync(log, "utf8");
+    const complete = text.endsWith("\n") ? text : text.slice(0, text.lastIndexOf("\n") + 1);
+    return complete.split("\n").filter((l) => l.length > 0).map((l) => JSON.parse(l) as FakeRun);
+  };
   // No fake outlives its test.
   t.after(() => {
     for (const run of runs()) {
@@ -118,7 +124,13 @@ export function fakeCodexBin(t: test.TestContext): { file: string; runs: () => F
   } else {
     fs.writeFileSync(file, SCRIPT(log), { mode: 0o755 });
   }
-  const runs = (): FakeRun[] => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l) as FakeRun) : []);
+  // Only complete, non-empty lines count as recorded starts (issue #452).
+  const runs = (): FakeRun[] => {
+    if (!fs.existsSync(log)) return [];
+    const text = fs.readFileSync(log, "utf8");
+    const complete = text.endsWith("\n") ? text : text.slice(0, text.lastIndexOf("\n") + 1);
+    return complete.split("\n").filter((l) => l.length > 0).map((l) => JSON.parse(l) as FakeRun);
+  };
   const childFile = `${log}.child`;
   const child = (): number | null => (fs.existsSync(childFile) ? Number(fs.readFileSync(childFile, "utf8")) : null);
   t.after(() => {
