@@ -9,11 +9,17 @@ import type { AppServerRequestError } from "./codex-app-server-client.mts";
 // and which strings the attempt already holds the message contains. Nothing is
 // persisted, and the code names no cause by itself.
 
-export const FORK_RPC_METHODS = ["initialize", "thread/read", "thread/turns/list", "thread/fork"] as const;
+const FORK_RPC_METHODS = ["initialize", "thread/read", "thread/turns/list", "thread/fork"] as const;
 export type ForkRpcMethod = typeof FORK_RPC_METHODS[number];
 const MENTIONS = ["owner", "turn", "cwd", "codex-home", "kherep"] as const;
 export const FORK_RPC_OVERLONG_BYTES = 4096;
-export interface ForkRpcContext { owner: string; cwd: string; producer: { resolvedCodexHome: string } }
+interface ForkRpcContext { owner: string; cwd: string; producer: { resolvedCodexHome: string } }
+
+function shapeOf(message: unknown): "missing" | "empty" | "text" | "overlong" {
+  if (typeof message !== "string") return "missing";
+  if (message === "") return "empty";
+  return Buffer.byteLength(message, "utf8") > FORK_RPC_OVERLONG_BYTES ? "overlong" : "text";
+}
 
 export function forkRpcError(method: ForkRpcMethod, error: Pick<AppServerRequestError, "code" | "rawMessage">, ctx: ForkRpcContext,
   lastTurnId?: string): { line: string } {
@@ -21,8 +27,7 @@ export function forkRpcError(method: ForkRpcMethod, error: Pick<AppServerRequest
   const message = error.rawMessage;
   const text = typeof message === "string" ? message : "";
   const code = Number.isInteger(error.code) ? String(error.code) : "none";
-  const shape = typeof message !== "string" ? "missing" : message === "" ? "empty"
-    : Buffer.byteLength(message, "utf8") > FORK_RPC_OVERLONG_BYTES ? "overlong" : "text";
+  const shape = shapeOf(message);
   const sha256 = crypto.createHash("sha256").update(text, "utf8").digest("hex").slice(0, 12);
   // Tests against strings the attempt already holds, without case; an empty one matches nothing.
   const lower = text.toLowerCase();
