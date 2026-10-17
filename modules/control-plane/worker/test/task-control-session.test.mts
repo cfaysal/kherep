@@ -8,10 +8,10 @@ import { authenticate, enroll, FACTS, newKey, registry, session, type NodeKey, t
 
 const capabilities = [TASK_CONTROL_CAPABILITY, SESSIONS_CAPABILITY, "messaging.v1"];
 
-async function node(name: string): Promise<{ nodeId: string; key: NodeKey }> {
+async function node(name: string, runtimes = ["codex"]): Promise<{ nodeId: string; key: NodeKey }> {
   const key = await newKey();
   const nodeId = await enroll(key, name);
-  await registry().updateRegistration(nodeId, FACTS, [{ name: "codex", kind: "cli" }], capabilities);
+  await registry().updateRegistration(nodeId, FACTS, runtimes.map((runtime) => ({ name: runtime, kind: "cli" })), capabilities);
   return { nodeId, key };
 }
 
@@ -77,6 +77,53 @@ describe("NodeSession owner task-control events", () => {
       .toMatchObject({ requestId, state: "succeeded", freshness: "cached" });
     expect(await runInDurableObject(session(target.nodeId), (_instance, state) =>
       state.storage.sql.exec("SELECT 1 FROM outbox").toArray())).toEqual([]);
+    ownerSocket.ws.close(1000, "done");
+    targetSocket.ws.close(1000, "done");
+  });
+
+  it("a confirming Claude stop result passes the frame validation and is stored like the Codex one (issue #460, U7)", async () => {
+    const owner = await node(`claude-owner-${crypto.randomUUID()}`, ["claude"]);
+    const target = await node(`claude-target-${crypto.randomUUID()}`, ["claude"]);
+    const ownerSocket = await authenticate(owner.nodeId, owner.key);
+    const targetSocket = await authenticate(target.nodeId, target.key);
+    const sourceMessageId = await source(owner.nodeId, target.nodeId);
+    const taskId = crypto.randomUUID();
+    const runVersion = "e".repeat(64);
+    targetSocket.send(makeEnvelope("event", {
+      name: "task.control.register", registrationId: crypto.randomUUID(), taskId, runtime: "claude",
+      associationVersion: 1, sourceMessageId,
+    }, 1, 0));
+    expect((await named(targetSocket, "task.control.registration.receipt")).body).toMatchObject({ ok: true, taskId });
+
+    const requestId = crypto.randomUUID();
+    ownerSocket.send(makeEnvelope("event", {
+      name: "task.control.submit", requestId, action: "stop", taskId, expectedRunVersion: runVersion,
+    }, 1, 0));
+    const execute = (await named(targetSocket, "task.control.execute")).body as Record<string, unknown>;
+    expect(execute).toMatchObject({ requestId, taskId, runtime: "claude", action: "stop", expectedRunVersion: runVersion });
+    expect((await named(ownerSocket, "task.control.query.result")).body).toMatchObject({ requestId, state: "pending" });
+
+    const result = {
+      name: "task.control.result", operationId: execute.operationId, taskId, state: "succeeded", runtime: "claude",
+      taskState: "stopped", processState: "closed", runVersion, observedAt: "2026-10-17T10:30:00.000Z",
+      freshness: "fresh", stopSupported: true, stopConfirmed: true,
+    };
+    // The confirmation shape checks are runtime-neutral, not absent: the frame validator refuses a confirmed stop
+    // without stopSupported, the store refuses one for another run version; neither stores a result.
+    targetSocket.send(makeEnvelope("event", { ...result, stopSupported: false }, 2, 0));
+    const invalid = await targetSocket.next();
+    expect([invalid.type, (invalid.body as { errorCode?: string }).errorCode]).toEqual(["error", "invalid_frame"]);
+    targetSocket.send(makeEnvelope("event", { ...result, runVersion: "f".repeat(64) }, 3, 0));
+    const mismatch = await targetSocket.next();
+    expect([mismatch.type, (mismatch.body as { errorCode?: string }).errorCode]).toEqual(["error", "result_mismatch"]);
+    targetSocket.send(makeEnvelope("event", result, 4, 0));
+    expect((await named(targetSocket, "task.control.result.receipt")).body)
+      .toEqual({ name: "task.control.result.receipt", operationId: execute.operationId, storedState: "succeeded" });
+
+    ownerSocket.send(makeEnvelope("event", { name: "task.control.query", requestId }, 2, 0));
+    expect((await named(ownerSocket, "task.control.query.result")).body).toMatchObject({
+      requestId, state: "succeeded", runtime: "claude", stopConfirmed: true, runVersion, freshness: "cached",
+    });
     ownerSocket.ws.close(1000, "done");
     targetSocket.ws.close(1000, "done");
   });
