@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -146,19 +147,41 @@ test("a running attempt carries the fork id, the cutoff turn and the goal proof 
 });
 
 test("a thread/fork RPC error fails closed: fork-rejected, no text kept, no turn, a clean helper exit", async (t) => {
-  const message = "synthetic -32600 refusal text with token sk-live_Secret1 and /private/path";
-  const f = forkNode(t, { errors: { "thread/fork": { code: -32600, message } } });
+  const error = { code: -32600, message: "", data: { canary: "data-canary-7f3a" } };
+  const f = forkNode(t, { errors: { "thread/fork": error } });
+  // #477: the canary set; the fake reads the error when it answers, after the node exists.
+  error.message = `synthetic -32600 refusal text of ${FORK_OWNER} at ${f.cwd} home ${f.home} with token sk-live_Secret1, /private/path`
+    + " and C:\\Users\\canary\\secret.txt asked: Is the build green?";
   const id = f.add();
-  await poll(f);
+  const logs: string[] = [];
+  for (let round = 0; round < 2; round++) {
+    pollCodexQueue(f.deps(), (line) => { logs.push(line); });
+    await codexQueueIdle();
+  }
   const [attempt] = forkAttempts(f.paths, FORK_OWNER);
   assert.deepEqual([attempt?.state, attempt?.reason, attempt?.detail, attempt?.forkId, attempt?.lastTurnId],
     ["failed", "fork-rejected", undefined, undefined, undefined], "terminal, never running");
+  assert.equal(Object.hasOwn(attempt!, "rpc"), false, "#477: no persisted field");
   const run = f.app.runs[0]!;
   assert.ok(!run.requests.some((m) => m.method === "turn/start"));
-  assert.deepEqual([run.ended, run.signals], [true, []], "stdin end closed it; no signal");
+  assert.deepEqual([f.app.runs.length, run.ended, run.signals], [1, true, []], "stdin end closed it; no signal");
+  const dirs = fs.readdirSync(f.paths.dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+  assert.deepEqual(dirs, ["codex-fork-attempts", "codex-sessions", "inbox", "listeners", "service"], "no new store in the node dir");
+  const hash = crypto.createHash("sha256").update(error.message, "utf8").digest("hex").slice(0, 12);
+  // The test's temporary directory may itself carry the word kherep, then the path is also that mention.
+  const kherep = error.message.toLowerCase().includes("kherep") ? ",kherep" : "";
+  assert.deepEqual(logs.filter((line) => line.includes("refused")),
+    [`kherep-node: Codex fork helper refused thread/fork (code -32600, text, sha256 ${hash}, mentions owner,cwd,codex-home${kherep})`]);
+  const outbox = fs.existsSync(f.paths.outbox) ? fs.readdirSync(f.paths.outbox) : [];
+  assert.deepEqual([outbox, fs.existsSync(path.join(f.paths.inbox, "proxied"))], [[], false], "nothing relayed");
   const written = fs.readFileSync(path.join(forkAttemptsPath(f.paths, FORK_OWNER), `${id}.json`), "utf8")
     + fs.readFileSync(wakeAudit(f.paths), "utf8");
-  for (const text of ["synthetic -32600", "sk-live", "/private/path"]) assert.equal(written.includes(text), false, text);
+  for (const text of ["synthetic -32600", "refusal text", "sk-live", "Secret1", "/private/path", "C:\\Users\\canary", "secret.txt",
+    "data-canary-7f3a", "Is the build green?"]) {
+    assert.equal(written.includes(text), false, text);
+    assert.equal(logs.join("\n").includes(text), false, `log: ${text}`);
+  }
+  for (const text of [FORK_OWNER, f.cwd, f.home]) assert.equal(logs.join("\n").includes(text), false, `log: ${text}`);
   assert.deepEqual(forkAudit(f).map((line) => line.action), ["fork-failed"]);
 });
 

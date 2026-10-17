@@ -44,8 +44,8 @@ export interface ForkScenario {
   afterCompleted?: (fork: string, turn: string) => Message[];
   // Sent when stdin ends, before the process ends: during close.
   onClose?: (fork: string) => Message[];
-  // A {error} entry answers that method with the error instead.
-  errors?: Record<string, { code: number; message: string }>;
+  // A {error} entry answers that method with the error instead; malformed fields and data are sent as given.
+  errors?: Record<string, { code?: unknown; message?: unknown; data?: unknown }>;
   forkThread?: Record<string, unknown>; forkTop?: Record<string, unknown>;
   answer?: string; turnStatus?: string; summaryText?: string;
   // Notifications during the turn, after turn/started, sent also with hang.
@@ -54,7 +54,8 @@ export interface ForkScenario {
   early?: boolean; hang?: boolean;
   // A server request at this method, with the id of that pending request.
   serverRequestAt?: string;
-  exitAt?: string; malformedAt?: string;
+  // hangAt: that request is never answered, so the client's request timeout ends it.
+  exitAt?: string; malformedAt?: string; hangAt?: string;
   // Called with each request before it is answered.
   onRequest?: (method: string, params: Record<string, any>) => void;
   // stdin end does not end the process; only SIGKILL does, unless neverExit.
@@ -127,6 +128,7 @@ export function fakeAppServer(scenario: ForkScenario) {
         scenario.onRequest?.(method, request.params ?? {});
         if (scenario.exitAt === method) { child.end(); continue; }
         if (scenario.malformedAt === method) { stdout.write("{not json\n"); continue; }
+        if (scenario.hangAt === method) continue;
         if (scenario.serverRequestAt === method) {
           send({ id: request.id, method: "item/commandExecution/requestApproval", params: { threadId: fork, command: "synthetic" } });
         }

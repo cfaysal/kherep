@@ -11,6 +11,7 @@ import {
 } from "./codex-fork-goal.mts";
 import { forkOutputSchema, forkPrompt, validateForkAnswer } from "./codex-fork-answer.mts";
 import type { ForkAttemptReason } from "./codex-fork-attempts.mts";
+import { forkRpcError, type ForkRpcMethod } from "./codex-fork-refusal.mts";
 import { ForkWatch } from "./codex-fork-watch.mts";
 import { lastLine } from "./codex-output.mts";
 import { signalGroupReport, type CodexDeps } from "./codex-process.mts";
@@ -127,8 +128,12 @@ function discardOnViolation(outcome: ForkOutcome, watch: ForkWatch): ForkOutcome
   return { state: "failed", from: outcome.from, reason: watch.violation };
 }
 
-async function ask(s: Session, method: string, params: unknown, ms: number, reason: ForkAttemptReason): Promise<unknown> {
-  try { return await s.client.request(method, params, ms); } catch { throw new Stop(s.gone() ? "helper-exit" : reason); }
+async function ask(s: Session, method: ForkRpcMethod, params: unknown, ms: number, reason: ForkAttemptReason, lastTurnId?: string): Promise<unknown> {
+  try { return await s.client.request(method, params, ms); } catch (error) {
+    // Issue #477: a refusal logs content-free metadata; a throwing formatter or logger leaves it as it is.
+    if (error instanceof AppServerRequestError && !s.gone()) try { s.input.log(forkRpcError(method, error, s.input, lastTurnId).line); } catch { /* the refusal stands */ }
+    throw new Stop(s.gone() ? "helper-exit" : reason);
+  }
 }
 
 // One thread/goal/get as the RPC outcome the pure checks of codex-fork-goal.mts
@@ -168,7 +173,7 @@ async function converse(s: Session): Promise<ForkOutcome> {
     if (s.watch.violation) return failed(s.watch.violation);
     if (!input.stillAccepted()) return { state: "superseded", from: "launching" };
     const fork = await ask(s, "thread/fork", forkParams(owner, newest.id, input.cwd, input.features, input.mcpNames), s.t.forkMs,
-      "fork-rejected");
+      "fork-rejected", newest.id);
     const forkThread = object(fork) && object(fork.thread) ? fork.thread : null;
     const forkId = forkThread?.id;
     if (!forkThread || typeof forkId !== "string" || !UUID.test(forkId) || forkId === owner || forkThread.forkedFromId !== owner

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import test from "node:test";
 
 import { ANSWER, FORK_ID, FORK_OWNER, FORK_TURN, LAST_TURN, type ForkScenario } from "./codex-fork-fixture.mts";
@@ -12,6 +13,9 @@ import { testServiceOwner } from "./task-fixture.mts";
 
 const SEQUENCE = ["initialize", "initialized", "thread/read", "thread/turns/list", "thread/goal/get", "thread/fork", "thread/goal/get",
   "turn/start"];
+
+// Issue #477: a JSON-RPC refusal is one local log line of content-free metadata.
+const sha = (text: string): string => crypto.createHash("sha256").update(text, "utf8").digest("hex").slice(0, 12);
 
 test("the happy path: exact sequence, exact fork request, persisted running, then the validated answer", async (t) => {
   const r = await runFork(t);
@@ -97,6 +101,8 @@ test("fork response shape: same id, wrong source, persisted, writable or other a
   }
   const rejected = await runFork(t, { errors: { "thread/fork": { code: -32600, message: "cannot fork" } } });
   assert.deepEqual(rejected.outcome, { state: "failed", from: "launching", reason: "fork-rejected" });
+  assert.equal(Object.hasOwn(rejected.outcome, "rpc"), false, "#477: no new outcome field");
+  assert.ok(rejected.logs.includes(`kherep-node: Codex fork helper refused thread/fork (code -32600, text, sha256 ${sha("cannot fork")}, mentions none)`));
 });
 
 test("T17: anything but the ephemeral proof on the fork fails before the turn, with its detail code", async (t) => {

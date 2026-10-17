@@ -250,7 +250,17 @@ admission. No version or hash of `codex` is pinned: an upgrade that answers the
 same way keeps working, and one that answers differently fails visibly with a
 fixed reason code.
 The fork gets one bounded structured question; the daemon validates the answer
-and stores it in `codex-fork-attempts/<owner>/<message>.json`. Any approval or
+and stores it in `codex-fork-attempts/<owner>/<message>.json`. A JSON-RPC error
+response to `initialize`, `thread/read`, `thread/turns/list` or `thread/fork`
+is recorded only as one content-free daemon log line (issue #477):
+`kherep-node: Codex fork helper refused <method> (code <code|none>, <shape>, sha256 <12 hex>, mentions <list|none>)`,
+with the code only when it is an integer, the shape `missing`, `empty`, `text`
+or `overlong` (over 4096 UTF-8 bytes), the first 12 hex digits of the SHA-256
+of the message, and which of the owner id, the newest turn id, the working
+directory, the Codex home and the word `kherep` the message contains. No text
+of the server's message is kept anywhere, and no persisted field is added: the
+attempt keeps its reason code as before, `wake.jsonl` and the relay are
+unchanged, and a code alone names no cause. Any approval or
 other request from the server, a tool item, a goal change or a turn the helper
 did not start fails the attempt. The owner's inbox record, progress, session
 record and thread are untouched; the owner's next turn reads the message as

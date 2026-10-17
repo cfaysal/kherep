@@ -507,7 +507,11 @@ attempt `uncertain/close-unconfirmed` and the service admission retained,
 whatever the direct helper did. On Windows `taskkill /T` cannot address an
 exited root, so a forced close there is unconfirmed once the helper has exited;
 the fork stays limited to darwin (`policy.mts`, `FORK_PLATFORMS`).
-`codex-fork-process.mts` runs one attempt; a
+`codex-fork-process.mts` runs one attempt, and `codex-fork-refusal.mts`
+turns a JSON-RPC error response to one of its four requests into one
+content-free daemon log line (method, integer code, shape marker, 12 hex
+digits of the message's SHA-256, mentions; issue #477) without any persisted
+field or kept text; a
 watch rule that fired at any time, also in the chunk that carried
 `turn/completed` or while the helper closed, discards the answer or decline
 (checked before the answer is accepted and again after the shutdown); `codex-fork-watch.mts` checks every notification against what is known
