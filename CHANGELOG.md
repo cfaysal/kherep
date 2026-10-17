@@ -227,7 +227,8 @@ increments the minor version; every other release increments the patch version.
   (measured), or when the row is missing, the target now reads the start time
   of the pid recorded on the task: equal, the process lives and the status
   answers `idle` for an ended session (`running` for a `working` or `blocked`
-  row) with its run version; null or changed, the process ended and the answer
+  row; a missing row answers from the task state, `idle` for an ended task and
+  otherwise `unknown`) with its run version; null or changed, the process ended and the answer
   stays `closed` or `idle` as before; unreadable, it is `identity_unknown`. A
   stop that ended `stop_failed` with the session process alive is followed by
   `idle`, then `closed` once the process ended, and a stop meanwhile is
