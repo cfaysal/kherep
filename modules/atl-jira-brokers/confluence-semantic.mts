@@ -7,9 +7,10 @@
 // collapse into the same empty array (golden rule 12). The reason travels with
 // the result, so a caller can say "nothing matched" only when nothing matched.
 import { execFile } from "node:child_process";
+import { statSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir as osHomedir, tmpdir } from "node:os";
+import { join, posix, win32 } from "node:path";
 
 export interface Proposals {
   titles: string[];
@@ -43,7 +44,52 @@ export function titlesFrom(payload: unknown): string[] {
     .filter(Boolean);
 }
 
-export interface SemanticDeps {
+// Where an installed twg is looked for, injected so a test needs no binary.
+export interface TwgLookup {
+  env?: NodeJS.ProcessEnv;
+  platform?: string;
+  homedir?: string;
+  exists?: (candidate: string) => boolean;
+}
+
+const isFile = (candidate: string) => statSync(candidate, { throwIfNoEntry: false })?.isFile() === true;
+
+// Issue #478. A bare "twg" is only found on PATH, and a macOS background job
+// runs without ~/.local/bin on it. The order mirrors modules/twg/runtime/
+// resolve-binary.mts, which cannot be imported from the flat tools directory:
+// KHEREP_TWG_BIN, then PATH, then the documented install locations. A set but
+// unusable override fails closed rather than silently running another binary.
+// On Windows only twg.exe qualifies: a .cmd shim would need a shell.
+export function resolveTwg(lookup: TwgLookup = {}): string {
+  const env = lookup.env ?? process.env;
+  const platform = lookup.platform ?? process.platform;
+  const home = lookup.homedir ?? osHomedir();
+  const exists = lookup.exists ?? isFile;
+  const paths = platform === "win32" ? win32 : posix;
+
+  const explicit = env.KHEREP_TWG_BIN;
+  if (explicit !== undefined) {
+    if (!paths.isAbsolute(explicit) || !exists(explicit)) {
+      throw new Error("KHEREP_TWG_BIN is not an absolute path to an existing file");
+    }
+    return explicit;
+  }
+
+  const name = platform === "win32" ? "twg.exe" : "twg";
+  const onPath = String(env.PATH ?? "").split(paths.delimiter).filter(Boolean)
+    .map((entry) => paths.join(entry, name));
+  const installed = platform === "win32"
+    ? [
+      paths.join(env.LOCALAPPDATA || paths.join(home, "AppData", "Local"), "Programs", "twg", "bin", "twg.exe"),
+      paths.join(env.ProgramFiles || "C:\\Program Files", "twg", "twg.exe"),
+    ]
+    : [paths.join(home, ".local", "bin", "twg"), "/opt/homebrew/bin/twg", "/usr/local/bin/twg"];
+  const found = [...onPath, ...installed].find(exists);
+  if (!found) throw new Error("twg not found on KHEREP_TWG_BIN, PATH or the install locations");
+  return found;
+}
+
+export interface SemanticDeps extends TwgLookup {
   exec?: ExecLike;
   read?: (path: string) => Promise<string>;
   remove?: (path: string) => Promise<void>;
@@ -64,7 +110,6 @@ export async function semanticProposals(
   const read = deps.read ?? ((path: string) => readFile(path, "utf8"));
   const remove = deps.remove ?? ((path: string) => rm(path, { force: true }));
   const out = deps.outFile ?? join(tmpdir(), `kherep-related-${process.pid}.json`);
-  const cli = deps.cli ?? "twg";
 
   // The query is a page title, and a title that starts with a dash would be
   // read by the CLI as a flag rather than as a search term. The end-of-options
@@ -75,6 +120,7 @@ export async function semanticProposals(
   }
 
   try {
+    const cli = deps.cli ?? resolveTwg(deps);
     await exec(cli, [
       "rovo", "search",
       "--app", "confluence",
