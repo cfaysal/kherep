@@ -1,6 +1,8 @@
 import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from "node:child_process";
 import os from "node:os";
 
+import { timedSync } from "./sync-timing.mts";
+
 export interface ServiceFileOwner { version: 1; pid: number; startedAt: string; owner: string }
 export interface ServiceOwnerProbe {
   current(): ServiceFileOwner;
@@ -36,17 +38,19 @@ export function createServiceOwnerProbe(deps: ServiceOwnerProbeDeps = {}): Servi
   // restart can exceed the timeout. As in issues #219 and #221, a timeout alone
   // runs once more (spawnSync returns only after the killed child exited);
   // every other failure is final at once.
-  const powerShell = (script: string, options: Partial<SpawnSyncOptionsWithStringEncoding> = {}): SpawnSyncReturns<string> => {
-    const run = () => spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script],
-      { encoding: "utf8", windowsHide: true, timeout, ...options });
-    const first = run();
-    return timedOut(first) ? run() : first;
-  };
+  // Issue #441: name is logged when the call, retry included, exceeds SLOW_SYNC_MS.
+  const powerShell = (name: string, script: string, options: Partial<SpawnSyncOptionsWithStringEncoding> = {}): SpawnSyncReturns<string> =>
+    timedSync(name, () => {
+      const run = () => spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script],
+        { encoding: "utf8", windowsHide: true, timeout, ...options });
+      const first = run();
+      return timedOut(first) ? run() : first;
+    });
 
   const currentOwner = (): string => {
     if (platform !== "win32") return os.userInfo().username;
     if (cachedWindowsOwner) return cachedWindowsOwner;
-    const result = powerShell("[Security.Principal.WindowsIdentity]::GetCurrent().User.Value", { stdio: ["ignore", "pipe", "pipe"] });
+    const result = powerShell("owner-identity", "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value", { stdio: ["ignore", "pipe", "pipe"] });
     if (timedOut(result)) throw new Error(IDENTITY_TIMED_OUT);
     const sid = result.stdout.trim();
     if (result.status !== 0 || !WINDOWS_SID.test(sid)) throw new Error(IDENTITY_UNVERIFIED);
@@ -56,7 +60,7 @@ export function createServiceOwnerProbe(deps: ServiceOwnerProbeDeps = {}): Servi
 
   const observedOwner = (pid: number): { startedAt: string; owner: string | null } | null | "unknown" => {
     if (platform === "win32") {
-      const result = powerShell(OBSERVED_OWNER_SCRIPT, { env: { ...process.env, KHEREP_OWNER_PID: String(pid) } });
+      const result = powerShell("owner-observe", OBSERVED_OWNER_SCRIPT, { env: { ...process.env, KHEREP_OWNER_PID: String(pid) } });
       if (result.error || result.status !== 0) return "unknown";
       try {
         const observed = JSON.parse(result.stdout) as { status?: unknown; startedAt?: unknown; owner?: unknown };

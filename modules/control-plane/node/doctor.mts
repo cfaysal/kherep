@@ -6,6 +6,7 @@ import type { NodePaths } from "./config.mts";
 import { pidAlive } from "./daemon-state.mts";
 import { checkRuntimes, checkWorker, findRuntime, runtimeVersion, type VersionOf } from "./doctor-host.mts";
 import { checkHooks } from "./doctor-hooks.mts";
+import { checkIntakeLatency } from "./doctor-intake.mts";
 import { checkIntercom } from "./doctor-intercom.mts";
 import {
   checkCodexForkAttempts, checkCodexSessions, checkDaemon, checkEnrollment, checkListeners, checkPolicy, checkWakeReadiness, daemonReadiness, type Check,
@@ -69,6 +70,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     listeners: checkListeners(deps.paths, alive, now),
     wakeReadiness: checkWakeReadiness(deps.paths, parsed, alive, now),
     codexSessions: checkCodexSessions(deps.paths, now),
+    // Issue #441: control-plane accept to local store, last two hours; only messages that arrived.
+    intakeLatency: checkIntakeLatency(deps.paths, now),
     codexForkAttempts: checkCodexForkAttempts(deps.paths),
   };
   return { ok: Object.values(checks).every((check) => check.ok), version: checkoutVersion(repoRoot), checks };

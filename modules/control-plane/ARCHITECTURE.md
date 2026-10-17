@@ -98,8 +98,30 @@ The daemon retains one runtime-mutation lane. Only around its awaited
 MCP intent receipts and deliveries to positively recorded full Codex IDs. Its
 serialized jobs use the real client callbacks and the existing exchange/CP admission
 paths. Task threads remain excluded from interactive hint admission; CP records admission,
-not an offer or delivery. Claude targets, aliases, unknown targets, commands,
-task control, MCP inbox requests and authentication remain on the original lane.
+not an offer or delivery. Commands, task control, MCP inbox requests and
+authentication remain on the original lane; deliveries the window does not admit
+(Claude targets, aliases, unknown targets) go to the intake lane below.
+
+The intake lane (`node/frame-lanes.mts`, issue #441) takes every `message.deliver`
+frame of an authenticated connection, so storing a message never waits for the
+awaited runtime work of the original lane (CLI stops and starts, task control,
+listings). It runs what the original lane ran for a delivery: a policy refresh,
+the client's `onDeliver` (policy acceptance, store, one status frame, no answer
+when the store fails) and the publication of its frames. Until `auth.ok` of a
+connection has been handled, a delivery stays on the original lane behind it, so
+none is handled unauthenticated and dropped. The window keeps its own lane and
+defers frames it cannot process through the same dispatcher. A command ack is
+allocated after its handler, so a status the intake lane sends meanwhile cannot
+carry a higher seq and make the Worker drop the ack. A synchronous child process
+still blocks the event loop and thereby every lane: one `watchCodexTasks` pass
+can run several PowerShell children in a row, so a delivery can wait for their
+sum, each bounded by its 10 second timeout. The daemon logs a lane item over
+5 seconds (`lane <lane> item <kind> took <s> s`), a delivery stored more than
+60 seconds after the control plane accepted it, with its id and its lane wait,
+and a synchronous child over 2 seconds by name; never bodies, session names or
+pids. `kherep-node doctor` reports `intakeLatency` for the messages stored in the
+last two hours; it sees only messages that reached the inbox, so it is no proof
+that the control-plane queue for this node drains.
 
 The window pins the socket and the policy actually applied by the last client
 refresh, including a refresh inside MCP polling. Its CP admission runner copy uses that
@@ -643,6 +665,8 @@ Compatibility: no new message state or progress code. `refused` and its reason a
 ## Exchange recovery
 
 The sender's outbox file is removed only after the Worker's answer has been written to `sent/`, so a daemon crash between the socket send and that write leaves the file to be sent again by the next daemon. On a live connection an unanswered send is repeated after 30 seconds. The Worker's `messageId` deduplication answers every repeat with the current state and creates no second delivery. A target that crashes before its `accepted` answer leaves the message `queued`; the Worker hands it over again after the next authentication, and the idempotent inbox keeps the first record. A message whose target never returns expires after 24 hours and the sender is told. Inbox retention refuses rather than deletes a waiting record and keeps final records until their state is confirmed.
+
+Deliveries are stored on the intake lane (see "Codex intake peer progress"), independently of the frame lane that runs commands, receipts, exchange rounds and session snapshots. The recovery rules above are unchanged: a delivery that arrives before its connection's `auth.ok` was handled waits on the frame lane behind it, a store failure still sends no answer, and a delivery handled after its socket closed sends nothing, so the Worker keeps the message and hands it over again after the next authentication. A receipt or status for a message whose delivery still waits on the intake lane can be handled first; both act on separate records.
 
 ## CLI sender identity
 
