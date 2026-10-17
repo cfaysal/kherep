@@ -696,7 +696,8 @@ never evidence that a process stopped. Claude process state is measured from the
 that `claude agents --json --all` lists for the task's own background session and that
 process's start time, re-read at every status. A Claude stop captures that process and
 its descendants with their start times before `claude stop <short id>`, waits for every
-captured identity to end and signals only survivors, each by verified identity; it is
+captured identity to end, re-captures the tree from its live members before each signal
+and signals only survivors, each by verified identity, never the session process; it is
 confirmed by the identities, never by the listing, and it is refused on Windows until
 measured there.
 

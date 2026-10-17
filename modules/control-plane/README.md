@@ -533,20 +533,33 @@ without a live process, is `idle`; an ended one without a process is `closed`. A
 failed listing, an unreadable start time, or a row that is not the task's own
 background session (by kind, short id, session id or name) is
 `identity_unknown`. A Claude stop re-measures the run, captures the session
-process and every descendant with its start time (a shell command runs in its
-own process group and is captured by parent, not by group), then runs `claude
-stop <short id>`, the supported stop, so that the supervisor does not restart
-the process, and waits for every captured identity to end. The listing shows the
-session `stopped` without a `pid` while its process still lives, so the row is
-never the evidence. A process that outlives the grace period, in practice a
-shell command `claude stop` does not end, is signalled by its own pid, SIGTERM
-then SIGKILL, only while it still has its captured start time; the session
-process is never signalled before `claude stop`. The stop is confirmed only when
-every captured identity ended; a `claude stop` that fails or a survivor after
-SIGKILL is `stop_failed`, a session the supervisor restarted in the meantime is
-`stale_run` with the new run recorded for the next status. On Windows the Claude
-stop stays refused (`unsupported_runtime`, `stopSupported: false`) until the
-listed process, its tree and `claude stop` through `cmd.exe` are measured there.
+process and the descendants it has at that moment, each with its start time (by
+parent, not by process group: a shell command runs in its own group), then runs
+`claude stop <short id>`, the supported stop, so that the supervisor does not
+restart the process, and waits for every captured identity to end. The listing
+shows the session `stopped` without a `pid` while its process still lives, so
+the row is never the evidence. The tree is captured again from every captured
+process that still lives, once `claude stop` has returned and again before each
+signal, so a process that a survivor started during the stop is waited for and
+signalled too. A process that outlives the grace period, in practice a shell
+command `claude stop` does not end, is signalled by its own pid, SIGTERM then
+SIGKILL, only while it still has its captured start time. The session process
+itself is never signalled: it was measured to end 1.7-1.8 s after `claude stop`
+returns, and if it still lives after the grace period the stop ends
+`stop_failed` with `processState` `running` without a signal, because the
+supervisor's reaction to a signalled session is not measured and ending its
+commands while it lives is no stop; the listing then shows the session `stopped`
+without a `pid`, so a later status answers `closed` for a process that lives,
+and the operator ends it locally. The stop is confirmed only when every captured
+identity ended; a `claude stop` that fails, a survivor after SIGKILL, or a tree
+that passes 256 processes is `stop_failed`, a session the supervisor restarted
+in the meantime is `stale_run` with the new run recorded for the next status. A
+process whose ancestors all ended before a capture, for example a background
+job left by a command that finished during the grace period, is not reached;
+this is the limit of the Codex stop as well (issues #231, #233). On Windows the
+Claude stop stays refused (`unsupported_runtime`, `stopSupported: false`) until
+the listed process, its tree and `claude stop` through `cmd.exe` are measured
+there.
 The stop was measured on macOS; Linux runs the same code path and is not
 measured separately.
 A stop succeeds only after the target verifies that the captured process

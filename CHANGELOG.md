@@ -161,19 +161,25 @@ increments the minor version; every other release increments the patch version.
 - Confirmed remote stop for Claude Code background tasks (issue #437, second
   part). `task stop` and `msg stop` for a Claude task the node started now stop
   the measured run and confirm it. The target re-measures the run, captures the
-  session process and every descendant with its start time (a shell command runs
-  in its own process group and is captured by parent, not by group), runs
-  `claude stop <short id>`, the supported stop, and waits for every captured
-  identity to end; the listing shows the session `stopped` without a `pid` while
-  its process still lives, so the row is never the evidence. A process that
-  outlives the grace period, in practice a shell command the stop does not end,
-  is signalled by its own pid, SIGTERM then SIGKILL, only while it still has its
-  captured start time; the session process is never signalled before `claude
-  stop`, because the supervisor restarts a process that ended unexpectedly.
+  session process and the descendants it has at that moment with their start
+  times (by parent, not by process group), runs `claude stop <short id>`, the
+  supported stop, and waits for every captured identity to end; the listing
+  shows the session `stopped` without a `pid` while its process still lives, so
+  the row is never the evidence. The tree is captured again from its live
+  members after `claude stop` returned and before each signal, so a process a
+  survivor started during the stop is ended and waited for too; a process whose
+  ancestors all ended before a capture is not reached, the limit of the Codex
+  stop (issues #231, #233). A process that outlives the grace period, in
+  practice a shell command the stop does not end, is signalled by its own pid,
+  SIGTERM then SIGKILL, only while it still has its captured start time; the
+  session process is never signalled: it ends 1.7-1.8 s after `claude stop`
+  returns (measured), and one that still lives after the grace period makes the
+  stop `stop_failed` with `processState` `running` without a signal, because the
+  supervisor's reaction to a signalled session is not measured.
   `stopConfirmed: true` only when every captured identity ended; a `claude stop`
-  that fails or a survivor after SIGKILL is `stop_failed`, a session the
-  supervisor restarted in the meantime is `stale_run` with the new run recorded
-  for the next status. Status offers the stop (`stopSupported: true`) for a
+  that fails, a survivor after SIGKILL or a tree past 256 processes is
+  `stop_failed`, a session the supervisor restarted in the meantime is
+  `stale_run` with the new run recorded for the next status. Status offers the stop (`stopSupported: true`) for a
   `working` or `blocked` session with a live process on macOS and Linux
   (measured on macOS). On Windows the Claude stop stays refused
   (`unsupported_runtime`, `stopSupported: false`) until the listed process, its
