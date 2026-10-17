@@ -212,15 +212,16 @@ seconds) and applies it to that round, the exchange's send gate included: adding
 an owner in `wake.sessions` or `codexFork.sessions`, takes effect at the next
 round without a daemon restart (issue #444). Only full thread ids are accepted (in any case, kept in
 lowercase), never `*` or a name, and
-only `darwin`. Windows was measured and stays off (issue #464): the Codex CLI
-refused `thread/fork` with `-32600` for a Desktop-created owner (cause
-unknown), the helper's process tree cannot be proven contained, and a forced
-close cannot confirm the helper's process tree once the helper has exited
-(`taskkill /T` needs a living root), so an attempt whose close is forced
-after the helper exited would keep the service admission lease (the measured
-clean refusal closed normally and kept none). Enabling Windows needs the per-descendant identity
-kill of the stop path (issue #231) in the fork, a containment capture from
-creation on, and a cause for the refused fork, a separate change. Any other shape turns off
+only `darwin`. Windows was measured and stays off (issues #464, #477): the helper's process tree
+cannot be proven contained, and a forced close cannot confirm the helper's process tree once the
+helper has exited (`taskkill /T` needs a living root), so an attempt whose close is forced after the
+helper exited keeps the service admission lease. A turn timeout on a living root measured exactly
+that: `uncertain/close-unconfirmed` with the lease kept. The fork itself completes on Windows
+(Codex CLI 0.160.1, a Desktop-created owner): the `-32600` refusal first measured in #464 came from
+the measurement probe, which passed one MCP server override that codex rejects; the production fork
+guards drop such names (`computeOverrides`). Enabling Windows needs the per-descendant identity
+kill of the stop path (issue #231) in the fork and a containment capture from creation on, a
+separate change. Any other shape turns off
 only the fork reply; waking stays as written. The node already records one
 attempt per message and decides admission (opt-in, kill switch, enrollment,
 policy unchanged, recorded non-task owner, permission mode, platform, the Codex
@@ -357,10 +358,10 @@ Still open are goal isolation with an active goal set on the owner; a fork of
 an owner loaded by the Desktop app and the absence of a new chat or Queue card
 in its UI; the Desktop stop button; the native renewal of the login; the real
 model catalog and plugins as a separate measurement; and an installed daemon
-with the fork switched on. The fork stays `darwin` only (measured in issue #464): on
-Windows `thread/fork` was refused with `-32600`, and `taskkill /T` cannot reach
-the descendants of a helper that already exited, so the close there is never
-confirmed.
+with the fork switched on. The fork stays `darwin` only (measured in issues #464 and #477): on
+Windows the fork completes, but `taskkill /T` cannot reach the descendants of a
+helper that already exited, so the close there is never confirmed and the
+lease is kept.
 
 Admission and a metadata claim leave messages `accepted`. Explicit
 `msg inbox --receive` offers only the messages actually returned; normal confirming
