@@ -55,6 +55,21 @@ async function measure(path: string, call: (instance: Registry) => unknown): Pro
   }
 }
 
+// The rows of every call to one path within a single Durable Object turn: no
+// alarm or other request can run between them (issue #441: a due alarm, left by
+// the alarm test's retention backlog, drops the cached directory on its own).
+async function measureTurn(path: string, call: (instance: Registry) => void): Promise<SqlRows[]> {
+  const log = vi.spyOn(console, "log");
+  try {
+    await runInDurableObject(registry(), (instance) => { call(instance); });
+    return log.mock.calls.map(([line]) => line as { event?: string; path?: string } & SqlRows)
+      .filter((line) => line?.event === "registry.sql" && line.path === path)
+      .map((line) => ({ rowsRead: line.rowsRead, rowsWritten: line.rowsWritten }));
+  } finally {
+    log.mockRestore();
+  }
+}
+
 async function round(sender: string, target: string, label: string) {
   const messageId = crypto.randomUUID();
   const send = await measure("sendMessage", (r) => r.sendMessage({
@@ -179,9 +194,14 @@ describe("Registry read budget", () => {
     const invalidate = () => registry().ackMessageStatus(SEED_SENDER, { name: MESSAGE_STATUS_ACK, messageId: crypto.randomUUID(), state: "delivered" });
     const rebuild = async () => {
       await invalidate();
+      // An alarm may run between any two requests; here it does, before the measured turn.
+      await runInDurableObject(registry(), (r) => r.alarm());
       let body: Awaited<ReturnType<Registry["directory"]>> | null = null;
-      const rows = await measure("directory", (r) => { body = r.directory(); });
-      return { rows, body: body! };
+      const turn = await measureTurn("directory", (r) => { body = r.directory(); r.directory(); });
+      expect(turn).toHaveLength(2);
+      // The second read of the same turn is served from the cache.
+      expect(turn[1]!.rowsRead).toBe(0);
+      return { rows: turn[0]!, body: body! };
     };
     const empty = await rebuild();
 
@@ -204,6 +224,5 @@ describe("Registry read budget", () => {
     expect(listed.map((n) => n.nodeId)).toEqual(Array.from({ length: MAX_DIRECTORY_NODES }, (_, i) => idOf(i + 1)));
     expect(listed.every((n, i) => n.intake?.queued === 3 && n.intake.oldestQueuedAt === new Date(1_000 * (i + 1) + 1).toISOString())).toBe(true);
     expect(empty.body.nodes.every((n) => n.intake?.queued === 0 && n.intake.oldestQueuedAt === null)).toBe(true);
-    expect((await measure("directory", (r) => r.directory())).rowsRead).toBe(0);
   });
 });
