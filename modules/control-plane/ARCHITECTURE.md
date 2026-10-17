@@ -115,7 +115,10 @@ allocated after its handler, and only then does the command count as processed
 (the `ack` every node frame carries), so a status the intake lane sends
 meanwhile neither carries a higher seq that makes the Worker drop the ack nor
 acks the command early and lets the Worker drop its resend copy; a resend
-waits behind the handler on the original lane and is only acknowledged. A
+waits behind the handler on the original lane and is only acknowledged. The
+daemon's per-connection `send` is the only path to the socket and stamps the
+wire seq and the current ack (`NodeClient.stamp`); the seq a frame gets when it
+is built is provisional, so lanes cannot reorder the wire. A
 synchronous child process
 still blocks the event loop and thereby every lane: one `watchCodexTasks` pass
 can run several PowerShell children in a row, so a delivery can wait for their
