@@ -83,8 +83,12 @@ streams. Direct native Queue reconciliation retains the same child's later
 `exit` and `close` evidence after an unconfirmed shutdown. Its lease can then
 release once every retained helper is confirmed stopped; this proves helper
 lifetime only and does not certify Queue deletion. Rejected or missing evidence
-and permanent holds remain fail-closed. Historical leases lack helper identity
-and cannot use this recovery path; they still need positive stale-owner proof.
+and permanent holds remain fail-closed. All disk leases keep the same PID,
+process start time and owner fields; helper identity is not persisted. This
+release requires the creating daemon to retain the admission and proof from that
+exact child in memory. If that evidence is lost, or an earlier daemon never held
+it, this path cannot recover the lease retroactively. Existing positive
+stale-owner recovery stays unchanged.
 
 ## Codex intake peer progress
 

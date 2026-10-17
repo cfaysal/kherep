@@ -339,8 +339,12 @@ admission. Its lease remains until the operation finishes and the helper process
 has exited and closed. Direct native Queue reconciliation can release a retained
 lease after that same child's later `exit` and `close` confirm every held helper
 stopped. Missing or rejected evidence and permanent holds keep blocking. This
-does not certify Queue deletion or recover historical leases without helper
-identity; those still require positive stale-owner proof.
+does not certify Queue deletion. All disk leases keep the same PID, process
+start time and owner fields; helper identity is not persisted. This release
+requires the creating daemon to retain the admission and proof from that exact
+child in memory. If that evidence is lost, or an earlier daemon never held it,
+this path cannot recover the lease retroactively. Existing positive stale-owner
+recovery stays unchanged.
 
 Exported Windows task definitions, configured macOS plist bytes and their
 security metadata are backed up before mutation and kept after rollback.
