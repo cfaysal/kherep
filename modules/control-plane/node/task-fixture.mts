@@ -17,6 +17,10 @@ import { readReport, removeReport, reportIds } from "./task-records.mts";
 // with the documented `backgrounded · <id> · <name>` line and `agents --json --all` with its rows.
 // After livePids(first), each new row also carries the `pid` and `status` the
 // listing shows "While the process is alive" (issue #437); by default it has neither.
+// `stop <id>` does what `claude stop` was measured to do to the listing (issue
+// #437): the row loses `pid` and `status` and shows `state: "stopped"` at once,
+// whether or not its processes ended. onStop(handler) runs after that, so a
+// test decides which processes end; failStop(message) rejects `stop` alone.
 
 export const T0 = Date.UTC(2026, 8, 25, 12);
 export const TASK = "3f2a1b0c-0000-4000-8000-000000000001";
@@ -51,11 +55,23 @@ export function taskNode(t: test.TestContext, sessions: Record<string, unknown> 
   let next = 0;
   let failWith: string | null = null;
   let livePid: number | null = null;
+  let stopFailure: string | null = null;
+  let onStop: ((id: string) => void) | null = null;
   const exec = async (file: string, args: string[], options: ExecOptions): Promise<string> => {
     calls.push({ file, args, options });
     if (failWith) throw new Error(failWith);
     if (args[0] === "agents") return JSON.stringify(rows);
-    if (args[0] === "stop") return "";
+    if (args[0] === "stop") {
+      if (stopFailure) throw new Error(stopFailure);
+      const stopped = rows.find((row) => row.id === args[1]);
+      if (stopped) {
+        delete stopped.pid;
+        delete stopped.status;
+        stopped.state = "stopped";
+      }
+      onStop?.(args[1]);
+      return "";
+    }
     const short = `b${(next++).toString(16).padStart(7, "0")}`;
     const name = args[args.indexOf("--name") + 1];
     // A resume continues the session under its own id (a copy is set up by the test).
@@ -80,6 +96,8 @@ export function taskNode(t: test.TestContext, sessions: Record<string, unknown> 
     tick: (ms: number) => { clock += ms; },
     failNext: (message: string | null) => { failWith = message; },
     livePids: (first: number | null) => { livePid = first; },
+    failStop: (message: string | null) => { stopFailure = message; },
+    onStop: (handler: ((id: string) => void) | null) => { onStop = handler; },
   };
 }
 

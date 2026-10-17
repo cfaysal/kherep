@@ -9,7 +9,7 @@ import { claudeCall } from "./sessions.mts";
 import { resumeClaude } from "./closed-resume.mts";
 import type { Readiness } from "./runtime-readiness.mts";
 import { beginServiceDrain, serviceAdmissionsIdle } from "./service-drain.mts";
-import { continueTask, startTask, stopTask } from "./session-runner.mts";
+import { continueTask, markClaudeStopped, startTask, stopTask } from "./session-runner.mts";
 import { startArgs, TASK, taskId, taskNode, testServiceOwner } from "./task-fixture.mts";
 import { readTask, writeTask } from "./task-records.mts";
 
@@ -227,4 +227,20 @@ test("a start records the listed pid and its start time; a continue replaces the
   const unread = readTask(node.paths, TASK)!;
   assert.deepEqual([unread.shortId, unread.sessionId, unread.pid, unread.pidStart], ["b0000002", started.sessionId, undefined, undefined]);
   assert.equal(unread.mappingPendingSince, undefined);
+});
+
+// Issue #437, PR 2: stopTask and the confirmed owner stop share the state write
+// and the report (markClaudeStopped); a session that reported done stays done.
+test("a Claude stop writes stopped with its reason and reports it once; a done task stays done", async (t) => {
+  const node = taskNode(t);
+  await startTask(startArgs(), node.deps());
+  node.reports();
+  writeTask(node.paths, { ...readTask(node.paths, TASK)!, running: true });
+  await stopTask({ taskId: TASK }, node.deps());
+  const stopped = readTask(node.paths, TASK)!;
+  assert.deepEqual([stopped.state, stopped.reason, stopped.running], ["stopped", "stopped by the operator", undefined]);
+  assert.deepEqual(node.reports(), [{ taskId: TASK, state: "stopped", reason: "stopped by the operator", sessionId: stopped.sessionId }]);
+  const done = markClaudeStopped(node.deps(), { ...stopped, state: "done" }, "stopped by task owner");
+  assert.deepEqual([done.state, done.reason, readTask(node.paths, TASK)?.state], ["done", "stopped by task owner", "done"]);
+  assert.deepEqual(node.reports(), []);
 });

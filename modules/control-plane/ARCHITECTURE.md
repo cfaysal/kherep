@@ -694,8 +694,11 @@ never the prompt, and only an owner that advertises the report capability receiv
 Fresh measurement and cached results are explicit; connectivity or missing data is
 never evidence that a process stopped. Claude process state is measured from the `pid`
 that `claude agents --json --all` lists for the task's own background session and that
-process's start time, re-read at every status; its remote stop stays unsupported until
-the stop half of issue #437 lands.
+process's start time, re-read at every status. A Claude stop captures that process and
+its descendants with their start times before `claude stop <short id>`, waits for every
+captured identity to end and signals only survivors, each by verified identity; it is
+confirmed by the identities, never by the listing, and it is refused on Windows until
+measured there.
 
 The attribution log (`attribution.jsonl`, issue #325) is host-local. The git
 `pre-push` hook (`claude/kherep/githooks/attribution-record.mts`) and

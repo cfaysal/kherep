@@ -60,6 +60,16 @@ test("msg stop by the sent message id stops the exact run that status measured a
   assert.equal(run.out.at(-1), `stopped: task ${TASK}; its process and child processes ended at the target (task stopped)`);
 });
 
+// Issue #437, PR 2: the verdict is runtime neutral; a Claude task's confirmed stop reads the same.
+test("msg stop reports a confirmed stop of a Claude task like a Codex one", async (t) => {
+  const node = taskNode(t, { ownTaskControl: true, runtimes: ["claude"] });
+  const run = await stop(node, [TASK], [measured({ runtime: "claude" }),
+    measured({ runtime: "claude", action: "stop", taskState: "stopped", processState: "closed", stopConfirmed: true })]);
+  assert.equal(run.code, 0, run.err.join("\n"));
+  assert.deepEqual(run.submits.map((s) => s.action), ["status", "stop"]);
+  assert.equal(run.out.at(-1), `stopped: task ${TASK}; its process and child processes ended at the target (task stopped)`);
+});
+
 test("msg stop never reports stopped without a confirmed exit of that run", async (t) => {
   const node = taskNode(t, { ownTaskControl: true, runtimes: ["codex"] });
   // A later run replaced the measured one: the target denies the pinned stop.

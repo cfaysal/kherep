@@ -521,18 +521,35 @@ acknowledged it) and shows the newest settled status answer this node holds as
 `lastStatus`.
 
 `task stop` first obtains status and then submits a stop for that exact run.
-Confirmed remote stop is supported for Codex. Claude status measures the
-process behind the task's background session: the `pid` that `claude agents
---json --all` lists while the process is alive, and that process's start time.
-The node re-reads both at every status, because the supervisor may stop and
-restart a session's process, so a restart is a new run with a new run version.
-Only a `working` or `blocked` session with a live process is `running`. A
+Confirmed remote stop is supported for Codex and, on macOS and Linux, for Claude
+Code background tasks the node started. Claude status measures the process
+behind the task's background session: the `pid` that `claude agents --json
+--all` lists while the process is alive, and that process's start time. The node
+re-reads both at every status, because the supervisor may stop and restart a
+session's process, so a restart is a new run with a new run version. Only a
+`working` or `blocked` session with a live process is `running` and stoppable. A
 finished session whose process still runs, or a `working` or `blocked` one
-without a live process, is `idle`; an ended one without a process is `closed`.
-A failed listing, an unreadable start time, or a row that is not the task's
-own background session (by kind, short id, session id or name) is
-`identity_unknown`. Remote stop for Claude remains unsupported.
-A stop succeeds only after the target verifies that the captured Codex process
+without a live process, is `idle`; an ended one without a process is `closed`. A
+failed listing, an unreadable start time, or a row that is not the task's own
+background session (by kind, short id, session id or name) is
+`identity_unknown`. A Claude stop re-measures the run, captures the session
+process and every descendant with its start time (a shell command runs in its
+own process group and is captured by parent, not by group), then runs `claude
+stop <short id>`, the supported stop, so that the supervisor does not restart
+the process, and waits for every captured identity to end. The listing shows the
+session `stopped` without a `pid` while its process still lives, so the row is
+never the evidence. A process that outlives the grace period, in practice a
+shell command `claude stop` does not end, is signalled by its own pid, SIGTERM
+then SIGKILL, only while it still has its captured start time; the session
+process is never signalled before `claude stop`. The stop is confirmed only when
+every captured identity ended; a `claude stop` that fails or a survivor after
+SIGKILL is `stop_failed`, a session the supervisor restarted in the meantime is
+`stale_run` with the new run recorded for the next status. On Windows the Claude
+stop stays refused (`unsupported_runtime`, `stopSupported: false`) until the
+listed process, its tree and `claude stop` through `cmd.exe` are measured there.
+The stop was measured on macOS; Linux runs the same code path and is not
+measured separately.
+A stop succeeds only after the target verifies that the captured process
 tree ended. A changed run, uncertain identity, failed termination or recovery
 state cannot produce `stopConfirmed: true`. Durable stop intent prevents an
 automatic wake from starting the same task again; explicit continue clears it.

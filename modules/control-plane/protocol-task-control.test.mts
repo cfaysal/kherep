@@ -143,6 +143,8 @@ test("a Claude status result with a measured run is a valid target result (issue
   assert.equal(isTaskControlResultBody({ ...withoutRun, state: "failed", processState: "unknown", stopSupported: false,
     errorCode: "identity_unknown" }), true);
   assert.equal(isTaskControlResultBody({ ...status, runVersion: "A".repeat(64) }), false);
+  // Issue #437, PR 2: a confirmed Claude stop has the Codex result shape.
+  assert.equal(isTaskControlResultBody({ ...status, taskState: "stopped", processState: "closed", stopConfirmed: true }), true);
 });
 
 test("all fixed node and Worker error codes are accepted without raw error text", () => {
