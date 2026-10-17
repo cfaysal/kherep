@@ -214,6 +214,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- `wake.codexFork` stays `darwin` only (issue #464), now for measured reasons
+  on a Windows node: the Codex CLI 0.160.1 refused `thread/fork` with
+  JSON-RPC `-32600` for an owner created by the Desktop app (0.163.0-alpha;
+  cause unknown); the fork helper's process tree cannot be proven contained;
+  and the close cannot confirm a stop after the helper exited, so a
+  hand-enabled `win32` would keep the service admission lease after every
+  failed attempt. The app-server schema is the same on Windows and macOS at
+  the same version. Lifting it needs an identity-confirmed close on Windows,
+  a containment capture from creation on (such as a job object), and a cause
+  for the refused fork.
 - Windows stays refused for the Claude confirmed stop (issue #460), now for a
   measured reason (Claude Code 2.1.289): the Bash tool runs a command through
   Git Bash (MSYS), whose intermediate process exits, so the command is not a
