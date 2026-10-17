@@ -29,11 +29,12 @@ test("queued deliveries are stored and acknowledged while the frame lane is held
   for (const n of [1, 2, 3]) {
     assert.ok(getMessage(h.paths.inbox, messageId(n))?.receivedAt, `delivery ${n} is stored while the command is pending`);
     assert.equal(statuses(socket, messageId(n)).length, 1, `delivery ${n} is acknowledged while the command is pending`);
+    assert.ok(statuses(socket, messageId(n))[0]!.ack < 1, `delivery ${n} does not ack the pending command`);
   }
   assert.equal(socket.sent.some((f) => f.type === "command.result"), false, "the command is still pending");
   h.release();
   await flush();
-  assert.equal(socket.sent.filter((f) => f.type === "command.ack").length, 1);
+  assert.deepEqual(socket.sent.filter((f) => f.type === "command.ack").map((f) => f.ack), [1], "the ack frame acks the command");
   assert.equal(socket.sent.filter((f) => f.type === "command.result").length, 1);
   const seqs = socket.sent.map((f) => f.seq);
   assert.ok(seqs.every((seq, i) => seq > 0 && (i === 0 || seq > seqs[i - 1]!)), `strictly increasing seq in send order: ${seqs.join(",")}`);

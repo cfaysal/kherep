@@ -169,3 +169,49 @@ test("onCommand allocates the ack after the handler", async () => {
   assert.ok(ack.seq > accepted.seq, `ack seq ${ack.seq} after accepted seq ${accepted.seq}`);
   assert.ok(result.seq > ack.seq);
 });
+
+// Issue #441: every node frame carries ack = processedSeq, and the Worker drops
+// its resend copy of every command up to it. A frame sent on the intake lane
+// while a handler runs must not ack that command before its result exists.
+function heldClient() {
+  let release: () => void = () => {};
+  let runs = 0;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const client = new NodeClient({
+    nodeId: NODE_ID, identity: generateIdentity(), facts: () => FACTS, runtimes: async () => [], sessions: async () => [],
+    policy: { ...DEFAULT_POLICY, allowedCommands: ["node.status"], messaging: { accept: [{ from: ["*"], session: "*" }] } } as NodePolicy,
+    handlers: {
+      "node.status": async () => { runs++; await held; return { ok: true }; },
+      "runtime.list": async () => [], "session.list": async () => [],
+    },
+    storeMessage: () => {},
+  });
+  return { client, release: () => release(), runs: () => runs };
+}
+const delivery = (n: number): string => JSON.stringify(makeEnvelope("message.deliver", {
+  messageId: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+  from: { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "synthetic-peer" },
+  toSession: "synthetic-session", text: "synthetic", createdAt: new Date(0).toISOString() }, 0, 0));
+
+test("a frame sent while a command handler is pending does not ack that command", async () => {
+  const { client, release } = heldClient();
+  await client.onFrame(JSON.stringify(makeEnvelope("event", { name: "auth.ok" }, 0, 0)));
+  const pending = client.onFrame(command(7, "node.status"));
+  const [during] = decode(await client.onFrame(delivery(1)));
+  assert.ok(during.ack < 7, `accepted carries ack ${during.ack} below the pending command seq 7`);
+  release();
+  const [ack, result] = decode(await pending);
+  assert.deepEqual([ack.type, ack.ack, result.ack], ["command.ack", 7, 7]);
+  const [after] = decode(await client.onFrame(delivery(2)));
+  assert.equal(after.ack, 7, "the next frame acks the completed command");
+});
+
+test("a resend after the handler resolved returns only command.ack and does not run the handler twice", async () => {
+  const { client, release, runs } = heldClient();
+  await client.onFrame(JSON.stringify(makeEnvelope("event", { name: "auth.ok" }, 0, 0)));
+  release();
+  assert.deepEqual(decode(await client.onFrame(command(3, "node.status"))).map((e) => e.type), ["command.ack", "command.result"]);
+  const resend = decode(await client.onFrame(command(3, "node.status")));
+  assert.deepEqual(resend.map((e) => [e.type, e.ack]), [["command.ack", 3]]);
+  assert.equal(runs(), 1);
+});
