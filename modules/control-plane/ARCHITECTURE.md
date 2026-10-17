@@ -755,8 +755,11 @@ and start time recorded on the task (issue #454). A Claude stop captures that pr
 its descendants with their start times before `claude stop <short id>`, waits for every
 captured identity to end, re-captures the tree from its live members before each signal
 and signals only survivors, each by verified identity, never the session process; it is
-confirmed by the identities, never by the listing, and it is refused on Windows until
-measured there.
+confirmed by the identities, never by the listing, and it is refused on Windows (issue
+#460, measured): a Git Bash tool command's parent is an intermediate process that already
+exited, so the command is outside the captured tree and outlives `claude stop`. Lifting the
+refusal needs a capture independent of the parent chain, such as a job object or the MSYS
+process table.
 
 The attribution log (`attribution.jsonl`, issue #325) is host-local. The git
 `pre-push` hook (`claude/kherep/githooks/attribution-record.mts`) and

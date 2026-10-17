@@ -195,8 +195,8 @@ increments the minor version; every other release increments the patch version.
   `stale_run` with the new run recorded for the next status. Status offers the stop (`stopSupported: true`) for a
   `working` or `blocked` session with a live process on macOS and Linux
   (measured on macOS). On Windows the Claude stop stays refused
-  (`unsupported_runtime`, `stopSupported: false`) until the listed process, its
-  tree and `claude stop` through `cmd.exe` are measured there.
+  (`unsupported_runtime`, `stopSupported: false`); see issue #460 under
+  **Changed**.
 - Sender-visible intake per node (Refs #441). The `directory` frame gives each
   node an additive `intake` record: `oldestQueuedAt` and `queued`, its queue at
   the control plane, and `lastAcceptedAt`, the Worker's time of the node's last
@@ -214,6 +214,15 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- Windows stays refused for the Claude confirmed stop (issue #460), now for a
+  measured reason (Claude Code 2.1.289): the Bash tool runs a command through
+  Git Bash (MSYS), whose intermediate process exits, so the command is not a
+  descendant of the listed session process and is missing from the captured
+  tree; after `claude stop` the session ended within about 2 s while the
+  command and its shell chain kept running, so a confirmed stop would confirm
+  too early. Lifting the refusal needs a capture independent of the parent
+  chain, such as a job object or the MSYS process table. A Worker test pins
+  that a confirming Claude stop result is stored like a Codex one.
 - Upgrade the Worker before the nodes for the Codex fork reply relay (issue
   #408): the `directory` frame carries `worker.capabilities`, and a node
   refuses every fork before admission (`fork-relay-unsupported`) while its

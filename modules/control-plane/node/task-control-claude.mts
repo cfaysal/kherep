@@ -52,7 +52,10 @@ function withoutProcess(state: unknown): ClaudeMeasurement {
 function withProcess(record: TaskRecord, runner: RunnerDeps, state: unknown): ClaudeMeasurement {
   const runVersion = runVersionOf(record)!;
   // Status never offers a stop the target refuses: the stop is measured on
-  // macOS, Linux runs the same path, and Windows refuses it until measured there.
+  // macOS, Linux runs the same path, and Windows refuses it (issue #460,
+  // measured): Git Bash runs a tool command through an intermediate process
+  // that exits, so the command is outside the captured tree and outlives
+  // `claude stop`; a confirmed stop would confirm while it still runs.
   const supported = (runner.platform ?? process.platform) !== "win32";
   if (LIVE.includes(state)) return { processState: "running", stopSupported: supported, runVersion };
   return { processState: ENDED.includes(state) ? "idle" : "unknown", stopSupported: false, runVersion };
