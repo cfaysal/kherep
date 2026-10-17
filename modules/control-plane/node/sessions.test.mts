@@ -88,14 +88,17 @@ test("native discovery rejects cancellation only after the started helper is clo
   const pidFile = path.join(root, "pid");
   const controller = new AbortController();
   const pending = execFileText(process.execPath,
-    ["-e", "require('node:fs').writeFileSync(process.argv[1],String(process.pid));setTimeout(()=>{},30000)", pidFile],
+    // The helper publishes its pid with an atomic rename, so a pid file that exists is complete.
+    ["-e", "const fs=require('node:fs');fs.writeFileSync(process.argv[1]+'.tmp',String(process.pid));fs.renameSync(process.argv[1]+'.tmp',process.argv[1]);setTimeout(()=>{},30000)", pidFile],
     { timeout: 10_000, signal: controller.signal });
-  for (let i = 0; i < 100 && !fs.existsSync(pidFile); i += 1) await new Promise(resolve => setTimeout(resolve, 10));
-  assert.ok(fs.existsSync(pidFile));
-  const pid = Number(fs.readFileSync(pidFile, "utf8"));
+  const deadline = Date.now() + 5_000;
+  while (!fs.existsSync(pidFile) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+  const raw = fs.existsSync(pidFile) ? fs.readFileSync(pidFile, "utf8") : "<missing>";
+  const pid = Number(raw);
+  assert.ok(Number.isInteger(pid) && pid > 0, `the helper published its pid, got ${JSON.stringify(raw)}`);
   controller.abort();
   await assert.rejects(pending, /abort/i);
-  assert.throws(() => process.kill(pid, 0), "the listing promise cannot release its admission before process close");
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "the listing promise cannot release its admission before process close");
 });
 
 function client(sessions: () => Promise<SessionInfo[]>) {
