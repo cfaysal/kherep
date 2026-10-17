@@ -34,13 +34,16 @@ function isFile(file: string): boolean {
   try { return fs.statSync(file).isFile(); } catch { return false; }
 }
 
-// Present: the file holds the exact expected text (intercom-instructions.mts).
+// Present: the file holds the exact expected text (intercom-instructions.mts);
+// the managed rules file must be exactly that text, nothing besides it.
 function instructionStatuses(deps: IntercomDeps, command: string): Record<string, string> {
   const files = intercomInstructionFiles(deps.claudeConfigDir, deps.codexHome);
   return Object.fromEntries(INTERCOM_INSTRUCTIONS.map((kind) => {
     const bytes = read(files[kind]);
     if (typeof bytes === "string") return [kind, bytes];
-    return [kind, bytes.toString("utf8").includes(expectedIntercomText(kind, command)) ? "present" : "stale"];
+    const text = bytes.toString("utf8");
+    const expected = expectedIntercomText(kind, command);
+    return [kind, (kind === "codexRules" ? text === expected : text.includes(expected)) ? "present" : "stale"];
   }));
 }
 

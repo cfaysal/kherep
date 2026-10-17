@@ -11,8 +11,11 @@ import { CODEX_IDLE_AFTER_MS, idleEvidence, readCodexSession } from "./codex-ses
 import { CODEX_CONTEXT_BYTES, CODEX_ESCALATION_NOTE, CODEX_STOP_REASON, deliverForCodex } from "./deliver-codex.mts";
 import { MAX_OFFERS, REOFFER_AFTER_MS } from "./deliver-core.mts";
 import { hookRuntime } from "./deliver-hook.mts";
+import { writeIntercomHost } from "./doctor-intercom-fixture.mts";
 import { getSent, recordSent, writeDirectory, writeLocalSessions, writeOutbox } from "./exchange.mts";
 import { getMessage, readJson, storeMessage } from "./inbox.mts";
+import { launcherCommand } from "./launcher.mts";
+import { CLI_PATH } from "./msg-cli.mts";
 
 const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
   + "feature and might change at any time\\r?\\n\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning was "
@@ -68,6 +71,28 @@ test("SessionStart records the session and tells it its id and how to send; sile
   for (const event of ["SessionStart", "UserPromptSubmit", "Stop"]) assert.equal(hook(none, event), "");
   assert.equal(fs.existsSync(none.dir), false, "an unenrolled machine gets no files");
   assert.equal(deliverForCodex({ session_id: "../x", hook_event_name: "SessionStart" }, { paths }), "");
+});
+
+// Issue #436, PR D: without a replyCommand the SessionStart recipe and the
+// "To reply" line name the stable launcher on a managed host, else this CLI.
+test("the SessionStart recipe and the reply line name the launcher on a managed host and the CLI elsewhere", (t) => {
+  const context = (paths: NodePaths, event: string): string => (JSON.parse(deliverForCodex(
+    { session_id: SELF, cwd: "/work/repo", hook_event_name: event, source: "startup" },
+    { paths, nonce: () => "t0k3n", now: () => clock })) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
+  const plain = setup(t);
+  assert.ok(context(plain, "SessionStart").includes(`To message another session: node "${CLI_PATH}" msg send --from ${SELF} `));
+
+  const managed = setup(t);
+  const root = path.dirname(managed.dir);
+  writeIntercomHost(managed, path.join(root, "claude"), path.join(root, "codex"), root);
+  const command = launcherCommand(root);
+  const start = context(managed, "SessionStart");
+  assert.ok(start.includes(`To message another session: ${command} msg send --from ${SELF} <node>/<session> -- <text>. `), start);
+  assert.ok(start.includes(`run \`${command} msg inbox --from ${SELF} --receive\``), start);
+  const messageId = inbox(managed, 1);
+  const prompt = context(managed, "UserPromptSubmit");
+  assert.ok(prompt.includes(`To reply: ${command} msg send --from ${SELF} --reply-to ${messageId} -- <reply text>`), prompt);
+  assert.ok(!`${start}${prompt}`.includes(CLI_PATH));
 });
 
 test("UserPromptSubmit offers by id and name as developer context, with --from in the reply command", (t) => {

@@ -29,10 +29,8 @@ export function intercomCommand(root: string, platform: NodeJS.Platform = proces
 }
 
 // A file is current when it holds this text: the command itself, or for the
-// rules file the launcher's whole prefix_rule, pattern and examples, exactly as
-// codex/install.mts writes it (without the file header the renderer adds).
+// rules file the whole file exactly as codex/install.mts writes it, the
+// launcher's rule alone (PR D), so a file still carrying another rule is stale.
 export function expectedIntercomText(kind: IntercomInstruction, command: string): string {
-  if (kind !== "codexRules") return command;
-  const rules = renderControlPlaneRules([launcherRule(command)]);
-  return rules.slice(rules.indexOf("prefix_rule("));
+  return kind === "codexRules" ? renderControlPlaneRules([launcherRule(command)]) : command;
 }

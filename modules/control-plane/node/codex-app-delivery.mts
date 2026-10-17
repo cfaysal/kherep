@@ -4,8 +4,8 @@ import { startIntercom } from "./closed-resume.mts";
 import { frameRecords } from "./deliver-core.mts";
 import { readLocalSessions } from "./exchange.mts";
 import type { InboxRecord } from "./inbox.mts";
-import { taskCliCommand } from "./msg-cli.mts";
 import { acceptsMessage } from "./policy.mts";
+import { taskCommand } from "./session-command.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { overLimit } from "./task-admission.mts";
 import { resolveCwd } from "./task-prompt.mts";
@@ -38,7 +38,7 @@ export function planAppDelivery(deps: RunnerDeps, records: InboxRecord[], cwd: s
   if (!resolved.ok) return { reason: resolved.reason };
   const burst = eligible.filter((r) => r.from.nodeId === first.from.nodeId && r.from.session === first.from.session);
   try {
-    const carried = frameRecords(deps.paths, burst, deps.cli ?? taskCliCommand(deps.platform), MAX_TASK_TEXT).carried;
+    const carried = frameRecords(deps.paths, burst, deps.cli ?? taskCommand(deps.paths, { platform: deps.platform }), MAX_TASK_TEXT).carried;
     if (carried.length === 0) return { reason: "no peer message fits the intercom prompt" };
     return { plan: { records: carried, cwd: resolved.cwd, mode } };
   } catch {

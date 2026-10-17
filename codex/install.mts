@@ -20,7 +20,7 @@ import {
 import { componentHash } from "./lib/component-hash.mts";
 import { prepareManagedConfig } from "./lib/config-preservation.mts";
 import type { Capabilities, McpCompatibilityOptions, PluginMcpServer, RunCodex } from "./lib/contracts.mts";
-import { cliRule, controlPlaneCli, controlPlaneRulesPath, launcherRule, renderControlPlaneRules } from "./lib/control-plane-rules.mts";
+import { controlPlaneRulesPath, launcherRule, renderControlPlaneRules } from "./lib/control-plane-rules.mts";
 import { controlPlaneOutbox } from "./lib/outbox-writable-root.mts";
 import { InstallTransaction } from "./lib/install-transaction.mts";
 import * as localPlugin from "./lib/local-plugin.mts";
@@ -484,12 +484,11 @@ export function install(options: InstallOptions = {}) {
     transaction.copyFile(sources.obsResultHook, path.join(targets.hookDir, "codex-obs-result-check.mts"));
     transaction.copyFile(sources.obsCandidatePolicy, path.join(targets.hookDir, "obs-candidate-policy.mts"));
     transaction.remove(targets.memoryNotifyHook);
-    // Issue #72. Beside the deliver hook: the msg CLI from the same checkout.
-    // Issue #436. The stable launcher first; the checkout CLI stays until the
-    // task prompt and the delivery hook name the launcher too.
-    transaction.writeFile(controlPlaneRulesPath(codexHome), renderControlPlaneRules([
-      launcherRule(intercom.command), cliRule(controlPlaneCli(repoRoot)),
-    ]));
+    // Issue #72. Beside the deliver hook: the msg CLI allowlist.
+    // Issue #436. Only the stable launcher, which the task prompt, the delivery
+    // hook and the instructions name; the whole file is rewritten, so the
+    // checkout CLI rule of an older install goes.
+    transaction.writeFile(controlPlaneRulesPath(codexHome), renderControlPlaneRules([launcherRule(intercom.command)]));
     for (const relative of RETIRED_TARGETS) transaction.remove(path.join(codexHome, relative));
 
     const projection = parityProjection.project({
