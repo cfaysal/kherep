@@ -59,7 +59,7 @@ async function fixture(t: test.TestContext) {
     clear: globalThis.clearInterval, frame: NodeClient.prototype.onFrame };
   const timers = new Map<number, (() => void)[]>();
   const listeners = new Map<string, (event: { data?: string; code?: number }) => void>();
-  let reads = 0;
+  let marks = 0;
   Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true,
     value: class {
       static OPEN = 1; static CONNECTING = 0;
@@ -72,13 +72,15 @@ async function fixture(t: test.TestContext) {
     timers.set(ms, [...timers.get(ms) ?? [], callback]); return { interval: ms };
   }) as unknown as typeof setInterval;
   globalThis.clearInterval = (() => {}) as typeof clearInterval;
-  // Stub authentication only; policy reads, snapshots and closed delivery use the production daemon path.
+  // Stub authentication and a marker frame only; policy reads, snapshots and closed delivery use the
+  // production daemon path. The marker runs on the daemon's lane after the step queued before it.
   NodeClient.prototype.onFrame = async function (raw) {
+    if (raw === "synthetic-marker") { marks++; return []; }
     if (raw !== "synthetic-auth-ok") return original.frame.call(this, raw);
     this.authenticated = true;
     return this.refreshPolicy(loadPolicy(paths.policy));
   };
-  const handle = startDaemon(config, paths, () => {}, async () => { reads++; return []; }, () => new Promise<ProbeResult>(() => {}));
+  const handle = startDaemon(config, paths, () => {}, async () => [], () => new Promise<ProbeResult>(() => {}));
   t.after(() => {
     handle.stop();
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: original.socket });
@@ -88,19 +90,27 @@ async function fixture(t: test.TestContext) {
     assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep));
     fs.rmSync(root, { recursive: true, force: true });
   });
+  const listedAt = (): string | undefined => (fs.existsSync(paths.sessions)
+    ? (JSON.parse(fs.readFileSync(paths.sessions, "utf8")) as { updatedAt?: string }).updatedAt : undefined);
+  // The lane step that recorded a listing finished: sessions.json changed, then a marker queued behind the step ran.
+  const settled = async (before: string | undefined): Promise<void> => {
+    await until(() => listedAt() !== before, "the listing was recorded");
+    const marked = marks;
+    listeners.get("message")?.({ data: "synthetic-marker" });
+    await until(() => marks > marked, "the lane reached the marker");
+    await flush();
+  };
   listeners.get("open")?.({});
+  const initial = listedAt();
   listeners.get("message")?.({ data: "synthetic-auth-ok" });
-  await until(() => reads > 0, "the initial session listing ran");
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await settled(initial);
   const snapshotTick = timers.get(SESSIONS_INTERVAL_MS)?.[0];
   assert.ok(snapshotTick);
-  // One complete session check: its listing ran and the snapshot chain settled.
+  // One complete session check: its listing was recorded and the rest of its step (closed delivery) ran.
   const check = async (): Promise<void> => {
-    const before = reads;
+    const before = listedAt();
     snapshotTick();
-    await until(() => reads > before, "the session check listed");
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    await flush();
+    await settled(before);
   };
   const closedLines = (): { outcome: string; reason?: string; messageIds: string[] }[] => (fs.existsSync(wakeAudit(paths))
     ? fs.readFileSync(wakeAudit(paths), "utf8").trim().split("\n").map((line) => JSON.parse(line) as
@@ -115,6 +125,7 @@ test("messaging.resumeClosed set after start reaches closed-session delivery at 
   assert.deepEqual(f.closedLines(), [], "resumeClosed off: no delivery attempt");
   f.writePolicy(true);
   await f.check();
+  await until(() => f.closedLines().length > 0, "the delivery attempt was audited");
   assert.deepEqual(f.closedLines(), [{ outcome: "refused", reason: "an operator message goes to no intercom session", messageIds: [MSG] }],
     "one attempt under the policy as written");
 });

@@ -674,7 +674,11 @@ admission is not. `node/policy.mts` gives a policy file without a `wake` section
 `{ "enabled": true, "sessions": ["*"], "codexApp": true, "replies": true }` when the
 file is parsed, so every consumer of the parsed policy (the wake listener, the
 delivery hooks, the Codex queue and task resume, closed-session delivery, delivery
-progress and doctor) sees the same effective section. A file without a `messaging`
+progress and doctor) sees the same effective section. The daemon parses the file
+again for each of them (issue #463): the exchange round hands its policy to the Codex
+task wake, the Codex queue and task requests, closed-session delivery reads it fresh
+at each session check, and `session.start`, `session.stop` and `session.continue`
+read it fresh per command, so no section waits for a restart. A file without a `messaging`
 section still accepts nothing (fail closed): an implied accept rule for every sender
 would silently open existing nodes, so the permissive rule
 `{ "session": "*", "from": ["*"] }` exists only in `DEFAULT_POLICY`, which `onboard`
