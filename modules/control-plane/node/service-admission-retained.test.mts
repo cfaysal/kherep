@@ -122,3 +122,22 @@ test("ordinary synchronous cleanup failures still reject the operation", async t
 test("forged admission tokens cannot register evidence", () => {
   assert.throws(() => retainServiceAdmission({ root: "/synthetic" }, Promise.resolve()), /not active/);
 });
+
+test("unrelated positive proof cannot release a disk-only lease of the same live owner", async t => {
+  const f = fixture(t), stopped = deferred();
+  const dir = path.join(f.paths.dir, "service", "admissions");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const legacy = path.join(dir, "synthetic-legacy-lease"), bytes = `${JSON.stringify(owner)}\n`;
+  fs.writeFileSync(legacy, bytes, { mode: 0o600, flag: "wx" });
+  await withServiceAdmission(f.paths, async admission => retainServiceAdmission(admission, stopped.promise), testServiceOwner);
+  const own = fs.readdirSync(dir).filter(name => name !== path.basename(legacy));
+  assert.equal(own.length, 1);
+  assert.equal(f.idle(), false);
+  stopped.resolve(); await flush();
+  assert.equal(fs.existsSync(path.join(dir, own[0]!)), false, "proof releases only its creating admission");
+  for (let check = 0; check < 2; check++) {
+    assert.equal(f.idle(), false, "legacy helper state remains unknown while its owner is alive");
+    assert.equal(fs.readFileSync(legacy, "utf8"), bytes);
+    assert.deepEqual(fs.readdirSync(dir), [path.basename(legacy)]);
+  }
+});
