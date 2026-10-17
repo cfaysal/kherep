@@ -43,3 +43,61 @@ test("reportStitch links only on a distinctive word and logs the reason per link
     "the sibling with no shared word and the page sharing only the product name are not linked");
   assert.ok(log.includes("pages that would be written: 1"));
 });
+
+// Issue #479. Two real runs against one in-memory page store. The store hands
+// a written body back the way Confluence may re-serialize it (here: a list item
+// wrapped in a paragraph), so the bytes read back are not the bytes written.
+// "Already linked" has to survive that, for a sibling neighbour as for any.
+const SIBLINGS = [
+  { id: "node", title: "Acme", parentId: null },
+  { id: "101", title: "Broker output differs between hosts", parentId: "node" },
+  { id: "102", title: "Why the runtime label differs", parentId: "node" },
+  { id: "103", title: "Release checklist", parentId: null },
+];
+
+function store(reserialize: (storage: string) => string) {
+  const bodies = new Map([["101", "<p>o</p>"], ["102", "<p>n</p>"], ["103", "<p>m</p>"]]);
+  const writes: string[] = [];
+  const session: ConfluenceSession = {
+    async request(spec) {
+      if (spec.path.includes("/spaces/")) return { status: 200, json: { results: SIBLINGS, _links: {} } };
+      if (spec.path.includes("/search")) return { status: 200, json: { results: [] } };
+      const id = /\/pages\/([^/?]+)/.exec(spec.path)?.[1] ?? "";
+      return { status: 200, json: { body: { storage: { value: bodies.get(id) ?? "" } } } };
+    },
+  };
+  const log: string[] = [];
+  const run: NeighbourDeps = {
+    session, spaceId: "42", spaceKey: "KB",
+    log: (line) => log.push(line),
+    logError: (line) => log.push(`error: ${line}`),
+    semantic: async () => ({ titles: SIBLINGS.map((p) => p.title) }),
+    update: async (id, storage) => { writes.push(id); bodies.set(id, reserialize(storage)); },
+  };
+  return { run, writes, log, bodies };
+}
+
+const wrapItems = (storage: string) => storage.replace(/<li>(.*?)<\/li>/g, "<li><p>$1</p></li>");
+
+for (const [name, reserialize] of [["verbatim", (s: string) => s], ["re-serialized", wrapItems]] as const) {
+  test(`a second stitch of the same orphan writes nothing (${name} store, sibling neighbour)`, async () => {
+    const { run, writes, log } = store(reserialize);
+    assert.equal(await reportStitch(run, { only: "101", perOrphan: 3 }), 0);
+    assert.ok(log.includes("link\t102\t101\tterm=differs\tsibling"), "the neighbour is a sibling");
+    assert.deepEqual(writes, ["102"]);
+
+    log.length = 0;
+    assert.equal(await reportStitch(run, { only: "101", perOrphan: 3 }), 0);
+    assert.deepEqual(writes, ["102"], "the second run must not write the link again");
+    assert.ok(log.includes("pages written: 0"));
+    assert.ok(log.includes("unchanged: 1"));
+  });
+}
+
+test("a block that already exists still takes a new orphan", async () => {
+  const { run, writes, bodies } = store(wrapItems);
+  bodies.set("102", '<p>n</p><h2>Related pages</h2><ul><li><p><a href="/wiki/spaces/KB/pages/103">Release checklist</a></p></li></ul>');
+  await reportStitch(run, { only: "101", perOrphan: 3 });
+  assert.deepEqual(writes, ["102"]);
+  assert.match(bodies.get("102") ?? "", /pages\/103".*pages\/101"/, "the earlier link is kept and the orphan added");
+});
