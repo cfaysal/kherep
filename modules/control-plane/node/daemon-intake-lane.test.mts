@@ -4,7 +4,7 @@ import os from "node:os";
 import test from "node:test";
 
 import { readDaemonState } from "./daemon-state.mts";
-import { EXCHANGE_INTERVAL_MS } from "./exchange.mts";
+import { DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS } from "./exchange.mts";
 import { getMessage } from "./inbox.mts";
 import { enqueueMcpIntent } from "./mcp-local.mts";
 import { AUTH_OK, command, deliver, flush, intakeHarness, messageId, statuses } from "./daemon-intake-fixture.mts";
@@ -126,4 +126,14 @@ test("a delivery after a reconnect waits for its authentication while the old so
   assert.ok(register >= 0 && accepted > register, "acknowledged after the new connection authenticated");
   assert.equal(getMessage(h.paths.inbox, messageId(8))?.state, "accepted", "stored, never dropped");
   assert.equal(statuses(fresh, messageId(8)).length, 1, "acknowledged exactly once");
+  // Issue #441: the wire seq continues across the reconnect, and a frame offered to
+  // the closed socket (the old command's ack and result) consumes none. A stamped
+  // probe frame reads the counter: it equals the number of sequenced frames sent.
+  const sequenced = (socket: typeof old) => socket.sent.filter((f) => f.seq > 0);
+  assert.ok(sequenced(fresh)[0]!.seq > sequenced(old).at(-1)!.seq, "the new socket continues above the old one");
+  h.timers.get(DIRECTORY_INTERVAL_MS)!.at(-1)!();
+  await flush();
+  const probe = fresh.sent.at(-1)!;
+  assert.equal(probe.type, "directory.get");
+  assert.equal(probe.seq, sequenced(old).length + sequenced(fresh).length, "no wire seq was consumed by a frame that was not sent");
 });
