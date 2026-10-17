@@ -16,6 +16,7 @@ import {
 } from "./daemon-state.mts";
 import { captureRuntimeSourceIdentity } from "./daemon-source.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
+import { frameKind, intakeLane, laneTimer, type IntakeConnection, type LaneOptions } from "./frame-lanes.mts";
 import { observeClaudeDeliveryProgress, observeCodexTaskProgress } from "./delivery-progress.mts";
 import {
   deliveryDepth, DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions, type ProxySend,
@@ -29,6 +30,7 @@ import { routeFrame } from "./readiness-lane.mts";
 import { probeRuntime, type ProbeResult } from "./runtime-probe.mts";
 import { createReadiness } from "./runtime-readiness.mts";
 import { retainServiceAdmission, waitForServiceAdmission } from "./service-drain.mts";
+import { reportSlowSync } from "./sync-timing.mts";
 import { continueTask, startTask, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { listSessions } from "./sessions.mts";
 import { recordAndPublishSessions } from "./periodic-session-publication.mts";
@@ -75,11 +77,12 @@ export function commandHandlers(config: NodeConfig, startedAt: number,
 }
 
 // probe: the runtime readiness probe (issue #197); tests replace it.
+// lanes: the slow-item and slow-intake log thresholds (issue #441); tests lower them.
 export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: string) => void = (line) => console.error(line),
   sessionSource?: (signal?: AbortSignal) => Promise<SessionInfo[]>,
   probe: (runtime: TaskRuntime, onUnconfirmedShutdown?: () => void) => Promise<ProbeResult> = (runtime, onUnconfirmedShutdown) =>
     probeRuntime(runtime, { forgetSession: (threadId) => forgetCodexSession(paths, threadId), onUnconfirmedShutdown }),
-  service?: DaemonServiceBinding): DaemonHandle {
+  service?: DaemonServiceBinding, lanes: LaneOptions = {}): DaemonHandle {
   const identity = readPrivateKey(config.privateKeyFile);
   if (identity.publicKey !== config.publicKey) throw new Error("private key does not match the enrolled public key");
   const policy = loadPolicy(config.policyFile);
@@ -175,13 +178,17 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
       (execute) => executeTaskControl(execute, { nodeId: config.nodeId, paths, runner })),
     ...exchangeOptions(paths), log,
   });
+  const timed = laneTimer(log, lanes.slowLaneMs);
+  // Issue #441: deliveries on a lane of their own (frame-lanes.mts); spans reconnects like chain.
+  const intake = intakeLane({ client, policyFile: config.policyFile, inbox: paths.inbox, log, timed, intakeSlowMs: lanes.intakeSlowMs });
+  const stopSlowSync = reportSlowSync(log);
 
   let stopped = false;
   let attempt = 0;
   let socket: WebSocket | null = null;
   let retry: NodeJS.Timeout | null = null;
   let finish: () => void = () => {};
-  const done = new Promise<void>((resolve) => { finish = resolve; }).then(drainProbes);
+  const done = new Promise<void>((resolve) => { finish = resolve; }).then(drainProbes).finally(stopSlowSync);
   // One lane spans reconnects so an old socket cannot finish a state mutation
   // concurrently with the replacement connection.
   let chain = Promise.resolve();
@@ -232,12 +239,12 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           if (!controller.signal.aborted) log(`kherep-node: session listing failed, snapshot skipped: ${String(error)}`);
           return null;
         }).then((listed) => {
-          chain = chain.then(async () => {
+          chain = chain.then(() => timed("chain", "snapshot", async () => {
             if (socket !== ws || ws.readyState !== WebSocket.OPEN) return;
             if (listed && !controller.signal.aborted) await recordAndPublishSessions(client, paths, listed, send, log, controller.signal);
             await watchTasks(runner, log);
             await deliverToClosed(live(), log);
-          }).catch((error: unknown) => log(`kherep-node: session snapshot failed: ${String(error)}`));
+          })).catch((error: unknown) => log(`kherep-node: session snapshot failed: ${String(error)}`));
           return chain;
         }).finally(() => {
           if (backgroundDiscovery?.controller === controller) backgroundDiscovery = null;
@@ -249,7 +256,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         // cannot accumulate behind redundant periodic exchange work.
         if (exchangePending) return;
         exchangePending = true;
-        chain = chain.then(async () => {
+        chain = chain.then(() => timed("chain", "exchange-round", async () => {
           const current = loadPolicy(config.policyFile);
           let applied = current;
           // Issue #444: the gate's presence check follows the round's policy, as the queue does; the relay guards read the file.
@@ -275,7 +282,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
             connected: () => !stopped && socket === ws && ws.readyState === WebSocket.OPEN,
             send: frame => !stopped && socket === ws && send(frame),
             exchange: () => pollExchange(client, paths, inflight, send, Date.now(), Math.random, proxySend()),
-            queue: () => pollCodexQueue({ ...runner, policy: applied }, log), defer: handleFrame, log }) : null;
+            queue: () => pollCodexQueue({ ...runner, policy: applied }, log), defer: dispatchFrame, log }) : null;
           intakeWindow = window;
           try { await pollCodexInbound({ ...runner, policy: applied }, log); }
           finally { await window?.drain(); intakeWindow = null; }
@@ -283,20 +290,26 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           // Not awaited: queue runs have their own lane and never block this chain.
           // Issue #444: this round's policy, as the intake window passes it; the fork gate and queue authorization re-read the file.
           pollCodexQueue({ ...runner, policy: applied }, log);
-        })
+        }))
           .catch((error: unknown) => log(`kherep-node: message exchange failed: ${String(error)}`))
           .finally(() => { exchangePending = false; });
       }, EXCHANGE_INTERVAL_MS);
       directory = setInterval(() => {
-        chain = chain.then(() => { client.directoryRequest().forEach(send); });
+        chain = chain.then(() => timed("chain", "directory", () => { client.directoryRequest().forEach(send); }));
       }, DIRECTORY_INTERVAL_MS);
     });
+    const connection: IntakeConnection = { live: () => socket === ws && ws.readyState === WebSocket.OPEN, send, publishRegistration };
     ws.addEventListener("message", (event) => {
       if (typeof event.data !== "string") return;
-      const data = event.data;
-      if (intakeWindow?.frame(data)) return;
+      const arrivedAt = Date.now();
+      if (!intakeWindow?.frame(event.data)) dispatchFrame(event.data, arrivedAt);
+    });
+    // The listener after the Codex intake window, which also defers to it. Auth barrier: until
+    // auth.ok is handled on chain, a delivery stays behind it there, never unauthenticated on intake.
+    const dispatchFrame = (data: string, arrivedAt = Date.now()): void => {
       const route = routeFrame(data, paths);
-      if (!route.command) handleFrame(data);
+      if (route.kind === "deliver" && client.authenticated) intake(data, arrivedAt, connection);
+      else if (route.kind !== "command") handleFrame(data);
       else {
         // Issue #197: a session command for a runtime without any readiness
         // verdict waits for its first probe here, outside the frame lane;
@@ -307,9 +320,9 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           if (socket === ws) handleFrame(data);
         }).catch((error: unknown) => log(`kherep-node: command handling failed: ${String(error)}`));
       }
-    });
+    };
     const handleFrame = (data: string): void => {
-      chain = chain.then(async () => {
+      chain = chain.then(() => timed("chain", () => frameKind(data), async () => {
         publishRegistration(await client.refreshPolicy(loadPolicy(config.policyFile)));
         const wasAuthed = client.authenticated;
         // Issue #408 (design r3 section 3.3): live is decided when the lane reaches the frame.
@@ -329,10 +342,10 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
             const controller = new AbortController();
             backgroundDiscovery = { controller, socket: ws };
             void source(controller.signal).then((listed) => {
-              chain = chain.then(async () => {
+              chain = chain.then(() => timed("chain", "snapshot", async () => {
                 if (socket !== ws || ws.readyState !== WebSocket.OPEN || controller.signal.aborted) return;
                 await recordAndPublishSessions(client, paths, listed, send, log, controller.signal);
-              });
+              }));
               return chain;
             }).catch((error: unknown) => {
               if (!controller.signal.aborted) log(`kherep-node: initial session snapshot failed: ${String(error)}`);
@@ -341,7 +354,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
             });
           }
         }
-      }).catch((error: unknown) => log(`kherep-node: frame handling failed: ${String(error)}`));
+      })).catch((error: unknown) => log(`kherep-node: frame handling failed: ${String(error)}`));
     };
     ws.addEventListener("close", (event) => {
       intakeWindow?.close();

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { timedSync } from "./sync-timing.mts";
 
 import { holdsChild, signalGroup, signalProcess, startTimeOf, type CodexDeps, type SignalScope } from "./codex-process.mts";
 
@@ -36,7 +37,8 @@ export function processTree(deps: CodexDeps, root: number, known: readonly Proce
 }
 
 function posixRelations(): ProcessRelation[] {
-  const text = execFileSync("ps", ["-eo", "pid=,ppid="], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" }, timeout: 10_000 });
+  const text = timedSync("process-relations", () => execFileSync("ps", ["-eo", "pid=,ppid="],
+    { encoding: "utf8", env: { ...process.env, LC_ALL: "C" }, timeout: 10_000 }));
   return parseRelations(text);
 }
 
@@ -106,8 +108,8 @@ public static class KherepProcessTree {
 Add-Type -TypeDefinition $source
 [KherepProcessTree]::Rows()
 `;
-  return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command],
-    { encoding: "utf8", windowsHide: true, timeout: 10_000 });
+  return timedSync("process-relations", () => execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command],
+    { encoding: "utf8", windowsHide: true, timeout: 10_000 }));
 }
 
 function parseRelations(text: string): ProcessRelation[] {

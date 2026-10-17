@@ -11,6 +11,19 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Intake visibility (refs #441). `kherep-node doctor` adds the `intakeLatency`
+  check: for messages stored in the last two hours, `observed`,
+  `maxLatencySeconds` (control-plane accept to local store), `overThreshold`
+  (over 300 seconds; any one fails the check) and `lastReceivedAt`, with no
+  ids, text or sender names. It sees only messages that reached the inbox, so
+  it is no proof that the control-plane queue for the node drains. The daemon
+  logs a lane item over 5 seconds with its kind (`lane chain item
+  command:session.start took 61.0 s`), a message stored more than 60 seconds
+  after the control plane accepted it with its id and lane wait, and a
+  synchronous child process over 2 seconds by name (`process-start`,
+  `process-relations`, `owner-identity`, `owner-observe`); never bodies,
+  session names or pids.
+
 - Codex idle evidence (issue #408, first increment). The node's record of each
   Codex session (`codex-sessions/<id>.json`) now keeps `lastEvent` and
   `lastEventAt`, the last hook event (`SessionStart`, `UserPromptSubmit`,
@@ -220,6 +233,19 @@ increments the minor version; every other release increments the patch version.
   `identity_unknown`. The stop followed in the second part (see Added).
 
 ### Fixed
+
+- Message intake no longer waits for runtime work (refs #441; the
+  sender-visible signal for a node that does not drain is a follow-up). A
+  `message.deliver` frame of an authenticated connection is stored on an
+  intake lane of its own instead of behind the daemon's frame lane, which
+  awaits CLI stops and starts, task control and listings of up to 60 seconds
+  each. Policy acceptance, the store, the refusal and the no-answer-on-store-
+  failure rule are unchanged; a delivery before its connection's `auth.ok` was
+  handled still waits behind it. A command ack is now allocated after its
+  handler, so a status sent meanwhile cannot make the Worker drop the ack. A
+  synchronous child process still blocks the event loop: one
+  `watchCodexTasks` pass can run several in a row, so a delivery can still
+  wait for their sum, each bounded by 10 seconds.
 
 - Node policy applied without a restart (issue #463). The daemon handed the
   Codex task wake, closed-session delivery, task requests

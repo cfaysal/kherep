@@ -14,6 +14,7 @@ import { KHEREP_SESSION_ENV, SESSION_ENV } from "./msg-resolve.mts";
 import type { ProcessIdentity, ProcessRelation } from "./codex-stop.mts";
 import { withNodeOnPath } from "./task-env.mts";
 import type { ServiceAdmission } from "./service-drain.mts";
+import { timedSync } from "./sync-timing.mts";
 
 // The Codex processes of tasks (issue #63), from `codex exec --help` and
 // `codex exec resume --help` of Codex CLI 0.153.4 and the measurements in the
@@ -199,10 +200,10 @@ export async function spawnCodex(deps: CodexDeps, file: string, args: string[], 
 // error, such as a start time that cannot be read, still exits non-zero.
 export function processStart(pid: number, platform: NodeJS.Platform = process.platform): string | null {
   if (platform === "win32") {
-    const text = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+    const text = timedSync("process-start", () => execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
       `try { (Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc() } `
       + "catch [Microsoft.PowerShell.Commands.ProcessCommandException] { exit 0 }"],
-    { encoding: "utf8", windowsHide: true, timeout: 10_000 });
+    { encoding: "utf8", windowsHide: true, timeout: 10_000 }));
     return text.trim() || null;
   }
   const gone = (): boolean => {
@@ -215,7 +216,8 @@ export function processStart(pid: number, platform: NodeJS.Platform = process.pl
   };
   if (gone()) return null;
   try {
-    const text = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" }, timeout: 10_000 });
+    const text = timedSync("process-start", () => execFileSync("ps", ["-o", "lstart=", "-p", String(pid)],
+      { encoding: "utf8", env: { ...process.env, LC_ALL: "C" }, timeout: 10_000 }));
     return text.trim() || null;
   } catch (error) {
     if (gone()) return null; // it ended between the probe and ps

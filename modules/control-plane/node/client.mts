@@ -401,23 +401,21 @@ export class NodeClient {
     // only acknowledged again, never executed twice.
     if (envelope.seq <= this.processedSeq) return [this.frame("command.ack", { commandId })];
     this.processedSeq = envelope.seq;
-    const out = [this.frame("command.ack", { commandId })];
-    if (!isAllowed(this.policy, command)) {
-      out.push(this.failedResult(commandId, command, args, "rejected by local policy"));
-      return out;
-    }
+    const ack = (): string => this.frame("command.ack", { commandId });
+    if (!isAllowed(this.policy, command)) return [ack(), this.failedResult(commandId, command, args, "rejected by local policy")];
     const handler = this.options.handlers[command] as ((args?: unknown) => Promise<unknown>) | undefined;
     if (!isCommandArgs(command, args) || !handler) {
-      out.push(this.failedResult(commandId, command, args, handler ? "invalid command arguments" : "command not supported"));
-      return out;
+      return [ack(), this.failedResult(commandId, command, args, handler ? "invalid command arguments" : "command not supported")];
     }
+    // Issue #441: the ack's seq is allocated after the handler, next to its
+    // result. A delivery answered on the intake lane meanwhile carries a lower
+    // seq, so the Worker never drops this ack as a duplicate.
     try {
       const result = await handler(args);
-      out.push(this.frame("command.result", { commandId, ok: true, result }));
+      return [ack(), this.frame("command.result", { commandId, ok: true, result })];
     } catch (error) {
-      out.push(this.failedResult(commandId, command, args, String((error as Error).message ?? error).slice(0, 1024)));
+      return [ack(), this.failedResult(commandId, command, args, String((error as Error).message ?? error).slice(0, 1024))];
     }
-    return out;
   }
 
   // Issue #240: every failed command result is logged with its task id and

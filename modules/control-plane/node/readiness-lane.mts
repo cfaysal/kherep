@@ -10,22 +10,25 @@ import { readTask } from "./task-records.mts";
 // keep their order on a lane of their own (their acks are cumulative); every
 // other frame goes on directly. With a verdict, stale or not, nothing waits.
 
-export type FrameRoute = { command: false } | { command: true; runtime: TaskRuntime | null };
+// Issue #441: the same single parse also routes a message.deliver frame to the
+// daemon's intake lane, so storing a message never waits for runtime work.
+export type FrameKind = { kind: "deliver" } | { kind: "other" } | { kind: "command"; runtime: TaskRuntime | null };
 
 // session.start names its runtime; session.continue runs the runtime of the
 // task record this node keeps (claude for records written before issue #63).
-export function routeFrame(data: string, paths: NodePaths): FrameRoute {
+export function routeFrame(data: string, paths: NodePaths): FrameKind {
   const parsed = parseEnvelope(data);
-  if (!parsed.ok || parsed.envelope.type !== "command") return { command: false };
+  if (parsed.ok && parsed.envelope.type === "message.deliver") return { kind: "deliver" };
+  if (!parsed.ok || parsed.envelope.type !== "command") return { kind: "other" };
   const body = parsed.envelope.body;
-  if (!isCommandBody(body)) return { command: true, runtime: null };
+  if (!isCommandBody(body)) return { kind: "command", runtime: null };
   const args = body.args as Record<string, unknown> | undefined;
-  if (body.command === "session.start") return { command: true, runtime: isTaskRuntime(args?.runtime) ? args.runtime : null };
-  if (body.command !== "session.continue" || typeof args?.taskId !== "string") return { command: true, runtime: null };
+  if (body.command === "session.start") return { kind: "command", runtime: isTaskRuntime(args?.runtime) ? args.runtime : null };
+  if (body.command !== "session.continue" || typeof args?.taskId !== "string") return { kind: "command", runtime: null };
   try {
     const record = readTask(paths, args.taskId);
-    return { command: true, runtime: record ? record.runtime ?? "claude" : null };
+    return { kind: "command", runtime: record ? record.runtime ?? "claude" : null };
   } catch {
-    return { command: true, runtime: null };
+    return { kind: "command", runtime: null };
   }
 }
