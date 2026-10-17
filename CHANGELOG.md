@@ -293,6 +293,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Confluence semantic search without `~/.local/bin` on `PATH` (fixes #478).
+  The search behind `search`, `related` and `stitch` spawned `twg` by bare
+  name, so a macOS background job, whose `PATH` lacks `~/.local/bin`, failed
+  every search with `spawn twg ENOENT`. `confluence-semantic.mts` now resolves
+  the executable itself, without a shell: `KHEREP_TWG_BIN`, then `PATH`, then
+  `~/.local/bin/twg`, `/opt/homebrew/bin/twg` and `/usr/local/bin/twg`; on
+  Windows `twg.exe` on `PATH`, then the `%LOCALAPPDATA%` and `%ProgramFiles%`
+  install locations. The order mirrors `modules/twg/runtime/resolve-binary.mts`.
+  A set but unusable `KHEREP_TWG_BIN` and a CLI found nowhere both end as a
+  search that did not run (UNKNOWN), as before.
 - Managed service rollback (fixes #472). A rollback now starts the restored
   service whenever the current or the backed-up service was running, so a
   backup taken from a stopped service no longer leaves a running node unloaded
