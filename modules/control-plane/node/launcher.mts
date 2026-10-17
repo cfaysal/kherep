@@ -83,7 +83,7 @@ export function ensureLauncher(root: string, options: Omit<LauncherInput, "confi
     const target = path.join(dir, file.name);
     const existing = current(target);
     const bytes = Buffer.from(file.content, "utf8");
-    if (existing?.bytes.equals(bytes) && (process.platform === "win32" || existing.mode === file.mode)) continue;
+    if (existing && Buffer.compare(existing.bytes, bytes) === 0 && (process.platform === "win32" || existing.mode === file.mode)) continue;
     const temp = `${target}.${process.pid}.tmp`;
     try {
       fs.writeFileSync(temp, bytes, { mode: file.mode });
