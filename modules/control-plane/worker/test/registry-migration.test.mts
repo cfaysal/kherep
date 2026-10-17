@@ -27,6 +27,26 @@ describe("Registry sessions migration", () => {
     });
   });
 
+  // Issue #441: the last intake of a node, written only by the Worker.
+  it("adds last_accepted_at to a nodes table from an earlier deployment, once", async () => {
+    await runInDurableObject(registry(), (_instance, state) => {
+      const sql = state.storage.sql;
+      const nodeColumns = () => sql.exec("PRAGMA table_info(nodes)").toArray().map((c) => String(c.name));
+      sql.exec("DROP TABLE nodes");
+      sql.exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, name TEXT NOT NULL, public_key TEXT, status TEXT NOT NULL DEFAULT 'offline',
+        hostname TEXT, os TEXT, arch TEXT, cpus INTEGER, memory_bytes INTEGER, capabilities TEXT NOT NULL DEFAULT '[]',
+        enrolled_at INTEGER NOT NULL, last_seen INTEGER, revoked_at INTEGER)`);
+      sql.exec("INSERT INTO nodes (id, name, enrolled_at) VALUES ('n', 'earlier', 1)");
+      expect(nodeColumns()).not.toContain("last_accepted_at");
+
+      migrateRegistry(sql);
+      expect(nodeColumns()).toContain("last_accepted_at");
+      migrateRegistry(sql);
+      expect(nodeColumns().length).toBe(14);
+      expect(sql.exec("SELECT id, name, last_accepted_at FROM nodes").toArray()).toEqual([{ id: "n", name: "earlier", last_accepted_at: null }]);
+    });
+  });
+
   it("stores and returns the new session fields, and omits them when absent", async () => {
     const nodeId = await enroll(await newKey());
     await registry().replaceSessions(nodeId, [

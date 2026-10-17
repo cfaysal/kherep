@@ -148,6 +148,15 @@ test("directory.get and directory bodies", () => {
   for (const value of bad) assert.equal(isDirectoryBody(value), false, JSON.stringify(value).slice(0, 120));
 });
 
+test("issue #441: a directory node may carry a key-strict intake record", () => {
+  const intake = { lastAcceptedAt: null, oldestQueuedAt: "2026-10-17T09:59:50.000Z", queued: 2 };
+  const body = { nodes: [{ nodeId: NODE, name: "node-a", status: "online", intake }], sessions: [], fetchedAt: new Date(0).toISOString() };
+  assert.equal(isDirectoryBody(body), true);
+  for (const bad of [{ queued: 1 }, "x", null, { ...intake, extra: true }]) {
+    assert.equal(isDirectoryBody({ ...body, nodes: [{ ...body.nodes[0], intake: bad }] }), false, JSON.stringify(bad));
+  }
+});
+
 test("issue #408 relay: proxyOf is an optional message id on send and deliver, never together with inReplyTo", () => {
   assert.equal(MESSAGING_PROXY_CAPABILITY, "messaging.proxy.v1");
   assert.equal(isMessageSendBody({ ...SEND, proxyOf: ID }), true);

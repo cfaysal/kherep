@@ -6,13 +6,14 @@ import { describe, expect, it, vi } from "vitest";
 // a real WebSocket against the real NodeSession. Its node:crypto signing runs
 // here through the test-only nodejs_compat flag (vitest.config.mts); the
 // deployed Worker bundle does not use it.
-import type { SessionInfo } from "../../protocol.mts";
-import { MESSAGING_CAPABILITY, type MessageDeliverBody } from "../../protocol-messages.mts";
+import { isNodeId, isSessionInfo, type SessionInfo } from "../../protocol.mts";
+import { MAX_DIRECTORY_NODES, MESSAGING_CAPABILITY, type MessageDeliverBody } from "../../protocol-messages.mts";
 import { NodeClient, type ClientOptions } from "../../node/client.mts";
 import { generateIdentity } from "../../node/identity.mts";
 import { DEFAULT_POLICY } from "../../node/policy.mts";
+import { directoryBody } from "../src/directory.mts";
 import { routeEffects } from "../src/message-routing.mts";
-import { enroll, FACTS, registry, session, workerFetch } from "./helpers.mts";
+import { enroll, FACTS, newKey, registry, session, workerFetch } from "./helpers.mts";
 
 function settle(ms = 100): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -108,5 +109,39 @@ describe("node client against the Worker", () => {
       state.storage.sql.exec("SELECT state, text FROM messages WHERE id = ?", messageId).one());
     expect(row).toEqual({ state: "accepted", text: null });
     ws.close(1000, "done");
+  });
+
+  // Issue #441: isDirectoryBody as of 0d2c5d7, before node intake, vendored so an
+  // older node's reading of the new frame is pinned here. It does not reject unknown keys.
+  function isLegacyDirectoryBody(body: unknown): boolean {
+    const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+    const isText = (v: unknown, max: number) => typeof v === "string" && v.length > 0 && v.length <= max;
+    return isObject(body) && Array.isArray(body.nodes) && body.nodes.length <= 256
+      && body.nodes.every((n) => isObject(n) && isNodeId(n.nodeId) && isText(n.name, 128) && isText(n.status, 32))
+      && Array.isArray(body.sessions) && body.sessions.length <= 1024
+      && body.sessions.every((s) => isObject(s) && isNodeId(s.nodeId) && isSessionInfo(s) && s.startedAt === undefined)
+      && typeof body.fetchedAt === "string" && !Number.isNaN(Date.parse(body.fetchedAt))
+      && (body.truncated === undefined || typeof body.truncated === "boolean")
+      && (body.worker === undefined || (isObject(body.worker) && Array.isArray(body.worker.capabilities)
+        && body.worker.capabilities.length <= 64 && body.worker.capabilities.every((c) => isText(c, 64))));
+  }
+
+  it("emits a directory with intake that an older node still accepts (issue #441)", async () => {
+    const sender = await enroll(await newKey(), "legacy-sender");
+    const target = await enroll(await newKey(), "legacy-target");
+    await registry().updateRegistration(target, FACTS, [], [MESSAGING_CAPABILITY]);
+    await registry().sendMessage({ messageId: crypto.randomUUID(), from: { nodeId: sender, session: "s" },
+      to: { nodeId: target, session: "t" }, text: "x" }, "test");
+    const body = await registry().directory();
+    expect(body.nodes.find((n) => n.nodeId === target)?.intake).toMatchObject({ queued: 1 });
+    expect(isLegacyDirectoryBody(body)).toBe(true);
+
+    const rows = Array.from({ length: MAX_DIRECTORY_NODES + 1 }, (_, i) => ({
+      id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`, name: "n".repeat(128), status: "online" }));
+    const full = { lastAcceptedAt: "2026-10-17T09:57:30.000Z", oldestQueuedAt: "2026-10-17T09:59:50.000Z", queued: 100 };
+    const truncated = directoryBody(rows, [], 0, new Map(rows.map((r) => [r.id, full])));
+    expect(truncated.truncated).toBe(true);
+    expect(truncated.nodes.some((n) => n.intake)).toBe(true);
+    expect(isLegacyDirectoryBody(truncated)).toBe(true);
   });
 });

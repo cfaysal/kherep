@@ -22,8 +22,11 @@ const ENV = { CLAUDE_CODE_SESSION_ID: "s-self" };
 
 const DIRECTORY: DirectoryBody = {
   nodes: [
-    { nodeId: SELF, name: "node-a", status: "online" }, { nodeId: PEER, name: "node-b", status: "online" },
-    { nodeId: TWIN, name: "node-c", status: "offline" },
+    // Issue #441: node-a without intake (an older Worker), node-b not draining, node-c empty.
+    { nodeId: SELF, name: "node-a", status: "online" },
+    { nodeId: PEER, name: "node-b", status: "online",
+      intake: { lastAcceptedAt: new Date(NOW - 25 * 60_000).toISOString(), oldestQueuedAt: new Date(NOW - 12 * 60_000).toISOString(), queued: 3 } },
+    { nodeId: TWIN, name: "node-c", status: "offline", intake: { lastAcceptedAt: new Date(NOW - 3 * 60_000).toISOString(), oldestQueuedAt: null, queued: 0 } },
   ],
   sessions: [
     { nodeId: SELF, sessionId: "s-self", name: "review", state: "busy", runtime: "claude-code", cwd: "/work/a" },
@@ -71,9 +74,9 @@ test("msg sessions lists every node, marks this session and warns about a stale 
   const listed = await run(paths, ["sessions"]);
   assert.equal(listed.code, 0);
   assert.equal(listed.err, "");
-  assert.match(listed.out, /node-a \(.*\) online \[this node\]\n  \* review  s-self  busy  claude-code  \/work\/a/);
-  assert.match(listed.out, /node-b .*\n    build  s-b1  idle  claude-code/);
-  assert.match(listed.out, /node-c .* offline\n    no sessions reported/);
+  assert.match(listed.out, /node-a \(.*\) online \[this node\]\n    intake: .*\n  \* review  s-self  busy  claude-code  \/work\/a/);
+  assert.match(listed.out, /node-b .*\n    intake: .*\n    build  s-b1  idle  claude-code/);
+  assert.match(listed.out, /node-c .* offline\n    intake: .*\n    no sessions reported/);
   assert.ok(fs.existsSync(paths.directoryRequest), "a refresh is requested");
 
   const stale = await run(paths, ["sessions"], ENV, NOW + 10 * 60_000);
@@ -84,6 +87,72 @@ test("msg sessions lists every node, marks this session and warns about a stale 
   assert.equal(missing.code, 1);
   assert.equal(missing.out, "");
   assert.match(missing.err, /no session directory yet .*Is the daemon running\?/);
+});
+
+test("msg sessions shows each node's intake beside its connection, UNKNOWN when unmeasured (issue #441)", async (t) => {
+  const fetched = new Date(NOW - 30_000).toISOString();
+  const listed = await run(setup(t), ["sessions"]);
+  assert.equal(listed.code, 0, listed.err);
+  const lines = listed.out.split("\n");
+  const after = (header: RegExp) => lines[lines.findIndex((l) => header.test(l)) + 1];
+  assert.equal(after(/^node-a /), "    intake: UNKNOWN (the control plane did not report queue state; it may run an older Worker)");
+  assert.equal(after(/^node-b /), `    intake: NOT DRAINING: 3 queued, oldest 12 min (over 5 min) as of ${fetched}; last intake 25 min ago`);
+  assert.equal(after(/^node-c /), `    intake: queue empty as of ${fetched}; last intake 3 min ago`);
+  assert.equal(lines.at(-1), "(NOT DRAINING: a node holds a queued message older than 5 min; messages to it wait in the control plane; "
+    + "on that node run `kherep-node doctor` (queueDrain, intakeLatency) and read its daemon log for `lane` lines)");
+  // No intake line carries a session id, name or cwd.
+  for (const line of lines.filter((l) => l.startsWith("    intake:"))) assert.doesNotMatch(line, /s-self|s-b\d|review|build|docs|\/work/);
+
+  // Every line is UNKNOWN when the directory is stale or dated ahead of this clock.
+  const stale = await run(setup(t), ["sessions"], ENV, NOW + 10 * 60_000);
+  assert.deepEqual(stale.out.split("\n").filter((l) => l.startsWith("    intake:")),
+    Array(3).fill("    intake: UNKNOWN (the session directory is 11 min old)"));
+  assert.doesNotMatch(stale.out, /NOT DRAINING/);
+  const ahead = await run(setup(t, { ...DIRECTORY, fetchedAt: new Date(NOW + 3 * 60_000).toISOString() }), ["sessions"]);
+  assert.deepEqual(ahead.out.split("\n").filter((l) => l.startsWith("    intake:")),
+    Array(3).fill("    intake: UNKNOWN (the session directory is dated 3 min ahead of this clock)"));
+  // A truncated directory: a node without intake is UNKNOWN for that reason.
+  const truncated = await run(setup(t, { ...DIRECTORY, truncated: true }), ["sessions"]);
+  assert.ok(truncated.out.includes("    intake: UNKNOWN (not reported in a truncated directory)"), truncated.out);
+  // A record that contradicts itself is UNKNOWN, never an empty queue.
+  const odd = await run(setup(t, { ...DIRECTORY, nodes: [{ nodeId: PEER, name: "node-b", status: "online",
+    intake: { lastAcceptedAt: null, oldestQueuedAt: fetched, queued: 0 } }] }), ["sessions"]);
+  assert.ok(odd.out.includes("    intake: UNKNOWN (the intake record is inconsistent)"), odd.out);
+  const none = await run(setup(t, { ...DIRECTORY, nodes: [{ nodeId: PEER, name: "node-b", status: "online",
+    intake: { lastAcceptedAt: null, oldestQueuedAt: null, queued: 0 } }] }), ["sessions"]);
+  assert.ok(none.out.includes(`    intake: queue empty as of ${fetched}; last intake: none recorded by the control plane`), none.out);
+  assert.doesNotMatch(none.out, /NOT DRAINING/);
+});
+
+test("msg status of a queued message names its target's intake (issue #441)", async (t) => {
+  const fetched = new Date(NOW - 30_000).toISOString();
+  const paths = setup(t);
+  const queuedTo = async (target: string) => {
+    const sent = (await run(paths, ["send", target, "x"])).out;
+    recordSent(paths, sent, "queued", undefined, NOW);
+    return sent;
+  };
+  const toPeer = await queuedTo("node-b/docs");
+  const status = await run(paths, ["status", toPeer]);
+  assert.equal(status.code, 0, status.err);
+  assert.deepEqual(status.out.split("\n"), [`${toPeer} queued (updated ${new Date(NOW).toISOString()})`,
+    `  target node-b (${PEER}) online; intake: NOT DRAINING: 3 queued, oldest 12 min (over 5 min) as of ${fetched}; last intake 25 min ago`]);
+
+  const toSelf = await queuedTo("node-a/s-self");
+  assert.equal((await run(paths, ["status", toSelf])).out.split("\n")[1],
+    `  target node-a (${SELF}) online; intake: UNKNOWN (the control plane did not report queue state; it may run an older Worker)`);
+  writeDirectory(paths, { ...DIRECTORY, nodes: DIRECTORY.nodes.filter((n) => n.nodeId !== PEER) });
+  assert.equal((await run(paths, ["status", toPeer])).out.split("\n")[1], `  target ${PEER}: intake UNKNOWN (not listed in the directory)`);
+  writeDirectory(paths, { ...DIRECTORY, nodes: DIRECTORY.nodes.filter((n) => n.nodeId !== PEER), truncated: true });
+  assert.equal((await run(paths, ["status", toPeer])).out.split("\n")[1], `  target ${PEER}: intake UNKNOWN (not listed in a truncated directory)`);
+  fs.rmSync(paths.directory);
+  const missing = await run(paths, ["status", toPeer]);
+  assert.deepEqual([missing.code, missing.out.split("\n")[1]], [0, `  target ${PEER}: intake UNKNOWN (no session directory; is the daemon running?)`]);
+
+  // Later states add nothing.
+  writeDirectory(paths, DIRECTORY);
+  recordSent(paths, toPeer, "accepted", undefined, NOW);
+  assert.deepEqual((await run(paths, ["status", toPeer])).out.split("\n"), [`${toPeer} accepted (updated ${new Date(NOW).toISOString()})`]);
 });
 
 test("msg sessions shows a Codex thread title next to the name, and the title is never an address (issue #88)", async (t) => {

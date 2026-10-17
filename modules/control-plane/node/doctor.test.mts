@@ -13,7 +13,7 @@ import { daemonStateFile } from "./daemon-state.mts";
 import { captureSourceIdentity } from "./daemon-source.mts";
 import { runDoctor, type DoctorDeps } from "./doctor.mts";
 import { writeIntercomHost } from "./doctor-intercom-fixture.mts";
-import { writeLocalSessions } from "./exchange.mts";
+import { writeDirectory, writeLocalSessions } from "./exchange.mts";
 import { generateIdentity, writePrivateKey } from "./identity.mts";
 import { pinServiceSource } from "./service-source.mts";
 
@@ -51,6 +51,9 @@ function host(t: test.TestContext): Host {
   fs.writeFileSync(daemonStateFile(paths), JSON.stringify({ pid: LIVE_PID, startedAt: "2026-10-04T10:00:00.000Z",
     connectedAt: "2026-10-04T10:00:01.000Z", source: captureSourceIdentity(repo) }));
   writeLocalSessions(paths, [], Date.parse("2026-10-04T12:00:00.000Z"));
+  // Issue #441: the last directory shows this node's queue at the control plane empty.
+  writeDirectory(paths, { nodes: [{ nodeId: NODE_ID, name: "synthetic", status: "online",
+    intake: { lastAcceptedAt: null, oldestQueuedAt: null, queued: 0 } }], sessions: [], fetchedAt: "2026-10-04T11:59:30.000Z" });
   const claude = path.join(root, "claude");
   const codex = path.join(root, "codex");
   fs.mkdirSync(claude);
@@ -101,8 +104,19 @@ test("a healthy host passes every check and reports versions without secrets", a
   });
   assert.equal((report.checks.daemon.source as { status: string }).status, "match");
   assert.deepEqual([report.checks.intercom.ok, report.checks.intercom.managed, report.checks.intercom.resolves], [true, true, "match"]);
+  assert.deepEqual(report.checks.queueDrain, { ok: true, state: "empty", measured: true, fetchedAt: "2026-10-04T11:59:30.000Z",
+    directoryAgeSeconds: 30, truncated: false, queued: 0, oldestQueuedAgeSeconds: null, lastAcceptedAgeSeconds: null, connection: "online",
+    peers: { listed: 0, stalled: 0, waiting: 0, empty: 0, unknown: 0 } });
   const text = JSON.stringify(report);
   for (const secret of ["SYNTHETIC_SECRET", "PRIVATE KEY", h.pem.split("\n")[1]]) assert.equal(text.includes(secret), false);
+});
+
+test("without a session directory the control plane queue is unmeasured and the report fails (issue #441)", async (t) => {
+  const h = host(t);
+  fs.rmSync(h.paths.directory);
+  const report = await runDoctor(h.deps);
+  assert.deepEqual([report.ok, report.checks.queueDrain.ok, report.checks.queueDrain.measured], [false, false, false]);
+  assert.match(String(report.checks.queueDrain.detail), /no directory\.json/);
 });
 
 test("the daemon source is unknown when missing and fails when the invoking checkout advanced", async (t) => {
