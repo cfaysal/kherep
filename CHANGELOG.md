@@ -221,6 +221,13 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Node policy applied without a restart (issue #463). The daemon handed the
+  Codex task wake, closed-session delivery, task requests
+  (`sessions.delegate.request`) and the `session.*` commands the policy it
+  loaded at start; they now use the exchange round's policy, a fresh read per
+  session check, and a fresh read per command, so every section takes effect
+  within one exchange round, one session check or at the next command.
+  Tightened `sessions` fields apply to the next command.
 - Retained admission recovery for direct native Codex Queue reconciliation
   (Refs #442). After an unconfirmed shutdown, the same helper's later `exit` and
   `close` can release its lease once the operation and every held helper have

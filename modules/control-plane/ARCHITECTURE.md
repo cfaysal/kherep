@@ -144,7 +144,7 @@ The exact identity contracts are tabulated in [MCP.md](MCP.md#runtime-specific-n
 
 Inbox reads use a typed in-memory request on the originating `NodeSession`. The response is accepted only from the socket that received the request. Body text is returned to the waiting HTTP call and is absent from command history, Registry storage, audits and logs. Reading does not advance delivery state. An MCP `reply` to a message the Registry already deleted after its sender's acknowledgement (issue #308) uses the same request for that one item (`messageId`, `reply: true`) and then completes the send with a reply depth the Registry derives from the tombstone. [MCP.md](MCP.md) defines the complete flow, activation gates and tested limits.
 
-The route flag and node capability both default off. Credential provisioning happens only on the authenticated node socket. The daemon applies policy changes on each exchange round and before processing authentication completion. Removing the MCP opt-in immediately blocks local inbox and intent handling and clears private local MCP exchange state. The daemon retries a reduced registration after a failed socket send; once received, Registry capability retraction transactionally invalidates the credential and intents. Reconnect polling resends only unacknowledged local intent metadata while enabled; idempotent Registry registration preserves the original expiry and does not rewrite an unchanged intent.
+The route flag and node capability both default off. Credential provisioning happens only on the authenticated node socket. The daemon applies policy changes on each exchange round, each session check, before each command and before processing authentication completion. Removing the MCP opt-in immediately blocks local inbox and intent handling and clears private local MCP exchange state. The daemon retries a reduced registration after a failed socket send; once received, Registry capability retraction transactionally invalidates the credential and intents. Reconnect polling resends only unacknowledged local intent metadata while enabled; idempotent Registry registration preserves the original expiry and does not rewrite an unchanged intent.
 
 Registry admission separates the per-node limit of 128 unexpired intents from the replay ledger limit of 32,768 retained rows. A claim does not release active capacity before the intent's original expiry. Rows become eligible for pruning 24 hours after that expiry; a later new request-ID registration prunes them at the exact boundary before checking both limits. Exact duplicate registration is resolved before pruning or capacity checks and preserves the original row.
 
@@ -431,7 +431,8 @@ no process starts and nothing is written. The daemon hands every exchange round
 the policy it read for that round (`daemon.mts`, issue #444), so the first check
 follows `policy.json` without a restart; the fresh read at the second check and
 in admission are unchanged, and the exchange's send gate is built from the same
-round's policy. Every refusal before the claim is one `fork-<code>`
+round's policy; the task wake and task requests use the same round's policy
+(issue #463). Every refusal before the claim is one `fork-<code>`
 audit line per owner, message and code, recorded as written only after the
 append succeeded. The validated answer is persisted in
 the attempt file; the relay below sends it to the original's sender.
