@@ -5,6 +5,7 @@ import {
 import { depthExceeded, DEPTH_QUERIES, REPLY_DEPTH_EXCEEDED, replyDepth } from "./message-depth.mts";
 import { isQueued, PROXY_QUERIES, PROXY_SUPERSEDED, PROXY_SUPERSEDED_READ, proxyRefusal, supersededProxies } from "./message-proxy.mts";
 import { MessageRetention, RETENTION_QUERIES } from "./message-retention.mts";
+import { QUEUE_HEAD } from "./node-intake.mts";
 
 // The Registry's `messages` table (issue #31). Additive: an existing Registry
 // gains the table on its next start. The message text is kept only while a
@@ -61,7 +62,8 @@ export interface MessageEffects {
 }
 
 export type SendResult = { ok: true; status: MessageStatusBody; effects: MessageEffects } | { ok: false; error: string };
-export interface MessageReportResult { effects: MessageEffects; receipt: MessageReceiptBody | null }
+// advancedFrom: the state a node report moved the message out of (issue #441).
+export interface MessageReportResult { effects: MessageEffects; receipt: MessageReceiptBody | null; advancedFrom?: MessageState }
 
 type Audit = (actor: string, action: string, target: string | null, detail: unknown) => void;
 // Registered capabilities of an enrolled, non-revoked node, or null.
@@ -83,6 +85,7 @@ export const HOT_MESSAGE_QUERIES = {
   expireDue: { sql: EXPIRE_DUE, args: [0] },
   nextExpiry: { sql: NEXT_EXPIRY, args: [] },
   statusPage: { sql: STATUS_PAGE, args: ["node", 0, 128] },
+  queueHead: { sql: QUEUE_HEAD, args: ["node"] },
   ...DEPTH_QUERIES, ...RETENTION_QUERIES, ...PROXY_QUERIES,
 } as const;
 
@@ -203,7 +206,9 @@ export class MessageStore {
     if (record.state === "refused" && record.proxyOf !== null && (status.state === "accepted" || status.state === "delivered")) {
       this.audit(`node:${nodeId}`, "message.proxy.late-delivery", record.toNode, { messageId: record.messageId, reported: status.state });
     }
+    let advancedFrom: MessageState | undefined;
     if (this.mayAdvance(record.state, status.state)) {
+      advancedFrom = record.state;
       this.setState(record, status.state, status.reason ?? null, `node:${nodeId}`, now, effects, status.progress);
       // Issue #408: the owner read (or refused) the original; a proxy of it not yet delivered loses.
       if (status.state === "delivered" || status.state === "refused") {
@@ -215,7 +220,7 @@ export class MessageStore {
       this.setProgress(record, status.progress, `node:${nodeId}`, now, effects);
       record = this.get(status.messageId) ?? record;
     }
-    return { effects, receipt: {
+    return { effects, ...(advancedFrom ? { advancedFrom } : {}), receipt: {
       name: "message.receipt", messageId: status.messageId, requestedState: status.state, storedState: record.state,
       ...(record.state === "accepted" && record.progress ? { storedProgressAt: record.progress.observedAt } : {}),
     } };

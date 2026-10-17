@@ -11,6 +11,7 @@ import {
   KHEREP_SESSION_ENV, resolveSendTarget, senderSession, senderSessionId, SESSION_ENV, sessionIdFromEnv,
 } from "./msg-resolve.mts";
 import { inbox, offerLine, replyLines } from "./msg-inbox.mts";
+import { targetLine } from "./msg-intake.mts";
 import { sendNew } from "./msg-new.mts";
 import { directoryFor, sessions } from "./msg-sessions.mts";
 import { stopTask } from "./msg-stop.mts";
@@ -230,6 +231,8 @@ function status(io: Io, messageId: string): number {
   const sent = getSent(io.paths, messageId);
   if (sent) {
     io.out(`${messageId} ${stateText(sent, io.now())} (updated ${sent.updatedAt})`);
+    // Issue #441: while queued, whether its target node takes its messages.
+    if (sent.state === "queued" && sent.to?.nodeId) io.out(targetLine(directoryFor(io), sent.to.nodeId, io.now()));
     for (const line of replyLines(io.paths, sent)) io.out(line);
     return 0;
   }

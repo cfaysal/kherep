@@ -627,6 +627,17 @@ Senders read `running` and `stopped` as refinements of `accepted`, derived from 
 
 Claude progress comes from the current successful session snapshot and freshly loaded node policy. Each accepted message resolves once: an exact session id precedes names, a unique name resolves to one session, and a shared name produces one stable `ambiguous-target` observation. An already offered message remains `awaiting-turn-confirmation`. An idle authorized Claude session reports `waking`/`wake-pending` only for messages the live listener covers: its scope file (`listeners/<session_id>.scope.json`, valid while its token matches the lock) says whether it is listed, which task grant it uses, and whether it wakes for replies; a listener without one, from an older node version, covers only task-granted messages. With `wake.replies` a reply to an unlisted session's own recent message, or a message of a task it requested from the node that runs it, counts as authorized (the reply and task message grants, `node/wake-reply.mts`, issues #253 and #264) and reports `waking`/`wake-pending` only under a scope with `replies`. Every other authorized message reports `waiting`/`awaiting-user-turn` (issue #213). That existing code is reused on purpose: a new code would make an older Worker reject the whole `message.status` in `isNodeMessageStatusBody`. Codex interactive progress annotates CP admission and original-owner intake. For Codex task sessions, the message resume records the code of the guard that holds it, `wake-failed` for a failed start and `awaiting-turn-confirmation` for the messages a run carries, while a separate observer marks messages for active tasks `target-busy` and for operator-stopped tasks `operator-stopped`. Closed-session fallback annotates its existing start or resume path; each of its refusals names the existing code of its guard at the call site, and `fallback-failed` is reserved for a start or resume that failed (issue #230), so a policy refusal is never reported as a failed launch. These observations add no wake attempt, permission, transcript read, or message-body persistence.
 
+## Node intake visibility
+
+Issue #441, part B: a sender can see a node that is connected but does not take its messages. The Worker measures, the reader judges; connection and intake stay separate facts.
+
+- Wire: each directory node may carry `intake: { lastAcceptedAt, oldestQueuedAt, queued }` (ISO instants or `null`, `queued` an integer 0 to 10 000). The type and the key-strict validator live in `protocol-messages.mts`, the reader rules in `protocol-intake.mts`; `protocol-messages.mts` imports nothing new, so the closed Claude MCP client graph and the Codex messaging client copy stay unchanged. An absent `intake` is not measured: UNKNOWN, never `queued: 0`. An older node accepts the frame because `isDirectoryNode` ignores unknown keys; a newer node reads an older Worker's frame as UNKNOWN.
+- Measurement (`worker/src/node-intake.mts`): `oldestQueuedAt` and `queued` come from one seek of `messages_to_state` per listed node (`QUEUE_HEAD`, pinned in the query-plan test). `lastAcceptedAt` is the additive column `nodes.last_accepted_at` (ms, added by `migrateRegistry`, outside `NODE_COLUMNS`), written in `reportMessageStatus` when a node's own report moved one of its messages out of `queued` by `accepted`, `delivered` or `refused` (`MessageStore.report` returns `advancedFrom`). A duplicate, a progress-only report, `accepted -> delivered`, a report on a final row, a Worker expiry or revocation and the push on authentication do not write it. It is the Worker's clock at the report.
+- Population and cache: the nodes query is `ORDER BY name, id LIMIT 257`; the extra row only marks `truncated`, and the seeks run over the 256 listed nodes. The id breaks ties between equal names, so the listed prefix is deterministic. The cached directory rows include the intake map and are dropped at the start of every message transaction (`messageTx`: send, MCP send and reply, report, ack, revoke, alarm) and by `pendingMessagesFor`; a cached read still reads 0 rows.
+- Frame budget (`worker/src/directory.mts`): the frame limit is unchanged. A body over it is cut by a fixed ladder, each step only while still too large, each setting `truncated`: sessions from the end, then `intake` from the end of the node list (bisected, equal to one node at a time), then nodes from the end with their sessions.
+- Reading (`intakeState`, threshold `QUEUE_STALL_MS` 5 min, tolerance `CLOCK_SKEW_MS` 60 s, first hit wins): a clock that is not finite, an unparseable `fetchedAt`, a directory dated more than 60 s ahead of the reader or older than the reader's stale bound, a missing record (`truncated` or `not-reported`), an unparseable instant, or an inconsistent record (`queued > 0` without `oldestQueuedAt`, `queued: 0` with one, `oldestQueuedAt` ahead of `fetchedAt` beyond the tolerance) are UNKNOWN. Otherwise `queued: 0` is `empty`, and an oldest message older than 5 min is `stalled` (NOT DRAINING), else `waiting`. A `lastAcceptedAt` ahead of the reader has no age and is flagged, never negative.
+- Output: `node/msg-intake.mts` prints the line under each node of `msg sessions`, the closing NOT DRAINING note and the `msg status` target line of a queued message; `node/doctor-drain.mts` is the `queueDrain` check (see [Health and doctor](#health-and-doctor)). No new field or line carries a session id, session name, path or message text.
+
 ## Sender notices
 
 `node/sent-notices.mts` selects what the delivery hook tells a session about
@@ -803,6 +814,20 @@ instead of through `listCodexSessions`, so it removes no expired record. It
 counts the records seen within `CODEX_ACTIVE_MS` per last hook event, with
 `unknown` for a record of an older hook, and omits session ids. An unreadable
 directory fails the check; a missing one counts zero.
+
+The `queueDrain` doctor check (issue #441, `node/doctor-drain.mts`) reads
+`directory.json` and `node.json` only; it never requests a refresh and never
+fetches. It reports this node's queue at the control plane as of the last
+fetch (at most about 70 s old while the daemon runs): `ok` for `empty` (also
+with no intake recorded yet) and `waiting`, not ok for `stalled`, and every
+UNKNOWN as `ok: false, measured: false` with a fixed detail (no or an invalid
+`directory.json`, stale or future-dated, no `intake` from an older Worker,
+own node not listed, in a complete or a truncated directory). `peers` counts
+the listed peers only; a truncated directory says that unlisted peers are not
+counted. It cannot say why a queue stalls; the daemon's `lane ... took` log
+lines answer that. `intakeLatency` (issue #441, part A, a separate change) sees only messages that reached
+this node's inbox, so it cannot show a message still queued at the control
+plane; `queueDrain` sees exactly that.
 
 Besides a listener releasing its own lock, the daemon removes wake listener
 locks (`node/listener-sweep.mts`, issue #225): at its start and hourly, the

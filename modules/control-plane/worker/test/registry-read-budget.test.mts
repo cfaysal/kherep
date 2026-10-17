@@ -169,30 +169,41 @@ describe("Registry read budget", () => {
     const extra = 10;
     const total = MAX_DIRECTORY_NODES + extra;
     const idOf = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
-    const counts = await runInDurableObject(registry(), (_instance, state) => {
-      const sql = state.storage.sql;
-      // Equal names, inserted in descending id order: only the id tie-break gives the listed prefix.
+    // Equal names, inserted in descending id order: only the id tie-break gives the listed prefix.
+    await runInDurableObject(registry(), (_instance, state) => {
       for (let i = total; i >= 1; i--) {
-        sql.exec("INSERT INTO nodes (id, name, status, capabilities, enrolled_at) VALUES (?, 'aaa-bulk', 'online', '[]', 0)", idOf(i));
-        // Every listed node holds 3 queued rows; every unlisted one holds 100, so a seek over them would show.
-        const queued = i <= MAX_DIRECTORY_NODES ? 3 : 100;
-        sql.exec(`WITH RECURSIVE n(k) AS (SELECT 1 UNION ALL SELECT k + 1 FROM n WHERE k < ?)
+        state.storage.sql.exec("INSERT INTO nodes (id, name, status, capabilities, enrolled_at) VALUES (?, 'aaa-bulk', 'online', '[]', 0)", idOf(i));
+      }
+    });
+    // Any message transaction drops the cached directory; this one changes nothing.
+    const invalidate = () => registry().ackMessageStatus(SEED_SENDER, { name: MESSAGE_STATUS_ACK, messageId: crypto.randomUUID(), state: "delivered" });
+    const rebuild = async () => {
+      await invalidate();
+      let body: Awaited<ReturnType<Registry["directory"]>> | null = null;
+      const rows = await measure("directory", (r) => { body = r.directory(); });
+      return { rows, body: body! };
+    };
+    const empty = await rebuild();
+
+    // Every listed node gets 3 queued rows; every unlisted one 100, so a seek over any of them would show.
+    await runInDurableObject(registry(), (_instance, state) => {
+      for (let i = 1; i <= total; i++) {
+        state.storage.sql.exec(`WITH RECURSIVE n(k) AS (SELECT 1 UNION ALL SELECT k + 1 FROM n WHERE k < ?)
           INSERT INTO messages (id, from_node, from_session, to_node, to_session, text, state, created_at, updated_at, expires_at)
           SELECT ? || '-' || k, ?, 's', ?, 't', 'x', 'queued', ? + k, ? + k, ? FROM n`,
-        queued, idOf(i), SEED_SENDER, idOf(i), 1_000 * i, 1_000 * i, Date.now() + DAY);
+        i <= MAX_DIRECTORY_NODES ? 3 : 100, idOf(i), SEED_SENDER, idOf(i), 1_000 * i, 1_000 * i, Date.now() + DAY);
       }
-      const n = (table: string) => Number(sql.exec(`SELECT COUNT(*) AS n FROM ${table}`).one().n);
-      return { nodes: n("nodes"), sessions: n("sessions") };
     });
-    // Any message transaction invalidates the cached directory.
-    await registry().ackMessageStatus(SEED_SENDER, { name: MESSAGE_STATUS_ACK, messageId: crypto.randomUUID(), state: "delivered" });
-    let body: Awaited<ReturnType<Registry["directory"]>> | null = null;
-    const rebuilt = await measure("directory", (r) => { body = r.directory(); });
-    expect(rebuilt.rowsRead).toBeLessThanOrEqual(counts.sessions + counts.nodes + MAX_DIRECTORY_NODES * 4);
-    const listed = body!.nodes;
-    expect([listed.length, body!.truncated]).toEqual([MAX_DIRECTORY_NODES, true]);
+    const loaded = await rebuild();
+    // The seeks read the queued entries of the listed nodes, plus at most the one index entry past each
+    // range; a seek over the unlisted nodes would add their 1000 entries.
+    expect(loaded.rows.rowsRead - empty.rows.rowsRead).toBeGreaterThanOrEqual(MAX_DIRECTORY_NODES * 3);
+    expect(loaded.rows.rowsRead - empty.rows.rowsRead).toBeLessThanOrEqual(MAX_DIRECTORY_NODES * (3 + 1));
+    const listed = loaded.body.nodes;
+    expect([listed.length, loaded.body.truncated]).toEqual([MAX_DIRECTORY_NODES, true]);
     expect(listed.map((n) => n.nodeId)).toEqual(Array.from({ length: MAX_DIRECTORY_NODES }, (_, i) => idOf(i + 1)));
     expect(listed.every((n, i) => n.intake?.queued === 3 && n.intake.oldestQueuedAt === new Date(1_000 * (i + 1) + 1).toISOString())).toBe(true);
+    expect(empty.body.nodes.every((n) => n.intake?.queued === 0 && n.intake.oldestQueuedAt === null)).toBe(true);
     expect((await measure("directory", (r) => r.directory())).rowsRead).toBe(0);
   });
 });
