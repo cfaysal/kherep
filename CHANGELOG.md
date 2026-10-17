@@ -225,8 +225,11 @@ increments the minor version; every other release increments the patch version.
   (Refs #442). After an unconfirmed shutdown, the same helper's later `exit` and
   `close` can release its lease once the operation and every held helper have
   finished. Unknown, rejected and permanent holds stay blocked. Late shutdown
-  evidence does not certify Queue cleanup, and historical leases without helper
-  identity still require positive stale-owner proof.
+  evidence does not certify Queue cleanup. All disk leases keep the same PID,
+  process start time and owner fields, without helper identity. This release
+  requires the creating daemon to retain the admission and proof from that exact
+  child in memory. Lost evidence cannot be reconstructed from disk; existing
+  positive stale-owner recovery stays unchanged.
 
 - Claude task status no longer answers `closed` while the recorded process
   lives (issue #454). When the `claude agents --json --all` row lists no `pid`,
