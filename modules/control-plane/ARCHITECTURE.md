@@ -693,11 +693,26 @@ Deliveries are stored on the intake lane (see "Codex intake peer progress"), ind
 ## CLI sender identity
 
 `node/msg-resolve.mts` decides the sender of `msg send`, `msg send --new`,
-`msg inbox --from` and `msg sessions --from`. A runtime variable names the session
-(`CLAUDE_CODE_SESSION_ID`, or the `KHEREP_SESSION_ID` the node sets for its Codex
-runs); `--from` must name that session or be the full id of a Codex session a hook
-recorded within 12 hours, with no other node-set session; an inherited Claude Code variable is ambient
-and neither verifies nor blocks the hook-recorded id.
+`msg inbox`, `msg sessions` and `task new`, through `node/runtime-identity.mts`
+(issue #471). The runtime that runs the command decides first, then its own
+variable, in this order:
+
+1. Only `CODEX_THREAD_ID` (Codex sets it for its shell commands): Codex.
+2. Only `CLAUDE_CODE_SESSION_ID`: Claude Code. Other `CODEX_*` names are no marker.
+3. Neither, but `KHEREP_SESSION_ID`: a Codex run the node started.
+4. Both: the process is nested, and the nearest runtime ancestor decides, the
+   Claude Code process (`CLAUDE_PID`) or a `codex` program, within 12 steps of
+   one process listing. No listing, no `CLAUDE_PID`, an unreadable command line
+   or no runtime found refuses with a fixed reason.
+5. Identity: Claude Code's id; for Codex the node's `KHEREP_SESSION_ID`, refused
+   when the task's known thread differs from `CODEX_THREAD_ID`, else
+   `CODEX_THREAD_ID`, which must be a plain id.
+6. Nothing set: refused.
+
+Every refusal exits 1 and writes nothing; no rule falls back to the other
+runtime's variable. `--from` must name that session or be the full id of a
+Codex session a hook recorded within 12 hours, with no other node-set session;
+when the runtime cannot be told, the hook-recorded id is the identity.
 An unverified `--from` is refused, never used as typed. This prevents mistaken or
 unknown senders; it is not authentication, since the node's processes still assert
 the session. Native MCP binds the session in the Worker instead.

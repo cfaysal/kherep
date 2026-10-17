@@ -4,7 +4,7 @@ import { readConfig } from "./config.mts";
 import { readDirectory, requestDirectory } from "./exchange.mts";
 import type { Io } from "./msg-cli.mts";
 import { intakeLine, NOT_DRAINING_NOTE } from "./msg-intake.mts";
-import { currentSession, DIRECTORY_STALE_MS, KHEREP_SESSION_ENV, senderSession, SESSION_ENV } from "./msg-resolve.mts";
+import { CODEX_THREAD_ENV, currentSession, DIRECTORY_STALE_MS, KHEREP_SESSION_ENV, senderSession, SESSION_ENV } from "./msg-resolve.mts";
 
 // kherep-node msg sessions and the directory read that every msg verb shares.
 
@@ -52,10 +52,10 @@ function lastEvent(io: Pick<Io, "paths">, sessionId: string): string {
 }
 
 export function sessions(io: Io, from?: string): number {
-  const current = currentSession(io.paths, io.env);
+  const current = currentSession(io.paths, io.env, io);
   let me = current?.id;
   if (from !== undefined) {
-    const verified = senderSession(io.paths, io.env, from, io.now());
+    const verified = senderSession(io.paths, io.env, from, io.now(), io);
     if (!verified.ok) {
       io.err(`kherep-node msg: ${verified.error}`);
       return 1;
@@ -86,7 +86,8 @@ export function sessions(io: Io, from?: string): number {
         + event + (task ? "  [background task]" : ""));
     }
   }
-  io.out(`(* marks this session${me ? "" : `; neither ${SESSION_ENV} nor ${KHEREP_SESSION_ENV} is set and no --from was given, so none is marked`})`);
+  io.out(`(* marks this session${me ? "" : `; none of ${SESSION_ENV}, ${CODEX_THREAD_ENV} or ${KHEREP_SESSION_ENV} names this session `
+    + "and no --from was given, so none is marked"})`);
   if (background) {
     io.out("([background task] runs as a Control Plane task, not as a desktop app chat, and the desktop apps may not list it; "
       + "`kherep-node attach <node>/<session id>` prints the command that opens its transcript, `kherep-node task status <taskId>` reads its status)");

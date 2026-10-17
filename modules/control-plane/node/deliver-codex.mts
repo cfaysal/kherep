@@ -29,8 +29,8 @@ import { hookCommand } from "./session-command.mts";
 //   with a head-and-tail preview ("Large hook output"). Message text, ids and
 //   paths tokenize at about 2.5 to 4 bytes per token, so 6 KB stays under that
 //   limit where Claude's 8 KB could cross it.
-// - No documented environment variable carries the session id, so the reply
-//   command passes it as --from.
+// - No documented environment variable carries the session id (CODEX_THREAD_ID
+//   is source-defined, issue #471), so the reply command still passes --from.
 // - The msg command writes into the node's outbox, which the Codex desktop
 //   app's sandbox does not make writable (measured 2026-09-27, issue #72). The
 //   installed prefix rule (codex/lib/control-plane-rules.mts) runs it outside

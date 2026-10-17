@@ -6,7 +6,7 @@ import { readDirectory, type LocalSession, type SentRecord } from "./exchange.mt
 import { listInbox, readJson, type InboxRecord } from "./inbox.mts";
 import { failureReason, getProxied, relayStateOf } from "./inbox-proxied.mts";
 import type { MsgArgs, MsgContext } from "./msg-cli.mts";
-import { NO_SESSION, nodeLabel, senderSession, sessionIdFromEnv } from "./msg-resolve.mts";
+import { nodeLabel, senderSession, sessionIdentity } from "./msg-resolve.mts";
 import { repliesTo } from "./sent-notices.mts";
 
 type InboxIo = Required<MsgContext>;
@@ -25,7 +25,7 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
       if (!session || session.sessionId !== values.from || session.runtime !== "codex") {
         return fail("--from needs a recorded Codex session id for inbox access");
       }
-      const verified = senderSession(io.paths, io.env, values.from, io.now());
+      const verified = senderSession(io.paths, io.env, values.from, io.now(), io);
       if (!verified.ok) return fail(verified.error);
       // An unsuccessful listing cannot prove an alias is unambiguous.
       const live = listCodexSessions(io.paths, io.now()).map(s => s.sessionId);
@@ -34,8 +34,9 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
       return fail("cannot read Codex sessions safely; inbox was not received");
     }
   } else {
-    const id = sessionIdFromEnv(io.env);
-    if (!id) return fail(NO_SESSION);
+    const identity = sessionIdentity(io.paths, io.env, io);
+    if (!identity.ok) return fail(identity.error);
+    const id = identity.id;
     refs = [id];
     try {
       const sessions = readJson<{ sessions?: LocalSession[] }>(io.paths.sessions)?.sessions;

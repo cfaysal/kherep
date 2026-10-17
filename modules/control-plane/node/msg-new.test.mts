@@ -15,6 +15,7 @@ import { listSessions } from "./sessions.mts";
 import { pollTasks, recordRequestResult, NOT_DELEGATING } from "./task-exchange.mts";
 import { startArgs, T0, TASK, taskNode } from "./task-fixture.mts";
 import { readRequest, readTask, requestIds, writeTask } from "./task-records.mts";
+import { codexUnderClaude, NESTED_ENV, THREAD } from "./runtime-fixture.mts";
 
 // msg send <node> --new (issue #74): a new intercom session for the first
 // message of a conversation, as a delegated task request for exactly that node.
@@ -133,7 +134,7 @@ test("msg send --new prints refusals with the reason and exits non-zero", async 
   assert.deepEqual(requestIds(fresh.paths), []);
   assert.match((await send(node, ["send", "sekhmet/s-peer", "--cwd", "/w", "--", "hi"])).err[0], /--cwd and --directive go with --new/);
   assert.match((await send(node, ["send", "sekhmet", "--new", "claude", ...D, "--", "hi"], undefined, {})).err[0],
-    /neither CLAUDE_CODE_SESSION_ID \(Claude Code\) nor KHEREP_SESSION_ID .* passes --from/);
+    /none of CLAUDE_CODE_SESSION_ID \(Claude Code\), CODEX_THREAD_ID \(Codex\) or KHEREP_SESSION_ID .* may pass --from/);
   // Issue #200: an unverified --from starts nothing.
   assert.match((await send(node, ["send", "sekhmet", "--new", "claude", ...D, "--from", "someone", "--", "hi"], undefined, {})).err[0],
     /--from "someone" is not a verified sender/);
@@ -164,4 +165,16 @@ test("a labelled task keeps --name task-<8>, records the label, frames the reply
 
   writeTask(node.paths, { ...readTask(node.paths, TASK)!, runtime: "codex", sessionId: "019a0000-0000-7000-8000-000000000001" }, T0);
   assert.equal(listCodexTaskSessions(node.paths, T0)[0].label, LABEL);
+});
+
+test("msg send --new from a Codex thread under Claude labels the task intercom: codex@n (issue #471)", async (t) => {
+  const node = taskNode(t, { delegate: { request: true } });
+  writeDirectory(node.paths, DIRECTORY);
+  const err: string[] = [];
+  const code = await runMsg(["send", "sekhmet", "--new", "claude", ...D, "--wait", "0", "--", "hi"], { paths: node.paths, env: NESTED_ENV,
+    now: () => T0, out: () => {}, err: (l) => err.push(l), sleep: async () => {}, processTable: codexUnderClaude });
+  assert.equal(code, 1, "no answer within a zero wait");
+  assert.match(err[0], /is still pending/);
+  const record = readRequest(node.paths, requestIds(node.paths)[0]);
+  assert.deepEqual([record?.label, record?.requestedBy, record?.requestedBySessionId], ["intercom: codex@n", THREAD, THREAD]);
 });
