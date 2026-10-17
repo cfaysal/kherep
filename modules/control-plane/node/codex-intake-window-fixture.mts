@@ -132,7 +132,10 @@ try {
       frame("message.deliver", body(85, "codex-00000001")), frame("message.deliver", body(86, "claude-synthetic")),
       frame("message.deliver", body(87, id(88)))];
     excluded.forEach(raw => socket.message(raw)); await flush();
-    assert.ok(excluded.every(raw => !handled.includes(raw))); assert.equal(queues.length, 0);
+    // Issue #441: deliveries the window excludes are stored on the intake lane at once.
+    const deliveries = excluded.slice(5), others = excluded.slice(0, 5);
+    assert.ok(others.every(raw => !handled.includes(raw))); assert.equal(queues.length, 0);
+    assert.ok(deliveries.every(raw => handled.includes(raw)), "excluded deliveries go to the intake lane, not the held lane");
     release(); await flush();
     assert.ok(excluded.every(raw => handled.includes(raw)), "excluded frames stay on the real original lane");
     console.log("INTAKE_WINDOW_PASS");
@@ -173,22 +176,34 @@ try {
     if (scenario === "stop") daemon.stop();
     if (scenario === "drain") release();
     await flush();
+    const status10 = () => frames.filter(f => f.type === "message.status" && (f.body as { messageId?: string }).messageId === id(10))
+      .map(f => (f.body as { state?: string }).state);
+    // Issue #441: a deferred delivery reaches the intake lane at once, while the
+    // original lane is still held; the policy file read there decides, as for
+    // any delivery. A malformed file fails closed (refused, nothing stored).
+    const refusedByPolicy = scenario === "malformed";
     if (scenario !== "drain") {
-      assert.equal(getMessage(paths.inbox, id(10)), null, "no admission after invalidation");
-      assert.equal(readMcpIntentReceipt(paths, id(11)), null);
+      assert.equal(readMcpIntentReceipt(paths, id(11)), null, "no admission after invalidation");
       assert.equal(queues.length, 0);
+      if (scenario === "close" || scenario === "stop") assert.equal(getMessage(paths.inbox, id(10)), null);
+      else if (refusedByPolicy) assert.deepEqual([getMessage(paths.inbox, id(10)), status10()], [null, ["refused"]]);
+      else assert.deepEqual([getMessage(paths.inbox, id(10))?.state, status10()], ["accepted", ["accepted"]],
+        "the deferred delivery is stored on the intake lane while the original lane is held");
       fs.writeFileSync(paths.policy, JSON.stringify(policy));
       tick(); await flush();
-      assert.equal(getMessage(paths.inbox, id(10)), null, "restoring policy cannot reopen the old window");
+      assert.equal(readMcpIntentReceipt(paths, id(11)), null, "restoring policy cannot reopen the old window");
       release(); await flush();
     }
-    // A live connection replays deferred jobs on the original lane. A closed
-    // connection sends no acceptance, so the Worker retains delivery ownership.
+    // A live connection replays deferred jobs (receipts on the original lane,
+    // deliveries on the intake lane). A closed connection sends no acceptance,
+    // so the Worker retains delivery ownership.
     if (scenario === "close" || scenario === "stop") {
       assert.equal(getMessage(paths.inbox, id(10)), null);
-      assert.equal(frames.some(f => f.type === "message.status" && (f.body as { messageId?: string }).messageId === id(10)), false);
+      assert.deepEqual(status10(), []);
     } else {
-      assert.ok(getMessage(paths.inbox, id(10)));
+      if (refusedByPolicy) assert.equal(getMessage(paths.inbox, id(10)), null);
+      else assert.ok(getMessage(paths.inbox, id(10)));
+      assert.equal(status10().length, 1, "answered exactly once");
       assert.equal(readMcpIntentReceipt(paths, id(11))?.ok, true);
     }
     assert.equal(exited, 1);
@@ -215,7 +230,8 @@ try {
   assert.equal(frames.filter(f => f.type === "message.send").length, 1);
   assert.equal(getMessage(paths.inbox, id(4))?.state, "accepted");
   assert.equal(getMessage(paths.inbox, id(5))?.state, "accepted");
-  assert.equal(getMessage(paths.inbox, id(6)), null);
+  // Issue #441: a Claude target is not admitted by the window but stored on the intake lane.
+  assert.equal(getMessage(paths.inbox, id(6))?.state, "accepted");
   assert.equal(queues.length, 0);
   const ledger = JSON.parse(fs.readFileSync(path.join(paths.dir, "listeners", `${SID}.busy-admission.json`), "utf8"));
   assert.deepEqual(ledger.messageIds, [id(4)]);
@@ -230,7 +246,7 @@ try {
     assert.equal(serviceAdmissionsIdle(paths), true); assert.equal(exited, 0);
     socket.message(frame("message.deliver", body(7))); await flush(); await codexQueueIdle();
     assert.equal(getMessage(paths.inbox, id(7))?.state, "accepted");
-    assert.equal(getMessage(paths.inbox, id(6)), null); assert.equal(frames.some(f => f.type === "command.ack"), false);
+    assert.equal(frames.some(f => f.type === "command.ack"), false);
   }
   release(); await flush();
   assert.equal(exited, 1); assert.ok(getMessage(paths.inbox, id(6)));

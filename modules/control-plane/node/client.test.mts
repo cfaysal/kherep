@@ -140,3 +140,32 @@ test("typed task-control events are handled only after authentication and outbou
     pending, completed,
   ], "retry receipts and pending-to-terminal queries are not deduplicated by correlation id");
 });
+
+// Issue #441: a delivery answered on the intake lane while a command handler
+// awaits must not carry a higher seq than that command's ack, or the Worker
+// drops the ack as a duplicate (it keeps only strictly increasing node seqs).
+test("onCommand allocates the ack after the handler", async () => {
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const client = new NodeClient({
+    nodeId: NODE_ID, identity: generateIdentity(), facts: () => FACTS, runtimes: async () => [], sessions: async () => [],
+    policy: { ...DEFAULT_POLICY, allowedCommands: ["node.status"], messaging: { accept: [{ from: ["*"], session: "*" }] } } as NodePolicy,
+    handlers: {
+      "node.status": async () => { await held; return { ok: true }; },
+      "runtime.list": async () => [], "session.list": async () => [],
+    },
+    storeMessage: () => {},
+  });
+  await client.onFrame(JSON.stringify(makeEnvelope("event", { name: "auth.ok" }, 0, 0)));
+  const commandFrames = client.onFrame(command(1, "node.status"));
+  const [accepted] = decode(await client.onFrame(JSON.stringify(makeEnvelope("message.deliver", {
+    messageId: "00000000-0000-4000-8000-000000000001", from: { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "synthetic-peer" },
+    toSession: "synthetic-session", text: "synthetic", createdAt: new Date(0).toISOString() }, 0, 0))));
+  assert.equal(accepted.type, "message.status");
+  release();
+  const [ack, result] = decode(await commandFrames);
+  assert.equal(ack.type, "command.ack");
+  assert.equal(result.type, "command.result");
+  assert.ok(ack.seq > accepted.seq, `ack seq ${ack.seq} after accepted seq ${accepted.seq}`);
+  assert.ok(result.seq > ack.seq);
+});
