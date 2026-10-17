@@ -57,6 +57,8 @@ export function intakeHarness(t: TestContext, options: HarnessOptions = {}) {
   const sockets: FakeSocket[] = [];
   const timers = new Map<number, (() => void)[]>();
   const logs: string[] = [];
+  // Issue #441: every frame on the wire must be a stamped, parseable envelope.
+  const invalid: string[] = [];
   Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: class {
     static OPEN = 1;
     static CONNECTING = 0;
@@ -72,7 +74,8 @@ export function intakeHarness(t: TestContext, options: HarnessOptions = {}) {
     addEventListener(name: string, callback: Listener) { this.listeners.set(name, callback); }
     send(raw: string) {
       const parsed = parseEnvelope(raw);
-      if (parsed.ok) this.handle.sent.push(parsed.envelope);
+      if (parsed.ok && parsed.envelope.seq >= 0) this.handle.sent.push(parsed.envelope);
+      else invalid.push(raw.slice(0, 120));
     }
     close(code = 1000) { this.readyState = 3; this.listeners.get("close")?.({ code }); }
   } });
@@ -91,6 +94,7 @@ export function intakeHarness(t: TestContext, options: HarnessOptions = {}) {
   const handle = startDaemon(config, paths, (line) => logs.push(line), async () => { listings++; return listing; },
     options.probe ?? (async () => ({ ok: true })), undefined, options.daemonOptions);
   t.after(() => {
+    assert.deepEqual(invalid, [], "every frame on the wire parses with seq >= 0");
     releaseListing([]);
     handle.stop();
     mock.restoreAll();

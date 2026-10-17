@@ -7,7 +7,7 @@ import test from "node:test";
 import { makeEnvelope, MAX_FRAME_BYTES, parseEnvelope } from "../protocol.mts";
 import { MAX_MESSAGE_TEXT } from "../protocol-messages.mts";
 import { isMcpInboxResponseBody, type McpInboxItem } from "../protocol-mcp.mts";
-import { NodeClient } from "./client.mts";
+import { NodeClient, STAMP_MARGIN } from "./client.mts";
 import { nodePaths } from "./config.mts";
 import { generateIdentity } from "./identity.mts";
 import { storeMessage } from "./inbox.mts";
@@ -47,7 +47,7 @@ async function fixture(t: test.TestContext, items: McpInboxItem[]) {
     readMcpInbox: (sessionId, limit) => readMcpInbox(paths, sessionId, limit),
   });
   await client.onFrame(JSON.stringify(makeEnvelope("event", { name: "auth.ok" }, 0, 0)));
-  return async (limit = 10) => {
+  const read = async (limit = 10) => {
     const response = await client.onFrame(JSON.stringify(makeEnvelope("mcp.inbox.request",
       { requestId: REQUEST, sessionId: SESSION, limit }, 0, 0)));
     assert.equal(response.length, 1);
@@ -60,8 +60,9 @@ async function fixture(t: test.TestContext, items: McpInboxItem[]) {
     assert.ok(isMcpInboxResponseBody(body));
     assert.equal(body.requestId, REQUEST);
     assert.deepEqual(snapshot(), before, "inbox reads must leave every delivery record unchanged");
-    return { body, bytes: Buffer.byteLength(raw, "utf8") };
+    return { body, bytes: Buffer.byteLength(raw, "utf8"), raw };
   };
+  return Object.assign(read, { client });
 }
 
 const oversizeCases: [string, string, number, string?][] = [
@@ -94,19 +95,27 @@ test("MCP inbox transport accepts a genuinely empty inbox", async (t) => {
   assert.deepEqual((await read()).body, { requestId: REQUEST, ok: true, items: [] });
 });
 
-for (const excess of [0, 1]) {
-  test(`MCP inbox transport handles the exact byte boundary plus ${excess}`, async (t) => {
+// Issue #441: the daemon stamps the wire seq and ack at send time, which can
+// lengthen both numbers; a response is sized with STAMP_MARGIN to spare, so the
+// stamped frame still fits the Worker's limit. The old exact limit is refused.
+for (const excess of [0, 1, STAMP_MARGIN]) {
+  test(`MCP inbox transport handles the stamp-margin byte boundary plus ${excess}`, async (t) => {
     const items = messages("A".repeat(MAX_MESSAGE_TEXT), 4);
     items[3]!.text = "";
     const overhead = Buffer.byteLength(JSON.stringify(makeEnvelope("mcp.inbox.response",
       { requestId: REQUEST, ok: true, items }, 4, 0)), "utf8");
-    items[3]!.text = "A".repeat(MAX_FRAME_BYTES - overhead + excess);
+    items[3]!.text = "A".repeat(MAX_FRAME_BYTES - STAMP_MARGIN - overhead + excess);
     assert.ok(items[3]!.text.length > 0 && items[3]!.text.length <= MAX_MESSAGE_TEXT);
     const read = await fixture(t, items);
     const { body, bytes } = await read();
     if (excess === 0) {
-      assert.equal(bytes, MAX_FRAME_BYTES);
+      assert.equal(bytes, MAX_FRAME_BYTES - STAMP_MARGIN);
       assert.deepEqual(body, { requestId: REQUEST, ok: true, items });
+      // Worst case: both numbers grow to the largest safe integer.
+      const widest = (await read()).raw.replace(/"seq":\d+/, `"seq":${Number.MAX_SAFE_INTEGER}`)
+        .replace(/"ack":\d+/, `"ack":${Number.MAX_SAFE_INTEGER}`);
+      assert.ok(Buffer.byteLength(widest, "utf8") <= MAX_FRAME_BYTES, "a stamped response still fits");
+      assert.ok(Buffer.byteLength(read.client.stamp((await read()).raw), "utf8") <= MAX_FRAME_BYTES);
     } else assert.deepEqual(body, { requestId: REQUEST, ok: false, error: TOO_LARGE });
   });
 }

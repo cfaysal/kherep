@@ -166,14 +166,15 @@ test("onCommand allocates the ack after the handler", async () => {
   const [ack, result] = decode(await commandFrames);
   assert.equal(ack.type, "command.ack");
   assert.equal(result.type, "command.result");
-  assert.ok(ack.seq > accepted.seq, `ack seq ${ack.seq} after accepted seq ${accepted.seq}`);
+  // Build order only: the wire order is stamped at the send step (daemon-wire-order.test.mts).
+  assert.ok(ack.seq > accepted.seq, `ack built with seq ${ack.seq} after accepted built with seq ${accepted.seq}`);
   assert.ok(result.seq > ack.seq);
 });
 
 // Issue #441: every node frame carries ack = processedSeq, and the Worker drops
 // its resend copy of every command up to it. A frame sent on the intake lane
 // while a handler runs must not ack that command before its result exists.
-function heldClient() {
+function heldClient(logs: string[] = []) {
   let release: () => void = () => {};
   let runs = 0;
   const held = new Promise<void>((resolve) => { release = resolve; });
@@ -184,7 +185,7 @@ function heldClient() {
       "node.status": async () => { runs++; await held; return { ok: true }; },
       "runtime.list": async () => [], "session.list": async () => [],
     },
-    storeMessage: () => {},
+    storeMessage: () => {}, log: (line) => logs.push(line),
   });
   return { client, release: () => release(), runs: () => runs };
 }
@@ -214,4 +215,41 @@ test("a resend after the handler resolved returns only command.ack and does not 
   const resend = decode(await client.onFrame(command(3, "node.status")));
   assert.deepEqual(resend.map((e) => [e.type, e.ack]), [["command.ack", 3]]);
   assert.equal(runs(), 1);
+});
+
+// Issue #441: a built frame's seq is provisional; the daemon's single send step
+// stamps the wire seq and the current ack, so lanes cannot reorder the wire.
+test("stamp assigns the wire seq at send time and the current ack", async () => {
+  const { client, release } = heldClient();
+  await client.onFrame(JSON.stringify(makeEnvelope("event", { name: "auth.ok" }, 0, 0)));
+  const pending = client.onFrame(command(7, "node.status"));
+  const [status] = await client.onFrame(delivery(1));
+  const wireStatus = client.stamp(status!);
+  release();
+  const [ack, result] = await pending;
+  const [stampedStatus, stampedAck, stampedResult] = decode([wireStatus, client.stamp(ack!), client.stamp(result!)]);
+  assert.deepEqual([stampedStatus.seq, stampedAck.seq, stampedResult.seq], [1, 2, 3]);
+  assert.deepEqual([stampedStatus.ack, stampedAck.ack, stampedResult.ack], [0, 7, 7]);
+  const [built] = decode([status!]);
+  assert.deepEqual({ ...stampedStatus, seq: built.seq, ack: built.ack }, built, "only seq and ack change");
+});
+
+test("stamp keeps an unsequenced frame at seq 0 and leaves an unparseable string unchanged", async () => {
+  const { client, release } = heldClient();
+  await client.onFrame(JSON.stringify(makeEnvelope("event", { name: "auth.ok" }, 0, 0)));
+  release();
+  await client.onFrame(command(3, "node.status"));
+  const [unsequenced] = decode([client.stamp(JSON.stringify(makeEnvelope("auth", { nodeId: NODE_ID }, 0, 0)))]);
+  assert.deepEqual([unsequenced.seq, unsequenced.ack], [0, 3]);
+  assert.equal(client.stamp("not json"), "not json");
+  assert.equal(client.stamp(PONG_FRAME), PONG_FRAME);
+  const [next] = decode([client.stamp(client.directoryRequest()[0]!)]);
+  assert.equal(next.seq, 1, "an unsequenced frame consumes no wire seq");
+});
+
+test("a Worker error frame that names no message is logged once", async () => {
+  const logs: string[] = [];
+  const { client } = heldClient(logs);
+  await client.onFrame(JSON.stringify(makeEnvelope("error", { error: "synthetic rejection" }, 0, 0)));
+  assert.deepEqual(logs, ["kherep-node: control plane rejected a frame: synthetic rejection"]);
 });
