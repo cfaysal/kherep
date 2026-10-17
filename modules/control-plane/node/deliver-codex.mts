@@ -43,7 +43,7 @@ export const CODEX_STOP_MARKER = "Kherep message delivery (not an error):";
 export const CODEX_STOP_REASON = "Kherep: New peer messages are waiting. Check this session's inbox and report any relevant update.";
 export const CODEX_ESCALATION_NOTE = "Run the msg command on its own, not in a pipeline or script, and request escalated "
   + "permissions (sandbox_permissions \"require_escalated\") on the first attempt: it writes outside the sandbox, and the "
-  + "installed Kherep rule approves msg send, sessions, inbox and status without asking the user.";
+  + "Kherep launcher rule approves msg send, sessions, inbox and status without asking the user.";
 
 // The hook's stdout for one Codex input: empty when there is nothing to say.
 // On a machine without an enrolled node it writes nothing at all.
