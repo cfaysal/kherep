@@ -20,7 +20,10 @@ export function nativeQueueNode(t: test.TestContext, owner = NATIVE_OWNER) {
   policy.wake = { enabled: true, sessions: [owner], nativeQueue: true };
   fs.writeFileSync(node.paths.policy, JSON.stringify(policy));
   recordCodexSession(node.paths, owner, node.workspace, T0, "default");
-  const deps = () => node.deps({ findCodex: () => fake.file, home, queueTimeoutMs: 1_000 });
+  // A bound for a hung fake, not a timing assumption: under the parallel suite a
+  // freshly written fake boots in up to ~1.1 s (issue #452), the production
+  // default stays QUEUE_TIMEOUT_MS.
+  const deps = () => node.deps({ findCodex: () => fake.file, home, queueTimeoutMs: 10_000 });
   const add = (text = "Public synthetic peer content", toSession = owner) => {
     const id = `4080${(++serial).toString(16).padStart(4, "0")}-0000-4000-8000-000000000001`;
     storeMessage(node.paths.inbox, { messageId: id, from: PEER, toSession, text, createdAt: new Date(T0).toISOString() }, T0);
