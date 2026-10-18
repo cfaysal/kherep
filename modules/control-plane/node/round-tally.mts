@@ -42,7 +42,7 @@ export function tallyKind(data: string): TallyKind {
 }
 
 export interface RoundTally {
-  add(kind: string): void;
+  add(kind: string, count?: number): void;
   // The total and the top kinds as `<kind> <n>, ..., other <n>` since the previous call; resets.
   take(): { total: number; summary: string };
 }
@@ -52,9 +52,9 @@ export const TALLY_TOP = 8;
 export function roundTally(): RoundTally {
   const counts = new Map<TallyKind, number>();
   return {
-    add(kind) {
+    add(kind, count = 1) {
       const key = member(kind);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+      counts.set(key, (counts.get(key) ?? 0) + count);
     },
     take() {
       const total = [...counts.values()].reduce((sum, n) => sum + n, 0);

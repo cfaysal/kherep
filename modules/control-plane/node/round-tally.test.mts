@@ -17,7 +17,7 @@ const control = (action: string): string => frame("event", { name: "task.control
   requestId: "00000000-0000-4000-8000-000000000002", taskId: "00000000-0000-4000-8000-000000000004", action, ownerNodeId: ID, targetNodeId: ID,
   runtime: "codex", origin: { kind: "source-request", sourceRequestId: "00000000-0000-4000-8000-000000000003" }, grantVersion: 1,
   ...(action === "stop" ? { expectedRunVersion: "0".repeat(64) } : {}) });
-const SUMMARY = new RegExp(`^((${[...TALLY_KINDS, "other"].map((k) => k.replace(/[.]/g, "\\.")).join("|")}) \\d+(, |$))*$`);
+const SUMMARY = new RegExp(`^((${[...TALLY_KINDS, "other"].map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")}) \\d+(, |$))*$`);
 
 test("item 1: marker and cardinality stay bounded to TALLY_KINDS", () => {
   assert.equal(TALLY_KINDS.length, 1 + 1 + 1 + 1 + 2 + 1 + 6 + 2 + 6 + 1 + 20 + 1);
@@ -75,7 +75,7 @@ test("item 3: oversize frames are invalid without an exception, a frame of exact
   // A valid envelope; the long reason fails isMessageStatusBody, so it lands in the closed invalid bucket.
   assert.equal(tallyKind(exact), "frame:message.status:invalid");
   const accepted = frame("message.status", { messageId: ID, state: "accepted" });
-  const padded = accepted.replace("{", `{${" ".repeat(MAX_FRAME_BYTES - accepted.length)}`);
+  const padded = "{" + " ".repeat(MAX_FRAME_BYTES - accepted.length) + accepted.slice(1);
   assert.equal(padded.length, MAX_FRAME_BYTES);
   assert.equal(tallyKind(padded), "frame:message.status:accepted");
 });
