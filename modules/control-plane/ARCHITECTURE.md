@@ -122,13 +122,28 @@ is built is provisional, so lanes cannot reorder the wire. A
 synchronous child process
 still blocks the event loop and thereby every lane: one `watchCodexTasks` pass
 can run several PowerShell children in a row, so a delivery can wait for their
-sum, each bounded by its 10 second timeout. The daemon logs a lane item over
-5 seconds (`lane <lane> item <kind> took <s> s`), a delivery stored more than
+sum, each bounded by its 10 second timeout. The daemon logs a lane item that ran
+over 5 seconds (`lane <lane> item <kind> took <s> s`) or waited over 5 seconds
+behind earlier items (`... waited <s> s, took <s> s`; issue #487 records each
+item's enqueue time), an exchange round that sent or handled more than 32 frames
+with its counts, a delivery stored more than
 60 seconds after the control plane accepted it, with its id and its lane wait,
 and a synchronous child over 2 seconds by name; never bodies, session names or
 pids. `kherep-node doctor` reports `intakeLatency` for the messages stored in the
 last two hours; it sees only messages that reached the inbox, so it is no proof
 that the control-plane queue for this node drains.
+
+The exchange round itself (`node/daemon-round.mts`) reads the inbox through the
+daemon's in-process index (`node/inbox-index.mts`, issue #487). The round's
+synchronous start, the delivery-progress observers and the status reports, shares
+one validated read: one directory listing and one stat per record, with a record
+read again only when it is new or its file changed. What runs after an await (the
+window's exchanges, `pollCodexInbound`, `pollCodexQueue`) validates the index
+again. `pollCodexInbound` reads it once for the routing and every ended task, and
+again only after a task that acted; each waiting message it acts on is read from
+its file first. Hooks, the CLI, `refuseUndeliverable` and closed-session delivery
+keep reading the files directly. A failed directory listing throws, as
+`listInbox` does; it is never an empty inbox.
 
 The window pins the socket and the policy actually applied by the last client
 refresh, including a refresh inside MCP polling. Its CP admission runner copy uses that

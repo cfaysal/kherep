@@ -3,10 +3,11 @@ import { getMessage, listInbox, type InboxRecord } from "./inbox.mts";
 
 export type CodexInboxSelector = (refs: string[]) => InboxRecord[];
 
-export function codexInboxRound(paths: NodePaths): CodexInboxSelector {
+// records: the daemon passes its inbox index (issue #487); each selected record is read again.
+export function codexInboxRound(paths: NodePaths, records: InboxRecord[] = listInbox(paths.inbox)): CodexInboxSelector {
   const byTarget = new Map<string, string[]>();
   const rank = new Map<string, number>();
-  for (const record of listInbox(paths.inbox)) {
+  for (const record of records) {
     rank.set(record.messageId, rank.size);
     const ids = byTarget.get(record.toSession) ?? [];
     ids.push(record.messageId);

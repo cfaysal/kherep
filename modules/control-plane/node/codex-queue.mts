@@ -10,7 +10,7 @@ import { codexInboxRound, type CodexInboxSelector } from "./codex-queue-inbox.mt
 import { codexSessionRefs, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { note, pruneNoted } from "./codex-wake.mts";
 export { guardQueue, QUEUE_TIMEOUT_MS, queueArgs } from "./codex-queue-run.mts";
-import { progressRecords } from "./delivery-progress.mts";
+import { inboxOf, progressRecords } from "./delivery-progress.mts";
 import { REOFFER_AFTER_MS } from "./deliver-core.mts";
 import { getMessageProgress, MAX_REPLY_DEPTH, type InboxRecord } from "./inbox.mts";
 import { explicitlyListed, wakeAllowed } from "./policy.mts";
@@ -63,7 +63,7 @@ export function pollCodexQueue(deps: RunnerDeps, log: (line: string) => void = (
   if (candidates.length === 0) return;
   let selectInbox: CodexInboxSelector;
   try {
-    selectInbox = codexInboxRound(deps.paths);
+    selectInbox = codexInboxRound(deps.paths, inboxOf(deps));
   } catch (error) {
     log(`kherep-node: could not scan Codex Inbox: ${String((error as Error).message ?? error)}`);
     return;
