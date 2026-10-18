@@ -25,10 +25,10 @@ const sameIdentities = (a: readonly ProcessIdentity[], b: readonly ProcessIdenti
 // as it is: unchanged, or the root is no longer the recorded process (it ended
 // during the listing, so the recorded tree is kept for the settle). A failed
 // read throws.
-export function refreshDescendants(codex: CodexDeps, record: TaskRecord): ProcessIdentity[] | null {
+export async function refreshDescendants(codex: CodexDeps, record: TaskRecord): Promise<ProcessIdentity[] | null> {
   if (record.pid === undefined) return null;
   const previous = record.descendants ?? [];
-  const tree = processTree(codex, record.pid, previous);
+  const tree = await processTree(codex, record.pid, previous);
   const root = tree.find((entry) => entry.pid === record.pid);
   if (!root || (record.pidStart !== undefined && root.start !== record.pidStart)) return null;
   const descendants = tree.filter((entry) => entry.pid !== record.pid).slice(0, MAX_DESCENDANTS);
@@ -52,13 +52,14 @@ export function reapDescendants(codex: CodexDeps, record: TaskRecord, log: (line
   const recorded = record.descendants ?? [];
   if (recorded.length === 0) return;
   lane = lane.then(async () => {
-    const live = recorded.filter(({ pid, start }) => {
+    const live: ProcessIdentity[] = [];
+    for (const entry of recorded) {
       try {
-        return startTimeOf(codex, pid) === start;
+        if (await startTimeOf(codex, entry.pid) === entry.start) live.push(entry);
       } catch {
-        return false; // an unverified process is never signalled
+        // an unverified process is never signalled
       }
-    });
+    }
     if (live.length === 0) return;
     const pids = live.map((entry) => entry.pid).join(", ");
     try {

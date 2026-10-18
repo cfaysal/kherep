@@ -38,15 +38,15 @@ async function session(t: test.TestContext) {
   const [line] = await once(root.stdout!, "data") as [Buffer];
   const child = Number(line.toString().trim());
   assert.ok(Number.isInteger(child) && child > 0);
-  const childStart = processStart(child);
+  const childStart = await processStart(child);
   assert.notEqual(childStart, null);
   // Only this test's processes: the root is the held child (Node resolves its
   // identity, kill() after its exit is a no-op), the detached child only while
   // it still has the start read at spawn.
-  t.after(() => {
+  t.after(async () => {
     root.kill("SIGKILL");
     try {
-      if (processStart(child) === childStart) process.kill(child, "SIGKILL");
+      if (await processStart(child) === childStart) process.kill(child, "SIGKILL");
     } catch {
       // ended between the read and the kill, or ps failed: nothing to end
     }
@@ -59,7 +59,7 @@ for (const spy of [false, true]) {
     { skip: process.platform === "win32" ? "POSIX process groups" : false }, async (t) => {
       const { root, child, childStart } = await session(t);
       const node = taskNode(t, { runtimes: ["claude"], ownTaskControl: true });
-      const rootStart = processStart(root);
+      const rootStart = await processStart(root);
       const stops: string[] = [];
       const exec = async (_file: string, args: string[]): Promise<string> => {
         if (args[0] === "stop") {
@@ -67,7 +67,7 @@ for (const spy of [false, true]) {
           process.kill(root, "SIGTERM");
           return "";
         }
-        const live = processStart(root) === rootStart;
+        const live = await processStart(root) === rootStart;
         return JSON.stringify([{ id: SHORT, kind: "background", sessionId: SESSION, name: "task-3f2a1b0c",
           ...(live ? { state: "working", pid: root, status: "busy" } : { state: "stopped" }) }]);
       };
@@ -86,7 +86,7 @@ for (const spy of [false, true]) {
       assert.deepEqual([status.processState, status.stopSupported], ["running", true]);
       const result = await executeTaskControl(operation("stop", status.runVersion), context);
       assert.deepEqual([result.state, result.stopConfirmed, result.processState, result.errorCode], ["succeeded", true, "closed", undefined]);
-      assert.notEqual(processStart(child), childStart);
+      assert.notEqual(await processStart(child), childStart);
       assert.deepEqual(stops, [SHORT]);
       if (spy) {
         assert.ok(signals.length > 0 && signals.every(([pid, , scope]) => pid === child && scope === "process"), JSON.stringify(signals));

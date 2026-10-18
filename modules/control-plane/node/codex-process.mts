@@ -1,4 +1,4 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -11,7 +11,9 @@ import { ensureDir, type NodePaths } from "./config.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
 import { writeJsonAtomic } from "./inbox.mts";
 import { KHEREP_SESSION_ENV, SESSION_ENV } from "./msg-resolve.mts";
-import type { ProcessIdentity, ProcessRelation } from "./codex-stop.mts";
+import type { ProcessIdentity } from "./codex-stop.mts";
+import type { ProcessRelation } from "./process-relations.mts";
+import { held, startTimeOf } from "./process-start.mts";
 import { withNodeOnPath } from "./task-env.mts";
 import type { ServiceAdmission } from "./service-drain.mts";
 import { timedSync } from "./sync-timing.mts";
@@ -41,18 +43,25 @@ export const FORBIDDEN_CODEX_FLAGS = ["--dangerously-bypass-approvals-and-sandbo
 
 export type SignalScope = "group" | "process";
 
+// Issue #473: the identity and tree reads may answer asynchronously; a
+// synchronous fake stays valid.
+type MaybePromise<T> = T | Promise<T>;
+
+// Moved to process-start.mts (issue #473); importers keep this module.
+export { holdsChild, processStart, sameProcess, startTimeOf, stillRuns } from "./process-start.mts";
+
 export interface CodexDeps {
   findCodex?: () => string | null;
   platform?: NodeJS.Platform;
   // The start time of a running process, null when there is none; throws
   // when it cannot tell.
-  processStart?: (pid: number) => string | null;
+  processStart?: (pid: number) => MaybePromise<string | null>;
   // Signals the process group of pid, or with scope "process" only pid.
   signal?: (pid: number, signal: NodeJS.Signals, scope?: SignalScope) => void;
   // Issue #408: the fork reply's group kill with its report (codex-fork-process.mts); signalGroupReport by default.
   killGroup?: (pid: number, signal: NodeJS.Signals) => KillReport;
-  processTree?: (root: number) => ProcessIdentity[];
-  processRelations?: () => ProcessRelation[];
+  processTree?: (root: number) => MaybePromise<ProcessIdentity[]>;
+  processRelations?: () => MaybePromise<ProcessRelation[]>;
   graceMs?: number;
   // How long a start waits for thread.started.
   startWaitMs?: number;
@@ -129,11 +138,6 @@ function guard(args: string[]): string[] {
   return args;
 }
 
-// The children this daemon started and has not reaped: their pids cannot be
-// reused yet, so they can be signalled without the start-time check.
-const held = new Map<number, ChildProcess>();
-export const holdsChild = (pid: number | undefined): boolean => pid !== undefined && held.has(pid);
-
 // Issue #119: on Windows a detached codex has no console, so each console
 // child it starts (shell commands, MCP servers behind cmd.exe) opens a new
 // visible window. An intercom run the daemon starts on its own is therefore
@@ -157,9 +161,12 @@ export function launchCommand(command: CodexCommand, platform: NodeJS.Platform, 
 // Starts codex (detached in its own process group unless told otherwise),
 // writes the prompt to its stdin and closes it, and sends stdout (the events)
 // and stderr into the task's files; exit.json records how it ended while this
-// daemon runs. Resolves with the pid once it runs.
+// daemon runs. Resolves with the pid once it runs, and its start time, read
+// before codex gets the end of its prompt, so a run cannot end before the read
+// (as while the read blocked the event loop, issue #473); undefined when the
+// read failed: the watch reads it again while this daemon holds the child.
 export async function spawnCodex(deps: CodexDeps, file: string, args: string[], cwd: string, files: CodexFiles,
-  env: NodeJS.ProcessEnv, prompt: string, detached = true): Promise<number> {
+  env: NodeJS.ProcessEnv, prompt: string, detached = true): Promise<{ pid: number; pidStart: string | undefined }> {
   const platform = deps.platform ?? process.platform;
   const command = launchCommand(codexCommand(file, args, platform), platform, detached);
   ensureDir(files.dir);
@@ -182,51 +189,24 @@ export async function spawnCodex(deps: CodexDeps, file: string, args: string[], 
       child.once("spawn", () => resolve(child.pid!));
     });
     held.set(pid, child);
+    let pidStart: string | undefined;
+    try {
+      pidStart = await startTimeOf(deps, pid) ?? undefined;
+    } catch {
+      // read again by the watch
+    }
     child.stdin?.end(prompt);
     child.unref();
-    return pid;
+    return { pid, pidStart };
   } finally {
     fs.closeSync(out);
     fs.closeSync(err);
   }
 }
 
-// The start time of pid, or null when no such process exists. A failed read
-// throws: it must not look like an ended process. ps prints the start time
-// with a one-second resolution, in the C locale; Windows prints the file time.
-// Issue #121: with -ErrorAction SilentlyContinue powershell.exe exits 1 for a
-// pid that has ended, so that looked like a failed read. Only "no such
-// process" (ProcessCommandException) now exits 0 without output; any other
-// error, such as a start time that cannot be read, still exits non-zero.
-export function processStart(pid: number, platform: NodeJS.Platform = process.platform): string | null {
-  if (platform === "win32") {
-    const text = timedSync("process-start", () => execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-      `try { (Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc() } `
-      + "catch [Microsoft.PowerShell.Commands.ProcessCommandException] { exit 0 }"],
-    { encoding: "utf8", windowsHide: true, timeout: 10_000 }));
-    return text.trim() || null;
-  }
-  const gone = (): boolean => {
-    try {
-      process.kill(pid, 0);
-      return false;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code === "ESRCH";
-    }
-  };
-  if (gone()) return null;
-  try {
-    const text = timedSync("process-start", () => execFileSync("ps", ["-o", "lstart=", "-p", String(pid)],
-      { encoding: "utf8", env: { ...process.env, LC_ALL: "C" }, timeout: 10_000 }));
-    return text.trim() || null;
-  } catch (error) {
-    if (gone()) return null; // it ended between the probe and ps
-    throw error;
-  }
-}
-
 type Run = (file: string, args: string[]) => unknown;
-const runHidden: Run = (file, args) => execFileSync(file, args, { windowsHide: true, timeout: 10_000 });
+// Still synchronous (issue #473): a slow taskkill is logged by name.
+const runHidden: Run = (file, args) => timedSync(file, () => execFileSync(file, args, { windowsHide: true, timeout: 10_000 }));
 
 // SIGTERM or SIGKILL to the process group (the negative pid) or, on Windows,
 // taskkill for the process tree (/T; /F for SIGKILL). Either way it reaches
@@ -259,18 +239,3 @@ export function signalProcess(pid: number, signal: NodeJS.Signals, platform: Nod
   if (platform === "win32") run("taskkill", ["/PID", String(pid), ...(signal === "SIGKILL" ? ["/F"] : [])]);
   else process.kill(pid, signal);
 }
-
-// True while the process that pid names is still the one this node started;
-// throws when the start time cannot be read.
-export function sameProcess(deps: CodexDeps, pid: number | undefined, pidStart: string | undefined): boolean {
-  if (pid === undefined || pidStart === undefined) return false;
-  return startTimeOf(deps, pid) === pidStart;
-}
-
-// True while the run's process is one this node started: held, or with the
-// recorded start time. Throws when the start time cannot be read.
-export const stillRuns = (deps: CodexDeps, pid: number | undefined, pidStart: string | undefined): boolean =>
-  holdsChild(pid) || sameProcess(deps, pid, pidStart);
-
-export const startTimeOf = (deps: CodexDeps, pid: number): string | null =>
-  (deps.processStart ?? ((p) => processStart(p, deps.platform)))(pid);

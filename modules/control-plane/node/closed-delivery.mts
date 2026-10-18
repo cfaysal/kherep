@@ -122,7 +122,8 @@ export async function deliverToClosed(deps: RunnerDeps, log: (line: string) => v
 const delegated = (deps: RunnerDeps, mode: unknown): mode is PermissionMode =>
   DELEGATED_PERMISSION_MODES.includes(mode as PermissionMode) && deps.policy.sessions!.permissionModes.includes(mode as PermissionMode);
 
-const runs = (deps: RunnerDeps, task: TaskRecord): boolean => isActive(task) || stillRuns(deps.codex ?? {}, task.pid, task.pidStart);
+const runs = async (deps: RunnerDeps, task: TaskRecord): Promise<boolean> =>
+  isActive(task) || stillRuns(deps.codex ?? {}, task.pid, task.pidStart);
 
 // True when the burst was handed on or a run was started (or tried) for it.
 async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now: number): Promise<boolean> {
@@ -155,7 +156,7 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
     progressRecords(paths, records, "waiting", "target-busy", now);
     return false;
   }
-  if (found.task && runs(deps, found.task)) {
+  if (found.task && await runs(deps, found.task)) {
     progressRecords(paths, records, "waiting", "target-busy", now);
     return false;
   }
@@ -163,7 +164,7 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   if (intercom?.operatorStoppedAt !== undefined) return refuse("intercom session stopped by operator", "operator-stopped");
   const runtime = intercom ? intercom.runtime ?? "claude" : found.runtime;
   if (!sessions.runtimes.includes(runtime)) return refuse(`runtime ${runtime} is not enabled on this node`, "wake-disabled");
-  if (intercom && runs(deps, intercom)) {
+  if (intercom && await runs(deps, intercom)) {
     // Its delivery hook, or the wake through its task grant, offers them.
     const linked = attachDelivery(paths, intercom, records.map((r) => r.messageId));
     if (linked !== intercom) writeTask(paths, linked, now);
