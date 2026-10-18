@@ -69,7 +69,7 @@ test("strings outside hook commands are ignored in Claude settings and Codex con
   const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
   assert.equal(check.ok, true, JSON.stringify(check));
   assert.deepEqual(check.claude, { present: true, deliver: 1, wake: 0, foreign: [] });
-  assert.deepEqual(check.codex, { present: true, deliver: 2, wake: 0, foreign: [] });
+  assert.deepEqual(check.codex, { present: true, deliver: 2, wake: 0, foreign: [], pointer: "missing", stable: 0, legacy: 2 });
 });
 
 // Issue #397. An installation may run its hooks from a source pin, a copy of
@@ -112,7 +112,7 @@ test("a hook in a source pin of the checked-out commit counts for this checkout"
   fs.writeFileSync(f.codex, codexHook(hook));
   const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
   assert.equal(check.ok, true, JSON.stringify(check));
-  assert.deepEqual(check.codex, { present: true, deliver: 1, wake: 0, foreign: [], pinned: [hook] });
+  assert.deepEqual(check.codex, { present: true, deliver: 1, wake: 0, foreign: [], pinned: [hook], pointer: "missing", stable: 0, legacy: 1 });
 });
 
 test("a matching source-pin hook reached through a canonical directory alias counts", (t) => {
@@ -132,7 +132,7 @@ test("a matching source-pin hook reached through a canonical directory alias cou
   fs.writeFileSync(f.codex, codexHook(hook));
   const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
   assert.equal(check.ok, true, JSON.stringify(check));
-  assert.deepEqual(check.codex, { present: true, deliver: 1, wake: 0, foreign: [], pinned: [hook] });
+  assert.deepEqual(check.codex, { present: true, deliver: 1, wake: 0, foreign: [], pinned: [hook], pointer: "missing", stable: 0, legacy: 0 });
 });
 
 test("a canonical hook alias counts only for the matching leaf of a complete source pin", (t) => {
@@ -162,7 +162,7 @@ test("a canonical hook alias counts only for the matching leaf of a complete sou
   };
   const accepted = check(correct);
   assert.equal(accepted.ok, true, JSON.stringify(accepted));
-  assert.deepEqual(accepted.codex, { present: true, deliver: 1, wake: 0, foreign: [], pinned: [alias] });
+  assert.deepEqual(accepted.codex, { present: true, deliver: 1, wake: 0, foreign: [], pinned: [alias], pointer: "missing", stable: 0, legacy: 0 });
 
   const wrongEntry = path.join(pin.root, "modules", "control-plane", "node", "wake-hook.mts");
   const wrongDirectoryEntry = path.join(pin.root, "modules", "control-plane", "other", "deliver-hook.mts");
@@ -172,17 +172,17 @@ test("a canonical hook alias counts only for the matching leaf of a complete sou
   for (const target of [wrongEntry, wrongDirectoryEntry, foreign]) {
     const refused = check(target);
     assert.equal(refused.ok, false, target);
-    assert.deepEqual(refused.codex, { present: true, deliver: 0, wake: 0, foreign: [alias] });
+    assert.deepEqual(refused.codex, { present: true, deliver: 0, wake: 0, foreign: [alias], pointer: "missing", stable: 0, legacy: 0 });
   }
 
   const broken = check(path.join(pin.root, "missing", "deliver-hook.mts"));
   assert.equal(broken.ok, false);
-  assert.deepEqual(broken.codex, { present: true, deliver: 0, wake: 0, foreign: [alias] });
+  assert.deepEqual(broken.codex, { present: true, deliver: 0, wake: 0, foreign: [alias], pointer: "missing", stable: 0, legacy: 0 });
 
   fs.writeFileSync(correct, "drift");
   const drifted = check(correct);
   assert.equal(drifted.ok, false);
-  assert.deepEqual(drifted.codex, { present: true, deliver: 0, wake: 0, foreign: [alias] });
+  assert.deepEqual(drifted.codex, { present: true, deliver: 0, wake: 0, foreign: [alias], pointer: "missing", stable: 0, legacy: 0 });
 });
 
 test("a source pin of another commit, a missing pin and another checkout still count as foreign", (t) => {
@@ -203,7 +203,7 @@ test("a source pin of another commit, a missing pin and another checkout still c
     fs.writeFileSync(f.codex, codexHook(hook));
     const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
     assert.equal(check.ok, false, hook);
-    assert.deepEqual(check.codex, { present: true, deliver: 0, wake: 0, foreign: [hook] });
+    assert.deepEqual(check.codex, { present: true, deliver: 0, wake: 0, foreign: [hook], pointer: "missing", stable: 0, legacy: 1 });
     assert.match(String(check.detail), /^a hook command names another checkout: /);
   }
 });
@@ -241,7 +241,7 @@ test("the live shape: Codex hooks name the pin, Claude hooks name the checkout, 
   fs.writeFileSync(f.codex, codexHook(f.pinDeliver));
   const check = checkHooks({ claude: f.claude, codex: f.codex }, f.pin);
   assert.equal(check.ok, true, JSON.stringify(check));
-  assert.deepEqual(check.codex, { present: true, deliver: 1, wake: 0, foreign: [] });
+  assert.deepEqual(check.codex, { present: true, deliver: 1, wake: 0, foreign: [], pointer: "missing", stable: 0, legacy: 1 });
   assert.deepEqual((check.claude as { checkouts?: string[] }).checkouts, [f.deliver, f.wake]);
 });
 
@@ -281,7 +281,7 @@ test("a dirty invoking checkout makes a same-identity pin hook foreign and the d
   fs.writeFileSync(f.wake, "uncommitted");
   const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
   assert.equal(check.ok, false);
-  assert.deepEqual(check.codex, { present: true, deliver: 0, wake: 0, foreign: [f.pinDeliver] });
+  assert.deepEqual(check.codex, { present: true, deliver: 0, wake: 0, foreign: [f.pinDeliver], pointer: "missing", stable: 0, legacy: 1 });
   assert.equal(check.detail, detailOf("the invoking source has tracked changes"));
 });
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { prepareManagedConfig, type ManagedConfigOptions } from "./config-preservation.mts";
+import { legacyForm } from "./legacy-control-plane-form.mts";
 import * as parityConfig from "./parity-config.mts";
 import {
   command, hookGroup, renderBeforeBusyHint, renderHooks, type HookSpec, type RenderOptions,
@@ -97,18 +98,20 @@ test("projects one dispatcher while preserving the matcher and attribution posit
 
     const attribution = entries(post[1]!);
     assert.equal(attribution.length - 1, 1);
-    assert.match(attribution[1]!, /attribution-hook\.mts/);
+    assert.match(attribution[1]!, /codex-control-plane-hook\.mts\\" \\"attribution/);
   }
 });
 
 test("pins the canonical POSIX and Windows predecessor bytes from base e29eaea", () => {
   const predecessor = Reflect.get(parityConfig, "renderBeforePostEditDispatcher") as Render | undefined;
   assert.equal(typeof predecessor, "function");
-  for (const [label, options] of [
-    ["posix", PIN_POSIX],
-    ["windows", PIN_WINDOWS],
+  // Issue #503. Base e29eaea wrote the checkout path into the Control Plane hook
+  // commands: the legacy fixture reproduces those bytes from the render.
+  for (const [label, options, root] of [
+    ["posix", PIN_POSIX, "/synthetic/repo"],
+    ["windows", PIN_WINDOWS, String.raw`C:\Synthetic\repo`],
   ] as const) {
-    const bytes = predecessor!(options);
+    const bytes = legacyForm(predecessor!(options), root);
     assert.equal(
       createHash("sha256").update(bytes, "utf8").digest("hex"),
       BASE_PREDECESSOR_SHA256[label],

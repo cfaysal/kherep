@@ -48,9 +48,11 @@ export interface RenderOptions extends McpRenderOptions {
   node: string;
   nativeHooks?: { contextCli: string; captureCli: string; profile: string; extraCaCertificates?: string };
   // The control-plane delivery hook in the checkout (issue #31, step 4). Blocks
-  // written before it existed are rendered without it.
+  // written before it existed are rendered without it. Present means the
+  // Control Plane hooks are wired; since issue #503 no command names it, the
+  // installer writes it to the source pointer instead.
   controlPlaneHook?: string;
-  // Exact external delivery groups keep ownership; attribution still needs the checkout.
+  // Exact external delivery groups keep ownership; attribution still runs.
   omitDeliveryHooks?: boolean;
   // Historical renders written before the busy hint existed.
   omitBusyHint?: boolean;
@@ -137,10 +139,13 @@ function withPreviousPostEditGroup(config: string, options: RenderOptions): stri
   return config.replace(current, postEditGroup(options, true));
 }
 
-// Issue #325, PR-A. The attribution hook lives next to the deliver hook in the
-// checkout; the path is spelled with whatever separator the deliver hook uses.
-export function attributionHookPath(controlPlaneHook: string): string {
-  return controlPlaneHook.replace(/deliver-hook\.mts$/, "attribution-hook.mts");
+// Issue #503. Every Control Plane hook command names the stable entry point in
+// the hook dir and a fixed hook name, never the source it runs: the commands,
+// and so their Codex trust hashes, stay the same across upgrades. The entry
+// point reads the source from the pointer the installer writes.
+export const CONTROL_PLANE_ENTRY = "codex-control-plane-hook.mts";
+export function controlPlaneEntry(hookDir: string): string {
+  return path.join(hookDir, CONTROL_PLANE_ENTRY);
 }
 
 export function atlassianDestructiveGuard(node: string, hookDir: string): HookSpec {
@@ -158,13 +163,14 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
       ? [{ command: previousNative ? command(node, cli, "codex", "--profile", options.nativeHooks.profile)
         : nativeCommand([node, cli, "codex", "--profile", options.nativeHooks.profile], process.platform,
           options.nativeHooks.extraCaCertificates), timeout }] : [];
-  // Issue #325, PR-A. The attribution hook runs from the checkout beside the
-  // deliver hook, directly with --runtime codex: it never blocks, so it needs no
+  // Issue #325, PR-A. The attribution hook runs through the stable entry point
+  // (issue #503), directly with --runtime codex: it never blocks, so it needs no
   // adapter. Its PreToolUse phase ends the shell group; its PostToolUse phase is
   // a group of its own after the only other one, which matches no shell tool.
   // Both placements keep every positional trust key rendered before them.
+  const entry = controlPlaneEntry(hookDir);
   const attribution: HookSpec[] = options.controlPlaneHook
-    ? [{ command: command(node, attributionHookPath(options.controlPlaneHook), "--runtime", "codex") }] : [];
+    ? [{ command: command(node, entry, "attribution", "--runtime", "codex") }] : [];
   const groups = [
     group("PreToolUse", "Read|Grep|Glob|Edit|Write|MultiEdit|apply_patch|Bash|shell_command|exec_command|functions\\.exec", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
     group("PreToolUse", "Agent|spawn_agent|Task|Workflow|WebSearch|WebFetch|mcp__.*", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy"),
@@ -176,7 +182,7 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
       // Issue #325. Appended last: Codex trust keys are positional.
       adapted("main-checkout-guard.mts", "pre"), ...attribution] : [{
         command: command(node, path.join(hookDir, "codex-shell-checks.mts"),
-          ...(options.controlPlaneHook ? [attributionHookPath(options.controlPlaneHook), "--runtime", "codex"] : [])),
+          ...(options.controlPlaneHook ? [entry, "attribution", "--runtime", "codex"] : [])),
         timeout: 40,
       }]),
     group("PreToolUse", "Agent|spawn_agent", [hook("codex-dispatch-contract-guard.mts")]),
@@ -224,8 +230,8 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
     group("SubagentStart", ".*", [hook("codex-cbm-reminder.mts")]),
   ];
   if (options.controlPlaneHook && !options.omitDeliveryHooks) {
-    // Runs from the checkout, because it imports the modules next to it.
-    const deliver: HookSpec = { command: command(node, options.controlPlaneHook, "--runtime", "codex") };
+    // The entry point runs the deliver hook of the installed source.
+    const deliver: HookSpec = { command: command(node, entry, "deliver", "--runtime", "codex") };
     groups.push(
       group("SessionStart", "startup|resume|clear|compact", [deliver]),
       group("UserPromptSubmit", "", [deliver]),
@@ -235,7 +241,7 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
   if (options.controlPlaneHook && !options.omitBusyHint) {
     // Independent of edit dispatch and the three externally owned intake hooks.
     // Last PostToolUse group in this block; external positions are checked before installation.
-    groups.push(group("PostToolUse", ".*", [{ command: command(node, options.controlPlaneHook, "--runtime", "codex") }]));
+    groups.push(group("PostToolUse", ".*", [{ command: command(node, entry, "deliver", "--runtime", "codex") }]));
   }
   if (native(options.nativeHooks?.captureCli).length)
     groups.push(group("SessionEnd", "other", native(options.nativeHooks?.captureCli, 3)));
@@ -392,6 +398,10 @@ export function renderPreviousNativeHooks(current: RenderOptions): string {
   return ["# Managed Kherep Codex Maestro parity projection.", hooks, renderMcp(options), renderPluginMcp(options), ""].join("\n\n");
 }
 
+// The attribution hook as its entry-point argument appears in a rendered TOML
+// string (issue #503), in its own entry and in the shell dispatcher entry alike.
+const ATTRIBUTION_ENTRY = String.raw`codex-control-plane-hook.mts\" \"attribution\"`;
+
 // Hooks that did not exist in the JavaScript-era projection. An older installer
 // never wrote them, so a legacy fragment containing them would not match the
 // block actually on disk - and matching that block is the only reason these
@@ -406,7 +416,7 @@ export const POST_LEGACY_HOOKS = [
   // With its extension: a bare "main-checkout-guard" also matches a checkout
   // directory of that name in the control-plane hook path.
   "main-checkout-guard.mts",
-  "attribution-hook.mts",
+  ATTRIBUTION_ENTRY,
   "codex-obs-result-check.mts",
 ];
 const PRE_OBSERVATION_HOOKS = ["codex-observation-turn-completion"];
@@ -414,7 +424,7 @@ const PRE_RESEARCH_HOOKS = ["codex-research-first", "codex-research-stop"];
 // Issue #325. Every render from before a hook predates each hook added after
 // it, so each list extends the list of the hook that came next.
 const PRE_OBS_RESULT_HOOKS = ["codex-obs-result-check.mts"];
-const PRE_ATTRIBUTION_HOOKS = ["attribution-hook.mts", ...PRE_OBS_RESULT_HOOKS];
+const PRE_ATTRIBUTION_HOOKS = [ATTRIBUTION_ENTRY, ...PRE_OBS_RESULT_HOOKS];
 const PRE_MAIN_CHECKOUT_HOOKS = ["main-checkout-guard.mts", ...PRE_ATTRIBUTION_HOOKS];
 const PRE_INTEGRITY_HOOKS = ["codex-hook-integrity", ...PRE_MAIN_CHECKOUT_HOOKS];
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { prepareManagedConfig, type ManagedConfigOptions } from "./config-preservation.mts";
-import { command, hookGroup, render, renderBeforeAttributionHook } from "./parity-config.mts";
+import { command, controlPlaneEntry, hookGroup, render, renderBeforeAttributionHook } from "./parity-config.mts";
 
 const START = "# >>> Kherep Codex Maestro >>>";
 const END = "# <<< Kherep Codex Maestro <<<";
@@ -27,7 +27,8 @@ function options(windows: boolean): ManagedConfigOptions {
 }
 
 function externalGroups(o: ManagedConfigOptions): string {
-  const bound = command(o.node, o.controlPlaneHook, "--runtime", "codex");
+  // Issue #503. Exact external groups in the stable entry-point form.
+  const bound = command(o.node, controlPlaneEntry(o.hookDir), "deliver", "--runtime", "codex");
   return [["SessionStart", "startup|resume|clear|compact"], ["UserPromptSubmit", ""], ["Stop", ""]]
     .map(([event, matcher]) => hookGroup(event!, matcher!, [{ command: bound, commandWindows: `& ${bound}` }]))
     .join("\n\n");
@@ -41,9 +42,9 @@ function groups(config: string, event: string): string[][] {
 }
 
 const attributionCount = (config: string): number =>
-  [...config.matchAll(/^command = .*attribution-hook\.mts/gm)].length;
+  [...config.matchAll(/^command = .*codex-control-plane-hook\.mts\\" \\"attribution/gm)].length;
 const deliveryCount = (config: string): number =>
-  [...config.matchAll(/^command = .*deliver-hook\.mts/gm)].length;
+  [...config.matchAll(/^command = .*codex-control-plane-hook\.mts\\" \\"deliver/gm)].length;
 
 for (const windows of [false, true]) {
   const o = options(windows);
@@ -73,10 +74,10 @@ for (const windows of [false, true]) {
       if (index === shellIndex) {
         assert.equal(group[0], beforePre[index]![0], "shell group position and matcher stay intact");
         assert.equal(group.length, 2, "one dispatcher includes attribution");
-        assert.match(group[1]!, /codex-shell-checks\.mts.*attribution-hook\.mts/);
+        assert.match(group[1]!, /codex-shell-checks\.mts.*codex-control-plane-hook\.mts\\" \\"attribution/);
       } else assert.deepEqual(index === mcpIndex ? group.slice(0, -1) : group, beforePre[index]);
     });
-    assert.match(afterPre[shellIndex]!.at(-1)!, /attribution-hook\.mts/);
+    assert.match(afterPre[shellIndex]!.at(-1)!, /codex-control-plane-hook\.mts\\" \\"attribution/);
     const afterPost = groups(result.config, "PostToolUse");
     const beforePost = groups(input, "PostToolUse");
     assert.equal(beforePost.length, 1);
@@ -89,9 +90,9 @@ for (const windows of [false, true]) {
     assert.equal(afterPost[0]!.length, 2, "one dispatcher replaces the four watcher entries");
     assert.deepEqual(afterPost[0], groups(render({ ...o, mcpServers: [], controlPlaneHook: undefined }), "PostToolUse")[0]);
     assert.ok(afterPost[1]![0]!.includes(JSON.stringify(SHELL)));
-    assert.match(afterPost[1]!.at(-1)!, /attribution-hook\.mts/);
+    assert.match(afterPost[1]!.at(-1)!, /codex-control-plane-hook\.mts\\" \\"attribution/);
     assert.match(afterPost[2]![0]!, /matcher = "\.\*"/);
-    assert.match(afterPost[2]![1]!, /deliver-hook\.mts/);
+    assert.match(afterPost[2]![1]!, /codex-control-plane-hook\.mts\\" \\"deliver/);
     assert.equal(prepareManagedConfig(result.config, o).config, result.config);
   });
 

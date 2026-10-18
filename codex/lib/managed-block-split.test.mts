@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { prepareManagedConfig, type ManagedConfigOptions } from "./config-preservation.mts";
+import { legacyForm } from "./legacy-control-plane-form.mts";
 import { render } from "./parity-config.mts";
 
 // Issue #274. Measured on a Windows host: the Codex app, storing hook trust,
@@ -82,7 +83,7 @@ function managedBlock(config: string): string {
 
 test("the split fixture holds the measured layout", () => {
   assert.match(TAIL, /^\[\[hooks\.SessionStart\]\]\nmatcher = "startup\|resume\|clear\|compact"/);
-  assert.match(TAIL, /deliver-hook\.mts/);
+  assert.match(TAIL, /codex-control-plane-hook\.mts\\" \\"deliver/);
   assert.match(TAIL, /\[mcp_servers\.kherep_messaging\][^]*tool_timeout_sec = 60\.0$/);
   assert.match(HEAD, /\[\[hooks\.SubagentStart\.hooks\]\][^[]*$/);
   const config = split(TAIL);
@@ -102,7 +103,7 @@ test("re-anchors a block whose tail the Codex app moved behind the end marker", 
     assert.deepEqual(tomlShape(result.config), tomlShape(config));
     // The tail went back into the block and left no copy behind.
     assert.equal(result.config.split("[mcp_servers.kherep_messaging]").length, FRESH.split("[mcp_servers.kherep_messaging]").length);
-    assert.equal(result.config.split("deliver-hook.mts").length, FRESH.split("deliver-hook.mts").length);
+    assert.equal(result.config.split("codex-control-plane-hook.mts").length, FRESH.split("codex-control-plane-hook.mts").length);
     const after = result.config.slice(result.config.indexOf(END));
     assert.ok(after.includes(`${STATE_INSIDE}\n${SEPARATED_KEY}\n`));
     if (between) assert.ok(after.includes(between));
@@ -188,8 +189,9 @@ test("refuses a split block with unknown content left inside the block", () => {
 // the checkout hooks. The Codex app splits such a block as well, so the
 // re-anchor has to know it; any other difference still refuses.
 const PIN = String.raw`C:\\Synthetic\\.codex\\orchestra\\source-pins\\0123456789abcdef0123456789abcdef01234567`;
+// Issue #503. An installer before the stable entry point wrote the pin into the hook commands.
 const fromPin = (text: string): string =>
-  text.replace(/C:\\\\Synthetic\\\\repo(?=\\\\modules\\\\control-plane\\\\node\\\\(?:deliver|attribution)-hook\.mts)/g, PIN);
+  legacyForm(text, String.raw`C:\Synthetic\.codex\orchestra\source-pins\0123456789abcdef0123456789abcdef01234567`);
 const fromNode = (text: string): string =>
   text.replaceAll(String.raw`C:\\Program Files\\nodejs\\node.exe`, String.raw`D:\\Previous\\nodejs\\node.exe`);
 

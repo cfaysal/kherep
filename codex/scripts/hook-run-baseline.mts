@@ -64,6 +64,11 @@ const original=cp.spawnSync; cp.spawnSync=function(file,args,options){const r=or
     delete env.CLAUDE_CODE_SESSION_ID;
     const options = { node: process.execPath, hookDir: hooks, contextHook: path.join(hooks, "kherep-maestro-context.mts"),
       mcpServers: [], controlPlaneHook: path.join(repo, "modules/control-plane/node/deliver-hook.mts") };
+    // Issue #503. The Control Plane hooks run through the stable entry point,
+    // which runs the hooks of the source its pointer names: this checkout.
+    fs.mkdirSync(path.join(env.CODEX_HOME!, "orchestra"), { recursive: true });
+    fs.writeFileSync(path.join(env.CODEX_HOME!, "orchestra", "control-plane-source.json"),
+      JSON.stringify({ version: 1, root: repo, kind: "checkout", verified: false }));
     const config = render(options);
     const groups = [...config.matchAll(/^\[\[hooks\.([A-Za-z]+)\]\]$/gm)].map((m, i, all) => {
       const body = config.slice(m.index, all[i + 1]?.index ?? config.length);

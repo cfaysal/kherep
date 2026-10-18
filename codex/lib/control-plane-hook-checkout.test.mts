@@ -3,16 +3,21 @@ import { test } from "node:test";
 
 import { prepareManagedConfig } from "./config-preservation.mts";
 import type { McpProjection, McpServerSpec } from "./contracts.mts";
-import { hookGroup, render } from "./parity-config.mts";
+import { legacyForm } from "./legacy-control-plane-form.mts";
+import { command, hookGroup, render } from "./parity-config.mts";
 
-// Issue #70. The deliver hook runs from the checkout, so a block written from one
-// checkout names a path that an install from another checkout does not render.
+// Issues #70 and #503. Every installer before the stable entry point wrote the
+// checkout or source pin it ran from into the Control Plane hook commands. An
+// install rewrites that form, in the deliver and attribution commands and in
+// the shell dispatcher argument, to the stable form once.
 
 const START = "# >>> Kherep Codex Maestro >>>";
 const END = "# <<< Kherep Codex Maestro <<<";
 const DELIVER = ["modules", "control-plane", "node", "deliver-hook.mts"];
 const CHECKOUT_A = String.raw`D:\work\kherep`;
 const CHECKOUT_B = String.raw`D:\work\kherep\.claude\worktrees\agent-b`;
+// The stable deliver and attribution commands as a TOML line spells them.
+const STABLE_DELIVER = String.raw`codex-control-plane-hook.mts\" \"deliver\"`;
 
 function options(checkout: string, withMcp = true) {
   return {
@@ -31,43 +36,50 @@ function options(checkout: string, withMcp = true) {
   };
 }
 
-function deliverCommands(config: string): string[] {
-  return [...config.matchAll(/^command = (".*deliver-hook\.mts.*")$/gm)].map((match) => JSON.parse(match[1]) as string);
-}
+const commands = (config: string): string[] =>
+  [...config.matchAll(/^command = (".*")$/gm)].map((match) => JSON.parse(match[1]) as string);
+const deliverCommands = (config: string): string[] =>
+  commands(config).filter((value) => /deliver-hook\.mts|codex-control-plane-hook\.mts" "deliver"/.test(value));
+const stable = (config: string, name: string): string[] =>
+  commands(config).filter((value) => value.includes(`codex-control-plane-hook.mts" "${name}" "--runtime" "codex"`));
+const legacy = (config: string): string[] =>
+  commands(config).filter((value) => /(?:deliver|attribution)-hook\.mts" "--runtime"/.test(value));
+const block = (config: string): string => config.slice(config.indexOf(START), config.indexOf(END));
 
-// Without MCP tables the upgrade matched the hooks of an older fragment and kept
-// the checkout-A deliver hooks after the new ones: 6 instead of 3. With MCP
-// tables it refused the block instead.
 for (const withMcp of [true, false]) {
   const A = options(CHECKOUT_A, withMcp);
   const B = options(CHECKOUT_B, withMcp);
   const renderA = { ...A, mcpServers: A.registryProjections as McpServerSpec[] };
   for (const windowsHookCommands of [true, false]) {
-    test(`an install from another checkout replaces the deliver hooks (${withMcp ? "with" : "without"} MCP, ${windowsHookCommands ? "with" : "before"} Windows commands)`, () => {
+    test(`an install rewrites the checkout-path form of another checkout once (${withMcp ? "with" : "without"} MCP, ${windowsHookCommands ? "with" : "before"} Windows commands)`, () => {
       const current = prepareManagedConfig("", A).config;
-      const written = current.replace(render(renderA).trim(), render({ ...renderA, windowsHookCommands }).trim());
-      assert.equal(deliverCommands(written).length, 4);
+      const written = legacyForm(current.replace(render(renderA).trim(), render({ ...renderA, windowsHookCommands }).trim()), CHECKOUT_A);
+      assert.equal(legacy(written).length, 6, "4 deliver, 1 attribution and the shell dispatcher argument");
 
       const result = prepareManagedConfig(written, B);
 
-      const commands = deliverCommands(result.config);
-      assert.equal(commands.length, 4);
-      for (const command of commands) assert.ok(command.includes(`"${B.controlPlaneHook}"`));
       assert.equal(result.managedFragment, "replaced");
+      assert.equal(stable(result.config, "deliver").length, 4);
+      assert.equal(stable(result.config, "attribution").length, 2);
+      assert.deepEqual(legacy(block(result.config)), []);
       assert.equal(result.config, prepareManagedConfig("", B).config);
-      assert.equal(prepareManagedConfig(result.config, B).managedFragment, "current");
+      const again = prepareManagedConfig(result.config, B);
+      assert.equal(again.managedFragment, "current");
+      assert.equal(again.config, result.config);
     });
   }
 }
 
-test("an install from another POSIX checkout replaces the deliver hooks", () => {
+test("an install rewrites the checkout-path form of a POSIX source pin", () => {
   const posix = (checkout: string) => ({ ...options(""), controlPlaneHook: [checkout, ...DELIVER].join("/") });
-  const written = prepareManagedConfig("", posix("/home/user/kherep")).config;
+  const pin = "/Users/x/.codex/orchestra/source-pins/0123456789abcdef0123456789abcdef01234567";
+  const written = legacyForm(prepareManagedConfig("", posix(pin)).config, pin);
+  assert.equal(legacy(written).length, 6);
 
   const result = prepareManagedConfig(written, posix("/tmp/kherep-worktree"));
 
-  assert.deepEqual(new Set(deliverCommands(result.config).map((command) => command.split('" "')[1])), new Set(["/tmp/kherep-worktree/modules/control-plane/node/deliver-hook.mts"]));
-  assert.equal(deliverCommands(result.config).length, 4);
+  assert.equal(result.config.includes("source-pins"), false);
+  assert.equal(stable(result.config, "deliver").length, 4);
   assert.equal(result.managedFragment, "replaced");
 });
 
@@ -82,34 +94,35 @@ const TRUST = ["[hooks.state]", "", '[hooks.state."fixture:stop:0:0"]', 'trusted
 // The three legacy intake groups, excluding the separate busy consumer.
 function deliverGroups(rendered: string): string {
   const hooks = rendered.trim().split("\n\n[mcp_servers.")[0];
-  const start = hooks.lastIndexOf("[[hooks.SessionStart]]", hooks.indexOf("deliver-hook.mts"));
+  const start = hooks.lastIndexOf("[[hooks.SessionStart]]", hooks.indexOf(STABLE_DELIVER));
   const end = hooks.indexOf('\n\n[[hooks.PostToolUse]]\nmatcher = ".*"', start);
   const fallback = hooks.indexOf("\n\n[[hooks.SubagentStop]]", start);
   return hooks.slice(start, end >= 0 ? end : fallback < 0 ? undefined : fallback);
 }
 
 function deliverEvents(config: string): string[] {
-  return [...config.matchAll(/^\[\[hooks\.(\w+)\.hooks\]\]\ntype = "command"\ncommand = ".*deliver-hook\.mts/gm)].map((match) => match[1]);
+  return [...config.matchAll(/^\[\[hooks\.(\w+)\.hooks\]\]\ntype = "command"\ncommand = ".*(?:deliver-hook\.mts|codex-control-plane-hook\.mts\\" \\"deliver)/gm)].map((match) => match[1]);
 }
 
 // Older installs left a second set of deliver-hook groups in the block, either
-// behind the fragment's own deliver hooks or behind the whole fragment.
-for (const [origin, surplus] of [["another checkout", renderA], ["the same checkout", renderB]] as const) {
+// behind the fragment's own deliver hooks or behind the whole fragment, in the
+// checkout-path form of another checkout or in the current form.
+for (const [origin, surplus] of [["another checkout", (text: string) => legacyForm(text, CHECKOUT_A)],
+  ["the same install", (text: string) => text]] as const) {
   for (const windowsHookCommands of [true, false]) {
     for (const [place, trust] of [["hooks", false], ["fragment", false], ["fragment", true]] as const) {
       test(`duplicate deliver hooks from ${origin} behind the ${place} collapse to one group per event (${windowsHookCommands ? "with" : "before"} Windows commands${trust ? ", with trust tables" : ""})`, () => {
-        const fragment = render({ ...renderB, windowsHookCommands }).trim();
-        const extra = deliverGroups(render({ ...surplus, windowsHookCommands }));
-        const own = deliverGroups(fragment);
-        const block = place === "hooks" ? fragment.replace(own, `${own}\n\n${extra}`) : `${fragment}\n\n${extra}`;
-        const written = prepareManagedConfig("", B).config
-          .replace(`${fragmentB}\n`, `${block}\n${trust ? `\n${TRUST}` : ""}`);
+        const fragment = legacyForm(render({ ...renderB, windowsHookCommands }).trim(), CHECKOUT_B);
+        const extra = surplus(deliverGroups(render({ ...renderA, windowsHookCommands })));
+        const own = legacyForm(deliverGroups(render({ ...renderB, windowsHookCommands })), CHECKOUT_B);
+        const written = prepareManagedConfig("", B).config.replace(`${fragmentB}\n`,
+          `${place === "hooks" ? fragment.replace(own, `${own}\n\n${extra}`) : `${fragment}\n\n${extra}`}\n${trust ? `\n${TRUST}` : ""}`);
         assert.equal(deliverCommands(written).length, 7);
 
         const result = prepareManagedConfig(written, B);
 
         assert.deepEqual(deliverEvents(result.config), ["SessionStart", "UserPromptSubmit", "Stop", "PostToolUse"]);
-        for (const command of deliverCommands(result.config)) assert.ok(command.includes(`"${B.controlPlaneHook}"`));
+        assert.equal(stable(result.config, "deliver").length, 4);
         const fresh = prepareManagedConfig("", B).config;
         assert.equal(result.config, trust ? fresh.replace(`${fragmentB}\n`, `${fragmentB}\n\n${TRUST}`) : fresh);
         assert.equal(result.managedFragment, "replaced");
@@ -121,7 +134,7 @@ for (const [origin, surplus] of [["another checkout", renderA], ["the same check
 
 test("deliver hooks outside the managed block and mixed groups are left alone", () => {
   const fresh = prepareManagedConfig("", B).config;
-  const outside = deliverGroups(render(renderA));
+  const outside = legacyForm(deliverGroups(render(renderA)), CHECKOUT_A);
   const mixed = deliverGroups(fragmentB).split("\n\n[[hooks.UserPromptSubmit]]")[0]
     .replace("[[hooks.SessionStart.hooks]]", '[[hooks.SessionStart.hooks]]\ntype = "command"\ncommand = "fixture-own-hook"\n\n[[hooks.SessionStart.hooks]]');
   const written = `${fresh.replace(`${fragmentB}\n`, `${fragmentB}\n\n${mixed}\n`)}\n${outside}\n`;
@@ -154,13 +167,48 @@ test("exact external delivery groups remain the single owner during a managed pr
   assert.equal(prepareManagedConfig(result.config, B).config, result.config);
 });
 
+// The groups an operator copied out of a block written before issue #503, built
+// from the old command shape itself rather than from the current renderer.
+function oldExternalGroups(controlPlaneHook: string): string {
+  const old = command(B.node, controlPlaneHook, "--runtime", "codex");
+  return [["SessionStart", "startup|resume|clear|compact"], ["UserPromptSubmit", ""], ["Stop", ""]]
+    .map(([event, matcher]) => hookGroup(event!, matcher!, [{ command: old, commandWindows: `& ${old}` }])).join("\n\n");
+}
+
+test("exact external delivery groups in the checkout-path form of this source keep sole ownership, unrewritten", () => {
+  const predecessor = prepareManagedConfig("", { ...B, controlPlaneHook: undefined }).config;
+  const external = oldExternalGroups(B.controlPlaneHook);
+  const written = `${predecessor.trimEnd()}\n\n${external}\n`;
+  assert.deepEqual(deliverEvents(written), ["SessionStart", "UserPromptSubmit", "Stop"]);
+
+  const result = prepareManagedConfig(written, B);
+
+  assert.deepEqual(deliverEvents(result.config), ["PostToolUse", "SessionStart", "UserPromptSubmit", "Stop"],
+    "the block adds only the busy hint; delivery is not doubled");
+  assert.equal(deliverCommands(result.config).length, 4);
+  assert.ok(result.config.endsWith(`\n\n${external}\n`), "the external groups keep their bytes");
+  assert.equal(prepareManagedConfig(result.config, B).config, result.config);
+});
+
+test("external delivery groups in the checkout-path form of another source are not the owner and stay unrewritten", () => {
+  const predecessor = prepareManagedConfig("", { ...B, controlPlaneHook: undefined }).config;
+  const external = oldExternalGroups(A.controlPlaneHook);
+  const written = `${predecessor.trimEnd()}\n\n${external}\n`;
+
+  const result = prepareManagedConfig(written, B);
+
+  assert.equal(stable(block(result.config), "deliver").length, 4, "the managed block renders its own delivery");
+  assert.ok(result.config.endsWith(`\n\n${external}\n`), "the external groups keep their bytes");
+});
+
 test("an install from another checkout keeps the Codex trust tables", () => {
-  const trust = ["[hooks.state]", "", '[hooks.state."fixture:stop:0:0"]', 'trusted_hash = "sha256:fixture"', ""].join("\n");
-  const written = prepareManagedConfig("", A).config.replace(`${render(renderA).trim()}\n`, `${render(renderA).trim()}\n\n${trust}`);
+  const written = legacyForm(prepareManagedConfig("", A).config, CHECKOUT_A)
+    .replace(`${legacyForm(render(renderA).trim(), CHECKOUT_A)}\n`, `${legacyForm(render(renderA).trim(), CHECKOUT_A)}\n\n${TRUST}`);
+  assert.ok(written.includes(TRUST));
 
   const result = prepareManagedConfig(written, B);
 
   assert.equal(deliverCommands(result.config).length, 4);
-  assert.ok(result.config.includes(trust));
+  assert.ok(result.config.includes(TRUST));
   assert.equal(prepareManagedConfig(result.config, B).managedFragment, "current");
 });

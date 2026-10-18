@@ -22,6 +22,7 @@ import { prepareManagedConfig } from "./lib/config-preservation.mts";
 import type { Capabilities, McpCompatibilityOptions, PluginMcpServer, RunCodex } from "./lib/contracts.mts";
 import { controlPlaneRulesPath, launcherRule, renderControlPlaneRules } from "./lib/control-plane-rules.mts";
 import { controlPlaneOutbox } from "./lib/outbox-writable-root.mts";
+import { pointerFile, renderControlPlanePointer } from "./lib/control-plane-pointer.mts";
 import { InstallTransaction } from "./lib/install-transaction.mts";
 import * as localPlugin from "./lib/local-plugin.mts";
 import * as managedConfig from "./lib/managed-config.mts";
@@ -182,6 +183,7 @@ export function install(options: InstallOptions = {}) {
     hookAdapter: path.join(sourceRoot, "hooks", "hook-adapter.mts"),
     postEditDispatcher: path.join(sourceRoot, "hooks", "post-edit-checks.mts"),
     shellDispatcher: path.join(sourceRoot, "hooks", "shell-checks.mts"),
+    controlPlaneEntry: path.join(sourceRoot, "hooks", "control-plane-hook.mts"),
     postEditToolCalls: path.join(sourceRoot, "hooks", "post-edit-tool-calls.mts"),
     privacyHook: path.join(sourceRoot, "hooks", "privacy-boundary-guard.mts"),
     confluenceDeliveryHook: path.join(sourceRoot, "hooks", "confluence-delivery-check.mts"),
@@ -460,6 +462,10 @@ export function install(options: InstallOptions = {}) {
     transaction.copyFile(sources.hookAdapter, path.join(targets.hookDir, "hook-adapter.mts"));
     transaction.copyFile(sources.postEditDispatcher, path.join(targets.hookDir, "codex-post-edit-checks.mts"));
     transaction.copyFile(sources.shellDispatcher, path.join(targets.hookDir, "codex-shell-checks.mts"));
+    // Issue #503. Every Control Plane hook command names this entry point, which
+    // runs the hooks of the source the pointer names: this installer's root.
+    transaction.copyFile(sources.controlPlaneEntry, path.join(targets.hookDir, "codex-control-plane-hook.mts"));
+    transaction.writeFile(pointerFile(codexHome), renderControlPlanePointer(repoRoot));
     transaction.copyFile(sources.postEditToolCalls, path.join(targets.hookDir, "post-edit-tool-calls.mts"));
     transaction.copyFile(sources.privacyHook, path.join(targets.hookDir, "codex-privacy-boundary-guard.mts"));
     transaction.copyFile(sources.confluenceDeliveryHook, path.join(targets.hookDir, "codex-confluence-delivery-check.mts"));
