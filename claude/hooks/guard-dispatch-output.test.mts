@@ -79,3 +79,24 @@ test("only the type-stripping warning is dropped from a guard's stderr", () => {
   assert.equal(output?.permissionDecision, "deny");
   assert.equal(output?.permissionDecisionReason, "own reason");
 });
+
+// The dispatcher ends itself after its output (part 2): it must wait until both
+// streams took every byte, also when it prints no verdict.
+const MIB = 1024 * 1024;
+fs.writeFileSync(path.join(HOOKS, "mib-stderr.mts"), `process.stderr.write("x".repeat(${MIB}));\n`);
+fs.writeFileSync(path.join(HOOKS, "mib-stderr-deny.mts"), `process.stderr.write("y".repeat(${MIB}));\n`
+  + printing(pre({ permissionDecision: "deny", permissionDecisionReason: "large deny" })));
+
+for (const [name, letter, decision] of [["mib-stderr.mts", "x", undefined], ["mib-stderr-deny.mts", "y", "deny"]] as const) {
+  test(`${name}: every byte of 1 MiB guard stderr arrives${decision ? " next to the deny" : ""}`, () => {
+    const run = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", DISPATCH, path.join(HOOKS, name)], {
+      input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git status" } }),
+      encoding: "utf8", windowsHide: true, maxBuffer: 8 * MIB, timeout: 20_000,
+    });
+    assert.equal(run.status, 0, String(run.error));
+    assert.equal(run.stderr.split(letter).length - 1, MIB);
+    if (!decision) return assert.equal(run.stdout, "");
+    assert.deepEqual(JSON.parse(run.stdout).hookSpecificOutput,
+      { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "large deny" });
+  });
+}
