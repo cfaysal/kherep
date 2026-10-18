@@ -101,6 +101,11 @@ describe("Registry read budget", () => {
       sessionId: `session-${i}`, runtime: "claude-code", state: "idle",
     })));
     const later = Date.now() + DAY;
+    // Issue #493: settled rows of the replaying sender, below its unsettled ones.
+    await seed(REPLAY_NODE, target, "settled-", M);
+    await runInDurableObject(registry(), (_instance, state) => {
+      state.storage.sql.exec("UPDATE messages SET settled_state = state WHERE id LIKE 'settled-%'");
+    });
     await seed(REPLAY_NODE, target, "replay-", 3);
     await seed(SEED_SENDER, target, "seed-a-", M);
     await seed(SEED_SENDER, target, "due-a-", M, later);
@@ -119,6 +124,13 @@ describe("Registry read budget", () => {
     }
     expect(first.cached.rowsRead).toBe(0);
     expect(second).toEqual(first);
+
+    // Issue #493: the ack that settles a row stored before PR 4.
+    await seed(REPLAY_NODE, target, "legacy-ack-", 1);
+    const settle = await measure("ackMessageStatus", (r) => r.ackMessageStatus(REPLAY_NODE,
+      { name: MESSAGE_STATUS_ACK, messageId: "legacy-ack-1", state: "refused" }));
+    expect(settle.rowsRead).toBeLessThanOrEqual(BOUND);
+    expect(settle.rowsWritten).toBeGreaterThanOrEqual(2);
 
     const totals = await runInDurableObject(registry(), (instance) => instance.sqlStats());
     expect(totals.rowsRead).toBeGreaterThanOrEqual(first.directory.rowsRead + second.directory.rowsRead);
@@ -150,7 +162,7 @@ describe("Registry read budget", () => {
       expect(Object.fromEntries(plans)).toEqual({
         expireDue: expect.stringContaining("USING INDEX messages_queued_expiry"),
         nextExpiry: expect.stringContaining("messages_queued_expiry"),
-        statusPage: expect.stringContaining("USING INDEX messages_from_node"),
+        statusPage: expect.stringContaining("USING INDEX messages_replay"),
         parentDepth: expect.stringMatching(/sqlite_autoindex_messages_1.*sqlite_autoindex_message_tombstones_1/),
         row: expect.stringContaining("USING INDEX sqlite_autoindex_messages_1"),
         tombstone: expect.stringContaining("USING INDEX sqlite_autoindex_message_tombstones_1"),

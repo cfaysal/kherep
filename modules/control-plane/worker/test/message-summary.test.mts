@@ -38,22 +38,22 @@ async function api(path: string, jwt?: string): Promise<Response> {
   return workerFetch(path, jwt ? { headers: { "cf-access-jwt-assertion": jwt } } : {});
 }
 
-interface Seed { state: string; deletable: number | null; created: number; deleteAfter?: number }
+interface Seed { state: string; deletable: number | null; created: number; deleteAfter?: number; settledState?: string }
 
 // Rows straight into SQLite, each with a synthetic secret text, session and reason.
 async function seed(from: string, rows: Seed[]): Promise<string[]> {
   const ids = rows.map(() => crypto.randomUUID());
   await runInDurableObject(registry(), (_i, state) => {
     rows.forEach((r, i) => state.storage.sql.exec(`INSERT INTO messages (id, from_node, from_session, to_node, to_session, text, state,
-      reason, created_at, updated_at, expires_at, deletable, delete_after) VALUES (?, ?, 'secret-session', ?, 'secret-target', 'secret-text',
-      ?, 'secret-reason', ?, ?, ?, ?, ?)`, ids[i], from, crypto.randomUUID(), r.state, r.created, r.created, r.created + DAY,
-    r.deletable, r.deleteAfter ?? null));
+      reason, created_at, updated_at, expires_at, deletable, delete_after, settled_state) VALUES (?, ?, 'secret-session', ?, 'secret-target',
+      'secret-text', ?, 'secret-reason', ?, ?, ?, ?, ?, ?)`, ids[i], from, crypto.randomUUID(), r.state, r.created, r.created, r.created + DAY,
+    r.deletable, r.deleteAfter ?? null, r.settledState ?? null));
   });
   return ids;
 }
 
-const group = (state: string, deletable: string, values: Partial<Record<string, number>>) => ({
-  state, deletable, count: 1, withDeadline: 0, ageUnder24h: 0, age1to7d: 0, ageOver7d: 0, ...values,
+const group = (state: string, deletable: string, values: Partial<Record<string, number | string>>) => ({
+  state, deletable, settled: "unsettled", count: 1, withDeadline: 0, ageUnder24h: 0, age1to7d: 0, ageOver7d: 0, ...values,
 });
 
 describe("GET /api/messages/summary", () => {
@@ -65,6 +65,8 @@ describe("GET /api/messages/summary", () => {
       { state: "delivered", deletable: 1, created: NOW - 2 * DAY, deleteAfter: NOW + DAY },
       { state: "delivered", deletable: null, created: NOW - 10 * DAY },
       { state: "delivered", deletable: null, created: NOW - 7 * DAY },
+      // Issue #493: a settled row is its own group.
+      { state: "delivered", deletable: null, created: NOW - 9 * DAY, settledState: "delivered" },
       // Two different non-1 marks are one "other" group, not two.
       { state: "delivered", deletable: 0, created: NOW - 3 * DAY },
       { state: "delivered", deletable: 2, created: NOW - 8 * DAY },
@@ -80,6 +82,7 @@ describe("GET /api/messages/summary", () => {
     expect(summary.groups).toEqual([
       group("accepted", "null", { ageUnder24h: 1 }),
       group("delivered", "1", { count: 2, withDeadline: 1, ageUnder24h: 1, age1to7d: 1 }),
+      group("delivered", "null", { settled: "settled", ageOver7d: 1 }),
       group("delivered", "null", { count: 2, age1to7d: 1, ageOver7d: 1 }),
       group("delivered", "other", { count: 2, age1to7d: 1, ageOver7d: 1 }),
       group("other", "1", { ageUnder24h: 1 }),
@@ -113,18 +116,19 @@ describe("GET /api/messages/summary", () => {
     expect(after).toBeLessThanOrEqual(before + 1);
   });
 
-  it("returns exactly one group per state bucket and deletable bucket", async () => {
+  it("returns exactly one group per state bucket, deletable bucket and settled bucket", async () => {
     const a = crypto.randomUUID();
     const marks = [1, null, 0, 2, -1, 7];
-    await seed(a, ["delivered", "replied", "unknown-x", "unknown-y"].flatMap((state) => marks.map((deletable) => ({
-      state, deletable, created: NOW - DAY,
-    }))));
+    await seed(a, ["delivered", "replied", "unknown-x", "unknown-y"].flatMap((state) => marks.flatMap((deletable) =>
+      [undefined, state].map((settledState) => ({ state, deletable, created: NOW - DAY, settledState })))));
+    // Acknowledged in another state than the current one: unsettled, as the replay sees it.
+    await seed(a, [{ state: "replied", deletable: null, created: NOW - DAY, settledState: "delivered" }]);
     const { groups } = await registry().messageSummary(a, NOW);
-    const keys = groups.map((g) => `${g.state}/${g.deletable}`);
-    expect(keys).toEqual(["delivered/1", "delivered/null", "delivered/other", "other/1", "other/null", "other/other",
-      "replied/1", "replied/null", "replied/other"]);
+    const keys = groups.map((g) => `${g.state}/${g.deletable}/${g.settled}`);
+    expect(keys).toEqual(["delivered", "other", "replied"].flatMap((state) => ["1", "null", "other"].flatMap((deletable) =>
+      ["settled", "unsettled"].map((settled) => `${state}/${deletable}/${settled}`))));
     expect(new Set(keys).size).toBe(keys.length);
-    expect(groups.map((g) => g.count)).toEqual([1, 1, 4, 2, 2, 8, 1, 1, 4]);
+    expect(groups.map((g) => g.count)).toEqual([1, 1, 1, 1, 4, 4, 2, 2, 2, 2, 8, 8, 1, 1, 1, 2, 4, 4]);
   });
 
   it("is logged by the SQL meter under its own path with the rows it reports", async () => {
@@ -167,18 +171,22 @@ describe("GET /api/messages/summary", () => {
   it("answers with the build and counts only: no message id, session, reason or text", async () => {
     const a = crypto.randomUUID();
     const b = crypto.randomUUID();
-    const ids = [...await seed(a, [{ state: "delivered", deletable: 1, created: NOW }, { state: "queued", deletable: null, created: NOW }]),
+    const ids = [...await seed(a, [{ state: "delivered", deletable: 1, created: NOW },
+      { state: "queued", deletable: null, created: NOW }, { state: "refused", deletable: null, created: NOW, settledState: "refused" }]),
       ...await seed(b, [{ state: "refused", deletable: 1, created: NOW }])];
     const response = await api(`/api/messages/summary?from=${a}`, await token());
     expect(response.status).toBe(200);
     const raw = await response.text();
-    for (const secret of [...ids, a, b, "secret-text", "secret-session", "secret-target", "secret-reason"]) expect(raw).not.toContain(secret);
+    for (const secret of [...ids, a, b, "secret-text", "secret-session", "secret-target", "secret-reason", "settled_state"]) {
+      expect(raw).not.toContain(secret);
+    }
     const body = JSON.parse(raw) as Record<string, unknown> & { groups: Record<string, unknown>[] };
     expect(Object.keys(body).sort()).toEqual(["commit", "fetchedAt", "groups", "rowsRead", "version"]);
     expect(body).toMatchObject({ version: rootPackage.version, commit: null, fetchedAt: expect.any(String) });
-    expect(body.groups.map((g) => [g.state, g.deletable, g.count])).toEqual([["delivered", "1", 1], ["queued", "null", 1]]);
+    expect(body.groups.map((g) => [g.state, g.deletable, g.settled, g.count])).toEqual([["delivered", "1", "unsettled", 1],
+      ["queued", "null", "unsettled", 1], ["refused", "null", "settled", 1]]);
     for (const g of body.groups) {
-      expect(Object.keys(g).sort()).toEqual(["age1to7d", "ageOver7d", "ageUnder24h", "count", "deletable", "state",
+      expect(Object.keys(g).sort()).toEqual(["age1to7d", "ageOver7d", "ageUnder24h", "count", "deletable", "settled", "state",
         "withDeadline"]);
     }
   });
