@@ -179,15 +179,13 @@ async function dispatch(guards: string[]): Promise<{ verdict?: Verdict; stderr: 
   let raw = "";
   let payload: unknown;
   try { raw = await readStdin(); payload = JSON.parse(raw); } catch { payload = undefined; }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return { verdict: failure(SELF, "stdin is not a JSON object"), stderr: [] };
-  }
+  if (!isObject(payload)) return { verdict: failure(SELF, "stdin is not a JSON object"), stderr: [] };
   if (!guards.length) return { verdict: failure(SELF, "no guard given"), stderr: [] };
   const ownDir = realDir(DIR);
   const outcomes = await Promise.all(guards.map((arg) => {
     const file = path.resolve(arg);
     const why = unrunnable(file, ownDir);
-    return why ? Promise.resolve({ verdict: failure(file, why), stderr: "" }) : runGuard(file, raw);
+    return why ? { verdict: failure(file, why), stderr: "" } : runGuard(file, raw);
   }));
   return { verdict: combine(outcomes.map((outcome) => outcome.verdict)), stderr: outcomes.map((outcome) => outcome.stderr) };
 }
