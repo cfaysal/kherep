@@ -62,7 +62,7 @@ function readStdin(): Promise<string> {
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk) => (data += chunk));
     process.stdin.on("end", () => { clearTimeout(timer); resolve(data); });
-    process.stdin.on("error", reject);
+    process.stdin.on("error", (error) => { clearTimeout(timer); reject(error); });
   });
 }
 
@@ -196,14 +196,14 @@ const firstLine = (error: unknown): string => String((error as Error)?.message |
 
 // The re-check notice, or undefined when the heartbeat is fresh and every guard
 // ran. Text only, never a verdict; settled at the latest at the deadline.
-async function recheck(payload: string, guards: Promise<Outcome[]>): Promise<string | undefined> {
+async function recheck(payload: string, guards: Promise<Outcome[]>, ownDir: string): Promise<string | undefined> {
   // A broken lib throws here or, empty (an empty namespace), at its first call.
   const lib = await import("./lib/guard-recheck.mts");
   const { stale, lastOk } = lib.heartbeatState(HOME, HEARTBEAT_WINDOW_MS);
   if (!stale && !(await guards).some((outcome) => outcome.verdict.broken)) return undefined;
   const context = { why: !stale ? "guard failure" : lastOk ? "stale heartbeat" : "no heartbeat", lastOk };
   const script = path.join(INVOKED_DIR, "live-hook-integrity.mts");
-  const why = unrunnable(script, realDir(DIR));
+  const why = unrunnable(script, ownDir);
   if (why) return lib.recheckNotice(context, [`${script} cannot run (${why})`]);
   const budgetMs = Math.min(RECHECK_MAX_MS, remaining());
   if (budgetMs >= RECHECK_MIN_MS) return lib.runRecheck({ script, home: HOME, payload, budgetMs, ...context });
@@ -223,7 +223,7 @@ async function dispatch(guards: string[]): Promise<{ verdict?: Verdict; stderr: 
     const why = unrunnable(file, ownDir);
     return why ? { verdict: failure(file, why), stderr: "" } : runGuard(file, raw);
   }));
-  const checking = recheck(raw, running)
+  const checking = recheck(raw, running, ownDir)
     .catch((error) => `hook integrity re-check unavailable (lib/guard-recheck.mts cannot be loaded: ${firstLine(error)})`);
   const [outcomes, notice] = await Promise.all([running, checking]);
   const verdicts = outcomes.map((outcome) => outcome.verdict);

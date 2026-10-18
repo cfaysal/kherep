@@ -58,7 +58,7 @@ const readText = (file: string): string | null => {
   try { return fs.readFileSync(file, "utf8"); } catch { return null; }
 };
 const parse = (text: string | null): Holder & { nonce?: unknown } => {
-  try { return (JSON.parse(text ?? "") as Holder) ?? {}; } catch { return {}; }
+  try { return (JSON.parse(text ?? "") as Holder & { nonce?: unknown }) ?? {}; } catch { return {}; }
 };
 
 function create(lock: string): { release: () => void } | null {
@@ -68,8 +68,12 @@ function create(lock: string): { release: () => void } | null {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") return null;
     throw error;
   }
-  try { fs.writeSync(fd, JSON.stringify({ pid: process.pid, ts: new Date().toISOString(), nonce: mine })); }
-  finally { fs.closeSync(fd); }
+  try { fs.writeSync(fd, JSON.stringify({ pid: process.pid, ts: new Date().toISOString(), nonce: mine })); } catch (error) {
+    fs.closeSync(fd);
+    fs.rmSync(lock, { force: true }); // an empty lock would hold off every run for two minutes
+    throw error;
+  }
+  fs.closeSync(fd);
   return {
     release: () => {
       if (parse(readText(lock)).nonce !== mine) return;
@@ -78,6 +82,7 @@ function create(lock: string): { release: () => void } | null {
   };
 }
 
+// Either signal counts: the ts the owner wrote, or the mtime when the ts is unreadable or young.
 function isStale(lock: string, holder: Holder, now: number): boolean {
   const ts = Date.parse(String(holder.ts));
   if (!Number.isNaN(ts) && now - ts > LOCK_TAKEOVER_MS) return true;

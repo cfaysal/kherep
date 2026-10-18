@@ -41,8 +41,8 @@
  * every inventoried file ended OK or restored with proof, with the live settings
  * read completely, writes <home>/.cache/hook-integrity/heartbeat.json. Any other
  * run leaves it as it was. run.lock keeps a second run from checking at the same
- * time; the loser reports the holder and checks nothing. No wired file, no lock,
- * no heartbeat. `--trigger <source>` (guard-dispatch.mts uses it when the
+ * time; the loser prints only the holder and checks nothing. No wired file, no
+ * lock, no heartbeat. `--trigger <source>` (guard-dispatch.mts uses it when the
  * heartbeat is stale or a guard failed) prints plain lines, one per finding,
  * plus one line on the heartbeat, instead of the SessionStart JSON.
  *
@@ -54,6 +54,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { HookFile } from "./lib/hook-inventory.mts";
+import type { Lock } from "./lib/integrity-heartbeat.mts";
 import type { Restored } from "./lib/integrity-verdict.mts";
 import type { ScopePayload } from "./lib/workspace-scope.mts";
 
@@ -153,7 +154,7 @@ async function main(): Promise<void> {
     if (PLAIN) lines.push(`heartbeat not written (no hook file is wired under ${home})`);
     return emit(lines);
   }
-  let lock: ReturnType<Libs["acquireLock"]> | undefined;
+  let lock: Lock | undefined;
   try {
     lock = lib.acquireLock(home);
   } catch (error) {
@@ -166,7 +167,7 @@ async function main(): Promise<void> {
     const unproven = notes.length ? "the live settings were not read completely" : lock ? "" : "no run lock";
     await checkAll(files, lines, unproven, payload, home);
   } finally {
-    if (lock && "release" in lock) lock.release();
+    lock?.release();
   }
 }
 
