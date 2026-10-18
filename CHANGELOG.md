@@ -9,6 +9,8 @@ increments the minor version; every other release increments the patch version.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-18
+
 ### Added
 
 - Codex fork refusal metadata (issue #477). A JSON-RPC error response to
@@ -2185,7 +2187,8 @@ First public release.
 - Turn-completion observations for Claude and Codex through the service-account
   Confluence path.
 
-[Unreleased]: https://github.com/cfaysal/kherep/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/cfaysal/kherep/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/cfaysal/kherep/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/cfaysal/kherep/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cfaysal/kherep/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/cfaysal/kherep/compare/v0.1.1...v0.1.2
