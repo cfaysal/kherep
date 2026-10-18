@@ -122,14 +122,18 @@ try {
   socket.message(frame("event", { name: "auth.ok" })); await flush();
   const tick = timers.get(EXCHANGE_INTERVAL_MS)![0];
   tick(); await flush(); assert.equal(entered, 1);
+  // Issue #493 D2: the counters lines from "handled" on; PONG_FRAME pads a round past the threshold.
+  const counted = () => logs.filter(line => line.startsWith("kherep-node: round sent")).map(line => line.replace(/^.*?, (?=handled )/, ""));
+  const pongs = (count: number): void => { for (let n = 0; n < count; n++) socket.message('{"type":"pong"}'); };
   if (scenario === "counter") {
     // Issue #487 D1: frames the window handles count in the round's counters line.
-    for (let n = 0; n < 40; n++) socket.message(frame("mcp.intent.receipt", { requestId: id(1000 + n), ok: true, expiresAt: Date.now() + 10000, version: 1 }));
+    const receipt = (n: number) => frame("mcp.intent.receipt", { requestId: id(n), ok: true, expiresAt: Date.now() + 10000, version: 1 });
+    for (let n = 0; n < 40; n++) socket.message(receipt(1000 + n));
     await flush();
     assert.equal(Array.from({ length: 40 }, (_, n) => readMcpIntentReceipt(paths, id(1000 + n))).filter(r => r?.ok).length, 40);
     release(); await flush();
-    // auth.ok on the chain plus the 40 receipts in the window, each counted once.
-    assert.deepEqual(logs.filter(line => line.startsWith("kherep-node: round sent")).map(line => /handled (\d+) /.exec(line)?.[1]), ["41"]);
+    // auth.ok on the chain plus the 40 receipts in the window, each counted once (issue #493 D2: by kind).
+    assert.deepEqual(counted(), ["handled 41 inbound items: frame:mcp.intent.receipt 40, auth 1"]);
     console.log("INTAKE_WINDOW_PASS");
   } else if (scenario === "excluded") {
     const control = { name: "task.control.execute", operationId: id(80), requestId: id(81), taskId: id(99), action: "status",
@@ -141,13 +145,18 @@ try {
       frame("challenge", { nonce: "c3ludGhldGlj", serverTime: Date.now() }), frame("event", { name: "auth.ok" }),
       frame("message.deliver", body(85, "codex-00000001")), frame("message.deliver", body(86, "claude-synthetic")),
       frame("message.deliver", body(87, id(88)))];
-    excluded.forEach(raw => socket.message(raw)); await flush();
+    excluded.forEach(raw => socket.message(raw)); pongs(30); await flush();
     // Issue #441: deliveries the window excludes are stored on the intake lane at once.
     const deliveries = excluded.slice(5), others = excluded.slice(0, 5);
     assert.ok(others.every(raw => !handled.includes(raw))); assert.equal(queues.length, 0);
     assert.ok(deliveries.every(raw => handled.includes(raw)), "excluded deliveries go to the intake lane, not the held lane");
     release(); await flush();
     assert.ok(excluded.every(raw => handled.includes(raw)), "excluded frames stay on the real original lane");
+    assert.deepEqual(counted(), [], "held round: auth 1 + frame:message.deliver 3, no line");
+    tick(); await flush();
+    // Ties in TALLY_KINDS order; the deliveries are not counted again.
+    assert.deepEqual(counted(), ["handled 35 inbound items: pong 30, auth 1, task-control:status 1, frame:challenge 1, "
+      + "frame:mcp.credential 1, frame:mcp.inbox.request 1"]);
     console.log("INTAKE_WINDOW_PASS");
   } else if (scenario === "publication" || scenario === "admitted-drift") {
     socket.message(frame("message.deliver", body(10)));
@@ -179,6 +188,7 @@ try {
     // Enqueue then invalidate synchronously, before the pump's promise job.
     socket.message(frame("message.deliver", body(10)));
     socket.message(frame("mcp.intent.receipt", { requestId: id(11), ok: true, expiresAt: Date.now() + 1000, version: 1 }));
+    pongs(32);
     if (scenario === "drift") fs.writeFileSync(paths.policy, JSON.stringify({ ...policy, wake: { enabled: false } }));
     if (scenario === "missing") fs.rmSync(paths.policy);
     if (scenario === "malformed") fs.writeFileSync(paths.policy, "{");
@@ -217,6 +227,13 @@ try {
       assert.equal(readMcpIntentReceipt(paths, id(11))?.ok, true);
     }
     assert.equal(exited, 1);
+    // Issue #493 D2: each deferred frame counted once, outside the window: the delivery in the
+    // held round (auth 1 + deliver 1, no line), the receipt with the pongs in the next one.
+    assert.deepEqual(counted(), []);
+    if (scenario !== "close" && scenario !== "stop") {
+      tick(); await flush();
+      assert.deepEqual(counted(), ["handled 33 inbound items: pong 32, frame:mcp.intent.receipt 1"]);
+    }
     console.log("INTAKE_WINDOW_PASS");
   } else {
   let completeStopped: (() => void) | undefined;

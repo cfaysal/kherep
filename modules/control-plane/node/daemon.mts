@@ -23,6 +23,7 @@ import { inboxIndex } from "./inbox-index.mts";
 import { scheduleListenerSweep } from "./listener-sweep.mts";
 import { loadPolicy, type NodePolicy } from "./policy.mts";
 import { routeFrame } from "./readiness-lane.mts";
+import { classifySocketError, roundTally, tallyKind, type SocketErrorClass } from "./round-tally.mts";
 import { probeRuntime, type ProbeResult } from "./runtime-probe.mts";
 import { createReadiness } from "./runtime-readiness.mts";
 import { retainServiceAdmission, waitForServiceAdmission } from "./service-drain.mts";
@@ -177,10 +178,10 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     ...exchangeOptions(paths), log,
   });
   const timed = laneTimer(log, lanes.slowLaneMs);
-  let handled = 0; // inbound items since the last round (issue #487)
+  const tally = roundTally(); // inbound items since the last round, by kind (issues #487, #493)
   // Issue #441: deliveries on a lane of their own (frame-lanes.mts); spans reconnects like chain.
   const intake = intakeLane({ client, policyFile: config.policyFile, inbox: paths.inbox, log, intakeSlowMs: lanes.intakeSlowMs,
-    timed: (lane, kind, run, at) => timed(lane, kind, () => { handled++; return run(); }, at) });
+    timed: (lane, kind, run, at) => timed(lane, kind, () => { tally.add("frame:message.deliver"); return run(); }, at) });
   const stopSlowSync = reportSlowSync(log);
 
   let stopped = false;
@@ -198,6 +199,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   const connect = (): void => {
     if (stopped) return;
     const ws = new WebSocket(connectUrl(config.controlUrl, config.nodeId));
+    let socketError: SocketErrorClass | "none" = "none"; // issue #493 D2b: this socket's last error, classified
     socket = ws;
     let ping: NodeJS.Timeout | null = null;
     let snapshots: NodeJS.Timeout | null = null;
@@ -259,7 +261,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         chain = chain.then(enqueued(timed, "chain", "exchange-round", () => exchangeRound({ client, paths, policyFile: config.policyFile,
           runner, inbox, log, inflight, requestsInflight, taskControlInflight: () => taskControlInflight, mcpInflight: () => mcpInflight,
           send, publishRegistration, live: () => !stopped && socket === ws && ws.readyState === WebSocket.OPEN, defer: dispatchFrame,
-          window: (window) => { intakeWindow = window; }, handled: () => { const count = handled; handled = 0; return count; } })))
+          window: (window) => { intakeWindow = window; }, tally })))
           .catch((error: unknown) => log(`kherep-node: message exchange failed: ${String(error)}`))
           .finally(() => { exchangePending = false; });
       }, EXCHANGE_INTERVAL_MS);
@@ -292,7 +294,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     };
     const handleFrame = (data: string): void => {
       chain = chain.then(enqueued(timed, "chain", () => frameKind(data), async () => {
-        handled++;
+        tally.add(tallyKind(data));
         publishRegistration(await client.refreshPolicy(loadPolicy(config.policyFile)));
         const wasAuthed = client.authenticated;
         // Issue #408 (design r3 section 3.3): live is decided when the lane reaches the frame.
@@ -347,11 +349,11 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         return finish();
       }
       const delay = reconnectDelay(attempt++);
-      log(`kherep-node: disconnected (${event.code}); reconnecting in ${Math.round(delay / 1000)} s`);
+      log(`kherep-node: disconnected (${event.code}, clean=${event.wasClean === true}, error:${socketError}); reconnecting in ${Math.round(delay / 1000)} s`);
       retry = setTimeout(connect, delay);
     });
-    ws.addEventListener("error", () => {
-      // The close event follows and schedules the reconnect.
+    ws.addEventListener("error", (event) => {
+      socketError = classifySocketError(event); // the close event follows, names it and schedules the reconnect
     });
   };
 
