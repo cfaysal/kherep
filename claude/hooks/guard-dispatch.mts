@@ -203,7 +203,7 @@ async function recheck(payload: string, guards: Promise<Outcome[]>, ownDir: stri
   const script = path.join(INVOKED_DIR, "live-hook-integrity.mts");
   const why = unrunnable(script, ownDir);
   if (why) return lib.recheckNotice(context, [`${script} cannot run (${why})`]);
-  const budgetMs = Math.min(RECHECK_MAX_MS, remaining() - 250); // its own timeout line beats the backstop
+  const budgetMs = Math.max(0, Math.min(RECHECK_MAX_MS, remaining() - 250)); // ends before the backstop
   if (budgetMs >= RECHECK_MIN_MS) return lib.runRecheck({ script, home: HOME, payload, budgetMs, ...context });
   return lib.recheckNotice(context, [`skipped, ${budgetMs} ms left of the hook budget; the next matching call re-checks`]);
 }
