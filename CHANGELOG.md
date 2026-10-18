@@ -11,6 +11,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Pull request commit policy check (issue #506). The CI job `commit-policy`
+  runs on pull requests and passes every commit in
+  `merge-base(base, head)..head`, merge commits included, through the
+  versioned `commit-msg` hook via `bootstrap/pr-commit-policy.mts`, so a
+  commit made with `--no-verify` is still checked. The caller's `KHEREP_*`
+  variables are dropped, which closes the `KHEREP_WORK_ITEM=none` escape
+  hatch, and the hook must first reject a canary message with an attribution
+  trailer. Exit `0` means every commit passed, `1` a policy violation, and `2`
+  a range or hook that could not be read, such as a missing commit, a shallow
+  clone or an emptied hook; a failed read is never a pass.
 - Reconnect burst measurement (issue #493). The daemon's round counters line
   `round sent <n> status/<m> outbox frames, handled <k> inbound items` keeps
   its text and, when the round handled frames, goes on with
