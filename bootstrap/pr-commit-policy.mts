@@ -146,8 +146,9 @@ function parseArgs(args: string[]): Options {
   return { base: rest[0]!, head: rest[1]!, hook };
 }
 
-// Same main-module test as ci-shard.mts: import.meta.main is missing on Node
-// 23 and 24.0-24.1, and a symlinked directory matches only after realpath.
+// Same main-module test as ci-shard.mts. It needs no main flag on import.meta,
+// which Node 23 and 24.0-24.1 lack, and a symlinked directory matches only
+// after realpath.
 function isMainModule(): boolean {
   const entry = process.argv[1] || "";
   try {
