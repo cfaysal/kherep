@@ -1,6 +1,8 @@
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
+import { MESSAGING_CAPABILITY } from "../../protocol-messages.mts";
+import { MessageStore } from "../src/message-store.mts";
 import { ADDED_SESSION_COLUMNS, migrateRegistry } from "../src/registry-schema.mts";
 import { enroll, newKey, registry } from "./helpers.mts";
 
@@ -44,6 +46,52 @@ describe("Registry sessions migration", () => {
       migrateRegistry(sql);
       expect(nodeColumns().length).toBe(14);
       expect(sql.exec("SELECT id, name, last_accepted_at FROM nodes").toArray()).toEqual([{ id: "n", name: "earlier", last_accepted_at: null }]);
+    });
+  });
+
+  // Issue #493: settled_state and the partial replay index on a messages table of
+  // an earlier deployment; the index can only follow the column.
+  it("adds settled_state and the messages_replay index to an earlier messages table, and keeps settled rows on a restart", async () => {
+    await runInDurableObject(registry(), (_instance, state) => {
+      const sql = state.storage.sql;
+      const ids = (page: ReturnType<MessageStore["statusPageFor"]>) => page.effects.statuses.map((s) => s.body.messageId);
+      sql.exec("DROP TABLE messages");
+      sql.exec(`CREATE TABLE messages (id TEXT PRIMARY KEY, from_node TEXT NOT NULL, from_session TEXT NOT NULL, to_node TEXT NOT NULL,
+        to_session TEXT NOT NULL, in_reply_to TEXT, text TEXT, state TEXT NOT NULL, reason TEXT, progress_phase TEXT, progress_code TEXT,
+        progress_observed_at TEXT, progress_retry_at TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+        CREATE INDEX messages_to_state ON messages (to_node, state, created_at);
+        CREATE INDEX messages_queued_expiry ON messages (expires_at) WHERE state = 'queued';
+        CREATE INDEX messages_from_node ON messages (from_node);
+        CREATE INDEX messages_state_updated ON messages (state, updated_at);`);
+      const later = Date.now() + 60 * 60_000;
+      sql.exec(`INSERT INTO messages (id, from_node, from_session, to_node, to_session, state, created_at, updated_at, expires_at)
+        VALUES ('old-delivered', 'sender', 's', 'target', 't', 'delivered', 1, 1, ?), ('old-queued', 'sender', 's', 'target', 't', 'queued', 2, 2, ?)`,
+      later, later);
+      const columns = () => sql.exec("PRAGMA table_info(messages)").toArray().map((c) => String(c.name));
+      expect(columns()).not.toContain("settled_state");
+
+      const capabilities = (nodeId: string) => (nodeId === "target" ? [MESSAGING_CAPABILITY] : null);
+      let store = new MessageStore(sql, () => {}, capabilities);
+      expect(columns()).toContain("settled_state");
+      expect(String(sql.exec("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'messages_replay'").one().sql))
+        .toMatch(/ON messages \(from_node\) WHERE settled_state IS NOT state$/);
+      expect(sql.exec("SELECT id, settled_state FROM messages ORDER BY rowid").toArray())
+        .toEqual([{ id: "old-delivered", settled_state: null }, { id: "old-queued", settled_state: null }]);
+      expect(ids(store.statusPageFor("sender", 0, 32))).toEqual(["old-delivered", "old-queued"]);
+
+      // A settled row stays settled when the Registry starts again.
+      sql.exec("UPDATE messages SET settled_state = 'delivered' WHERE id = 'old-delivered'");
+      store = new MessageStore(sql, () => {}, capabilities);
+      expect(sql.exec("SELECT settled_state FROM messages WHERE id = 'old-delivered'").one().settled_state).toBe("delivered");
+      expect(ids(store.statusPageFor("sender", 0, 32))).toEqual(["old-queued"]);
+
+      // New rows start unsettled, queued or refused at once.
+      const send = (messageId: string, to: string) => store.send({ messageId, from: { nodeId: "sender", session: "s" },
+        to: { nodeId: to, session: "t" }, text: "synthetic" }, "test", Date.now());
+      expect(send("new-queued", "target")).toMatchObject({ ok: true, status: { state: "queued" } });
+      expect(send("new-refused", "unknown")).toMatchObject({ ok: true, status: { state: "refused" } });
+      expect(sql.exec("SELECT id, settled_state FROM messages WHERE id LIKE 'new-%' ORDER BY rowid").toArray())
+        .toEqual([{ id: "new-queued", settled_state: null }, { id: "new-refused", settled_state: null }]);
     });
   });
 

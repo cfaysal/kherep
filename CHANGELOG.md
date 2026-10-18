@@ -26,9 +26,10 @@ increments the minor version; every other release increments the patch version.
   message, close reason or URL is logged.
 - Message summary diagnostic (issue #493). `GET /api/messages/summary?from=<node id>`,
   behind the existing Access JWT check, groups the Registry rows of one sender
-  node by `state` (a known state or `other`) and `deletable` (`1`, `null` or
-  `other`), each with `count`, `withDeadline` and the age buckets
-  `ageUnder24h`, `age1to7d` and `ageOver7d`, and adds `fetchedAt`, the Worker
+  node by `state` (a known state or `other`), `deletable` (`1`, `null` or
+  `other`) and `settled` (`settled` or `unsettled`), each with `count`,
+  `withDeadline` and the age buckets `ageUnder24h`, `age1to7d` and
+  `ageOver7d`, and adds `fetchedAt`, the Worker
   `version` and `commit`, and `rowsRead`. Counts only; no node id, message
   id, timestamp, session, reason or text. Each call reads the sender's whole
   history through its index and is logged as `registry.sql` path
@@ -37,6 +38,20 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Reconnect replay of acknowledged legacy rows (issue #493). A message row
+  stored before the deletion existed (no `deletable` mark) was replayed to its
+  sender after every authentication although the sender had acknowledged its
+  final state. The acknowledgement of its current final state by its sender
+  now settles such a row: the Worker stores the acknowledged state in
+  `settled_state` and audits `message.settle` with ids only. The row is kept,
+  never deleted, and the replay leaves it out while its state equals the
+  acknowledged one; a later state, also one set by an earlier Worker version
+  after a rollback, makes it replayed again until that state is acknowledged.
+  The replay reads a partial index over the unacknowledged rows. This inverts the earlier tested expectation that an
+  acknowledged legacy row is replayed again after reconnect: that replay was a
+  redundancy the acknowledgement already covered, not a delivery guarantee. A
+  legacy row whose sender never acknowledged its current state is still
+  replayed on every authentication.
 - Corrected nested-runtime guidance (issue #489). When both
   `CLAUDE_CODE_SESSION_ID` and `CODEX_THREAD_ID` are set and the available
   process ancestry does not establish their nesting, the fixed `NESTED_RUNTIME`
