@@ -147,6 +147,14 @@ export const CONTROL_PLANE_ENTRY = "codex-control-plane-hook.mts";
 export function controlPlaneEntry(hookDir: string): string {
   return path.join(hookDir, CONTROL_PLANE_ENTRY);
 }
+// The entry point starts the hook as a second Node process. Started with this
+// flag it adds no type-stripping warning of its own on the Node versions that
+// print one, so a hook run shows the stderr of a direct hook call. The shell
+// dispatcher imports the entry point in-process and takes no flag.
+export const ENTRY_NODE_FLAG = "--disable-warning=ExperimentalWarning";
+export function controlPlaneCommand(node: string, hookDir: string, name: "deliver" | "attribution"): string {
+  return command(node, ENTRY_NODE_FLAG, controlPlaneEntry(hookDir), name, "--runtime", "codex");
+}
 
 export function atlassianDestructiveGuard(node: string, hookDir: string): HookSpec {
   return { command: command(node, path.join(hookDir, "atlassian-destructive-guard.mts"), "--runtime", "codex") };
@@ -170,7 +178,7 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
   // Both placements keep every positional trust key rendered before them.
   const entry = controlPlaneEntry(hookDir);
   const attribution: HookSpec[] = options.controlPlaneHook
-    ? [{ command: command(node, entry, "attribution", "--runtime", "codex") }] : [];
+    ? [{ command: controlPlaneCommand(node, hookDir, "attribution") }] : [];
   const groups = [
     group("PreToolUse", "Read|Grep|Glob|Edit|Write|MultiEdit|apply_patch|Bash|shell_command|exec_command|functions\\.exec", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy")]),
     group("PreToolUse", "Agent|spawn_agent|Task|Workflow|WebSearch|WebFetch|mcp__.*", [adapted("codex-privacy-boundary-guard.mts", "pre-privacy"),
@@ -231,7 +239,7 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
   ];
   if (options.controlPlaneHook && !options.omitDeliveryHooks) {
     // The entry point runs the deliver hook of the installed source.
-    const deliver: HookSpec = { command: command(node, entry, "deliver", "--runtime", "codex") };
+    const deliver: HookSpec = { command: controlPlaneCommand(node, hookDir, "deliver") };
     groups.push(
       group("SessionStart", "startup|resume|clear|compact", [deliver]),
       group("UserPromptSubmit", "", [deliver]),
@@ -241,7 +249,7 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
   if (options.controlPlaneHook && !options.omitBusyHint) {
     // Independent of edit dispatch and the three externally owned intake hooks.
     // Last PostToolUse group in this block; external positions are checked before installation.
-    groups.push(group("PostToolUse", ".*", [{ command: command(node, entry, "deliver", "--runtime", "codex") }]));
+    groups.push(group("PostToolUse", ".*", [{ command: controlPlaneCommand(node, hookDir, "deliver") }]));
   }
   if (native(options.nativeHooks?.captureCli).length)
     groups.push(group("SessionEnd", "other", native(options.nativeHooks?.captureCli, 3)));

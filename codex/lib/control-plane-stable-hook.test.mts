@@ -50,8 +50,10 @@ for (const host of HOSTS) {
     }
     const entry = path.join(host.hookDir, "codex-control-plane-hook.mts");
     const q = (...parts: string[]) => parts.map((part) => `"${part}"`).join(" ");
-    const deliver = q(host.node, entry, "deliver", "--runtime", "codex");
-    const attribution = q(host.node, entry, "attribution", "--runtime", "codex");
+    // The four hook commands start the entry point with the Node flag; the
+    // shell dispatcher imports it in-process and names it without one.
+    const deliver = q(host.node, "--disable-warning=ExperimentalWarning", entry, "deliver", "--runtime", "codex");
+    const attribution = q(host.node, "--disable-warning=ExperimentalWarning", entry, "attribution", "--runtime", "codex");
     const shell = q(host.node, path.join(host.hookDir, "codex-shell-checks.mts"), entry, "attribution", "--runtime", "codex");
     const named = tables(a!).map(({ command }) => command).filter((command) => command.includes(entry));
     assert.deepEqual(named, [shell, attribution, deliver, deliver, deliver, deliver]);

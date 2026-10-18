@@ -1767,7 +1767,7 @@ test("wires the control-plane delivery hook from the checkout and upgrades a blo
   const groups = group(command(process.execPath, hookPath, "--runtime", "codex"));
   const result = install(installOptions);
   const config = fs.readFileSync(result.targets.config, "utf8");
-  assert.equal(occurrences(config, group(command(process.execPath, entry, "deliver", "--runtime", "codex"))), 1);
+  assert.equal(occurrences(config, group(command(process.execPath, "--disable-warning=ExperimentalWarning", entry, "deliver", "--runtime", "codex"))), 1);
   assert.equal(occurrences(config, String.raw`codex-control-plane-hook.mts\" \"deliver\"`), 8);
   assert.equal(occurrences(config, "deliver-hook.mts"), 0);
   // Issue #325. The attribution hook beside it: a PreToolUse entry and a PostToolUse group.

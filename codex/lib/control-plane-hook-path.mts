@@ -1,4 +1,4 @@
-import { command, CONTROL_PLANE_ENTRY, hookGroup } from "./parity-config.mts";
+import { command, CONTROL_PLANE_ENTRY, ENTRY_NODE_FLAG, hookGroup } from "./parity-config.mts";
 
 // Issues #70, #325 and #503. Blocks written before issue #503 ran the deliver
 // and attribution hooks from the checkout or source pin the installer ran from,
@@ -47,7 +47,7 @@ export function hasExactExternalDeliverHooks(
   if (start >= 0 && end < start) return false;
   const external = start < 0 ? config
     : config.slice(0, start) + config.slice(end + endMarker.length);
-  const bound = [command(node, entry, "deliver", "--runtime", "codex"),
+  const bound = [command(node, ENTRY_NODE_FLAG, entry, "deliver", "--runtime", "codex"),
     ...(controlPlaneHook ? [command(node, controlPlaneHook, "--runtime", "codex")] : [])];
   const groups = hookGroups(external);
   return DELIVER_EVENTS.every(([event, matcher]) => {
@@ -56,12 +56,16 @@ export function hasExactExternalDeliverHooks(
   });
 }
 
-// Every checkout-path hook command in text, in the stable form of entry.
+// Every checkout-path hook command in text, in the stable form of entry. A
+// hook command starts the entry point with ENTRY_NODE_FLAG; the shell
+// dispatcher's argument names the entry point alone.
+const SHELL_ARGUMENT = /codex-shell-checks\.mts\\" $/;
 export function stableHookCommands(text: string, entry: string): string {
   // The entry path exactly as a rendered TOML string spells it.
   const spelled = JSON.stringify(command(entry)).slice(3, -3);
-  return text.replace(CHECKOUT_HOOK, (_match, _dir, name: string) =>
-    `\\"${spelled}\\" \\"${name}\\" \\"--runtime\\" \\"codex\\"`);
+  return text.replace(CHECKOUT_HOOK, (_match, _dir, name: string, offset: number) =>
+    `${SHELL_ARGUMENT.test(text.slice(Math.max(0, offset - 256), offset)) ? "" : `\\"${ENTRY_NODE_FLAG}\\" `}`
+    + `\\"${spelled}\\" \\"${name}\\" \\"--runtime\\" \\"codex\\"`);
 }
 
 export function pointControlPlaneHooksAt(
