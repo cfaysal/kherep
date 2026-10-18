@@ -1,57 +1,67 @@
 #!/usr/bin/env node
-// Issue #507, part 1. Runs the PreToolUse guards of one matcher group and fails
-// closed when a guard cannot run.
-//
+// Issue #507, parts 1 and 2. Runs the PreToolUse guards of one matcher group,
+// fails closed when a guard cannot run, and starts the hook integrity re-check.
 //   node "<home>/hooks/guard-dispatch.mts" "<home>/hooks/<guard-a>.mts" ...
 //
-// Wired directly, an empty guard exits 0 with no output and Claude Code takes
-// that as allow; a missing or broken guard exits 1, which Claude Code treats as
-// a non-blocking error. Here every such case becomes a deny that names the file:
-// a guard that is missing, empty or no regular file, lies outside this
-// directory, cannot be spawned, is killed by a signal, runs past 10 s, exits
-// with a code other than 0 or 2, or prints anything but the accepted PreToolUse
-// shape: hookSpecificOutput alone, with hookEventName, an optional decision and
-// reason, an optional additionalContext, at least one of the two, nothing else.
-// So does stdin that is not a JSON object.
+// Wired directly, an empty guard is an allow and a broken one a non-blocking
+// error. Here each becomes a deny naming the file: missing, empty, no regular
+// file, outside this directory, not spawnable, killed by a signal, past its cap,
+// an exit other than 0 or 2, or stdout other than hookSpecificOutput alone with
+// hookEventName, an optional decision and reason, an optional additionalContext,
+// at least one of the two. So does stdin that is no JSON object or stays open.
+// A working guard keeps its verdict (exit 2 = deny with stderr as the reason).
+// Guards run in parallel to the end; decisions combine deny > ask > allow,
+// notices join as additionalContext. At most one JSON document, nothing for a
+// plain allow, each guard's stderr forwarded, exit 0 always. Guards get no args.
 //
-// A working guard keeps its verdict: exit 2 is a deny with its stderr as the
-// reason, a JSON decision passes through, exit 0 without output is allow, and an
-// additionalContext without a decision is a notice. All guards run in parallel
-// and every one runs to the end, also after a deny. Decisions combine as
-// deny > ask > allow; every notice is passed on as additionalContext, also
-// without a decision. The dispatcher prints at most one JSON document, nothing
-// for a plain allow, forwards each guard's stderr, and always exits 0.
-//
-// Static imports come from node:* only, so a broken lib/ file cannot stop this
-// file from loading. A guard receives no arguments: none of the wired Claude
-// guards takes one.
+// Re-check (part 2): with <home>/.cache/hook-integrity/heartbeat.json older than
+// 30 minutes or missing, live-hook-integrity.mts --trigger guard-dispatch runs
+// in parallel with the guards, after them when a guard could not run; <home> is
+// the parent of this file's directory as invoked. Its lines are one more notice
+// (and stderr), never a decision: a restored guard runs from the next call on.
+// One deadline 5 s before the 30 s hook timeout bounds stdin, guards and the
+// re-check, so a decided deny is printed before Claude Code cancels the hook.
+// Static imports are node:* only: a broken lib/ file cannot stop this loading.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const TIMEOUT_MS = 10_000;
+// Each PreToolUse entry of claude/settings.user.json has "timeout": 30; a test pins both.
+const HOOK_TIMEOUT_MS = 30_000;
+// Outside this clock: Node start (<= 2 s assumed; 0.09 s on macOS, Windows UNKNOWN), emit (<= 0.5 s).
+const SAFETY_MARGIN_MS = 5_000;
+const DEADLINE = Date.now() + HOOK_TIMEOUT_MS - SAFETY_MARGIN_MS;
+const remaining = (): number => Math.max(0, DEADLINE - Date.now());
+const GUARD_TIMEOUT_MS = 10_000;
+// A re-check gets at most RECHECK_MAX_MS of what is left; below RECHECK_MIN_MS it is skipped.
+const RECHECK_MAX_MS = 20_000, RECHECK_MIN_MS = 2_000;
+const HEARTBEAT_WINDOW_MS = 1_800_000; // = lib/integrity-heartbeat.mts; each side has a boundary test
 const SELF = fileURLToPath(import.meta.url);
 const DIR = path.dirname(SELF);
+const INVOKED_DIR = path.dirname(path.resolve(process.argv[1] ?? SELF));
+const HOME = path.dirname(INVOKED_DIR);
 
 const DECISIONS = ["deny", "ask", "allow"] as const;
 type Decision = typeof DECISIONS[number];
-// No decision: exit 0 without output (a plain allow) or a notice only.
-interface Verdict { decision?: Decision; reason: string; notice?: string }
+// No decision: exit 0 without output (a plain allow) or a notice only. `broken`:
+// the guard could not run, which starts a re-check; a policy deny does not.
+interface Verdict { decision?: Decision; reason: string; notice?: string; broken?: boolean }
 interface Outcome { verdict: Verdict; stderr: string }
 
-const failure = (file: string, why: string): Verdict => ({
-  decision: "deny",
+const failure = (file: string, why: string): Verdict => ({ decision: "deny", broken: true,
   reason: `[guard-dispatch] ${file} cannot run (${why}); the tool call is blocked until hook integrity restores it`,
 });
 
 function readStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = "";
+    const ms = remaining();
+    const timer = setTimeout(() => { process.stdin.destroy(); reject(new Error(`stdin not closed within ${ms} ms`)); }, ms);
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk) => (data += chunk));
-    process.stdin.on("end", () => resolve(data));
+    process.stdin.on("end", () => { clearTimeout(timer); resolve(data); });
     process.stdin.on("error", reject);
   });
 }
@@ -145,29 +155,26 @@ const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning:
 
 function runGuard(file: string, payload: string): Promise<Outcome> {
   return new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
+    let stdout = "", stderr = "", settled = false;
+    const filtered = (): string => stderr.replace(TYPE_STRIPPING_WARNING, "");
     const settle = (verdict: Verdict): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ verdict, stderr });
+      resolve({ verdict, stderr: filtered() });
     };
     const child = spawn(process.execPath, [file], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    const cap = Math.min(GUARD_TIMEOUT_MS, remaining());
     const timer = setTimeout(() => {
-      settle(failure(file, `timed out after ${TIMEOUT_MS / 1000} s`));
+      settle(failure(file, `timed out after ${Number((cap / 1000).toFixed(1))} s`));
       child.kill("SIGKILL");
       child.unref();
       for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
-    }, TIMEOUT_MS);
+    }, cap);
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
     child.on("error", (error) => settle(failure(file, `spawn failed: ${error.message}`)));
-    child.on("close", (code, signal) => {
-      stderr = stderr.replace(TYPE_STRIPPING_WARNING, "");
-      settle(judge(file, code, signal, stdout, stderr));
-    });
+    child.on("close", (code, signal) => settle(judge(file, code, signal, stdout, filtered())));
     // A guard may exit without reading its payload; the broken pipe is no verdict.
     child.stdin.on("error", () => {});
     child.stdin.end(payload);
@@ -185,19 +192,44 @@ function combine(verdicts: Verdict[]): Verdict | undefined {
   return { decision, reason, ...(notice ? { notice } : {}) };
 }
 
+const firstLine = (error: unknown): string => String((error as Error)?.message || error).split(/\r?\n/)[0];
+
+// The re-check notice, or undefined when the heartbeat is fresh and every guard
+// ran. Text only, never a verdict; settled at the latest at the deadline.
+async function recheck(payload: string, guards: Promise<Outcome[]>): Promise<string | undefined> {
+  // A broken lib throws here or, empty (an empty namespace), at its first call.
+  const lib = await import("./lib/guard-recheck.mts");
+  const { stale, lastOk } = lib.heartbeatState(HOME, HEARTBEAT_WINDOW_MS);
+  if (!stale && !(await guards).some((outcome) => outcome.verdict.broken)) return undefined;
+  const context = { why: !stale ? "guard failure" : lastOk ? "stale heartbeat" : "no heartbeat", lastOk };
+  const script = path.join(INVOKED_DIR, "live-hook-integrity.mts");
+  const why = unrunnable(script, realDir(DIR));
+  if (why) return lib.recheckNotice(context, [`${script} cannot run (${why})`]);
+  const budgetMs = Math.min(RECHECK_MAX_MS, remaining());
+  if (budgetMs >= RECHECK_MIN_MS) return lib.runRecheck({ script, home: HOME, payload, budgetMs, ...context });
+  return lib.recheckNotice(context, [`skipped, ${budgetMs} ms left of the hook budget; the next matching call re-checks`]);
+}
+
 async function dispatch(guards: string[]): Promise<{ verdict?: Verdict; stderr: string[] }> {
-  let raw = "";
+  let raw: string;
+  try { raw = await readStdin(); } catch (error) { return { verdict: failure(SELF, firstLine(error)), stderr: [] }; }
   let payload: unknown;
-  try { raw = await readStdin(); payload = JSON.parse(raw); } catch { payload = undefined; }
+  try { payload = JSON.parse(raw); } catch { /* not JSON */ }
   if (!isObject(payload)) return { verdict: failure(SELF, "stdin is not a JSON object"), stderr: [] };
   if (!guards.length) return { verdict: failure(SELF, "no guard given"), stderr: [] };
   const ownDir = realDir(DIR);
-  const outcomes = await Promise.all(guards.map((arg) => {
+  const running = Promise.all(guards.map((arg) => {
     const file = path.resolve(arg);
     const why = unrunnable(file, ownDir);
     return why ? { verdict: failure(file, why), stderr: "" } : runGuard(file, raw);
   }));
-  return { verdict: combine(outcomes.map((outcome) => outcome.verdict)), stderr: outcomes.map((outcome) => outcome.stderr) };
+  const checking = recheck(raw, running)
+    .catch((error) => `hook integrity re-check unavailable (lib/guard-recheck.mts cannot be loaded: ${firstLine(error)})`);
+  const [outcomes, notice] = await Promise.all([running, checking]);
+  const verdicts = outcomes.map((outcome) => outcome.verdict);
+  const stderr = outcomes.map((outcome) => outcome.stderr);
+  if (notice) { verdicts.push({ reason: "", notice }); stderr.push(notice); }
+  return { verdict: combine(verdicts), stderr };
 }
 
 function emit(verdict: Verdict | undefined, stderr: string[]): void {

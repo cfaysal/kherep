@@ -5,17 +5,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
 
-// Real path: macOS tmpdir is a symlink, and Node names the main module by its real path.
-const ROOT = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "guard-dispatch-")));
-const HOOKS = path.join(ROOT, "hooks");
-const DISPATCH = path.join(HOOKS, "guard-dispatch.mts");
+import { dispatcherFixture } from "./guard-dispatch-fixture.mts";
+
+const { root: ROOT, hooks: HOOKS, dispatch: DISPATCH } = dispatcherFixture("guard-dispatch-");
 const TRACE = path.join(ROOT, "trace.txt");
-fs.mkdirSync(HOOKS);
-fs.copyFileSync(path.join(import.meta.dirname, "guard-dispatch.mts"), DISPATCH);
 after(() => { try { fs.rmSync(ROOT, { recursive: true, force: true }); } catch { /* best effort */ } });
 
 const decision = (permissionDecision: string, reason: string): string => JSON.stringify({

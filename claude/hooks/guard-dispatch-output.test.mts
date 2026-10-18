@@ -6,15 +6,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
-const ROOT = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "guard-dispatch-output-")));
-const HOOKS = path.join(ROOT, "hooks");
-const DISPATCH = path.join(HOOKS, "guard-dispatch.mts");
-fs.mkdirSync(HOOKS);
-fs.copyFileSync(path.join(import.meta.dirname, "guard-dispatch.mts"), DISPATCH);
+import { dispatcherFixture } from "./guard-dispatch-fixture.mts";
+
+const { root: ROOT, hooks: HOOKS, dispatch: DISPATCH } = dispatcherFixture("guard-dispatch-output-");
 after(() => { try { fs.rmSync(ROOT, { recursive: true, force: true }); } catch { /* best effort */ } });
 
 const pre = (fields: Record<string, unknown>) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", ...fields } });

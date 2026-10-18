@@ -26,7 +26,7 @@ export function heartbeatState(home: string, windowMs: number, now: number = Dat
 
 export interface Recheck { script: string; home: string; payload: string; budgetMs: number; why: string; lastOk?: string }
 
-const block = ({ why, lastOk }: Recheck, lines: string[]): string =>
+export const recheckNotice = ({ why, lastOk }: { why: string; lastOk?: string }, lines: string[]): string =>
   `hook integrity re-check (${why}, last OK ${lastOk ?? "none"}):\n${lines.map((line) => `  - ${line}`).join("\n")}`;
 
 // The re-check's lines as one notice block. Resolves at the latest when the
@@ -39,7 +39,7 @@ export function runRecheck(recheck: Recheck): Promise<string> {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve(block(recheck, lines));
+      resolve(recheckNotice(recheck, lines));
     };
     const child = spawn(process.execPath, [recheck.script, "--trigger", "guard-dispatch"], {
       env: { ...process.env, CLAUDE_HOME: recheck.home }, stdio: ["pipe", "pipe", "ignore"], windowsHide: true,
