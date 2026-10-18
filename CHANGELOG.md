@@ -11,6 +11,23 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Hook integrity heartbeat and re-check (issue #507, part 2 of 4).
+  `hooks/live-hook-integrity.mts` writes
+  `<CLAUDE_HOME>/.cache/hook-integrity/heartbeat.json` atomically after a
+  fully proven run only, takes `run.lock` (a second run reports
+  `re-check already running`; a lock older than 2 minutes is taken over) and
+  gains a `--trigger <source>` mode that prints plain lines. The guard
+  dispatcher re-checks on the next guarded tool call when the heartbeat is
+  older than 30 minutes or missing (in parallel with the guards) or when a
+  guard could not run (after them), with at most 20 s of one shared deadline
+  25 s after it starts; stdin is bounded by the same deadline. The re-check is
+  reported as `additionalContext` and on stderr and never changes the
+  decision; a guard restored during a call runs from the next call. Journal
+  entries name their `trigger`. `classify`, `restore` and `journal` moved to
+  `hooks/lib/integrity-verdict.mts`; a broken copy of that file is reported but
+  not restored until the next installation. Limits: no timer, so an idle
+  session is not re-checked; whether the session shows a `PreToolUse`
+  `additionalContext` is UNVERIFIED.
 - Fail-closed Claude guard dispatcher (issue #507, part 1 of 4). The five
   `PreToolUse` groups of `claude/settings.user.json` each run one
   `hooks/guard-dispatch.mts` entry that starts the group's guards in parallel.
@@ -27,7 +44,8 @@ increments the minor version; every other release increments the patch version.
   argument is missing or retired as `DANGLING-HOOK`. Limits: the dispatcher
   cannot check itself, so an empty `guard-dispatch.mts` fails open until the
   next session start; a hook cancelled at its 30 s `timeout` loses its output,
-  so each guard is capped at 10 s; `onFailure` is not set, because no minimum
+  so each guard is capped at 10 s, within one deadline 25 s after the
+  dispatcher starts (part 2); `onFailure` is not set, because no minimum
   Claude Code version is declared.
 - Pull request commit policy check (issue #506). The CI job `commit-policy`
   runs on pull requests and passes every commit in
