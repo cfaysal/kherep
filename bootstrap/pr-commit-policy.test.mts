@@ -70,6 +70,17 @@ test("a range of clean commits passes", (t) => {
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, new RegExp(`^ok   ${first} `, "m"));
   assert.match(result.stdout, new RegExp(`^ok   ${second} `, "m"));
+  assert.match(result.stdout, /^commit-policy: 2 commits passed$/m);
+});
+
+test("a single clean commit is counted in the singular", (t) => {
+  const f = fixture(t);
+  const base = f.git("rev-parse", "HEAD");
+  const head = f.commit("Add the only change");
+  const result = run(f, base, head);
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^commit-policy: 1 commit passed$/m);
 });
 
 test("a caller's KHEREP_WORK_ITEM=none does not reach the hook", (t) => {
