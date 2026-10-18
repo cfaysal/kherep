@@ -16,6 +16,8 @@ interface Options {
   exchange: () => void;
   queue: () => void;
   defer: (data: string) => void;
+  // Called once for each frame the window itself hands to onFrame (issue #487 D1).
+  handled: () => void;
   log: (message: string) => void;
 }
 
@@ -71,6 +73,7 @@ export function codexIntakeWindow(options: Options): CodexIntakeWindow {
         if (!eligible()) { options.defer(data); return; }
         // Once admitted, publish its result even if policy changes afterwards.
         // A closed socket gets no ACK: the Worker retains its durable message.
+        options.handled();
         const frames = await options.client.onFrame(data);
         for (const frame of frames) if (!options.send(frame)) break;
         if (eligible()) options.queue();
