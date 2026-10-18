@@ -2,9 +2,8 @@
 // after their move from .js to .mts, run exactly the way the installed settings
 // run them: the command string from claude/settings.user.json, under the event
 // it is wired to, with the Claude home placeholder resolved, executed through a
-// shell. A guard whose wiring points
-// at a missing file, or whose converted source no longer loads, exits without
-// a decision; that is fail-open, and this test fails on it.
+// shell. Since issue #507 a PreToolUse guard that is missing or cannot load
+// denies the call instead of exiting without a decision (fail-open).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -56,7 +55,7 @@ function transcript(name: string, entries: unknown[]): string {
 const user = (text: string) => ({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
 const assistant = (text: string) => ({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
 
-interface Run { status: number | null; decision: unknown; permission: unknown; stderr: string }
+interface Run { status: number | null; decision: unknown; permission: unknown; reason: unknown; stderr: string }
 
 // Runs the wired command through a shell, the way Claude Code starts a hook.
 // claudeHome replaces the placeholder (default: this checkout's claude/), so a
@@ -73,7 +72,7 @@ function runWired(
     env: { ...process.env, KHEREP_WORKSPACE: WORKSPACE, ...env },
     windowsHide: true,
   });
-  let output: { decision?: unknown; hookSpecificOutput?: { permissionDecision?: unknown } } = {};
+  let output: { decision?: unknown; hookSpecificOutput?: { permissionDecision?: unknown; permissionDecisionReason?: unknown } } = {};
   try {
     output = JSON.parse(result.stdout) ?? {};
   } catch { /* no JSON on stdout */ }
@@ -81,6 +80,7 @@ function runWired(
     status: result.status,
     decision: output.decision ?? null,
     permission: output.hookSpecificOutput?.permissionDecision ?? null,
+    reason: output.hookSpecificOutput?.permissionDecisionReason ?? null,
     stderr: result.stderr,
   };
 }
@@ -128,10 +128,10 @@ for (const guard of GUARDS) {
   });
 }
 
-// Issue #237 batch 2: the six PreToolUse guards, and main-checkout-guard from
-// issue #325. Four block with exit 2 and a stderr reason, three with a JSON deny
-// on exit 0. Each case names a tool its wired matcher has to cover, including
-// the tools of the legacy groups hosts still carry (see guard-matcher-coverage.test.mts).
+// Issue #237 batch 2: the six PreToolUse guards, and main-checkout-guard from #325.
+// Four block with exit 2 and a stderr reason, three with a JSON deny on exit 0;
+// guard-dispatch.mts (#507) turns exit 2 into a deny, stderr forwarded. Each case
+// names a tool its wired matcher must cover, legacy groups included (guard-matcher-coverage).
 type Mode = "exit2" | "deny" | "ask";
 interface ToolCase { tool: string; input: Record<string, unknown> }
 const bash = (command: string, tool = "Bash"): ToolCase => ({ tool, input: { command } });
@@ -184,9 +184,8 @@ function runCase(wired: Wired, item: ToolCase, claudeHome?: string): Run {
 }
 
 function blocked(run: Run, mode: Mode, hook: string): boolean {
-  return mode === "exit2"
-    ? run.status === 2 && run.stderr.includes(hook.replace(".mts", ""))
-    : run.status === 0 && run.permission === mode;
+  return run.status === 0 && run.permission === (mode === "exit2" ? "deny" : mode)
+    && (mode !== "exit2" || run.stderr.includes(hook.replace(".mts", "")));
 }
 
 // Asserts that the guard blocks every blocking case and lets the benign one pass.
@@ -207,7 +206,8 @@ for (const guard of PRETOOL_GUARDS) {
     const { event, matcher, command } = wiredCommand(guard.hook);
     assert.equal(event, "PreToolUse");
     assert.equal(matcher, guard.matcher);
-    assert.match(command, new RegExp(`^node "__KHEREP_CLAUDE_HOME__/hooks/${guard.hook.replace(".", "\\.")}"$`));
+    assert.ok(command.startsWith('node "__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts" ')
+      && command.split(" ").includes(`"__KHEREP_CLAUDE_HOME__/hooks/${guard.hook}"`), command);
     const file = path.join(repo, "claude", "hooks", guard.hook);
     assert.ok(fs.statSync(file).size > 0, `claude/hooks/${guard.hook} is not empty`);
     // live-hook-integrity.mts calls a hook DEFEKT when Node's parser rejects it.
@@ -221,9 +221,9 @@ for (const guard of PRETOOL_GUARDS) {
   });
 }
 
-// Red-first evidence kept as a test: the same checks fail for a 0-byte or a
-// missing guard, so a conversion that leaves a guard unable to run cannot pass.
-test("a 0-byte or missing PreToolUse guard fails the blocking checks", () => {
+// Issue #507. A 0-byte or missing guard used to exit without a decision (fail-open).
+// Through the dispatcher it denies every call, benign included, naming the file.
+test("a 0-byte or missing PreToolUse guard denies every call and names its file", () => {
   const copy = path.join(TMP, "broken-claude");
   fs.cpSync(path.join(repo, "claude", "hooks"), path.join(copy, "hooks"), { recursive: true });
   const home = copy.replace(/\\/g, "/");
@@ -231,10 +231,14 @@ test("a 0-byte or missing PreToolUse guard fails the blocking checks", () => {
     const file = path.join(copy, "hooks", guard.hook);
     const original = fs.readFileSync(file);
     assertBlocks(guard, home);
-    fs.writeFileSync(file, "");
-    assert.throws(() => assertBlocks(guard, home), assert.AssertionError, `0-byte ${guard.hook}`);
-    fs.rmSync(file);
-    assert.throws(() => assertBlocks(guard, home), assert.AssertionError, `missing ${guard.hook}`);
+    for (const breakGuard of [() => fs.writeFileSync(file, ""), () => fs.rmSync(file)]) {
+      breakGuard();
+      for (const item of [...guard.blocking, guard.benign]) {
+        const { status, permission, reason, stderr } = runCase(wiredCommand(guard.hook), item, home);
+        assert.ok(status === 0 && permission === "deny" && String(reason).includes(`${path.resolve(file)} cannot run`),
+          `${guard.hook} ${item.tool}: ${status} ${String(reason)} ${stderr}`);
+      }
+    }
     fs.writeFileSync(file, original);
   }
 });

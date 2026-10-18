@@ -42,10 +42,15 @@ function covers(templateMatcher: string | undefined, legacyMatcher: string | und
   return templateMatcher === legacyMatcher;
 }
 
+// The hook files a command names, in order. Issue #507: a PreToolUse guard is
+// an argument of guard-dispatch.mts, not the end of its own command.
+const hookFiles = (command: unknown): string[] =>
+  [...String(command).matchAll(/\/hooks\/([\w.-]+\.(?:js|mts))"/g)].map((match) => match[1]!);
+
 // The template matcher that wires <hook> at <event>, exactly once.
 function templateMatcher(event: string, hook: string): string | undefined {
   const found = (template.hooks[event] ?? []).filter((group) =>
-    (group.hooks ?? []).some((entry) => String(entry.command).endsWith(`/hooks/${hook}"`)));
+    (group.hooks ?? []).some((entry) => hookFiles(entry.command).includes(hook)));
   assert.equal(found.length, 1, `${hook} is wired once under ${event}`);
   return found[0]!.matcher;
 }
@@ -97,11 +102,11 @@ test("main-checkout-guard.mts covers Bash and PowerShell in a group of its own",
   assert.ok(!matcherMatches(current, "Read"), `matcher "${current}" is limited to the shell tools`);
   const bash = template.hooks.PreToolUse!.filter((group) => group.matcher === "Bash");
   assert.equal(bash.length, 1);
-  assert.deepEqual(bash[0]!.hooks!.map((entry) => String(entry.command).replace(/^.*\/hooks\/|"$/g, "")),
-    ["commit-guard.mts", "deploy-guard.mts"]);
+  assert.deepEqual(bash[0]!.hooks!.flatMap((entry) => hookFiles(entry.command)),
+    ["guard-dispatch.mts", "commit-guard.mts", "deploy-guard.mts"]);
 });
 
 test("no template entry wires a .js script", () => {
-  const commands = Object.values(template.hooks).flat().flatMap((group) => group.hooks ?? []).map((h) => String(h.command));
-  assert.deepEqual(commands.filter((command) => /\.js"?$/.test(command)), []);
+  const files = Object.values(template.hooks).flat().flatMap((group) => group.hooks ?? []).flatMap((h) => hookFiles(h.command));
+  assert.deepEqual(files.filter((file) => file.endsWith(".js")), []);
 });

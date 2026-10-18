@@ -57,12 +57,9 @@ function homePrefixes(claudeHome: string, userHome: string): string[] {
   return isDefault ? [home, ...HOME_TOKENS] : [home];
 }
 
-// The script a `node <script>` command runs relative to the first matching
-// prefix, or undefined. An unquoted script ends at whitespace or a shell operator.
-function scriptUnder(command: unknown, prefixes: string[]): string | undefined {
-  if (typeof command !== "string") return undefined;
-  const match = /^\s*node\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|<>]+))/.exec(command);
-  const script = (match?.[1] ?? match?.[2] ?? match?.[3])?.replace(/\\/g, "/");
+// A path relative to the first matching prefix, or undefined.
+function relativeUnder(token: string | undefined, prefixes: string[]): string | undefined {
+  const script = token?.replace(/\\/g, "/");
   if (!script) return undefined;
   for (const prefix of prefixes) {
     if (comparable(script.slice(0, prefix.length)) !== prefix) continue;
@@ -70,6 +67,24 @@ function scriptUnder(command: unknown, prefixes: string[]): string | undefined {
     return rel === "." || rel === ".." || rel.startsWith("../") ? undefined : rel;
   }
   return undefined;
+}
+
+// The script a `node <script>` command runs relative to the first matching
+// prefix, or undefined. An unquoted script ends at whitespace or a shell operator.
+function scriptUnder(command: unknown, prefixes: string[]): string | undefined {
+  if (typeof command !== "string") return undefined;
+  const match = /^\s*node\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|<>]+))/.exec(command);
+  return relativeUnder(match?.[1] ?? match?.[2] ?? match?.[3], prefixes);
+}
+
+// Issue #507. The scripts a `node <script> <args>` command passes as arguments,
+// relative to the prefixes: the guards guard-dispatch.mts runs.
+function argumentScriptsUnder(command: unknown, prefixes: string[]): string[] {
+  if (typeof command !== "string" || scriptUnder(command, prefixes) === undefined) return [];
+  return [...command.matchAll(/"([^"]+)"|'([^']+)'|([^\s;&|<>]+)/g)].slice(2)
+    .map((token) => token[1] ?? token[2] ?? token[3])
+    .filter((token) => /\.(?:js|mjs|cjs|mts)$/.test(token))
+    .flatMap((token) => relativeUnder(token, prefixes) ?? []);
 }
 
 // The script a `node <script>` command runs, relative to the Claude home, or
@@ -121,44 +136,59 @@ const scriptStem = (rel: string): string => rel.replace(/\.(?:js|mjs|cjs|mts)$/,
 // event the template has since dropped would run on. Such an entry (the hook
 // under the absolute Claude home, .js and .mts folded) is removed; a hand-written
 // ~/.claude form and every hook the template does not manage stay.
+// Issue #507. A script the template passes as an argument (a guard that
+// guard-dispatch.mts runs) is managed "<event> via <first script>". A direct
+// entry for it is removed, or it would run a second time next to the dispatcher.
 export function unwireMovedHooks(
   existing: Settings, source: Settings, claudeHome: string,
 ): { settings: Settings; removed: Array<HookFinding & { managedAt: string[] }> } {
   const prefixes = [absoluteHome(claudeHome)];
-  const managed = new Map<string, Set<string>>();
+  const direct = new Map<string, Set<string>>();
+  const via = new Map<string, Set<string>>();
+  const add = (map: Map<string, Set<string>>, rel: string, label: string): void => {
+    map.set(scriptStem(rel), (map.get(scriptStem(rel)) || new Set()).add(label));
+  };
   for (const [event, entries] of Object.entries(source.hooks || {})) {
     for (const hook of (Array.isArray(entries) ? entries : []).flatMap((entry) => entry?.hooks || [])) {
       const rel = scriptUnder(hook?.command, prefixes);
-      if (rel !== undefined) managed.set(scriptStem(rel), (managed.get(scriptStem(rel)) || new Set()).add(event));
+      if (rel === undefined) continue;
+      add(direct, rel, event);
+      for (const arg of argumentScriptsUnder(hook?.command, prefixes)) add(via, arg, `${event} via ${rel}`);
     }
   }
-  const eventsOf = (command: unknown): Set<string> | undefined => {
+  const stemOf = (command: unknown): string => {
     const rel = scriptUnder(command, prefixes);
-    return rel === undefined ? undefined : managed.get(scriptStem(rel));
+    return rel === undefined ? "" : scriptStem(rel);
   };
-  const result = removeHooks(existing, (event, command) => {
-    const events = eventsOf(command);
-    return events !== undefined && !events.has(event);
-  });
+  const managedAt = (command: unknown): string[] =>
+    [...(direct.get(stemOf(command)) || []), ...(via.get(stemOf(command)) || [])];
+  const result = removeHooks(existing, (event, command) =>
+    managedAt(command).length > 0 && !direct.get(stemOf(command))?.has(event));
   return {
     settings: result.settings,
-    removed: result.removed.map((item) => ({ ...item, managedAt: [...(eventsOf(item.command) || [])] })),
+    removed: result.removed.map((item) => ({ ...item, managedAt: managedAt(item.command) })),
   };
 }
 
-// Wired commands whose Claude-home script is retired or does not exist.
+// Wired commands whose Claude-home script, or a Claude-home script it passes as
+// an argument (a guard guard-dispatch.mts runs, issue #507), is retired or does
+// not exist.
 export function danglingHookCommands(
   settings: Settings, retired: ReadonlySet<string>, claudeHome: string, userHome: string = userHomeNow(),
   exists: (file: string) => boolean = fs.existsSync,
 ): HookFinding[] {
   const found: HookFinding[] = [];
+  const prefixes = homePrefixes(claudeHome, userHome);
+  const dangles = (rel: string): boolean => retired.has(rel) || !exists(path.join(claudeHome, rel));
   for (const [event, entries] of Object.entries(settings.hooks || {})) {
     if (!Array.isArray(entries)) continue;
     for (const entry of entries) {
       for (const hook of (Array.isArray(entry?.hooks) ? entry.hooks : [])) {
-        const rel = claudeHomeScript(hook?.command, claudeHome, userHome);
+        const rel = scriptUnder(hook?.command, prefixes);
         if (rel === undefined) continue;
-        if (retired.has(rel) || !exists(path.join(claudeHome, rel))) found.push({ event, command: String(hook.command) });
+        if ([rel, ...argumentScriptsUnder(hook?.command, prefixes)].some(dangles)) {
+          found.push({ event, command: String(hook.command) });
+        }
       }
     }
   }

@@ -5,6 +5,8 @@ hooks/commit-guard.mts
 hooks/commit-guard.test.mts
 hooks/deploy-guard.mts
 hooks/deploy-guard.test.mts
+hooks/guard-dispatch.mts
+hooks/guard-dispatch.test.mts
 hooks/main-checkout-guard.mts
 hooks/main-checkout-guard.test.mts
 hooks/maestro-discipline.mts

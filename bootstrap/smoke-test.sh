@@ -322,7 +322,7 @@ check_profile() {
   local wired_hooks
   wired_hooks="$(node -e '
   const fs=require("fs");const names=new Set();
-  for(const f of process.argv.slice(1)){const j=JSON.parse(fs.readFileSync(f));const walk=o=>{if(Array.isArray(o)){o.forEach(walk);return}if(o&&typeof o==="object"){if(typeof o.command==="string"){const m=o.command.match(/(?:__KHEREP_CLAUDE_HOME__|~\/\.claude)\/hooks\/([\w.-]+\.(?:js|mts))\b/);if(m)names.add(m[1])}Object.values(o).forEach(walk)}};walk(j.hooks||{})}
+  for(const f of process.argv.slice(1)){const j=JSON.parse(fs.readFileSync(f));const walk=o=>{if(Array.isArray(o)){o.forEach(walk);return}if(o&&typeof o==="object"){if(typeof o.command==="string"){for(const m of o.command.matchAll(/(?:__KHEREP_CLAUDE_HOME__|~\/\.claude)\/hooks\/([\w.-]+\.(?:js|mts))\b/g))names.add(m[1])}Object.values(o).forEach(walk)}};walk(j.hooks||{})}
   process.stdout.write([...names].sort().join("\n"));
   ' "$TMP/repo/claude/settings.user.json" "$TMP/repo/claude/settings.project.json")" || { note_fail "WIRED-HOOK extraction failed [$profile]"; wired_hooks=""; }
   [ -n "$wired_hooks" ] || { note_fail "WIRED-HOOK list empty [$profile]"; }
