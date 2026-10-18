@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { hasExactExternalDeliverHooks, pointDeliverHooksAt } from "./control-plane-hook-path.mts";
+import { hasExactExternalDeliverHooks, pointControlPlaneHooksAt } from "./control-plane-hook-path.mts";
 import type { McpCompatibilityOptions, McpProjection, McpServerSpec, PluginMcpServer } from "./contracts.mts";
 import * as managedConfig from "./managed-config.mts";
 import { repairManagedMcp } from "./mcp-config-repair.mts";
@@ -283,13 +283,14 @@ function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
   const retiredTable = retireUnmanagedCentralBrainTable(next, options.retiredCentralBrain, options.startMarker, options.endMarker);
   next = retiredTable.config;
   const beforeCheckout = next;
-  next = pointDeliverHooksAt(next, options.controlPlaneHook, options.startMarker, options.endMarker);
+  const entry = options.controlPlaneHook ? parityConfig.controlPlaneEntry(options.hookDir) : undefined;
+  next = pointControlPlaneHooksAt(next, entry, options.startMarker, options.endMarker);
   const outbox = options.controlPlaneOutbox;
   const outboxRoot = outbox ? projectOutboxWritableRoot(next, outbox, options.startMarker, options.endMarker) : undefined;
   if (outboxRoot) next = outboxRoot.config;
   const withoutOutbox = { ...effectiveOptions, mcpServers, pluginMcpServers, outboxWritableRoot: undefined };
   const externalDeliverHooks = hasExactExternalDeliverHooks(
-    next, options.node, options.controlPlaneHook, options.startMarker, options.endMarker,
+    next, options.node, entry, options.controlPlaneHook, options.startMarker, options.endMarker,
   );
   const currentRenderOptions = { ...withoutOutbox,
     omitDeliveryHooks: externalDeliverHooks,

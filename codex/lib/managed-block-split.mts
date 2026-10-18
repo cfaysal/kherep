@@ -3,6 +3,8 @@
 // managed fragment sits behind the end marker, and the end marker can separate
 // the keys of one trust table. The TOML is unchanged, the text matches no fragment.
 
+import { stableHookCommands } from "./control-plane-hook-path.mts";
+
 const MESSAGE = "Refusing to overwrite a managed block without an exact known managed fragment";
 
 export class UnknownManagedFragmentError extends Error {
@@ -25,7 +27,16 @@ const tables = (text: string): string[] => text.split(/^(?=\[)/m);
 // nothing else in the text may differ.
 const CHECKOUT_DIR = /(?<=\\")(?:[^"\\]|\\\\)*?(?:\\\\|\/)modules(?:\\\\|\/)control-plane(?:\\\\|\/)node(?:\\\\|\/)(?=(?:deliver|attribution)-hook\.mts\\" \\"--runtime\\" \\"codex\\")/g;
 
+// Issue #503. A fragment in the stable form names one entry point instead; a
+// block written before it names checkout paths, which take that stable form.
+const STABLE_ENTRY = /(?<=\\")(?:[^"\\]|\\\\)*?codex-control-plane-hook\.mts(?=\\" \\"(?:deliver|attribution)\\" \\"--runtime\\" \\"codex\\")/g;
+
 function atCheckoutOf(fragment: string): (text: string) => string {
+  const entries = new Set(Array.from(fragment.matchAll(STABLE_ENTRY), ([entry]) => entry));
+  if (entries.size === 1) {
+    const [entry] = entries;
+    return (text) => stableHookCommands(text, JSON.parse(`"${entry}"`) as string);
+  }
   const dirs = new Set(Array.from(fragment.matchAll(CHECKOUT_DIR), ([dir]) => dir));
   if (dirs.size !== 1) return (text) => text;
   const [dir] = dirs;

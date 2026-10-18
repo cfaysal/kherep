@@ -128,8 +128,26 @@ export function sourceOf(rel: string): { from: string } | { hint: string } {
   return { from: `${CODEX_HELPERS.has(own) ? "codex" : "claude"}/hooks/${own}` };
 }
 
-// The checkout the deliver-hook command runs from, else the Claude-side chain.
-export function checkoutOf(parts: string[], payload: ScopePayload | null, env: NodeJS.ProcessEnv = process.env): string {
+// Issue #503. The source root the installer recorded for the Control Plane
+// hooks under <home>/orchestra, or "" when the pointer is absent or invalid.
+// The same schema check as readPointer() in control-plane-hook.mts, which this
+// file cannot import by a fixed name; hook-integrity.test.mts runs both on the
+// same pointers.
+function pointerRoot(home: string): string {
+  let value: { version?: unknown; root?: unknown; kind?: unknown; verified?: unknown; commit?: unknown } | null;
+  try { value = JSON.parse(fs.readFileSync(path.join(home, "orchestra", "control-plane-source.json"), "utf8")) as typeof value; }
+  catch { return ""; }
+  if (!value || value.version !== 1 || typeof value.root !== "string" || !path.isAbsolute(value.root)
+    || (value.kind !== "pin" && value.kind !== "checkout") || typeof value.verified !== "boolean"
+    || (value.commit !== undefined && (typeof value.commit !== "string" || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(value.commit)))) return "";
+  return lib.normalizePathLike(value.root);
+}
+
+// The source the Control Plane pointer of home names, else the checkout an
+// older deliver-hook command runs from, else the Claude-side chain.
+export function checkoutOf(parts: string[], payload: ScopePayload | null, env: NodeJS.ProcessEnv = process.env, home?: string): string {
+  const pointed = home ? pointerRoot(home) : "";
+  if (pointed && lib.isCheckout(pointed)) return pointed;
   const deliver = parts.map(lib.normalizePathLike).find((part) => part.toLowerCase().endsWith(DELIVER_HOOK));
   const root = deliver ? deliver.slice(0, -DELIVER_HOOK.length) : "";
   if (lib.isCheckout(root)) return root;
@@ -155,7 +173,7 @@ async function classify(file: string, kind: string): Promise<Verdict> {
 }
 
 function restore(file: string, from: string, repoRoot: string, hooksDir: string): Restored {
-  if (!repoRoot) return { proven: false, why: "no checkout resolved via the deliver-hook command, workspace, KHEREP_WORKSPACE or install note" };
+  if (!repoRoot) return { proven: false, why: "no checkout resolved via the control-plane pointer, the deliver-hook command, workspace, KHEREP_WORKSPACE or install note" };
   const source = lib.joinPathLike(repoRoot, from);
   const wanted = read(source);
   if (typeof wanted === "string") return { proven: false, why: `versioned source ${source} unreadable (${wanted})` };
@@ -193,7 +211,7 @@ const outcome = (result: Restored): string => result.proven
 function ownImportFailed({ rel, why, loaded }: LoadFailure, payload: ScopePayload | null, home: string, parts: string[]): void {
   const file = path.join(LIB_DIR, path.basename(rel)).replace(/\\/g, "/");
   const result: Restored = loaded >= RESTORE_LIBS
-    ? restore(file, `claude/hooks/${rel}`, checkoutOf(parts, payload), `${lib.normalizePathLike(home)}/hooks`)
+    ? restore(file, `claude/hooks/${rel}`, checkoutOf(parts, payload, process.env, home), `${lib.normalizePathLike(home)}/hooks`)
     : { proven: false, why: "the restore itself needs workspace-scope, orchestra-checkout and restore-write" };
   journal(home, {
     ts: new Date().toISOString(), file: `kherep-maestro/${rel}`, path: file, state: "DEFEKT", reason: why, kind: "self",
@@ -219,7 +237,7 @@ async function main(): Promise<void> {
   if (failed) return ownImportFailed(failed, payload, home, parts);
   if (typeof config === "string") return emit([`config.toml under ${home} unreadable (${config}), so WHICH hooks are wired is UNKNOWN here`]);
   const hooksDir = `${lib.normalizePathLike(home)}/hooks`;
-  const repoRoot = checkoutOf(parts, payload);
+  const repoRoot = checkoutOf(parts, payload, process.env, home);
   const wired = wiredHookFiles(parts, hooksDir);
   const lines = wired.length ? [] : [`no hook file under ${hooksDir} is wired in config.toml, so WHICH hooks run is UNKNOWN here`];
   // The live file, else the versioned one, so one broken file does not hide the files behind it.

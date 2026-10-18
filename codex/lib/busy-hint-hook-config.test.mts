@@ -10,7 +10,7 @@ const options = { startMarker: "# >>> fixture >>>", endMarker: "# <<< fixture <<
   hookDir: "/opt/codex/hooks", contextHook: "/opt/codex/context.mts",
   controlPlaneHook: "/opt/kherep/modules/control-plane/node/deliver-hook.mts" };
 const renderOptions = { ...options, mcpServers: [] };
-const busyGroups = (config: string) => [...config.matchAll(/\[\[hooks\.PostToolUse\]\]\nmatcher = "\.\*"\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = ".*deliver-hook\.mts.*"/g)];
+const busyGroups = (config: string) => [...config.matchAll(/\[\[hooks\.PostToolUse\]\]\nmatcher = "\.\*"\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = ".*codex-control-plane-hook\.mts\\" \\"deliver.*"/g)];
 
 test("a supported read-only tool boundary has one independent native PostToolUse delivery hook", () => {
   const rendered = parity.render(renderOptions);

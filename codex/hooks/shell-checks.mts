@@ -34,11 +34,20 @@ export async function shellChecks(payload: HookPayload, attributionHook?: string
       }
     } catch { decision ||= deny(`${guard} could not complete; this tool call is blocked.`); }
   }
+  // After every guard, in-process with the payload already read: a failure here
+  // writes one stderr line and never changes the decision.
   if (attributionHook) {
     try {
       if (!path.isAbsolute(attributionHook)) throw new Error("invalid attribution path");
-      const { handleAttributionHook } = await import(pathToFileURL(attributionHook).href);
-      const { nodePaths } = await import(pathToFileURL(path.join(path.dirname(attributionHook), "config.mts")).href);
+      // Issue #503. The stable entry point names the attribution hook of the
+      // installed source; an older command names the hook itself.
+      let hook = attributionHook;
+      if (path.basename(attributionHook) === "codex-control-plane-hook.mts") {
+        const entry = await import(pathToFileURL(attributionHook).href) as typeof import("./control-plane-hook.mts");
+        hook = entry.resolveControlPlaneHook("attribution");
+      }
+      const { handleAttributionHook } = await import(pathToFileURL(hook).href);
+      const { nodePaths } = await import(pathToFileURL(path.join(path.dirname(hook), "config.mts")).href);
       handleAttributionHook(payload, "codex", { paths: nodePaths(), env: process.env });
     } catch { process.stderr.write("kherep shell-checks: attribution could not complete\n"); }
   }

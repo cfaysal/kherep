@@ -92,7 +92,7 @@ test("a healthy host passes every check and reports versions without secrets", a
   assert.deepEqual(report.checks.policy.wake, { enabled: true, sessions: ["build"], codexApp: false, replies: false, nativeQueue: false });
   assert.deepEqual(report.checks.runtimes.claude, { installed: true, version: "2.1.300 (Claude Code)", configured: true, ready: "unknown" });
   assert.deepEqual(report.checks.hooks.claude, { present: true, deliver: 1, wake: 1, foreign: [] });
-  assert.deepEqual(report.checks.hooks.codex, { present: true, deliver: 1, wake: 0, foreign: [] });
+  assert.deepEqual(report.checks.hooks.codex, { present: true, deliver: 1, wake: 0, foreign: [], pointer: "missing", stable: 0, legacy: 1 });
   assert.deepEqual(report.checks.listeners, { ok: true, live: 0, stale: 0, orphaned: 0 });
   assert.deepEqual(report.checks.wakeReadiness, {
     ok: true,
@@ -294,7 +294,7 @@ test("the hook check fails for another checkout, for no hooks and for an unreada
   writeHooks(claude, codex, h.repo, other);
   const hooks = (await runDoctor(h.deps)).checks.hooks;
   assert.equal(hooks.ok, false);
-  assert.deepEqual(hooks.codex, { present: true, deliver: 0, wake: 0, foreign: [path.join(HOOKS(other), "deliver-hook.mts")] });
+  assert.deepEqual(hooks.codex, { present: true, deliver: 0, wake: 0, foreign: [path.join(HOOKS(other), "deliver-hook.mts")], pointer: "missing", stable: 0, legacy: 1 });
   fs.rmSync(path.join(claude, "settings.json"));
   fs.rmSync(path.join(codex, "config.toml"));
   const none = (await runDoctor(h.deps)).checks.hooks;

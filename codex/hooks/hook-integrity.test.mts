@@ -92,6 +92,49 @@ test("resolves the checkout from the deliver-hook command first, else gives up w
   }
 });
 
+// Issue #503. The stable commands name no checkout; the pointer the installer
+// wrote under <CODEX_HOME>/orchestra names it, and an unusable pointer falls
+// back to the existing chain.
+test("resolves the checkout from the control-plane pointer first, then the existing chain", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-integrity-pointer-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, "codex");
+  const pointer = (value: unknown) => {
+    fs.mkdirSync(path.join(home, "orchestra"), { recursive: true });
+    fs.writeFileSync(path.join(home, "orchestra", "control-plane-source.json"), JSON.stringify(value));
+  };
+  const env = { CLAUDE_HOME: root, KHEREP_WORKSPACE: root };
+  const stable = ["node", `${home}/hooks/kherep-maestro/codex-control-plane-hook.mts`, "deliver", "--runtime", "codex"];
+  assert.equal(checkoutOf(stable, { cwd: root }, env, home), "", "no pointer, no deliver path");
+  pointer({ version: 1, root: REPO, kind: "checkout", verified: true });
+  assert.equal(checkoutOf(stable, { cwd: root }, env, home), REPO);
+  pointer({ version: 1, root: path.join(root, "deleted"), kind: "checkout", verified: true });
+  assert.equal(checkoutOf(stable, { cwd: root }, env, home), "", "a pointer to a deleted dir falls back");
+  assert.equal(checkoutOf(["node", `${REPO}/modules/control-plane/node/deliver-hook.mts`], { cwd: root }, env, home), REPO,
+    "an older deliver path is the next stage");
+  assert.deepEqual(sourceOf("kherep-maestro/codex-control-plane-hook.mts"), { from: "codex/hooks/control-plane-hook.mts" });
+});
+
+// A pointer becomes a restore source only after the entry point's own schema check.
+test("accepts exactly the pointers the entry point accepts", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-integrity-schema-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { readPointer } = await import("./control-plane-hook.mts");
+  const file = path.join(root, "orchestra", "control-plane-source.json");
+  fs.mkdirSync(path.dirname(file));
+  const env = { CLAUDE_HOME: root, KHEREP_WORKSPACE: root };
+  const valid = { version: 1, root: REPO, kind: "checkout", verified: true };
+  const cases: unknown[] = [valid, { ...valid, kind: "pin", commit: "0123456789abcdef0123456789abcdef01234567" },
+    { ...valid, version: 2 }, { ...valid, root: "." }, { ...valid, root: path.relative(process.cwd(), REPO) || "." },
+    { version: 1, root: REPO }, { ...valid, kind: "other" }, { ...valid, verified: "yes" }, { ...valid, commit: "abc" }, [valid], null];
+  for (const value of cases) {
+    fs.writeFileSync(file, JSON.stringify(value));
+    const accepted = "pointer" in readPointer(file);
+    assert.equal(checkoutOf([], { cwd: root }, env, root), accepted ? REPO : "", JSON.stringify(value));
+  }
+  assert.equal(cases.filter((value) => { fs.writeFileSync(file, JSON.stringify(value)); return "pointer" in readPointer(file); }).length, 2);
+});
+
 test("maps a wired path under a symlinked spelling of the home onto the real hooks dir", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hook-integrity-alias-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

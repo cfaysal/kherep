@@ -52,6 +52,26 @@ increments the minor version; every other release increments the patch version.
   redundancy the acknowledgement already covered, not a delivery guarantee. A
   legacy row whose sender never acknowledged its current state is still
   replayed on every authentication.
+- Codex hook commands stay the same across upgrades (issue #503). The six
+  Control Plane hook definitions in `config.toml` (shell-group and
+  `PostToolUse` attribution, and delivery on `SessionStart`, `UserPromptSubmit`,
+  `Stop` and the `PostToolUse` busy hint) named the checkout or source pin the
+  installer ran from, so every upgrade from a new pin changed their hash and
+  Codex asked to review them again. They now name the stable entry point
+  `<CODEX_HOME>/hooks/kherep-maestro/codex-control-plane-hook.mts` and a fixed
+  hook name (`deliver` or `attribution`). The installer writes
+  `<CODEX_HOME>/orchestra/control-plane-source.json`, the source root with its
+  commit and kind, inside its install transaction. The entry point checks the
+  record's shape and that the hook file (and, for a pin, its manifest) exists,
+  then runs the hook as its own process with the caller's stdin, stdout,
+  stderr, environment, working directory and exit code. Without a usable record
+  it exits 1 with one stderr line and never falls back to another source. The
+  check per run is not a verified load; `kherep-node doctor` verifies the
+  source identity and reports `codex.pointer`, `stable` and `legacy`. The shell
+  dispatcher still runs its three guards first and calls attribution
+  in-process afterwards, so a missing record costs attribution only. The first
+  install after this change rewrites the old commands once, and Codex asks for
+  one review. Trust entries, rules, guards and permissions are unchanged.
 - Corrected nested-runtime guidance (issue #489). When both
   `CLAUDE_CODE_SESSION_ID` and `CODEX_THREAD_ID` are set and the available
   process ancestry does not establish their nesting, the fixed `NESTED_RUNTIME`

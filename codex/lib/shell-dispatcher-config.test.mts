@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { prepareManagedConfig } from "./config-preservation.mts";
+import { legacyForm } from "./legacy-control-plane-form.mts";
 import { render, renderBeforeShellDispatcher, type RenderOptions } from "./parity-config.mts";
 
 const OPTIONS: RenderOptions = { contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks",
@@ -12,8 +13,10 @@ const options = { ...OPTIONS, memoryProvider: "unconfigured" as const, startMark
 const shellGroup = (config: string) => config.split(/(?=^\[\[hooks\.[A-Za-z]+\]\]$)/m)
   .find(s => s.startsWith("[[hooks.PreToolUse]]") && s.includes('matcher = "Bash|'))!.trim();
 
+// Issue #503. The installer of 87c317b wrote the checkout path into the Control
+// Plane hook commands: the legacy fixture reproduces those bytes from the render.
 test("freezes the exact 87c317b predecessor bytes independently read from Git", () => {
-  assert.equal(createHash("sha256").update(renderBeforeShellDispatcher({ ...OPTIONS, hookDir: "" })).digest("hex"),
+  assert.equal(createHash("sha256").update(legacyForm(renderBeforeShellDispatcher({ ...OPTIONS, hookDir: "" }), "/synthetic/repo")).digest("hex"),
     "3c755d0bc3ba4d77436a21f4f7bc4521f4d00649e770bd02ba19151693c161a1");
 });
 
