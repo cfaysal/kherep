@@ -38,6 +38,8 @@ Track changes to Kherep in the repository's GitHub Issues. Open or reference an 
 
 Changes reach `main` only through a pull request, which is merged by rebase.
 
+The `commit-policy` CI check re-runs the `commit-msg` hook on every commit of a pull request with this repository's policy: no work-item key is required, and AI attribution trailers are rejected. A commit made with `git commit --no-verify` that breaks the policy fails the check; reword it and push again.
+
 The repository deletes a pull request's branch when the pull request is merged. A pull request closed without merging keeps its branch, for example one replaced by a new pull request after a rebase. Close such a pull request with `gh pr close <number> --delete-branch`, or delete its branch right after closing it. Its commits stay reachable from the closed pull request.
 
 Keep organization-specific policy, personal configuration and credentials outside the reusable product. The work-item and commit conventions of a workspace where Kherep is installed apply to that workspace's repositories, not to contributions to Kherep.
