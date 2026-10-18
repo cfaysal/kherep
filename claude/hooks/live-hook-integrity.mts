@@ -20,7 +20,8 @@
  * Heartbeat (issue #507, part 2, lib/integrity-heartbeat.mts): only a run in
  * which every file of the final closure ended OK or restored with proof, with
  * the live settings read completely, writes <home>/.cache/hook-integrity/
- * heartbeat.json. run.lock keeps a second run out; it prints only the holder.
+ * heartbeat.json. run.lock throttles: a run that finds a live owner prints only
+ * the holder; one that finds a dead or old owner says so and runs anyway.
  * `--trigger <source>` (guard-dispatch.mts) prints plain lines, one per finding
  * plus one on the heartbeat, instead of the SessionStart JSON. Any unexpected
  * error is reported, exit 0; silent at session start when everything is OK.
@@ -139,11 +140,16 @@ async function main(): Promise<void> {
   if (lock && "holder" in lock) {
     return emit([`re-check already running (pid ${lock.holder.pid ?? "unknown"}, since ${lock.holder.ts ?? "unknown"})`]);
   }
+  if (lock && "stale" in lock) {
+    const { holder: { pid = "unknown", ts = "unknown" }, why } = lock.stale;
+    lines.push(`run lock stale (pid ${pid} since ${ts}, ${why}); checked without exclusion`);
+  }
   try {
     const unproven = notes.length ? "the live settings were not read completely" : lock ? "" : "no run lock";
     await checkAll(files, lines, unproven, payload, home);
   } finally {
-    lock?.release();
+    if (lock && "release" in lock) lock.release();
+    else if (lock) lock.discard();
   }
 }
 

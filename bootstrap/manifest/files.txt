@@ -69,6 +69,7 @@ hooks/lib/integrity-verdict.mts
 hooks/lib/integrity-verdict.test.mts
 hooks/lib/integrity-heartbeat.mts
 hooks/lib/integrity-heartbeat.test.mts
+hooks/lib/integrity-lock.test.mts
 hooks/lib/guard-recheck.mts
 hooks/lib/guard-recheck.test.mts
 hooks/cbm-code-discovery-gate

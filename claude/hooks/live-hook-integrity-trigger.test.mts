@@ -73,11 +73,12 @@ const journal = (box: Box): Record<string, unknown>[] => (read(path.join(box.cac
 const guardText = (box: Box): string | null => read(path.join(box.hooks, "commit-guard.mts"));
 const lines = (run: Run): string[] => run.stdout.split(/\r?\n/).filter(Boolean);
 
-function plantLock(box: Box, ageMs: number): void {
+// pid 424242 stands for an owner that is gone; the live case plants this test's own pid.
+function plantLock(box: Box, ageMs: number, pid = 424_242): void {
   fs.mkdirSync(box.cache, { recursive: true });
   const lock = path.join(box.cache, "run.lock");
   const then = new Date(Date.now() - ageMs);
-  fs.writeFileSync(lock, JSON.stringify({ pid: 424_242, ts: then.toISOString(), nonce: "planted" }));
+  fs.writeFileSync(lock, JSON.stringify({ pid, ts: then.toISOString(), nonce: "planted" }));
   fs.utimesSync(lock, then, then);
 }
 
@@ -140,21 +141,23 @@ test("no wired file: no lock, no heartbeat, no cache directory", () => {
 
 test("a live lock younger than two minutes: already running, nothing checked or written", () => {
   const box = sandbox("");
-  plantLock(box, 30_000);
+  plantLock(box, 30_000, process.pid);
   const result = run(box);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /^re-check already running \(pid 424242, since \d{4}-\d\d-\d\dT[^)]+\)\n$/);
+  assert.match(result.stdout, new RegExp(`^re-check already running \\(pid ${process.pid}, since \\d{4}-\\d\\d-\\d\\dT[^)]+\\)\n$`));
   assert.equal(guardText(box), "", "the guard is not restored by the loser");
   assert.equal(beat(box), null);
   assert.deepEqual(journal(box), []);
   assert.equal(JSON.parse(read(path.join(box.cache, "run.lock")) ?? "{}").nonce, "planted");
 });
 
-test("a lock older than two minutes is taken over: restored, heartbeat written, lock removed", () => {
+test("a stale lock is reported and the run proceeds: restored, heartbeat written, lock removed", () => {
   const box = sandbox("");
   plantLock(box, 3 * MIN);
   const result = run(box);
   assert.equal(result.status, 0, result.stderr);
+  assert.match(lines(result)[0] ?? "", /^run lock stale \(pid 424242 since \d{4}-[^,]+, owner gone\); checked without exclusion$/);
+  assert.match(lines(result)[1] ?? "", /^commit-guard\.mts: 0 bytes .* -> RESTORED/);
   assert.equal(lines(result).at(-1), "all 1 files OK (1 restored), heartbeat refreshed");
   assert.equal(guardText(box), GOOD);
   assert.equal(journal(box)[0]?.restoreProven, true);
@@ -171,4 +174,17 @@ test("two runs started together: both exit 0, one writes, the journal has one en
   assert.equal(journal(box).length, 1);
   assert.equal(guardText(box), GOOD);
   assert.deepEqual(fs.readdirSync(box.cache).sort(), ["heartbeat.json", "incidents.jsonl"]);
+});
+
+// L4: runs that find a stale lock proceed without exclusion and still converge.
+test("four runs at one stale lock converge on the versioned bytes", async () => {
+  const box = sandbox("");
+  plantLock(box, 3 * MIN);
+  const runs = await Promise.all([start(box), start(box), start(box), start(box)]);
+  for (const result of runs) assert.equal(result.status, 0, result.stderr);
+  assert.ok(runs.some((result) => result.stdout.includes("checked without exclusion")), JSON.stringify(runs.map((r) => r.stdout)));
+  assert.equal(guardText(box), GOOD);
+  const heartbeat = beat(box);
+  if (heartbeat) assert.equal(heartbeat.trigger, "guard-dispatch");
+  assert.equal(fs.existsSync(path.join(box.cache, "run.lock")), false);
 });
