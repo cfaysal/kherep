@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import type { DirectoryBody } from "../protocol-messages.mts";
-import { recordCodexSession } from "./codex-sessions.mts";
+import { CODEX_ACTIVE_MS, recordCodexSession } from "./codex-sessions.mts";
 import { nodePaths, writeConfig, type NodePaths } from "./config.mts";
 import { getOutbox, recordSent, writeDirectory, writeLocalSessions } from "./exchange.mts";
 import { getMessage, markDelivered, markOffered, storeMessage } from "./inbox.mts";
@@ -454,6 +454,9 @@ test("msg send refuses an undecidable nesting with the fixed reason and writes n
   const refused = await run(paths, ["send", "node-b/docs", "hello"], NESTED_ENV, NOW, () => null);
   assert.deepEqual([refused.code, refused.out, refused.err], [1, "", `kherep-node msg: ${NESTED_RUNTIME}`]);
   assert.deepEqual(fs.existsSync(paths.outbox) ? fs.readdirSync(paths.outbox) : [], []);
+  // Issue #489: the hint names the conditional hook-record requirement and no assumed cause.
+  assert.match(NESTED_RUNTIME, /--from requires the full id of a Codex session a Kherep hook recorded within 12 hours; if KHEREP_SESSION_ID is set/);
+  assert.doesNotMatch(NESTED_RUNTIME, /sandbox/i);
 });
 
 test("a claude -p started inside a Codex tool sends as its own Claude session (issue #471)", async (t) => {
@@ -479,4 +482,37 @@ test("msg send --from <own thread> inside that thread needs no hook record; --fr
   const recorded = await run(paths, ["send", "--from", other, "node-b/docs", "hello"], thread);
   assert.equal(recorded.code, 0, recorded.err);
   assert.equal(getOutbox(paths, recorded.out)?.fromSession, other);
+});
+
+// Issue #489: with an undecidable nesting, --from is accepted only for a fresh hook record and a matching task binding.
+test("msg send --from under an undecidable nesting needs a fresh hook record and a matching task (issue #489)", async (t) => {
+  const other = "019a2b3c-4d5e-7f60-8123-000000000099";
+  const task = (paths: NodePaths, sessionId: string) => writeTask(paths, { taskId: "00000000-0000-4000-8000-0000000000f2", runtime: "codex",
+    name: "task-00000002", cwd: "/w", permissionMode: "auto", state: "running", startedAt: new Date(NOW).toISOString(),
+    deadline: new Date(NOW + 60_000).toISOString(), updatedAt: new Date(NOW).toISOString(), sessionId });
+  const cases: [string, string, number | null, NodeJS.ProcessEnv, ((paths: NodePaths) => void) | null, boolean][] = [
+    ["own thread, no hook record", THREAD, null, NESTED_ENV, null, false],
+    ["own thread, fresh record", THREAD, NOW, NESTED_ENV, null, true],
+    ["own thread, stale record", THREAD, NOW - CODEX_ACTIVE_MS - 1, NESTED_ENV, null, false],
+    ["own thread, fresh record, task bound to another thread", THREAD, NOW, { ...NESTED_ENV, KHEREP_SESSION_ID: "task-00000002" },
+      (paths) => task(paths, other), false],
+    ["another fresh recorded thread", other, NOW, NESTED_ENV, null, true],
+  ];
+  for (const [label, from, seen, env, prepare, accepted] of cases) {
+    const paths = setup(t);
+    if (seen !== null) recordCodexSession(paths, from, "/work/b", seen);
+    prepare?.(paths);
+    const outbox = () => (fs.existsSync(paths.outbox) ? fs.readdirSync(paths.outbox).sort() : []);
+    const before = outbox();
+    const sent = await run(paths, ["send", "--from", from, "node-b/docs", "hello"], env, NOW, () => null);
+    if (accepted) {
+      assert.equal(sent.code, 0, `${label}: ${sent.err}`);
+      assert.equal(outbox().length, before.length + 1, label);
+      assert.deepEqual([getOutbox(paths, sent.out)?.fromSession, getOutbox(paths, sent.out)?.fromSessionId], [from, from], label);
+    } else {
+      assert.deepEqual([sent.code, sent.out], [1, ""], label);
+      assert.match(sent.err, /is not a verified sender: .*a Codex session a Kherep hook recorded within 12 hours/, label);
+      assert.deepEqual(outbox(), before, label);
+    }
+  }
 });

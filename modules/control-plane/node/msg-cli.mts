@@ -55,7 +55,7 @@ export const MSG_USAGE = `usage:
   kherep-node msg inbox [--from <codex-session-id>] [--all | --receive]
   kherep-node msg status <messageId>
   kherep-node msg stop <taskId | sent messageId | owned requestId> [--expected-run-version <run version>] [--wait <seconds>]
-Without --from the session is named by ${SESSION_ENV} (Claude Code), ${CODEX_THREAD_ENV} (Codex) or ${KHEREP_SESSION_ENV} (the node's Codex runs).`;
+Without --from the session is named by ${SESSION_ENV} (Claude Code), ${CODEX_THREAD_ENV} (Codex) or ${KHEREP_SESSION_ENV} (the node's Codex runs). --from names the resolved current session, or the full id of a Codex session recorded by a Kherep hook within 12 hours. The recorded-session alternative must match any node task binding from ${KHEREP_SESSION_ENV}.`;
 
 const FINAL_OK = ["accepted", "delivered", "replied"];
 const WAIT_POLL_MS = 250;

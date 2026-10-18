@@ -9,6 +9,22 @@ increments the minor version; every other release increments the patch version.
 
 ## [Unreleased]
 
+### Fixed
+
+- Corrected nested-runtime guidance (issue #489). When both
+  `CLAUDE_CODE_SESSION_ID` and `CODEX_THREAD_ID` are set and the available
+  process ancestry does not establish their nesting, the fixed `NESTED_RUNTIME`
+  reason no longer suggests that any `--from` resolves it: for msg commands it
+  states that `--from` needs the full id of a Codex session a Kherep hook
+  recorded within 12 hours, with a matching task when `KHEREP_SESSION_ID` is
+  set. The `msg` usage text, `docs/CODEX.md` (which no longer says the Codex
+  thread is taken as sender regardless of ancestry) and the Control Plane
+  README and architecture match it. New synthetic tests cover `--from` under an
+  undecidable nesting: no record, stale record and a task bound to another
+  thread are refused with nothing written; a fresh record of the own or of
+  another thread is accepted. Sender checks, the refusal code and the exec
+  rules are unchanged; this does not restore or explain any Windows send.
+
 ## [0.4.0] - 2026-10-18
 
 ### Added

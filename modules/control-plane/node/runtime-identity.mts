@@ -48,8 +48,10 @@ export interface IdentityDeps {
 export const NO_SESSION = "cannot tell which session this is: none of CLAUDE_CODE_SESSION_ID (Claude Code), CODEX_THREAD_ID (Codex) "
   + "or KHEREP_SESSION_ID (the node's Codex runs) is set; a Codex session may pass --from <its full session id>";
 export const NESTED_RUNTIME = "cannot tell which runtime runs this command: both a Claude Code session (CLAUDE_CODE_SESSION_ID) "
-  + "and a Codex thread (CODEX_THREAD_ID) are in the environment and the process ancestry does not show which started the other; "
-  + "pass --from <the session this command speaks for> or run it from the runtime's own tool";
+  + "and a Codex thread (CODEX_THREAD_ID) are in the environment and the available process ancestry does not establish their nesting. "
+  + "For msg commands in this state, --from requires the full id of a Codex session a Kherep hook recorded within 12 hours; "
+  + "if KHEREP_SESSION_ID is set, its task must record the same thread. "
+  + "Without that evidence, use an authorized command context where the runtime can be determined.";
 export const TASK_THREAD_MISMATCH = "KHEREP_SESSION_ID names a node task whose Codex thread is not this process's CODEX_THREAD_ID; "
   + "a Codex started inside a node task's shell is another session and cannot send as the task";
 export const BAD_THREAD_ID = "CODEX_THREAD_ID is not a plain session id; nothing was sent";
