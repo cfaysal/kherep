@@ -26,6 +26,7 @@ interface JournalEntry {
   mtimeBefore?: unknown;
   sha256After?: unknown;
   restoreProven?: unknown;
+  trigger?: unknown;
 }
 
 interface Box {
@@ -133,6 +134,14 @@ function journalOf(box: Box): JournalEntry[] {
     .map((line) => JSON.parse(line) as JournalEntry);
 }
 
+// The heartbeat (issue #507, part 2) as bytes, null when absent.
+const cacheDir = (box: Box): string => path.join(box.claude, ".cache", "hook-integrity");
+const beatOf = (box: Box): string | null => liveText({ ...box, hooks: cacheDir(box) }, "heartbeat.json");
+function plantBeat(box: Box, text: string): void {
+  fs.mkdirSync(cacheDir(box), { recursive: true });
+  fs.writeFileSync(path.join(cacheDir(box), "heartbeat.json"), text, "utf8");
+}
+
 // The first journal line, or an empty entry when there is none.
 const NO_ENTRY: JournalEntry = {};
 
@@ -154,9 +163,21 @@ function liveText(box: Box, name: string): string | null {
   place(box, "deploy-guard.js", { live: GOOD, repo: GOOD });
   wire(box, { PreToolUse: ["node ~/.claude/hooks/commit-guard.js", "node ~/.claude/hooks/deploy-guard.js"] });
   const before = liveText(box, "commit-guard.js");
+  const started = Date.now();
   check("healthy hooks stay silent", contextOf(run(box)), null);
+  const ended = Date.now();
   check("healthy hooks are not rewritten", liveText(box, "commit-guard.js"), before);
   check("healthy hooks leave no journal entry", journalOf(box).length, 0);
+  const beat = JSON.parse(beatOf(box) || "{}");
+  check("a healthy run writes the heartbeat with trigger session-start", beat.trigger, "session-start");
+  check("the heartbeat counts the inventoried files", beat.files, 2);
+  check("the heartbeat ts lies within the run", Date.parse(beat.ts) >= started && Date.parse(beat.ts) <= ended, true);
+  check("no temporary heartbeat file is left", fs.readdirSync(cacheDir(box)).filter((n) => n !== "heartbeat.json").length, 0);
+  const file = path.join(cacheDir(box), "heartbeat.json");
+  fs.utimesSync(file, new Date(Date.now() - 600_000), new Date(Date.now() - 600_000));
+  const old = fs.statSync(file).mtimeMs;
+  run(box);
+  check("a second healthy run rewrites the heartbeat", fs.statSync(file).mtimeMs > old, true);
 }
 
 // --- the actual incident: 0 bytes -------------------------------------------
@@ -188,6 +209,8 @@ function liveText(box: Box, name: string): string | null {
   check("the journal records the sha after the restore", entry && entry.sha256After, sha256(Buffer.from(GOOD)));
   check("the journal records that the restore is proven", entry && entry.restoreProven, true);
   check("the journal timestamp is ISO", Boolean(entry && !Number.isNaN(Date.parse(entry.ts as string))), true);
+  check("the journal names the trigger", entry && entry.trigger, "session-start");
+  check("a proven restore writes the heartbeat", JSON.parse(beatOf(box) || "{}").trigger, "session-start");
 }
 
 // --- syntactically broken ---------------------------------------------------
@@ -227,6 +250,7 @@ function liveText(box: Box, name: string): string | null {
   const [entry] = journalOf(box);
   check("the failed restore is journalled as not proven", entry && entry.restoreProven, false);
   check("with no sha to show for it", entry && entry.sha256After, null);
+  check("a failed restore writes no heartbeat", beatOf(box), null);
 }
 
 // --- unreadable: UNCHECKED, neither OK nor DEFEKT ---------------------------
@@ -244,6 +268,10 @@ function liveText(box: Box, name: string): string | null {
   check("an unreadable hook is not treated as DEFEKT either", Boolean(seen && !seen.includes("RESTORED")), true);
   check("an unreadable hook is not overwritten", fs.statSync(path.join(box.hooks, "commit-guard.js")).isDirectory(), true);
   check("an unreadable hook is journalled as UNGEPRUEFT", (journalOf(box)[0] || NO_ENTRY).state, "UNGEPRUEFT");
+  check("an unchecked file writes no heartbeat", beatOf(box), null);
+  plantBeat(box, "planted heartbeat bytes\n");
+  run(box);
+  check("and leaves an earlier heartbeat byte for byte", beatOf(box), "planted heartbeat bytes\n");
 }
 
 // --- extraction covers every hook event, and only hooks/*.js ----------------
