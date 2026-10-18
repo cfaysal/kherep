@@ -25,7 +25,11 @@ increments the minor version; every other release increments the patch version.
   decision; a guard restored during a call runs from the next call. Journal
   entries name their `trigger`. `classify`, `restore` and `journal` moved to
   `hooks/lib/integrity-verdict.mts`; a broken copy of that file is reported but
-  not restored until the next installation. Limits: no timer, so an idle
+  not restored until the next installation. The re-check lib must load within
+  2 s and answer before the deadline, and the dispatcher exits once stdout and
+  stderr are flushed, so a lib or guard that leaves a handle open cannot hold
+  the hook past the cancel. After a restore the import closure is walked again
+  (at most three passes) before a heartbeat is written. Limits: no timer, so an idle
   session is not re-checked; whether the session shows a `PreToolUse`
   `additionalContext` is UNVERIFIED.
 - Fail-closed Claude guard dispatcher (issue #507, part 1 of 4). The five
