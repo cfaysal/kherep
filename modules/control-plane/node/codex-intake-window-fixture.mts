@@ -115,13 +115,23 @@ writeTask(paths, { taskId: id(99), runtime: "codex", name: "synthetic-task", ses
 const config: NodeConfig = { version: 1, controlUrl: "https://control.example.invalid", nodeId: NODE, name: "synthetic",
   publicKey: identity.publicKey, privateKeyFile: paths.privateKey, policyFile: paths.policy, enrolledAt: new Date().toISOString() };
 fs.writeFileSync(paths.config, JSON.stringify(config));
-const daemon = startDaemon(config, paths, () => {}, async () => [], async () => ({ ok: true }));
+const logs: string[] = [];
+const daemon = startDaemon(config, paths, line => logs.push(line), async () => [], async () => ({ ok: true }));
 try {
   socket.listeners.get("open")?.({});
   socket.message(frame("event", { name: "auth.ok" })); await flush();
   const tick = timers.get(EXCHANGE_INTERVAL_MS)![0];
   tick(); await flush(); assert.equal(entered, 1);
-  if (scenario === "excluded") {
+  if (scenario === "counter") {
+    // Issue #487 D1: frames the window handles count in the round's counters line.
+    for (let n = 0; n < 40; n++) socket.message(frame("mcp.intent.receipt", { requestId: id(1000 + n), ok: true, expiresAt: Date.now() + 10000, version: 1 }));
+    await flush();
+    assert.equal(Array.from({ length: 40 }, (_, n) => readMcpIntentReceipt(paths, id(1000 + n))).filter(r => r?.ok).length, 40);
+    release(); await flush();
+    // auth.ok on the chain plus the 40 receipts in the window, each counted once.
+    assert.deepEqual(logs.filter(line => line.startsWith("kherep-node: round sent")).map(line => /handled (\d+) /.exec(line)?.[1]), ["41"]);
+    console.log("INTAKE_WINDOW_PASS");
+  } else if (scenario === "excluded") {
     const control = { name: "task.control.execute", operationId: id(80), requestId: id(81), taskId: id(99), action: "status",
       ownerNodeId: NODE, targetNodeId: NODE, runtime: "codex", origin: { kind: "source-request", sourceRequestId: id(82) }, grantVersion: 1 };
     const inbox = { requestId: id(83), sessionId: "synthetic-empty", limit: 1, runtime: "codex" };

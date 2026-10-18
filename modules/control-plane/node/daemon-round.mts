@@ -71,9 +71,12 @@ export async function exchangeRound(ctx: RoundContext): Promise<void> {
   // Peer messages for ended Codex task sessions resume them (issue #63).
   // Keep runtime mutation serialized while the existing queue lane and
   // admitted Codex peer transport can progress (issue #369).
+  // Frames the window handles bypass the daemon's lanes; deferred ones are counted there.
+  let windowHandled = 0;
   const window = published ? codexIntakeWindow({ client, paths, policyFile: ctx.policyFile, policy: applied,
     connected: ctx.live, send: (frame) => ctx.live() && ctx.send(frame), exchange: () => exchange(),
-    queue: () => pollCodexQueue({ ...runner, policy: applied }, log), defer: ctx.defer, log }) : null;
+    queue: () => pollCodexQueue({ ...runner, policy: applied }, log), defer: ctx.defer,
+    handled: () => { windowHandled++; }, log }) : null;
   ctx.window(window);
   try { await pollCodexInbound({ ...runner, policy: applied }, log); }
   finally { await window?.drain(); ctx.window(null); }
@@ -81,7 +84,7 @@ export async function exchangeRound(ctx: RoundContext): Promise<void> {
   // Not awaited: queue runs have their own lane and never block this chain.
   // Issue #444: this round's policy, as the intake window passes it; the fork gate and queue authorization re-read the file.
   pollCodexQueue({ ...runner, policy: applied }, log);
-  const handled = ctx.handled();
+  const handled = ctx.handled() + windowHandled;
   if (counts.status + counts.outbox > ROUND_COUNTERS_MIN || handled > ROUND_COUNTERS_MIN) {
     log(`kherep-node: round sent ${counts.status} status/${counts.outbox} outbox frames, handled ${handled} inbound items`);
   }
