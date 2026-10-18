@@ -59,7 +59,7 @@ interface Run { stdout: string; stderr: string; output?: Printed }
 
 function dispatch({ hooks, dispatch: file }: Box, ...guards: string[]): Run {
   const run = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", file, ...guards.map((g) => path.join(hooks, g))],
-    { input: PAYLOAD, encoding: "utf8", windowsHide: true });
+    { input: PAYLOAD, encoding: "utf8", windowsHide: true, timeout: 10_000 });
   assert.equal(run.status, 0, `dispatcher exit ${run.status}; stderr ${run.stderr}`);
   const output = run.stdout ? (JSON.parse(run.stdout) as { hookSpecificOutput: Printed }).hookSpecificOutput : undefined;
   return { stdout: run.stdout, stderr: run.stderr, output };
@@ -144,6 +144,35 @@ test("an empty lib/guard-recheck.mts is one unavailable line; the verdict is unc
   assert.equal(run.output?.permissionDecisionReason, "json says no");
   assert.match(String(run.output?.additionalContext), /^hook integrity re-check unavailable \(lib\/guard-recheck\.mts cannot be loaded: /);
   assert.deepEqual(traced(b), []);
+});
+
+// A lib that keeps the real state and notice functions but a runRecheck of its own.
+function fakeRunner(b: Box, runRecheck: string): void {
+  const lib = path.join(b.hooks, "lib");
+  fs.renameSync(path.join(lib, "guard-recheck.mts"), path.join(lib, "real-recheck.mts"));
+  fs.writeFileSync(path.join(lib, "guard-recheck.mts"),
+    `export { heartbeatState, recheckNotice } from "./real-recheck.mts";\nexport ${runRecheck}\n`);
+}
+
+test("a lib whose import never settles: one unavailable line within 2 s, the deny stays", () => {
+  const b = box(31 * MIN);
+  fs.writeFileSync(path.join(b.hooks, "lib", "guard-recheck.mts"), "await new Promise(() => {});\n");
+  const begin = Date.now();
+  const run = dispatch(b, "json-deny.mts");
+  assert.ok(Date.now() - begin < 5000, `took ${Date.now() - begin} ms`);
+  assert.equal(run.output?.permissionDecision, "deny", run.stdout);
+  assert.equal(run.output?.permissionDecisionReason, "json says no");
+  assert.match(String(run.output?.additionalContext),
+    /^hook integrity re-check unavailable \(lib\/guard-recheck\.mts did not load within 2000 ms\)$/);
+});
+
+test("a lib that leaves a handle open: the dispatcher still exits right after its output", () => {
+  const b = box(31 * MIN);
+  fakeRunner(b, `async function runRecheck() { setInterval(() => {}, 1000); return "re-check fixture left an interval"; }`);
+  const begin = Date.now();
+  const run = dispatch(b, "allow.mts");
+  assert.ok(Date.now() - begin < 3000, `took ${Date.now() - begin} ms`);
+  assert.equal(run.output?.additionalContext, "re-check fixture left an interval");
 });
 
 test("every PreToolUse dispatcher entry's timeout equals HOOK_TIMEOUT_MS", () => {
