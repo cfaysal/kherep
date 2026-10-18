@@ -9,7 +9,9 @@ import { timedAsync } from "./sync-timing.mts";
 // (child-run.mts); its command and the meaning of its result are unchanged.
 
 // The children this daemon started and has not reaped: their pids cannot be
-// reused yet, so they can be signalled without the start-time check.
+// reused while the same child object is still held, so they can be signalled
+// without the start-time check; after an awaited read the holder is compared
+// again before a signal.
 export const held = new Map<number, ChildProcess>();
 export const holdsChild = (pid: number | undefined): boolean => pid !== undefined && held.has(pid);
 

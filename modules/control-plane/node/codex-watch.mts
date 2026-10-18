@@ -42,8 +42,9 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
   for (let record of listTasks(deps.paths).filter((t) => t.runtime === "codex" && isActive(t))) {
     const files = codexFiles(deps.paths, record.taskId);
     // A start time the spawn could not read is read again while this daemon
-    // holds the child; its pid cannot be reused before that. Issue #473: a read
-    // after that child ended or was replaced meanwhile is foreign, not recorded.
+    // holds the child; its pid cannot be reused before that, and the holder is
+    // compared again after every awaited read. Issue #473: a read after that
+    // child ended or was replaced meanwhile is foreign, not recorded.
     const child = record.pid === undefined ? undefined : held.get(record.pid);
     if (record.pidStart === undefined && child) {
       try {
