@@ -63,7 +63,10 @@ increments the minor version; every other release increments the patch version.
   no longer appear in the `synchronous <name> took` line, which now also names
   a slow `taskkill`. `taskkill`, the one-time owner identity read and the MCP
   credential write stay synchronous. A stop whose held child ends or is
-  replaced during its read signals nothing.
+  replaced during a read signals nothing: the root's SIGTERM and SIGKILL and
+  the force after a timeout each compare the child held when the stop began
+  after the awaited read, right before the send. Such a stop still completes
+  when a fresh read confirms that the captured processes ended.
 
 ## [0.4.0] - 2026-10-18
 

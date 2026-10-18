@@ -204,7 +204,8 @@ for (const [name, interleave] of interleavings) {
     const signals: Sent[] = [];
     await assert.rejects(terminate({ graceMs: 1, processStart: () => "replacement",
       processTree: async (root) => { await Promise.resolve(); interleave(root); return [{ pid: ROOT, start: "replacement" }]; },
-      signal: (pid, signal, scope) => { signals.push([pid, signal, scope]); } }, ROOT, undefined));
+      signal: (pid, signal, scope) => { signals.push([pid, signal, scope]); } }, ROOT, undefined),
+    /the held process ended during capture; nothing signalled/);
     assert.deepEqual(signals, []);
   });
 }

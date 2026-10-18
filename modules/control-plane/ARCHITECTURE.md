@@ -124,7 +124,11 @@ awaited child processes behind one runner (`node/child-run.mts`, issue #473), so
 their PowerShell or `ps` children no longer block the event loop: a delivery is
 stored while a watch pass, a stop or an exchange round waits for one. Their
 commands, their 10 second timeouts, the retry of a timed-out tree query, and the
-read of a start time directly before each signal are unchanged. A synchronous
+read of a start time directly before each signal are unchanged. An awaited read
+lets the exit of a held child be handled, and its handle closed, before the read
+resolves, so a stop binds to the `ChildProcess` held when it began: the root's
+SIGTERM and SIGKILL, and the force after a timeout, go out only while that same
+child is still held, compared after the read and right before the send. A synchronous
 child process still blocks every lane: `taskkill` (its async form would change
 the kill report contract of the fork helper), the owner identity read once per
 daemon, and the MCP credential write. The daemon logs a lane item that ran

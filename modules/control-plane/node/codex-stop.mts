@@ -1,3 +1,5 @@
+import type { ChildProcess } from "node:child_process";
+
 import { signalGroup, signalProcess, startTimeOf, type CodexDeps, type SignalScope } from "./codex-process.mts";
 import { posixRelations, timedOut, windowsRelations } from "./process-relations.mts";
 import { held } from "./process-start.mts";
@@ -80,10 +82,13 @@ function sender(deps: CodexDeps): Send {
 // decides whether the tree stopped. Without a root (issue #233) only the
 // verified identities are signalled, each by its pid. The Claude stop (issue
 // #437) calls it with root null, on a tree re-captured before each phase.
-// Issue #473: each signal is the statement right after the awaited read of its
-// pid's start; that continuation runs before any timer, I/O or socket callback.
+// Issue #473: each signal is the statement in the same continuation as the
+// awaited read of its pid's start, after the held re-check; that continuation
+// runs before any timer, I/O or socket callback. An awaited read lets the exit
+// of a held root be handled before it resolves, so the root is signalled only
+// while heldRoot, the child held when the stop began, is still held.
 export async function signalPhase(deps: CodexDeps, root: ProcessIdentity | null, identities: ProcessIdentity[],
-  signal: NodeJS.Signals): Promise<string[]> {
+  signal: NodeJS.Signals, heldRoot?: ChildProcess): Promise<string[]> {
   const send = sender(deps);
   const notes: string[] = [];
   const attempt = (pid: number, scope: SignalScope): void => {
@@ -96,8 +101,9 @@ export async function signalPhase(deps: CodexDeps, root: ProcessIdentity | null,
   };
   if (root) {
     const current = await startTimeOf(deps, root.pid);
-    if (current === root.start) attempt(root.pid, "group");
-    else notes.push("root process " + (current === null ? "ended" : "was reused") + " before " + signal);
+    if (current !== root.start) notes.push("root process " + (current === null ? "ended" : "was reused") + " before " + signal);
+    else if (heldRoot && held.get(root.pid) !== heldRoot) notes.push("the held root ended during its start read before " + signal);
+    else attempt(root.pid, "group");
   }
   for (const { pid, start } of identities) {
     if (pid !== root?.pid && await startTimeOf(deps, pid) === start) attempt(pid, "process");
@@ -107,11 +113,12 @@ export async function signalPhase(deps: CodexDeps, root: ProcessIdentity | null,
 
 // SIGTERM, up to graceMs for every identity to end, then SIGKILL and the same
 // wait; rejects when one still has its start identity after SIGKILL.
-export async function stopIdentities(deps: CodexDeps, root: ProcessIdentity | null, identities: ProcessIdentity[]): Promise<void> {
+export async function stopIdentities(deps: CodexDeps, root: ProcessIdentity | null, identities: ProcessIdentity[],
+  heldRoot?: ChildProcess): Promise<void> {
   const grace = deps.graceMs ?? 5_000;
-  await signalPhase(deps, root, identities, "SIGTERM");
+  await signalPhase(deps, root, identities, "SIGTERM", heldRoot);
   if (await waitStopped(deps, identities, grace)) return;
-  const notes = await signalPhase(deps, root, identities, "SIGKILL");
+  const notes = await signalPhase(deps, root, identities, "SIGKILL", heldRoot);
   if (!await waitStopped(deps, identities, grace)) throw new Error(["process tree did not stop after SIGKILL", ...notes].join("; "));
 }
 
@@ -123,18 +130,19 @@ export async function stopIdentities(deps: CodexDeps, root: ProcessIdentity | nu
 // the tree running. If the root is still the recorded process, its tree is
 // forced (SIGKILL; taskkill /T /F on Windows), and the stop still fails, since
 // no captured identity was confirmed ended; a later watch round settles the run.
-// Issue #473: without a start time only the child held at entry is forced; one
-// that ended, or a new child holding its pid, during the awaited reads is not.
+// Issue #473: a root held at entry is signalled or forced only while that same
+// child is still held after the awaited read; one that ended, or a new child
+// holding its pid, meanwhile is not. Without a start time only a held root is stopped.
 export async function terminate(deps: CodexDeps, pid: number, pidStart: string | undefined): Promise<void> {
   const child = held.get(pid);
   try {
-    await terminateTree(deps, pid, pidStart);
+    await terminateTree(deps, pid, pidStart, child);
   } catch (error) {
     if (!timedOut(error)) throw error;
     let outcome: string;
     try {
-      const recorded = pidStart === undefined ? child !== undefined && held.get(pid) === child : await startTimeOf(deps, pid) === pidStart;
-      if (recorded) {
+      const recorded = pidStart === undefined ? child !== undefined : await startTimeOf(deps, pid) === pidStart;
+      if (recorded && (child === undefined || held.get(pid) === child)) {
         sender(deps)(pid, "SIGKILL", "group");
         outcome = "its process tree was forced to stop, the stop is not confirmed";
       } else {
@@ -147,16 +155,17 @@ export async function terminate(deps: CodexDeps, pid: number, pidStart: string |
   }
 }
 
-async function terminateTree(deps: CodexDeps, pid: number, pidStart: string | undefined): Promise<void> {
-  const child = pidStart === undefined ? held.get(pid) : undefined;
+async function terminateTree(deps: CodexDeps, pid: number, pidStart: string | undefined,
+  child: ChildProcess | undefined): Promise<void> {
   if (pidStart === undefined && !child) throw new Error("process identity unknown");
   const identities = await processTree(deps, pid);
-  // Issue #473: a start read after the held child ended or was replaced is foreign.
-  if (child && held.get(pid) !== child) throw new Error("the held process ended during capture; nothing signalled");
+  // Issue #473: without a start time, a start read after the held child ended or
+  // was replaced is foreign; with one, the recorded start decides below.
+  if (pidStart === undefined && child && held.get(pid) !== child) throw new Error("the held process ended during capture; nothing signalled");
   const root = identities.find((entry) => entry.pid === pid);
   if (!root || (pidStart !== undefined && root.start !== pidStart)) {
     if (await allStopped(deps, identities)) return;
     throw new Error("root process identity changed during capture while captured processes still run");
   }
-  await stopIdentities(deps, root, identities);
+  await stopIdentities(deps, root, identities, child);
 }
