@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * live-hook-integrity.mts  -  SessionStart hook
+ * live-hook-integrity.mts  -  SessionStart hook, and the re-check of guard-dispatch
  *
  * Proves that every hook file wired in the LIVE settings can enforce anything at
  * all, and repairs it from the versioned source when it cannot. "Every file" is
@@ -37,26 +37,39 @@
  * .mts now goes through module.stripTypeScriptTypes and a V8 module parse, ~1 ms
  * per file; .js keeps vm.Script, confirmed by a child `node --check`.
  *
- * Fail-safe: any unexpected error is caught, reported, exit 0. Silent when
- * everything is OK. No network, no child process beyond that `node --check`.
+ * Heartbeat (issue #507, part 2, lib/integrity-heartbeat.mts): a run in which
+ * every inventoried file ended OK or restored with proof, with the live settings
+ * read completely, writes <home>/.cache/hook-integrity/heartbeat.json. Any other
+ * run leaves it as it was. run.lock keeps a second run from checking at the same
+ * time; the loser reports the holder and checks nothing. No wired file, no lock,
+ * no heartbeat. `--trigger <source>` (guard-dispatch.mts uses it when the
+ * heartbeat is stale or a guard failed) prints plain lines, one per finding,
+ * plus one line on the heartbeat, instead of the SessionStart JSON.
+ *
+ * Fail-safe: any unexpected error is caught, reported, exit 0. Silent at session
+ * start when everything is OK. No network, no child process beyond `node --check`.
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { ScopePayload } from "./lib/workspace-scope.mts";
-
+import type { HookFile } from "./lib/hook-inventory.mts";
 import type { Restored } from "./lib/integrity-verdict.mts";
+import type { ScopePayload } from "./lib/workspace-scope.mts";
 
 type Libs = typeof import("./lib/integrity-verdict.mts") & typeof import("./lib/workspace-scope.mts") &
   typeof import("./lib/orchestra-checkout.mts") & typeof import("./lib/restore-write.mts") &
-  typeof import("./lib/hook-inventory.mts") & typeof import("./lib/hook-syntax.mts");
+  typeof import("./lib/hook-inventory.mts") & typeof import("./lib/hook-syntax.mts") &
+  typeof import("./lib/integrity-heartbeat.mts");
 // The first lib that did not load or lacks a used function; `loaded` libs did.
 type LoadFailure = { rel: string; why: string; loaded: number };
 
 // Filled by loadLibs. restore() needs only the first RESTORE_LIBS of its steps.
 const lib = {} as Libs;
 const RESTORE_LIBS = 4;
+const TRIGGER_AT = process.argv.indexOf("--trigger");
+const PLAIN = TRIGGER_AT >= 0;
+const TRIGGER = PLAIN ? process.argv[TRIGGER_AT + 1] || "unnamed" : "session-start";
 
 // Dependency order, so a broken lib is named before the libs importing it.
 // String literals on purpose: lib/hook-inventory.mts and the install manifest
@@ -69,6 +82,7 @@ async function loadLibs(): Promise<LoadFailure | null> {
     ["lib/restore-write.mts", () => import("./lib/restore-write.mts"), ["writeExact"]],
     ["lib/hook-inventory.mts", () => import("./lib/hook-inventory.mts"), ["hookInventory", "wiredFiles"]],
     ["lib/hook-syntax.mts", () => import("./lib/hook-syntax.mts"), ["quietStripWarning", "syntaxVerdict"]],
+    ["lib/integrity-heartbeat.mts", () => import("./lib/integrity-heartbeat.mts"), ["acquireLock", "writeHeartbeat"]],
   ];
   for (const [index, [rel, load, used]] of steps.entries()) {
     let mod: Record<string, unknown>;
@@ -86,6 +100,7 @@ async function loadLibs(): Promise<LoadFailure | null> {
 
 function emit(lines: string[]): void {
   if (!lines.length) return;
+  if (PLAIN) return void process.stdout.write(lines.map((line) => `${line}\n`).join(""));
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
@@ -106,13 +121,15 @@ function ownImportFailed({ rel, why, loaded }: LoadFailure, payload: ScopePayloa
     : { proven: false, why: "the restore itself needs integrity-verdict, workspace-scope, orchestra-checkout and restore-write" };
   // Without integrity-verdict there is no journal function to call.
   if (loaded > 0) lib.journal(home, {
-    ts: new Date().toISOString(), file: rel, path: file, state: "DEFEKT", reason: why, kind: "self", importedBy: ["live-hook-integrity.mts"],
+    ts: new Date().toISOString(), trigger: TRIGGER, file: rel, path: file, state: "DEFEKT", reason: why, kind: "self",
+    importedBy: ["live-hook-integrity.mts"],
     sha256After: result.sha || null, restoreProven: result.proven, restoreDetail: result.proven ? undefined : result.why,
   });
   const outcome = result.proven
     ? `RESTORED from the repo, verified at the target (sha256 ${result.sha!.slice(0, 12)}); the next session checks again`
     : `NOT restored (${result.why})`;
-  emit([`own import ${rel} cannot be loaded (${why}); nothing was verified this session -> ${outcome}`]);
+  emit([`own import ${rel} cannot be loaded (${why}); nothing was verified this session -> ${outcome}`,
+    ...(PLAIN ? [`heartbeat not written (own import ${rel} cannot be loaded)`] : [])]);
 }
 
 async function main(): Promise<void> {
@@ -127,13 +144,40 @@ async function main(): Promise<void> {
   if (failed) return ownImportFailed(failed, payload, rawHome);
   lib.quietStripWarning();
   const home = lib.normalizePathLike(rawHome);
-  const repoRoot = lib.checkoutFor(payload, home);
-  const hooksDir = `${home}/hooks`;
   const { files, notes, readAny } = lib.wiredFiles(home);
   const lines = notes.slice();
   if (!readAny && !files.length) {
     lines.push(`no live settings could be read under ${home}, so WHICH hooks are wired is UNKNOWN here`);
   }
+  if (!files.length) {
+    if (PLAIN) lines.push(`heartbeat not written (no hook file is wired under ${home})`);
+    return emit(lines);
+  }
+  let lock: ReturnType<Libs["acquireLock"]> | undefined;
+  try {
+    lock = lib.acquireLock(home);
+  } catch (error) {
+    lines.push(`run lock unavailable (${(error as Error)?.message || error}); checked without it`);
+  }
+  if (lock && "holder" in lock) {
+    return emit([`re-check already running (pid ${lock.holder.pid ?? "unknown"}, since ${lock.holder.ts ?? "unknown"})`]);
+  }
+  try {
+    const unproven = notes.length ? "the live settings were not read completely" : lock ? "" : "no run lock";
+    await checkAll(files, lines, unproven, payload, home);
+  } finally {
+    if (lock && "release" in lock) lock.release();
+  }
+}
+
+// Every inventoried file, then the heartbeat when nothing stood in the way.
+async function checkAll(
+  files: HookFile[], lines: string[], unprovenAtStart: string, payload: ScopePayload | null, home: string,
+): Promise<void> {
+  let unproven = unprovenAtStart;
+  let restored = 0;
+  const repoRoot = lib.checkoutFor(payload, home);
+  const hooksDir = `${home}/hooks`;
   // The walk reads the live file, and the versioned one when the live file is
   // gone or empty, so one broken link does not hide the files behind it.
   const readSource = (file: string, rel: string): string | null => {
@@ -148,12 +192,13 @@ async function main(): Promise<void> {
     return null;
   };
 
-  for (const { file, rel, wired, importedBy } of lib.hookInventory(files, hooksDir, readSource)) {
+  const inventory = lib.hookInventory(files, hooksDir, readSource);
+  for (const { file, rel, wired, importedBy } of inventory) {
     const { state, reason, before = {} } = await lib.classify(lib, file, wired ? "wired" : "imported");
     if (state === "OK") continue;
     const label = importedBy.length ? `${rel} (imported by ${importedBy.join(", ")})` : rel;
     const entry: Record<string, unknown> = {
-      ts: new Date().toISOString(), file: rel, path: file, state, reason,
+      ts: new Date().toISOString(), trigger: TRIGGER, file: rel, path: file, state, reason,
       kind: wired ? "wired" : "import", importedBy,
       sizeBefore: before.size === undefined ? null : before.size,
       mtimeBefore: before.mtime || null,
@@ -163,6 +208,7 @@ async function main(): Promise<void> {
     if (state === "UNGEPRUEFT") {
       lines.push(`${label}: UNCHECKED - ${reason}. Neither proven healthy nor proven broken.`);
       lib.journal(home, entry);
+      unproven ||= `${rel} is unchecked`;
       continue;
     }
     const result = lib.restore(lib, file, rel, repoRoot, hooksDir);
@@ -170,13 +216,19 @@ async function main(): Promise<void> {
     entry.restoreProven = result.proven;
     if (!result.proven) entry.restoreDetail = result.why;
     lib.journal(home, entry);
+    if (result.proven) restored++;
+    else unproven ||= `${rel} is not restored`;
     lines.push(
       result.proven
         ? `${label}: ${reason} -> RESTORED from the repo, verified at the target (sha256 ${result.sha!.slice(0, 12)})`
         : `${label}: ${reason} -> NOT restored (${result.why}). ENFORCEMENT IS OFF for this hook.`
     );
   }
-
+  unproven ||= lib.writeHeartbeat(home, { trigger: TRIGGER, runtime: "claude", files: inventory.length });
+  if (PLAIN) {
+    lines.push(unproven ? `heartbeat not written (${unproven})`
+      : `all ${inventory.length} files OK (${restored} restored), heartbeat refreshed`);
+  }
   emit(lines);
 }
 
