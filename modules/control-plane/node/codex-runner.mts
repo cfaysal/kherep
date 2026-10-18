@@ -1,6 +1,6 @@
 import type { SessionContinueArgs, SessionStopArgs } from "../protocol-tasks.mts";
 import {
-  codexEnv, codexFiles, detachCodex, resumeArgs, spawnCodex, startArgs, startTimeOf, stillRuns, type CodexFiles,
+  codexEnv, codexFiles, detachCodex, resumeArgs, spawnCodex, startArgs, stillRuns, type CodexFiles,
 } from "./codex-process.mts";
 import { readEvents, readExit } from "./codex-output.mts";
 import { findCodex } from "./codex-binary.mts";
@@ -55,14 +55,8 @@ async function spawnAdmitted(
   ensureDir(deps.paths.outbox);
   const intercom = record.local === "intercom";
   const detached = detachCodex(codex.platform ?? process.platform, intercom);
-  const pid = await spawnCodex(codex, file, [...(intercom ? await mcpOff(deps, record, admission) : []), ...args(files, deps.paths.outbox)], record.cwd, files,
+  const { pid, pidStart } = await spawnCodex(codex, file, [...(intercom ? await mcpOff(deps, record, admission) : []), ...args(files, deps.paths.outbox)], record.cwd, files,
     codexEnv(deps.paths, record.sessionId ?? record.name), prompt, detached);
-  let pidStart: string | undefined;
-  try {
-    pidStart = startTimeOf(codex, pid) ?? undefined;
-  } catch {
-    // the watch reads it again while this daemon holds the child
-  }
   const now = deps.now?.() ?? Date.now();
   return writeTask(deps.paths, { ...record, pid, pidStart, descendants: undefined, awaitingProgressSince: new Date(now).toISOString() }, now);
 }
@@ -124,7 +118,7 @@ export async function continueCodex(
   if (!deps.policy.sessions?.enabled) throw new Error("sessions are not enabled on this node");
   if (!deps.policy.sessions.runtimes.includes("codex")) throw new Error("runtime codex is not supported on this node yet");
   if (!record.sessionId) throw new Error("the task's session id is not known yet");
-  if (record.state === "started" || record.state === "running" || record.running || stillRuns(deps.codex ?? {}, record.pid, record.pidStart)) {
+  if (record.state === "started" || record.state === "running" || record.running || await stillRuns(deps.codex ?? {}, record.pid, record.pidStart)) {
     throw new Error("the task's session is still running");
   }
   const now = deps.now?.() ?? Date.now();

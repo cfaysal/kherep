@@ -86,7 +86,7 @@ async function measured(execute: TaskControlExecuteBody, record: TaskRecord, con
   if (!runVersion) return failure(execute, record, observedAt, "identity_unknown");
   let running: boolean;
   try {
-    running = holdsChild(record.pid) || startTimeOf(context.runner.codex ?? {}, record.pid!) === record.pidStart;
+    running = holdsChild(record.pid) || await startTimeOf(context.runner.codex ?? {}, record.pid!) === record.pidStart;
   } catch {
     return failure(execute, record, observedAt, "identity_unknown");
   }

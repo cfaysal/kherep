@@ -24,6 +24,27 @@ increments the minor version; every other release increments the patch version.
   thread are refused with nothing written; a fresh record of the own or of
   another thread is accepted. Sender checks, the refusal code and the exec
   rules are unchanged; this does not restore or explain any Windows send.
+- Windows identity reads no longer block the daemon's event loop (issue #473).
+  The process start-time read (`process-start`) and the process-tree query
+  (`process-relations`) run as awaited child processes behind one runner
+  (`node/child-run.mts`), so message intake keeps storing deliveries while a
+  watch pass, a stop or an exchange round waits for PowerShell or `ps`. The
+  commands, their 10 second timeouts and the meaning of their results are
+  unchanged: no output is no such process, a non-zero exit or a timeout is a
+  failed read, a timed-out tree query runs once more, and each signal of a stop
+  still follows the read of its pid's start directly; a started run gets the
+  end of its prompt only after its start time was read, so it cannot end
+  before the read, as while the read blocked the loop. The exchange round reads
+  an ended Codex task's previous run only after its `maxConcurrent` and
+  working-directory checks, before the readiness verdict and the turn budget,
+  so no refusal and no turn changes; a task at the limit or with a refused
+  working directory costs no PowerShell start per round, and while its previous
+  run still ends it shows that guard's waiting code (and the `cwd-refused` note)
+  instead of `target-busy`. A slow read is logged
+  as `child process <name> took <s> s`; `process-start` and `process-relations`
+  no longer appear in the `synchronous <name> took` line, which now also names
+  a slow `taskkill`. `taskkill`, the one-time owner identity read and the MCP
+  credential write stay synchronous.
 
 ## [0.4.0] - 2026-10-18
 

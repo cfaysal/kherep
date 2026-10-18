@@ -21,18 +21,18 @@ const endedPid = (): number => {
   return Number(run.stdout);
 };
 
-test("the start time of an ended process is null and of a running one a stable value", () => {
-  assert.equal(processStart(endedPid()), null, "gone");
-  const own = processStart(process.pid);
+test("the start time of an ended process is null and of a running one a stable value", async () => {
+  assert.equal(await processStart(endedPid()), null, "gone");
+  const own = await processStart(process.pid);
   assert.ok(own, "running");
-  assert.equal(processStart(process.pid), own, "stable while it runs");
+  assert.equal(await processStart(process.pid), own, "stable while it runs");
 });
 
 test("Windows: a process whose start time cannot be read is a failed read, not an ended process", {
   skip: process.platform === "win32" ? false : "Windows only",
-}, () => {
+}, async () => {
   // The System Idle Process exists, but its start time reads as null.
-  assert.throws(() => processStart(0));
+  await assert.rejects(processStart(0));
 });
 
 const codexTask = (node: ReturnType<typeof taskNode>, n: number, extra: Record<string, unknown> = {}) => writeTask(node.paths, {

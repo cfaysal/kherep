@@ -22,3 +22,15 @@ export function timedSync<T>(name: string, run: () => T, now: () => number = Dat
     if (took > SLOW_SYNC_MS) sink?.(`kherep-node: synchronous ${name} took ${(took / 1000).toFixed(1)} s`);
   }
 }
+
+// Issue #473: the same log for an awaited child process, which no longer
+// blocks the event loop but can still be slow.
+export async function timedAsync<T>(name: string, run: () => Promise<T>, now: () => number = Date.now): Promise<T> {
+  const started = now();
+  try {
+    return await run();
+  } finally {
+    const took = now() - started;
+    if (took > SLOW_SYNC_MS) sink?.(`kherep-node: child process ${name} took ${(took / 1000).toFixed(1)} s`);
+  }
+}
