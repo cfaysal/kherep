@@ -162,9 +162,10 @@ export function launchCommand(command: CodexCommand, platform: NodeJS.Platform, 
 // writes the prompt to its stdin and closes it, and sends stdout (the events)
 // and stderr into the task's files; exit.json records how it ended while this
 // daemon runs. Resolves with the pid once it runs, and its start time, read
-// before codex gets the end of its prompt, so a run cannot end before the read
-// (as while the read blocked the event loop, issue #473); undefined when the
-// read failed: the watch reads it again while this daemon holds the child.
+// before codex gets the end of its prompt (issue #473). A codex failing at
+// startup can still exit during the read, so the start counts only while this
+// child is still held; undefined when it ended or the read failed: the watch
+// reads it again while this daemon holds the child.
 export async function spawnCodex(deps: CodexDeps, file: string, args: string[], cwd: string, files: CodexFiles,
   env: NodeJS.ProcessEnv, prompt: string, detached = true): Promise<{ pid: number; pidStart: string | undefined }> {
   const platform = deps.platform ?? process.platform;
@@ -177,7 +178,7 @@ export async function spawnCodex(deps: CodexDeps, file: string, args: string[], 
     const child = (deps.spawn ?? spawn)(command.file, command.args, { cwd, env, detached, stdio: ["pipe", out, err], windowsHide: true });
     child.stdin?.on("error", () => {}); // a codex that exits before reading
     child.on("exit", (code, signal) => {
-      held.delete(child.pid!);
+      if (held.get(child.pid!) === child) held.delete(child.pid!);
       try {
         writeJsonAtomic(files.exit, { code, signal });
       } catch {
@@ -195,6 +196,7 @@ export async function spawnCodex(deps: CodexDeps, file: string, args: string[], 
     } catch {
       // read again by the watch
     }
+    if (held.get(pid) !== child) pidStart = undefined; // ended or replaced during the read
     child.stdin?.end(prompt);
     child.unref();
     return { pid, pidStart };

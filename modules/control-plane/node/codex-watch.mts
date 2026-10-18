@@ -4,6 +4,7 @@ import { codexFiles, holdsChild, startTimeOf, stillRuns, type CodexFiles } from 
 import { reapDescendants, refreshDescendants } from "./codex-reap.mts";
 import { IDENTITY_UNKNOWN, MAX_RUNTIME_REASON, sessionOf, settleOffered, stopCodex } from "./codex-runner.mts";
 import { resolveDelivery } from "./delivery-identity.mts";
+import { held } from "./process-start.mts";
 import { failStalledCodex, NO_PROGRESS_REASON, progressOverdue } from "./run-progress.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { trim } from "./task-admission.mts";
@@ -41,11 +42,13 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
   for (let record of listTasks(deps.paths).filter((t) => t.runtime === "codex" && isActive(t))) {
     const files = codexFiles(deps.paths, record.taskId);
     // A start time the spawn could not read is read again while this daemon
-    // holds the child; its pid cannot be reused before that.
-    if (record.pidStart === undefined && holdsChild(record.pid)) {
+    // holds the child; its pid cannot be reused before that. Issue #473: a read
+    // after that child ended or was replaced meanwhile is foreign, not recorded.
+    const child = record.pid === undefined ? undefined : held.get(record.pid);
+    if (record.pidStart === undefined && child) {
       try {
         const pidStart = await startTimeOf(codex, record.pid!);
-        if (pidStart) record = writeTask(deps.paths, { ...record, pidStart }, now);
+        if (pidStart && held.get(record.pid!) === child) record = writeTask(deps.paths, { ...record, pidStart }, now);
       } catch {
         // the next round tries again; the held child can be stopped meanwhile
       }
