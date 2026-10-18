@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CODEX_NOTHING_TO_FILE, OBS_BRIEF_FORMAT, observationBriefIssue } from "./obs-brief-policy.mts";
+import {
+  CODEX_NOTHING_TO_FILE, OBS_BRIEF_FORMAT, OBS_BRIEF_REVISION, observationBriefIssue, observationBriefNotice,
+} from "./obs-brief-policy.mts";
 
 const MEASURED = "measured: `npm test` -> 42 pass, 0 fail";
 const RELAYED = "relayed: the operator, in chat";
@@ -74,4 +76,120 @@ test("the caller chooses the advice for a turn with nothing to file", () => {
   const reason = observationBriefIssue("nothing", CODEX_NOTHING_TO_FILE) ?? "";
   assert.ok(reason.endsWith(CODEX_NOTHING_TO_FILE), reason);
   assert.doesNotMatch(reason, /\[obs: none/);
+});
+
+// Issue #505. A code-bound measured finding names the commit it was measured
+// against; a missing or partial binding is a notice and `assumed`, never a deny.
+const SHA = "2733b35e2c102ac54295568509c68b18b6d92cab";
+const OTHER = "87da9d9aa1b2c3d4e5f60718293a4b5c6d7e8f90";
+const NO_REPO = /finding 1 \(measured:\) is code-bound but names no repository/;
+const NO_SHA = /finding 1 \(measured:\) names a repository without a full 40-hex commit SHA/;
+const DIRTY = /finding 1 \(measured:\) was measured on a dirty tree/;
+const MALFORMED = /finding 1 \(measured:\) has a malformed repository or revision/;
+const CONDITIONAL = (n: number) => `Observation brief revision: finding ${n} (measured:) names no repository and commit SHA. `
+  + "If it is about repository code, tests or a build, the observation agent files it as assumed; add `code <name>@<sha>` after measured:. "
+  + "A finding that is not about repository code is unchanged.";
+
+function notice(brief: string): string | null {
+  assert.equal(observationBriefIssue(brief), null, `well-formed: ${brief}`);
+  return observationBriefNotice(brief);
+}
+const bound = (binding: string, command = "npm test") => `measured: code ${binding} \`${command}\` -> 42 pass, 0 fail`;
+
+test("the revision sentence is pinned", () => {
+  assert.equal(OBS_BRIEF_REVISION,
+    "A finding about repository code starts with code after measured: and names each repository as <name>@<full commit sha> before the command.");
+});
+
+test("T1 a complete binding is silent", () => {
+  assert.equal(notice(bound(`kherep@${SHA}`)), null);
+  assert.equal(notice(bound(`cfaysal/kherep@${SHA}`)), null);
+  assert.equal(notice(`- ${bound(`kherep@${SHA}`)}\n- ${RELAYED}`), null);
+});
+
+test("T2 a bare code finding names no repository and is not the conditional notice", () => {
+  const text = notice("measured: code `npm test` -> 42 pass") ?? "";
+  assert.match(text, NO_REPO);
+  assert.match(text, /files each as assumed: no exact binding to the measured code/);
+  assert.notEqual(text, CONDITIONAL(1));
+});
+
+test("T3 a name, a symbolic or short revision, uppercase hex and a nameless SHA are no full binding", () => {
+  for (const binding of ["kherep", "kherep@HEAD", "kherep@2733b35", "kherep@main", `kherep@${SHA.toUpperCase()}`, `kherep@${SHA}0`]) {
+    assert.match(notice(bound(binding)) ?? "", NO_SHA, binding);
+  }
+  for (const binding of [`@${SHA}`, `https://example.com/kherep@${SHA}`, `D:/work/kherep@${SHA}`, `kherep//x@${SHA}`, `.kherep@${SHA}`]) {
+    assert.match(notice(bound(binding)) ?? "", MALFORMED, binding);
+  }
+});
+
+test("T4 a dirty tree is no exact binding", () => {
+  assert.match(notice(bound(`kherep@${SHA}-dirty`)) ?? "", DIRTY);
+});
+
+test("T5 the validator never inspects the command", () => {
+  assert.equal(notice(bound(`kherep@${SHA}`, `git show ${SHA}:README.md`)), null);
+  assert.match(notice(bound(`kherep@${SHA}-dirty`, `git show ${SHA}:README.md`)) ?? "", DIRTY);
+});
+
+test("T6 every repository needs its own complete token, and the finding is named once", () => {
+  assert.equal(notice(bound(`kherep@${SHA} cfaysal/other@${OTHER}`)), null);
+  const text = notice(bound(`kherep@${SHA} other@HEAD`)) ?? "";
+  assert.match(text, NO_SHA);
+  assert.equal(text.match(/finding 1 /g)?.length, 1, text);
+});
+
+test("T7 a finding never borrows a binding from the preamble or another finding", () => {
+  assert.match(notice(`Revision: kherep@${SHA}\nmeasured: code \`npm test\` -> ok`) ?? "", NO_REPO);
+  const text = notice(`${bound(`kherep@${SHA}`)}\nmeasured: code \`npm test\` -> ok`) ?? "";
+  assert.match(text, /finding 2 \(measured:\) is code-bound but names no repository/);
+  assert.doesNotMatch(text, /finding 1/);
+});
+
+test("T8 unmarked findings: a binding is silent, none gets the fixed conditional notice", () => {
+  assert.equal(notice(`measured: kherep@${SHA} \`cmd\` -> ok`), null);
+  assert.equal(notice(MEASURED), CONDITIONAL(1));
+  assert.equal(notice("measured: `cmd` -> code kherep"), CONDITIONAL(1));
+  assert.equal(notice(`measured: \`cmd\` -> code kherep@${SHA}`), CONDITIONAL(1));
+  assert.equal(notice(`${RELAYED}\n${MEASURED}`), CONDITIONAL(2));
+  assert.equal(notice("relayed: code kherep"), null);
+  assert.equal(notice(`relayed: code kherep@${SHA}-dirty \`x\` -> y`), null);
+  assert.equal(notice(RELAYED), null);
+});
+
+test("T8b an unmarked finding is silent only when every binding it names is complete", () => {
+  const partial = (n: number) => CONDITIONAL(n).replace("names no repository and commit SHA", "has no complete binding of all named repositories");
+  assert.equal(notice(`measured: alpha@${SHA} beta@HEAD \`cmd\` -> ok`), partial(1), "valid + missing SHA");
+  assert.equal(notice(`measured: alpha@${SHA} beta@${OTHER}-dirty \`cmd\` -> ok`), partial(1), "valid + dirty");
+  assert.equal(notice(`measured: alpha@${SHA} @${OTHER} \`cmd\` -> ok`), partial(1), "valid + malformed");
+  assert.equal(notice(`measured: alpha@${SHA} beta@${OTHER} \`cmd\` -> ok`), null);
+  assert.equal(notice(`measured: alpha@${SHA} \`a\` -> x\nmeasured: beta@HEAD \`b\` -> y`), partial(2), "no borrowing");
+  assert.equal(notice(`measured: alpha@${SHA} \`a\` -> x\nmeasured: \`b\` -> y`), CONDITIONAL(2), "no borrowing");
+  assert.doesNotMatch(partial(1), /alpha|beta|[0-9a-f]{7,}/);
+  assert.match(notice(bound(`alpha@${SHA} beta@HEAD`)) ?? "", NO_SHA, "a marked finding keeps the unconditional notice");
+});
+
+test("T11 a missing repository and a missing SHA are two clauses of one notice", () => {
+  const text = notice("measured: code `a` -> x\nmeasured: code kherep `b` -> y") ?? "";
+  assert.match(text, /finding 1 \(measured:\) is code-bound but names no repository; finding 2 \(measured:\) names a repository without a full 40-hex commit SHA\./);
+  assert.equal(text.match(/Observation brief revision:/g)?.length, 1);
+});
+
+test("T9 a denied brief gets no notice, and the deny says nothing about revisions", () => {
+  for (const brief of ["", "prose only", "measured: code npm test -> 42", "measured: code kherep `x` printed ok", `${bound("kherep")}\nrelayed:  `]) {
+    assert.equal(observationBriefNotice(brief), null, brief);
+    assert.doesNotMatch(observationBriefIssue(brief) ?? "", /revision|code-bound|-dirty/i, brief);
+  }
+});
+
+test("T10 a notice quotes no name, no SHA and no brief text", () => {
+  for (const brief of [
+    bound("examplecorp"), bound(`examplecorp@${SHA}-dirty`), bound(`examplecorp@${SHA.slice(0, 12)}`),
+    bound(`https://token@examplecorp.example.com/x@${SHA}`), "measured: `examplecorp deploy` -> examplecorp ok",
+  ]) {
+    const text = notice(brief) ?? "";
+    assert.ok(text, brief);
+    assert.doesNotMatch(text, /examplecorp|example\.com|token/i, brief);
+    assert.doesNotMatch(text, /[0-9a-f]{7,}/i, brief);
+  }
 });

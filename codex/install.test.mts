@@ -1031,7 +1031,7 @@ test("default install projects observation delivery without optional Jira toolin
   assert.ok(guard({}).includes(`pinned to model ${obsModel};`));
   // Issue #331. The installed guard loads the brief check from its lib sibling.
   assert.match(guard({ model: obsModel }), /Observation brief format: the brief marks no finding/);
-  assert.equal(guard({ model: obsModel, message: "- measured: `node t.mts` -> 1 pass\n- relayed: the operator" }), "");
+  assert.equal(guard({ model: obsModel, message: "- measured: code kherep@2733b35e2c102ac54295568509c68b18b6d92cab `node t.mts` -> 1 pass\n- relayed: the operator" }), "");
 
   assert.deepEqual(fs.readFileSync(jira), jiraBefore);
   assert.equal(fs.readFileSync(retired, "utf8"), "operator-owned-retired\n");

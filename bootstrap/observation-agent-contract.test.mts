@@ -10,7 +10,7 @@ import { test } from "node:test";
 import { renderAgent } from "../codex/lib/component-render.mts";
 import type { Capabilities } from "../codex/lib/contracts.mts";
 import { agentSourcePath } from "../codex/lib/parity-projection.mts";
-import { OBS_BRIEF_FORMAT } from "../claude/hooks/lib/obs-brief-policy.mts";
+import { OBS_BRIEF_FORMAT, OBS_BRIEF_REVISION } from "../claude/hooks/lib/obs-brief-policy.mts";
 
 const REPO = path.resolve(import.meta.dirname, "..");
 const CLAUDE_OBS = fs.readFileSync(path.join(REPO, "claude", "agents", "claude-obs.md"), "utf8");
@@ -139,7 +139,7 @@ test("both routing files define the brief markers and the actual reporter", () =
 test("every observation hook reason states the brief format the dispatch guards check", () => {
   for (const hook of ["claude/hooks/observation-stop.mts", "codex/hooks/observation-stop.mts", "codex/hooks/observation-turn-completion.mts"]) {
     const source = fs.readFileSync(path.join(REPO, hook), "utf8");
-    assert.ok(source.includes(OBS_BRIEF_FORMAT), hook);
+    assert.ok(source.includes(OBS_BRIEF_FORMAT) && source.includes(OBS_BRIEF_REVISION), hook);
   }
 });
 
@@ -211,6 +211,25 @@ test("a text that asks for --body-file creates it with mktemp and bans backslash
     assert.match(text, /rm -f "\$f"/, name);
     assert.match(text, /never[^.]{0,80}Windows backslash path[^.]{0,40}Bash/i, name);
     assert.doesNotMatch(text, /[A-Za-z]:\\/, `${name}: carries a Windows backslash path itself`);
+  }
+});
+
+// Issue #505. A code-bound finding is `confirmed` only with an exact binding.
+test("both texts bind a code-bound finding to <name>@<sha> and file the rest as assumed", () => {
+  for (const [name, text] of [["claude-obs", CLAUDE_OBS], ["codex-obs", codexProjection()]]) {
+    for (const pattern of [/`code`[^.]{0,120}after `measured:`/, /<name>@<sha>/, /no exact binding/, /-dirty[\s\S]{0,200}`assumed`/,
+      /Revision: <name>@<sha>/, /repository code, tests or a build[\s\S]{0,200}code-bound/i, /never guess[^.]{0,60}(repository|SHA)/i,
+      /never copied[\s\S]{0,120}(page|title|notice)/i]) assert.match(text, pattern, `${name}: ${pattern}`);
+  }
+  assert.match(codexProjection(), /tool result about repository code, tests or a build is code-bound[\s\S]{0,300}supplied turn/);
+});
+
+test("both routing files state the code marker and that the guard reports what it cannot deny", () => {
+  for (const file of ROUTING_FILES) {
+    const text = fs.readFileSync(file, "utf8");
+    const section = text.slice(text.indexOf("## Session observations"), text.indexOf("## Linking"));
+    for (const pattern of [/`` measured: code <name>@<sha> `<command>` -> <deciding output excerpt> ``/, /`-dirty`/, /no exact binding/,
+      /reports, and never denies/, /conditional notice/, /declarations only[^.]{0,120}no completeness/]) assert.match(section, pattern, `${file}: ${pattern}`);
   }
 });
 

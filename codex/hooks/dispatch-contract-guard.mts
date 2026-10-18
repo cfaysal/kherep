@@ -47,6 +47,18 @@ function deny(reason: string): void {
   }));
 }
 
+// Issue #505. A brief notice is context for the Maestro and a line for the
+// operator, never a permission decision.
+function report(notice: string): void {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      additionalContext: notice,
+    },
+    systemMessage: notice,
+  }));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -156,6 +168,18 @@ export function validate(payload: unknown, { pins, observationAgent, supportedMo
   return null;
 }
 
+// Issue #505. The revision notice for an observation dispatch that validate
+// allows; null otherwise. A report, not a gate: an installed lib that predates
+// observationBriefNotice yields no notice and no deny.
+export function advise(payload: unknown, policy: DispatchPolicy): string | null {
+  if (validate(payload, policy) !== null || !isRecord(payload) || !DISPATCH_TOOLS.has(payload.tool_name as string)) return null;
+  const input = payload.tool_input;
+  if (!isRecord(input) || typeof input.message !== "string") return null;
+  if ((typeof input.agent_type === "string" ? input.agent_type.trim() : "") !== policy.observationAgent) return null;
+  const { observationBriefNotice } = obsBriefPolicy();
+  return typeof observationBriefNotice === "function" ? observationBriefNotice(input.message) : null;
+}
+
 export function decide(raw: string, readPolicy: () => DispatchPolicy = loadPolicy): string | null {
   let payload: unknown;
   try { payload = JSON.parse(raw); } catch {
@@ -169,11 +193,15 @@ export function decide(raw: string, readPolicy: () => DispatchPolicy = loadPolic
 }
 
 function main(): void {
+  let raw = "";
   let reason: string | null;
-  try { reason = decide(fs.readFileSync(0, "utf8")); } catch {
+  try { raw = fs.readFileSync(0, "utf8"); reason = decide(raw); } catch {
     reason = "Kherep dispatch guard failed unexpectedly; refusing the agent dispatch.";
   }
-  if (reason) deny(reason);
+  if (reason) return deny(reason);
+  let notice: string | null = null;
+  try { notice = advise(JSON.parse(raw), loadPolicy()); } catch { /* a report is not a gate */ }
+  if (notice) report(notice);
 }
 
 // Node loads the main module from its real path, so a script started through a

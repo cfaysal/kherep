@@ -69,3 +69,73 @@ export function observationBriefIssue(brief: string, nothingToFile: string = CLA
   const problem = firstProblem(brief);
   return problem ? `Observation brief format: ${problem}. ${OBS_BRIEF_FORMAT} ${nothingToFile}` : null;
 }
+
+// Issue #505. A finding about repository code is `confirmed` only when it
+// names each repository as <name>@<full commit sha>, measured on a clean tree.
+// The token `code` as the first word after `measured:` declares it; the
+// binding tokens follow, before the command's code span. This is a report,
+// never a deny: the notice names positions only and quotes nothing.
+export const OBS_BRIEF_REVISION =
+  "A finding about repository code starts with code after measured: and names each repository as <name>@<full commit sha> before the command.";
+
+const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/;
+const SHA = /^[0-9a-f]{40}$/;
+const NO_REPOSITORY = "is code-bound but names no repository";
+const NO_FULL_SHA = "names a repository without a full 40-hex commit SHA";
+const DIRTY_TREE = "was measured on a dirty tree";
+const MALFORMED = "has a malformed repository or revision";
+const BOUND_ADVICE = "The observation agent files each as assumed: no exact binding to the measured code. "
+  + "Give <name>@<sha> after `code`, the SHA from `git rev-parse HEAD` of the checkout the command ran in, "
+  + "add -dirty only when that tree had uncommitted changes, or drop `code` when the finding is not about repository code.";
+const UNMARKED = "names no repository and commit SHA";
+const UNMARKED_PARTIAL = "has no complete binding of all named repositories";
+const UNMARKED_ADVICE = "If it is about repository code, tests or a build, the observation agent files it as assumed; "
+  + "add `code <name>@<sha>` after measured:. A finding that is not about repository code is unchanged.";
+
+// null for a complete <name>@<sha>, else the clause for that token.
+function tokenProblem(token: string): string | null {
+  const at = token.indexOf("@");
+  const name = at < 0 ? token : token.slice(0, at);
+  if (!NAME.test(name)) return MALFORMED;
+  if (at < 0) return NO_FULL_SHA;
+  const revision = token.slice(at + 1);
+  const dirty = revision.endsWith("-dirty");
+  if (!SHA.test(dirty ? revision.slice(0, -"-dirty".length) : revision)) return NO_FULL_SHA;
+  return dirty ? DIRTY_TREE : null;
+}
+
+// The words between `measured:` and the command's code span: the only place a
+// finding declares `code` and its binding (not the excerpt, not the preamble).
+// A well-formed measured: finding always has the span (measuredIssue).
+function prefixWords(text: string): string[] {
+  return text.slice(0, CODE_SPAN.exec(text)?.index ?? 0).split(/\s+/).filter(Boolean);
+}
+
+// null when every measured: finding is bound or plainly not declared, else one
+// notice. Computed only for a brief observationBriefIssue accepts.
+export function observationBriefNotice(brief: string): string | null {
+  if (firstProblem(brief)) return null;
+  const bound: string[] = [];
+  const unmarked: string[] = [];
+  for (const [index, finding] of findings(brief).entries()) {
+    if (finding.kind !== "measured") continue;
+    const position = `finding ${index + 1} (measured:)`;
+    const words = prefixWords(finding.text);
+    if (words[0] !== "code") {
+      // Without the declaration, a word with @ is a named binding: the finding
+      // is silent only when it names one and every one it names is complete.
+      const named = words.filter((word) => word.includes("@"));
+      if (!named.length) unmarked.push(`${position} ${UNMARKED}`);
+      else if (named.some((word) => tokenProblem(word) !== null)) unmarked.push(`${position} ${UNMARKED_PARTIAL}`);
+      continue;
+    }
+    const tokens = words.slice(1);
+    const problem = tokens.length ? tokens.map(tokenProblem).find((clause) => clause !== null) : NO_REPOSITORY;
+    if (problem) bound.push(`${position} ${problem}`);
+  }
+  const parts = [
+    bound.length ? `${bound.join("; ")}. ${BOUND_ADVICE}` : "",
+    unmarked.length ? `${unmarked.join("; ")}. ${UNMARKED_ADVICE}` : "",
+  ].filter(Boolean);
+  return parts.length ? `Observation brief revision: ${parts.join(" Also, ")}` : null;
+}

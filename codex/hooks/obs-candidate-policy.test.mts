@@ -75,6 +75,30 @@ test("placement is exactly a non-empty project and app", () => {
   }
 });
 
+// Issue #505 (D3). A confirmed candidate that names a revision names it as
+// <repo>@<full commit sha>; assumed bodies and absent lines are not checked.
+test("a confirmed candidate's Revision lines bind a full commit SHA", () => {
+  const sha = "2733b35e2c102ac54295568509c68b18b6d92cab";
+  const confirmed = (body: string) => doc(candidate({
+    evidence: "confirmed", labels: ["type-observation", "evidence-confirmed", "status-author-model"], bodyStorage: body,
+  }));
+  const assumed = (body: string) => doc(candidate({ bodyStorage: body }));
+  for (const body of [`<p>Revision: kherep@${sha}</p>`, `<p>Revision: cfaysal/kherep@${sha}</p><p>Revision: other@${sha}</p>`,
+    "<p>Synthetic body without a revision line.</p>"]) {
+    assert.deepEqual(checkObsCandidate(confirmed(body)), { count: 1 }, body);
+  }
+  for (const value of ["kherep@HEAD", "kherep@2733b35", `kherep@${sha}-dirty`, `kherep@${sha} (no exact binding: dirty tree)`,
+    "none (no exact binding: no repository)", `kherep@${sha.toUpperCase()}`, `https://example.com/kherep@${sha}`,
+    `D:/work/kherep@${sha}`, `/home/x/kherep@${sha}`, `@${sha}`]) {
+    const body = `<p>Revision: kherep@${sha}</p><p>Revision: ${value}</p>`;
+    assert.equal(problem(confirmed(body)), "a confirmed candidate names a revision that is not <repo>@<full commit sha>", value);
+    assert.doesNotMatch(problem(confirmed(body)), /example|kherep@|[0-9a-f]{7,}/, value);
+    assert.deepEqual(checkObsCandidate(assumed(body)), { count: 1 }, value);
+  }
+  assert.match(problem(doc(candidate({ evidence: "confirmed", bodyStorage: `<p>Revision: kherep@${sha}</p>`, extra: 1 }))),
+    /exactly title, bodyStorage/, "a sixth key fails as before");
+});
+
 test("a problem never quotes the message", () => {
   const secret = "Example Corp host.example.com";
   for (const message of [secret, doc(candidate({ evidence: secret })), doc(candidate({ placement: { project: secret } }))]) {

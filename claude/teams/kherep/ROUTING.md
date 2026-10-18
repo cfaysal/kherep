@@ -118,6 +118,27 @@ so the session resends in the same turn (issue #331). On
 277054566 were filed as assumed and operator-reported although the dispatching session had measured
 each finding in the same turn.
 
+A finding about repository code, tests or a build is code-bound, whether the brief marks it `code`,
+describes it, or supplies it as a tool result. A code-bound finding is `confirmed` only when it binds
+the measured code exactly: every repository named as `<name>@<sha>` with the full 40-hex commit SHA
+the command ran against, and no `-dirty`. Without a repository, without a full SHA, or measured on a
+dirty tree it has no exact binding to the measured code and is `assumed`; no agent guesses a
+repository or a SHA. The body carries only validated `<name>@<sha>` tokens and otherwise the fixed
+line "no exact binding: <no repository | no full commit SHA | dirty tree | malformed repository or
+revision>", never a raw value. A finding that is not about repository code is labelled exactly as
+today. The brief declares a code-bound finding as
+`` measured: code <name>@<sha> `<command>` -> <deciding output excerpt> ``: the token `code` right
+after `measured:`, then one `<name>@<sha>` per repository, with the SHA from `git rev-parse HEAD` of
+the checkout the command ran in and `-dirty` when that tree had uncommitted changes, all before the
+command. The dispatch guard of each runtime reports, and never denies, a missing or incomplete
+binding (issue #505): a `code` finding without complete tokens gets a notice naming its position, and
+a `measured:` finding without `code` gets a fixed conditional notice when it names no binding or not
+every binding it names is complete. The guard checks declarations only and gives no completeness
+guarantee: it reads no command, so an unmarked code finding is left to the observation agent's
+contract. The denies above (issue #331) are unchanged. That a filed page carries its `Revision:`
+line stays unproven at the target: the Codex result check only verifies the shape of a `Revision:`
+line a `confirmed` candidate carries, not that the line is present or belongs to the finding.
+
 The runtime label carries the host as well as the runtime, because the two service accounts are
 shared across machines and the author of a page therefore no longer says which one wrote it. Both
 halves are computed by the broker at write time and replace anything a caller passes: the runtime
