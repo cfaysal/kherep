@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
+import { makeEnvelope, PONG_FRAME } from "../protocol.mts";
 import { AUTH_OK, flush, intakeHarness, statuses } from "./daemon-intake-fixture.mts";
 import { EXCHANGE_INTERVAL_MS } from "./exchange.mts";
 import { markDelivered, type InboxRecord } from "./inbox.mts";
@@ -74,7 +75,57 @@ test("a round that sends more than 32 frames logs its counters, a quiet round do
   assert.equal(h.socket().sent.filter((f) => f.type === "message.status").length, 40);
   const counters = h.logs.filter((line) => line.includes("kherep-node: round sent"));
   assert.equal(counters.length, 1, h.logs.join("\n"));
-  assert.match(counters[0]!, /^kherep-node: round sent 40 status\/0 outbox frames, handled \d+ inbound items$/);
+  assert.equal(counters[0], "kherep-node: round sent 40 status/0 outbox frames, handled 1 inbound items: auth 1");
   await h.round();
   assert.equal(h.logs.filter((line) => line.includes("kherep-node: round sent")).length, 1, "nothing due, no counters line");
+});
+
+// Issue #493 D2: the frames of a reconnect burst, counted by closed kind.
+const replayed = (n: number, state: string): string =>
+  JSON.stringify(makeEnvelope("message.status", { messageId: idOf(n), state }, 0, 0));
+const receipt = (n: number): string => JSON.stringify(makeEnvelope("event",
+  { name: "message.receipt", messageId: idOf(n), requestedState: "accepted", storedState: "accepted" }, 0, 0));
+const unknownType = JSON.stringify({ ...makeEnvelope("event", { name: "x" }, 0, 0), type: "synthetic.unknown" });
+const counterLines = (logs: string[]): string[] => logs.filter((line) => line.includes("kherep-node: round sent"));
+const line = (handled: number, summary: string): string =>
+  `kherep-node: round sent 0 status/0 outbox frames, handled ${handled} inbound items: ${summary}`;
+
+async function pongs(h: Awaited<ReturnType<typeof connectedRound>>, count: number): Promise<void> {
+  for (let n = 0; n < count; n++) h.socket().message(PONG_FRAME);
+  for (let i = 0; i < 5; i++) await flush();
+  await h.round();
+}
+
+test("a burst of mixed frames logs one counters line with its kind histogram and an unchanged total", async (t) => {
+  const h = await connectedRound(t);
+  for (let n = 0; n < 300; n++) h.socket().message(replayed(n, "accepted"));
+  for (let n = 300; n < 500; n++) h.socket().message(replayed(n, "delivered"));
+  for (let n = 0; n < 40; n++) h.socket().message(receipt(n));
+  for (let n = 0; n < 5; n++) h.socket().message(PONG_FRAME);
+  for (let n = 0; n < 2; n++) h.socket().message(unknownType);
+  for (let i = 0; i < 20; i++) await flush();
+  await h.round();
+  assert.deepEqual(counterLines(h.logs), [line(548, "frame:message.status:accepted 300, frame:message.status:delivered 200, "
+    + "frame:event:receipt 40, pong 5, frame:invalid 2, auth 1")]);
+});
+
+// Design revision 2, section 4.4 items 11 and 12.
+test("item 11: 32 handled items log nothing", async (t) => {
+  const h = await connectedRound(t);
+  await pongs(h, 31); // plus the initial auth.ok: 32
+  assert.deepEqual(counterLines(h.logs), []);
+});
+
+test("items 11 and 12: 33 log the line, and every following round starts from zero", async (t) => {
+  const h = await connectedRound(t);
+  await pongs(h, 32); // plus the initial auth.ok: 33
+  assert.deepEqual(counterLines(h.logs), [line(33, "pong 32, auth 1")]);
+  await pongs(h, 0);
+  assert.equal(counterLines(h.logs).length, 1, "a round without inbound frames logs nothing");
+  await pongs(h, 33);
+  assert.deepEqual(counterLines(h.logs).slice(1), [line(33, "pong 33")]);
+  await pongs(h, 10);
+  assert.equal(counterLines(h.logs).length, 2, "10 log nothing");
+  await pongs(h, 33);
+  assert.deepEqual(counterLines(h.logs).slice(2), [line(33, "pong 33")], "the round of 10 was reset too");
 });

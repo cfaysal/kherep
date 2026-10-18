@@ -9,6 +9,22 @@ increments the minor version; every other release increments the patch version.
 
 ## [Unreleased]
 
+### Added
+
+- Reconnect burst measurement (issue #493). The daemon's round counters line
+  `round sent <n> status/<m> outbox frames, handled <k> inbound items` keeps
+  its text and, when the round handled frames, goes on with
+  `: <kind> <n>, ...`: the eight most frequent frame kinds by count, then
+  `other <n>`. Kinds come from a closed list of 43 labels built from the
+  protocol's message types, node commands, message states and task-control
+  actions, with fixed buckets such as `command:unknown`, `frame:invalid` and
+  `unknown`; a received string never becomes a label. Each frame counts once,
+  on the lane that finally handles it, and the tally resets every round. The
+  line still appears only above 32 frames. The `disconnected` line now reads
+  `disconnected (<code>, clean=<true|false>, error:<class>)`, where the class
+  is a listed socket error code, `unknown`, `missing` or `none`; no error
+  message, close reason or URL is logged.
+
 ### Fixed
 
 - Corrected nested-runtime guidance (issue #489). When both
