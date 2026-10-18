@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import test from "node:test";
 
 import { ANSWER, FORK_ID, FORK_OWNER, FORK_TURN, LAST_TURN, type ForkScenario } from "./codex-fork-fixture.mts";
@@ -7,6 +8,9 @@ import { FORK_FEATURE_KEYS } from "./codex-fork-process.mts";
 import { RECORD, runFork } from "./codex-fork-run-fixture.mts";
 import { serviceAdmissionsIdle } from "./service-drain.mts";
 import { testServiceOwner } from "./task-fixture.mts";
+
+// The helper reports the product version from the root package.json; pin the test to the same source.
+const VERSION = (JSON.parse(fs.readFileSync(new URL("../../../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
 // Issue #408, PR 3: one fork attempt end to end against the fake app-server
 // (design sections 2 to 4). Nothing here starts a process or reaches a real Codex.
@@ -25,7 +29,7 @@ test("the happy path: exact sequence, exact fork request, persisted running, the
   assert.deepEqual([r.run.args, r.run.cwd, r.run.detached, r.run.env.KHEREP_CODEX_FORK, r.run.env.CODEX_HOME],
     [["app-server", "--listen", "stdio://"], r.cwd, true, "1", "/synthetic/codex-home"]);
   const request = (method: string) => r.run.requests.find((m) => m.method === method)!.params;
-  assert.deepEqual(request("initialize"), { clientInfo: { name: "kherep_fork_reply", version: "0.3.0" }, capabilities: { experimentalApi: true } });
+  assert.deepEqual(request("initialize"), { clientInfo: { name: "kherep_fork_reply", version: VERSION }, capabilities: { experimentalApi: true } });
   assert.deepEqual(request("thread/read"), { threadId: FORK_OWNER, includeTurns: false });
   assert.deepEqual(request("thread/turns/list"), { threadId: FORK_OWNER, limit: 1, sortDirection: "desc", itemsView: "notLoaded" });
   const goals = r.run.requests.filter((m) => m.method === "thread/goal/get").map((m) => m.params);
