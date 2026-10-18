@@ -86,17 +86,35 @@ const MIB = 1024 * 1024;
 fs.writeFileSync(path.join(HOOKS, "mib-stderr.mts"), `process.stderr.write("x".repeat(${MIB}));\n`);
 fs.writeFileSync(path.join(HOOKS, "mib-stderr-deny.mts"), `process.stderr.write("y".repeat(${MIB}));\n`
   + printing(pre({ permissionDecision: "deny", permissionDecisionReason: "large deny" })));
+fs.writeFileSync(path.join(HOOKS, "mib-stderr-exit2.mts"), `process.stderr.write("z".repeat(${MIB}));\nprocess.exitCode = 2;\n`);
+const count = (text: string, letter: string): number => text.split(letter).length - 1;
 
-for (const [name, letter, decision] of [["mib-stderr.mts", "x", undefined], ["mib-stderr-deny.mts", "y", "deny"]] as const) {
-  test(`${name}: every byte of 1 MiB guard stderr arrives${decision ? " next to the deny" : ""}`, () => {
-    const run = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", DISPATCH, path.join(HOOKS, name)], {
-      input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git status" } }),
-      encoding: "utf8", windowsHide: true, maxBuffer: 8 * MIB, timeout: 20_000,
-    });
-    assert.equal(run.status, 0, String(run.error));
-    assert.equal(run.stderr.split(letter).length - 1, MIB);
-    if (!decision) return assert.equal(run.stdout, "");
-    assert.deepEqual(JSON.parse(run.stdout).hookSpecificOutput,
-      { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "large deny" });
+function large(name: string): { stdout: string; stderr: string } {
+  const run = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", DISPATCH, path.join(HOOKS, name)], {
+    input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git status" } }),
+    encoding: "utf8", windowsHide: true, maxBuffer: 8 * MIB, timeout: 20_000,
   });
+  assert.equal(run.status, 0, String(run.error));
+  return run;
 }
+
+test("a guard printing 1 MiB to stderr and allowing: all of it arrives, stdout stays empty", () => {
+  const run = large("mib-stderr.mts");
+  assert.equal(count(run.stderr, "x"), MIB);
+  assert.equal(run.stdout, "");
+});
+
+test("a guard printing 1 MiB to stderr next to a JSON deny: the deny and all of stderr arrive", () => {
+  const run = large("mib-stderr-deny.mts");
+  assert.equal(count(run.stderr, "y"), MIB);
+  assert.deepEqual(JSON.parse(run.stdout).hookSpecificOutput,
+    { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "large deny" });
+});
+
+test("a guard denying by exit 2 with a 1 MiB reason: the reason arrives whole on stdout and stderr", () => {
+  const run = large("mib-stderr-exit2.mts");
+  const output = JSON.parse(run.stdout).hookSpecificOutput;
+  assert.equal(output.permissionDecision, "deny");
+  assert.equal(output.permissionDecisionReason, "z".repeat(MIB));
+  assert.equal(count(run.stderr, "z"), MIB);
+});

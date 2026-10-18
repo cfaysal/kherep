@@ -29,8 +29,7 @@ const GUARD_TIMEOUT_MS = 10_000;
 // A re-check gets <= RECHECK_MAX_MS of what is left, none below RECHECK_MIN_MS; its lib loads within RECHECK_LOAD_MS.
 const RECHECK_MAX_MS = 20_000, RECHECK_MIN_MS = 2_000, RECHECK_LOAD_MS = 2_000;
 const HEARTBEAT_WINDOW_MS = 1_800_000; // = lib/integrity-heartbeat.mts; each side has a boundary test
-const SELF = fileURLToPath(import.meta.url);
-const DIR = path.dirname(SELF);
+const SELF = fileURLToPath(import.meta.url), DIR = path.dirname(SELF);
 const INVOKED_DIR = path.dirname(path.resolve(process.argv[1] ?? SELF));
 const HOME = path.dirname(INVOKED_DIR);
 
@@ -232,16 +231,17 @@ async function dispatch(guards: string[]): Promise<{ verdict?: Verdict; stderr: 
   return { verdict: combine(verdicts), stderr };
 }
 
-// Exits once both streams took their bytes, so a handle left open cannot outlive the cancel.
+// Exits in its last write's callback (every used stream flushed), at once with nothing to write.
 function emit(verdict: Verdict | undefined, stderr: string[]): void {
-  let pending = 2;
-  const done = (): void => { if (--pending === 0) process.exit(0); };
-  process.stderr.write(stderr.filter(Boolean).map((text) => (text.endsWith("\n") ? text : `${text}\n`)).join(""), done);
-  const output = verdict && { hookEventName: "PreToolUse",
+  let pending = 0;
+  const flushed = (): void => { if (--pending === 0) process.exit(0); };
+  const put = (stream: NodeJS.WriteStream, text: string): void => { pending++; stream.write(text, flushed); };
+  for (const text of stderr) if (text) put(process.stderr, text.endsWith("\n") ? text : `${text}\n`);
+  if (verdict) put(process.stdout, JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse",
     ...(verdict.decision ? { permissionDecision: verdict.decision } : {}),
     ...(verdict.reason ? { permissionDecisionReason: verdict.reason } : {}),
-    ...(verdict.notice ? { additionalContext: verdict.notice } : {}) };
-  process.stdout.write(output ? JSON.stringify({ hookSpecificOutput: output }) : "", done);
+    ...(verdict.notice ? { additionalContext: verdict.notice } : {}) } }));
+  if (pending === 0) process.exit(0);
 }
 
 dispatch(process.argv.slice(2)).then(
