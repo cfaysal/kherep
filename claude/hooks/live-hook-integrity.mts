@@ -40,32 +40,30 @@
  * Fail-safe: any unexpected error is caught, reported, exit 0. Silent when
  * everything is OK. No network, no child process beyond that `node --check`.
  */
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import type { ScopePayload } from "./lib/workspace-scope.mts";
 
-type Libs = typeof import("./lib/workspace-scope.mts") & typeof import("./lib/orchestra-checkout.mts") &
-  typeof import("./lib/restore-write.mts") & typeof import("./lib/hook-inventory.mts") & typeof import("./lib/hook-syntax.mts");
-type Before = { size?: number; mtime?: string; ino?: number };
-type Verdict = { state: "OK" | "DEFEKT" | "UNGEPRUEFT"; reason?: string; before?: Before };
-type Restored = { proven: boolean; sha?: string; why?: string };
+import type { Restored } from "./lib/integrity-verdict.mts";
+
+type Libs = typeof import("./lib/integrity-verdict.mts") & typeof import("./lib/workspace-scope.mts") &
+  typeof import("./lib/orchestra-checkout.mts") & typeof import("./lib/restore-write.mts") &
+  typeof import("./lib/hook-inventory.mts") & typeof import("./lib/hook-syntax.mts");
 // The first lib that did not load or lacks a used function; `loaded` libs did.
 type LoadFailure = { rel: string; why: string; loaded: number };
 
-const sha256 = (buf: Buffer): string => crypto.createHash("sha256").update(buf).digest("hex");
-const errorCode = (error: unknown): string | undefined => (error ? (error as NodeJS.ErrnoException).code : undefined);
 // Filled by loadLibs. restore() needs only the first RESTORE_LIBS of its steps.
 const lib = {} as Libs;
-const RESTORE_LIBS = 3;
+const RESTORE_LIBS = 4;
 
 // Dependency order, so a broken lib is named before the libs importing it.
 // String literals on purpose: lib/hook-inventory.mts and the install manifest
-// test see exactly this form. null when all five are in.
+// test see exactly this form. null when all are in.
 async function loadLibs(): Promise<LoadFailure | null> {
   const steps: [string, () => Promise<object>, string[]][] = [
+    ["lib/integrity-verdict.mts", () => import("./lib/integrity-verdict.mts"), ["classify", "restore", "journal"]],
     ["lib/workspace-scope.mts", () => import("./lib/workspace-scope.mts"), ["joinPathLike", "normalizePathLike"]],
     ["lib/orchestra-checkout.mts", () => import("./lib/orchestra-checkout.mts"), ["checkoutFor"]],
     ["lib/restore-write.mts", () => import("./lib/restore-write.mts"), ["writeExact"]],
@@ -86,70 +84,6 @@ async function loadLibs(): Promise<LoadFailure | null> {
   return null;
 }
 
-// `kind` only words the absent case: "wired but" or "imported but" not present.
-async function classify(file: string, kind: string): Promise<Verdict> {
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(file);
-  } catch (error) {
-    const code = errorCode(error) || "unknown";
-    if (code === "ENOENT") return { state: "DEFEKT", reason: `${kind} but not present on disk` };
-    return { state: "UNGEPRUEFT", reason: `stat failed (${code})` };
-  }
-  // Before the size test on purpose: a directory reports size 0 on Windows and
-  // would otherwise be mistaken for the 0-byte incident.
-  if (!stat.isFile()) return { state: "UNGEPRUEFT", reason: "not a regular file" };
-  const before = { size: stat.size, mtime: new Date(stat.mtimeMs).toISOString(), ino: stat.ino };
-  if (stat.size === 0) {
-    return { state: "DEFEKT", reason: "0 bytes - it runs, enforces nothing and exits 0 (fail-open)", before };
-  }
-  let source: string;
-  try {
-    source = fs.readFileSync(file, "utf8");
-  } catch (error) {
-    return { state: "UNGEPRUEFT", reason: `unreadable (${errorCode(error) || "unknown"})`, before };
-  }
-  const verdict = await lib.syntaxVerdict(file, source);
-  if (verdict.state === "OK") return { state: "OK", before };
-  return { state: verdict.state, reason: verdict.state === "DEFEKT" ? verdict.detail : `syntax unchecked (${verdict.detail})`, before };
-}
-
-function restore(file: string, rel: string, repoRoot: string, hooksDir: string): Restored {
-  if (!repoRoot) return { proven: false, why: "no checkout resolved via workspace, KHEREP_WORKSPACE or install note" };
-  const source = lib.joinPathLike(repoRoot, `claude/hooks/${rel}`);
-  let wanted: Buffer;
-  try {
-    wanted = fs.readFileSync(source);
-  } catch (error) {
-    return { proven: false, why: `versioned source ${source} unreadable (${errorCode(error) || "unknown"})` };
-  }
-  if (!wanted.length) return { proven: false, why: `versioned source ${source} is itself 0 bytes` };
-  const refusal = lib.writeExact(file, wanted, hooksDir);
-  if (refusal) return { proven: false, why: refusal };
-  // Measured at the target. The write call reporting success is not a measurement.
-  let landed: Buffer;
-  try {
-    landed = fs.readFileSync(file);
-  } catch (error) {
-    return { proven: false, why: `target unreadable after the write (${errorCode(error) || "unknown"})` };
-  }
-  const sha = sha256(landed);
-  if (!landed.length || sha !== sha256(wanted)) {
-    return { proven: false, sha, why: "the target does not match the versioned source after the write" };
-  }
-  return { proven: true, sha };
-}
-
-function journal(home: string, entry: Record<string, unknown>): void {
-  try {
-    const dir = path.join(home, ".cache", "hook-integrity");
-    fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, "incidents.jsonl"), `${JSON.stringify(entry)}\n`, "utf8");
-  } catch {
-    /* a journal we cannot write must never break a session start */
-  }
-}
-
 function emit(lines: string[]): void {
   if (!lines.length) return;
   process.stdout.write(
@@ -168,9 +102,10 @@ function ownImportFailed({ rel, why, loaded }: LoadFailure, payload: ScopePayloa
   const hooksDir = import.meta.dirname.replace(/\\/g, "/");
   const file = `${hooksDir}/${rel}`;
   const result: Restored = loaded >= RESTORE_LIBS
-    ? restore(file, rel, lib.checkoutFor(payload, lib.normalizePathLike(home)), hooksDir)
-    : { proven: false, why: "the restore itself needs workspace-scope, orchestra-checkout and restore-write" };
-  journal(home, {
+    ? lib.restore(lib, file, rel, lib.checkoutFor(payload, lib.normalizePathLike(home)), hooksDir)
+    : { proven: false, why: "the restore itself needs integrity-verdict, workspace-scope, orchestra-checkout and restore-write" };
+  // Without integrity-verdict there is no journal function to call.
+  if (loaded > 0) lib.journal(home, {
     ts: new Date().toISOString(), file: rel, path: file, state: "DEFEKT", reason: why, kind: "self", importedBy: ["live-hook-integrity.mts"],
     sha256After: result.sha || null, restoreProven: result.proven, restoreDetail: result.proven ? undefined : result.why,
   });
@@ -214,7 +149,7 @@ async function main(): Promise<void> {
   };
 
   for (const { file, rel, wired, importedBy } of lib.hookInventory(files, hooksDir, readSource)) {
-    const { state, reason, before = {} } = await classify(file, wired ? "wired" : "imported");
+    const { state, reason, before = {} } = await lib.classify(lib, file, wired ? "wired" : "imported");
     if (state === "OK") continue;
     const label = importedBy.length ? `${rel} (imported by ${importedBy.join(", ")})` : rel;
     const entry: Record<string, unknown> = {
@@ -227,14 +162,14 @@ async function main(): Promise<void> {
     };
     if (state === "UNGEPRUEFT") {
       lines.push(`${label}: UNCHECKED - ${reason}. Neither proven healthy nor proven broken.`);
-      journal(home, entry);
+      lib.journal(home, entry);
       continue;
     }
-    const result = restore(file, rel, repoRoot, hooksDir);
+    const result = lib.restore(lib, file, rel, repoRoot, hooksDir);
     entry.sha256After = result.sha || null;
     entry.restoreProven = result.proven;
     if (!result.proven) entry.restoreDetail = result.why;
-    journal(home, entry);
+    lib.journal(home, entry);
     lines.push(
       result.proven
         ? `${label}: ${reason} -> RESTORED from the repo, verified at the target (sha256 ${result.sha!.slice(0, 12)})`
