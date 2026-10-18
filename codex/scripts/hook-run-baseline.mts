@@ -64,6 +64,11 @@ const original=cp.spawnSync; cp.spawnSync=function(file,args,options){const r=or
     delete env.CLAUDE_CODE_SESSION_ID;
     const options = { node: process.execPath, hookDir: hooks, contextHook: path.join(hooks, "kherep-maestro-context.mts"),
       mcpServers: [], controlPlaneHook: path.join(repo, "modules/control-plane/node/deliver-hook.mts") };
+    // Issue #503. The Control Plane hooks run through the stable entry point,
+    // which runs the hooks of the source its pointer names: this checkout.
+    fs.mkdirSync(path.join(env.CODEX_HOME!, "orchestra"), { recursive: true });
+    fs.writeFileSync(path.join(env.CODEX_HOME!, "orchestra", "control-plane-source.json"),
+      JSON.stringify({ version: 1, root: repo, kind: "checkout", verified: false }));
     const config = render(options);
     const groups = [...config.matchAll(/^\[\[hooks\.([A-Za-z]+)\]\]$/gm)].map((m, i, all) => {
       const body = config.slice(m.index, all[i + 1]?.index ?? config.length);
@@ -87,7 +92,9 @@ const original=cp.spawnSync; cp.spawnSync=function(file,args,options){const r=or
           assert.equal(result.status, 0, `${label}: ${result.stderr}`);
           if (result.stdout.includes('"permissionDecision":"deny"')) denied = true;
           outputs.push(result.stdout);
-          rows.push({ label, event: name, hook: path.basename(args[1]), target: args[2] ? path.basename(args[2]) : null,
+          // Node options before the script (issue #503) name neither hook nor target.
+          const [script, target] = args.slice(1).filter((arg) => !arg.startsWith("--"));
+          rows.push({ label, event: name, hook: path.basename(script!), target: target ? path.basename(target) : null,
             hookCommands: 1, nodeProcesses: 1 + children.filter(x => x.file === path.basename(process.execPath)).length,
             totalProcesses: 1 + children.length, children: children.map(x => ({ file: x.file, script: x.script ? path.basename(x.script) : null })),
             durationMs: performance.now() - started, contextBytes: Buffer.byteLength(result.stdout),

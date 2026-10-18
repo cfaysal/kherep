@@ -10,7 +10,9 @@ import { depthExceeded, replyDepth } from "./message-depth.mts";
 // that a late resend, a late target report, MCP status, task-control
 // provenance and reply depth still resolve. Only rows stored by this Worker
 // version carry `deletable = 1`; rows stored before it are never deleted here,
-// however they are acknowledged, swept or revoked (operator decision).
+// however they are acknowledged, swept or revoked (operator decision). A row
+// stored before this version is settled on its sender's acknowledgement
+// instead (issue #493), never deleted.
 export const TOMBSTONE_TTL_MS = 24 * 60 * 60_000;
 // Senders without messaging.ack.v1, and the operator API, never acknowledge.
 export const FALLBACK_DELETE_MS = 24 * 60 * 60_000;
@@ -33,7 +35,7 @@ CREATE INDEX IF NOT EXISTS messages_delete_after ON messages (delete_after) WHER
 `;
 
 const FINAL = "('delivered', 'replied', 'refused', 'expired')";
-const ROW_COLUMNS = "id, from_node, to_node, state, reason, depth, reply_message_id, deletable";
+const ROW_COLUMNS = "id, from_node, to_node, state, reason, depth, reply_message_id, deletable, settled_state";
 const ROW = `SELECT ${ROW_COLUMNS} FROM messages WHERE id = ?`;
 const TOMBSTONE = "SELECT id, from_node, to_node, state, reason, depth, reply_message_id, deleted_at FROM message_tombstones WHERE id = ?";
 // Due rows in deadline order, whatever they are: a deadline the sweep must not
@@ -108,13 +110,18 @@ export class MessageRetention {
 
   // The sender acknowledged a final status. Anything else is a no-op: an
   // unknown or already deleted message, another sender, a state that is not
-  // final or not the stored one (a later status gets its own ack), and a row
-  // stored before this Worker version.
+  // final or not the stored one (a later status gets its own ack). A row this
+  // Worker may delete (deletable = 1) goes; a row it may not (stored before
+  // PR 4, operator decision) is settled instead (issue #493): it keeps the
+  // acknowledged state in settled_state and is replayed again only when its
+  // state moves on, whichever Worker version moves it.
   ack(nodeId: string, body: MessageStatusAckBody, now: number): void {
     const row = this.sql.exec(ROW, body.messageId).toArray()[0];
-    if (!row || String(row.from_node) !== nodeId || row.state !== body.state || !isFinalMessageState(row.state)
-      || row.deletable !== 1) return;
-    this.remove(row, `node:${nodeId}`, "ack", now);
+    if (!row || String(row.from_node) !== nodeId || row.state !== body.state || !isFinalMessageState(row.state)) return;
+    if (row.deletable === 1) return this.remove(row, `node:${nodeId}`, "ack", now);
+    if (row.settled_state === row.state) return; // settled by an earlier ack of this state
+    this.sql.exec("UPDATE messages SET settled_state = ? WHERE id = ?", row.state, row.id);
+    this.audit(`node:${nodeId}`, "message.settle", String(row.to_node), { messageId: String(row.id) });
   }
 
   // Deletes up to `limit` rows whose fallback deadline passed; true when the

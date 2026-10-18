@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { ENTRY_NAME, pointerFile, resolveHook } from "../../../codex/hooks/control-plane-hook.mts";
 import type { Check } from "./doctor-local.mts";
 import { captureSourceIdentity, compareSourceIdentity, type SourceIdentity } from "./daemon-source.mts";
 
@@ -56,11 +57,43 @@ function realOrResolved(file: string): string {
   try { return fs.realpathSync.native(expanded); } catch { return path.resolve(expanded); }
 }
 
-type HookScan = { present: boolean; deliver: number; wake: number; foreign: string[]; pinned?: string[]; checkouts?: string[] };
+type PointerStatus = "valid" | "missing" | "invalid" | "unresolved";
+type EntryStatus = "valid" | "missing" | "symlink" | "stale" | "unchecked";
+type HookScan = { present: boolean; deliver: number; wake: number; foreign: string[]; pinned?: string[]; checkouts?: string[];
+  pointer?: PointerStatus; stable?: number; legacy?: number; entry?: EntryStatus };
+
+// Issue #503. A Codex command names the stable entry point and a fixed hook
+// name; the deliver hook it runs is the one the pointer of the config's
+// CODEX_HOME names, and only through that home's own entry point. A command
+// still naming the hook path is legacy until codex/install.mts rewrites it.
+const STABLE = /"([^"\n]*[\\/]codex-control-plane-hook\.mts)"\s+"(deliver|attribution)"/;
+const OTHER_HOME = "the entry point belongs to another Codex home";
+const LEGACY = /[\\/]modules[\\/]control-plane[\\/]node[\\/](?:deliver|attribution)-hook\.mts["']?\s+["']?--runtime["']?\s+["']?codex\b/;
+
+function pointerHook(codexConfig: string): { hook?: string; root?: string; status: PointerStatus } {
+  const resolved = resolveHook("deliver", pointerFile(path.dirname(codexConfig)));
+  if ("hook" in resolved) return { hook: resolved.hook, root: resolved.pointer.root, status: "valid" };
+  return { status: resolved.reason === "missing" || resolved.reason === "invalid" ? resolved.reason : "unresolved" };
+}
+
+// The entry point every stable command of this home runs: a regular file, not a
+// link, with the bytes the installer copied from the pointer's source. Without a
+// usable pointer the bytes are not compared ("unchecked").
+function entryStatus(entryFile: string, root: string | undefined): EntryStatus {
+  let stat: fs.Stats;
+  try { stat = fs.lstatSync(entryFile); } catch { return "missing"; }
+  if (stat.isSymbolicLink()) return "symlink";
+  if (!stat.isFile()) return "missing";
+  if (!root) return "unchecked";
+  try {
+    return fs.readFileSync(entryFile).equals(fs.readFileSync(path.join(root, "codex", "hooks", "control-plane-hook.mts"))) ? "valid" : "stale";
+  } catch { return "stale"; }
+}
 
 // The scan as reported, and the reason of its first foreign hook (not reported in the scan).
+// codex: the Codex config, whose stable commands resolve through its pointer.
 function scanHooks(
-  file: string, repoRoot: string, commandsOf: (text: string) => string[], cache: SourceCache,
+  file: string, repoRoot: string, commandsOf: (text: string) => string[], cache: SourceCache, codex = false,
 ): { scan: HookScan; reason?: string } | null {
   let commands: string[];
   try {
@@ -74,7 +107,27 @@ function scanHooks(
   const pinned = new Set<string>();
   const checkouts = new Set<string>();
   let reason: string | undefined;
-  for (const found of commands.flatMap(hookPaths)) {
+  const pointer = codex ? pointerHook(file) : undefined;
+  const entryFile = path.join(path.dirname(file), "hooks", "kherep-maestro", ENTRY_NAME);
+  const entry = codex ? entryStatus(entryFile, pointer?.root) : undefined;
+  // The entry directory must be hooks/kherep-maestro of the canonical home: a
+  // link to the whole home still binds, a linked hooks/ or kherep-maestro/ (whose
+  // entry point would read another home's pointer) does not. The file itself is
+  // checked without following a link.
+  const entryDir = path.join(realOrResolved(path.dirname(file)), "hooks", "kherep-maestro");
+  const forms = { stable: 0, legacy: 0 };
+  const paths = commands.flatMap((command) => {
+    const stable = codex ? STABLE.exec(command) : null;
+    if (codex && LEGACY.test(command)) forms.legacy++;
+    if (!stable) return hookPaths(command);
+    forms.stable++;
+    // Another home's entry point reads another pointer: never resolved through this one.
+    if (path.basename(stable[1]!) !== ENTRY_NAME || realOrResolved(path.dirname(stable[1]!)) !== entryDir) {
+      foreign.add(stable[1]!); reason ??= OTHER_HOME; return [];
+    }
+    return stable[2] === "deliver" && pointer?.hook && entry === "valid" ? [pointer.hook] : [];
+  });
+  for (const found of paths) {
     const kind = /deliver-hook\.mts$/.test(found) ? "deliver" : "wake";
     const expected = path.join(repoRoot, "modules", "control-plane", "node", `${kind}-hook.mts`);
     if (realOrResolved(found) === realOrResolved(expected)) { counts[kind]++; continue; }
@@ -84,7 +137,7 @@ function scanHooks(
     (same.kind === "pin" ? pinned : checkouts).add(found);
   }
   const scan = { present: true, ...counts, foreign: [...foreign], ...(pinned.size ? { pinned: [...pinned] } : {}),
-    ...(checkouts.size ? { checkouts: [...checkouts] } : {}) };
+    ...(checkouts.size ? { checkouts: [...checkouts] } : {}), ...(pointer ? { pointer: pointer.status, ...forms, ...(forms.stable ? { entry } : {}) } : {}) };
   return { scan, reason };
 }
 
@@ -137,19 +190,26 @@ export function sourceCache(repoRoot: string): SourceCache {
 export function checkHooks(files: { claude: string; codex: string }, repoRoot: string): Check {
   const cache = sourceCache(repoRoot);
   const claude = scanHooks(files.claude, repoRoot, claudeCommands, cache);
-  const codex = scanHooks(files.codex, repoRoot, codexCommands, cache);
+  const codex = scanHooks(files.codex, repoRoot, codexCommands, cache, true);
   if (!claude || !codex) return { ok: false, detail: "a runtime configuration file is unreadable" };
   const foreign = claude.scan.foreign.length + codex.scan.foreign.length;
   const total = claude.scan.deliver + claude.scan.wake + codex.scan.deliver + codex.scan.wake + foreign;
+  const { pointer, stable = 0, legacy = 0, entry } = codex.scan;
+  const unresolved = stable > 0 && pointer !== "valid";
+  const brokenEntry = stable > 0 && pointer === "valid" && entry !== "valid";
   let detail: string | undefined;
   if (foreign > 0) detail = `a hook command names another checkout: ${claude.reason ?? codex.reason ?? UNVERIFIED}`;
+  else if (unresolved) detail = `the Codex control-plane source pointer is ${pointer}; run codex/install.mts`;
+  else if (brokenEntry) detail = `the Codex control-plane entry point is ${entry}; run codex/install.mts`;
   else if (total === 0) detail = "no delivery or wake hook is installed";
-  return { ok: foreign === 0 && total > 0, checkout: repoRoot, claude: claude.scan, codex: codex.scan, ...(detail ? { detail } : {}) };
+  else if (legacy > 0) detail = "Codex hook commands still name a source path; run codex/install.mts to migrate them";
+  return { ok: foreign === 0 && total > 0 && !unresolved && !brokenEntry, checkout: repoRoot, claude: claude.scan, codex: codex.scan,
+    ...(detail ? { detail } : {}) };
 }
 
 // Issue #408: whether the Codex config runs this checkout's delivery hook (or
 // that of a source of the same identity) on PostToolUse, which records the tool
 // boundaries that keep a running turn from reading idle. An unreadable config is false.
 export function codexPostToolHookInstalled(codexConfig: string, repoRoot: string): boolean {
-  return (scanHooks(codexConfig, repoRoot, (text) => codexCommands(text, "PostToolUse"), sourceCache(repoRoot))?.scan.deliver ?? 0) > 0;
+  return (scanHooks(codexConfig, repoRoot, (text) => codexCommands(text, "PostToolUse"), sourceCache(repoRoot), true)?.scan.deliver ?? 0) > 0;
 }

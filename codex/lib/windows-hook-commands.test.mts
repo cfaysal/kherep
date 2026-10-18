@@ -51,7 +51,7 @@ test("every rendered hook carries a PowerShell call-operator form for Windows", 
     assert.match(hook.command, /^"/);
     assert.equal(hook.commandWindows, `& ${hook.command}`);
   }
-  assert.ok(hooks.some((hook) => hook.command.includes("deliver-hook.mts")));
+  assert.ok(hooks.some((hook) => hook.command.includes(`codex-control-plane-hook.mts" "deliver"`)));
 });
 
 test("the Windows form parses and runs in pwsh; the plain form does not",

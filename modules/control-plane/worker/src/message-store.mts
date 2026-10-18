@@ -79,8 +79,14 @@ const COLUMNS = "id, from_node, from_session, to_node, to_session, in_reply_to, 
 const EXPIRE_DUE = `SELECT ${COLUMNS} FROM messages INDEXED BY messages_queued_expiry
   WHERE state = 'queued' AND expires_at <= ?`;
 const NEXT_EXPIRY = "SELECT MIN(expires_at) AS next FROM messages INDEXED BY messages_queued_expiry WHERE state = 'queued'";
-const STATUS_PAGE = `SELECT rowid AS cursor, ${COLUMNS} FROM messages INDEXED BY messages_from_node
-  WHERE from_node = ? AND rowid > ? ORDER BY rowid LIMIT ?`;
+// Issue #493: the replay index. Partial on the acknowledged state, so a
+// sender's settled rows are not in it, and a state change by any Worker
+// version puts the row back. Runs after the column loop added settled_state
+// to an existing table (SCHEMA runs before the column exists). The query
+// repeats the index's WHERE term verbatim, so the planner can use the index.
+const REPLAY_INDEX = "CREATE INDEX IF NOT EXISTS messages_replay ON messages (from_node) WHERE settled_state IS NOT state";
+const STATUS_PAGE = `SELECT rowid AS cursor, ${COLUMNS} FROM messages INDEXED BY messages_replay
+  WHERE from_node = ? AND settled_state IS NOT state AND rowid > ? ORDER BY rowid LIMIT ?`;
 export const HOT_MESSAGE_QUERIES = {
   expireDue: { sql: EXPIRE_DUE, args: [0] },
   nextExpiry: { sql: NEXT_EXPIRY, args: [] },
@@ -143,9 +149,10 @@ export class MessageStore {
     if (!columns.includes("task_id")) this.sql.exec("ALTER TABLE messages ADD COLUMN task_id TEXT");
     for (const [name, type] of [["progress_phase", "TEXT"], ["progress_code", "TEXT"], ["progress_observed_at", "TEXT"],
       ["progress_retry_at", "TEXT"], ["reply_message_id", "TEXT"], ["depth", "INTEGER"], ["delete_after", "INTEGER"],
-      ["deletable", "INTEGER"], ["proxy_of", "TEXT"]] as const) {
+      ["deletable", "INTEGER"], ["proxy_of", "TEXT"], ["settled_state", "TEXT"]] as const) {
       if (!columns.includes(name)) this.sql.exec(`ALTER TABLE messages ADD COLUMN ${name} ${type}`);
     }
+    this.sql.exec(REPLAY_INDEX);
     this.retention = new MessageRetention(sql, audit, capabilities);
   }
 
@@ -243,8 +250,10 @@ export class MessageStore {
   }
 
   // One metadata-only cursor page for a sender reconnect. NodeSession keeps
-  // requesting pages until nextCursor is null, so history is complete without
-  // an unbounded allocation or frame batch.
+  // requesting pages until nextCursor is null, so every row whose current
+  // state its sender has not acknowledged is replayed (#493) without an
+  // unbounded allocation or frame batch; history is complete for what the
+  // sender does not yet hold.
   statusPageFor(nodeId: string, afterRowId: number, limit: number): { effects: MessageEffects; nextCursor: number | null } {
     const effects = none();
     const pageSize = Math.min(128, Math.max(1, Math.floor(limit)));

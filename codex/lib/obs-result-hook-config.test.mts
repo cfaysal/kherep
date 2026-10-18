@@ -71,7 +71,7 @@ test("upgrades the exact pre-obs-result-check managed block and then settles", (
     registryBridge: "/synthetic/bridge.mts", registryRuntime: "/synthetic/runtime.mts",
     memoryNotifyHook: "/synthetic/notify.mts" };
   for (const previous of [renderBeforeObsResultCheck!(base), renderBeforeObsResultCheckWithoutNativeHooks!(base)]) {
-    assert.match(previous, /attribution-hook\.mts/);
+    assert.match(previous, /codex-control-plane-hook\.mts\\" \\"attribution/);
     assert.doesNotMatch(previous, /codex-obs-result-check|SubagentStop/);
     const upgraded = prepareManagedConfig(`${managed.startMarker}\n${previous}${managed.endMarker}`, managed);
     assert.equal(upgraded.managedFragment, "replaced");

@@ -20,7 +20,9 @@ import {
 } from "./install.mts";
 import { adaptSkillText } from "./lib/component-render.mts";
 import { componentHash } from "./lib/component-hash.mts";
+import { fixtureModelOptions } from "./lib/model-policy.fixture.mts";
 import type { Capabilities } from "./lib/contracts.mts";
+import { legacyForm } from "./lib/legacy-control-plane-form.mts";
 import { command, hookGroup, renderRegistryMcpServer } from "./lib/parity-config.mts";
 import { retiredCentralBrainRender } from "./lib/retired-central-brain.mts";
 import { withoutRetiredTable, withRetiredCentralBrain } from "./lib/retired-central-brain-fixture.mts";
@@ -139,6 +141,7 @@ function fixture() {
   const atlassianMcpTokenFile = path.join(root, "operator", "atl-mcp-credential-codex.txt");
   fs.writeFileSync(atlassianMcpTokenFile, `${"a".repeat(48)}\n`, { mode: 0o600 });
   const installOptions = {
+    ...fixtureModelOptions(),
     claudeConfigDir, claudeRegistryFile, codexHome,
     workspace, installAtlassianTools: true, atlassianMcpTokenFile,
     nodePath: process.execPath, log: (): void => {},
@@ -191,8 +194,10 @@ function beforePostEditDispatcher(config: string, hookDir: string): string {
   return withoutAtlassianDestructiveGuard(predecessor, hookDir).replace(/\n\n\[\[hooks\.PostToolUse\]\]\nmatcher = "\.\*"\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = .*deliver-hook\.mts.*\n(?:commandWindows = .*\n)?timeout = 10(?=\n)/, "");
 }
 
-// Reconstruct the exact pre-#386 group before deriving older fixtures.
+// Reconstruct the exact pre-#386 group before deriving older fixtures. Every
+// installer before issue #503 wrote this checkout into the Control Plane hooks.
 function beforeShellDispatcher(config: string, hookDir: string): string {
+  config = legacyForm(config, path.resolve(here, ".."));
   const attribution = path.resolve(here, "..", "modules", "control-plane", "node", "attribution-hook.mts");
   const current = command(process.execPath, path.join(hookDir, "codex-shell-checks.mts"), attribution, "--runtime", "codex");
   const matcher = "Bash|shell_command|exec_command|functions\\.exec";
@@ -208,13 +213,11 @@ function beforeShellDispatcher(config: string, hookDir: string): string {
   return config.replace(currentGroup, previous);
 }
 
-// Issue #397. The checkout hooks of a block an install from another source pin
-// wrote name that pin instead of this checkout.
+// Issues #397 and #503. The Control Plane hooks of a block an install from a
+// source pin wrote before issue #503 name that pin.
 function fromSourcePin(config: string, pin: string): string {
-  const escaped = (value: string): string => JSON.stringify(value).slice(1, -1);
-  const checkout = escaped(path.join(path.resolve(here, ".."), "modules", "control-plane"));
-  assert.ok(config.includes(checkout));
-  return config.replaceAll(checkout, escaped(path.join(pin, "modules", "control-plane")));
+  assert.ok(config.includes("codex-control-plane-hook.mts"));
+  return legacyForm(config, pin);
 }
 
 // The layout the Codex app writes when it stores hook trust (issue #274): its
@@ -1016,10 +1019,11 @@ test("default install projects observation delivery without optional Jira toolin
   const obsModel = observationAgent.match(/^model = "(.*)"$/m)?.[1] ?? "";
   const installedGuard = path.join(result.targets.hookDir, "codex-dispatch-contract-guard.mts");
   assert.deepEqual(fs.readFileSync(installedGuard), fs.readFileSync(path.join(here, "hooks", "dispatch-contract-guard.mts")));
-  assert.deepEqual(
-    fs.readFileSync(path.join(result.targets.hookDir, "..", "parity", "capabilities.json")),
-    fs.readFileSync(path.join(here, "parity", "capabilities.json")),
-  );
+  const installedCapabilities = JSON.parse(fs.readFileSync(
+    path.join(result.targets.hookDir, "..", "parity", "capabilities.json"), "utf8")) as Capabilities;
+  assert.deepEqual(installedCapabilities.modelResolution, result.receipt.modelResolution);
+  assert.deepEqual(installedCapabilities.projectedAgents, result.receipt.projection.agentDefaults);
+  assert.equal(installedCapabilities.agents["claude-obs"].model, obsModel);
   const guard = (extra: Record<string, unknown>): string => spawnSync(process.execPath, [installedGuard], {
     encoding: "utf8",
     input: JSON.stringify({ tool_name: "spawn_agent", tool_input: { task_name: "obs", message: "m", agent_type: "codex-obs", ...extra } }),
@@ -1749,26 +1753,28 @@ test("Mac install keeps observation hooks unconfigured and acceptance active", (
   assert.equal(fs.readFileSync(install({ ...installOptions, platform: "darwin" }).targets.config, "utf8"), config);
 });
 
-// Issue #31, step 4: the control-plane delivery hook runs from this checkout
-// with --runtime codex for SessionStart, UserPromptSubmit and Stop.
+// Issue #31, step 4: the control-plane delivery hook runs with --runtime codex
+// for SessionStart, UserPromptSubmit and Stop; since issue #503 through the
+// stable entry point, which runs this checkout's hook.
 test("wires the control-plane delivery hook from the checkout and upgrades a block without it", (t) => {
   const { root, installOptions } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const hookPath = path.resolve(here, "..", "modules", "control-plane", "node", "deliver-hook.mts");
   assert.ok(fs.existsSync(hookPath));
-  const deliverCommand = command(process.execPath, hookPath, "--runtime", "codex");
-  const deliver = { command: deliverCommand, commandWindows: `& ${deliverCommand}` };
-  const groups = [
-    hookGroup("SessionStart", "startup|resume|clear|compact", [deliver]),
-    hookGroup("UserPromptSubmit", "", [deliver]),
-    hookGroup("Stop", "", [deliver]),
-  ].join("\n\n");
+  const group = (value: string) => {
+    const deliver = { command: value, commandWindows: `& ${value}` };
+    return [hookGroup("SessionStart", "startup|resume|clear|compact", [deliver]),
+      hookGroup("UserPromptSubmit", "", [deliver]), hookGroup("Stop", "", [deliver])].join("\n\n");
+  };
+  const entry = path.join(installOptions.codexHome, "hooks", "kherep-maestro", "codex-control-plane-hook.mts");
+  const groups = group(command(process.execPath, hookPath, "--runtime", "codex"));
   const result = install(installOptions);
   const config = fs.readFileSync(result.targets.config, "utf8");
-  assert.equal(occurrences(config, groups), 1);
-  assert.equal(occurrences(config, "deliver-hook.mts"), 8);
+  assert.equal(occurrences(config, group(command(process.execPath, "--disable-warning=ExperimentalWarning", entry, "deliver", "--runtime", "codex"))), 1);
+  assert.equal(occurrences(config, String.raw`codex-control-plane-hook.mts\" \"deliver\"`), 8);
+  assert.equal(occurrences(config, "deliver-hook.mts"), 0);
   // Issue #325. The attribution hook beside it: a PreToolUse entry and a PostToolUse group.
-  assert.equal(occurrences(config, "attribution-hook.mts"), 4);
+  assert.equal(occurrences(config, String.raw`codex-control-plane-hook.mts\" \"attribution\"`), 4);
   // The existing hooks are untouched: without the three groups, the attribution
   // hook that only comes with them, and the commandWindows forms (issue #68) the
   // block is the one the previous installer wrote, and a reinstall recognises and

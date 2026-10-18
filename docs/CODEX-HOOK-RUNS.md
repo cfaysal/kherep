@@ -114,6 +114,8 @@ native queue submission and the retained budget for real continuations
 (PR #385). The independent return-point consumer remains configured; its
 wildcard matcher is necessary for supported native tool boundaries.
 
+Issue #503 routes the eleven Control Plane hook runs of this fixture through the stable entry point `codex-control-plane-hook.mts`, which starts the hook as its one Node child: one extra Node process per such run (79 + 11 Node processes, 85 + 11 counted processes after the change). The hook commands and stdout are unchanged in number.
+
 ## Host acceptance
 
 **Native Desktop measurement is untestable in this Linux cloud session.**

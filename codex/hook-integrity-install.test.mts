@@ -10,6 +10,7 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 
 import { install } from "./install.mts";
+import { fixtureModelOptions } from "./lib/model-policy.fixture.mts";
 
 const REPO = path.resolve(import.meta.dirname, "..");
 
@@ -21,6 +22,7 @@ function fixture(t: TestContext) {
   fs.mkdirSync(codexHome, { recursive: true });
   fs.writeFileSync(claudeRegistryFile, JSON.stringify({ mcpServers: {} }), { mode: 0o600 });
   const options = {
+    ...fixtureModelOptions(),
     codexHome, claudeRegistryFile,
     claudeConfigDir: path.join(root, "home with spaces", ".claude"),
     workspace: path.join(root, "workspace", "Kherep"),
@@ -36,7 +38,7 @@ function fixture(t: TestContext) {
   };
   const config = path.join(codexHome, "config.toml");
   install(options);
-  // Only the deliver-hook command may name a checkout: no workspace, no note.
+  // Only the control-plane pointer may name a checkout: no workspace, no note.
   const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_HOME: path.join(root, "no-claude-home"), KHEREP_WORKSPACE: path.join(root, "no-workspace") };
   delete env.CODEX_HOME;
   return { root, codexHome, config, hookDir: path.join(codexHome, "hooks", "kherep-maestro"), env };
@@ -184,12 +186,14 @@ test("6. a 0-byte own lib workspace-scope is reported only", (t) => {
 
 test("7. without a checkout nothing is written and the result is NOT restored", (t) => {
   const ctx = fixture(t);
-  // A path as it appears inside the TOML basic string (JSON escaping; paths hold no quotes).
+  // Issue #503. No hook command names a checkout; the pointer does, here a gone one.
   const encoded = (value: string) => JSON.stringify(value).slice(1, -1);
-  const deliver = path.join("modules", "control-plane", "node", "deliver-hook.mts");
   const text = fs.readFileSync(ctx.config, "utf8");
-  assert.ok(text.includes(encoded(path.join(REPO, deliver))), "the installed config names the deliver hook in this checkout");
-  fs.writeFileSync(ctx.config, text.replaceAll(encoded(path.join(REPO, deliver)), encoded(path.join(ctx.root, "gone", deliver))));
+  assert.ok(text.includes(encoded(path.join(ctx.hookDir, "codex-control-plane-hook.mts"))), "the installed config names the entry point");
+  assert.equal(text.includes(encoded(REPO)), false, "no hook command names this checkout");
+  const pointer = path.join(ctx.codexHome, "orchestra", "control-plane-source.json");
+  assert.equal(JSON.parse(fs.readFileSync(pointer, "utf8")).root, REPO);
+  fs.writeFileSync(pointer, JSON.stringify({ version: 1, root: path.join(ctx.root, "gone"), kind: "checkout", verified: false }));
   const file = path.join(ctx.hookDir, "commit-guard.mts");
   fs.writeFileSync(file, "");
   const result = run(ctx);

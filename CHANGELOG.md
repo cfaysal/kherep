@@ -21,6 +21,11 @@ increments the minor version; every other release increments the patch version.
   trailer. Exit `0` means every commit passed, `1` a policy violation, and `2`
   a range or hook that could not be read, such as a missing commit, a shallow
   clone or an emptied hook; a failed read is never a pass.
+- Versionless Codex role policy (issue #509). Astra designs, SOL builds,
+  Terra handles support and research, and Luna handles observations and brokers.
+  Installation resolves available models into native agent TOMLs and one
+  dispatch snapshot; ordinary reinstall retains that resolution, while
+  `--refresh-models` explicitly refreshes it.
 - Reconnect burst measurement (issue #493). The daemon's round counters line
   `round sent <n> status/<m> outbox frames, handled <k> inbound items` keeps
   its text and, when the round handled frames, goes on with
@@ -36,9 +41,10 @@ increments the minor version; every other release increments the patch version.
   message, close reason or URL is logged.
 - Message summary diagnostic (issue #493). `GET /api/messages/summary?from=<node id>`,
   behind the existing Access JWT check, groups the Registry rows of one sender
-  node by `state` (a known state or `other`) and `deletable` (`1`, `null` or
-  `other`), each with `count`, `withDeadline` and the age buckets
-  `ageUnder24h`, `age1to7d` and `ageOver7d`, and adds `fetchedAt`, the Worker
+  node by `state` (a known state or `other`), `deletable` (`1`, `null` or
+  `other`) and `settled` (`settled` or `unsettled`), each with `count`,
+  `withDeadline` and the age buckets `ageUnder24h`, `age1to7d` and
+  `ageOver7d`, and adds `fetchedAt`, the Worker
   `version` and `commit`, and `rowsRead`. Counts only; no node id, message
   id, timestamp, session, reason or text. Each call reads the sender's whole
   history through its index and is logged as `registry.sql` path
@@ -47,6 +53,40 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Reconnect replay of acknowledged legacy rows (issue #493). A message row
+  stored before the deletion existed (no `deletable` mark) was replayed to its
+  sender after every authentication although the sender had acknowledged its
+  final state. The acknowledgement of its current final state by its sender
+  now settles such a row: the Worker stores the acknowledged state in
+  `settled_state` and audits `message.settle` with ids only. The row is kept,
+  never deleted, and the replay leaves it out while its state equals the
+  acknowledged one; a later state, also one set by an earlier Worker version
+  after a rollback, makes it replayed again until that state is acknowledged.
+  The replay reads a partial index over the unacknowledged rows. This inverts the earlier tested expectation that an
+  acknowledged legacy row is replayed again after reconnect: that replay was a
+  redundancy the acknowledgement already covered, not a delivery guarantee. A
+  legacy row whose sender never acknowledged its current state is still
+  replayed on every authentication.
+- Codex hook commands stay the same across upgrades (issue #503). The six
+  Control Plane hook definitions in `config.toml` (shell-group and
+  `PostToolUse` attribution, and delivery on `SessionStart`, `UserPromptSubmit`,
+  `Stop` and the `PostToolUse` busy hint) named the checkout or source pin the
+  installer ran from, so every upgrade from a new pin changed their hash and
+  Codex asked to review them again. They now name the stable entry point
+  `<CODEX_HOME>/hooks/kherep-maestro/codex-control-plane-hook.mts` and a fixed
+  hook name (`deliver` or `attribution`). The installer writes
+  `<CODEX_HOME>/orchestra/control-plane-source.json`, the source root with its
+  commit and kind, inside its install transaction. The entry point checks the
+  record's shape and that the hook file (and, for a pin, its manifest) exists,
+  then runs the hook as its own process with the caller's stdin, stdout,
+  stderr, environment, working directory and exit code. Without a usable record
+  it exits 1 with one stderr line and never falls back to another source. The
+  check per run is not a verified load; `kherep-node doctor` verifies the
+  source identity and reports `codex.pointer`, `stable` and `legacy`. The shell
+  dispatcher still runs its three guards first and calls attribution
+  in-process afterwards, so a missing record costs attribution only. The first
+  install after this change rewrites the old commands once, and Codex asks for
+  one review. Trust entries, rules, guards and permissions are unchanged.
 - Corrected nested-runtime guidance (issue #489). When both
   `CLAUDE_CODE_SESSION_ID` and `CODEX_THREAD_ID` are set and the available
   process ancestry does not establish their nesting, the fixed `NESTED_RUNTIME`

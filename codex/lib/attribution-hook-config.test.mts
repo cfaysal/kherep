@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { test } from "node:test";
 
 import { prepareManagedConfig } from "./config-preservation.mts";
+import { legacyForm } from "./legacy-control-plane-form.mts";
 import * as parityConfigApi from "./parity-config.mts";
 import {
   render, renderBeforeHookIntegrity, renderBeforeMainCheckoutGuard, renderBeforePostLegacyHooks,
   renderBeforePostEditDispatcher, renderBeforeResearchHooks, renderLegacyJavaScript, renderPreviousNudges,
 } from "./parity-config.mts";
 
-// Issue #325, PR-A. The attribution hook runs from the checkout, like the
-// deliver hook, with --runtime codex. Its PreToolUse phase is appended as the
+// Issue #325, PR-A. The attribution hook runs through the stable entry point
+// (issue #503), like the deliver hook, with --runtime codex. Its PreToolUse phase is appended as the
 // last entry of the shell group; its PostToolUse phase needs shell tools, which
 // the only existing PostToolUse group does not match, so it is a new group after
 // that one. Codex trust keys are <file>:<event>:<group>:<entry>, so neither
@@ -27,7 +29,10 @@ const base = { contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks
   mcpServers: [], controlPlaneHook: `${CHECKOUT}/deliver-hook.mts` };
 const native = { ...base, memoryProvider: "central-brain" as const,
   nativeHooks: { contextCli: "/synthetic/context.js", captureCli: "/synthetic/capture.mjs", profile: "/synthetic/profile.json" } };
-const ATTRIBUTION = /^command = "\\"\/synthetic\/node\\" \\"\/synthetic\/checkout\/modules\/control-plane\/node\/attribution-hook\.mts\\" \\"--runtime\\" \\"codex\\""$/m;
+const ENTRY = JSON.stringify(path.join("/synthetic/hooks", "codex-control-plane-hook.mts")).slice(1, -1).replace(/[\\.]/g, "\\$&");
+const ATTRIBUTION = new RegExp(String.raw`^command = "\\"\/synthetic\/node\\" \\"--disable-warning=ExperimentalWarning\\" \\"${ENTRY}\\" \\"attribution\\" \\"--runtime\\" \\"codex\\""$`, "m");
+// The attribution hook in either form, as a rendered TOML string spells it.
+const ANY_ATTRIBUTION = /attribution-hook|codex-control-plane-hook\.mts\\" \\"attribution/;
 
 function groups(config: string, event: string): string[][] {
   return config.split(/^(?=\[\[hooks\.[A-Za-z]+\]\]$)/m).slice(1).filter((group) => group.startsWith(`[[hooks.${event}]]`))
@@ -66,13 +71,13 @@ test("the attribution hook ends the shell PreToolUse group and a new last PostTo
     assert.equal(last.length, 2, "one hook in the new group");
     assert.equal(last[0], `[[hooks.PostToolUse]]\n${SHELL_MATCHER}`);
     assert.match(last[1]!, ATTRIBUTION);
-    assert.match(postGroups[2]![1]!, /deliver-hook\.mts/);
-    assert.doesNotMatch(previous, /attribution-hook/);
+    assert.match(postGroups[2]![1]!, /codex-control-plane-hook\.mts\\" \\"deliver/);
+    assert.doesNotMatch(previous, ANY_ATTRIBUTION);
   }
 });
 
 test("without a control-plane checkout no attribution hook is rendered", () => {
-  assert.doesNotMatch(render({ ...base, controlPlaneHook: undefined }), /attribution-hook/);
+  assert.doesNotMatch(render({ ...base, controlPlaneHook: undefined }), ANY_ATTRIBUTION);
 });
 
 test("upgrades the exact pre-attribution managed block and then settles", () => {
@@ -81,7 +86,10 @@ test("upgrades the exact pre-attribution managed block and then settles", () => 
     retiredMcpServerNames: [], registryProjections: [], pluginMcpServers: {}, registry: "/synthetic/registry.json",
     registryBridge: "/synthetic/bridge.mts", registryRuntime: "/synthetic/runtime.mts",
     memoryNotifyHook: "/synthetic/notify.mts" };
-  for (const previous of [renderBeforeAttributionHook!(base), renderBeforeAttributionHookWithoutNativeHooks!(base)]) {
+  // Written by an installer before issue #503, so in the checkout-path form.
+  for (const previous of [renderBeforeAttributionHook!(base), renderBeforeAttributionHookWithoutNativeHooks!(base)]
+    .map((text) => legacyForm(text, "/synthetic/checkout"))) {
+    assert.match(previous, /checkout\/modules\/control-plane\/node\/deliver-hook\.mts/);
     assert.match(previous, /main-checkout-guard\.mts/);
     const upgraded = prepareManagedConfig(`${managed.startMarker}\n${previous}${managed.endMarker}`, managed);
     assert.equal(upgraded.managedFragment, "replaced");
@@ -91,22 +99,22 @@ test("upgrades the exact pre-attribution managed block and then settles", () => 
   for (const historical of [renderBeforeMainCheckoutGuard(base), renderBeforeHookIntegrity(base),
     renderBeforeResearchHooks(base), renderBeforePostLegacyHooks(base), renderPreviousNudges(base),
     renderLegacyJavaScript(base)]) {
-    assert.doesNotMatch(historical, /attribution-hook/, "no older installer wrote the attribution hook");
+    assert.doesNotMatch(historical, ANY_ATTRIBUTION, "no older installer wrote the attribution hook");
     assert.doesNotMatch(historical, /\[\[hooks\.PostToolUse\]\]\nmatcher = "Bash/, "no empty group is left behind");
   }
 });
 
-test("an install from another checkout points the attribution hook at the current checkout", () => {
+test("an install rewrites the attribution hook of another checkout to the stable form", () => {
   const managed = (checkout: string) => ({ ...base, controlPlaneHook: `${checkout}/deliver-hook.mts`,
     startMarker: "# start synthetic", endMarker: "# end synthetic", retiredMcpServerNames: [], registryProjections: [],
     pluginMcpServers: {}, registry: "/synthetic/registry.json", registryBridge: "/synthetic/bridge.mts",
     registryRuntime: "/synthetic/runtime.mts", memoryNotifyHook: "/synthetic/notify.mts" });
-  const written = prepareManagedConfig("", managed("/synthetic/other/modules/control-plane/node")).config;
+  const written = legacyForm(prepareManagedConfig("", managed("/synthetic/other/modules/control-plane/node")).config, "/synthetic/other");
   assert.match(written, /other\/modules\/control-plane\/node\/attribution-hook\.mts/);
   const result = prepareManagedConfig(written, managed(CHECKOUT));
   assert.equal(result.managedFragment, "replaced");
   assert.doesNotMatch(result.config, /synthetic\/other\//);
   assert.equal([...result.config.matchAll(new RegExp(ATTRIBUTION.source, "gm"))].length, 1,
     "PostToolUse keeps direct attribution; PreToolUse calls it in the dispatcher");
-  assert.match(result.config, /codex-shell-checks\.mts[^\n]*attribution-hook\.mts/);
+  assert.match(result.config, /codex-shell-checks\.mts[^\n]*codex-control-plane-hook\.mts\\" \\"attribution/);
 });

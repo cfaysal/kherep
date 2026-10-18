@@ -18,6 +18,25 @@ Evidence first. The Maestro classifies every directive and researches a relevant
 
 Keep direct, low-risk work in the main agent. Use bounded delegation when independent investigation, expertise, parallelism or review helps. Select available models according to task complexity, configured cost limits and privacy boundaries. Never assume a particular provider, model identifier, host or tool is installed.
 
+Codex role families and reasoning defaults are versioned in `codex/parity/model-policy.toml`
+and installed at `orchestra/model-policy.toml` within the selected Codex home:
+Astra designs, SOL builds and coordinates the root, Terra handles bounded support
+and research, and Luna handles observation and broker work. Installation resolves
+these families against a complete visible native `model/list` catalog and writes
+concrete IDs into agent TOMLs and the dispatch snapshot together. Use those native
+agent defaults. Read the installed observation agent TOML for its exact model pin
+when explicitly dispatching `codex-obs`; never copy an ID from an old reminder.
+Ordinary reinstall preserves a verified resolution. Model refresh is an explicit
+installer operation, and an unavailable family or reasoning level fails closed.
+
+For nontrivial designs, the DEFAULT main designer is the projected Astra designer
+role, normally `code-architect`. The DEFAULT implementation role is the SOL
+`kherep-builder`. The Maestro coordinates and accepts their work. Resolve the
+designer's actual managed name from the receipt's `projection.agentDefaults` or
+installed dispatch snapshot's `projectedAgents`: a personal name collision may
+rename it, and a personal `code-architect` is not thereby the managed designer.
+Read concrete model IDs from that installed resolution, never from this guidance.
+
 Every dispatch states the objective, exact ownership, constraints, required evidence and return format. Use separate worktrees for independent writers. Read-only reviews may run alongside implementation. Do not delegate a task whose result cannot be retrieved and checked.
 
 ## Privacy and authority

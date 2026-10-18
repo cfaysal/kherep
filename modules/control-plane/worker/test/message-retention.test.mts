@@ -6,7 +6,9 @@ import {
   MESSAGE_STATUS_ACK, MESSAGING_ACK_CAPABILITY, MESSAGING_CAPABILITY, OPERATOR_NODE_ID, type MessageStatusBody,
 } from "../../protocol-messages.mts";
 import { FALLBACK_DELETE_MS, RETENTION_BATCH, TOMBSTONE_TTL_MS } from "../src/message-retention.mts";
+import { MessageStore } from "../src/message-store.mts";
 import { authenticate, enroll, FACTS, newKey, nextMessageStatus, registry, type NodeKey, type TestSocket } from "./helpers.mts";
+import { nodes } from "./message-proxy-fixture.mts";
 
 // Issue #308, PR 4: a message row is deleted once its sender acknowledged the
 // final status, or by the 24 h fallback; only rows stored by this version.
@@ -27,6 +29,8 @@ const query = <T,>(run: (sql: SqlStorage) => T) => runInDurableObject(registry()
 const row = (id: string): Promise<Row> => query((sql) => sql.exec("SELECT * FROM messages WHERE id = ?", id).toArray()[0]);
 const tombstone = (id: string): Promise<Row> => query((sql) => sql.exec("SELECT * FROM message_tombstones WHERE id = ?", id).toArray()[0]);
 const deletes = (id: string) => query((sql) => sql.exec("SELECT actor, detail FROM audit WHERE action = 'message.delete' AND detail LIKE ?",
+  `%${id}%`).toArray());
+const settles = (id: string) => query((sql) => sql.exec("SELECT actor, detail FROM audit WHERE action = 'message.settle' AND detail LIKE ?",
   `%${id}%`).toArray());
 
 // Every frame up to the answer to a directory.get, which the Worker handles after all earlier frames.
@@ -73,6 +77,7 @@ describe("deletion after the sender's acknowledgement", () => {
     expect(stone).toMatchObject({ from_node: a.nodeId, to_node: b.nodeId, state: "delivered", depth: 0 });
     expect(Object.keys(stone ?? {}).sort()).toEqual(["deleted_at", "depth", "from_node", "id", "reason", "reply_message_id", "state", "to_node"]);
     expect(await deletes(id)).toEqual([{ actor: `node:${a.nodeId}`, detail: JSON.stringify({ messageId: id, via: "ack" }) }]);
+    expect(await settles(id)).toEqual([]); // issue #493: a deletable row is deleted, never settled
     expect((await registry().listMessages(a.nodeId, 100)).map((m) => m.messageId)).not.toContain(id);
     // Idempotent: a repeated ack changes nothing and gets no error.
     ack(sender, id, "delivered");
@@ -205,25 +210,74 @@ describe("fallback deletion, prune and revoke", () => {
   });
 });
 
+// Reconnects a node and returns its replay, in rowid order. sync() does not
+// bound it (auth.ok starts the replay while later frames may already be
+// handled), so a final legacy row inserted just before the reconnect ends it:
+// the pages go out in rowid order. Earlier end rows are left out.
+const ends = new Set<string>();
+async function reconnect(n: { key: NodeKey; nodeId: string }): Promise<{ socket: TestSocket; statuses: MessageStatusBody[]; replayed: string[] }> {
+  const end = await legacyRow(n.nodeId, crypto.randomUUID(), "refused");
+  ends.add(end);
+  const socket = await authenticate(n.nodeId, n.key);
+  const statuses: MessageStatusBody[] = [];
+  for (;;) {
+    const envelope = await socket.next();
+    if (envelope.type !== "message.status") continue;
+    const body = envelope.body as MessageStatusBody;
+    if (body.messageId === end) break;
+    if (!ends.has(body.messageId)) statuses.push(body);
+  }
+  return { socket, statuses, replayed: statuses.map((s) => s.messageId) };
+}
+
+// The next status of one message, skipping other frames (a reply's delivery).
+async function statusOf(socket: TestSocket, messageId: string): Promise<MessageStatusBody> {
+  for (;;) {
+    const envelope = await socket.next();
+    const body = envelope.body as MessageStatusBody;
+    if (envelope.type === "message.status" && body.messageId === messageId) return body;
+  }
+}
+
+const settledState = async (id: string) => (await row(id))?.settled_state;
+// The [settled bucket, count] groups of one sender's legacy rows in one state.
+const legacyGroups = async (nodeId: string, state: string) => (await registry().messageSummary(nodeId, Date.now())).groups
+  .filter((g) => g.state === state && g.deletable === "null").map((g) => [g.settled, g.count]);
+const replyTo = (socket: TestSocket, original: string, to: { nodeId: string; session: string }) => frame(socket, "message.send",
+  { messageId: crypto.randomUUID(), fromSession: "s-b", to, text: "synthetic reply", inReplyTo: original });
+
+// Issue #493: a row stored before PR 4 is never deleted. An acknowledgement of
+// its current final state by its sender settles it instead: it stays, and the
+// reconnect replay leaves it out until its state changes. This inverts the
+// earlier expectation that such a row is replayed after every reconnect: that
+// replay was a redundancy the ack already covered, not a delivery guarantee.
 describe("rows stored before this version", () => {
-  it("survive an acknowledgement, the replay, expiry, the alarm sweep and a revoke", async () => {
+  it("are settled by their sender's ack, leave the replay, and survive expiry, the alarm sweep and a revoke", async () => {
     const { a, sender, b } = await pair();
     const old = await legacyRow(a.nodeId, b.nodeId);
     const queued = await legacyRow(OPERATOR_NODE_ID, b.nodeId, "queued");
     ack(sender, old, "delivered");
     await sync(sender);
-    sender.ws.close(1000, "reconnect");
-    const back = await authenticate(a.nodeId, a.key);
-    expect(await nextMessageStatus(back, { messageId: old, state: "delivered" })).toEqual({ messageId: old, state: "delivered" });
-    ack(back, old, "delivered");
-    await sync(back);
+    const settled = await row(old);
+    expect(settled).toMatchObject({ state: "delivered", deletable: null, delete_after: null });
+    expect(settled?.settled_state).toBe("delivered");
+    expect(await tombstone(old)).toBeUndefined();
+    expect(await deletes(old)).toEqual([]);
+    expect(await settles(old)).toEqual([{ actor: `node:${a.nodeId}`, detail: JSON.stringify({ messageId: old }) }]);
+    const back = await reconnect(a);
+    expect(back.replayed).not.toContain(old);
+    // A repeated ack writes nothing: no second audit entry, settled_state unchanged.
+    ack(back.socket, old, "delivered");
+    await sync(back.socket);
+    expect(await settledState(old)).toBe("delivered");
+    expect(await settles(old)).toHaveLength(1);
     // The alarm expires the operator row without a fallback deadline, and clears
     // a deadline written by hand instead of sweeping it or re-arming on it.
     await query((sql) => sql.exec("UPDATE messages SET delete_after = 1 WHERE id = ?", old));
     await runInDurableObject(registry(), (instance) => instance.alarm());
     const rearmed = await runInDurableObject(registry(), (_i, state) => state.storage.getAlarm());
     expect(rearmed === null || rearmed > Date.now() - 1000).toBe(true);
-    expect(await row(queued)).toMatchObject({ state: "expired", delete_after: null, deletable: null });
+    expect(await row(queued)).toMatchObject({ state: "expired", delete_after: null, deletable: null, settled_state: null });
     expect(await registry().revoke(a.nodeId, "test")).not.toBeNull();
     await runInDurableObject(registry(), (instance) => instance.alarm());
     for (const id of [old, queued]) {
@@ -231,5 +285,174 @@ describe("rows stored before this version", () => {
       expect(await tombstone(id)).toBeUndefined();
       expect(await deletes(id)).toEqual([]);
     }
+  });
+
+  it("stay unsettled and replayed on an ack from another node, of another state, or of a state that is not final", async () => {
+    const { a, sender, target, b } = await pair();
+    const foreign = await legacyRow(a.nodeId, b.nodeId);
+    const stale = await legacyRow(a.nodeId, b.nodeId);
+    const open = await legacyRow(a.nodeId, b.nodeId, "accepted");
+    ack(target, foreign, "delivered");
+    await sync(target);
+    ack(sender, stale, "refused");
+    ack(sender, open, "delivered");
+    await sync(sender);
+    // The node frame validator refuses an accepted ack; the Registry checks it again.
+    await registry().ackMessageStatus(a.nodeId, { name: MESSAGE_STATUS_ACK, messageId: open, state: "accepted" as "delivered" });
+    for (const id of [foreign, stale, open]) {
+      expect(await settledState(id)).toBeNull();
+      expect(await settles(id)).toEqual([]);
+    }
+    const back = await reconnect(a);
+    expect(back.statuses.filter((s) => [foreign, stale, open].includes(s.messageId))).toEqual([
+      { messageId: foreign, state: "delivered" }, { messageId: stale, state: "delivered" }, { messageId: open, state: "accepted" }]);
+  });
+
+  it("settle a legacy accepted row once its later delivered status is acknowledged", async () => {
+    const { a, sender, target, b } = await pair();
+    const id = await legacyRow(a.nodeId, b.nodeId, "accepted");
+    frame(target, "message.status", { messageId: id, state: "delivered" });
+    expect(await statusOf(sender, id)).toEqual({ messageId: id, state: "delivered" });
+    await sync(target);
+    expect(await row(id)).toMatchObject({ state: "delivered", deletable: null, settled_state: null });
+    const back = await reconnect(a);
+    expect(back.statuses.filter((s) => s.messageId === id)).toEqual([{ messageId: id, state: "delivered" }]);
+    ack(back.socket, id, "delivered");
+    await sync(back.socket);
+    expect(await settledState(id)).toBe("delivered");
+    expect((await reconnect(a)).replayed).not.toContain(id);
+  });
+
+  it("replay a settled row again once a reply marks it replied, and settle it only on the replied ack", async () => {
+    const { a, sender, target, b } = await pair();
+    const old = await legacyRow(a.nodeId, b.nodeId);
+    ack(sender, old, "delivered");
+    await sync(sender);
+    expect(await settledState(old)).toBe("delivered");
+    replyTo(target, old, { nodeId: a.nodeId, session: "s-a" });
+    expect(await statusOf(sender, old)).toEqual({ messageId: old, state: "replied" });
+    expect(await row(old)).toMatchObject({ state: "replied", settled_state: "delivered" });
+    let back = await reconnect(a);
+    expect(back.statuses.filter((s) => s.messageId === old)).toEqual([{ messageId: old, state: "replied" }]);
+    // A delivered ack arriving late never settles the replied row.
+    ack(back.socket, old, "delivered");
+    await sync(back.socket);
+    expect(await settledState(old)).toBe("delivered");
+    back = await reconnect(a);
+    expect(back.replayed).toContain(old);
+    ack(back.socket, old, "replied");
+    await sync(back.socket);
+    expect(await settledState(old)).toBe("replied");
+    expect(await settles(old)).toHaveLength(2);
+    expect(await deletes(old)).toEqual([]);
+    expect((await reconnect(a)).replayed).not.toContain(old);
+  });
+
+  it("replay a row that was replied to while its sender was offline, whatever late delivered ack follows", async () => {
+    const { a, sender, target, b } = await pair();
+    const old = await legacyRow(a.nodeId, b.nodeId);
+    sender.ws.close(1000, "offline");
+    replyTo(target, old, { nodeId: a.nodeId, session: "s-a" });
+    await sync(target);
+    expect(await row(old)).toMatchObject({ state: "replied", settled_state: null });
+    const back = await reconnect(a);
+    expect(back.statuses.filter((s) => s.messageId === old)).toEqual([{ messageId: old, state: "replied" }]);
+    ack(back.socket, old, "delivered");
+    await sync(back.socket);
+    expect(await settledState(old)).toBeNull();
+    expect(await settles(old)).toEqual([]);
+    expect((await reconnect(a)).statuses.filter((s) => s.messageId === old)).toEqual([{ messageId: old, state: "replied" }]);
+  });
+
+  // A rollback to a Worker before this fix (36aae53) moves the state with its
+  // own setState SQL, which knows nothing of the settle mark. After the roll
+  // forward the row is replayed in its new state until that state is acked.
+  it("replay a settled row that a rolled-back Worker marked replied, until the replied ack", async () => {
+    const { a, sender, b } = await pair();
+    const old = await legacyRow(a.nodeId, b.nodeId);
+    ack(sender, old, "delivered");
+    await sync(sender);
+    expect(await settles(old)).toHaveLength(1);
+    // 36aae53 message-store.mts:379-381, verbatim, for delivered -> replied.
+    await query((sql) => sql.exec(`UPDATE messages SET state = ?, reason = ?, text = NULL, progress_phase = ?, progress_code = ?,
+      progress_observed_at = ?, progress_retry_at = ?, updated_at = ? WHERE id = ?`, "replied", null, null, null, null, null, Date.now(), old));
+    // The roll-forward start: the constructor's column loop and index run again.
+    await query((sql) => { new MessageStore(sql, () => {}, () => null); });
+    let back = await reconnect(a);
+    expect(back.statuses.filter((s) => s.messageId === old)).toEqual([{ messageId: old, state: "replied" }]);
+    expect(await row(old)).toMatchObject({ state: "replied", settled_state: "delivered" });
+    expect(await legacyGroups(a.nodeId, "replied")).toEqual([["unsettled", 1]]);
+    ack(back.socket, old, "delivered");
+    await sync(back.socket);
+    expect(await row(old)).toMatchObject({ state: "replied", settled_state: "delivered" });
+    expect(await settles(old)).toHaveLength(1);
+    ack(back.socket, old, "replied");
+    await sync(back.socket);
+    expect(await row(old)).toMatchObject({ state: "replied", settled_state: "replied" });
+    expect(await settles(old)).toHaveLength(2);
+    expect(await legacyGroups(a.nodeId, "replied")).toEqual([["settled", 1]]);
+    back = await reconnect(a);
+    expect(back.replayed).not.toContain(old);
+  });
+
+  it("stay settled on a duplicate, regressive or foreign report, a reply to another session and a resend", async () => {
+    const { a, sender, target, b } = await pair();
+    const third = await node("retention-third");
+    const foreign = await authenticate(third.nodeId, third.key);
+    const old = await legacyRow(a.nodeId, b.nodeId);
+    ack(sender, old, "delivered");
+    await sync(sender);
+    frame(target, "message.status", { messageId: old, state: "delivered" });
+    frame(target, "message.status", { messageId: old, state: "accepted" });
+    // markReplied: a reply that does not go to the original's sending session marks nothing.
+    replyTo(target, old, { nodeId: a.nodeId, session: "s-x" });
+    await sync(target);
+    frame(foreign, "message.status", { messageId: old, state: "delivered" });
+    await sync(foreign);
+    frame(sender, "message.send", { messageId: old, fromSession: "s-a", to: { nodeId: b.nodeId, session: "s-b" }, text: "synthetic" });
+    await sync(sender);
+    expect(await row(old)).toMatchObject({ state: "delivered", settled_state: "delivered" });
+    expect(await settles(old)).toHaveLength(1);
+    expect((await reconnect(a)).replayed).not.toContain(old);
+  });
+
+  it("keep a legacy accepted row replayable with its newest progress", async () => {
+    const { a, target, b } = await pair();
+    const id = await legacyRow(a.nodeId, b.nodeId, "accepted");
+    const newer = { phase: "waiting", code: "target-busy", observedAt: new Date().toISOString() };
+    const older = { ...newer, observedAt: new Date(Date.now() - 60_000).toISOString() };
+    frame(target, "message.status", { messageId: id, state: "accepted", progress: newer });
+    frame(target, "message.status", { messageId: id, state: "accepted", progress: older });
+    await sync(target);
+    expect(await row(id)).toMatchObject({ state: "accepted", progress_observed_at: newer.observedAt, settled_state: null });
+    const back = await reconnect(a);
+    expect(back.statuses.filter((s) => s.messageId === id)).toEqual([{ messageId: id, state: "accepted", progress: newer }]);
+  });
+
+  it("replay a row made final by expiry, a revoked target or a superseding owner until its sender acknowledges it", async () => {
+    const { a, b } = await pair();
+    const gone = await node("retention-revoked");
+    const expiring = await legacyRow(a.nodeId, b.nodeId, "queued");
+    const waiting = await legacyRow(a.nodeId, gone.nodeId, "queued");
+    await query((sql) => sql.exec("UPDATE messages SET expires_at = ? WHERE id = ?", Date.now() + 60 * 60_000, waiting));
+    await runInDurableObject(registry(), (instance) => instance.alarm());
+    expect(await row(expiring)).toMatchObject({ state: "expired", settled_state: null });
+    expect(await registry().revoke(gone.nodeId, "test")).not.toBeNull();
+    expect(await row(waiting)).toMatchObject({ state: "refused", settled_state: null });
+    const back = await reconnect(a);
+    expect(back.statuses.filter((s) => [expiring, waiting].includes(s.messageId))).toEqual([
+      { messageId: expiring, state: "expired" }, { messageId: waiting, state: "refused", reason: "target node revoked" }]);
+    ack(back.socket, expiring, "expired");
+    ack(back.socket, waiting, "refused");
+    await sync(back.socket);
+    expect([await settledState(expiring), await settledState(waiting)]).toEqual(["expired", "refused"]);
+    expect((await reconnect(a)).replayed).toEqual([]);
+
+    // A proxy that the owner's read supersedes goes through the same setState.
+    const { original, proxy } = await nodes();
+    const read = await original();
+    const queuedProxy = (await proxy(read)).messageId;
+    await registry().reportMessageStatus(String((await row(read))?.to_node), { messageId: read, state: "delivered" });
+    expect(await row(queuedProxy)).toMatchObject({ state: "refused", settled_state: null });
   });
 });

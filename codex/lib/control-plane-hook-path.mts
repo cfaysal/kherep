@@ -1,15 +1,17 @@
-import { command, hookGroup } from "./parity-config.mts";
+import { command, CONTROL_PLANE_ENTRY, ENTRY_NODE_FLAG, hookGroup } from "./parity-config.mts";
 
-// Issue #70. The deliver hook runs from the checkout, so a block written from
-// another checkout names a path that no fragment of this install renders. The
-// stable suffix and the runtime argument identify the hook, not the checkout:
-// point every such command in the managed block at the current checkout before
-// the block is matched. Both `command` and `commandWindows` carry the same form.
-const DELIVER_HOOK = /\\"((?:[^"\\]|\\\\)*?(?:\\\\|\/)modules(?:\\\\|\/)control-plane(?:\\\\|\/)node(?:\\\\|\/)deliver-hook\.mts)\\" \\"--runtime\\" \\"codex\\"/g;
-const DELIVER_COMMAND = new RegExp(`^command = ".*${DELIVER_HOOK.source}"$`, "m");
-// Issue #325, PR-A. The attribution hook sits beside the deliver hook in the
-// same checkout directory and is pointed at the current checkout with it.
+// Issues #70, #325 and #503. Blocks written before issue #503 ran the deliver
+// and attribution hooks from the checkout or source pin the installer ran from,
+// so every upgrade wrote another path into them. The stable suffix and the
+// runtime argument identify the hook, not the checkout: every such command in
+// the managed block becomes the stable entry-point form, once, before the block
+// is matched. The shell dispatcher carries the attribution path as its argument
+// with the same tail, so the same rule covers it. Both `command` and
+// `commandWindows` carry the same form.
 const CHECKOUT_HOOK = /\\"((?:[^"\\]|\\\\)*?(?:\\\\|\/)modules(?:\\\\|\/)control-plane(?:\\\\|\/)node(?:\\\\|\/))(deliver|attribution)-hook\.mts\\" \\"--runtime\\" \\"codex\\"/g;
+// The stable deliver command of any hook dir, as its TOML line spells it.
+const DELIVER_COMMAND = new RegExp(String.raw`^command = ".*\\"(?:[^"\\]|\\\\)*?`
+  + CONTROL_PLANE_ENTRY.replace(".", String.raw`\.`) + String.raw`\\" \\"deliver\\" \\"--runtime\\" \\"codex\\""$`, "m");
 const DELIVER_EVENTS = [
   ["SessionStart", "startup|resume|clear|compact"],
   ["UserPromptSubmit", ""],
@@ -30,36 +32,49 @@ function hookGroups(config: string): string[] {
   return groups;
 }
 
+// entry: the stable entry point of this install, when the control plane is wired.
+// controlPlaneHook: the deliver hook of this install's own source. Exact external
+// groups keep sole ownership in the stable form, and in the checkout-path form
+// bound to this same source, which an operator copied before issue #503; they
+// are never rewritten, because they lie outside the managed block.
 export function hasExactExternalDeliverHooks(
-  config: string, node: string, controlPlaneHook: string | undefined,
+  config: string, node: string, entry: string | undefined, controlPlaneHook: string | undefined,
   startMarker: string, endMarker: string,
 ): boolean {
-  if (!controlPlaneHook) return false;
+  if (!entry) return false;
   const start = config.indexOf(startMarker);
   const end = start < 0 ? -1 : config.indexOf(endMarker, start);
   if (start >= 0 && end < start) return false;
   const external = start < 0 ? config
     : config.slice(0, start) + config.slice(end + endMarker.length);
-  const bound = command(node, controlPlaneHook, "--runtime", "codex");
-  const hook = { command: bound, commandWindows: `& ${bound}` };
+  const bound = [command(node, ENTRY_NODE_FLAG, entry, "deliver", "--runtime", "codex"),
+    ...(controlPlaneHook ? [command(node, controlPlaneHook, "--runtime", "codex")] : [])];
   const groups = hookGroups(external);
   return DELIVER_EVENTS.every(([event, matcher]) => {
-    const expected = hookGroup(event, matcher, [hook]);
-    return groups.filter((group) => group === expected).length === 1;
+    const expected = new Set(bound.map((value) => hookGroup(event, matcher, [{ command: value, commandWindows: `& ${value}` }])));
+    return groups.filter((group) => expected.has(group)).length === 1;
   });
 }
 
-export function pointDeliverHooksAt(
-  config: string, controlPlaneHook: string | undefined, startMarker: string, endMarker: string,
+// Every checkout-path hook command in text, in the stable form of entry. A
+// hook command starts the entry point with ENTRY_NODE_FLAG; the shell
+// dispatcher's argument names the entry point alone.
+const SHELL_ARGUMENT = /codex-shell-checks\.mts\\" $/;
+export function stableHookCommands(text: string, entry: string): string {
+  // The entry path exactly as a rendered TOML string spells it.
+  const spelled = JSON.stringify(command(entry)).slice(3, -3);
+  return text.replace(CHECKOUT_HOOK, (_match, _dir, name: string, offset: number) =>
+    `${SHELL_ARGUMENT.test(text.slice(Math.max(0, offset - 256), offset)) ? "" : `\\"${ENTRY_NODE_FLAG}\\" `}`
+    + `\\"${spelled}\\" \\"${name}\\" \\"--runtime\\" \\"codex\\"`);
+}
+
+export function pointControlPlaneHooksAt(
+  config: string, entry: string | undefined, startMarker: string, endMarker: string,
 ): string {
   const start = config.indexOf(startMarker);
   const end = start < 0 ? -1 : config.indexOf(endMarker, start);
-  if (!controlPlaneHook || end < 0) return config;
-  // The hook path exactly as a rendered TOML string spells it.
-  const current = JSON.stringify(command(controlPlaneHook)).slice(3, -3);
-  const dir = current.slice(0, -"deliver-hook.mts".length);
-  const body = config.slice(start, end)
-    .replace(CHECKOUT_HOOK, (_match, _dir, name: string) => `\\"${dir}${name}-hook.mts\\" \\"--runtime\\" \\"codex\\"`);
+  if (!entry || end < 0) return config;
+  const body = stableHookCommands(config.slice(start, end), entry);
   return config.slice(0, start) + dropSurplusDeliverGroups(body) + config.slice(end);
 }
 

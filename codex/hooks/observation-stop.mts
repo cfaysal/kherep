@@ -28,7 +28,7 @@ export function observationPrompt(workspace = SELECTED_WORKSPACE, platform = pro
   const pathApi = platform === "win32" ? path.win32 : path.posix;
   const broker = shellLiteral(pathApi.join(workspace, "tools", "atl-confluence.mts"), platform);
   return [
-  "Before the final response, dispatch the codex-obs agent for this completed user turn using agent_type codex-obs, model gpt-5.6-luna, reasoning_effort low, and fork_turns none.",
+  "Before the final response, dispatch the codex-obs agent for this completed user turn using agent_type codex-obs, the exact model from its installed agent TOML, reasoning_effort low, and fork_turns none.",
   "Give it only a bounded, sanitized summary; never pass raw sessions, credentials, customer-private material, or private infrastructure.",
   "Mark each finding at the start of its own line as measured: `<command>` -> <deciding output excerpt>, or relayed: <source>.",
   "Require one strict JSON candidate. The worker performs no configuration or broker I/O.",
