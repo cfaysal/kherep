@@ -129,3 +129,28 @@ test("items 11 and 12: 33 log the line, and every following round starts from ze
   await pongs(h, 33);
   assert.deepEqual(counterLines(h.logs).slice(2), [line(33, "pong 33")], "the round of 10 was reset too");
 });
+
+// A round that throws discards its window's share, as base's round-local count did;
+// the chain's count (auth 1) survives into the next round, as on base. Frames sent
+// while pollCodexInbound lists tasks: only the first starts before the window
+// drains, the rest are deferred to the chain, so one frame is the window's share.
+test("a round whose Codex queue poll throws carries no window frame into the next round", async (t) => {
+  const h = await connectedRound(t);
+  const read = fs.readdirSync;
+  let injected = false, thrown = false;
+  t.mock.method(fs, "readdirSync", (...args: Parameters<typeof fs.readdirSync>) => {
+    const stack = path.resolve(String(args[0])) === path.resolve(h.paths.tasks) ? new Error().stack ?? "" : "";
+    if (!injected && stack.includes("pollCodexInbound")) { injected = true; h.socket().message(receipt(0)); }
+    if (!thrown && stack.includes("pollCodexQueue") && stack.includes("exchangeRound")) {
+      thrown = true;
+      throw Object.assign(new Error("synthetic EIO"), { code: "EIO" });
+    }
+    return read(...args);
+  });
+  await h.round();
+  assert.ok(injected && thrown);
+  assert.ok(h.logs.some((entry) => entry.startsWith("kherep-node: message exchange failed:")), h.logs.join("\n"));
+  assert.deepEqual(counterLines(h.logs), []);
+  await pongs(h, 32);
+  assert.deepEqual(counterLines(h.logs), [line(33, "pong 32, auth 1")]);
+});

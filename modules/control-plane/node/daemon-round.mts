@@ -10,7 +10,7 @@ import type { InboxRecord } from "./inbox.mts";
 import type { InboxIndex } from "./inbox-index.mts";
 import { pollMcpIntents } from "./mcp-local.mts";
 import { loadPolicy } from "./policy.mts";
-import { tallyKind, type RoundTally } from "./round-tally.mts";
+import { tallyKind, type RoundTally, type TallyKind } from "./round-tally.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { pollTaskControl } from "./task-control-exchange.mts";
 import { pollTasks } from "./task-exchange.mts";
@@ -73,10 +73,12 @@ export async function exchangeRound(ctx: RoundContext): Promise<void> {
   // Keep runtime mutation serialized while the existing queue lane and
   // admitted Codex peer transport can progress (issue #369).
   // Frames the window handles bypass the daemon's lanes; deferred ones are counted there.
+  // Round-local, as base's windowHandled: discarded when the round throws. Bounded by TALLY_KINDS.
+  const windowKinds = new Map<TallyKind, number>();
   const window = published ? codexIntakeWindow({ client, paths, policyFile: ctx.policyFile, policy: applied,
     connected: ctx.live, send: (frame) => ctx.live() && ctx.send(frame), exchange: () => exchange(),
     queue: () => pollCodexQueue({ ...runner, policy: applied }, log), defer: ctx.defer,
-    handled: (data) => ctx.tally.add(tallyKind(data)), log }) : null;
+    handled: (data) => { const kind = tallyKind(data); windowKinds.set(kind, (windowKinds.get(kind) ?? 0) + 1); }, log }) : null;
   ctx.window(window);
   try { await pollCodexInbound({ ...runner, policy: applied }, log); }
   finally { await window?.drain(); ctx.window(null); }
@@ -84,6 +86,7 @@ export async function exchangeRound(ctx: RoundContext): Promise<void> {
   // Not awaited: queue runs have their own lane and never block this chain.
   // Issue #444: this round's policy, as the intake window passes it; the fork gate and queue authorization re-read the file.
   pollCodexQueue({ ...runner, policy: applied }, log);
+  for (const [kind, count] of windowKinds) ctx.tally.add(kind, count);
   const { total, summary } = ctx.tally.take();
   if (counts.status + counts.outbox > ROUND_COUNTERS_MIN || total > ROUND_COUNTERS_MIN) {
     log(`kherep-node: round sent ${counts.status} status/${counts.outbox} outbox frames, handled ${total} inbound items${summary && `: ${summary}`}`);
