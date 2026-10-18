@@ -699,18 +699,29 @@ test_upgrade_moves_clq_to_stop() {
   grep -q '^hooks: unwire PreToolUse node ".*hooks/clq-accept-gate\.mts" (managed under Stop)$' "$ROOT/log" ||
     { cat "$ROOT/log"; fail "the install did not report moving clq-accept-gate off PreToolUse"; }
   node -e '
-    const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const fs = require("fs"), path = require("path");
+    const [file, home, renderer, template] = process.argv.slice(1);
+    const fail = (message) => { console.error(message); process.exit(1); };
+    const s = JSON.parse(fs.readFileSync(file, "utf8"));
     const where = Object.entries(s.hooks).flatMap(([event, groups]) => groups.flatMap((g) =>
       (g.hooks || []).filter((h) => String(h.command).includes("clq-accept-gate")).map(() => `${event}[${g.matcher}]`)));
     if (where.join(",") !== "Stop[]") { console.error(`clq wired at: ${where.join(",") || "nowhere"}`); process.exit(1); }
-    // Issue #507: the Bash group is exactly the dispatcher entry for commit-guard and deploy-guard.
-    const at = (name) => `"${process.argv[2].replace(/\\/g, "/")}/hooks/${name}.mts"`;
-    const want = `node ${at("guard-dispatch")} ${at("commit-guard")} ${at("deploy-guard")}`;
-    const bash = (s.hooks.PreToolUse || []).filter((g) => g.matcher === "Bash").flatMap((g) => g.hooks || []);
-    if (JSON.stringify(bash) !== JSON.stringify([{ type: "command", command: want, timeout: 30 }])) {
-      console.error(`Bash group is not exactly ${want} with timeout 30: ${JSON.stringify(bash)}`); process.exit(1);
-    }
-  ' "$C/settings.json" "$home" || { cat "$C/settings.json"; fail "the upgrade did not converge clq-accept-gate to one Stop entry and one Bash dispatcher"; }
+    // Issue #507: the Bash group is exactly the dispatcher entry for commit-guard and deploy-guard, with the
+    // Claude home as the win profile renders it: resolveProfilePath, the host path.resolve, no slash rewrite.
+    const dispatcher = (claudeHome) =>
+      `node ${["guard-dispatch", "commit-guard", "deploy-guard"].map((n) => `"${claudeHome}/hooks/${n}.mts"`).join(" ")}`;
+    import(require("url").pathToFileURL(renderer).href).then(({ resolveProfilePath }) => {
+      if (resolveProfilePath("win", home) !== path.resolve(home)) fail("the win profile no longer renders the home with path.resolve");
+      // On any host: a Windows home keeps its backslashes under path.win32, as the renderer substitutes it.
+      const winHome = path.win32.resolve("C:\\Users\\Example\\.claude");
+      const raw = JSON.parse(fs.readFileSync(template, "utf8")).hooks.PreToolUse.find((g) => g.matcher === "Bash").hooks[0].command;
+      if (raw.replaceAll("__KHEREP_CLAUDE_HOME__", winHome) !== dispatcher(winHome)) fail(`no win32 match: ${dispatcher(winHome)}`);
+      const want = JSON.stringify([{ type: "command", command: dispatcher(resolveProfilePath("win", home)), timeout: 30 }]);
+      const bash = (s.hooks.PreToolUse || []).filter((g) => g.matcher === "Bash").flatMap((g) => g.hooks || []);
+      if (JSON.stringify(bash) !== want) fail(`Bash group is not exactly ${want}: ${JSON.stringify(bash)}`);
+    });
+  ' "$C/settings.json" "$home" "$HERE/render-profile-paths.mts" "$HERE/../claude/settings.user.json" ||
+    { cat "$C/settings.json"; fail "the upgrade did not converge clq-accept-gate to one Stop entry and one Bash dispatcher"; }
   HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
     bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
     { cat "$ROOT/drift.log"; fail "drift-check failed after moving clq-accept-gate to Stop"; }
