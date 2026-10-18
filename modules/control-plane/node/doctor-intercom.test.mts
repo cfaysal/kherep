@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { install } from "../../../codex/install.mts";
+import { fixtureModelOptions } from "../../../codex/lib/model-policy.fixture.mts";
 import type { Capabilities } from "../../../codex/lib/contracts.mts";
 import { launcherRule, renderControlPlaneRules, type RuleCommand } from "../../../codex/lib/control-plane-rules.mts";
 import { nodePaths, type NodePaths } from "./config.mts";
@@ -164,7 +165,7 @@ test("a reinstall over a legacy two-rule file leaves the launcher rule alone and
   const registry = path.join(h.scratch, "claude.json");
   fs.writeFileSync(registry, JSON.stringify({ mcpServers: Object.fromEntries(
     capabilities.mcpServers.map((name) => [name, { type: "http", url: `https://example.test/${name}` }])) }), { mode: 0o600 });
-  install({ codexHome: h.codex, claudeRegistryFile: registry, claudeConfigDir: h.claude, workspace: path.join(h.scratch, "workspace"),
+  install({ ...fixtureModelOptions(), codexHome: h.codex, claudeRegistryFile: registry, claudeConfigDir: h.claude, workspace: path.join(h.scratch, "workspace"),
     nodePath: process.execPath, log: (): void => {}, skipPluginRegistration: true, installAtlassianTools: false,
     resolveRegistryRuntime: () => "fixture", runCodex: (): string => "ok", controlPlaneOutbox: h.paths.outbox });
   const rules = fs.readFileSync(h.files.codexRules, "utf8");
