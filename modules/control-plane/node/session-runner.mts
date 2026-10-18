@@ -4,6 +4,7 @@ import type { SessionContinueArgs, SessionStartArgs, SessionStopArgs } from "../
 import { continueCodex, startCodex, stopCodex } from "./codex-runner.mts";
 import { startTimeOf, type CodexDeps } from "./codex-process.mts";
 import type { NodePaths } from "./config.mts";
+import type { InboxRecord } from "./inbox.mts";
 import type { NodePolicy } from "./policy.mts";
 import { notReady, type Readiness } from "./runtime-readiness.mts";
 import { taskCommand } from "./session-command.mts";
@@ -67,6 +68,9 @@ export interface RunnerDeps {
   // Issue #408, PR 4: the Worker capabilities proven on the current
   // connection (client.mts workerCapabilities); null or absent: none proven.
   workerCapabilities?: () => readonly string[] | null;
+  // Issue #487: the daemon's inbox records (inbox-index.mts, or one round's
+  // snapshot of it); without it the readers list the inbox files.
+  inbox?: () => InboxRecord[];
 }
 
 // Rejects with the CLI's own stderr (or stdout), never with the command line,

@@ -6,9 +6,9 @@ import { resumeArgs, stillRuns } from "./codex-process.mts";
 import { spawnRun } from "./codex-runner.mts";
 import type { NodePaths } from "./config.mts";
 import { deliveryContext, MAX_OFFERS, offerEnded, sessionInbox } from "./deliver-core.mts";
-import { progressRecords } from "./delivery-progress.mts";
+import { inboxOf, progressRecords } from "./delivery-progress.mts";
 import { exhaustedOfferReason, permanentFallbackFailure } from "./delivery-failure.mts";
-import { listInbox, markRefused, markRetry, MAX_REPLY_DEPTH, messageIds, type InboxRecord } from "./inbox.mts";
+import { getMessage, markRefused as refuseRecord, markRetry, MAX_REPLY_DEPTH, messageIds, type InboxRecord } from "./inbox.mts";
 import { wakeAllowed, wakeBudget } from "./policy.mts";
 import { notReadyNow } from "./runtime-readiness.mts";
 import type { RunnerDeps } from "./session-runner.mts";
@@ -56,8 +56,14 @@ export async function pollCodexInbound(deps: RunnerDeps, log: (line: string) => 
     && !isActive(record) && record.operatorStoppedAt === undefined);
   if (tasks.length === 0) return;
   pruneNoted(deps.paths);
+  // Issue #487: one inbox read serves the routing and every task's selection;
+  // it was one full read per ended task. It is read again, before the next
+  // task, only after a task acted on due messages (a wake may await a run) or
+  // refused one. A failed routing read is retried per task, as before.
+  let inbox: InboxRecord[] | null = null;
   try {
-    const targets = new Set(listInbox(deps.paths.inbox).filter((r) => r.state === "accepted" || r.state === "offered").map((r) => r.toSession));
+    inbox = inboxOf(deps);
+    const targets = new Set(inbox.filter((r) => r.state === "accepted" || r.state === "offered").map((r) => r.toSession));
     if (!tasks.some((record) => targets.has(record.sessionId!) || targets.has(record.name))) return;
   } catch (error) {
     log(`kherep-node: could not read inbox for Codex task routing: ${String((error as Error).message ?? error)}`);
@@ -65,15 +71,21 @@ export async function pollCodexInbound(deps: RunnerDeps, log: (line: string) => 
   // Only an initially empty round skips the loop. A pending round keeps every
   // task's fresh read, including messages arriving while another wake awaits.
   for (const record of tasks) {
+    const effects = { stale: false };
     try {
-      await wakeTask(deps, record, log);
+      inbox ??= inboxOf(deps);
+      await wakeTask(deps, record, log, inbox, effects);
     } catch (error) {
+      effects.stale = true;
       log(`kherep-node: could not deliver messages to task ${record.taskId}: ${String((error as Error).message ?? error)}`);
     }
+    if (effects.stale) inbox = null;
   }
 }
 
-async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string) => void): Promise<void> {
+// inbox: the round's records; effects.stale: the task acted, read them again.
+async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string) => void, inbox: InboxRecord[],
+  effects: { stale: boolean }): Promise<void> {
   const { paths, policy } = deps;
   const now = deps.now?.() ?? Date.now();
   const sessionId = record.sessionId!;
@@ -81,7 +93,14 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   // Task grant: a task session gets the messages of its task, listed or not.
   const listed = wakeAllowed(policy, refs);
   const granted = (r: InboxRecord): boolean => listed || taskGrants(record, r);
-  const all = sessionInbox(paths, refs);
+  const markRefused = (dir: string, messageId: string, reason: string): boolean => {
+    effects.stale = true;
+    return refuseRecord(dir, messageId, reason);
+  };
+  // Only waiting records are used below. Each is read again, so a stale
+  // snapshot never authorizes a wake; delivered and refused are final.
+  const all = inbox.filter((r) => (r.state === "accepted" || r.state === "offered") && refs.includes(r.toSession))
+    .map((r) => getMessage(paths.inbox, r.messageId)).filter((r): r is InboxRecord => r !== null && refs.includes(r.toSession));
   const unlisted = all.filter((r) => !granted(r) && r.state === "accepted");
   // Every early return below leaves a fixed progress code on the waiting
   // messages, so none stays accepted without a reason (issue #197).
@@ -110,6 +129,7 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
   const waiting = [...fresh, ...stuck];
   const due = ids(waiting);
   if (due.length === 0) return;
+  effects.stale = true;
   // Sessions not enabled or codex not listed hold the resume as the kill switch does (issue #244).
   const sessions = policy.sessions;
   if (!sessions?.enabled || !sessions.runtimes.includes("codex") || fs.existsSync(killSwitch(paths))) {

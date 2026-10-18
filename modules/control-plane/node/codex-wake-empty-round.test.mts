@@ -187,3 +187,17 @@ test("a failed routing snapshot is logged and the original per-task read retries
   assert.equal(getMessage(node.paths.inbox, record.messageId)?.retry, true);
   assert.ok(lines.some((line) => /could not read inbox for Codex task routing: synthetic routing read failure/.test(line)));
 });
+
+// Issue #487: one waiting message for one ended task made every ended task
+// read the whole inbox (23 tasks x about 0.5 s per round on the live node).
+test("20 ended tasks and one waiting task message read the inbox a constant number of times, not once per task", async (t) => {
+  const node = endedTasks(t, 20);
+  for (let n = 0; n < 100; n++) message(node, "unrelated-session", "delivered");
+  const waiting = message(node, node.tasks[0].name, "accepted", node.tasks[0]);
+  const reads = countInboxReads(t, node);
+  await pollCodexInbound(node.deps());
+  assert.equal(node.attempts.length, 1, "the one task with a waiting message is resumed");
+  assert.equal(getMessage(node.paths.inbox, waiting.messageId)?.retry, true);
+  // Routing, the resume path (as before), one re-read after the acting task; it was one full read per task.
+  assert.ok(reads() <= 6 * 101, `${reads()} record reads for 101 records and 20 ended tasks`);
+});

@@ -6,24 +6,20 @@ import { deliverToClosed } from "./closed-delivery.mts";
 import { codexHome } from "./codex-app.mts";
 import { forgetCodexSession } from "./codex-sessions.mts";
 import { recoverForkAttemptsAtStart } from "./codex-fork-attempts.mts";
-import { relaySendGate } from "./codex-fork-relay.mts";
-import { pollCodexQueue } from "./codex-queue.mts";
-import { pollCodexInbound } from "./codex-wake.mts";
-import { codexIntakeWindow } from "./codex-intake-window.mts";
+import type { CodexIntakeWindow } from "./codex-intake-window.mts";
 import { connectUrl, ensureDir, type NodeConfig, type NodePaths } from "./config.mts";
 import {
   carriedOver, previousDaemonState, recordDaemonState, withVerdict, type DaemonServiceBinding, type DaemonState,
 } from "./daemon-state.mts";
+import { exchangeRound } from "./daemon-round.mts";
 import { captureRuntimeSourceIdentity } from "./daemon-source.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
-import { frameKind, intakeLane, laneTimer, type IntakeConnection, type LaneOptions } from "./frame-lanes.mts";
-import { observeClaudeDeliveryProgress, observeCodexTaskProgress } from "./delivery-progress.mts";
-import {
-  deliveryDepth, DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, pollExchange, recordingSessions, type ProxySend,
-} from "./exchange.mts";
+import { enqueued, frameKind, intakeLane, laneTimer, type IntakeConnection, type LaneOptions } from "./frame-lanes.mts";
+import { deliveryDepth, DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, recordingSessions } from "./exchange.mts";
 import { readPrivateKey } from "./identity.mts";
 import { installPaused, markedProbe, noticeInterruptedProbe } from "./install-pause.mts";
 import { purgeInbox, storeMessage } from "./inbox.mts";
+import { inboxIndex } from "./inbox-index.mts";
 import { scheduleListenerSweep } from "./listener-sweep.mts";
 import { loadPolicy, type NodePolicy } from "./policy.mts";
 import { routeFrame } from "./readiness-lane.mts";
@@ -34,15 +30,15 @@ import { reportSlowSync } from "./sync-timing.mts";
 import { continueTask, startTask, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { listSessions } from "./sessions.mts";
 import { recordAndPublishSessions } from "./periodic-session-publication.mts";
-import { pollTasks, recordRequestResult } from "./task-exchange.mts";
+import { recordRequestResult } from "./task-exchange.mts";
 import { watchTasks } from "./task-watch.mts";
-import { handleTaskControlExecute, pollTaskControl } from "./task-control-exchange.mts";
+import { handleTaskControlExecute } from "./task-control-exchange.mts";
 import { executeTaskControl } from "./task-control-local.mts";
 import {
   applyQueryResult, receiptResult, recordRegistrationReceipt, recoverOperations,
 } from "./task-control-store.mts";
 import {
-  answerMcpInbox, disableMcp, hasMcpCredential, offerMcpInbox, pollMcpIntents, readMcpInbox, recordMcpCredential, recordMcpIntentReceipt,
+  answerMcpInbox, disableMcp, hasMcpCredential, offerMcpInbox, readMcpInbox, recordMcpCredential, recordMcpIntentReceipt,
 } from "./mcp-local.mts";
 
 // Application ping interval. The Worker answers PING_FRAME through
@@ -140,7 +136,9 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // the first check runs the Windows identity lookup before connect().
   for (const runtime of enabledRuntimes(policy)) void readiness.check(runtime);
   // Issue #408, PR 4: the capability proven on the current connection, read lazily from the client below.
-  const runner: RunnerDeps = { paths, policy, log, readiness, workerCapabilities: () => client.workerCapabilities };
+  // Issue #487: one in-process inbox index for the daemon's readers (inbox-index.mts).
+  const inbox = inboxIndex(paths.inbox);
+  const runner: RunnerDeps = { paths, policy, log, readiness, workerCapabilities: () => client.workerCapabilities, inbox: () => inbox.records() };
   const live = (): RunnerDeps => ({ ...runner, policy: loadPolicy(config.policyFile) });
   recoverOperations(paths);
   recoverForkAttemptsAtStart(paths, Date.now(), log);
@@ -179,8 +177,10 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     ...exchangeOptions(paths), log,
   });
   const timed = laneTimer(log, lanes.slowLaneMs);
+  let handled = 0; // inbound items since the last round (issue #487)
   // Issue #441: deliveries on a lane of their own (frame-lanes.mts); spans reconnects like chain.
-  const intake = intakeLane({ client, policyFile: config.policyFile, inbox: paths.inbox, log, timed, intakeSlowMs: lanes.intakeSlowMs });
+  const intake = intakeLane({ client, policyFile: config.policyFile, inbox: paths.inbox, log, intakeSlowMs: lanes.intakeSlowMs,
+    timed: (lane, kind, run, at) => timed(lane, kind, () => { handled++; return run(); }, at) });
   const stopSlowSync = reportSlowSync(log);
 
   let stopped = false;
@@ -204,7 +204,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     let exchange: NodeJS.Timeout | null = null;
     let directory: NodeJS.Timeout | null = null;
     let exchangePending = false;
-    let intakeWindow: ReturnType<typeof codexIntakeWindow> | null = null;
+    let intakeWindow: CodexIntakeWindow | null = null;
     // Outbox records sent on this connection, with their send time; an
     // unanswered one is sent again with backoff (send-schedule.mts), or at
     // once after a reconnect, which starts with a new map.
@@ -239,7 +239,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           if (!controller.signal.aborted) log(`kherep-node: session listing failed, snapshot skipped: ${String(error)}`);
           return null;
         }).then((listed) => {
-          chain = chain.then(() => timed("chain", "snapshot", async () => {
+          chain = chain.then(enqueued(timed, "chain", "snapshot", async () => {
             if (socket !== ws || ws.readyState !== WebSocket.OPEN) return;
             if (listed && !controller.signal.aborted) await recordAndPublishSessions(client, paths, listed, send, log, controller.signal);
             await watchTasks(runner, log);
@@ -256,46 +256,15 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         // cannot accumulate behind redundant periodic exchange work.
         if (exchangePending) return;
         exchangePending = true;
-        chain = chain.then(() => timed("chain", "exchange-round", async () => {
-          const current = loadPolicy(config.policyFile);
-          let applied = current;
-          // Issue #444: the gate's presence check follows the round's policy, as the queue does; the relay guards read the file.
-          const proxySend = (): ProxySend => relaySendGate({ ...runner, policy: applied }, log);
-          let published = publishRegistration(await client.refreshPolicy(applied));
-          observeClaudeDeliveryProgress({ ...runner, policy: current });
-          observeCodexTaskProgress(runner);
-          pollExchange(client, paths, inflight, send, Date.now(), Math.random, proxySend());
-          pollTasks(client, paths, applied, requestsInflight, send);
-          const enabled = current.sessions?.enabled === true && current.sessions.ownTaskControl === true
-            && current.sessions.runtimes.length > 0;
-          pollTaskControl(client, paths, taskControlInflight, send, Date.now(), enabled);
-          await pollMcpIntents(client, paths, mcpInflight, send, async () => {
-            applied = loadPolicy(config.policyFile);
-            const sent = publishRegistration(await client.refreshPolicy(applied));
-            published = published && sent;
-            return sent;
-          });
-          // Peer messages for ended Codex task sessions resume them (issue #63).
-          // Keep runtime mutation serialized while the existing queue lane and
-          // admitted Codex peer transport can progress (issue #369).
-          const window = published ? codexIntakeWindow({ client, paths, policyFile: config.policyFile, policy: applied,
-            connected: () => !stopped && socket === ws && ws.readyState === WebSocket.OPEN,
-            send: frame => !stopped && socket === ws && send(frame),
-            exchange: () => pollExchange(client, paths, inflight, send, Date.now(), Math.random, proxySend()),
-            queue: () => pollCodexQueue({ ...runner, policy: applied }, log), defer: dispatchFrame, log }) : null;
-          intakeWindow = window;
-          try { await pollCodexInbound({ ...runner, policy: applied }, log); }
-          finally { await window?.drain(); intakeWindow = null; }
-          // ... and wake idle interactive Codex sessions with a pointer (issue #66).
-          // Not awaited: queue runs have their own lane and never block this chain.
-          // Issue #444: this round's policy, as the intake window passes it; the fork gate and queue authorization re-read the file.
-          pollCodexQueue({ ...runner, policy: applied }, log);
-        }))
+        chain = chain.then(enqueued(timed, "chain", "exchange-round", () => exchangeRound({ client, paths, policyFile: config.policyFile,
+          runner, inbox, log, inflight, requestsInflight, taskControlInflight: () => taskControlInflight, mcpInflight: () => mcpInflight,
+          send, publishRegistration, live: () => !stopped && socket === ws && ws.readyState === WebSocket.OPEN, defer: dispatchFrame,
+          window: (window) => { intakeWindow = window; }, handled: () => { const count = handled; handled = 0; return count; } })))
           .catch((error: unknown) => log(`kherep-node: message exchange failed: ${String(error)}`))
           .finally(() => { exchangePending = false; });
       }, EXCHANGE_INTERVAL_MS);
       directory = setInterval(() => {
-        chain = chain.then(() => timed("chain", "directory", () => { client.directoryRequest().forEach(send); }));
+        chain = chain.then(enqueued(timed, "chain", "directory", () => { client.directoryRequest().forEach(send); }));
       }, DIRECTORY_INTERVAL_MS);
     });
     const connection: IntakeConnection = { live: () => socket === ws && ws.readyState === WebSocket.OPEN, send, publishRegistration };
@@ -322,7 +291,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
       }
     };
     const handleFrame = (data: string): void => {
-      chain = chain.then(() => timed("chain", () => frameKind(data), async () => {
+      chain = chain.then(enqueued(timed, "chain", () => frameKind(data), async () => {
+        handled++;
         publishRegistration(await client.refreshPolicy(loadPolicy(config.policyFile)));
         const wasAuthed = client.authenticated;
         // Issue #408 (design r3 section 3.3): live is decided when the lane reaches the frame.
@@ -342,7 +312,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
             const controller = new AbortController();
             backgroundDiscovery = { controller, socket: ws };
             void source(controller.signal).then((listed) => {
-              chain = chain.then(() => timed("chain", "snapshot", async () => {
+              chain = chain.then(enqueued(timed, "chain", "snapshot", async () => {
                 if (socket !== ws || ws.readyState !== WebSocket.OPEN || controller.signal.aborted) return;
                 await recordAndPublishSessions(client, paths, listed, send, log, controller.signal);
               }));
