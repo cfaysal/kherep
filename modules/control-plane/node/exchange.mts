@@ -1,17 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { SessionInfo } from "../protocol.mts";
 import {
   isDirectoryBody, isMessageId, isMessageSendBody, type DirectoryBody, type MessageDeliverBody, type MessageProgress, type MessageSendBody,
 } from "../protocol-messages.mts";
 import type { ClientOptions, NodeClient, SentState } from "./client.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
-import {
-  markReported, messageIds, readJson, refuseUndeliverable, UNDELIVERABLE_AFTER_MS, unreportedStatuses, writeJsonAtomic,
-} from "./inbox.mts";
-import { rememberSessions, unlistedRuntimes } from "./known-sessions.mts";
+import { readLocalSessions } from "./exchange-sessions.mts";
+import { markReported, messageIds, readJson, unreportedStatuses, writeJsonAtomic, type UnreportedStatus } from "./inbox.mts";
 import { directoryDue, sendSchedule } from "./send-schedule.mts";
+export {
+  addLocalSession, localSessionName, readLocalSessions, recordingSessions, writeLocalSessions, type LocalSession,
+} from "./exchange-sessions.mts";
 
 // The local exchange between the daemon and the session tools (issue #31,
 // step 3a): plain files in the node's config directory, no local socket.
@@ -39,7 +39,6 @@ export interface OutboxRecord extends MessageSendBody { createdAt: string; depth
 export type SentRecord = Partial<OutboxRecord> & {
   messageId: string; state: SentState; reason?: string; progress?: MessageProgress; updatedAt: string; noticedAt?: string;
 };
-export interface LocalSession { sessionId: string; name?: string; runtime?: string; state?: string }
 // Issue #408, PR 4 (design r3 section 2.5): the send gate of proxy answers.
 // allow decides at each send, resends included; sent is told each send.
 export interface ProxySend { allow(record: OutboxRecord, now: number): boolean; sent(messageId: string): void }
@@ -159,61 +158,6 @@ function takeDirectoryRequest(paths: NodePaths): boolean {
   }
 }
 
-export function writeLocalSessions(paths: NodePaths, sessions: SessionInfo[], now: number = Date.now()): void {
-  ensureDir(paths.dir);
-  const local: LocalSession[] = sessions.map((s) => ({ sessionId: s.sessionId, ...(s.name ? { name: s.name } : {}),
-    runtime: s.runtime, state: s.state }));
-  writeJsonAtomic(paths.sessions, { sessions: local, unseen: [...unlistedRuntimes(sessions)], updatedAt: new Date(now).toISOString() });
-}
-
-export function readLocalSessions(paths: NodePaths): LocalSession[] {
-  const value = readJson<{ sessions?: unknown }>(paths.sessions);
-  return Array.isArray(value?.sessions) ? value.sessions as LocalSession[] : [];
-}
-
-// Adds a session this node just resumed (issue #102), so the delivery hook of
-// its first turn finds it by name before the next listing replaces the file.
-export function addLocalSession(paths: NodePaths, session: LocalSession): void {
-  const value = readJson<{ sessions?: unknown; updatedAt?: string }>(paths.sessions);
-  const sessions = readLocalSessions(paths).filter((s) => s.sessionId !== session.sessionId);
-  writeJsonAtomic(paths.sessions, { ...value, sessions: [...sessions, session] });
-}
-
-// The name sessions.json records for a local session id, if any.
-export function localSessionName(paths: NodePaths, sessionId: string): string | undefined {
-  return readLocalSessions(paths).find((s) => s.sessionId === sessionId)?.name;
-}
-
-// Wraps the session listing so that every successful one is written to
-// sessions.json; the delivery hook reads names from there instead of running
-// claude on every prompt. The same successful listing refuses inbox messages
-// whose session has ended (refuseUndeliverable); a failed one decides nothing.
-export function recordingSessions(paths: NodePaths, list: (signal?: AbortSignal) => Promise<SessionInfo[]>, log: (line: string) => void,
-  now: () => number = Date.now, undeliverableAfterMs: number = UNDELIVERABLE_AFTER_MS): (signal?: AbortSignal) => Promise<SessionInfo[]> {
-  return async (signal) => {
-    const sessions = await list(signal);
-    signal?.throwIfAborted();
-    const observedAt = now();
-    try {
-      writeLocalSessions(paths, sessions, observedAt);
-    } catch (error) {
-      log(`kherep-node: could not write sessions.json: ${String(error)}`);
-    }
-    try {
-      rememberSessions(paths, sessions, observedAt, unlistedRuntimes(sessions));
-    } catch (error) {
-      log(`kherep-node: could not write known-sessions.json: ${String(error)}`);
-    }
-    try {
-      const refused = refuseUndeliverable(paths.inbox, sessions, observedAt, undeliverableAfterMs);
-      if (refused.length > 0) log(`kherep-node: refused ${refused.length} message(s) for sessions that are not running`);
-    } catch (error) {
-      log(`kherep-node: could not check the inbox for ended sessions: ${String(error)}`);
-    }
-    return sessions;
-  };
-}
-
 // The client callbacks that record directory frames and sent states, and read
 // the local session listing for the messaging policy.
 export function exchangeOptions(paths: NodePaths, now: () => number = Date.now):
@@ -252,9 +196,13 @@ function reportKey(record: { messageId: string; state: string; progress?: Messag
 // progress), later with the same backoff. send returns false when the socket
 // is gone; nothing counts as sent or reported unless it went out. A proxy
 // answer (proxyOf) goes out only when proxySend allows it at that moment;
-// without proxySend it is held.
+// without proxySend it is held. Issue #487: the daemon passes its inbox index
+// as unreported, and counts adds up the status and outbox frames sent (D1).
+export interface ExchangeCounts { status: number; outbox: number }
+export interface ExchangeSources { unreported?: (now: number) => UnreportedStatus[]; counts?: ExchangeCounts }
 export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Map<string, number>, send: (frame: string) => boolean,
-  now: number = Date.now(), random: () => number = Math.random, proxySend?: ProxySend): void {
+  now: number = Date.now(), random: () => number = Math.random, proxySend?: ProxySend, sources: ExchangeSources = {}): void {
+  const counts = sources.counts ?? { status: 0, outbox: 0 };
   const sendAll = (frames: string[]): boolean => frames.length > 0 && frames.every(send);
   const schedule = sendSchedule(inflight);
   if (directoryDue(schedule, now) && takeDirectoryRequest(paths) && sendAll(client.directoryRequest())) schedule.directorySentAt = now;
@@ -283,14 +231,16 @@ export function pollExchange(client: NodeClient, paths: NodePaths, inflight: Map
       inflight.set(messageId, now);
       schedule.outbox.sent(messageId, now, random);
       if (body.proxyOf) proxySend?.sent(messageId);
+      counts.outbox++;
     }
   }
-  const pending = unreportedStatuses(paths.inbox, now);
+  const pending = sources.unreported?.(now) ?? unreportedStatuses(paths.inbox, now);
   schedule.reports.retain(pending.map(reportKey));
   for (const record of pending) {
     const key = reportKey(record);
     if (schedule.reports.due(key, now) && sendAll(client.reportStatus(record.messageId, record.state, record.reason, record.progress))) {
       schedule.reports.sent(key, now, random);
+      counts.status++;
     }
   }
 }

@@ -12,6 +12,9 @@ import { isActive, listTasks, taskForSession, taskGrants } from "./task-records.
 import { killSwitch, WAKE_MAX_WAIT_MS } from "./wake-hook.mts";
 import { lazyRequests, replyGrants, taskMessageGrants, type RequestIndex } from "./wake-reply.mts";
 
+// Issue #487: the daemon passes its inbox index or the round snapshot.
+export const inboxOf = (deps: RunnerDeps): InboxRecord[] => deps.inbox?.() ?? listInbox(deps.paths.inbox);
+
 const refsOf = (session: { sessionId: string; name?: string }): string[] =>
   session.name ? [session.sessionId, session.name] : [session.sessionId];
 
@@ -89,8 +92,7 @@ export function observeClaudeDeliveryProgress(deps: RunnerDeps): void {
     return aliases.length === 1 ? aliases[0] : undefined;
   };
 
-  const waiting = listInbox(deps.paths.inbox)
-    .filter((record) => record.state === "accepted" || record.state === "offered");
+  const waiting = inboxOf(deps).filter((record) => record.state === "accepted" || record.state === "offered");
   progressRecords(deps.paths, waiting.filter((record) => {
     if (record.state !== "offered") return false;
     const target = resolve(record);
@@ -125,7 +127,7 @@ export function observeCodexTaskProgress(deps: RunnerDeps): void {
     && (task.operatorStoppedAt !== undefined || isActive(task)));
   if (held.length === 0) return;
   const now = deps.now?.() ?? Date.now();
-  const waiting = listInbox(deps.paths.inbox).filter((record) => record.state === "accepted" && record.closedTo === undefined);
+  const waiting = inboxOf(deps).filter((record) => record.state === "accepted" && record.closedTo === undefined);
   for (const task of held) {
     const records = waiting.filter((record) => record.toSession === task.sessionId || record.toSession === task.name);
     const code = task.operatorStoppedAt !== undefined ? "operator-stopped" : "target-busy";

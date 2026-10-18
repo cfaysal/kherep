@@ -270,11 +270,15 @@ function reportState(record: InboxRecord): ReportedState | null {
   return record.state === "delivered" || record.state === "refused" ? record.state : null;
 }
 
-export function unreportedStatuses(dir: string, now: number = Date.now()): (InboxRecord & { state: ReportedState; progress?: MessageProgress })[] {
-  return listInbox(dir).flatMap((record) => {
+// records and receiptOf: the daemon's index (inbox-index.mts, issue #487)
+// supplies both; every other caller reads the files.
+export type UnreportedStatus = InboxRecord & { state: ReportedState; progress?: MessageProgress };
+export function unreportedStatuses(dir: string, now: number = Date.now(), records: InboxRecord[] = listInbox(dir),
+  receiptOf: (record: InboxRecord) => ReceiptRecord | null = (record) => getReceipt(dir, record.messageId)): UnreportedStatus[] {
+  return records.flatMap((record) => {
     const state = reportState(record);
     if (!state) return [];
-    const receipt = getReceipt(dir, record.messageId);
+    const receipt = receiptOf(record);
     const statePending = receipt?.reportedState !== state;
     const progress = state === "accepted" ? getMessageProgress(dir, record.messageId) : null;
     const reportedProgressAt = Date.parse(receipt?.reportedProgressAt ?? "");

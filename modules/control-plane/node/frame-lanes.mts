@@ -12,7 +12,7 @@ import { loadPolicy } from "./policy.mts";
 // refresh, the client's onDeliver (policy acceptance, store, one status frame,
 // no answer when the store fails) and the publication of its frames.
 //
-// Both lanes, and the time an item or a store took, are logged only when slow:
+// Both lanes, and the time an item waited, ran or a store took, are logged only when slow:
 // envelope types, command names, task-control actions and message ids, never
 // bodies, session names or text.
 
@@ -20,6 +20,7 @@ export const SLOW_LANE_MS = 5_000;
 export const INTAKE_SLOW_MS = 60_000;
 export interface LaneOptions { slowLaneMs?: number; intakeSlowMs?: number }
 
+const seconds = (ms: number): string => (ms / 1000).toFixed(1);
 const label = (value: unknown): string => String(value).replace(/[^\w.:-]/g, "_").slice(0, 64);
 
 // The log kind of an inbound frame, parsed only for an item that was slow.
@@ -33,18 +34,31 @@ export function frameKind(data: string): string {
   return `frame:${label(type)}`;
 }
 
-export type LaneTimer = (lane: string, kind: string | (() => string), run: () => Promise<void> | void) => Promise<void>;
+// enqueuedAt: when the item was put on the lane (issue #487); its wait behind
+// earlier items is logged when it exceeds the same threshold as the run time.
+export type LaneTimer = (lane: string, kind: string | (() => string), run: () => Promise<void> | void, enqueuedAt?: number) => Promise<void>;
 
 export function laneTimer(log: (line: string) => void, slowMs = SLOW_LANE_MS, now: () => number = Date.now): LaneTimer {
-  return async (lane, kind, run) => {
+  return async (lane, kind, run, enqueuedAt) => {
     const started = now();
+    const waited = enqueuedAt === undefined ? 0 : started - enqueuedAt;
     try {
       await run();
     } finally {
       const took = now() - started;
-      if (took > slowMs) log(`kherep-node: lane ${lane} item ${typeof kind === "function" ? kind() : kind} took ${(took / 1000).toFixed(1)} s`);
+      // The kind is parsed only for a slow item.
+      const item = (): string => `kherep-node: lane ${lane} item ${typeof kind === "function" ? kind() : kind}`;
+      if (took > slowMs) log(`${item()} took ${seconds(took)} s${waited > slowMs ? `, waited ${seconds(waited)} s` : ""}`);
+      else if (waited > slowMs) log(`${item()} waited ${seconds(waited)} s, took ${seconds(took)} s`);
     }
   };
+}
+
+// The then-callback of a lane item, stamped with the time it was enqueued.
+export function enqueued(timed: LaneTimer, lane: string, kind: string | (() => string), run: () => Promise<void> | void,
+  now: () => number = Date.now): () => Promise<void> {
+  const at = now();
+  return () => timed(lane, kind, run, at);
 }
 
 // What the intake lane needs of the connection a frame arrived on.
@@ -72,7 +86,7 @@ export function intakeLane(options: IntakeOptions): (data: string, arrivedAt: nu
       const frames = await options.client.onFrame(data, connection.live());
       for (const frame of frames) if (!connection.send(frame)) break;
       logSlowIntake(options, data, arrivedAt);
-    })).catch((error: unknown) => options.log(`kherep-node: message intake failed: ${String(error)}`));
+    }, arrivedAt)).catch((error: unknown) => options.log(`kherep-node: message intake failed: ${String(error)}`));
   };
 }
 

@@ -293,6 +293,25 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Control Plane: an idle exchange round no longer re-reads the whole inbox
+  (issue #487). On a Windows node with about 1000 settled messages a round read
+  every record, receipt and progress file several times, about 2.6 s against
+  the 2-second cadence, and one waiting message for an ended Codex task added
+  one full inbox read per ended Codex task (23 of them, about 11 s). The daemon
+  now keeps an in-process inbox index (`node/inbox-index.mts`), validated each
+  round by one directory listing and one stat per record; only new or changed
+  record files are read, the round's consumers share that read, and the Codex
+  task resume reads the inbox once per round. Hooks and the CLI read and write
+  the files as before and their writes are picked up by the next round. A
+  failed directory listing still fails the round, never reads as empty; the
+  index is rebuilt from the files every 10 minutes. Lane items now record their
+  enqueue time: an item that waited over 5 seconds logs `lane <lane> item
+  <kind> waited <s> s, took <s> s`, the existing `took` line gains `, waited
+  <s> s` when both were slow, and a round that sent or handled more than 32
+  frames logs `round sent <n> status/<m> outbox frames, handled <k> inbound
+  items`. Guards, policy, receipts, progress codes, audit lines and the wire
+  protocol are unchanged.
+
 - Control Plane: the sender of `msg send`, `msg send --new`, `msg send --reply-to`,
   `msg inbox`, `msg sessions` and `task new` is the runtime that runs the command
   (issue #471). A Codex process started from a Claude Code tool inherits
