@@ -172,12 +172,15 @@ function liveText(box: Box, name: string): string | null {
   check("a healthy run writes the heartbeat with trigger session-start", beat.trigger, "session-start");
   check("the heartbeat counts the inventoried files", beat.files, 2);
   check("the heartbeat ts lies within the run", Date.parse(beat.ts) >= started && Date.parse(beat.ts) <= ended, true);
-  check("no temporary heartbeat file is left", fs.readdirSync(cacheDir(box)).filter((n) => n !== "heartbeat.json").length, 0);
+  const names = fs.existsSync(cacheDir(box)) ? fs.readdirSync(cacheDir(box)) : [];
+  check("no temporary heartbeat file is left", names.join(), "heartbeat.json");
+  // A missing heartbeat is a counted FAIL here, not an exception that ends the run.
   const file = path.join(cacheDir(box), "heartbeat.json");
-  fs.utimesSync(file, new Date(Date.now() - 600_000), new Date(Date.now() - 600_000));
-  const old = fs.statSync(file).mtimeMs;
+  const mtime = (): number => (fs.existsSync(file) ? fs.statSync(file).mtimeMs : Number.NaN);
+  if (fs.existsSync(file)) fs.utimesSync(file, new Date(Date.now() - 600_000), new Date(Date.now() - 600_000));
+  const old = mtime();
   run(box);
-  check("a second healthy run rewrites the heartbeat", fs.statSync(file).mtimeMs > old, true);
+  check("a second healthy run rewrites the heartbeat", mtime() > old, true);
 }
 
 // --- the actual incident: 0 bytes -------------------------------------------
