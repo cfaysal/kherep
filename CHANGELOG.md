@@ -60,7 +60,8 @@ increments the minor version; every other release increments the patch version.
   as `child process <name> took <s> s`; `process-start` and `process-relations`
   no longer appear in the `synchronous <name> took` line, which now also names
   a slow `taskkill`. `taskkill`, the one-time owner identity read and the MCP
-  credential write stay synchronous.
+  credential write stay synchronous. A stop or watch read whose held child ends
+  or is replaced during the read signals nothing and records no start.
 
 ## [0.4.0] - 2026-10-18
 

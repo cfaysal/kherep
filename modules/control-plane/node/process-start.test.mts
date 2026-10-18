@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import type { ChildProcess, spawn as nodeSpawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +9,7 @@ import test from "node:test";
 import type { ChildRun } from "./child-run.mts";
 import { waitFor } from "./codex-fixture.mts";
 import { spawnCodex } from "./codex-process.mts";
-import { processStart } from "./process-start.mts";
+import { held, processStart } from "./process-start.mts";
 
 // Issue #473: the start-time read runs as an awaited child process, so the
 // daemon's event loop keeps reading socket frames while PowerShell starts.
@@ -64,3 +66,23 @@ test("a started run's start time is read before it gets the end of its prompt", 
   assert.equal(alive, true, "still waiting for its prompt while the start time was read");
   await waitFor(() => fs.existsSync(files.exit), "the run's exit");
 });
+
+// A codex failing at startup can exit before the end of its prompt: a start
+// read after its child ended or its pid was held by a new child is foreign.
+for (const [name, interleave] of [
+  ["lost", (child: ChildProcess) => { child.emit("exit", 1, null); }],
+  ["replaced-held", (child: ChildProcess) => { held.set(child.pid!, {} as ChildProcess); }],
+] as const) {
+  test(`a start read whose held child was ${name} meanwhile records no start (issue #473)`, async (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-start-held-"));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const files = { dir, events: path.join(dir, "events.jsonl"), lastMessage: path.join(dir, "last.txt"),
+      stderr: path.join(dir, "stderr.log"), exit: path.join(dir, "exit.json") };
+    const child = Object.assign(new EventEmitter(), { pid: 40_101, stdin: { on() {}, end() {} }, unref() {} }) as unknown as ChildProcess;
+    t.after(() => held.delete(40_101));
+    const spawn = (() => { setImmediate(() => child.emit("spawn")); return child; }) as unknown as typeof nodeSpawn;
+    const processStart = async (): Promise<string> => { interleave(child); return "foreign"; };
+    const run = await spawnCodex({ spawn, processStart }, process.execPath, [], dir, files, process.env, "synthetic prompt", false);
+    assert.deepEqual(run, { pid: 40_101, pidStart: undefined });
+  });
+}

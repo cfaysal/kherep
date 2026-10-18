@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import type { ChildProcess } from "node:child_process";
 import test from "node:test";
 
 import type { SignalScope } from "./codex-process.mts";
 import { processTree, terminate, windowsRelations, type ProcessIdentity } from "./codex-stop.mts";
+import { held } from "./process-start.mts";
 
 const ROOT = 40_001;
 const CHILD = 40_002;
@@ -184,4 +186,36 @@ test("after a timeout only the recorded root is forced, and a failed force is re
   await assert.rejects(terminate({ processRelations: timesOut, processStart: () => "root-start",
     signal: () => { throw new Error("could not send SIGKILL to process tree"); } }, ROOT, "root-start"),
   /ETIMEDOUT; forcing its process tree failed: could not send SIGKILL to process tree/);
+});
+
+// Issue #473: with the identity reads awaited, the held child of a run without
+// a start time can end (lost) or its pid be held by a new child (replaced)
+// during the capture or a timed-out read; a start read then is a foreign one.
+type Interleave = (pid: number) => void;
+const interleavings: [string, Interleave][] = [
+  ["lost", (pid) => { held.delete(pid); }],
+  ["replaced-held", (pid) => { held.set(pid, {} as ChildProcess); }],
+];
+
+for (const [name, interleave] of interleavings) {
+  test(`a held child ${name} during capture is never signalled (issue #473)`, async (t) => {
+    held.set(ROOT, {} as ChildProcess);
+    t.after(() => held.delete(ROOT));
+    const signals: Sent[] = [];
+    await assert.rejects(terminate({ graceMs: 1, processStart: () => "replacement",
+      processTree: async (root) => { await Promise.resolve(); interleave(root); return [{ pid: ROOT, start: "replacement" }]; },
+      signal: (pid, signal, scope) => { signals.push([pid, signal, scope]); } }, ROOT, undefined));
+    assert.deepEqual(signals, []);
+  });
+}
+
+test("after a timeout a pid now held by another child is not forced (issue #473)", async (t) => {
+  held.set(ROOT, {} as ChildProcess);
+  t.after(() => held.delete(ROOT));
+  const signals: NodeJS.Signals[] = [];
+  await assert.rejects(terminate({ processRelations: timesOut,
+    processStart: async () => { held.set(ROOT, {} as ChildProcess); return "replacement"; },
+    signal: (_pid, signal) => { signals.push(signal); } }, ROOT, undefined),
+  /ETIMEDOUT; the root is no longer the recorded process, so nothing was forced/);
+  assert.deepEqual(signals, []);
 });
