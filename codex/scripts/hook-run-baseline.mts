@@ -92,7 +92,9 @@ const original=cp.spawnSync; cp.spawnSync=function(file,args,options){const r=or
           assert.equal(result.status, 0, `${label}: ${result.stderr}`);
           if (result.stdout.includes('"permissionDecision":"deny"')) denied = true;
           outputs.push(result.stdout);
-          rows.push({ label, event: name, hook: path.basename(args[1]), target: args[2] ? path.basename(args[2]) : null,
+          // Node options before the script (issue #503) name neither hook nor target.
+          const [script, target] = args.slice(1).filter((arg) => !arg.startsWith("--"));
+          rows.push({ label, event: name, hook: path.basename(script!), target: target ? path.basename(target) : null,
             hookCommands: 1, nodeProcesses: 1 + children.filter(x => x.file === path.basename(process.execPath)).length,
             totalProcesses: 1 + children.length, children: children.map(x => ({ file: x.file, script: x.script ? path.basename(x.script) : null })),
             durationMs: performance.now() - started, contextBytes: Buffer.byteLength(result.stdout),

@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { checkHooks, codexPostToolHookInstalled } from "./doctor-hooks.mts";
 import { pinServiceSource } from "./service-source.mts";
+import { renderHooks } from "../../../codex/lib/parity-config.mts";
 
 // Issue #503. A Codex command in the stable form names the entry point and a
 // fixed hook name; doctor resolves it through the pointer of the config's
@@ -55,7 +56,8 @@ function fixture(t: test.TestContext) {
     fs.writeFileSync(path.join(home, "orchestra", "control-plane-source.json"), JSON.stringify(value));
   const group = (event: string, ...args: string[]) => [`[[hooks.${event}]]`, `[[hooks.${event}.hooks]]`, 'type = "command"',
     `command = ${JSON.stringify(["/usr/bin/node", ...args].map((part) => `"${part}"`).join(" "))}`, ""].join("\n");
-  const stable = (event: string, name: string) => group(event, entry, name, "--runtime", "codex");
+  // The rendered shape: the entry point started with the Node flag.
+  const stable = (event: string, name: string) => group(event, "--disable-warning=ExperimentalWarning", entry, name, "--runtime", "codex");
   const files = { claude: path.join(root, "settings.json"), codex };
   return { root, repo, first, pin, home, entry, codex, files, pointer, group, stable,
     pinDeliver: path.join(pin, "modules", "control-plane", "node", "deliver-hook.mts") };
@@ -258,3 +260,20 @@ for (const linked of [["hooks"], ["hooks", "kherep-maestro"]]) {
     assert.equal(codexPostToolHookInstalled(f.codex, f.repo), false);
   });
 }
+
+test("the hook commands the Codex renderer writes are recognised", (t) => {
+  if (!hasGit()) return t.skip("git is not available");
+  const f = fixture(t);
+  fs.writeFileSync(f.codex, renderHooks({ node: "/usr/bin/node", hookDir: path.join(f.home, "hooks", "kherep-maestro"),
+    contextHook: path.join(f.home, "hooks", "kherep-maestro-context.mts"), mcpServers: [],
+    controlPlaneHook: path.join(f.repo, "modules", "control-plane", "node", "deliver-hook.mts") }));
+  f.pointer({ version: 1, root: f.pin, commit: f.first, kind: "pin", verified: true });
+
+  const check = checkHooks(f.files, f.repo);
+
+  assert.equal(check.ok, true, JSON.stringify(check));
+  // Six definitions, each with command and commandWindows; four of them deliver.
+  assert.deepEqual(check.codex, { present: true, deliver: 8, wake: 0, foreign: [], pinned: [f.pinDeliver],
+    pointer: "valid", stable: 12, legacy: 0, entry: "valid" });
+  assert.equal(codexPostToolHookInstalled(f.codex, f.repo), true);
+});

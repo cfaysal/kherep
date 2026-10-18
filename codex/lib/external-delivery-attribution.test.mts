@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { prepareManagedConfig, type ManagedConfigOptions } from "./config-preservation.mts";
-import { command, controlPlaneEntry, hookGroup, render, renderBeforeAttributionHook } from "./parity-config.mts";
+import { controlPlaneCommand, hookGroup, render, renderBeforeAttributionHook } from "./parity-config.mts";
 
 const START = "# >>> Kherep Codex Maestro >>>";
 const END = "# <<< Kherep Codex Maestro <<<";
@@ -28,7 +28,7 @@ function options(windows: boolean): ManagedConfigOptions {
 
 function externalGroups(o: ManagedConfigOptions): string {
   // Issue #503. Exact external groups in the stable entry-point form.
-  const bound = command(o.node, controlPlaneEntry(o.hookDir), "deliver", "--runtime", "codex");
+  const bound = controlPlaneCommand(o.node, o.hookDir, "deliver");
   return [["SessionStart", "startup|resume|clear|compact"], ["UserPromptSubmit", ""], ["Stop", ""]]
     .map(([event, matcher]) => hookGroup(event!, matcher!, [{ command: bound, commandWindows: `& ${bound}` }]))
     .join("\n\n");

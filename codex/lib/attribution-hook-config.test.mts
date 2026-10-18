@@ -30,7 +30,7 @@ const base = { contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks
 const native = { ...base, memoryProvider: "central-brain" as const,
   nativeHooks: { contextCli: "/synthetic/context.js", captureCli: "/synthetic/capture.mjs", profile: "/synthetic/profile.json" } };
 const ENTRY = JSON.stringify(path.join("/synthetic/hooks", "codex-control-plane-hook.mts")).slice(1, -1).replace(/[\\.]/g, "\\$&");
-const ATTRIBUTION = new RegExp(String.raw`^command = "\\"\/synthetic\/node\\" \\"${ENTRY}\\" \\"attribution\\" \\"--runtime\\" \\"codex\\""$`, "m");
+const ATTRIBUTION = new RegExp(String.raw`^command = "\\"\/synthetic\/node\\" \\"--disable-warning=ExperimentalWarning\\" \\"${ENTRY}\\" \\"attribution\\" \\"--runtime\\" \\"codex\\""$`, "m");
 // The attribution hook in either form, as a rendered TOML string spells it.
 const ANY_ATTRIBUTION = /attribution-hook|codex-control-plane-hook\.mts\\" \\"attribution/;
 

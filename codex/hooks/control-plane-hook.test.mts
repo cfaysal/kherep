@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { withoutNodeWarnings } from "../lib/node-warning-fixture.mts";
+import { withoutTypeStrippingWarning } from "../lib/node-warning-fixture.mts";
+import { ENTRY_NODE_FLAG } from "../lib/parity-config.mts";
 
 // Issue #503. The stable entry point runs the hook of the source its pointer
 // names, as that hook's own main module, and fails closed without the pointer.
@@ -51,7 +52,7 @@ function fixture(t: import("node:test").TestContext) {
   fs.writeFileSync(path.join(decoyBin, "node"), `#!/bin/sh\necho decoy > ${JSON.stringify(record)}\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(decoyBin, "node.cmd"), `@echo decoy> "${record}"\r\n`);
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^path$/i.test(key)));
-  const run = (args: string[], extra: NodeJS.ProcessEnv = {}) => spawnSync(process.execPath, [entry, ...args], {
+  const run = (args: string[], extra: NodeJS.ProcessEnv = {}) => spawnSync(process.execPath, [ENTRY_NODE_FLAG, entry, ...args], {
     input: '{"hook_event_name":"Stop"}', encoding: "utf8", cwd, timeout: 20_000,
     env: { ...env, PATH: decoyBin, KHEREP_CONFIG_DIR: configDir, CODEX_HOME: path.join(root, "elsewhere"), ...extra },
   });
@@ -68,8 +69,8 @@ test("the entry point runs the pointer's hook with the caller's stdio, argv, cwd
   const first = f.run(["deliver", "--runtime", "codex"]);
 
   assert.equal(first.status, 7, first.stderr);
-  // A Node that warns about type stripping warns once for the entry point, as for a direct hook call, never for its child.
-  assert.equal(withoutNodeWarnings(first.stderr, 1), "stub stderr line\n");
+  // A Node that warns about type stripping warns once, for the hook, as for a direct hook call.
+  assert.equal(withoutTypeStrippingWarning(first.stderr, 1), "stub stderr line\n");
   const out = JSON.parse(first.stdout) as { marker: string; argv: string[]; main: boolean; stdin: string; cwd: string; config: string };
   assert.equal(out.marker, "R1");
   assert.equal(out.argv[0], path.join(r1, "modules", "control-plane", "node", "deliver-hook.mts"));
@@ -92,7 +93,7 @@ test("a source pin needs its manifest; attribution is the other fixed entry", (t
   const refused = f.run(["attribution", "--runtime", "codex"]);
   assert.equal(refused.status, 1);
   assert.equal(refused.stdout, "");
-  assert.match(withoutNodeWarnings(refused.stderr, 1), /^kherep control-plane-hook: the pointer's source pin has no manifest; pointer .+; run codex\/install\.mts\n$/);
+  assert.match(refused.stderr, /^kherep control-plane-hook: the pointer's source pin has no manifest; pointer .+; run codex\/install\.mts\n$/);
   assert.equal(f.ran(), undefined);
 
   fs.writeFileSync(path.join(pin, ".kherep-source.json"), "{}");
@@ -131,7 +132,28 @@ test("the entry point fails closed and never falls back to another source", (t) 
     const result = f.run([...args, "--runtime", "codex"], { KHEREP_WORKSPACE: workspace });
     assert.equal(result.status, 1, label);
     assert.equal(result.stdout, "", label);
-    assert.match(withoutNodeWarnings(result.stderr, 1), /^kherep control-plane-hook: [^\n]+; pointer [^\n]+; run codex\/install\.mts\n$/, label);
+    assert.match(result.stderr, /^kherep control-plane-hook: [^\n]+; pointer [^\n]+; run codex\/install\.mts\n$/, label);
     assert.equal(f.ran(), undefined, `${label}: no hook ran`);
   }
+});
+
+// Issue #503. The entry point adds no Node option to the hook, so every warning
+// the hook emits reaches the caller as from a direct call, of any category.
+test("the entry point keeps every warning of the hook, as a direct call shows it", (t) => {
+  const f = fixture(t);
+  const r = f.source("R");
+  const hook = path.join(r, "modules", "control-plane", "node", "deliver-hook.mts");
+  fs.writeFileSync(hook, `process.emitWarning("SYNTHETIC_UNRELATED_WARNING", "ExperimentalWarning");
+process.stderr.write("stub stderr line\\n");
+`);
+  f.pointer({ version: 1, root: r, kind: "checkout", verified: true });
+  const env = { ...process.env, KHEREP_CONFIG_DIR: f.configDir };
+  const options = { input: "{}", encoding: "utf8" as const, cwd: f.cwd, env, timeout: 20_000 };
+  const direct = spawnSync(process.execPath, [hook, "--runtime", "codex"], options);
+  const stable = f.run(["deliver", "--runtime", "codex"]);
+  const pids = (text: string) => text.replace(/\(node:\d+\)/g, "(node:PID)");
+
+  assert.equal(stable.status, direct.status);
+  assert.match(stable.stderr, /ExperimentalWarning: SYNTHETIC_UNRELATED_WARNING/);
+  assert.equal(pids(stable.stderr), pids(direct.stderr));
 });
