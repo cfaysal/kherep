@@ -140,9 +140,9 @@ After the page exists, you link it in the other direction, once:
 
     <confluence.json broker> stitch --space <spaceKey> --id <the new page id> --per-orphan 2
 
-This puts a link to your page on the pages it belongs next to. Your own outgoing links do not make your page findable
-- nobody points at it yet, and that is exactly what this call fixes. Skipping it means your page is an orphan the
-moment you finish.
+This puts a link to your page on the pages it belongs next to. Your own outgoing links do not make your page
+findable - nobody points at it yet, and that is exactly what this call fixes. Skipping it means your page is an
+orphan the moment you finish.
 
 ## One observation is one page
 

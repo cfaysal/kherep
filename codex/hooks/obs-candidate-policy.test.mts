@@ -95,6 +95,10 @@ test("a confirmed candidate's Revision lines bind a full commit SHA", () => {
     assert.doesNotMatch(problem(confirmed(body)), /example|kherep@|[0-9a-f]{7,}/, value);
     assert.deepEqual(checkObsCandidate(assumed(body)), { count: 1 }, value);
   }
+  assert.deepEqual(checkObsCandidate(confirmed("<p>The printed label is Revision: draft.</p>")), { count: 1 }, "prose is no Revision line");
+  assert.equal(problem(confirmed(`<p>Revision: alpha@${sha}<em>-dirty</em></p>`)),
+    "a confirmed candidate names a revision that is not <repo>@<full commit sha>", "markup cannot hide a suffix");
+  assert.deepEqual(checkObsCandidate(confirmed(`<p>Revision:\nalpha@${sha}</p>`)), { count: 1 }, "a line break after Revision:");
   assert.match(problem(doc(candidate({ evidence: "confirmed", bodyStorage: `<p>Revision: kherep@${sha}</p>`, extra: 1 }))),
     /exactly title, bodyStorage/, "a sixth key fails as before");
 });

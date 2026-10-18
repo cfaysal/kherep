@@ -117,11 +117,10 @@ what the finding rests on. The origin line names the actual reporter: "dispatchi
 measured in this turn: <command> -> <excerpt>" or "relayed from <source> via dispatching session
 <id>".
 
-Beside the origin line, a code-bound body carries one line per repository:
-`<p>Revision: <name>@<sha></p>` on a `confirmed` candidate. On an `assumed` code-bound candidate the line is
-`<p>Revision: <name>@<sha> (no exact binding: dirty tree)</p>` when both tokens validated, else
-`<p>Revision: none (no exact binding: no repository | no full commit SHA | malformed repository or revision)</p>`
-with the one reason that applies. A valid `<name>` has letters, digits, `.`, `_`, `-` and single `/`, a
+Beside the origin line, a code-bound body carries one line per validated token,
+`<p>Revision: <name>@<sha></p>`, with ` (no exact binding: dirty tree)` before `</p>` only for a token that
+itself carried `-dirty`, whatever the evidence label. A token that did not validate gets
+`<p>Revision: none (no exact binding: <the one reason>)</p>`. A valid `<name>` has letters, digits, `.`, `_`, `-` and single `/`, a
 valid `<sha>` is 40 lowercase hex; any other value (a URL, a path, a short or symbolic revision) is
 never copied into a candidate, a title or a notice.
 
