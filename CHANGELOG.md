@@ -24,6 +24,16 @@ increments the minor version; every other release increments the patch version.
   `disconnected (<code>, clean=<true|false>, error:<class>)`, where the class
   is a listed socket error code, `unknown`, `missing` or `none`; no error
   message, close reason or URL is logged.
+- Message summary diagnostic (issue #493). `GET /api/messages/summary?from=<node id>`,
+  behind the existing Access JWT check, groups the Registry rows of one sender
+  node by `state` (a known state or `other`) and `deletable` (`1`, `null` or
+  `other`), each with `count`, `withDeadline` and the age buckets
+  `ageUnder24h`, `age1to7d` and `ageOver7d`, and adds `fetchedAt`, the Worker
+  `version` and `commit`, and `rowsRead`. Counts only; no node id, message
+  id, timestamp, session, reason or text. Each call reads the sender's whole
+  history through its index and is logged as `registry.sql` path
+  `messageSummary`. Read-only: replay, acknowledgement, retention and the
+  protocol are unchanged.
 
 ### Fixed
 

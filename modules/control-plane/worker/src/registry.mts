@@ -12,6 +12,7 @@ import { directoryBody } from "./directory.mts";
 import { routeEffects } from "./message-routing.mts";
 import { MessageStore, type MessageEffects, type MessageRecord, type NewMessage, type SendResult } from "./message-store.mts";
 import { earliest, type MessageStatusView } from "./message-retention.mts";
+import { messageSummary, type MessageSummary } from "./message-summary.mts";
 import { TaskStore, type CreateResult, type NewTask, type TaskRow } from "./task-store.mts";
 import { TaskControlRegistry } from "./task-control-registry.mts";
 import { McpRegistry, type McpOutcome } from "./mcp-registry.mts";
@@ -346,6 +347,12 @@ export class Registry extends DurableObject<Env> {
 
   listMessages(nodeId: string | null, limit: number): MessageRecord[] {
     return this.metered("listMessages", () => this.messages.list(nodeId, limit));
+  }
+
+  // Issue #493: diagnostic only. Reads every row of one sender, so it is logged
+  // under its own path and never mistaken for a hot one.
+  messageSummary(fromNode: string, now = Date.now()): MessageSummary {
+    return this.metered("messageSummary", () => messageSummary(this.sql, fromNode, now));
   }
 
   // A replied message also names the reply that marked it (issue #200); a
