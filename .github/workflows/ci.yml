@@ -28,6 +28,32 @@ jobs:
       - name: Manifest consistency
         run: node --test bootstrap/manifest-consistency.test.mts
 
+  # Issue #506. Runs the versioned commit-msg hook over every commit of a pull
+  # request, so a commit made with `git commit --no-verify` is still rejected.
+  # No `name:` and no matrix: the check context is exactly `commit-policy`, the
+  # name a ruleset can require. The `if` limits it to pull requests, where the
+  # base and head SHAs exist; on push and workflow_dispatch it is skipped.
+  # fetch-depth: 0 because the default shallow checkout lacks the range; the
+  # script fails closed (exit 2) on a shallow repository. The SHAs pass through
+  # env, never interpolated into the script.
+  commit-policy:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      KHEREP_WORK_ITEM_REQUIRED: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+      - name: Commit messages of every pull request commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node bootstrap/pr-commit-policy.mts "$BASE_SHA" "$HEAD_SHA"
+
   unit:
     strategy:
       fail-fast: false
