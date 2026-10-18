@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { pointerFile, resolveHook } from "../../../codex/hooks/control-plane-hook.mts";
+import { ENTRY_NAME, pointerFile, resolveHook } from "../../../codex/hooks/control-plane-hook.mts";
 import type { Check } from "./doctor-local.mts";
 import { captureSourceIdentity, compareSourceIdentity, type SourceIdentity } from "./daemon-source.mts";
 
@@ -93,7 +93,7 @@ function scanHooks(
   const checkouts = new Set<string>();
   let reason: string | undefined;
   const pointer = codex ? pointerHook(file) : undefined;
-  const entry = realOrResolved(path.join(path.dirname(file), "hooks", "kherep-maestro", "codex-control-plane-hook.mts"));
+  const entry = realOrResolved(path.join(path.dirname(file), "hooks", "kherep-maestro", ENTRY_NAME));
   const forms = { stable: 0, legacy: 0 };
   const paths = commands.flatMap((command) => {
     const stable = codex ? STABLE.exec(command) : null;
