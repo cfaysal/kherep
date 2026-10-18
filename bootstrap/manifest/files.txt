@@ -8,6 +8,9 @@ hooks/deploy-guard.test.mts
 hooks/guard-dispatch.mts
 hooks/guard-dispatch-output.test.mts
 hooks/guard-dispatch.test.mts
+hooks/guard-dispatch-fixture.mts
+hooks/guard-dispatch-recheck.test.mts
+hooks/guard-dispatch-deadline.test.mts
 hooks/main-checkout-guard.mts
 hooks/main-checkout-guard.test.mts
 hooks/maestro-discipline.mts
@@ -62,6 +65,12 @@ hooks/lib/hook-syntax-check.test.mts
 hooks/lib/hook-syntax.test.mts
 hooks/lib/restore-write.mts
 hooks/lib/restore-write.test.mts
+hooks/lib/integrity-verdict.mts
+hooks/lib/integrity-verdict.test.mts
+hooks/lib/integrity-heartbeat.mts
+hooks/lib/integrity-heartbeat.test.mts
+hooks/lib/guard-recheck.mts
+hooks/lib/guard-recheck.test.mts
 hooks/cbm-code-discovery-gate
 hooks/playwright-file-guard.mts
 hooks/atlassian-destructive-guard.mts
@@ -89,6 +98,7 @@ hooks/critical-file-integrity.mts
 hooks/critical-file-integrity.test.mts
 hooks/live-hook-integrity.mts
 hooks/live-hook-integrity.test.mts
+hooks/live-hook-integrity-trigger.test.mts
 hooks/fixtures/smoke-report-legacy.txt
 hooks/portable-scope-hooks.test.mts
 commands/memo-checkpoint.md
