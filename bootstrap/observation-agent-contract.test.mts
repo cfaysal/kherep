@@ -222,6 +222,11 @@ test("both texts bind a code-bound finding to <name>@<sha> and file the rest as 
       /never copied[\s\S]{0,120}(page|title|notice)/i]) assert.match(text, pattern, `${name}: ${pattern}`);
   }
   assert.match(codexProjection(), /tool result about repository code, tests or a build is code-bound[\s\S]{0,300}supplied turn/);
+  for (const text of [CLAUDE_OBS, codexProjection()]) { // the dirty suffix only for a token that carried -dirty
+    assert.match(text, /dirty tree\)[^.]{0,120}(only|on a dirty one|carried `-dirty`)/);
+    assert.doesNotMatch(text, /dirty tree\)<\/p>` when both tokens validated/);
+  } // and no wrapped prose line starts with "- ", which would render as a list item
+  CLAUDE_OBS.split(/\r?\n/).forEach((line, i, all) => { if (/^[-*+] /.test(line)) assert.match(all[i - 1], /^(\s|[-*+] |$)/, line); });
 });
 
 test("both routing files state the code marker and that the guard reports what it cannot deny", () => {

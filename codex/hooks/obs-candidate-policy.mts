@@ -9,8 +9,8 @@
 //   placement; evidence is one of the four values; labels are exactly
 //   type-observation, evidence-<value> and status-author-model in any order;
 //   placement is exactly a non-empty project and app.
-// - Issue #505: on a confirmed candidate, every Revision: line its body
-//   carries is exactly <repo>@<full commit sha>. Assumed bodies and a body
+// - Issue #505: on a confirmed candidate, every `<p>Revision: …</p>` paragraph
+//   its body carries is exactly <repo>@<full commit sha>. Assumed bodies and a body
 //   without such a line are not checked: absence is undeclared.
 //
 // Pure: no I/O, and a problem is a fixed text that never quotes the message.
@@ -22,7 +22,7 @@ const EVIDENCE = new Set(["confirmed", "assumed", "refuted", "superseded"]);
 const CANDIDATE_KEYS = ["bodyStorage", "evidence", "labels", "placement", "title"];
 const PLACEMENT_KEYS = ["app", "project"];
 const ENVELOPE_KEYS = ["observations"];
-const REVISION_VALUE = /Revision:([^<\n]*)/g;
+const REVISION_LINE = /<p>\s*Revision:((?:(?!<\/p>)[\s\S])*)<\/p>/g;
 // The name grammar of claude/hooks/lib/obs-brief-policy.mts NAME, then @<40 hex>.
 const BOUND_REVISION = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*@[0-9a-f]{40}$/;
 
@@ -55,7 +55,7 @@ function candidateProblem(value: unknown): string | null {
     return "a candidate's placement is not exactly a non-empty project and app";
   }
   if (item.evidence === "confirmed"
-    && [...(item.bodyStorage as string).matchAll(REVISION_VALUE)].some(([, value]) => !BOUND_REVISION.test(value.trim()))) {
+    && [...(item.bodyStorage as string).matchAll(REVISION_LINE)].some(([, value]) => !BOUND_REVISION.test(value.trim()))) {
     return "a confirmed candidate names a revision that is not <repo>@<full commit sha>";
   }
   return null;
