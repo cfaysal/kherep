@@ -66,6 +66,7 @@
   ],
   "requiredHooks": [
     "commit-guard.mts",
+    "guard-dispatch.mts",
     "deploy-guard.mts",
     "dispatch-contract-guard.mts",
     "privacy-boundary-guard.mts",

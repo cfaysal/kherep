@@ -162,6 +162,18 @@ test("a dangling command is one that runs a retired or missing script in the Cla
     retired, winHome, winUser, retiredButPresent).length, 1, "a retired script counts even while its file is still live");
 });
 
+// Issue #507: a guard the dispatcher runs as an argument dangles like the script node runs.
+test("a dispatcher command dangles when a guard argument is retired or missing", () => {
+  const at = (name: string) => `"${winHome}/hooks/${name}"`;
+  const command = `node ${at("guard-dispatch.mts")} ${at("commit-guard.mts")} ${at("deploy-guard.mts")}`;
+  const settings = { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [run(command)] }] } };
+  const without = (gone: string) => (file: string) => !file.replace(/\\/g, "/").endsWith(`/hooks/${gone}`);
+  assert.deepEqual(danglingHookCommands(settings, new Set(), winHome, winUser, without("commit-guard.mts"))
+    .map((item) => `${item.event} ${item.command}`), [`PreToolUse ${command}`]);
+  assert.deepEqual(danglingHookCommands(settings, new Set(), winHome, winUser, without("none")), []);
+  assert.equal(danglingHookCommands(settings, new Set(["hooks/deploy-guard.mts"]), winHome, winUser, without("none")).length, 1);
+});
+
 // Review of #254: clq-accept-gate moves from PreToolUse "Bash" to Stop.
 test("a managed hook the template no longer wires at an event leaves that event only", () => {
   const managed = (name: string) => run(`node "C:\\Users\\Example\\.claude/hooks/${name}"`);

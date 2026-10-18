@@ -136,7 +136,7 @@ test("install.sh refuses the default workspace under a home with a space", (t) =
 // The accepted side, end to end: a home with a space holds CLAUDE_HOME and the
 // default credentials root, the workspace sits outside it. The install
 // completes, each hook command names CLAUDE_HOME inside double quotes and parses
-// as exactly node plus that path, and the unquoted workspace forms are
+// as exactly node plus those paths, and the unquoted workspace forms are
 // unchanged.
 test("install.sh accepts CLAUDE_HOME with a space, where hook commands quote it", (t) => {
   const f = fixture(t, "Jane Doe", "Kherep");
@@ -149,9 +149,11 @@ test("install.sh accepts CLAUDE_HOME with a space, where hook commands quote it"
     .filter((command) => command.includes("/hooks/"));
   assert.ok(hookCommands.length > 0, "no managed hook command rendered");
   for (const command of hookCommands) {
-    const quoted = command.match(/^node "([^"]*Jane Doe[^"]*\/hooks\/[\w.-]+)"$/);
-    assert.ok(quoted, `hook command not quoted around CLAUDE_HOME: ${command}`);
-    assert.deepEqual(wordsAsStored(command), ["node", quoted[1]]);
+    const words = wordsAsStored(command);
+    assert.equal(words[0], "node", command);
+    assert.ok(words.length >= 2, command);
+    for (const word of words.slice(1)) assert.match(word, /Jane Doe.*\/hooks\/[\w.-]+$/, command);
+    assert.equal(command, `node ${words.slice(1).map((w) => `"${w}"`).join(" ")}`, `every path is double-quoted: ${command}`);
   }
   assert.match(settings.env.KHEREP_CREDENTIALS_ROOT, /Jane Doe\/\.kherep\/credentials$/);
 

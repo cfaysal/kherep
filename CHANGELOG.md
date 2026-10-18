@@ -11,6 +11,24 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Fail-closed Claude guard dispatcher (issue #507, part 1 of 4). The five
+  `PreToolUse` groups of `claude/settings.user.json` each run one
+  `hooks/guard-dispatch.mts` entry that starts the group's guards in parallel.
+  A guard that is missing, empty, not a regular file, outside the hooks
+  directory (a symlink counts where it points), killed by a signal, still running after 10 s, exiting with a code
+  other than 0 or 2, or printing anything other than a `PreToolUse` decision
+  now denies the tool call, and the reason names the file; before, most of
+  these let the tool call through. Stdin that is not a JSON object is denied too.
+  Working guards keep their verdicts, combined as deny > ask > allow. A guard
+  notice (`additionalContext` without a decision) passes through unchanged;
+  any output field beyond decision, reason and `additionalContext` denies and
+  names the field. The upgrade unwires the old direct guard entries and logs
+  each removal, and `drift-check.sh` reports a dispatcher entry whose guard
+  argument is missing or retired as `DANGLING-HOOK`. Limits: the dispatcher
+  cannot check itself, so an empty `guard-dispatch.mts` fails open until the
+  next session start; a hook cancelled at its 30 s `timeout` loses its output,
+  so each guard is capped at 10 s; `onFailure` is not set, because no minimum
+  Claude Code version is declared.
 - Pull request commit policy check (issue #506). The CI job `commit-policy`
   runs on pull requests and passes every commit in
   `merge-base(base, head)..head`, merge commits included, through the
