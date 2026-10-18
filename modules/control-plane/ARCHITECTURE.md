@@ -825,6 +825,23 @@ environment. Its session id is what the runtime reported to the writing process
 attributes a push to a session; it does not authenticate one. The file is mode
 `0600`, and every append drops records older than 90 days.
 
+## Message summary diagnostic
+
+`GET /api/messages/summary?from=<node id>` (issue #493) sits behind the same
+Access JWT check as every `/api/*` route and is served by
+`Registry.messageSummary()` (`worker/src/message-summary.mts`), measured by the
+SQL meter under the path `messageSummary`. One metered `SELECT` reads the
+requested sender's rows through `messages_from_node` and groups them by closed
+buckets: `state` (a known message state, else `other`) and `deletable` (`1`,
+`null`, `other`). Each group carries `count`, `withDeadline` and the `created_at`
+age buckets under 24 h, 1 to 7 d and over 7 d. The response adds `fetchedAt`,
+the `/health` `version` and `commit`, and `rowsRead`. It returns counts only:
+no node id (not even the requested one), message id, timestamp, session, reason
+or text. It is a diagnostic, not a hot query: each call reads the sender's
+whole history, a cost linear in that sender's stored rows and independent of
+other senders'. It writes nothing and changes no protocol, admission,
+retention, replay or acknowledgement behaviour.
+
 ## Health and doctor
 
 `GET /health` is the one unauthenticated Worker route besides the node

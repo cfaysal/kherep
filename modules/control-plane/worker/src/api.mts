@@ -1,6 +1,7 @@
 import { isNodeId, isPhase1Command, PHASE1_COMMANDS } from "../../protocol.mts";
 import { isMessageId, isMessageText, isSessionRef, MAX_SESSION_REF, OPERATOR_NODE_ID } from "../../protocol-messages.mts";
 import { registryStub, sessionStub, type Env } from "./env.mts";
+import { health } from "./health.mts";
 import { fail, json, readJsonObject } from "./http.mts";
 import { routeEffects } from "./message-routing.mts";
 import { handleTasksApi } from "./tasks-api.mts";
@@ -15,6 +16,7 @@ export async function handleApi(request: Request, env: Env, actor: string): Prom
 
   if (parts.length === 2 && parts[1] === "nodes" && method === "GET") return json({ nodes: await registry.listNodes() });
   if (parts.length === 2 && parts[1] === "sessions" && method === "GET") return json({ sessions: await registry.listSessions() });
+  if (pathname === "/api/messages/summary" && method === "GET") return summarizeMessages(new URL(request.url).searchParams, env);
   if (parts.length === 2 && parts[1] === "messages" && method === "GET") return listMessages(new URL(request.url).searchParams, env);
   if (parts.length === 2 && parts[1] === "enrollments" && method === "POST") {
     const body = await readJsonObject(request);
@@ -87,4 +89,15 @@ async function listMessages(params: URLSearchParams, env: Env): Promise<Response
   const limit = Number(params.get("limit") ?? "50");
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) return fail(400, "limit must be 1-200");
   return json({ messages: await registryStub(env).listMessages(node, limit) });
+}
+
+// Issue #493: one sender's rows grouped by state and deletable mark, with the
+// build that answered. Counts only, no id; a diagnostic that reads the
+// sender's whole history.
+async function summarizeMessages(params: URLSearchParams, env: Env): Promise<Response> {
+  const from = params.get("from");
+  if (!isNodeId(from)) return fail(400, "invalid from");
+  const { version, commit } = health(env);
+  const { fetchedAt, rowsRead, groups } = await registryStub(env).messageSummary(from);
+  return json({ fetchedAt, version, commit, rowsRead, groups });
 }
