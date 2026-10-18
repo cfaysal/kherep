@@ -119,11 +119,11 @@ export const rowPid = (row: Record<string, unknown> | undefined): number | undef
 
 // The listed process and its start time, best effort: a start time that
 // cannot be read leaves the identity to the next status (task-control-claude.mts).
-function withProcess(deps: RunnerDeps, record: TaskRecord, row: Record<string, unknown> | undefined): TaskRecord {
+async function withProcess(deps: RunnerDeps, record: TaskRecord, row: Record<string, unknown> | undefined): Promise<TaskRecord> {
   const pid = rowPid(row);
   if (pid === undefined) return record;
   try {
-    const pidStart = startTimeOf(deps.codex ?? {}, pid);
+    const pidStart = await startTimeOf(deps.codex ?? {}, pid);
     return pidStart === null ? record : { ...record, pid, pidStart };
   } catch {
     return record;
@@ -157,7 +157,7 @@ async function background(deps: RunnerDeps, launched: TaskRecord, args: string[]
   let mapped: TaskRecord = { ...launch, shortId, state: "started" };
   try {
     const row = findRow(await agentRows(deps), mapped);
-    mapped = withProcess(deps, mapIds(mapped, row), row);
+    mapped = await withProcess(deps, mapIds(mapped, row), row);
   } catch {
     // mapped later by the watch round
   }

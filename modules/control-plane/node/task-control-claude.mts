@@ -66,11 +66,11 @@ function withProcess(record: TaskRecord, runner: RunnerDeps, state: unknown): Cl
 // still equal means the recorded process lives; null or changed means it
 // ended, and only then is the session without a process; an unreadable start
 // time is identity_unknown, never closed.
-function recorded(record: TaskRecord, runner: RunnerDeps, state: unknown): ClaudeMeasurement {
+async function recorded(record: TaskRecord, runner: RunnerDeps, state: unknown): Promise<ClaudeMeasurement> {
   if (record.pid === undefined || record.pidStart === undefined) return withoutProcess(state);
   let start: string | null;
   try {
-    start = startTimeOf(runner.codex ?? {}, record.pid);
+    start = await startTimeOf(runner.codex ?? {}, record.pid);
   } catch {
     return UNKNOWN_IDENTITY;
   }
@@ -98,13 +98,13 @@ export async function measureClaude(record: TaskRecord, runner: RunnerDeps, now:
   const row = rows.find((r) => r.id === record.shortId);
   // The listing includes ended sessions (--all): absence is no evidence of an
   // exit; the record's task state stands in for the row's.
-  if (!row) return recorded(record, runner, record.state);
+  if (!row) return await recorded(record, runner, record.state);
   if (!ownsRow(record, row)) return UNKNOWN_IDENTITY;
   const pid = rowPid(row);
-  if (pid === undefined) return recorded(record, runner, row.state);
+  if (pid === undefined) return await recorded(record, runner, row.state);
   let pidStart: string | null;
   try {
-    pidStart = startTimeOf(runner.codex ?? {}, pid);
+    pidStart = await startTimeOf(runner.codex ?? {}, pid);
   } catch {
     return UNKNOWN_IDENTITY;
   }

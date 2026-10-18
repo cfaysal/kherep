@@ -118,18 +118,24 @@ acks the command early and lets the Worker drop its resend copy; a resend
 waits behind the handler on the original lane and is only acknowledged. The
 daemon's per-connection `send` is the only path to the socket and stamps the
 wire seq and the current ack (`NodeClient.stamp`); the seq a frame gets when it
-is built is provisional, so lanes cannot reorder the wire. A
-synchronous child process
-still blocks the event loop and thereby every lane: one `watchCodexTasks` pass
-can run several PowerShell children in a row, so a delivery can wait for their
-sum, each bounded by its 10 second timeout. The daemon logs a lane item that ran
+is built is provisional, so lanes cannot reorder the wire. The process
+start-time and process-tree reads (`process-start`, `process-relations`) run as
+awaited child processes behind one runner (`node/child-run.mts`, issue #473), so
+their PowerShell or `ps` children no longer block the event loop: a delivery is
+stored while a watch pass, a stop or an exchange round waits for one. Their
+commands, their 10 second timeouts, the retry of a timed-out tree query, and the
+read of a start time directly before each signal are unchanged. A synchronous
+child process still blocks every lane: `taskkill` (its async form would change
+the kill report contract of the fork helper), the owner identity read once per
+daemon, and the MCP credential write. The daemon logs a lane item that ran
 over 5 seconds (`lane <lane> item <kind> took <s> s`) or waited over 5 seconds
 behind earlier items (`... waited <s> s, took <s> s`; issue #487 records each
 item's enqueue time), an exchange round that sent or handled more than 32 frames
 with its counts, a delivery stored more than
 60 seconds after the control plane accepted it, with its id and its lane wait,
-and a synchronous child over 2 seconds by name; never bodies, session names or
-pids. `kherep-node doctor` reports `intakeLatency` for the messages stored in the
+a synchronous child over 2 seconds by name (`synchronous <name> took <s> s`)
+and an awaited one as `child process <name> took <s> s`; never bodies, session
+names or pids. `kherep-node doctor` reports `intakeLatency` for the messages stored in the
 last two hours; it sees only messages that reached the inbox, so it is no proof
 that the control-plane queue for this node drains.
 

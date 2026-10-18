@@ -152,9 +152,14 @@ test("Windows: the deadline stops the wrapper, codex and codex's children", win3
   const saved = await start(3, "work [tree] [sleep]");
   await waitFor(() => codex.child() !== null, "the child of the run", 15_000);
   const tree = [saved.pid!, codex.runs()[0].pid, codex.child()!];
-  assert.ok(tree.every((pid) => processStart(pid) !== null), "all running");
+  // As every() did: in order, stopping at the first pid that does not match.
+  const all = async (ended: boolean): Promise<boolean> => {
+    for (const pid of tree) if ((await processStart(pid) === null) !== ended) return false;
+    return true;
+  };
+  assert.ok(await all(false), "all running");
   node.tick(2 * 3_600_000);
   await watchCodexTasks(deps());
-  await waitFor(() => tree.every((pid) => processStart(pid) === null), "the whole tree", 20_000);
+  await waitFor(() => all(true), "the whole tree", 20_000);
   assert.equal(readTask(node.paths, taskId(3))?.state, "stopped");
 });

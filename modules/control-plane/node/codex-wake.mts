@@ -140,8 +140,6 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
     explain(waiting, "permission-restricted");
     return note(paths, now, sessionId, due, "permission-mode");
   }
-  // The previous run may still be ending (a stop's grace period); a failed read throws.
-  if (stillRuns(deps.codex ?? {}, record.pid, record.pidStart)) return explain(waiting, "target-busy");
   if (overLimit(deps, now, record.taskId)) return explain(waiting, "retry-pending");
   // The turn is taken before deliveryContext because that marks the messages
   // offered: a turn denied afterwards (spacing) would count an offer for
@@ -156,6 +154,10 @@ async function wakeTask(deps: RunnerDeps, record: TaskRecord, log: (line: string
     if (due.some((id) => noted.get(id) !== "cwd-refused")) log(`kherep-node: not resuming task ${record.taskId} for messages: ${cwd.reason}`);
     return note(paths, now, sessionId, due, "cwd-refused");
   }
+  // The previous run may still be ending (a stop's grace period); a failed read throws.
+  // Issue #473: read after the guards that start no process, before the
+  // readiness verdict that refuses and the turn that counts against the budget.
+  if (await stillRuns(deps.codex ?? {}, record.pid, record.pidStart)) return explain(waiting, "target-busy");
   // Issue #197: a Codex that cannot run a turn gets no resume; the messages are
   // refused with a fixed reason. A pending probe keeps them waiting.
   const blocked = notReadyNow(deps.readiness, "codex");

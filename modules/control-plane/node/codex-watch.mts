@@ -44,7 +44,7 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
     // holds the child; its pid cannot be reused before that.
     if (record.pidStart === undefined && holdsChild(record.pid)) {
       try {
-        const pidStart = startTimeOf(codex, record.pid!);
+        const pidStart = await startTimeOf(codex, record.pid!);
         if (pidStart) record = writeTask(deps.paths, { ...record, pidStart }, now);
       } catch {
         // the next round tries again; the held child can be stopped meanwhile
@@ -91,7 +91,7 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
     }
     let running: boolean;
     try {
-      running = !ended && stillRuns(codex, record.pid, record.pidStart);
+      running = !ended && await stillRuns(codex, record.pid, record.pidStart);
     } catch (error) {
       log(`kherep-node: task ${record.taskId}: ${String((error as Error).message ?? error)}`);
       continue; // a failed read decides nothing
@@ -110,7 +110,7 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
     if (running) {
       // Issue #233: the run's descendants, for a settle after its root crashed.
       try {
-        const found = refreshDescendants(codex, record);
+        const found = await refreshDescendants(codex, record);
         if (found) {
           const descendants = found.length > 0 ? found : undefined;
           record = writeTask(deps.paths, { ...record, descendants }, now);

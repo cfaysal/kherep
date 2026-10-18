@@ -28,8 +28,8 @@ test("a stop ends a child that runs in its own process group (issue #231)",
       }
     });
     assert.ok(Number.isInteger(child) && child > 0);
-    const childStart = processStart(child);
+    const childStart = await processStart(child);
     assert.notEqual(childStart, null);
-    await terminate({ graceMs: 3_000 }, root.pid!, processStart(root.pid!) ?? undefined);
-    assert.notEqual(processStart(child), childStart);
+    await terminate({ graceMs: 3_000 }, root.pid!, await processStart(root.pid!) ?? undefined);
+    assert.notEqual(await processStart(child), childStart);
   });
