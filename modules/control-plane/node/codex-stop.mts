@@ -1,5 +1,6 @@
-import { holdsChild, signalGroup, signalProcess, startTimeOf, type CodexDeps, type SignalScope } from "./codex-process.mts";
+import { signalGroup, signalProcess, startTimeOf, type CodexDeps, type SignalScope } from "./codex-process.mts";
 import { posixRelations, timedOut, windowsRelations } from "./process-relations.mts";
+import { held } from "./process-start.mts";
 
 export { windowsRelations, type ProcessRelation } from "./process-relations.mts";
 
@@ -122,14 +123,17 @@ export async function stopIdentities(deps: CodexDeps, root: ProcessIdentity | nu
 // the tree running. If the root is still the recorded process, its tree is
 // forced (SIGKILL; taskkill /T /F on Windows), and the stop still fails, since
 // no captured identity was confirmed ended; a later watch round settles the run.
+// Issue #473: without a start time only the child held at entry is forced; one
+// that ended, or a new child holding its pid, during the awaited reads is not.
 export async function terminate(deps: CodexDeps, pid: number, pidStart: string | undefined): Promise<void> {
+  const child = held.get(pid);
   try {
     await terminateTree(deps, pid, pidStart);
   } catch (error) {
     if (!timedOut(error)) throw error;
     let outcome: string;
     try {
-      const recorded = pidStart === undefined ? holdsChild(pid) : await startTimeOf(deps, pid) === pidStart;
+      const recorded = pidStart === undefined ? child !== undefined && held.get(pid) === child : await startTimeOf(deps, pid) === pidStart;
       if (recorded) {
         sender(deps)(pid, "SIGKILL", "group");
         outcome = "its process tree was forced to stop, the stop is not confirmed";
@@ -144,8 +148,11 @@ export async function terminate(deps: CodexDeps, pid: number, pidStart: string |
 }
 
 async function terminateTree(deps: CodexDeps, pid: number, pidStart: string | undefined): Promise<void> {
-  if (pidStart === undefined && !holdsChild(pid)) throw new Error("process identity unknown");
+  const child = pidStart === undefined ? held.get(pid) : undefined;
+  if (pidStart === undefined && !child) throw new Error("process identity unknown");
   const identities = await processTree(deps, pid);
+  // Issue #473: a start read after the held child ended or was replaced is foreign.
+  if (child && held.get(pid) !== child) throw new Error("the held process ended during capture; nothing signalled");
   const root = identities.find((entry) => entry.pid === pid);
   if (!root || (pidStart !== undefined && root.start !== pidStart)) {
     if (await allStopped(deps, identities)) return;
