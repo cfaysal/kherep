@@ -99,6 +99,7 @@ hooks/critical-file-integrity.test.mts
 hooks/live-hook-integrity.mts
 hooks/live-hook-integrity.test.mts
 hooks/live-hook-integrity-trigger.test.mts
+hooks/live-hook-integrity-closure.test.mts
 hooks/fixtures/smoke-report-legacy.txt
 hooks/portable-scope-hooks.test.mts
 commands/memo-checkpoint.md
