@@ -400,7 +400,7 @@ export function renderPreviousNativeHooks(current: RenderOptions): string {
 
 // The attribution hook as its entry-point argument appears in a rendered TOML
 // string (issue #503), in its own entry and in the shell dispatcher entry alike.
-const ATTRIBUTION_ENTRY = String.raw`codex-control-plane-hook.mts\" \"attribution\"`;
+const ATTRIBUTION_ENTRY = String.raw`${CONTROL_PLANE_ENTRY}\" \"attribution\"`;
 
 // Hooks that did not exist in the JavaScript-era projection. An older installer
 // never wrote them, so a legacy fragment containing them would not match the
