@@ -12,6 +12,7 @@ import { launcherCommand } from "../modules/control-plane/node/launcher.mts";
 import { AGENTS_START, USER_START, install } from "./install.mts";
 import type { Capabilities } from "./lib/contracts.mts";
 import { controlPlaneRulesPath, starlarkString } from "./lib/control-plane-rules.mts";
+import { fixtureModelOptions } from "./lib/model-policy.fixture.mts";
 
 const AGENTS_END = "<!-- kherep:end -->";
 const USER_END = "<!-- kherep-user-parity:end -->";
@@ -27,6 +28,7 @@ function fixture(t: { after: (fn: () => void) => void }, configName = "kherep co
   fs.writeFileSync(claudeRegistryFile, JSON.stringify({ mcpServers: Object.fromEntries(
     capabilities.mcpServers.map((name) => [name, { type: "http", url: `https://example.test/${name}` }])) }), { mode: 0o600 });
   const options = {
+    ...fixtureModelOptions(),
     codexHome, claudeRegistryFile, claudeConfigDir: path.join(root, "home", ".claude"), workspace: path.join(root, "workspace"),
     nodePath: process.execPath, log: (): void => {}, skipPluginRegistration: true, installAtlassianTools: false,
     resolveRegistryRuntime: () => "fixture", runCodex: (): string => "ok",

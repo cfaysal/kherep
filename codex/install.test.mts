@@ -20,6 +20,7 @@ import {
 } from "./install.mts";
 import { adaptSkillText } from "./lib/component-render.mts";
 import { componentHash } from "./lib/component-hash.mts";
+import { fixtureModelOptions } from "./lib/model-policy.fixture.mts";
 import type { Capabilities } from "./lib/contracts.mts";
 import { legacyForm } from "./lib/legacy-control-plane-form.mts";
 import { command, hookGroup, renderRegistryMcpServer } from "./lib/parity-config.mts";
@@ -140,6 +141,7 @@ function fixture() {
   const atlassianMcpTokenFile = path.join(root, "operator", "atl-mcp-credential-codex.txt");
   fs.writeFileSync(atlassianMcpTokenFile, `${"a".repeat(48)}\n`, { mode: 0o600 });
   const installOptions = {
+    ...fixtureModelOptions(),
     claudeConfigDir, claudeRegistryFile, codexHome,
     workspace, installAtlassianTools: true, atlassianMcpTokenFile,
     nodePath: process.execPath, log: (): void => {},
@@ -1017,10 +1019,11 @@ test("default install projects observation delivery without optional Jira toolin
   const obsModel = observationAgent.match(/^model = "(.*)"$/m)?.[1] ?? "";
   const installedGuard = path.join(result.targets.hookDir, "codex-dispatch-contract-guard.mts");
   assert.deepEqual(fs.readFileSync(installedGuard), fs.readFileSync(path.join(here, "hooks", "dispatch-contract-guard.mts")));
-  assert.deepEqual(
-    fs.readFileSync(path.join(result.targets.hookDir, "..", "parity", "capabilities.json")),
-    fs.readFileSync(path.join(here, "parity", "capabilities.json")),
-  );
+  const installedCapabilities = JSON.parse(fs.readFileSync(
+    path.join(result.targets.hookDir, "..", "parity", "capabilities.json"), "utf8")) as Capabilities;
+  assert.deepEqual(installedCapabilities.modelResolution, result.receipt.modelResolution);
+  assert.deepEqual(installedCapabilities.projectedAgents, result.receipt.projection.agentDefaults);
+  assert.equal(installedCapabilities.agents["claude-obs"].model, obsModel);
   const guard = (extra: Record<string, unknown>): string => spawnSync(process.execPath, [installedGuard], {
     encoding: "utf8",
     input: JSON.stringify({ tool_name: "spawn_agent", tool_input: { task_name: "obs", message: "m", agent_type: "codex-obs", ...extra } }),

@@ -4,12 +4,57 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
+import { fixtureResolution } from "./model-policy.fixture.mts";
+import { resolveCapabilities } from "./model-policy.mts";
 import { componentHash } from "./component-hash.mts";
 import type { Capabilities } from "./contracts.mts";
 import { InstallTransaction } from "./install-transaction.mts";
-import { project } from "./parity-projection.mts";
+import { pluginAgentRole, project } from "./parity-projection.mts";
+import { dispatchPolicy, validate } from "../hooks/dispatch-contract-guard.mts";
 
 const here = import.meta.dirname;
+
+test("feature architect takes designer precedence while simplifier and Opus remain builders", () => {
+  const source = (model: string) => `---\nmodel: ${model}\n---\nBounded work.\n`;
+  assert.equal(pluginAgentRole({ id: "feature-dev@claude-plugins-official", mode: "project" }, "code-architect", source("opus")), "designer");
+  assert.equal(pluginAgentRole({ id: "feature-dev@claude-plugins-official", mode: "project" }, "code-reviewer", source("sonnet")), "support");
+  assert.equal(pluginAgentRole({ id: "code-simplifier@claude-plugins-official", mode: "agent" }, "code-simplifier", source("sonnet")), "builder");
+  assert.equal(pluginAgentRole({ id: "fixture@plugins", mode: "project" }, "x", source("opus")), "builder");
+  assert.equal(pluginAgentRole({ id: "fixture@plugins", mode: "project" }, "x", source("haiku")), "researcher");
+});
+
+test("projected plugin names and defaults drive inherited reasoning even after personal name collisions", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-designer-defaults-"));
+  t.after(() => fs.rmSync(root, { force: true, recursive: true }));
+  const repoRoot = path.resolve(here, "..", "..");
+  const codexHome = path.join(root, "codex");
+  const pluginSourceRoot = path.join(root, "plugins");
+  const pluginRoot = path.join(pluginSourceRoot, "feature-dev");
+  write(path.join(pluginRoot, "agents", "code-architect.md"), "---\nmodel: opus\n---\nDesign this task.\n");
+  write(path.join(codexHome, "agents", "code-architect.toml"), "personal designer\n");
+  write(path.join(pluginSourceRoot, "manifest.json"), JSON.stringify({ plugins: [{
+    id: "feature-dev@claude-plugins-official", version: "fixture", path: "feature-dev", contentSha256: componentHash(pluginRoot),
+  }] }));
+  const capabilities = readCapabilities(repoRoot);
+  capabilities.plugins = [{ id: "feature-dev@claude-plugins-official", mode: "project" }];
+  const resolution = capabilities.modelResolution as ReturnType<typeof fixtureResolution>;
+  resolution.supportedModels[resolution.roles.designer.model] = ["high", "ultra"];
+  resolution.supportedModels[resolution.roles.root.model] = ["high", "xhigh"];
+  const transaction = new InstallTransaction(codexHome, path.join(root, "backup"));
+  const projection = project({ capabilities, codexHome, pluginSourceRoot, repoRoot, transaction });
+  const designer = projection.agents.find((entry) => entry.source === "feature-dev@claude-plugins-official")!;
+  assert.equal(designer.name, "feature-dev-code-architect");
+  assert.equal(fs.readFileSync(path.join(codexHome, "agents", "code-architect.toml"), "utf8"), "personal designer\n");
+  const snapshot = { ...capabilities, projectedAgents: projection.agentDefaults };
+  const policy = dispatchPolicy(snapshot);
+  const dispatch = (reasoning_effort: string) => ({ tool_name: "spawn_agent", tool_input: {
+    task_name: "design", message: "Design bounded task.", agent_type: designer.name, reasoning_effort,
+  } });
+  assert.equal(validate(dispatch("ultra"), policy), null);
+  assert.match(validate(dispatch("xhigh"), policy) ?? "", /reasoning effort/);
+  assert.equal(projection.agentDefaults[designer.name].role, "designer");
+  assert.equal(projection.agentDefaults[designer.name].reasoning, "high");
+});
 
 function write(file: string, content: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -17,7 +62,7 @@ function write(file: string, content: string): void {
 }
 
 function readCapabilities(repoRoot: string): Capabilities {
-  return JSON.parse(fs.readFileSync(path.join(repoRoot, "codex", "parity", "capabilities.json"), "utf8")) as Capabilities;
+  return resolveCapabilities(JSON.parse(fs.readFileSync(path.join(repoRoot, "codex", "parity", "capabilities.json"), "utf8")) as Capabilities, fixtureResolution());
 }
 
 test("projects Kherep and local Claude plugin components without writing Claude", (t) => {
@@ -64,7 +109,7 @@ test("projects Kherep and local Claude plugin components without writing Claude"
   assert.match(fs.readFileSync(path.join(codexHome, "skills", "demo", "SKILL.md"), "utf8"), /Personal\./);
   assert.ok(receipt.commands.some((entry) => entry.name === "demo-command"));
   assert.ok(receipt.commands.some((entry) => entry.name === "demo-mode"));
-  assert.match(fs.readFileSync(path.join(codexHome, "agents", "demo-agent.toml"), "utf8"), /gpt-5\.6-sol/);
+  assert.match(fs.readFileSync(path.join(codexHome, "agents", "demo-agent.toml"), "utf8"), /gpt-6\.10-sol/);
   assert.equal(fs.existsSync(path.join(codexHome, "skills", "gepeto")), false);
   assert.equal(fs.existsSync(path.join(codexHome, "skills", "pinokio")), false);
   const twgSkill = fs.readFileSync(path.join(codexHome, "skills", "kherep-twg", "SKILL.md"), "utf8");

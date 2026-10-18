@@ -12,6 +12,7 @@ import { test } from "node:test";
 import { install as installCodex } from "../codex/install.mts";
 import type { Capabilities } from "../codex/lib/contracts.mts";
 import { controlPlaneRulesPath } from "../codex/lib/control-plane-rules.mts";
+import { fixtureModelOptions } from "../codex/lib/model-policy.fixture.mts";
 import { launcherCommand } from "../modules/control-plane/node/launcher.mts";
 import { INTERCOM_COMMAND, INTERCOM_EXAMPLE_TARGET } from "./render-intercom.mts";
 
@@ -58,7 +59,7 @@ test("both installers name one launcher command in all five files, and install.s
   fs.mkdirSync(codexHome, { recursive: true });
   fs.writeFileSync(registry, JSON.stringify({ mcpServers: Object.fromEntries(
     capabilities.mcpServers.map((name) => [name, { type: "http", url: `https://example.test/${name}` }])) }), { mode: 0o600 });
-  installCodex({ codexHome, claudeRegistryFile: registry, claudeConfigDir: claude, workspace: ws, nodePath: process.execPath,
+  installCodex({ ...fixtureModelOptions(), codexHome, claudeRegistryFile: registry, claudeConfigDir: claude, workspace: ws, nodePath: process.execPath,
     log: (): void => {}, skipPluginRegistration: true, installAtlassianTools: false, resolveRegistryRuntime: () => "fixture",
     runCodex: (): string => "ok", controlPlaneOutbox: path.join(config, "control-plane", "outbox") });
   const files = [path.join(claude, "CLAUDE.md"), path.join(claude, "teams", "kherep", "ROUTING.md"),

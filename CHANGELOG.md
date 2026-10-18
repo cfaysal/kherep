@@ -11,6 +11,11 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Versionless Codex role policy (issue #509). Astra designs, SOL builds,
+  Terra handles support and research, and Luna handles observations and brokers.
+  Installation resolves available models into native agent TOMLs and one
+  dispatch snapshot; ordinary reinstall retains that resolution, while
+  `--refresh-models` explicitly refreshes it.
 - Reconnect burst measurement (issue #493). The daemon's round counters line
   `round sent <n> status/<m> outbox frames, handled <k> inbound items` keeps
   its text and, when the round handled frames, goes on with

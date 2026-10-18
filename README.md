@@ -49,6 +49,7 @@ flowchart LR
   subgraph host["Host: Windows or macOS"]
     direction TB
     bootstrap["Installer and drift check<br/>bootstrap/"]
+    codexModels["Codex role-family TOML<br/>visible model/list metadata"]
     subgraph runtimes["Agent runtimes"]
       claude["Claude Code<br/>rules, hooks, skills, agents"]
       codex["Codex<br/>adapter projection"]
@@ -70,6 +71,8 @@ flowchart LR
 
   operator --> runtimes
   bootstrap -->|installs| runtimes
+  codexModels -->|first install or explicit refresh| bootstrap
+  bootstrap -->|one resolved model snapshot| codex
   bootstrap -->|binds| githook
   runtimes --> brokers --> confluence
   runtimes --> runner --> model

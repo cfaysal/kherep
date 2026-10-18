@@ -24,7 +24,7 @@ function run(input: unknown, env: NodeJS.ProcessEnv = {}) {
   assert.match(result.stdout, /KHEREP CODEX ORCHESTRA ACTIVE/);
   assert.match(result.stdout, /\[Maestro on \| routing loaded \| evidence-first\]/);
   assert.match(result.stdout, /ROUTING\.md/);
-  assert.match(result.stdout, /Default root tier is gpt-6\.1-sol\/xhigh/);
+  assert.match(result.stdout, /Astra for the main designer, SOL for builders and root/);
 }
 
 {
@@ -36,7 +36,7 @@ function run(input: unknown, env: NodeJS.ProcessEnv = {}) {
   assert.match(result.stdout, /MAESTRO TURN CHECK/);
   assert.match(result.stdout, /C1 correctness/);
   assert.match(result.stdout, /Never overlap writes/i);
-  assert.match(result.stdout, /dispatch codex-obs once.*gpt-5\.6-luna.*fork_turns none/);
+  assert.match(result.stdout, /dispatch codex-obs once.*installed agent TOML.*fork_turns none/);
   assert.match(result.stdout, /observationPublishingAuthorized is literal true/);
   assert.doesNotMatch(result.stdout, /Before the final response, dispatch the codex-obs agent/);
 }

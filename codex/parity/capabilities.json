@@ -50,54 +50,44 @@
   ],
   "agents": {
     "kherep-builder": {
-      "model": "gpt-5.6-sol",
-      "reasoning": "high"
+      "role": "builder"
     },
     "dc-plugin-build-runner": {
-      "model": "gpt-5.6-terra",
-      "reasoning": "medium"
+      "role": "support"
     },
     "forge-deploy-validator": {
-      "model": "gpt-5.6-terra",
-      "reasoning": "medium",
-      "sandbox": "read-only"
+      "sandbox": "read-only",
+      "role": "support"
     },
     "lmstudio-mac-researcher": {
-      "model": "gpt-5.6-terra",
-      "reasoning": "low",
-      "sandbox": "read-only"
+      "sandbox": "read-only",
+      "role": "researcher"
     },
     "lmstudio-win-researcher": {
-      "model": "gpt-5.6-terra",
-      "reasoning": "low",
-      "sandbox": "read-only"
+      "sandbox": "read-only",
+      "role": "researcher"
     },
     "mac-agent": {
-      "model": "gpt-5.6-terra",
-      "reasoning": "low",
-      "sandbox": "read-only"
+      "sandbox": "read-only",
+      "role": "researcher"
     },
     "n8n-workflow-deploy-runner": {
-      "model": "gpt-5.6-sol",
-      "reasoning": "high"
+      "role": "builder"
     },
     "win-agent": {
-      "model": "gpt-5.6-terra",
-      "reasoning": "low",
-      "sandbox": "read-only"
+      "sandbox": "read-only",
+      "role": "researcher"
     },
     "claude-obs": {
       "as": "codex-obs",
       "source": "codex/agents/codex-obs.md",
-      "model": "gpt-5.6-luna",
       "enforcePin": true,
-      "reasoning": "low",
-      "sandbox": "read-only"
+      "sandbox": "read-only",
+      "role": "observer"
     },
     "atlassian-broker": {
       "source": "codex/agents/atlassian-broker.md",
-      "model": "gpt-5.6-luna",
-      "reasoning": "low"
+      "role": "broker"
     }
   },
   "mcpServers": [
