@@ -85,3 +85,13 @@ test("session start: the JSON report names both files and writes no heartbeat", 
   assert.ok(context.includes("lib/missing.mts (imported by commit-guard.mts)"), context);
   assert.equal(fs.existsSync(path.join(box.cache, "heartbeat.json")), false);
 });
+
+test("a restore of a versioned copy that does not parse is proven, reported as still broken, no heartbeat", () => {
+  const box = sandbox(null);
+  fs.writeFileSync(path.join(box.hooks, "commit-guard.mts"), "");
+  fs.writeFileSync(path.join(box.repoHooks, "commit-guard.mts"), BROKEN);
+  const lines = run(box).stdout.split(/\r?\n/).filter(Boolean);
+  assert.ok(lines.includes("commit-guard.mts: still DEFEKT after the restore"), lines.join("\n"));
+  assert.equal(lines.at(-1), "heartbeat not written (commit-guard.mts is not OK after the restore)");
+  assert.equal(read(path.join(box.cache, "heartbeat.json")), PLANTED);
+});

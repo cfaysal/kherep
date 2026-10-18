@@ -202,7 +202,6 @@ async function checkAll(
 type Outcome = { unproven: string; restored: boolean };
 async function checkOne(entry: InventoryEntry, lines: string[], repoRoot: string, home: string): Promise<Outcome> {
   const { file, rel, wired, importedBy } = entry;
-  const hooksDir = `${home}/hooks`;
   const { state, reason, before = {} } = await lib.classify(lib, file, wired ? "wired" : "imported");
   if (state === "OK") return { unproven: "", restored: false };
   const label = importedBy.length ? `${rel} (imported by ${importedBy.join(", ")})` : rel;
@@ -219,7 +218,7 @@ async function checkOne(entry: InventoryEntry, lines: string[], repoRoot: string
     lib.journal(home, record);
     return { unproven: `${rel} is unchecked`, restored: false };
   }
-  const result = lib.restore(lib, file, rel, repoRoot, hooksDir);
+  const result = lib.restore(lib, file, rel, repoRoot, `${home}/hooks`);
   record.sha256After = result.sha || null;
   record.restoreProven = result.proven;
   if (!result.proven) record.restoreDetail = result.why;
@@ -232,6 +231,7 @@ async function checkOne(entry: InventoryEntry, lines: string[], repoRoot: string
   if (!result.proven) return { unproven: `${rel} is not restored`, restored: false };
   // Proven bytes, re-checked as the loader will see them.
   const after = (await lib.classify(lib, file, "restored")).state;
+  if (after !== "OK") lines.push(`${label}: still ${after} after the restore`);
   return { unproven: after === "OK" ? "" : `${rel} is not OK after the restore`, restored: true };
 }
 
