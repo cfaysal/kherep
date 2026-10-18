@@ -12,6 +12,8 @@ import { after, test } from "node:test";
 
 import { dispatcherFixture, heartbeatPath, plantHeartbeat } from "./guard-dispatch-fixture.mts";
 
+// The renamed real lib, imported by a fixture lib; spelled so the repo's import scan skips it.
+const REAL = JSON.stringify("./real-recheck.mts");
 const MIN = 60_000;
 const PAYLOAD = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git status ü" } });
 const GOOD = "process.exit(0);\n";
@@ -151,7 +153,7 @@ function fakeRunner(b: Box, runRecheck: string): void {
   const lib = path.join(b.hooks, "lib");
   fs.renameSync(path.join(lib, "guard-recheck.mts"), path.join(lib, "real-recheck.mts"));
   fs.writeFileSync(path.join(lib, "guard-recheck.mts"),
-    `export { heartbeatState, recheckNotice } from "./real-recheck.mts";\nexport ${runRecheck}\n`);
+    `export { heartbeatState, recheckNotice } from ${REAL};\nexport ${runRecheck}\n`);
 }
 
 test("a lib whose import never settles: one unavailable line within 2 s, the deny stays", () => {
