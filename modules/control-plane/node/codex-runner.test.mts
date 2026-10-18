@@ -20,7 +20,7 @@ const FRAMED = `Task ${TASK} from the operator via the Kherep Control Plane: fix
   + "a short summary; it is reported as the task's result. Coordinate with other sessions of this task through `kherep-node msg` "
   + "(your messages carry the task id automatically).";
 const codexArgs = (id: string = TASK, extra: Parameters<typeof startArgs>[1] = {}) => startArgs(id, { runtime: "codex", ...extra });
-const gone = (pid: number): boolean => processStart(pid) === null;
+const gone = async (pid: number): Promise<boolean> => await processStart(pid) === null;
 
 const posix = { skip: process.platform === "win32" ? "the fake codex is a POSIX script" : false };
 
@@ -140,7 +140,7 @@ test("stop ends the process group with SIGTERM, then SIGKILL after the grace per
   const began = Date.now();
   for (const n of [1, 2]) {
     assert.deepEqual(await stopTask({ taskId: taskId(n) }, node.deps()), { taskId: taskId(n), state: "stopped" });
-    assert.equal(gone(node.runs()[n - 1].pid), true, "stop returns only after that run ended");
+    assert.equal(await gone(node.runs()[n - 1].pid), true, "stop returns only after that run ended");
   }
   assert.ok(Date.now() - began < 10_000, "stopped within 10 s");
   assert.deepEqual(node.reports().map((r) => [r.state, r.reason]), [["stopped", "stopped by the operator"], ["stopped", "stopped by the operator"]]);
@@ -155,9 +155,9 @@ test("a stop ends the whole process tree, codex behind a launcher included", pos
   await waitFor(() => fs.existsSync(marker), "the child");
   const child = Number(fs.readFileSync(marker, "utf8"));
   t.after(() => { try { process.kill(child, "SIGKILL"); } catch { /* ended */ } });
-  assert.equal(gone(child), false);
+  assert.equal(await gone(child), false);
   await stopTask({ taskId: TASK }, node.deps());
-  await waitFor(() => gone(child) && gone(node.runs()[0].pid), "the whole tree");
+  await waitFor(async () => await gone(child) && await gone(node.runs()[0].pid), "the whole tree");
 });
 
 test("a pid this daemon no longer holds is signalled only with its recorded start time", posix, async (t) => {
@@ -247,7 +247,7 @@ test("a held child without a readable identity is not falsely reported stopped a
   await watchTasks(node.deps(), (line) => logs.push(line));
   assert.deepEqual(node.reports(), [], "an unverified stop produces no stopped report");
   assert.equal(readTask(node.paths, TASK)?.state, "started");
-  assert.equal(gone(node.runs()[0].pid), false, "the process is not assumed stopped");
+  assert.equal(await gone(node.runs()[0].pid), false, "the process is not assumed stopped");
   assert.match(logs.at(-1) ?? "", /could not stop task.*ps failed/);
 });
 

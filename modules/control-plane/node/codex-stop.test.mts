@@ -21,12 +21,31 @@ test("termination confirms every captured pid start identity before returning", 
   assert.deepEqual([...starts], []);
 });
 
-test("Windows process discovery captures the root and every descendant identity", () => {
+// Issue #473: with an awaited start-time read, each signal still follows the
+// read of its own pid's start directly; nothing runs between them.
+test("an asynchronous start-time read keeps every signal right after the read of its pid", async () => {
+  const starts = new Map(TREE.map((entry) => [entry.pid, entry.start]));
+  const events: string[] = [];
+  const signals: Sent[] = [];
+  await terminate({ processTree: () => TREE, graceMs: 1,
+    processStart: (pid) => new Promise((resolve) => setImmediate(() => { events.push(`read ${pid}`); resolve(starts.get(pid) ?? null); })),
+    signal: (pid, signal, scope) => {
+      events.push(`signal ${pid}`);
+      signals.push([pid, signal, scope]);
+      if (signal === "SIGKILL") starts.clear();
+    } }, ROOT, "root-start");
+  assert.deepEqual(signals, [[ROOT, "SIGTERM", "group"], [CHILD, "SIGTERM", "process"], [ROOT, "SIGKILL", "group"]]);
+  events.forEach((event, i) => {
+    if (event.startsWith("signal ")) assert.equal(events[i - 1], event.replace("signal", "read"), `read before ${event}`);
+  });
+});
+
+test("Windows process discovery captures the root and every descendant identity", async () => {
   const starts = new Map([[ROOT, "root-start"], [CHILD, "child-start"], [40_003, "grandchild-start"], [40_004, "unrelated-start"]]);
   const relations = [{ pid: CHILD, ppid: ROOT }, { pid: 40_003, ppid: CHILD }, { pid: 40_004, ppid: 10 }];
-  assert.deepEqual(processTree({ platform: "win32", processStart: (pid) => starts.get(pid) ?? null,
+  assert.deepEqual(await processTree({ platform: "win32", processStart: (pid) => starts.get(pid) ?? null,
     processRelations: () => relations }, ROOT), TREE.concat({ pid: 40_003, start: "grandchild-start" }));
-  assert.deepEqual(processTree({ platform: "win32", processStart: (pid) => starts.get(pid) ?? null,
+  assert.deepEqual(await processTree({ platform: "win32", processStart: (pid) => starts.get(pid) ?? null,
     processRelations: () => [] }, ROOT), [TREE[0]]);
 });
 
@@ -124,20 +143,20 @@ test("a missing root with ended captured descendants needs no signal", async () 
     signal: () => { assert.fail("an ended tree must not be signalled"); } }, ROOT, "root-start");
 });
 
-// execFileSync's error when its timeout ended the child (issue #221).
+// The runner's error when its timeout ended the child (issue #221; child-run.mts).
 const timeout = () => Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" });
 const timesOut = (): never => { throw timeout(); };
 
-test("a timed-out Windows process-tree query runs once more; any other failure and a second timeout throw (issue #221)", () => {
+test("a timed-out Windows process-tree query runs once more; any other failure and a second timeout throw (issue #221)", async () => {
   let calls = 0;
-  assert.deepEqual(windowsRelations(() => {
+  assert.deepEqual(await windowsRelations(async () => {
     calls += 1;
     return calls === 1 ? timesOut() : `${CHILD} ${ROOT}\r\n`;
   }), [{ pid: CHILD, ppid: ROOT }]);
   assert.equal(calls, 2);
   for (const [error, expected] of [[timeout(), 2], [new Error("Add-Type failed"), 1]] as const) {
     calls = 0;
-    assert.throws(() => windowsRelations(() => { calls += 1; throw error; }), error);
+    await assert.rejects(windowsRelations(async () => { calls += 1; throw error; }), error);
     assert.equal(calls, expected);
   }
 });

@@ -153,9 +153,9 @@ export function fakeCodexBin(t: test.TestContext): { file: string; runs: () => F
 }
 
 // Polls until check is true, for processes that end on their own schedule.
-export async function waitFor(check: () => boolean, what: string, ms = 5_000): Promise<void> {
+export async function waitFor(check: () => boolean | Promise<boolean>, what: string, ms = 5_000): Promise<void> {
   const until = Date.now() + ms;
-  while (!check()) {
+  while (!await check()) {
     if (Date.now() > until) throw new Error(`timed out waiting for ${what}`);
     await new Promise((resolve) => { setTimeout(resolve, 25); });
   }

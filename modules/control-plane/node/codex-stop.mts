@@ -1,21 +1,20 @@
-import { execFileSync } from "node:child_process";
-
 import { holdsChild, signalGroup, signalProcess, startTimeOf, type CodexDeps, type SignalScope } from "./codex-process.mts";
-import { timedSync } from "./sync-timing.mts";
+import { posixRelations, timedOut, windowsRelations } from "./process-relations.mts";
+
+export { windowsRelations, type ProcessRelation } from "./process-relations.mts";
 
 export interface ProcessIdentity { pid: number; start: string }
-export interface ProcessRelation { pid: number; ppid: number }
 
 // The descendants that belong to root at the stop boundary. Start identities
 // make a later reused pid a different process, never another kill target.
 // known (issue #233): start identities read earlier for descendant pids, kept
 // instead of read again; the root's start is always read.
-export function processTree(deps: CodexDeps, root: number, known: readonly ProcessIdentity[] = []): ProcessIdentity[] {
+export async function processTree(deps: CodexDeps, root: number, known: readonly ProcessIdentity[] = []): Promise<ProcessIdentity[]> {
   if (deps.processTree) return deps.processTree(root);
   const platform = deps.platform ?? process.platform;
-  const rootStart = startTimeOf(deps, root);
+  const rootStart = await startTimeOf(deps, root);
   if (rootStart === null) return [];
-  const relations = deps.processRelations?.() ?? (platform === "win32" ? windowsRelations() : posixRelations());
+  const relations = await (deps.processRelations?.() ?? (platform === "win32" ? windowsRelations() : posixRelations()));
   const descendants = new Set<number>([root]);
   let changed = true;
   while (changed) {
@@ -30,99 +29,20 @@ export function processTree(deps: CodexDeps, root: number, known: readonly Proce
   starts.delete(root);
   const identities: ProcessIdentity[] = [];
   for (const pid of descendants) {
-    const start = starts.get(pid) ?? startTimeOf(deps, pid);
+    const start = starts.get(pid) ?? await startTimeOf(deps, pid);
     if (start !== null) identities.push({ pid, start });
   }
   return identities;
 }
 
-function posixRelations(): ProcessRelation[] {
-  const text = timedSync("process-relations", () => execFileSync("ps", ["-eo", "pid=,ppid="],
-    { encoding: "utf8", env: { ...process.env, LC_ALL: "C" }, timeout: 10_000 }));
-  return parseRelations(text);
-}
-
-const timedOut = (error: unknown): boolean => (error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
-
-// Toolhelp32 takes one process snapshot without WMI/CIM administrator access.
-// Issue #221: on a loaded windows-latest runner the cold powershell.exe start
-// with its Add-Type compile hit the 10 s limit, so a timeout alone runs once
-// more (execFileSync returns only after the killed child exited); any other
-// failure throws at once.
-export function windowsRelations(run: () => string = queryWindowsRelations): ProcessRelation[] {
-  let text: string;
-  try {
-    text = run();
-  } catch (error) {
-    if (!timedOut(error)) throw error;
-    text = run();
-  }
-  return parseRelations(text);
-}
-
-function queryWindowsRelations(): string {
-  const command = String.raw`
-$source = @"
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-using System.Text;
-public static class KherepProcessTree {
-  const uint SnapshotProcesses = 2;
-  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-  struct ProcessEntry {
-    public uint size, usage, pid;
-    public IntPtr heap;
-    public uint module, threads, parentPid;
-    public int priority;
-    public uint flags;
-    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string executable;
-  }
-  [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint pid);
-  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool Process32FirstW(IntPtr snap, ref ProcessEntry entry);
-  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool Process32NextW(IntPtr snap, ref ProcessEntry entry);
-  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
-  public static string Rows() {
-    IntPtr snap = CreateToolhelp32Snapshot(SnapshotProcesses, 0);
-    if (snap == new IntPtr(-1)) throw new Win32Exception(Marshal.GetLastWin32Error());
-    try {
-      var entry = new ProcessEntry();
-      entry.size = (uint)Marshal.SizeOf(entry);
-      var rows = new StringBuilder();
-      if (!Process32FirstW(snap, ref entry)) {
-        int error = Marshal.GetLastWin32Error();
-        if (error != 18) throw new Win32Exception(error);
-        return rows.ToString();
-      }
-      do {
-        rows.Append(entry.pid).Append(' ').Append(entry.parentPid).Append('\n');
-        entry.size = (uint)Marshal.SizeOf(entry);
-      } while (Process32NextW(snap, ref entry));
-      int lastError = Marshal.GetLastWin32Error();
-      if (lastError != 18) throw new Win32Exception(lastError);
-      return rows.ToString();
-    } finally { CloseHandle(snap); }
-  }
-}
-"@
-Add-Type -TypeDefinition $source
-[KherepProcessTree]::Rows()
-`;
-  return timedSync("process-relations", () => execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command],
-    { encoding: "utf8", windowsHide: true, timeout: 10_000 }));
-}
-
-function parseRelations(text: string): ProcessRelation[] {
-  return text.trim().split("\n").flatMap((line) => {
-    const [pid, ppid] = line.trim().split(/\s+/).map(Number);
-    return Number.isInteger(pid) && Number.isInteger(ppid) ? [{ pid, ppid }] : [];
-  });
-}
-
 const pause = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); });
 
-function allStopped(deps: CodexDeps, identities: ProcessIdentity[]): boolean {
-  return identities.every(({ pid, start }) => startTimeOf(deps, pid) !== start);
+// In order, and no read after the first identity that still runs.
+async function allStopped(deps: CodexDeps, identities: ProcessIdentity[]): Promise<boolean> {
+  for (const { pid, start } of identities) {
+    if (await startTimeOf(deps, pid) === start) return false;
+  }
+  return true;
 }
 
 // Both runtimes use these helpers (issue #437): the Claude stop waits on the
@@ -130,10 +50,10 @@ function allStopped(deps: CodexDeps, identities: ProcessIdentity[]): boolean {
 export async function waitStopped(deps: CodexDeps, identities: ProcessIdentity[], timeoutMs: number): Promise<boolean> {
   const until = Date.now() + timeoutMs;
   do {
-    if (allStopped(deps, identities)) return true;
+    if (await allStopped(deps, identities)) return true;
     await pause(Math.min(25, Math.max(1, until - Date.now())));
   } while (Date.now() < until);
-  return allStopped(deps, identities);
+  return await allStopped(deps, identities);
 }
 
 type Send = (pid: number, signal: NodeJS.Signals, scope: SignalScope) => void;
@@ -159,7 +79,10 @@ function sender(deps: CodexDeps): Send {
 // decides whether the tree stopped. Without a root (issue #233) only the
 // verified identities are signalled, each by its pid. The Claude stop (issue
 // #437) calls it with root null, on a tree re-captured before each phase.
-export function signalPhase(deps: CodexDeps, root: ProcessIdentity | null, identities: ProcessIdentity[], signal: NodeJS.Signals): string[] {
+// Issue #473: each signal is the statement right after the awaited read of its
+// pid's start; that continuation runs before any timer, I/O or socket callback.
+export async function signalPhase(deps: CodexDeps, root: ProcessIdentity | null, identities: ProcessIdentity[],
+  signal: NodeJS.Signals): Promise<string[]> {
   const send = sender(deps);
   const notes: string[] = [];
   const attempt = (pid: number, scope: SignalScope): void => {
@@ -171,12 +94,12 @@ export function signalPhase(deps: CodexDeps, root: ProcessIdentity | null, ident
     }
   };
   if (root) {
-    const current = startTimeOf(deps, root.pid);
+    const current = await startTimeOf(deps, root.pid);
     if (current === root.start) attempt(root.pid, "group");
     else notes.push("root process " + (current === null ? "ended" : "was reused") + " before " + signal);
   }
   for (const { pid, start } of identities) {
-    if (pid !== root?.pid && startTimeOf(deps, pid) === start) attempt(pid, "process");
+    if (pid !== root?.pid && await startTimeOf(deps, pid) === start) attempt(pid, "process");
   }
   return notes;
 }
@@ -185,9 +108,9 @@ export function signalPhase(deps: CodexDeps, root: ProcessIdentity | null, ident
 // wait; rejects when one still has its start identity after SIGKILL.
 export async function stopIdentities(deps: CodexDeps, root: ProcessIdentity | null, identities: ProcessIdentity[]): Promise<void> {
   const grace = deps.graceMs ?? 5_000;
-  signalPhase(deps, root, identities, "SIGTERM");
+  await signalPhase(deps, root, identities, "SIGTERM");
   if (await waitStopped(deps, identities, grace)) return;
-  const notes = signalPhase(deps, root, identities, "SIGKILL");
+  const notes = await signalPhase(deps, root, identities, "SIGKILL");
   if (!await waitStopped(deps, identities, grace)) throw new Error(["process tree did not stop after SIGKILL", ...notes].join("; "));
 }
 
@@ -206,7 +129,7 @@ export async function terminate(deps: CodexDeps, pid: number, pidStart: string |
     if (!timedOut(error)) throw error;
     let outcome: string;
     try {
-      const recorded = pidStart === undefined ? holdsChild(pid) : startTimeOf(deps, pid) === pidStart;
+      const recorded = pidStart === undefined ? holdsChild(pid) : await startTimeOf(deps, pid) === pidStart;
       if (recorded) {
         sender(deps)(pid, "SIGKILL", "group");
         outcome = "its process tree was forced to stop, the stop is not confirmed";
@@ -222,10 +145,10 @@ export async function terminate(deps: CodexDeps, pid: number, pidStart: string |
 
 async function terminateTree(deps: CodexDeps, pid: number, pidStart: string | undefined): Promise<void> {
   if (pidStart === undefined && !holdsChild(pid)) throw new Error("process identity unknown");
-  const identities = processTree(deps, pid);
+  const identities = await processTree(deps, pid);
   const root = identities.find((entry) => entry.pid === pid);
   if (!root || (pidStart !== undefined && root.start !== pidStart)) {
-    if (allStopped(deps, identities)) return;
+    if (await allStopped(deps, identities)) return;
     throw new Error("root process identity changed during capture while captured processes still run");
   }
   await stopIdentities(deps, root, identities);

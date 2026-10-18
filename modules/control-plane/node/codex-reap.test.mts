@@ -111,11 +111,11 @@ test("Windows: a refresh reads only new descendants' starts, and the reap signal
   const proc = table();
   proc.codex.platform = "win32";
   const record = { taskId: taskId(5), pid: ROOT, pidStart: "root-start" } as TaskRecord;
-  const first = refreshDescendants(proc.codex, record);
+  const first = await refreshDescendants(proc.codex, record);
   assert.deepEqual(first, [{ pid: CHILD, start: "child-start" }]);
   assert.deepEqual(proc.reads, [ROOT, ROOT, CHILD]);
   proc.reads.length = 0;
-  assert.equal(refreshDescendants(proc.codex, { ...record, descendants: first! }), null, "an unchanged tree writes nothing");
+  assert.equal(await refreshDescendants(proc.codex, { ...record, descendants: first! }), null, "an unchanged tree writes nothing");
   assert.deepEqual(proc.reads, [ROOT, ROOT], "a recorded descendant's start is not read again");
 
   // The child ignores SIGTERM (taskkill without /F); SIGKILL (/F) ends it.
@@ -130,20 +130,20 @@ test("Windows: a refresh reads only new descendants' starts, and the reap signal
   assert.deepEqual(sent, [[CHILD, "SIGTERM", "process"], [CHILD, "SIGKILL", "process"]]);
 });
 
-test("a refresh keeps the record when the root ended during the listing, and is bounded", () => {
+test("a refresh keeps the record when the root ended during the listing, and is bounded", async () => {
   const proc = table();
   const record = { taskId: taskId(6), pid: ROOT, pidStart: "root-start", descendants: [{ pid: CHILD, start: "child-start" }] } as TaskRecord;
   proc.codex.processStart = (pid) => (pid === ROOT && proc.reads.push(pid) > 1 ? null : proc.starts.get(pid) ?? null);
   proc.setRelations([{ pid: CHILD, ppid: 1 }]);
-  assert.equal(refreshDescendants(proc.codex, record), null, "the recorded tree stays for the settle");
+  assert.equal(await refreshDescendants(proc.codex, record), null, "the recorded tree stays for the settle");
 
   const many = table();
   const rows = Array.from({ length: MAX_DESCENDANTS + 8 }, (_, i) => ({ pid: 50_000 + i, ppid: ROOT }));
   for (const row of rows) many.starts.set(row.pid, `start-${row.pid}`);
   many.setRelations(rows);
-  assert.equal(refreshDescendants(many.codex, record)?.length, MAX_DESCENDANTS);
+  assert.equal((await refreshDescendants(many.codex, record))?.length, MAX_DESCENDANTS);
   many.setRelations([]);
-  assert.deepEqual(refreshDescendants(many.codex, record), [], "a tree without descendants clears the record");
+  assert.deepEqual(await refreshDescendants(many.codex, record), [], "a tree without descendants clears the record");
 });
 
 test("a stop of a run whose root already ended reaps its recorded descendants", async (t) => {
@@ -179,18 +179,18 @@ test("a real child of a SIGKILLed root is recorded and reaped (issue #233)",
         }
       }
     });
-    const childStart = processStart(child);
+    const childStart = await processStart(child);
     assert.notEqual(childStart, null);
-    const record = { taskId: taskId(8), pid: root.pid!, pidStart: processStart(root.pid!) ?? undefined } as TaskRecord;
-    const descendants = refreshDescendants({}, record);
+    const record = { taskId: taskId(8), pid: root.pid!, pidStart: await processStart(root.pid!) ?? undefined } as TaskRecord;
+    const descendants = await refreshDescendants({}, record);
     assert.deepEqual(descendants, [{ pid: child, start: childStart }]);
     const exited = once(root, "exit");
     process.kill(root.pid!, "SIGKILL");
     await exited;
-    assert.equal(processStart(child), childStart, "the child outlives its root");
+    assert.equal(await processStart(child), childStart, "the child outlives its root");
     const lines: string[] = [];
     reapDescendants({ graceMs: 3_000 }, { ...record, descendants: descendants! }, (entry) => lines.push(entry));
     await codexReapsIdle();
-    assert.notEqual(processStart(child), childStart);
+    assert.notEqual(await processStart(child), childStart);
     assert.equal(lines.length, 1);
   });

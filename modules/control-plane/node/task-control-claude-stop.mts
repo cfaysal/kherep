@@ -41,14 +41,14 @@ const MAX_TREE = 256;
 // the same residual as there. A process whose ancestors all ended before a
 // capture is never reached. Past MAX_TREE entries growth stops and the stop
 // is not confirmed.
-function grownTree(deps: CodexDeps, tree: ProcessIdentity[]): { tree: ProcessIdentity[]; capped: boolean } {
+async function grownTree(deps: CodexDeps, tree: ProcessIdentity[]): Promise<{ tree: ProcessIdentity[]; capped: boolean }> {
   const grown = [...tree];
   const seen = new Set(grown.map(({ pid, start }) => `${pid} ${start}`));
   const covered = new Set<number>();
   let capped = grown.length > MAX_TREE;
   for (const { pid, start } of tree) {
     if (covered.has(pid)) continue;
-    const walked = processTree(deps, pid, grown);
+    const walked = await processTree(deps, pid, grown);
     if (walked.find((entry) => entry.pid === pid)?.start !== start) continue; // ended or reused: nothing to grow from
     for (const entry of walked) {
       covered.add(entry.pid);
@@ -71,10 +71,10 @@ async function endSurvivors(deps: CodexDeps, tree: ProcessIdentity[], grace: num
   let capped = false;
   let notes: string[] = [];
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {
-    const grown = grownTree(deps, tree);
+    const grown = await grownTree(deps, tree);
     tree = grown.tree;
     capped ||= grown.capped;
-    notes = signalPhase(deps, null, tree, signal);
+    notes = await signalPhase(deps, null, tree, signal);
     if (await waitStopped(deps, tree, grace)) return { capped };
   }
   throw new Error(["process tree did not stop after SIGKILL", ...notes].join("; "));
@@ -98,7 +98,7 @@ export async function stopClaude(record: TaskRecord, runVersion: string, runner:
   // a failed capture signals nothing, unlike terminate()'s timeout fallback.
   let identities: ProcessIdentity[];
   try {
-    identities = processTree(deps, current.pid);
+    identities = await processTree(deps, current.pid);
   } catch {
     return refused("identity_unknown");
   }
@@ -118,10 +118,10 @@ export async function stopClaude(record: TaskRecord, runVersion: string, runner:
   const grace = deps.graceMs ?? 5_000;
   let capped: boolean;
   try {
-    const grown = grownTree(deps, identities);
+    const grown = await grownTree(deps, identities);
     capped = grown.capped;
     if (!await waitStopped(deps, grown.tree, grace)) {
-      if (startTimeOf(deps, root.pid) === root.start) {
+      if (await startTimeOf(deps, root.pid) === root.start) {
         log("the session process still runs after claude stop; nothing signalled");
         return refused("stop_failed", "failed", "running");
       }
