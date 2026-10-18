@@ -864,8 +864,13 @@ if a file took the place meanwhile, the later-armed lock keeps it, by its
 scope in place, so a clock that stepped back cannot invert it.
 Listeners never yield to an older one: a listener that finds its lock gone
 while its scope names it or an older listener puts it back, and one that
-finds an older listener's lock writes its own back. The session's mode,
-budget, woken and queued files stay.
+finds an older listener's lock writes its own back. The session's other
+state files stay while the node can resume it. In the same pass
+`node/listener-prune.mts` (issue #474) removes them, by the same rename and
+compare and at most 200 per pass, once a fresh, complete listing does not show
+the session, `known-sessions.json` no longer holds it, no lock, in-flight lock
+or active task names it, and every file is older than 7 days; any unreadable
+input removes nothing. `doctor` reports the count as `listeners.orphaned`.
 
 ## Compatibility and activation
 

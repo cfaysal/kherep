@@ -293,6 +293,23 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Listener state files of ended sessions are now pruned (issue #474). The
+  daemon's hourly listener sweep also removes `listeners/<id>.mode.json`,
+  `.turns.json`, `.scope.json`, `.stuck.json`, `.woke.json`, `.queued.json`,
+  `.busy-hint.json` and `.busy-admission.json` of a session that a fresh,
+  complete listing does not show, that `known-sessions.json` no longer holds (7
+  days after its last listing), that has no lock or in-flight lock and no active
+  task record, once every one of its files is older than 7 days; at most 200
+  files per pass, each removed only while its bytes are unchanged, otherwise put
+  back, and nothing is removed while the listing is stale or any state file is
+  unreadable. `.queued.json` has had no writer or reader since 2026-10-11 and
+  goes with the rest. `kherep-node doctor` reports the count as
+  `listeners.orphaned`. A session resumed after more than 7 days without a
+  listing arms its `SessionStart` listener from the transcript and launch check,
+  as a session without a remembered mode always did. Locks and their scopes were
+  already swept hourly; this changes neither that nor any guard, permission or
+  wake budget.
+
 - Control Plane: the sender of `msg send`, `msg send --new`, `msg send --reply-to`,
   `msg inbox`, `msg sessions` and `task new` is the runtime that runs the command
   (issue #471). A Codex process started from a Claude Code tool inherits

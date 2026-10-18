@@ -76,6 +76,11 @@ test("the daemon's sweep runs at once, then on an unref'd hourly timer that stop
   const { paths } = setup(t);
   arm(paths, at("t-dead", T0, spawnSync(process.execPath, ["-e", ""]).pid as number));
   fs.mkdirSync(path.join(listenerDir(paths), "odd.json"));
+  // Issue #474: a week-old state file of a session the fresh listing and known-sessions.json do not name.
+  const orphan = path.join(listenerDir(paths), "gone.mode.json");
+  fs.writeFileSync(orphan, "{}");
+  const weekOld = (Date.now() - 8 * 24 * 60 * 60_000) / 1000;
+  fs.utimesSync(orphan, weekOld, weekOld);
   const original = { set: globalThis.setInterval, clear: globalThis.clearInterval };
   t.after(() => { globalThis.setInterval = original.set; globalThis.clearInterval = original.clear; });
   const timer = { unrefed: false, unref() { this.unrefed = true; return this; } };
@@ -87,6 +92,8 @@ test("the daemon's sweep runs at once, then on an unref'd hourly timer that stop
   const stop = scheduleListenerSweep(paths, (line) => lines.push(line));
   assert.equal(fs.existsSync(lockFile(paths)), false);
   assert.match(lines.join("\n"), /removed 1 stale listener lock\(s\); 1 failed \(E[A-Z]+\)/);
+  assert.match(lines.join("\n"), /removed 1 orphaned listener file\(s\) of 1 ended session\(s\)$/m);
+  assert.equal(fs.existsSync(orphan), false);
   assert.deepEqual([every, timer.unrefed, cleared], [60 * 60_000, true, null]);
   stop();
   assert.equal(cleared, timer);
