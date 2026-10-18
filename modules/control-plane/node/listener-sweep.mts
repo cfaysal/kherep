@@ -106,8 +106,12 @@ function restore(tomb: string, file: string, now: number, deps: SweepDeps): void
   }
 }
 
-// Removes file only if it still holds exactly the bytes seen.
-export function takeIfUnchanged(file: string, seen: Buffer, now: number, deps: SweepDeps): boolean {
+// A file's identity when it was judged: a rename keeps both, an atomic rewrite changes them.
+export interface FileStamp { ino: number; mtimeMs: number }
+
+// Removes file only if it still holds exactly the bytes seen and, with a
+// stamp, is still the file stated then (listener-prune.mts).
+export function takeIfUnchanged(file: string, seen: Buffer, now: number, deps: SweepDeps, stamp?: FileStamp): boolean {
   const tomb = tombOf(file, now);
   try {
     fs.renameSync(file, tomb);
@@ -119,6 +123,10 @@ export function takeIfUnchanged(file: string, seen: Buffer, now: number, deps: S
   let same = false;
   try {
     same = fs.readFileSync(tomb).equals(seen);
+    if (same && stamp) {
+      const { ino, mtimeMs } = fs.statSync(tomb);
+      same = ino === stamp.ino && mtimeMs === stamp.mtimeMs;
+    }
   } finally {
     if (same) fs.rmSync(tomb, { force: true });
     else restore(tomb, file, now, deps);
