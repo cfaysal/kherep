@@ -703,9 +703,14 @@ test_upgrade_moves_clq_to_stop() {
     const where = Object.entries(s.hooks).flatMap(([event, groups]) => groups.flatMap((g) =>
       (g.hooks || []).filter((h) => String(h.command).includes("clq-accept-gate")).map(() => `${event}[${g.matcher}]`)));
     if (where.join(",") !== "Stop[]") { console.error(`clq wired at: ${where.join(",") || "nowhere"}`); process.exit(1); }
-    const bash = (s.hooks.PreToolUse || []).find((g) => g.matcher === "Bash");
-    if (!bash || bash.hooks.length !== 2) { console.error("commit-guard/deploy-guard group changed"); process.exit(1); }
-  ' "$C/settings.json" || { cat "$C/settings.json"; fail "the upgrade did not converge clq-accept-gate to one Stop entry"; }
+    // Issue #507: the Bash group is exactly the dispatcher entry for commit-guard and deploy-guard.
+    const at = (name) => `"${process.argv[2].replace(/\\/g, "/")}/hooks/${name}.mts"`;
+    const want = `node ${at("guard-dispatch")} ${at("commit-guard")} ${at("deploy-guard")}`;
+    const bash = (s.hooks.PreToolUse || []).filter((g) => g.matcher === "Bash").flatMap((g) => g.hooks || []);
+    if (JSON.stringify(bash) !== JSON.stringify([{ type: "command", command: want, timeout: 30 }])) {
+      console.error(`Bash group is not exactly ${want} with timeout 30: ${JSON.stringify(bash)}`); process.exit(1);
+    }
+  ' "$C/settings.json" "$home" || { cat "$C/settings.json"; fail "the upgrade did not converge clq-accept-gate to one Stop entry and one Bash dispatcher"; }
   HOME="$H" CLAUDE_HOME="$C" KHEREP_PROFILE=win KHEREP_WORKSPACE="$W" KHEREP_CREDENTIALS_ROOT="$R" \
     bash "$HERE/drift-check.sh" > "$ROOT/drift.log" 2>&1 ||
     { cat "$ROOT/drift.log"; fail "drift-check failed after moving clq-accept-gate to Stop"; }
