@@ -93,7 +93,7 @@ test("a healthy host passes every check and reports versions without secrets", a
   assert.deepEqual(report.checks.runtimes.claude, { installed: true, version: "2.1.300 (Claude Code)", configured: true, ready: "unknown" });
   assert.deepEqual(report.checks.hooks.claude, { present: true, deliver: 1, wake: 1, foreign: [] });
   assert.deepEqual(report.checks.hooks.codex, { present: true, deliver: 1, wake: 0, foreign: [] });
-  assert.deepEqual(report.checks.listeners, { ok: true, live: 0, stale: 0 });
+  assert.deepEqual(report.checks.listeners, { ok: true, live: 0, stale: 0, orphaned: 0 });
   assert.deepEqual(report.checks.wakeReadiness, {
     ok: true,
     snapshot: { status: "fresh", completeness: "complete", updatedAt: "2026-10-04T12:00:00.000Z", ageSeconds: 0 },
@@ -326,7 +326,12 @@ test("the listener check counts live and stale listener locks only", async (t) =
   lock("dead-session.json", 99, now - 1_000);
   lock("old-session.json", LIVE_PID, now - 2 * 86_400_000);
   lock("live-session.turns.json", LIVE_PID, now);
-  assert.deepEqual((await runDoctor(h.deps)).checks.listeners, { ok: true, live: 1, stale: 2 });
+  assert.deepEqual((await runDoctor(h.deps)).checks.listeners, { ok: true, live: 1, stale: 2, orphaned: 0 });
+  // Issue #474: with the fresh listing, a week-old state file of a session no listing names is orphaned.
+  lock("gone-session.mode.json", LIVE_PID, now);
+  const weekOld = (now - 8 * 86_400_000) / 1000;
+  fs.utimesSync(path.join(dir, "gone-session.mode.json"), weekOld, weekOld);
+  assert.deepEqual((await runDoctor(h.deps)).checks.listeners, { ok: true, live: 1, stale: 2, orphaned: 1 });
 });
 
 test("the Codex session check counts recorded sessions by their last hook event, without session ids (issue #408)", async (t) => {

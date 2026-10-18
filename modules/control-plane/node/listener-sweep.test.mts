@@ -35,10 +35,10 @@ test("a dead listener's lock and scope go; live locks and the session's state st
   const state = ["dead.mode.json", "dead.turns.json", "dead.stuck.json", "dead.queued.json"];
   for (const name of state) fs.writeFileSync(path.join(listenerDir(paths), name), "{}");
   const now = T0 + 60_000;
-  assert.deepEqual(checkListeners(paths, alive, now), { ok: true, live: 1, stale: 2 });
+  assert.deepEqual(checkListeners(paths, alive, now), { ok: true, live: 1, stale: 2, orphaned: "listing-stale" });
 
   assert.deepEqual(sweepListeners(paths, { pidAlive: alive, now }), { removed: 2, kept: 1, failed: [] });
-  assert.deepEqual(checkListeners(paths, alive, now), { ok: true, live: 1, stale: 0 });
+  assert.deepEqual(checkListeners(paths, alive, now), { ok: true, live: 1, stale: 0, orphaned: "listing-stale" });
   assert.equal(fs.existsSync(listenerScope(paths, "dead")), false);
   assert.deepEqual(read(lockOf(paths, "live")), lock("t-live", LIVE));
   assert.equal(read(listenerScope(paths, "live")).token, "t-live");

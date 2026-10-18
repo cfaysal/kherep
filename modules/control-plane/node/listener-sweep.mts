@@ -6,6 +6,7 @@ import { listenerDir, listenerLock, listenerScope, type ListenerLock, type Liste
 import type { NodePaths } from "./config.mts";
 import { pidAlive as processAlive } from "./daemon-state.mts";
 import { orderOf } from "./listener-order.mts";
+import { pruneListenerState } from "./listener-prune.mts";
 
 // Removes the locks of wake listeners whose process is gone (issue #225):
 // nothing else does, and doctor counts them as stale. The daemon sweeps at its
@@ -21,10 +22,9 @@ import { orderOf } from "./listener-order.mts";
 // live lock moved aside for that moment is put back by its listener too, and a
 // listener never yields to an older one (listener-order.mts, wake-hook.mts).
 // With the lock goes its scope, but only while the scope carries that lock's
-// token, by the same rename and compare. The session's other files stay: the
-// remembered permission mode (.mode.json) arms a resumed session, the turn
-// budget (.turns.json) is a guard a deletion would reset, and the woken and
-// queued records (.stuck.json, .queued.json) keep a message from waking twice.
+// token, by the same rename and compare. The session's other files stay while
+// the node can resume it; listener-prune.mts removes them after it ended
+// (issue #474), in the same pass and by the same rename and compare.
 
 const SWEEP_INTERVAL_MS = 60 * 60_000;
 // A tombstone older than this was left by a sweep that did not finish.
@@ -32,7 +32,8 @@ export const TOMB_RECOVER_AFTER_MS = 60_000;
 const SWEEP_MAX = 500;
 const RESTORE_ATTEMPTS = 4;
 const LOCK_NAME = /^([A-Za-z0-9_-]{1,128})\.json$/;
-const TOMB_NAME = /^\.([A-Za-z0-9_-]{1,128}(?:\.scope)?\.json)\.(\d+)-[0-9a-f-]{36}\.tomb$/;
+// A lock's, or a state file's that listener-prune.mts took aside.
+const TOMB_NAME = /^\.([A-Za-z0-9_-]{1,128}(?:\.(?:scope|mode|turns|stuck|woke|queued|busy-hint|busy-admission))?\.json)\.(\d+)-[0-9a-f-]{36}\.tomb$/;
 
 // beforeTake and afterTake: test seams around the rename that takes a file aside.
 export interface SweepDeps {
@@ -106,7 +107,7 @@ function restore(tomb: string, file: string, now: number, deps: SweepDeps): void
 }
 
 // Removes file only if it still holds exactly the bytes seen.
-function takeIfUnchanged(file: string, seen: Buffer, now: number, deps: SweepDeps): boolean {
+export function takeIfUnchanged(file: string, seen: Buffer, now: number, deps: SweepDeps): boolean {
   const tomb = tombOf(file, now);
   try {
     fs.renameSync(file, tomb);
@@ -126,7 +127,7 @@ function takeIfUnchanged(file: string, seen: Buffer, now: number, deps: SweepDep
 }
 
 // The read error travels up: a file that cannot be read is never taken for a dead lock.
-function readIfPresent(file: string): Buffer | null {
+export function readIfPresent(file: string): Buffer | null {
   try {
     return fs.readFileSync(file);
   } catch (error) {
@@ -199,7 +200,8 @@ export function releaseOwn(paths: NodePaths, session: string, token: string, now
   return own;
 }
 
-// The daemon's sweep: at once, then every SWEEP_INTERVAL_MS. Returns the stop.
+// The daemon's sweep and then the prune of ended sessions' state files: at
+// once, then every SWEEP_INTERVAL_MS. A skipped prune is silent; doctor shows it. Returns the stop.
 export function scheduleListenerSweep(paths: NodePaths, log: (line: string) => void): () => void {
   const run = (): void => {
     const result = sweepListeners(paths);
@@ -207,6 +209,11 @@ export function scheduleListenerSweep(paths: NodePaths, log: (line: string) => v
     else if (result.removed + result.failed.length > 0) {
       const failures = result.failed.length ? `; ${result.failed.length} failed (${result.failed.join(", ")})` : "";
       log(`kherep-node: removed ${result.removed} stale listener lock(s)${failures}`);
+    }
+    const pruned = pruneListenerState(paths);
+    if (!("skipped" in pruned) && pruned.removed + pruned.failed.length > 0) {
+      const failures = pruned.failed.length ? `; ${pruned.failed.length} failed (${pruned.failed.join(", ")})` : "";
+      log(`kherep-node: removed ${pruned.removed} orphaned listener file(s) of ${pruned.sessions} ended session(s)${failures}`);
     }
   };
   run();

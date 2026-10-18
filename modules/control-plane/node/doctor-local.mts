@@ -9,6 +9,7 @@ import { readDaemonState } from "./daemon-state.mts";
 import { captureSourceIdentity, compareSourceIdentity, type SourceIdentity } from "./daemon-source.mts";
 import { readPrivateKey } from "./identity.mts";
 import { readJson } from "./inbox.mts";
+import { pruneCandidates, type PruneSkip } from "./listener-prune.mts";
 import { readPolicy, wakeBudget, type NodePolicy, type WakeBudget } from "./policy.mts";
 import { WAKE_MAX_WAIT_MS } from "./wake-hook.mts";
 export { checkWakeReadiness } from "./wake-readiness.mts";
@@ -188,14 +189,20 @@ export function checkCodexForkAttempts(paths: NodePaths): Check {
     ...(unreadable ? { detail: "a Codex fork attempt store cannot be read completely" } : {}) };
 }
 
+// The state files the daemon's next prune removes, or why it would skip (issue #474).
+function orphanedFiles(paths: NodePaths, now: number): number | PruneSkip {
+  const candidates = pruneCandidates(paths, now);
+  return candidates instanceof Map ? [...candidates.values()].reduce((sum, files) => sum + files.length, 0) : candidates.skipped;
+}
+
 // Live: the lock's process runs and the lock is younger than the listener's
-// longest wait. Counts only; session ids stay out of the report.
+// longest wait. Orphaned is hygiene, never a fault. Counts only; session ids stay out of the report.
 export function checkListeners(paths: NodePaths, pidAlive: (pid: unknown) => boolean, now: number): Check {
   let names: string[];
   try {
     names = fs.readdirSync(listenerDir(paths));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ok: true, live: 0, stale: 0 };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ok: true, live: 0, stale: 0, orphaned: orphanedFiles(paths, now) };
     return { ok: false, detail: "the listener directory is unreadable" };
   }
   let live = 0;
@@ -206,5 +213,5 @@ export function checkListeners(paths: NodePaths, pidAlive: (pid: unknown) => boo
     if (lock && pidAlive(lock.pid) && now - lock.startedAt <= WAKE_MAX_WAIT_MS) live++;
     else stale++;
   }
-  return { ok: true, live, stale };
+  return { ok: true, live, stale, orphaned: orphanedFiles(paths, now) };
 }
