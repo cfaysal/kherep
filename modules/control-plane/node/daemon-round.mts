@@ -10,6 +10,7 @@ import type { InboxRecord } from "./inbox.mts";
 import type { InboxIndex } from "./inbox-index.mts";
 import { pollMcpIntents } from "./mcp-local.mts";
 import { loadPolicy } from "./policy.mts";
+import { tallyKind, type RoundTally } from "./round-tally.mts";
 import type { RunnerDeps } from "./session-runner.mts";
 import { pollTaskControl } from "./task-control-exchange.mts";
 import { pollTasks } from "./task-exchange.mts";
@@ -39,8 +40,8 @@ export interface RoundContext {
   live(): boolean;
   defer(data: string): void;
   window(window: CodexIntakeWindow | null): void;
-  // Inbound items handled since the previous round; the call resets the count.
-  handled(): number;
+  // Inbound items handled since the previous round, by kind (issue #493 D2); take() resets it.
+  tally: RoundTally;
 }
 
 export async function exchangeRound(ctx: RoundContext): Promise<void> {
@@ -72,11 +73,10 @@ export async function exchangeRound(ctx: RoundContext): Promise<void> {
   // Keep runtime mutation serialized while the existing queue lane and
   // admitted Codex peer transport can progress (issue #369).
   // Frames the window handles bypass the daemon's lanes; deferred ones are counted there.
-  let windowHandled = 0;
   const window = published ? codexIntakeWindow({ client, paths, policyFile: ctx.policyFile, policy: applied,
     connected: ctx.live, send: (frame) => ctx.live() && ctx.send(frame), exchange: () => exchange(),
     queue: () => pollCodexQueue({ ...runner, policy: applied }, log), defer: ctx.defer,
-    handled: () => { windowHandled++; }, log }) : null;
+    handled: (data) => ctx.tally.add(tallyKind(data)), log }) : null;
   ctx.window(window);
   try { await pollCodexInbound({ ...runner, policy: applied }, log); }
   finally { await window?.drain(); ctx.window(null); }
@@ -84,8 +84,8 @@ export async function exchangeRound(ctx: RoundContext): Promise<void> {
   // Not awaited: queue runs have their own lane and never block this chain.
   // Issue #444: this round's policy, as the intake window passes it; the fork gate and queue authorization re-read the file.
   pollCodexQueue({ ...runner, policy: applied }, log);
-  const handled = ctx.handled() + windowHandled;
-  if (counts.status + counts.outbox > ROUND_COUNTERS_MIN || handled > ROUND_COUNTERS_MIN) {
-    log(`kherep-node: round sent ${counts.status} status/${counts.outbox} outbox frames, handled ${handled} inbound items`);
+  const { total, summary } = ctx.tally.take();
+  if (counts.status + counts.outbox > ROUND_COUNTERS_MIN || total > ROUND_COUNTERS_MIN) {
+    log(`kherep-node: round sent ${counts.status} status/${counts.outbox} outbox frames, handled ${total} inbound items${summary && `: ${summary}`}`);
   }
 }
