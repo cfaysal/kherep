@@ -105,12 +105,13 @@ function printed(stdout: string): Verdict | string {
   if (output.hookEventName !== "PreToolUse") return NOT_DECISION;
   const extra = Object.keys(parsed).find((key) => key !== "hookSpecificOutput")
     ?? Object.keys(output).find((key) => !FIELDS.includes(key));
-  if (extra) return `${NOT_DECISION} (unsupported field ${extra})`;
+  if (extra !== undefined) return `${NOT_DECISION} (unsupported field ${extra || '""'})`;
   const { permissionDecision, permissionDecisionReason, additionalContext } = output;
   if (permissionDecision !== undefined && !DECISIONS.includes(permissionDecision as Decision)) {
     return `${NOT_DECISION} (invalid field permissionDecision)`;
   }
-  if (permissionDecisionReason !== undefined && typeof permissionDecisionReason !== "string") {
+  // A reason without a decision would be dropped.
+  if (permissionDecisionReason !== undefined && (typeof permissionDecisionReason !== "string" || !permissionDecision)) {
     return `${NOT_DECISION} (invalid field permissionDecisionReason)`;
   }
   if (additionalContext !== undefined && (typeof additionalContext !== "string" || !additionalContext)) {
@@ -135,6 +136,13 @@ function judge(file: string, code: number | null, signal: string | null, stdout:
   return typeof result === "string" ? failure(file, result) : result;
 }
 
+// Node versions that strip types with a warning print this one for a .mts guard.
+// It is no diagnostic of the guard, so only this exact warning is dropped; every
+// other warning of the guard stays in its stderr and in an exit-2 reason.
+const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
+  + "feature and might change at any time\\r?\\n(?:\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning "
+  + "was created\\)\\r?\\n)?", "gm");
+
 function runGuard(file: string, payload: string): Promise<Outcome> {
   return new Promise((resolve) => {
     let stdout = "";
@@ -146,8 +154,7 @@ function runGuard(file: string, payload: string): Promise<Outcome> {
       clearTimeout(timer);
       resolve({ verdict, stderr });
     };
-    const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", file],
-      { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    const child = spawn(process.execPath, [file], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     const timer = setTimeout(() => {
       settle(failure(file, `timed out after ${TIMEOUT_MS / 1000} s`));
       child.kill("SIGKILL");
@@ -157,7 +164,10 @@ function runGuard(file: string, payload: string): Promise<Outcome> {
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
     child.on("error", (error) => settle(failure(file, `spawn failed: ${error.message}`)));
-    child.on("close", (code, signal) => settle(judge(file, code, signal, stdout, stderr)));
+    child.on("close", (code, signal) => {
+      stderr = stderr.replace(TYPE_STRIPPING_WARNING, "");
+      settle(judge(file, code, signal, stdout, stderr));
+    });
     // A guard may exit without reading its payload; the broken pipe is no verdict.
     child.stdin.on("error", () => {});
     child.stdin.end(payload);
