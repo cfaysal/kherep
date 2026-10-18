@@ -55,7 +55,7 @@ function transcript(name: string, entries: unknown[]): string {
 const user = (text: string) => ({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
 const assistant = (text: string) => ({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
 
-interface Run { status: number | null; decision: unknown; permission: unknown; reason: unknown; stderr: string }
+interface Run { status: number | null; decision: unknown; permission: unknown; reason: unknown; context: unknown; stderr: string }
 
 // Runs the wired command through a shell, the way Claude Code starts a hook.
 // claudeHome replaces the placeholder (default: this checkout's claude/), so a
@@ -72,7 +72,7 @@ function runWired(
     env: { ...process.env, KHEREP_WORKSPACE: WORKSPACE, ...env },
     windowsHide: true,
   });
-  let output: { decision?: unknown; hookSpecificOutput?: { permissionDecision?: unknown; permissionDecisionReason?: unknown } } = {};
+  let output: { decision?: unknown; hookSpecificOutput?: Record<string, unknown> } = {};
   try {
     output = JSON.parse(result.stdout) ?? {};
   } catch { /* no JSON on stdout */ }
@@ -81,6 +81,7 @@ function runWired(
     decision: output.decision ?? null,
     permission: output.hookSpecificOutput?.permissionDecision ?? null,
     reason: output.hookSpecificOutput?.permissionDecisionReason ?? null,
+    context: output.hookSpecificOutput?.additionalContext ?? null,
     stderr: result.stderr,
   };
 }
@@ -221,6 +222,13 @@ for (const guard of PRETOOL_GUARDS) {
   });
 }
 
+test("a dispatch-contract notice (#505) leaves the wired dispatcher as additionalContext, no decision", () => {
+  const prompt = "- measured: code `node x.test.mts` -> 12 pass, 0 fail";
+  const run = runCase(wiredCommand("dispatch-contract-guard.mts"), { tool: "Agent", input: { subagent_type: "claude-obs", model: "haiku", prompt } });
+  assert.ok(run.status === 0 && run.permission === null && run.reason === null, JSON.stringify(run));
+  assert.match(String(run.context), /^\[dispatch-contract:OBS_BRIEF_REVISION\] Observation brief revision: /);
+});
+
 // Issue #507. A 0-byte or missing guard used to exit without a decision (fail-open).
 // Through the dispatcher it denies every call, benign included, naming the file.
 test("a 0-byte or missing PreToolUse guard denies every call and names its file", () => {
@@ -233,10 +241,9 @@ test("a 0-byte or missing PreToolUse guard denies every call and names its file"
     assertBlocks(guard, home);
     for (const breakGuard of [() => fs.writeFileSync(file, ""), () => fs.rmSync(file)]) {
       breakGuard();
-      for (const item of [...guard.blocking, guard.benign]) {
-        const { status, permission, reason, stderr } = runCase(wiredCommand(guard.hook), item, home);
-        assert.ok(status === 0 && permission === "deny" && String(reason).includes(`${path.resolve(file)} cannot run`),
-          `${guard.hook} ${item.tool}: ${status} ${String(reason)} ${stderr}`);
+      for (const run of [...guard.blocking, guard.benign].map((item) => runCase(wiredCommand(guard.hook), item, home))) {
+        assert.ok(run.status === 0 && run.permission === "deny" && String(run.reason).includes(`${path.resolve(file)} cannot run`),
+          `${guard.hook}: ${JSON.stringify(run)}`);
       }
     }
     fs.writeFileSync(file, original);
