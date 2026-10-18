@@ -730,7 +730,12 @@ variable, in this order:
 Every refusal exits 1 and writes nothing; no rule falls back to the other
 runtime's variable. `--from` must name that session or be the full id of a
 Codex session a hook recorded within 12 hours, with no other node-set session;
-when the runtime cannot be told, the hook-recorded id is the identity.
+when the runtime cannot be told, the hook-recorded id is the only identity
+`--from` can carry. A missing or older record, or a `KHEREP_SESSION_ID` task
+that records another thread, then keeps the command refused, even when
+`--from` repeats `CODEX_THREAD_ID` (issue #489). The fixed `NESTED_RUNTIME`
+reason states this condition for msg commands and names no assumed cause of
+the undecided ancestry; the evidence requirements themselves are unchanged.
 An unverified `--from` is refused, never used as typed. This prevents mistaken or
 unknown senders; it is not authentication, since the node's processes still assert
 the session. Native MCP binds the session in the Worker instead.
