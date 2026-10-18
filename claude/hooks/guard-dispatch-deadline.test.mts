@@ -21,9 +21,13 @@ after(() => { for (const root of roots) try { fs.rmSync(root, { recursive: true,
 interface Run { status: number | null; stdout: string; stderr: string; ms: number; killed: boolean }
 
 // Runs the dispatcher with a fresh heartbeat; kills it at 35 s, past Claude Code's cancel.
-function run(integrity: string, guards: Record<string, string>, closeStdin = true): Promise<Run> {
+function run(integrity: string, guards: Record<string, string>, closeStdin = true, lib?: string): Promise<Run> {
   const { root, hooks, dispatch } = dispatcherFixture("guard-dispatch-deadline-");
   roots.push(root);
+  if (lib) {
+    fs.renameSync(path.join(hooks, "lib", "guard-recheck.mts"), path.join(hooks, "lib", "real-recheck.mts"));
+    fs.writeFileSync(path.join(hooks, "lib", "guard-recheck.mts"), lib);
+  }
   fs.writeFileSync(path.join(hooks, "live-hook-integrity.mts"), integrity);
   for (const [name, source] of Object.entries(guards)) fs.writeFileSync(path.join(hooks, name), source);
   return new Promise((resolve, reject) => {
@@ -65,6 +69,18 @@ describe("one shared deadline", { concurrency: true }, () => {
     const printed = output(result);
     assert.equal(printed.permissionDecision, "deny");
     assert.match(printed.permissionDecisionReason!, /guard-dispatch\.mts cannot run \(stdin not closed within \d+ ms\)/);
+    assert.ok(result.ms >= 24_000 && result.ms <= 27_000, `took ${result.ms} ms`);
+  });
+
+  test("the lib's runRecheck never settles and holds an interval: the deny is printed at the deadline", async () => {
+    const lib = `export { heartbeatState, recheckNotice } from "./real-recheck.mts";
+export function runRecheck() { setInterval(() => {}, 1000); return new Promise(() => {}); }
+`;
+    const result = await run(HANG, { "empty.mts": "" }, true, lib);
+    const printed = output(result);
+    assert.equal(printed.permissionDecision, "deny");
+    assert.match(printed.permissionDecisionReason!, /empty\.mts cannot run \(empty, 0 bytes\)/);
+    assert.equal(printed.additionalContext, "hook integrity re-check unavailable (no result before the hook deadline)");
     assert.ok(result.ms >= 24_000 && result.ms <= 27_000, `took ${result.ms} ms`);
   });
 

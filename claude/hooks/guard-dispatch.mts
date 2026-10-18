@@ -1,27 +1,18 @@
 #!/usr/bin/env node
-// Issue #507, parts 1 and 2. Runs the PreToolUse guards of one matcher group,
-// fails closed when a guard cannot run, and starts the hook integrity re-check.
+// Issue #507, parts 1 and 2. Runs the PreToolUse guards of one matcher group:
 //   node "<home>/hooks/guard-dispatch.mts" "<home>/hooks/<guard-a>.mts" ...
-//
-// Wired directly, an empty guard is an allow and a broken one a non-blocking
-// error. Here each becomes a deny naming the file: missing, empty, no regular
-// file, outside this directory, not spawnable, killed by a signal, past its cap,
-// an exit other than 0 or 2, or stdout other than hookSpecificOutput alone with
-// hookEventName, an optional decision and reason, an optional additionalContext,
-// at least one of the two. So does stdin that is no JSON object or stays open.
-// A working guard keeps its verdict (exit 2 = deny with stderr as the reason).
-// Guards run in parallel to the end; decisions combine deny > ask > allow,
-// notices join as additionalContext. At most one JSON document, nothing for a
-// plain allow, each guard's stderr forwarded, exit 0 always. Guards get no args.
-//
-// Re-check (part 2): with <home>/.cache/hook-integrity/heartbeat.json older than
-// 30 minutes or missing, live-hook-integrity.mts --trigger guard-dispatch runs
-// in parallel with the guards, after them when a guard could not run; <home> is
-// the parent of this file's directory as invoked. Its lines are one more notice
-// (and stderr), never a decision: a restored guard runs from the next call on.
-// One deadline 5 s before the 30 s hook timeout bounds stdin, guards and the
-// re-check, so a decided deny is printed before Claude Code cancels the hook.
-// Static imports are node:* only: a broken lib/ file cannot stop this loading.
+// A guard that cannot run (missing, empty, no regular file, outside this directory,
+// not spawnable, killed, past its cap, exit other than 0 or 2, stdout other than
+// hookSpecificOutput with hookEventName plus a decision, reason or additionalContext)
+// is a deny naming the file; so is stdin that is no JSON object or stays open. A
+// working guard keeps its verdict (exit 2 = deny, stderr the reason); all run in
+// parallel to the end, decisions combine deny > ask > allow, notices join.
+// Part 2: a heartbeat (<home>/.cache/hook-integrity/heartbeat.json, <home> = parent
+// of this file's directory as invoked) older than 30 minutes or missing, or a guard
+// that could not run, starts live-hook-integrity.mts --trigger guard-dispatch; its
+// lines are a notice, never a decision. One deadline 5 s before the 30 s hook
+// timeout bounds stdin, guards and the re-check lib, and the process exits after
+// its write. Static imports are node:* only. Output: at most one JSON document.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -35,8 +26,8 @@ const SAFETY_MARGIN_MS = 5_000;
 const DEADLINE = Date.now() + HOOK_TIMEOUT_MS - SAFETY_MARGIN_MS;
 const remaining = (): number => Math.max(0, DEADLINE - Date.now());
 const GUARD_TIMEOUT_MS = 10_000;
-// A re-check gets at most RECHECK_MAX_MS of what is left; below RECHECK_MIN_MS it is skipped.
-const RECHECK_MAX_MS = 20_000, RECHECK_MIN_MS = 2_000;
+// A re-check gets <= RECHECK_MAX_MS of what is left, none below RECHECK_MIN_MS; its lib loads within RECHECK_LOAD_MS.
+const RECHECK_MAX_MS = 20_000, RECHECK_MIN_MS = 2_000, RECHECK_LOAD_MS = 2_000;
 const HEARTBEAT_WINDOW_MS = 1_800_000; // = lib/integrity-heartbeat.mts; each side has a boundary test
 const SELF = fileURLToPath(import.meta.url);
 const DIR = path.dirname(SELF);
@@ -194,18 +185,26 @@ function combine(verdicts: Verdict[]): Verdict | undefined {
 
 const firstLine = (error: unknown): string => String((error as Error)?.message || error).split(/\r?\n/)[0];
 
-// The re-check notice, or undefined when the heartbeat is fresh and every guard
-// ran. Text only, never a verdict; settled at the latest at the deadline.
+// `work`, or `late()` after ms; the timer keeps the process alive meanwhile (not unref'd).
+function within<T, L>(work: Promise<T>, ms: number, late: () => L): Promise<T | L> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<L>((resolve) => { timer = setTimeout(() => resolve(late()), ms); });
+  return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+}
+
+// The re-check notice, or undefined when the heartbeat is fresh and every guard ran. Never a
+// verdict. A broken lib throws here or, empty (an empty namespace), at its first call.
 async function recheck(payload: string, guards: Promise<Outcome[]>, ownDir: string): Promise<string | undefined> {
-  // A broken lib throws here or, empty (an empty namespace), at its first call.
-  const lib = await import("./lib/guard-recheck.mts");
+  const loadMs = Math.min(RECHECK_LOAD_MS, remaining());
+  const lib = await within(import("./lib/guard-recheck.mts"), loadMs, () => undefined);
+  if (!lib) return `hook integrity re-check unavailable (lib/guard-recheck.mts did not load within ${loadMs} ms)`;
   const { stale, lastOk } = lib.heartbeatState(HOME, HEARTBEAT_WINDOW_MS);
   if (!stale && !(await guards).some((outcome) => outcome.verdict.broken)) return undefined;
   const context = { why: !stale ? "guard failure" : lastOk ? "stale heartbeat" : "no heartbeat", lastOk };
   const script = path.join(INVOKED_DIR, "live-hook-integrity.mts");
   const why = unrunnable(script, ownDir);
   if (why) return lib.recheckNotice(context, [`${script} cannot run (${why})`]);
-  const budgetMs = Math.min(RECHECK_MAX_MS, remaining());
+  const budgetMs = Math.min(RECHECK_MAX_MS, remaining() - 250); // its own timeout line beats the backstop
   if (budgetMs >= RECHECK_MIN_MS) return lib.runRecheck({ script, home: HOME, payload, budgetMs, ...context });
   return lib.recheckNotice(context, [`skipped, ${budgetMs} ms left of the hook budget; the next matching call re-checks`]);
 }
@@ -223,8 +222,9 @@ async function dispatch(guards: string[]): Promise<{ verdict?: Verdict; stderr: 
     const why = unrunnable(file, ownDir);
     return why ? { verdict: failure(file, why), stderr: "" } : runGuard(file, raw);
   }));
-  const checking = recheck(raw, running, ownDir)
-    .catch((error) => `hook integrity re-check unavailable (lib/guard-recheck.mts cannot be loaded: ${firstLine(error)})`);
+  const checking = within(recheck(raw, running, ownDir)
+    .catch((error) => `hook integrity re-check unavailable (lib/guard-recheck.mts cannot be loaded: ${firstLine(error)})`),
+  remaining(), () => "hook integrity re-check unavailable (no result before the hook deadline)");
   const [outcomes, notice] = await Promise.all([running, checking]);
   const verdicts = outcomes.map((outcome) => outcome.verdict);
   const stderr = outcomes.map((outcome) => outcome.stderr);
@@ -232,15 +232,16 @@ async function dispatch(guards: string[]): Promise<{ verdict?: Verdict; stderr: 
   return { verdict: combine(verdicts), stderr };
 }
 
+// Exits once both streams took their bytes, so a handle left open cannot outlive the cancel.
 function emit(verdict: Verdict | undefined, stderr: string[]): void {
-  for (const text of stderr) if (text) process.stderr.write(text.endsWith("\n") ? text : `${text}\n`);
-  process.exitCode = 0;
-  if (!verdict) return;
-  const output = { hookEventName: "PreToolUse",
+  let pending = 2;
+  const done = (): void => { if (--pending === 0) process.exit(0); };
+  process.stderr.write(stderr.filter(Boolean).map((text) => (text.endsWith("\n") ? text : `${text}\n`)).join(""), done);
+  const output = verdict && { hookEventName: "PreToolUse",
     ...(verdict.decision ? { permissionDecision: verdict.decision } : {}),
     ...(verdict.reason ? { permissionDecisionReason: verdict.reason } : {}),
     ...(verdict.notice ? { additionalContext: verdict.notice } : {}) };
-  process.stdout.write(JSON.stringify({ hookSpecificOutput: output }));
+  process.stdout.write(output ? JSON.stringify({ hookSpecificOutput: output }) : "", done);
 }
 
 dispatch(process.argv.slice(2)).then(
