@@ -80,9 +80,22 @@ a file that was read. An agent's own claim is not evidence. When in doubt, `assu
 A tool result in the supplied turn is first-hand evidence on its own, whatever the brief marks. A
 finding the brief only describes carries a marker. `measured:` means the dispatching session ran it
 in this turn; with both the command and the deciding output excerpt it is `confirmed`, and the
-command and excerpt go into the body. A finding marked `relayed:` is `assumed`, and the body names
-its source. A finding marked `measured:` without the command or the excerpt, or with no marker, is
-`assumed`.
+command and excerpt go into the body. A finding about repository code, tests or a build is
+code-bound, whether the brief marks it with `code` after `measured:`, describes it, or supplies it as
+a tool result. A code-bound finding is `confirmed` only when it binds the measured code exactly:
+every repository named as `<name>@<sha>` with the full 40-hex commit SHA the command ran against, and
+no `-dirty`. Without a repository, without a full SHA, or measured on a dirty tree it has no exact
+binding to the measured code and is `assumed`; you never guess a repository or a SHA. The body
+carries only validated `<name>@<sha>` tokens and otherwise the fixed line "no exact binding: <no
+repository | no full commit SHA | dirty tree | malformed repository or revision>", never a raw value.
+A finding that is not about repository code is labelled exactly as today. A finding marked
+`relayed:` is `assumed`, and the body names its source. A finding marked `measured:` without the
+command or the excerpt, or with no marker, is `assumed`.
+
+A tool result about repository code, tests or a build is code-bound like any other finding:
+`confirmed` only with a validated `<name>@<sha>` from the message or from a tool result in the same
+supplied turn that printed it for that checkout, else `assumed` with the no-exact-binding line. You
+never guess a repository or a SHA.
 
 A work item, report or page that describes a measurement made in another turn or session is
 second-hand: reading that text measures the text, not the thing. Such a finding is `assumed`, even
@@ -103,6 +116,14 @@ Origin, timestamp and source reference belong in the body: host, runtime, sessio
 what the finding rests on. The origin line names the actual reporter: "dispatching session <id>,
 measured in this turn: <command> -> <excerpt>" or "relayed from <source> via dispatching session
 <id>".
+
+Beside the origin line, a code-bound body carries one line per repository:
+`<p>Revision: <name>@<sha></p>` on a `confirmed` candidate. On an `assumed` code-bound candidate the line is
+`<p>Revision: <name>@<sha> (no exact binding: dirty tree)</p>` when both tokens validated, else
+`<p>Revision: none (no exact binding: no repository | no full commit SHA | malformed repository or revision)</p>`
+with the one reason that applies. A valid `<name>` has letters, digits, `.`, `_`, `-` and single `/`, a
+valid `<sha>` is 40 lowercase hex; any other value (a URL, a path, a short or symbolic revision) is
+never copied into a candidate, a title or a notice.
 
 ## Limits
 

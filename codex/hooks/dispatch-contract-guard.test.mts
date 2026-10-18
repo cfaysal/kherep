@@ -10,7 +10,7 @@ import { parseModelPolicy, resolveCapabilities, resolveModels } from "../lib/mod
 import { renderAgent } from "../lib/component-render.mts";
 import type { Capabilities } from "../lib/contracts.mts";
 import { agentSourcePath } from "../lib/parity-projection.mts";
-import { CAPABILITIES_FILE, decide, dispatchPins, dispatchPolicy, loadPolicy, validate } from "./dispatch-contract-guard.mts";
+import { advise, CAPABILITIES_FILE, decide, dispatchPins, dispatchPolicy, loadPolicy, validate } from "./dispatch-contract-guard.mts";
 
 const REPO = path.resolve(import.meta.dirname, "..", "..");
 const GUARD = path.join(import.meta.dirname, "dispatch-contract-guard.mts");
@@ -20,7 +20,10 @@ const POLICY = dispatchPolicy(capabilities);
 const PINS = POLICY.pins;
 const OBS_MODEL = PINS.get("codex-obs") ?? "";
 // Issue #331: a codex-obs message must be a well-formed observation brief.
-const BRIEF = "- measured: `node x.test.mts` -> 12 pass, 0 fail\n- relayed: the operator, in chat";
+// Issue #505: the finding names the commit it was measured against, so an
+// allowed dispatch of this brief is silent.
+const SHA = "2733b35e2c102ac54295568509c68b18b6d92cab";
+const BRIEF = `- measured: code kherep@${SHA} \`node x.test.mts\` -> 12 pass, 0 fail\n- relayed: the operator, in chat`;
 
 function spawnDispatch(input: Record<string, unknown>, tool = "spawn_agent") {
   return { tool_name: tool, tool_input: { task_name: "t", message: "m", ...input } };
@@ -270,4 +273,55 @@ test("older visible models remain explicit override choices without changing def
     for (const model of ["gpt-4-sol", "gpt-8-unknown", "gpt-99-sol"]) assert.match(dispatch(model, "low") ?? "", /Unsupported/);
   }
   assert.match(validate(spawnDispatch({ agent_type: "codex-obs", model: "gpt-5.6-sol", reasoning_effort: "low", message: BRIEF }), policy) ?? "", /pinned/);
+});
+
+// Issue #505. A code-bound finding without an exact binding is a report after
+// a null validate, never a deny; a stale installed lib reports nothing.
+const BARE_CODE = "- measured: code `npm test` -> 42 pass";
+const obsDispatch = (message: string, extra: Record<string, unknown> = {}) =>
+  spawnDispatch({ agent_type: "codex-obs", model: OBS_MODEL, reasoning_effort: "low", message, ...extra });
+
+test("advise reports an incomplete code binding for the observation agent only", () => {
+  assert.match(advise(obsDispatch(BARE_CODE), POLICY) ?? "", /finding 1 \(measured:\) is code-bound but names no repository/);
+  assert.equal(advise(obsDispatch(BRIEF), POLICY), null);
+  assert.equal(advise(spawnDispatch({ agent_type: "kherep-builder", message: BARE_CODE }), POLICY), null);
+  assert.equal(advise(obsDispatch(BARE_CODE, { model: "gpt-6.10-sol" }), POLICY), null, "a pin deny reports nothing");
+  assert.equal(advise(obsDispatch("All green."), POLICY), null, "a format deny reports nothing");
+  assert.equal(advise({ tool_name: "Read", tool_input: "x" }, POLICY), null);
+});
+
+test("a pasted tool output block never binds a finding; only the prefix after measured: does", () => {
+  const pasted = `Tool output:\n\`\`\`\nHEAD is now at ${SHA}\nkherep@${SHA}\n42 pass\n\`\`\`\n`;
+  assert.match(advise(obsDispatch(`${pasted}${BARE_CODE}`), POLICY) ?? "", /is code-bound but names no repository/);
+  assert.match(advise(obsDispatch(`${pasted}- measured: \`npm test\` -> 42 pass`), POLICY) ?? "",
+    /names no repository and commit SHA\. If it is about repository code/);
+  assert.equal(advise(obsDispatch(`${pasted}- measured: code kherep@${SHA} \`npm test\` -> 42 pass`), POLICY), null);
+});
+
+test("the installed guard writes the notice as context and a system message, and a stale lib stays silent", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-dispatch-notice-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const hookDir = path.join(root, "hooks", "kherep-maestro");
+  fs.mkdirSync(path.join(hookDir, "lib"), { recursive: true });
+  fs.mkdirSync(path.join(root, "hooks", "parity"));
+  const guard = path.join(hookDir, "codex-dispatch-contract-guard.mts");
+  fs.copyFileSync(GUARD, guard);
+  fs.writeFileSync(path.join(root, "hooks", "parity", "capabilities.json"), JSON.stringify(capabilities));
+  const lib = fs.readFileSync(path.join(REPO, "claude", "hooks", "lib", "obs-brief-policy.mts"), "utf8");
+  const run = (message: string, model = OBS_MODEL) => spawnSync(process.execPath, [guard], {
+    encoding: "utf8", input: JSON.stringify(spawnDispatch({ agent_type: "codex-obs", model, message })),
+  }).stdout;
+  fs.writeFileSync(path.join(hookDir, "lib", "obs-brief-policy.mts"), lib);
+  const output = JSON.parse(run(BARE_CODE)) as { hookSpecificOutput: Record<string, unknown>; systemMessage: unknown };
+  assert.equal(output.hookSpecificOutput.hookEventName, "PreToolUse");
+  assert.match(String(output.hookSpecificOutput.additionalContext), /^Observation brief revision: finding 1 \(measured:\) is code-bound/);
+  assert.equal(output.systemMessage, output.hookSpecificOutput.additionalContext);
+  assert.ok(!("permissionDecision" in output.hookSpecificOutput), "a notice is no permission decision");
+  assert.equal(run(BRIEF), "");
+  assert.ok(denied(run(BARE_CODE, "gpt-6.10-sol")).includes(OBS_MODEL), "the pin deny comes first and alone");
+  const stale = lib.replace("export function observationBriefNotice", "function observationBriefNotice");
+  assert.notEqual(stale, lib);
+  fs.writeFileSync(path.join(hookDir, "lib", "obs-brief-policy.mts"), stale);
+  assert.equal(run(BARE_CODE), "", "a stale lib: allowed, no notice, no deny");
+  assert.match(denied(run("All green.")), /Observation brief format/, "a stale lib keeps the format deny");
 });

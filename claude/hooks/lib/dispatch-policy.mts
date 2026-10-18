@@ -2,7 +2,7 @@
 // Local configuration can replace the allow-list and override individual pins;
 // empty, malformed or inconsistent overrides remain fail-closed.
 
-import { observationBriefIssue } from "./obs-brief-policy.mts";
+import { observationBriefIssue, observationBriefNotice } from "./obs-brief-policy.mts";
 import { referencesArtifact, referencesCredentials } from "./private-path-policy.mts";
 
 export type CanonicalModel = string;
@@ -38,6 +38,8 @@ export interface DispatchResult {
   decision: DispatchDecision;
   ruleId?: string;
   reason?: string;
+  // Issue #505. A report on an allowed dispatch, never a deny.
+  notice?: string;
   metadata?: DispatchMetadata;
 }
 
@@ -190,9 +192,16 @@ export function evaluateDispatch(event: DispatchEvent | null | undefined): Dispa
   }
   // Issue #331. Only the prompt is the brief: the description is a short label
   // that must neither supply a finding marker nor be read as part of one.
+  let notice: string | null = null;
   if (normalized.agent === "claude-obs") {
-    const issue = observationBriefIssue(String(event.brief ?? ""));
+    const brief = String(event.brief ?? "");
+    const issue = observationBriefIssue(brief);
     if (issue) return deny("OBS_BRIEF_FORMAT", issue, normalized);
+    notice = observationBriefNotice(brief);
   }
-  return { decision: "allow", metadata: { agent: normalized.agent, model: normalized.model, privacy: normalized.privacy } };
+  return {
+    decision: "allow",
+    ...(notice ? { notice } : {}),
+    metadata: { agent: normalized.agent, model: normalized.model, privacy: normalized.privacy },
+  };
 }

@@ -10,7 +10,7 @@ type Payload = string | Record<string, unknown>;
 // A null value removes the variable from the hook's environment.
 type EnvExtra = Record<string, string | null>;
 
-function run(payload: Payload, envExtra: EnvExtra = {}): { denied: boolean; reason: string; status: number | null } {
+function run(payload: Payload, envExtra: EnvExtra = {}): { denied: boolean; reason: string; status: number | null; stdout: string } {
   const env: Record<string, string | undefined> = {
     ...process.env,
     KHEREP_ALLOWED_MODELS: "opus,sonnet,haiku,fable",
@@ -48,6 +48,7 @@ function run(payload: Payload, envExtra: EnvExtra = {}): { denied: boolean; reas
         output.hookSpecificOutput.permissionDecisionReason) ||
       "",
     status: result.status,
+    stdout: result.stdout,
   };
 }
 
@@ -126,6 +127,30 @@ check("claude-obs marker in the description does not count", obs("All green.", "
 check("claude-obs description cannot break a good brief", obs(GOOD_BRIEF, "measured: tests"), false);
 check("claude-obs pin is checked before the brief", obs(GOOD_BRIEF, "Record observations", "opus"), true, "OWNED_AGENT_MODEL_MISMATCH");
 check("other agent with a prose prompt unaffected", { tool_name: "Agent", tool_input: { subagent_type: "general-purpose", model: "sonnet", prompt: "MEASURED by hand." } }, false);
+// Issue #505. An incomplete code binding is a context notice on an allowed
+// dispatch: no permissionDecision, no systemMessage, no new deny.
+const SHA = "2733b35e2c102ac54295568509c68b18b6d92cab";
+const BARE_CODE = "- measured: code `node x.test.mts` -> 12 pass, 0 fail";
+function noticeCheck(name: string, payload: Payload, expected: "notice" | "silent" | "deny"): void {
+  const actual = run(payload);
+  let output: { hookSpecificOutput?: Record<string, unknown>; systemMessage?: unknown } = {};
+  try { output = JSON.parse(actual.stdout || "{}"); } catch {}
+  const hso = output.hookSpecificOutput ?? {};
+  const context = typeof hso.additionalContext === "string" ? hso.additionalContext : "";
+  const ok = actual.status === 0 && (expected === "notice"
+    ? context.startsWith("[dispatch-contract:OBS_BRIEF_REVISION] Observation brief revision: ") && hso.hookEventName === "PreToolUse"
+      && !("permissionDecision" in hso) && !("permissionDecisionReason" in hso) && !("systemMessage" in output)
+    : expected === "silent" ? actual.stdout === "" : actual.denied && !context && !actual.reason.includes("revision"));
+  ok ? pass++ : fail++;
+  console.log(`${ok ? "PASS" : "FAIL"} | ${name} | expected ${expected}`);
+}
+noticeCheck("claude-obs bare code brief allowed with a notice", obs(BARE_CODE), "notice");
+noticeCheck("claude-obs unmarked brief gets the conditional notice", obs(GOOD_BRIEF), "notice");
+noticeCheck("claude-obs complete binding is silent", obs(`- measured: code kherep@${SHA} \`node x.test.mts\` -> 12 pass`), "silent");
+noticeCheck("other agent with a bare code prompt gets no notice", { tool_name: "Agent", tool_input: { subagent_type: "kherep-builder", model: "opus", prompt: BARE_CODE } }, "silent");
+noticeCheck("claude-obs pin deny carries no notice", obs(BARE_CODE, "Record observations", "opus"), "deny");
+check("claude-obs pin deny keeps its rule", obs(BARE_CODE, "Record observations", "opus"), true, "OWNED_AGENT_MODEL_MISMATCH");
+noticeCheck("claude-obs format deny carries no notice", obs("measured: code npm test -> green"), "deny");
 check("non-dispatch tool ignored", { tool_name: "Bash", tool_input: { command: "echo ok" } }, false);
 check("malformed dispatch input fails closed", "not-json", true, "HOOK_INPUT_INVALID");
 check("missing tool_input fails closed", { tool_name: "Agent" }, true, "HOOK_SCHEMA_UNKNOWN");

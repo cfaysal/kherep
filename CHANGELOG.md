@@ -21,6 +21,18 @@ increments the minor version; every other release increments the patch version.
   trailer. Exit `0` means every commit passed, `1` a policy violation, and `2`
   a range or hook that could not be read, such as a missing commit, a shallow
   clone or an emptied hook; a failed read is never a pass.
+- Commit binding for code-bound observations (issue #505). A finding about
+  repository code, tests or a build is `confirmed` only when the brief names
+  each repository as `<name>@<full commit sha>` measured on a clean tree, as
+  `` measured: code <name>@<sha> `<command>` -> <excerpt> ``; without a
+  repository, without a full SHA or on a dirty tree it is filed as `assumed`
+  with a fixed "no exact binding" line, and the page body carries a
+  `Revision:` line. Both dispatch guards report a missing or incomplete
+  binding as a notice that names positions only, never as a deny; every
+  existing deny is unchanged. The Codex result check rejects a `confirmed`
+  candidate whose `Revision:` line is not `<repo>@<full commit sha>`. That a
+  filed page carries the line is contract-enforced and not proven at the
+  target.
 - Versionless Codex role policy (issue #509). Astra designs, SOL builds,
   Terra handles support and research, and Luna handles observations and brokers.
   Installation resolves available models into native agent TOMLs and one
