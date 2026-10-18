@@ -24,6 +24,7 @@ increments the minor version; every other release increments the patch version.
   thread are refused with nothing written; a fresh record of the own or of
   another thread is accepted. Sender checks, the refusal code and the exec
   rules are unchanged; this does not restore or explain any Windows send.
+
 - Windows identity reads no longer block the daemon's event loop (issue #473).
   The process start-time read (`process-start`) and the process-tree query
   (`process-relations`) run as awaited child processes behind one runner
@@ -33,8 +34,9 @@ increments the minor version; every other release increments the patch version.
   unchanged: no output is no such process, a non-zero exit or a timeout is a
   failed read, a timed-out tree query runs once more, and each signal of a stop
   still follows the read of its pid's start directly; a started run gets the
-  end of its prompt only after its start time was read, so it cannot end
-  before the read, as while the read blocked the loop. The exchange round reads
+  end of its prompt only after its start time was read, so a normal run does
+  not end before the read; a run that exits on its own before the read keeps no
+  start time, as does a watch read whose held child ends or is replaced. The exchange round reads
   an ended Codex task's previous run only after its `maxConcurrent` and
   working-directory checks, before the readiness verdict and the turn budget,
   so no refusal and no turn changes; a task at the limit or with a refused
@@ -44,8 +46,8 @@ increments the minor version; every other release increments the patch version.
   as `child process <name> took <s> s`; `process-start` and `process-relations`
   no longer appear in the `synchronous <name> took` line, which now also names
   a slow `taskkill`. `taskkill`, the one-time owner identity read and the MCP
-  credential write stay synchronous. A stop or watch read whose held child ends
-  or is replaced during the read signals nothing and records no start.
+  credential write stay synchronous. A stop whose held child ends or is
+  replaced during its read signals nothing.
 
 ## [0.4.0] - 2026-10-18
 
