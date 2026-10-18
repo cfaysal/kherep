@@ -66,7 +66,6 @@ const parse = (text: string | null): Holder & { nonce?: unknown } => {
   try { return (JSON.parse(text ?? "") as Holder & { nonce?: unknown }) ?? {}; } catch { return {}; }
 };
 
-type Clock = () => number;
 const codeOf = (error: unknown): string | undefined => (error as NodeJS.ErrnoException)?.code;
 const statOf = (file: string): fs.Stats | null => {
   try { return fs.statSync(file); } catch { return null; }
@@ -107,7 +106,7 @@ function notLive(st: fs.Stats, holder: Holder, now: number): Stale["why"] | "" {
 }
 
 // Throws only when the lock directory itself cannot be used.
-export function acquireLock(home: string, now: Clock = Date.now): Lock {
+export function acquireLock(home: string): Lock {
   const lock = path.join(dirOf(home), "run.lock");
   fs.mkdirSync(path.dirname(lock), { recursive: true });
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -120,11 +119,11 @@ export function acquireLock(home: string, now: Clock = Date.now): Lock {
     }
     const text = readText(lock);
     const holder = parse(text);
-    const why = notLive(st, holder, now());
+    const why = notLive(st, holder, Date.now());
     if (!why) return { holder };
     const discard = (): void => {
       const current = statOf(lock);
-      if (current?.ino === st.ino && readText(lock) === text && notLive(current, holder, now())) drop(lock);
+      if (current?.ino === st.ino && readText(lock) === text && notLive(current, holder, Date.now())) drop(lock);
     };
     return { stale: { ino: st.ino, text, holder, why }, discard };
   }
