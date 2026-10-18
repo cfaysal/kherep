@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
+import { withoutNodeWarnings } from "../lib/node-warning-fixture.mts";
+
 // Issue #503. The shell dispatcher names the stable entry point as its
 // attribution argument. It runs every guard first, unchanged, then resolves the
 // attribution hook through the pointer and calls it in-process with the payload
@@ -54,7 +56,7 @@ test("the shell dispatcher hands the full PreToolUse payload to the pointer's at
   const r = f.run();
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, "");
-  assert.equal(r.stderr, "");
+  assert.equal(withoutNodeWarnings(r.stderr), "");
   const rows = f.rows();
   assert.deepEqual(rows.map((row) => row.guard), [...GUARDS, "attribution"]);
   assert.deepEqual(rows[3]!.payload, PAYLOAD);
@@ -76,7 +78,7 @@ for (const failure of ["missing pointer", "invalid pointer", "throwing entry poi
 
     assert.equal(denied.status, 0);
     assert.equal(denied.stdout, intact.stdout, "the guard's deny keeps its bytes");
-    assert.match(denied.stderr, /kherep shell-checks: attribution could not complete\n$/);
+    assert.match(withoutNodeWarnings(denied.stderr), /kherep shell-checks: attribution could not complete\n$/);
     assert.deepEqual(f.rows().map((row) => row.guard), GUARDS, "every guard ran, in order; attribution did not");
 
     // Without a deny the call stays allowed: attribution never decides.
@@ -84,6 +86,6 @@ for (const failure of ["missing pointer", "invalid pointer", "throwing entry poi
     const allowed = f.run();
     assert.equal(allowed.status, 0);
     assert.equal(allowed.stdout, "");
-    assert.match(allowed.stderr, /kherep shell-checks: attribution could not complete\n$/);
+    assert.match(withoutNodeWarnings(allowed.stderr), /kherep shell-checks: attribution could not complete\n$/);
   });
 }

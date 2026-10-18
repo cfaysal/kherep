@@ -67,7 +67,10 @@ for (const host of HOSTS) {
       assert.equal(command.startsWith("& "), false, "the POSIX command has no call operator");
       // TOML basic strings: a backslash is escaped, a quote is escaped.
       assert.ok(text.includes(`command = ${JSON.stringify(command)}`));
-      if (host.sep === "\\") assert.ok(text.includes(String.raw`\\kherep-maestro\\codex-control-plane-hook.mts\"`));
+      // The entry path inside the quoted command, backslashes doubled. Derived from
+      // the host's own path.join, as the renderer joins every hook-dir path.
+      assert.ok(text.includes(`\\"${JSON.stringify(entry).slice(1, -1)}\\"`));
+      if (entry.includes("\\")) assert.ok(text.includes(entry.replaceAll("\\", "\\\\")));
     }
     const withoutWindows = renderHooks({ ...options(host, host.pins[0]!), windowsHookCommands: false });
     assert.doesNotMatch(withoutWindows, /^commandWindows = /m);

@@ -9,6 +9,7 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 
 import { install } from "./install.mts";
+import { withoutNodeWarnings } from "./lib/node-warning-fixture.mts";
 
 const REPO = path.resolve(import.meta.dirname, "..");
 const escaped = (value: string): string => JSON.stringify(value).slice(1, -1);
@@ -66,7 +67,9 @@ test("install writes the entry point and a pointer to its own source, and no hoo
     { input: "{}", encoding: "utf8", env, cwd: f.root, timeout: 30_000 });
   const stable = spawnSync(process.execPath, [f.entry, "deliver", "--runtime", "codex"],
     { input: "{}", encoding: "utf8", env, cwd: f.root, timeout: 30_000 });
-  assert.deepEqual([stable.status, stable.stdout, stable.stderr], [direct.status, direct.stdout, direct.stderr]);
+  // Each warns at most once on a Node that warns about type stripping: the entry point's child does not.
+  assert.deepEqual([stable.status, stable.stdout, withoutNodeWarnings(stable.stderr, 1)],
+    [direct.status, direct.stdout, withoutNodeWarnings(direct.stderr, 1)]);
   assert.equal(stable.status, 0, stable.stderr);
 
   // A reinstall leaves the hook tables and the Codex trust tables byte-identical.

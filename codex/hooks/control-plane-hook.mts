@@ -94,7 +94,11 @@ if (isMainModule()) {
   else {
     // The hook runs as its own main module, with this process's stdin, stdout,
     // stderr, environment and working directory; its exit code is passed on.
-    const child = spawnSync(process.execPath, [resolved.hook, ...process.argv.slice(3)], { stdio: "inherit", windowsHide: true });
+    // On the Node versions that warn about type stripping this process has
+    // already warned once, as a direct hook call does; the child must not
+    // warn a second time, so the caller sees the stderr of a direct call.
+    const child = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", resolved.hook, ...process.argv.slice(3)],
+      { stdio: "inherit", windowsHide: true });
     if (child.error) fail("spawn");
     else process.exitCode = child.status ?? 1;
   }
