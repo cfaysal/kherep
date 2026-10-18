@@ -15,7 +15,11 @@ increments the minor version; every other release increments the patch version.
   `hooks/live-hook-integrity.mts` writes
   `<CLAUDE_HOME>/.cache/hook-integrity/heartbeat.json` atomically after a
   fully proven run only, takes `run.lock` (a second run reports
-  `re-check already running`; a lock older than 2 minutes is taken over) and
+  `re-check already running` while the owner lives and the lock is younger
+  than 2 minutes; a run that finds a dead or 2-minute-old owner proceeds
+  without exclusion and removes that lock at its end, which is safe because
+  concurrent runs write the same versioned bytes and each proves its own
+  result) and
   gains a `--trigger <source>` mode that prints plain lines. The guard
   dispatcher re-checks on the next guarded tool call when the heartbeat is
   older than 30 minutes or missing (in parallel with the guards) or when a
