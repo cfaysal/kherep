@@ -122,7 +122,8 @@ export function checkCommits(options: Options): Result {
       for (const line of verdict.stderr.split("\n").filter((l) => l.trim())) stdout.push(`     ${line.trim()}`);
     }
     if (failed === 0) {
-      stdout.push(`commit-policy: ${commits.length} commits passed`);
+      const noun = commits.length === 1 ? "commit" : "commits";
+      stdout.push(`commit-policy: ${commits.length} ${noun} passed`);
       return { code: 0, stdout, stderr };
     }
     stdout.push(`commit-policy: ${failed} of ${commits.length} commits failed`);
