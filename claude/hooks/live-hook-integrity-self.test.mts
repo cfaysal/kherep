@@ -117,10 +117,24 @@ const read = (file: string): string | null => (fs.existsSync(file) ? fs.readFile
   check("a 0-byte workspace-scope lib: the hook exits 0", status, 0);
   check("it names its own import", seen.includes("own import lib/workspace-scope.mts cannot be loaded"), true);
   check("and claims no restore", seen.includes("RESTORED"), false);
+  check("and names the four libs the restore needs",
+    seen.includes("needs integrity-verdict, workspace-scope, orchestra-checkout and restore-write"), true);
   check("the lib is left as it was", read(lib), "");
   const entry = journalOf(box)[0] || {};
   check("the journal records kind self", entry.kind, "self");
   check("the journal records no restore", entry.restoreProven, false);
+}
+
+// --- 2b. 0-byte integrity-verdict: reported, not restored (issue #507) -----------
+{
+  const box = sandbox();
+  const lib = path.join(box.hooks, "lib", "integrity-verdict.mts");
+  fs.writeFileSync(lib, "");
+  const { status, seen } = run(box);
+  check("a 0-byte integrity-verdict lib: the hook exits 0", status, 0);
+  check("it names its own import", seen.includes("own import lib/integrity-verdict.mts cannot be loaded"), true);
+  check("and reports it NOT restored", seen.includes("NOT restored") && !seen.includes("RESTORED"), true);
+  check("the lib is left as it was", read(lib), "");
 }
 
 // --- 3. missing hook-inventory without a checkout: report only ----------------------
