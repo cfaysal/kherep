@@ -742,7 +742,7 @@ Durable Object classes are declared with the `exports` map, which replaces the l
 The committed `wrangler.jsonc` and the override example above turn on Workers Logs for every invocation (`"observability": { "enabled": true, "head_sampling_rate": 1 }`). It takes effect only when the operator deploys with an override that carries it; the repository deploys nothing. Each Registry request then writes one log line, for example:
 
 ```json
-{ "event": "registry.sql", "path": "sendMessage", "rowsRead": 4, "rowsWritten": 8 }
+{ "event": "registry.sql", "path": "sendMessage", "rowsRead": 6, "rowsWritten": 9 }
 ```
 
 `path` is the Registry method; `rowsRead` and `rowsWritten` are the SQLite rows that the request's cursors read and wrote (`worker/src/sql-meter.mts`). The line carries no message text, session or identity, and no duration: time does not advance in synchronous Durable Object code. Every request path runs its SQL in one synchronous region, so no row is counted for two requests. SQL outside a request, such as the schema set-up when the Registry starts, counts only toward the totals of `Registry.sqlStats()`. Each line is a log event and counts toward the Workers Logs limits of the account's plan.
@@ -751,9 +751,9 @@ Durable Object SQLite storage is billed by rows read and rows written. The Worke
 
 | Request path | Rows read before | Rows read now | Rows written now |
 | --- | --- | --- | --- |
-| `sendMessage` (`message.send`) | 4,009 | 6 | 8 |
-| `sendMessage` (a reply to a deleted message) | - | 9 | 9 |
-| `reportMessageStatus` (`message.status` from the target) | 2,008 | 8, a final state 10 | 5, a final state 7 |
+| `sendMessage` (`message.send`) | 4,009 | 6 | 9 |
+| `sendMessage` (a reply to a deleted message) | - | 9 | 10 |
+| `reportMessageStatus` (`message.status` from the target) | 2,008 | 9, a final state 10 | 7, a final state 8 |
 | `ackMessageStatus` (`message.status.ack`, deletes the row) | - | 6 | 6 |
 | `ackMessageStatus` (settles a row stored before PR 4, issue #493) | - | 6 | 3 |
 | `messageStatusPageFor` (reconnect replay, a sender with 3 unacknowledged and 2,000 acknowledged messages) | 2,004 | 4 | 0 |
@@ -765,7 +765,7 @@ Durable Object SQLite storage is billed by rows read and rows written. The Worke
 
 PR 4 (deletion after acknowledgement) measured these with 4,000 further final rows that carry a fallback deadline and 4,000 tombstones in the tables. Each message request also reads the earliest deadline and the oldest tombstone to arm the alarm; that is one row each, whatever the table sizes. Its queries name `messages_delete_after` (a partial index of rows with a fallback deadline), `tombstones_deleted_at`, the primary keys of both tables, and `messages_from_node` for a revocation.
 
-Before, a send scanned the `messages` table twice and a status report or a replay page once, and the table keeps every final-state row, so the cost grew with every message ever sent; doubling the messages doubled these reads. Now the hot queries name their index (`INDEXED BY`): `messages_queued_expiry` (queued rows by expiry) and `messages_replay` (replay; partial over the rows whose current state differs from the acknowledged one, `settled_state IS NOT state`, issue #493, where `messages_from_node` served the replay before). A third index, `messages_state_updated` (state and last change), is created now for a later sweep of final-state rows and is not read yet. Doubling the messages leaves the "now" column unchanged. Each index adds a written row when a write touches its columns: a send now writes 8 rows instead of 5, a status report 5 instead of 4. The indexes are created on the first Registry start after the deploy, which reads the `messages` table once.
+Before, a send scanned the `messages` table twice and a status report or a replay page once, and the table keeps every final-state row, so the cost grew with every message ever sent; doubling the messages doubled these reads. Now the hot queries name their index (`INDEXED BY`): `messages_queued_expiry` (queued rows by expiry) and `messages_replay` (replay; partial over the rows whose current state differs from the acknowledged one, `settled_state IS NOT state`, issue #493, where `messages_from_node` served the replay before). A third index, `messages_state_updated` (state and last change), is created now for a later sweep of final-state rows and is not read yet. Doubling the messages leaves the "now" column unchanged. Each index adds a written row when a write touches its columns: a send now writes 9 rows instead of 5, a status report 7 instead of 4 (with `messages_replay`, issue #493, which a write that sets `state` also touches). The indexes are created on the first Registry start after the deploy, which reads the `messages` table once.
 
 ### Node
 
