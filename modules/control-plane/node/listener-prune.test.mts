@@ -81,6 +81,8 @@ test("a stale, partial, missing or unreadable listing, or an unreadable known-se
     ["listing-stale", (paths) => fs.rmSync(paths.sessions)],
     ["listing-partial", (paths) => writeLocalSessions(paths, markUnseen([], ["codex"]), NOW)],
     ["listing-unreadable", (paths) => fs.writeFileSync(paths.sessions, "{")],
+    ["listing-unreadable", (paths) => fs.writeFileSync(paths.sessions, JSON.stringify({ sessions: [{ name: "no id" }], unseen: [],
+      updatedAt: new Date(NOW).toISOString() }))],
     ["known-unreadable", (paths) => fs.writeFileSync(knownSessionsFile(paths), "{")],
     ["known-unreadable", (paths) => fs.writeFileSync(knownSessionsFile(paths), JSON.stringify({ sessions: [{ name: "no id" }] }))],
     ["tasks-unreadable", (paths) => { fs.mkdirSync(paths.tasks, { recursive: true }); fs.writeFileSync(path.join(paths.tasks, `${TASK}.json`), "{"); }],
@@ -100,16 +102,23 @@ test("a stale, partial, missing or unreadable listing, or an unreadable known-se
   assert.deepEqual(pruneListenerState(paths, { now: NOW }), { skipped: "dir-unreadable" });
 });
 
-test("a file rewritten while the prune holds it aside is kept, and an unfinished prune tombstone of any kind is linked back", (t) => {
+test("a file rewritten while the prune holds it aside is kept, with other or the same bytes, and an unfinished prune tombstone of any kind is linked back", (t) => {
   const paths = node(t);
-  const mode = put(paths, "gone.mode.json", OLD, JSON.stringify({ permissionMode: "default" }));
+  // The bytes rememberMode writes for "default".
+  const body = `${JSON.stringify({ permissionMode: "default" }, null, 2)}\n`;
+  const mode = put(paths, "gone.mode.json", OLD, body);
+  const same = put(paths, "same.mode.json", OLD, body);
   put(paths, "gone.turns.json");
   const result = pruneListenerState(paths, { now: NOW, beforeTake: (file) => {
     if (file === mode) rememberMode(paths, "gone", "acceptEdits");
+    // A resumed session remembering its unchanged mode: a new file with the same bytes.
+    if (file === same) rememberMode(paths, "same", "default");
   } });
-  assert.deepEqual(result, { removed: 1, kept: 1, sessions: 1, failed: [] });
-  assert.deepEqual(names(paths), ["gone.mode.json"]);
+  assert.deepEqual(result, { removed: 1, kept: 2, sessions: 1, failed: [] });
+  assert.deepEqual(names(paths), ["gone.mode.json", "same.mode.json"]);
   assert.deepEqual(JSON.parse(fs.readFileSync(mode, "utf8")), { permissionMode: "acceptEdits" });
+  assert.equal(fs.readFileSync(same, "utf8"), body);
+  assert.ok(Date.now() - fs.statSync(same).mtimeMs < STATE_RETENTION_MS, "the fresh file stays, not the old one");
 
   const tomb = put(paths, `.other.turns.json.${NOW - 2 * 60_000}-${crypto.randomUUID()}.tomb`, OLD, "[]");
   assert.deepEqual(sweepListeners(paths, { now: NOW }), { removed: 0, kept: 0, failed: [] });

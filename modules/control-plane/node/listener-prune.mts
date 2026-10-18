@@ -5,7 +5,7 @@ import { listenerDir } from "./autonomy.mts";
 import type { NodePaths } from "./config.mts";
 import { messageIds, readJson } from "./inbox.mts";
 import { knownSessionsFile } from "./known-sessions.mts";
-import { readIfPresent, takeIfUnchanged, type SweepDeps } from "./listener-sweep.mts";
+import { readIfPresent, takeIfUnchanged, type FileStamp, type SweepDeps } from "./listener-sweep.mts";
 import { isActive, readTask } from "./task-records.mts";
 
 // Removes the listener state files of sessions that ended (issue #474). The
@@ -79,12 +79,13 @@ function retained(paths: NodePaths, now: number): Set<string> | PruneSkip {
   return ids;
 }
 
-// False also when the file cannot be stated: it stays.
-const old = (file: string, now: number): boolean => {
+// The file's identity when it is past the retention, else null; null also when it cannot be stated: it stays.
+const oldStamp = (file: string, now: number): FileStamp | null => {
   try {
-    return now - fs.statSync(file).mtimeMs > STATE_RETENTION_MS;
+    const { ino, mtimeMs } = fs.statSync(file);
+    return now - mtimeMs > STATE_RETENTION_MS ? { ino, mtimeMs } : null;
   } catch {
-    return false;
+    return null;
   }
 };
 
@@ -111,16 +112,18 @@ export function pruneCandidates(paths: NodePaths, now: number): Map<string, stri
     list.push(path.join(dir, name));
     files.set(id, list);
   }
-  for (const [id, list] of files) if (!list.every((file) => old(file, now))) files.delete(id);
+  for (const [id, list] of files) if (!list.every((file) => oldStamp(file, now))) files.delete(id);
   return files;
 }
 
-// Removes a candidate only while its bytes are those read here, from a file still past the retention.
+// Removes a candidate only while it is the file stated here, past the retention, with the bytes read
+// before: an atomic rewrite with the same bytes (rememberMode of an unchanged mode) is a new inode and stays.
 function takeOld(file: string, now: number, deps: SweepDeps): boolean {
   const seen = readIfPresent(file);
-  if (!seen || !old(file, now)) return false;
+  const stamp = seen && oldStamp(file, now);
+  if (!seen || !stamp) return false;
   deps.beforeTake?.(file);
-  return takeIfUnchanged(file, seen, now, deps);
+  return takeIfUnchanged(file, seen, now, deps, stamp);
 }
 
 export function pruneListenerState(paths: NodePaths, deps: SweepDeps = {}): PruneResult {
