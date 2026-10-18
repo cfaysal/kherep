@@ -17,7 +17,7 @@ test("first Stop requests one pinned codex-obs dispatch without copying turn tex
   const result = await decision({ ...firstStop, last_assistant_message: "Synthetic private sentinel" }, env);
   assert.equal(result?.decision, "block");
   assert.match(result.reason, /codex-obs/);
-  assert.match(result.reason, /gpt-5\.6-luna/);
+  assert.match(result.reason, /installed agent TOML/);
   assert.match(result.reason, /low/);
   assert.match(result.reason, /empty result/i);
   assert.doesNotMatch(JSON.stringify(result), /Synthetic private sentinel/);

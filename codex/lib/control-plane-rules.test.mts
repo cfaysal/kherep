@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { launcherCommand } from "../../modules/control-plane/node/launcher.mts";
 import { install } from "../install.mts";
 import type { Capabilities } from "./contracts.mts";
+import { fixtureModelOptions } from "./model-policy.fixture.mts";
 import {
   CONTROL_PLANE_RULES_FILE, MSG_SUBCOMMANDS, controlPlaneRulesPath, launcherRule, renderControlPlaneRules, starlarkString,
 } from "./control-plane-rules.mts";
@@ -98,6 +99,7 @@ function fixture() {
   return {
     root, codexHome,
     options: {
+      ...fixtureModelOptions(),
       codexHome, claudeRegistryFile,
       claudeConfigDir: path.join(root, "home", ".claude"),
       workspace: path.join(root, "workspace"),

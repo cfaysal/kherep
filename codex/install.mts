@@ -27,6 +27,9 @@ import { InstallTransaction } from "./lib/install-transaction.mts";
 import * as localPlugin from "./lib/local-plugin.mts";
 import * as managedConfig from "./lib/managed-config.mts";
 import { memoryProviderFile, resolveMemoryProvider } from "./lib/memory-provider.mts";
+import { selectModelResolution } from "./lib/model-install-state.mts";
+import { CatalogReadError, readAvailableModels } from "./lib/model-catalog-process.mts";
+import { record, resolveCapabilities } from "./lib/model-policy.mts";
 import { projectOperatorBinding } from "./lib/mcp-operator-binding.mts";
 import { projectRegistry } from "./lib/mcp-registry-projection.mts";
 import { retiredCentralBrainRender } from "./lib/retired-central-brain.mts";
@@ -90,6 +93,9 @@ export function renderObservationHook(source: string, workspace: string): string
 // tests. The command wrappers (runCodex, resolveRegistryRuntime) exist so a
 // test never touches a real Codex binary.
 export interface InstallOptions {
+  // A complete metadata-only model/list catalog, injected by the async CLI or tests.
+  modelCatalog?: unknown;
+  refreshModels?: boolean;
   memoryProvider?: unknown;
   memoryProviderConfig?: string;
   codexHome?: string;
@@ -143,20 +149,59 @@ function declaredMissing(capabilities: Capabilities): string[] {
     .map(([name]) => name);
 }
 
+function resolvedCodexHome(options: InstallOptions): string {
+  return path.resolve(options.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+}
+
+function previousModelResolution(codexHome: string): unknown {
+  let text: string;
+  try { text = fs.readFileSync(path.join(codexHome, "orchestra", "parity-receipt.json"), "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error("Installed model receipt is unreadable");
+  }
+  try {
+    const receipt: unknown = JSON.parse(text);
+    if (record(receipt)) return receipt.modelResolution;
+  } catch { /* A corrupt read must not look like a fresh installation. */ }
+  throw new Error("Installed model receipt is unreadable");
+}
+
+export type ModelCatalogReader = (options: { codexHome: string }) => Promise<unknown>;
+
+// The async entry point collects metadata before the synchronous transaction.
+// A normal reinstall validates and reuses its canonical receipt without a read.
+export async function installFromCli(options: InstallOptions, readCatalog: ModelCatalogReader = readAvailableModels) {
+  const codexHome = resolvedCodexHome(options);
+  const existing = previousModelResolution(codexHome);
+  let modelCatalog = options.modelCatalog;
+  if (options.refreshModels === true || existing === undefined) {
+    if (modelCatalog === undefined) {
+      try { modelCatalog = await readCatalog({ codexHome }); }
+      catch { throw new CatalogReadError(); }
+    }
+  }
+  return install({ ...options, codexHome, modelCatalog });
+}
+
 export function install(options: InstallOptions = {}) {
   const sourceRoot = import.meta.dirname;
   const repoRoot = path.resolve(sourceRoot, "..");
   assertResearchHookParity(repoRoot);
   const platform = options.platform || process.platform;
-  const codexHome = path.resolve(options.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+  const codexHome = resolvedCodexHome(options);
+  const capabilitiesFile = path.join(sourceRoot, "parity", "capabilities.json");
+  const modelPolicyFile = path.join(sourceRoot, "parity", "model-policy.toml");
+  const modelResolution = selectModelResolution(fs.readFileSync(modelPolicyFile, "utf8"), {
+    existing: previousModelResolution(codexHome), catalog: options.modelCatalog, refresh: options.refreshModels,
+  });
+  const capabilities = resolveCapabilities(JSON.parse(fs.readFileSync(capabilitiesFile, "utf8")) as Capabilities, modelResolution);
   const selectionFile = memoryProviderFile(codexHome);
   if (options.memoryProviderConfig && options.memoryProvider !== undefined) throw new Error("Memory provider selection is ambiguous");
   const { memoryProvider, retired: retiredMemoryProvider } = resolveMemoryProvider(selectionFile, options.memoryProviderConfig
     ? JSON.parse(fs.readFileSync(options.memoryProviderConfig, "utf8")) : options.memoryProvider);
   const workspace = resolveWorkspace(options, platform);
   const claudeHome = path.resolve(options.claudeConfigDir || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"));
-  const capabilitiesFile = path.join(sourceRoot, "parity", "capabilities.json");
-  const capabilities = JSON.parse(fs.readFileSync(capabilitiesFile, "utf8")) as Capabilities;
   // #44. Workspace files retired through the one declaration both installers
   // read. Parsed before anything is written, so an invalid manifest moves nothing.
   const retiredWorkspace = readRetiredWorkspaceEntries(
@@ -444,9 +489,6 @@ export function install(options: InstallOptions = {}) {
     }
     transaction.copyFile(sources.cbmHook, path.join(targets.hookDir, "codex-cbm-reminder.mts"));
     transaction.copyFile(sources.dispatchHook, path.join(targets.hookDir, "codex-dispatch-contract-guard.mts"));
-    // The guard reads its agent pins from ../parity/capabilities.json, relative to itself
-    // as in the repository: the same manifest the agent TOML is projected from.
-    transaction.copyFile(capabilitiesFile, path.join(targets.hookDir, "..", "parity", "capabilities.json"));
     transaction.copyFile(sources.precompactHook, path.join(targets.hookDir, "codex-precompact-checkpoint.mts"));
     transaction.copyFile(sources.acceptancePolicy, path.join(targets.hookDir, "acceptance-policy.mts"));
     transaction.copyFile(sources.acceptanceHook, path.join(targets.hookDir, "codex-acceptance-gate.mts"));
@@ -505,6 +547,11 @@ export function install(options: InstallOptions = {}) {
       repoRoot,
       transaction,
     });
+    // Projection determines the actual plugin names, including personal-name
+    // collisions. Write the guard snapshot only after those native TOMLs exist.
+    transaction.writeFile(path.join(targets.hookDir, "..", "parity", "capabilities.json"),
+      `${JSON.stringify({ ...capabilities, projectedAgents: projection.agentDefaults }, null, 2)}\n`);
+    transaction.copyFile(modelPolicyFile, path.join(codexHome, "orchestra", "model-policy.toml"));
 
     const existingAgents = fs.existsSync(targets.agents) ? fs.readFileSync(targets.agents, "utf8") : "";
     let agents = setMarkedBlock(existingAgents, AGENTS_START, AGENTS_END,
@@ -530,6 +577,7 @@ export function install(options: InstallOptions = {}) {
       generatedAt: new Date().toISOString(),
       platform,
       manifestSha256: hashFile(capabilitiesFile),
+      modelResolution,
       canonicalTargetPolicy: capabilities.canonicalTargetPolicy,
       claudeModified: false,
       hooks: ["PreToolUse", "UserPromptSubmit", "PostToolUse", "SessionStart", "PreCompact", "Stop", "SubagentStart", "SubagentStop"],
@@ -608,7 +656,7 @@ export function install(options: InstallOptions = {}) {
 
 type CliOptions = Pick<InstallOptions,
   "codexHome" | "claudeConfigDir" | "registryFile" | "workspace" | "memoryProviderConfig"
-  | "authorizeObservationPublishing" | "messagingClient">;
+  | "authorizeObservationPublishing" | "messagingClient" | "refreshModels">;
 
 export function parseArgs(argv: string[]): CliOptions {
   const args = [...argv];
@@ -623,6 +671,10 @@ export function parseArgs(argv: string[]): CliOptions {
   ]);
   while (args.length) {
     const flag = args.shift();
+    if (flag === "--refresh-models") {
+      options.refreshModels = true;
+      continue;
+    }
     if (flag === "--authorize-observation-publishing") {
       options.authorizeObservationPublishing = true;
       continue;
@@ -656,7 +708,7 @@ function isMainModule(): boolean {
 if (isMainModule()) {
   try {
     const cliOptions = parseArgs(process.argv.slice(2));
-    const result = install(cliOptions);
+    const result = await installFromCli(cliOptions);
     process.stdout.write([
       "Kherep Codex Maestro parity installed.",
       `Codex home: ${result.codexHome}`,

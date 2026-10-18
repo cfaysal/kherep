@@ -10,6 +10,7 @@ import { test, type TestContext } from "node:test";
 
 import { install } from "./install.mts";
 import { sourceOf } from "./hooks/hook-integrity.mts";
+import { fixtureModelOptions } from "./lib/model-policy.fixture.mts";
 
 const REPO = path.resolve(import.meta.dirname, "..");
 
@@ -21,6 +22,7 @@ function fixture(t: TestContext) {
   fs.mkdirSync(codexHome, { recursive: true });
   fs.writeFileSync(claudeRegistryFile, JSON.stringify({ mcpServers: {} }), { mode: 0o600 });
   const result = install({
+    ...fixtureModelOptions(),
     codexHome, claudeRegistryFile,
     claudeConfigDir: path.join(root, "home with spaces", ".claude"),
     workspace: path.join(root, "workspace", "Kherep"),

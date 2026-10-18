@@ -1,0 +1,30 @@
+# Families are resolved only against the complete, visible Codex model/list catalog.
+schema_version = 1
+
+[roles.root]
+family = "sol"
+reasoning = "xhigh"
+
+[roles.designer]
+family = "astra"
+reasoning = "high"
+
+[roles.builder]
+family = "sol"
+reasoning = "high"
+
+[roles.support]
+family = "terra"
+reasoning = "medium"
+
+[roles.researcher]
+family = "terra"
+reasoning = "low"
+
+[roles.observer]
+family = "luna"
+reasoning = "low"
+
+[roles.broker]
+family = "luna"
+reasoning = "low"

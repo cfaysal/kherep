@@ -18,6 +18,7 @@ export interface AgentRenderOptions {
   // Repo-relative Markdown source for a runtime-specific definition; defaults to
   // claude/agents/<name>.md.
   source?: string;
+  role?: string;
   model?: string;
   // true: the Codex dispatch guard denies a dispatch of this agent whose model is
   // missing or differs from `model` (codex/hooks/dispatch-contract-guard.mts).
@@ -40,6 +41,7 @@ export interface Capabilities {
   kherepSkills: { active: string[]; compatibility: string[] };
   commands: string[];
   agents: Record<string, AgentRenderOptions>;
+  projectedAgents?: Record<string, ProjectedAgentDefault>;
   mcpServers: string[];
   retiredMcpServers?: string[];
   pluginMcpServers?: Record<string, PluginMcpServer>;
@@ -100,10 +102,17 @@ export interface PluginStatus {
 
 export interface ProjectionReceipt {
   agents: ReceiptEntry[];
+  agentDefaults: Record<string, ProjectedAgentDefault>;
   commands: ReceiptEntry[];
   plugins: PluginStatus[];
   skills: ReceiptEntry[];
   removed?: { agents: string[]; skills: string[] };
+}
+
+export interface ProjectedAgentDefault {
+  role: string;
+  model: string;
+  reasoning: string;
 }
 
 export interface ProjectionContext {

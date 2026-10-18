@@ -46,7 +46,7 @@ export function sessionContext(): string {
     "The banner alone proves nothing; name the concrete applied rule and completion evidence for non-trivial work.",
     "Root Maestro owns intent, routing, synthesis, and acceptance. Delegate only for material benefit.",
     "Live evidence outranks memory. Never invent cross-session continuity.",
-    "Default root tier is gpt-6.1-sol/xhigh; use terra/low-medium only for bounded support work.",
+    "Use the installed model policy: Astra for the main designer, SOL for builders and root, Terra or Luna for bounded support. Native agent defaults carry the resolved model and reasoning.",
     "Private material never enters Codex, cloud subagents, web, MCP, or connectors; use only an authorized direct local-inference path or stop.",
   ].join("\n");
 }
@@ -58,7 +58,7 @@ export function turnContext(): string {
     "Classify privacy before tools; private material is forbidden to Codex/cloud paths.",
     "Delegate only for parallelism, specialization, isolation or independent review; never overlap writes. Bound workers by objective, scope, constraints, evidence and return format; Maestro owns acceptance.",
     "Inspect the final diff; report C1 correctness, C2 verification, C3 safety and C4 scope integrity. Trivial conversation skips ceremony.",
-    "Before final, dispatch codex-obs once: agent_type codex-obs, model gpt-5.6-luna, reasoning_effort low, fork_turns none; bounded nonprivate summary, strict JSON.",
+    "Before final, dispatch codex-obs once: agent_type codex-obs, the exact model from its installed agent TOML, reasoning_effort low, fork_turns none; bounded nonprivate summary, strict JSON.",
     "Validate candidates; only Maestro publishes through the configured Codex Confluence broker when observationPublishingAuthorized is literal true. Empty means zero writes; omit routine observation status.",
   ].join("\n");
 }

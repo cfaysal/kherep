@@ -28,6 +28,7 @@ Review a disposable candidate before replacing an existing setup. The CLI suppor
 | --- | --- |
 | `--workspace` | Workspace in which Kherep applies |
 | `--codex-home` | Destination Codex configuration home |
+| `--refresh-models` | Resolve the family policy against the current native model catalog instead of retaining the installed resolution |
 | `--claude-config-dir` | Shared Claude dependency/configuration home |
 | `--mcp-registry` | Absolute path to your source MCP registry |
 | `--memory-provider-config` | Absolute path to explicit memory-backend selection JSON; only `{ "provider": "unconfigured" }` is accepted |
@@ -36,6 +37,8 @@ Review a disposable candidate before replacing an existing setup. The CLI suppor
 Both entry points run `codex/install.mts`, so the two host-owned values it needs are resolved by the same run whichever one you use: the Confluence knowledge space for this host, written to `kherep/confluence.json` in the resolved Codex home, and the Atlassian service-account credential. Each prompts only when a terminal is attached and otherwise fails with the variable named, so a scripted install does not block on stdin. If either is missing the parity installation above it still stands, and the observation agent writes nothing until the space file exists.
 
 Keep private registry configuration outside the checkout. Read [adapter architecture](../codex/ARCHITECTURE.md) for supported transport, authentication and backend-selection formats.
+
+The first CLI model resolution requires a signed-in Codex context in the selected configuration home. For an isolated or offline candidate, the synchronous `install()` API accepts a complete `modelCatalog` object exported by `node codex/scripts/model-catalog.mts` from an existing context. Login files do not need to be copied. Model metadata alone does not establish Desktop activation or access under a different account.
 
 ### Remote messaging client opt-in
 
@@ -425,6 +428,14 @@ Earlier installers could select a separate Central Brain MCP server with native 
 The installer manages routing, hooks, plugin registration and an installation receipt. It preserves unrelated settings and uses recoverable transactions.
 
 The top-level `model_reasoning_effort` in `config.toml` belongs to you. If it is set, the installer keeps that line byte for byte. Only when it is absent does the installer write the default `model_reasoning_effort = "xhigh"`, which matches the Maestro's default root tier. A value inside a table such as `[profiles.<name>]` does not count as top-level and is never changed. The receipt records the outcome as `reasoningEffort`, with `status` `preserved-existing` or `configured` and the `value` kept or written.
+
+Agent model selection comes from [`codex/parity/model-policy.toml`](../codex/parity/model-policy.toml), which names families rather than release numbers. The main designer uses Astra with high reasoning, builders use SOL with high reasoning, support and research use Terra with medium and low reasoning, and observers and brokers use Luna with low reasoning. The root role uses SOL with xhigh reasoning. The `feature-dev` code architect takes designer precedence over generic plugin model mappings; Opus agents and the code simplifier map to the builder role. Claude definitions remain unchanged.
+
+For nontrivial design work, use the managed Astra designer as the default main designer, normally `code-architect`, and use `kherep-builder` with SOL as the default implementation worker. The Maestro coordinates and verifies their results. If a personal agent already owns the designer's normal name, consult `projection.agentDefaults` in the receipt or `projectedAgents` in the installed dispatch snapshot for the actual managed name and role.
+
+The metadata collector initializes an isolated Codex app-server and exhausts visible `model/list` pagination. It opens no threads and starts no inference. Resolution selects the numerically newest exact family member that advertises the requested reasoning level. Hidden, preview, dated or ambiguous aliases do not establish a family match. Missing families, incomplete pagination, unsupported reasoning or unconfirmed process cleanup stop model selection. Offline tests inject catalog fixtures and never call a real Codex account.
+
+The resolved model IDs and supported reasoning levels form one installation snapshot used for both native agent TOMLs and the dispatch guard. It includes every actual projected plugin name, including collision renames, with its model and reasoning default. Its evidence includes the policy file's SHA-256, catalog hash and resolution time. Ordinary reinstall retains a valid snapshot; run `node codex/install.mts --refresh-models` with your usual installation arguments to adopt a new catalog or changed policy. The policy is installed at `orchestra/model-policy.toml` in the selected Codex home. The observation pin remains exact: an omitted or different model is denied. Known projected roles use native agent defaults, and the guard validates the effective model and reasoning combination without network calls. An explicit model override still inherits that agent's reasoning unless reasoning is also explicitly supplied, so an unsupported inherited combination is denied. Generic or unknown agents may inherit the runtime's parent settings without overrides; when overriding, supply both model and reasoning explicitly because the policy's root defaults do not measure the active parent's settings.
 
 After installation, restart Codex in the selected workspace. Check rule and plugin discovery, a harmless tool call and each configured MCP connection. A plugin entry alone does not establish a working connection.
 

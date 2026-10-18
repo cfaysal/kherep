@@ -3,11 +3,6 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-// gpt-5.6-luna gehoert dazu, seit die obs- und Broker-Agents darauf gepinnt sind
-// (codex/parity/capabilities.json). Ohne den Eintrag weist der Guard genau das Modell ab,
-// das die eigene Projektion in die Agent-TOML schreibt.
-export const ALLOWED_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
-export const ALLOWED_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max", "ultra"]);
 const DISPATCH_TOOLS = new Set(["Agent", "spawn_agent"]);
 
 // The pins come from the parity manifest the installer projects the agent TOML from:
@@ -22,6 +17,8 @@ export type Pins = ReadonlyMap<string, string>;
 export interface DispatchPolicy {
   pins: Pins;
   observationAgent: string | null;
+  supportedModels: ReadonlyMap<string, ReadonlySet<string>>;
+  agentDefaults: ReadonlyMap<string, { model: string; reasoning: string }>;
 }
 // The manifest key of the observation agent; the projected name is its `as`.
 const OBSERVATION_ENTRY = "claude-obs";
@@ -58,13 +55,30 @@ function projectedName(name: string, entry: Record<string, unknown>): string {
   return typeof entry.as === "string" && entry.as ? entry.as : name;
 }
 
+function modelSupport(capabilities: unknown): Map<string, ReadonlySet<string>> {
+  const resolution = isRecord(capabilities) ? capabilities.modelResolution : undefined;
+  const supported = isRecord(resolution) ? resolution.supportedModels : undefined;
+  if (!isRecord(supported) || !Object.keys(supported).length) throw new Error("Installed model resolution is missing");
+  const models = new Map<string, ReadonlySet<string>>();
+  const efforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+  for (const [model, values] of Object.entries(supported)) {
+    if (!/^gpt-\d+(?:\.\d+)?-(?:astra|sol|terra|luna)$/.test(model) || !Array.isArray(values) || !values.length
+      || values.some((value) => typeof value !== "string" || !efforts.has(value)) || new Set(values).size !== values.length) {
+      throw new Error("Installed model resolution is malformed");
+    }
+    models.set(model, new Set(values as string[]));
+  }
+  return models;
+}
+
 export function dispatchPins(capabilities: unknown): Pins {
   const agents = isRecord(capabilities) ? capabilities.agents : undefined;
   if (!isRecord(agents)) throw new Error("The parity manifest has no agents table.");
+  const models = modelSupport(capabilities);
   const pins = new Map<string, string>();
   for (const [name, entry] of Object.entries(agents)) {
     if (!isRecord(entry) || entry.enforcePin !== true) continue;
-    if (typeof entry.model !== "string" || !ALLOWED_MODELS.has(entry.model)) {
+    if (typeof entry.model !== "string" || !models.has(entry.model)) {
       throw new Error(`Pinned agent ${name} has no allowed model.`);
     }
     pins.set(projectedName(name, entry), entry.model);
@@ -75,14 +89,35 @@ export function dispatchPins(capabilities: unknown): Pins {
 export function dispatchPolicy(capabilities: unknown): DispatchPolicy {
   const pins = dispatchPins(capabilities);
   const entry = (capabilities as { agents: Record<string, unknown> }).agents[OBSERVATION_ENTRY];
-  return { pins, observationAgent: isRecord(entry) ? projectedName(OBSERVATION_ENTRY, entry) : null };
+  const supportedModels = modelSupport(capabilities);
+  const manifest = capabilities as { agents: Record<string, unknown>; projectedAgents?: unknown;
+    modelResolution: { roles: { root: { model: string; reasoning: string } } } };
+  const rootDefault = manifest.modelResolution.roles?.root;
+  if (!rootDefault || !supportedModels.get(rootDefault.model)?.has(rootDefault.reasoning)) throw new Error("Installed root model resolution is missing");
+  if (!isRecord(manifest.projectedAgents)) throw new Error("Installed projected agent defaults are missing");
+  const agentDefaults = new Map<string, { model: string; reasoning: string }>();
+  for (const [name, agent] of Object.entries(manifest.projectedAgents)) {
+    if (!isRecord(agent) || typeof agent.model !== "string" || !supportedModels.has(agent.model)
+      || typeof agent.reasoning !== "string" || !supportedModels.get(agent.model)?.has(agent.reasoning)) {
+      throw new Error(`Agent ${name} has an invalid installed model resolution`);
+    }
+    agentDefaults.set(name, { model: agent.model, reasoning: agent.reasoning });
+  }
+  for (const [name, agent] of Object.entries(manifest.agents)) {
+    if (!isRecord(agent)) throw new Error(`Agent ${name} is malformed`);
+    const actual = agentDefaults.get(projectedName(name, agent));
+    if (!actual || actual.model !== agent.model || actual.reasoning !== agent.reasoning) {
+      throw new Error(`Agent ${name} differs from the installed defaults snapshot`);
+    }
+  }
+  return { pins, supportedModels, agentDefaults, observationAgent: isRecord(entry) ? projectedName(OBSERVATION_ENTRY, entry) : null };
 }
 
 export function loadPolicy(): DispatchPolicy {
   return dispatchPolicy(JSON.parse(fs.readFileSync(CAPABILITIES_FILE, "utf8")));
 }
 
-export function validate(payload: unknown, { pins, observationAgent }: DispatchPolicy): string | null {
+export function validate(payload: unknown, { pins, observationAgent, supportedModels, agentDefaults }: DispatchPolicy): string | null {
   // codex/lib/parity-config.mts registers this guard for Agent|spawn_agent only, so
   // input that does not name its tool is an unclassifiable dispatch.
   if (!isRecord(payload) || typeof payload.tool_name !== "string") {
@@ -99,9 +134,20 @@ export function validate(payload: unknown, { pins, observationAgent }: DispatchP
   if (pin !== undefined && input.model !== pin) {
     return `Kherep agent ${agent} is pinned to model ${pin}; got ${input.model || "no model"}.`;
   }
-  if (input.model && !(typeof input.model === "string" && ALLOWED_MODELS.has(input.model))) return `Unsupported Kherep agent model: ${input.model}`;
-  if (input.reasoning_effort && !(typeof input.reasoning_effort === "string" && ALLOWED_EFFORTS.has(input.reasoning_effort))) {
-    return `Unsupported Kherep reasoning effort: ${input.reasoning_effort}`;
+  if (input.model !== undefined && !(typeof input.model === "string" && supportedModels.has(input.model))) return `Unsupported Kherep agent model: ${input.model}`;
+  const defaults = agentDefaults.get(agent);
+  const overridesModel = input.model !== undefined, overridesEffort = input.reasoning_effort !== undefined;
+  // Policy root defaults do not establish the active parent's model or effort:
+  // operator configuration and turn overrides can change native inheritance.
+  if (!defaults && overridesModel !== overridesEffort) {
+    return "Generic agent overrides require both explicit model and reasoning effort.";
+  }
+  if (defaults || overridesModel) {
+    const selectedModel = typeof input.model === "string" ? input.model : defaults!.model;
+    const selectedEffort = overridesEffort ? input.reasoning_effort : defaults!.reasoning;
+    if (!(typeof selectedEffort === "string" && supportedModels.get(selectedModel)?.has(selectedEffort))) {
+      return `Unsupported Kherep reasoning effort: ${selectedEffort}`;
+    }
   }
   if (agent === observationAgent) {
     const policy = obsBriefPolicy();

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import type { ModelResolution, ModelRole } from "./model-policy.mts";
 import path from "node:path";
 
 import { loadCanonicalPluginSources } from "./canonical-plugin-sources.mts";
@@ -138,6 +139,7 @@ function installKherepAgents(context: ProjectionContext, usedAgents: Set<string>
     transaction.writeFile(target, renderAgent(projected, source, options));
     usedAgents.add(projected);
     receipt.agents.push({ name: projected, status: existed ? "replaced-with-backup" : "installed" });
+    receipt.agentDefaults[projected] = { role: options.role!, model: options.model!, reasoning: options.reasoning! };
   }
 }
 
@@ -175,12 +177,19 @@ function installPluginCommands(context: ProjectionContext, plugin: CapabilityPlu
   }
 }
 
-function agentOptions(plugin: CapabilityPlugin, source: string): AgentRenderOptions {
+export function pluginAgentRole(plugin: CapabilityPlugin, name: string, source: string): ModelRole {
+  if (plugin.id === "feature-dev@claude-plugins-official" && name === "code-architect") return "designer";
   const model = parseFrontmatter(source).metadata.model;
-  if (plugin.id.startsWith("code-simplifier@")) return { model: "gpt-5.6-sol", reasoning: "high" };
-  if (model === "opus") return { model: "gpt-5.6-sol", reasoning: "high" };
-  if (model === "haiku") return { model: "gpt-5.6-terra", reasoning: "low" };
-  return { model: "gpt-5.6-terra", reasoning: "medium" };
+  if (plugin.id.startsWith("code-simplifier@") || model === "opus") return "builder";
+  if (model === "haiku") return "researcher";
+  return "support";
+}
+
+function agentOptions(context: ProjectionContext, plugin: CapabilityPlugin, name: string, source: string): AgentRenderOptions {
+  const role = pluginAgentRole(plugin, name, source);
+  const resolution = context.capabilities.modelResolution as ModelResolution | undefined;
+  if (!resolution?.roles[role]) throw new Error("Plugin projection requires a resolved model policy");
+  return { role, ...resolution.roles[role] };
 }
 
 function installPluginAgents(context: ProjectionContext, plugin: CapabilityPlugin, root: string, usedAgents: Set<string>, receipt: ProjectionReceipt): void {
@@ -188,11 +197,13 @@ function installPluginAgents(context: ProjectionContext, plugin: CapabilityPlugi
     const preferred = path.basename(sourceFile, ".md");
     const name = uniqueName(preferred, usedAgents, pluginShort(plugin.id));
     const source = fs.readFileSync(sourceFile, "utf8");
+    const options = agentOptions(context, plugin, preferred, source);
     context.transaction.writeFile(
       path.join(context.codexHome, "agents", `${name}.toml`),
-      renderAgent(name, source, agentOptions(plugin, source)),
+      renderAgent(name, source, options),
     );
     receipt.agents.push({ name, source: plugin.id, status: "projected" });
+    receipt.agentDefaults[name] = { role: options.role!, model: options.model!, reasoning: options.reasoning! };
   }
 }
 
@@ -226,7 +237,7 @@ function installPlugins(context: ProjectionContext, usedSkills: Set<string>, use
 }
 
 export function project(context: ProjectionContext): ProjectionReceipt {
-  const receipt: ProjectionReceipt = { agents: [], commands: [], plugins: [], skills: [] };
+  const receipt: ProjectionReceipt = { agents: [], agentDefaults: {}, commands: [], plugins: [], skills: [] };
   const usedSkills = new Set<string>();
   const usedAgents = new Set<string>();
   const prior = previousManaged(context.codexHome);
