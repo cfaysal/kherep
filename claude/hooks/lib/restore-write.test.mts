@@ -212,9 +212,12 @@ const aclTool = process.platform === "darwin" ? ["chmod", "ls"] : process.platfo
 const run = (cmd: string, args: string[]) => spawnSync(cmd, args, { encoding: "utf8" });
 const acl = (file: string): string => process.platform === "darwin"
   ? run("ls", ["-le", file]).stdout.split("\n").slice(1).join("\n") : run("getfacl", ["-cp", file]).stdout;
+// A POSIX ACL grants the file owner through its owner entry (u::), never through a
+// named entry for the same user, so the Linux deny case narrows u:: and keeps a
+// named entry and the mask, which makes the ACL an extended one.
 function addAcl(file: string, deny: boolean): boolean {
   const entry = process.platform === "darwin" ? [`+a`, `group:everyone ${deny ? "deny write" : "deny delete"}`, file]
-    : ["-m", deny ? `u:${os.userInfo().username}:r--,m::r--` : "u:nobody:r--", file];
+    : ["-m", deny ? "u::r--,u:nobody:r--,m::r--" : "u:nobody:r--", file];
   return run(aclTool[0], entry).status === 0;
 }
 
