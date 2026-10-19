@@ -62,15 +62,27 @@ function expandToken(token: string, home: string): string {
   return normalizePathLike(raw);
 }
 
+// Issue #507, part 2: the coordinated form of a command that runs hooks/ code,
+//   node <home>/kherep/hook-runtime/entry.mts <pretool|reader|writer> <home>/hooks/<main> ...
+const ENTRY_MODES = new Set(["pretool", "reader", "writer"]);
+// A leading `&` is PowerShell's call operator.
+function coordinated(tokens: string[], home: string, hooksDir: string): boolean {
+  const [node, entry, mode, main] = tokens.slice(tokens[0] === "&" ? 1 : 0).map((token) => token.replace(/^['"]+|['"]+$/g, ""));
+  return node === "node" && expandToken(entry ?? "", home) === `${home}/kherep/hook-runtime/entry.mts`
+    && ENTRY_MODES.has(mode ?? "") && isWithinPath(expandToken(main ?? "", home), hooksDir);
+}
+
 // Only .js and .mts under <CLAUDE_HOME>/hooks/ are in scope: an extension-less
 // wrapper carries no syntax contract, files elsewhere are not this hook's business.
+// `uncoordinated` lists the commands that run such a file without the hook runtime.
 export function wiredFiles(
   home: string,
   readSettings: (name: string) => string = (name) => fs.readFileSync(path.join(home, name), "utf8")
-): { files: HookFile[]; notes: string[]; readAny: boolean } {
+): { files: HookFile[]; notes: string[]; readAny: boolean; uncoordinated: string[] } {
   const hooksDir = `${home}/hooks`;
   const found = new Map<string, HookFile>();
   const notes: string[] = [];
+  const uncoordinated: string[] = [];
   let readAny = false;
   for (const name of SETTINGS_FILES) {
     let parsed: { hooks?: unknown } | null;
@@ -83,16 +95,20 @@ export function wiredFiles(
     }
     readAny = true;
     for (const command of commandsIn(parsed)) {
-      for (const token of command.split(/\s+/)) {
+      const tokens = command.trim().split(/\s+/);
+      let runsHookCode = false;
+      for (const token of tokens) {
         const file = expandToken(token, home);
         if (!/\.(?:js|mts)$/i.test(file) || !isWithinPath(file, hooksDir)) continue;
+        runsHookCode = true;
         if (!found.has(file.toLowerCase())) {
           found.set(file.toLowerCase(), { file, rel: file.slice(hooksDir.length + 1) });
         }
       }
+      if (runsHookCode && !coordinated(tokens, home, hooksDir)) uncoordinated.push(command);
     }
   }
-  return { files: [...found.values()], notes, readAny };
+  return { files: [...found.values()], notes, readAny, uncoordinated };
 }
 
 // A comment opens only where code could stand: at a line start, after

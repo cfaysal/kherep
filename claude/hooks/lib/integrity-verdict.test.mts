@@ -11,13 +11,13 @@ import path from "node:path";
 import { after, test } from "node:test";
 
 import { syntaxVerdict } from "./hook-syntax.mts";
-import { classify, journal, restore } from "./integrity-verdict.mts";
+import { classify, journal, type Repairer, restore } from "./integrity-verdict.mts";
 import { writeExact } from "./restore-write.mts";
 import { joinPathLike } from "./workspace-scope.mts";
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "integrity-verdict-")));
 after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ } });
-const LIB = { syntaxVerdict, joinPathLike, writeExact };
+const LIB = { syntaxVerdict, joinPathLike };
 const GOOD = "export const ok = 1;\n";
 const sha256 = (text: string): string => crypto.createHash("sha256").update(text).digest("hex");
 let seq = 0;
@@ -61,32 +61,43 @@ test("classify: a directory in the file's place is UNGEPRUEFT, not DEFEKT", asyn
   assert.deepEqual(await classify(LIB, `${hooks}/dir.mts`, "wired"), { state: "UNGEPRUEFT", reason: "not a regular file" });
 });
 
-test("restore: proven when the target holds the versioned bytes", () => {
+// The runtime's capability, reduced to a direct write: the coordination itself is tested in hook-runtime-*.test.mts.
+const direct = (hooks: string): Repairer => ({
+  repair: async (rel, bytes) => {
+    const why = writeExact(`${hooks}/${rel}`, bytes, hooks);
+    return why ? { proven: false, why } : { proven: true, sha: sha256(Buffer.from(bytes).toString()) };
+  },
+});
+
+test("restore: proven when the target holds the versioned bytes", async () => {
   const { hooks, repo } = box();
   fs.writeFileSync(`${repo}/claude/hooks/guard.mts`, GOOD);
   fs.writeFileSync(`${hooks}/guard.mts`, "");
-  const result = restore(LIB, `${hooks}/guard.mts`, "guard.mts", repo, hooks);
+  const result = await restore(LIB, direct(hooks), `${hooks}/guard.mts`, "guard.mts", repo);
   assert.deepEqual(result, { proven: true, sha: sha256(GOOD) });
   assert.equal(fs.readFileSync(`${hooks}/guard.mts`, "utf8"), GOOD);
 });
 
-test("restore: unproven without a checkout or with a 0-byte source", () => {
+test("restore: unproven without the runtime, without a checkout or with a 0-byte source", async () => {
   const { hooks, repo } = box();
   fs.writeFileSync(`${hooks}/guard.mts`, "");
-  assert.equal(restore(LIB, `${hooks}/guard.mts`, "guard.mts", "", hooks).proven, false);
+  fs.writeFileSync(`${repo}/claude/hooks/guard.mts`, GOOD);
+  assert.match(String((await restore(LIB, null, `${hooks}/guard.mts`, "guard.mts", repo)).why), /not coordinated/);
+  assert.equal((await restore(LIB, direct(hooks), `${hooks}/guard.mts`, "guard.mts", "")).proven, false);
   fs.writeFileSync(`${repo}/claude/hooks/guard.mts`, "");
-  const result = restore(LIB, `${hooks}/guard.mts`, "guard.mts", repo, hooks);
+  const result = await restore(LIB, direct(hooks), `${hooks}/guard.mts`, "guard.mts", repo);
   assert.equal(result.proven, false);
   assert.match(String(result.why), /is itself 0 bytes/);
+  assert.equal(fs.readFileSync(`${hooks}/guard.mts`, "utf8"), "");
 });
 
-test("restore: unproven when the target does not match after the write", () => {
+test("restore: unproven when the target does not match after the write", async () => {
   const { hooks, repo } = box();
   fs.writeFileSync(`${repo}/claude/hooks/guard.mts`, GOOD);
   fs.writeFileSync(`${hooks}/guard.mts`, "");
-  // A writer that reports success and lands other bytes: the claim is no measurement.
-  const lying = { ...LIB, writeExact: (file: string) => { fs.writeFileSync(file, "other bytes\n"); return ""; } };
-  const result = restore(lying, `${hooks}/guard.mts`, "guard.mts", repo, hooks);
+  // A runtime that reports success and lands other bytes: the claim is no measurement.
+  const lying: Repairer = { repair: async (rel) => { fs.writeFileSync(`${hooks}/${rel}`, "other bytes\n"); return { proven: true }; } };
+  const result = await restore(LIB, lying, `${hooks}/guard.mts`, "guard.mts", repo);
   assert.equal(result.proven, false);
   assert.equal(result.sha, sha256("other bytes\n"));
   assert.match(String(result.why), /does not match the versioned source/);

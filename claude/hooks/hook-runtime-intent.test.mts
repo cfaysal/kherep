@@ -130,7 +130,7 @@ test("R9: a target with a second name is refused before any intent is recorded",
   fs.linkSync(guard, path.join(home.root, "second-name.mts"));
   const child = writerChild(home, "");
   assert.notEqual(child.status, 0);
-  assert.match(child.stderr, /pending-invalid/);
+  assert.match(child.stderr, /target-shared/);
   assert.equal(await pendingRows(home), 0);
 });
 

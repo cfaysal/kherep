@@ -90,12 +90,15 @@ export function recordIntent(o: Opened, rel: string, bytes: Uint8Array): Intent 
   // The nearest existing ancestor must resolve inside the root before anything is created under it.
   let probe = dir;
   while (!fs.existsSync(probe)) probe = path.dirname(probe);
-  if (!inside(o.root, probe)) throw refuse("pending-invalid");
+  if (!inside(o.root, probe)) throw refuse("target-outside");
   try { fs.mkdirSync(dir, { recursive: true }); } catch { throw refuse("pending-invalid"); }
-  if (!inside(o.root, dir)) throw refuse("pending-invalid");
+  if (!inside(o.root, dir)) throw refuse("target-outside");
   const parent = lstatOrNull(dir);
   const existing = lstatOrNull(file);
-  if (!parent?.isDirectory() || (existing && (!existing.isFile() || existing.nlink !== 1n))) throw refuse("pending-invalid");
+  if (!parent?.isDirectory()) throw refuse("pending-invalid");
+  if (existing?.isSymbolicLink()) throw refuse("target-link");
+  if (existing && !existing.isFile()) throw refuse("target-irregular");
+  if (existing && existing.nlink !== 1n) throw refuse("target-shared");
   const intent: Intent = {
     intent: crypto.randomBytes(16).toString("hex"), root: o.rootId, rel, parent: { dev: parent.dev, ino: parent.ino },
     target: existing ? { dev: existing.dev, ino: existing.ino } : null,

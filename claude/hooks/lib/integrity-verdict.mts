@@ -4,13 +4,16 @@
 // Static imports come from node:* only. The libs these functions call arrive as
 // a parameter, so this file loads even when one of them is broken, and the hook
 // can still restore lib/hook-syntax.mts with it. A broken copy of THIS file is
-// reported by the hook but not restored until the next install.
+// reported by the hook but not restored until the next install. Since #507
+// part 2 the write itself belongs to the hook runtime: the restore hands the
+// complete bytes to its capability, which records them durably first.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-export type VerdictLibs = typeof import("./hook-syntax.mts") & typeof import("./workspace-scope.mts") &
-  typeof import("./restore-write.mts");
+export type VerdictLibs = typeof import("./hook-syntax.mts") & typeof import("./workspace-scope.mts");
+// What kherep/hook-runtime/coordinator.mts gives the admitted integrity writer.
+export interface Repairer { repair: (rel: string, bytes: Uint8Array) => Promise<Restored> }
 export type Before = { size?: number; mtime?: string; ino?: number };
 export type Verdict = { state: "OK" | "DEFEKT" | "UNGEPRUEFT"; reason?: string; before?: Before };
 export type Restored = { proven: boolean; sha?: string; why?: string };
@@ -46,9 +49,10 @@ export async function classify(lib: Pick<VerdictLibs, "syntaxVerdict">, file: st
   return { state: verdict.state, reason: verdict.state === "DEFEKT" ? verdict.detail : `syntax unchecked (${verdict.detail})`, before };
 }
 
-export function restore(
-  lib: Pick<VerdictLibs, "joinPathLike" | "writeExact">, file: string, rel: string, repoRoot: string, hooksDir: string,
-): Restored {
+export async function restore(
+  lib: Pick<VerdictLibs, "joinPathLike">, repairer: Repairer | null, file: string, rel: string, repoRoot: string,
+): Promise<Restored> {
+  if (!repairer) return { proven: false, why: "this run is not coordinated by the hook runtime" };
   if (!repoRoot) return { proven: false, why: "no checkout resolved via workspace, KHEREP_WORKSPACE or install note" };
   const source = lib.joinPathLike(repoRoot, `claude/hooks/${rel}`);
   let wanted: Buffer;
@@ -58,9 +62,9 @@ export function restore(
     return { proven: false, why: `versioned source ${source} unreadable (${errorCode(error) || "unknown"})` };
   }
   if (!wanted.length) return { proven: false, why: `versioned source ${source} is itself 0 bytes` };
-  const refusal = lib.writeExact(file, wanted, hooksDir);
-  if (refusal) return { proven: false, why: refusal };
-  // Measured at the target. The write call reporting success is not a measurement.
+  const result = await repairer.repair(rel, wanted);
+  if (!result.proven) return result;
+  // Measured at the target here as well. The runtime reporting success is not this run's measurement.
   let landed: Buffer;
   try {
     landed = fs.readFileSync(file);
