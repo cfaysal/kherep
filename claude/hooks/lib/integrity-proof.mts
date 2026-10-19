@@ -34,27 +34,22 @@ import type { SyntaxVerdict } from "./hook-syntax.mts";
 export type ProofLibs = Pick<typeof import("./hook-inventory.mts"), "hookInventory" | "wiredFiles">
   & Pick<typeof import("./hook-syntax.mts"), "syntaxVerdict" | "esmParses" | "cjsParses">;
 export type Scope = "module" | "commonjs" | "none" | "invalid";
-interface Snap { buf: Buffer; sha: string; dev: bigint; ino: bigint }
+// `real` is the path the bytes were read from: a wired name that is a link is only an
+// alias, and Node loads its target, so the grammar and the package scope come from it.
+interface Snap { buf: Buffer; sha: string; dev: bigint; ino: bigint; real: string }
 
 const sha256 = (buf: Buffer): string => crypto.createHash("sha256").update(buf).digest("hex");
 const codeOf = (error: unknown): string | undefined => (error as NodeJS.ErrnoException)?.code;
 
-function inside(root: string, file: string): boolean {
-  try {
-    const rel = path.relative(root, fs.realpathSync(file));
-    return !!rel && !rel.startsWith("..") && !path.isAbsolute(rel);
-  } catch {
-    return false;
-  }
-}
-
 function snapshot(file: string, root: string): Snap | null {
-  if (!inside(root, file)) return null;
   try {
-    const st = fs.statSync(file, { bigint: true });
+    const real = fs.realpathSync(file);
+    const rel = path.relative(root, real);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null;
+    const st = fs.statSync(real, { bigint: true });
     if (!st.isFile()) return null;
-    const buf = fs.readFileSync(file);
-    return { buf, sha: sha256(buf), dev: st.dev, ino: st.ino };
+    const buf = fs.readFileSync(real);
+    return { buf, sha: sha256(buf), dev: st.dev, ino: st.ino, real };
   } catch {
     return null;
   }
@@ -62,7 +57,7 @@ function snapshot(file: string, root: string): Snap | null {
 
 const unchanged = (file: string, root: string, snap: Snap): boolean => {
   const now = snapshot(file, root);
-  return !!now && now.sha === snap.sha && now.dev === snap.dev && now.ino === snap.ino;
+  return !!now && now.sha === snap.sha && now.dev === snap.dev && now.ino === snap.ino && now.real === snap.real;
 };
 
 // true only for a name that is proven not to exist; any other failure proves nothing.
@@ -187,8 +182,9 @@ export async function finalProof(lib: ProofLibs, home: string, root: string, fil
   for (const { file, rel } of inventory) {
     const snap = take(file);
     if (!snap || !snap.buf.length) return { why: `${rel} could not be proven in the final check`, count };
-    const scope = path.extname(file).toLowerCase() === ".js" ? scopeOf(file, root, take, absent) : "none";
-    const verdict = await boundVerdict(lib, file, snap.buf.toString("utf8"), scope);
+    // Grammar and scope of the target the bytes came from; `rel` only names it.
+    const scope = path.extname(snap.real).toLowerCase() === ".js" ? scopeOf(snap.real, root, take, absent) : "none";
+    const verdict = await boundVerdict(lib, snap.real, snap.buf.toString("utf8"), scope);
     if (verdict.state !== "OK") return { why: `${rel} is not OK in the final check`, count };
     if (!unchanged(file, root, snap)) return { why: `${rel} changed during the final check`, count };
   }
