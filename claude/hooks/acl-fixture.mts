@@ -93,8 +93,10 @@ function setAcl(file: string, deny: boolean): boolean {
     : ["-m", deny ? "u::r--,u:nobody:r--,m::r--" : "u:nobody:r--", file]).status === 0;
 }
 
-const resetAcl = (file: string): boolean =>
-  sh(WIN ? system32("icacls.exe") : posixTool, WIN ? [file, "/reset"] : process.platform === "darwin" ? ["-N", file] : ["-b", file]).status === 0;
+function resetAcl(file: string): boolean {
+  if (WIN) return sh(system32("icacls.exe"), [file, "/reset"]).status === 0;
+  return sh(posixTool, process.platform === "darwin" ? ["-N", file] : ["-b", file]).status === 0;
+}
 
 // true only when file is proven gone (ENOENT), not when it merely could not be seen.
 function removed(file: string): boolean {
@@ -174,9 +176,14 @@ export function changeDirectory(t: TestContext, dir: string, change: "inherit" |
     return null;
   }
   const darwin = process.platform === "darwin";
-  const undo = (): boolean => WIN ? sh(system32("icacls.exe"), [dir, "/reset"]).status === 0
-    : change === "noNewNames" ? (fs.chmodSync(dir, 0o755), true)
-    : sh(posixTool, darwin ? ["-N", dir] : ["-k", dir]).status === 0;
+  const undo = (): boolean => {
+    if (WIN) return sh(system32("icacls.exe"), [dir, "/reset"]).status === 0;
+    if (change === "noNewNames") {
+      fs.chmodSync(dir, 0o755);
+      return true;
+    }
+    return sh(posixTool, darwin ? ["-N", dir] : ["-k", dir]).status === 0;
+  };
   t.after(() => assert.ok(undo(), "the directory change could be undone"));
   let done: boolean;
   if (WIN) {

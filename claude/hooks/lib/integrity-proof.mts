@@ -81,18 +81,18 @@ function members(text: string): [string, string][] {
   const out: [string, string][] = [];
   let depth = 0;
   let key = "";
-  let value = -1;
+  let valueAt = -1;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     if (c === "\"") {
       const from = i;
       for (i++; text[i] !== "\""; i++) if (text[i] === "\\") i++;
-      if (depth === 1 && value < 0) key = text.slice(from, i + 1);
+      if (depth === 1 && valueAt < 0) key = text.slice(from, i + 1);
     } else if (c === "{" || c === "[") depth++;
-    else if (depth === 1 && value < 0 && c === ":") value = i + 1;
-    else if (depth === 1 && value >= 0 && (c === "," || c === "}")) {
-      out.push([key, text.slice(value, i).trim()]);
-      value = -1;
+    else if (depth === 1 && valueAt < 0 && c === ":") valueAt = i + 1;
+    else if (depth === 1 && valueAt >= 0 && (c === "," || c === "}")) {
+      out.push([key, text.slice(valueAt, i).trim()]);
+      valueAt = -1;
       if (c === "}") depth--;
     } else if (c === "}" || c === "]") depth--;
   }
@@ -112,8 +112,8 @@ function configScope(text: string): Scope {
   for (const [key, value] of members(clean)) {
     if (key !== "\"type\"" && key !== "\"name\"") continue;
     if (!value.startsWith("\"")) return "invalid";
-    const text = JSON.parse(value) as string;
-    if (key === "\"type\"" && (text === "module" || text === "commonjs")) scope = text;
+    const field = JSON.parse(value) as string;
+    if (key === "\"type\"" && (field === "module" || field === "commonjs")) scope = field;
   }
   return scope;
 }
