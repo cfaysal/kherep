@@ -9,13 +9,13 @@
 // The fixtures are ESM .mts files that pass the syntax check on their own. That
 // is the point: a hook whose lib is missing or empty passes its own syntax check
 // and dies at import, so only the closure walk can see it.
-import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const HOOK = path.join(import.meta.dirname, "live-hook-integrity.mts");
+import { coordinated, installIntegrity, runIntegrity } from "./integrity-sandbox.mts";
+
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "live-hook-imports-"));
 
 interface Box { root: string; claude: string; hooks: string; repoHooks: string; cwd: string }
@@ -51,6 +51,7 @@ function sandbox(): Box {
   const repoHooks = path.join(cwd, "kherep", "claude", "hooks");
   fs.mkdirSync(path.join(hooks, "lib"), { recursive: true });
   fs.mkdirSync(path.join(repoHooks, "lib"), { recursive: true });
+  installIntegrity(hooks);
   return { root, claude, hooks, repoHooks, cwd };
 }
 
@@ -61,7 +62,7 @@ function place(box: Box, rel: string, { live, repo }: { live?: string; repo?: st
 }
 
 function wire(box: Box, command = "node ~/.claude/hooks/guard.mts"): void {
-  const hooks = { PreToolUse: [{ matcher: "", hooks: [{ type: "command", command }] }] };
+  const hooks = { PreToolUse: [{ matcher: "", hooks: [{ type: "command", command: coordinated(command) }] }] };
   fs.writeFileSync(path.join(box.claude, "settings.user.json"), JSON.stringify({ hooks }), "utf8");
 }
 
@@ -77,16 +78,12 @@ function guardBox(dep: { live?: string; repo?: string }): Box {
 
 function run(box: Box, payload?: Record<string, unknown>, env: Record<string, string> = {}): string | null {
   const home = path.dirname(box.claude);
-  let out = "";
-  try {
-    out = execFileSync("node", [HOOK], {
-      input: JSON.stringify(payload || { hook_event_name: "SessionStart", cwd: box.cwd.replace(/\\/g, "/") }),
-      encoding: "utf8",
-      env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_HOME: box.claude, KHEREP_WORKSPACE: box.cwd, ...env },
-    });
-  } catch (caught) {
+  const result = runIntegrity(box.hooks, JSON.stringify(payload || { hook_event_name: "SessionStart", cwd: box.cwd.replace(/\\/g, "/") }),
+    { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_HOME: box.claude, KHEREP_WORKSPACE: box.cwd, ...env });
+  const out = result.status === 0 ? result.stdout : "";
+  if (result.status !== 0) {
     fail++;
-    console.log(`FAIL | hook exited non-zero (${(caught as { status?: number }).status}); it must always exit 0`);
+    console.log(`FAIL | hook exited non-zero (${result.status}); it must always exit 0`);
   }
   return out.trim() ? JSON.parse(out).hookSpecificOutput.additionalContext : null;
 }
@@ -238,12 +235,12 @@ function chainBox(aLive: string): Box {
 {
   const box = guardBox({ repo: LIB });
   const outsideDir = path.join(box.root, "elsewhere-lib");
-  fs.mkdirSync(outsideDir, { recursive: true });
-  fs.rmdirSync(path.join(box.hooks, "lib"));
+  // The integrity hook's own libs move along, so it still loads through the link.
+  fs.renameSync(path.join(box.hooks, "lib"), outsideDir);
   if (trySymlink(outsideDir, path.join(box.hooks, "lib"), "dir")) {
     const seen = run(box) || "";
     check("a lib under a symlinked hooks/lib is not restored", seen.includes("resolves outside") && seen.includes("ENFORCEMENT IS OFF"), true);
-    check("and nothing is written outside", fs.readdirSync(outsideDir).length, 0);
+    check("and nothing is written outside", fs.existsSync(path.join(outsideDir, "dep.mts")), false);
   }
 }
 

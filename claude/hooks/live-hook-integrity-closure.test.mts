@@ -11,7 +11,8 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
-const HOOK = path.join(import.meta.dirname, "live-hook-integrity.mts");
+import { coordinated, installIntegrity, runIntegrity } from "./integrity-sandbox.mts";
+
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "live-hook-closure-")));
 after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ } });
 const BROKEN = "export const x = ;\n";
@@ -30,10 +31,11 @@ function sandbox(repoLib: string | null, planted = true): Box {
     cache: path.join(claude, ".cache", "hook-integrity") };
   fs.mkdirSync(box.hooks, { recursive: true });
   fs.mkdirSync(path.join(box.repoHooks, "lib"), { recursive: true });
+  installIntegrity(box.hooks);
   fs.writeFileSync(path.join(box.hooks, "commit-guard.mts"), BROKEN);
   fs.writeFileSync(path.join(box.repoHooks, "commit-guard.mts"), NEEDS_LIB);
   if (repoLib !== null) fs.writeFileSync(path.join(box.repoHooks, "lib", "missing.mts"), repoLib);
-  const hooks = { PreToolUse: [{ matcher: "", hooks: [{ type: "command", command: "node ~/.claude/hooks/commit-guard.mts" }] }] };
+  const hooks = { PreToolUse: [{ matcher: "", hooks: [{ type: "command", command: coordinated("node ~/.claude/hooks/commit-guard.mts") }] }] };
   fs.writeFileSync(path.join(claude, "settings.user.json"), JSON.stringify({ hooks }));
   if (planted) {
     fs.mkdirSync(box.cache, { recursive: true });
@@ -44,10 +46,9 @@ function sandbox(repoLib: string | null, planted = true): Box {
 
 function run(box: Box, trigger = true): { status: number | null; stdout: string; stderr: string } {
   const home = path.dirname(box.claude);
-  return spawnSync(process.execPath, trigger ? [HOOK, "--trigger", "guard-dispatch"] : [HOOK], {
-    input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: box.cwd.replace(/\\/g, "/") }), encoding: "utf8",
-    env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_HOME: box.claude, KHEREP_WORKSPACE: box.cwd },
-  });
+  return runIntegrity(box.hooks, JSON.stringify({ hook_event_name: "PreToolUse", cwd: box.cwd.replace(/\\/g, "/") }),
+    { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_HOME: box.claude, KHEREP_WORKSPACE: box.cwd },
+    trigger ? ["--trigger", "guard-dispatch"] : []);
 }
 
 const read = (file: string): string | null => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null);
@@ -62,7 +63,7 @@ test("a restored guard importing a file absent everywhere: reported, heartbeat n
   assert.ok(lines.some((line) => line.startsWith("lib/missing.mts (imported by commit-guard.mts): imported but not present "
     + "on disk -> NOT restored (versioned source ") && line.includes("unreadable (ENOENT))")), result.stdout);
   assert.equal(lines.at(-1), "heartbeat not written (lib/missing.mts is not restored)");
-  assert.equal(read(path.join(box.cache, "heartbeat.json")), PLANTED);
+  assert.equal(read(path.join(box.cache, "heartbeat.json")), null, "removed before the first repair, not written again");
   assert.equal(journal(box).length, 2);
 });
 
@@ -93,5 +94,5 @@ test("a restore of a versioned copy that does not parse is proven, reported as s
   const lines = run(box).stdout.split(/\r?\n/).filter(Boolean);
   assert.ok(lines.includes("commit-guard.mts: still DEFEKT after the restore"), lines.join("\n"));
   assert.equal(lines.at(-1), "heartbeat not written (commit-guard.mts is not OK after the restore)");
-  assert.equal(read(path.join(box.cache, "heartbeat.json")), PLANTED);
+  assert.equal(read(path.join(box.cache, "heartbeat.json")), null, "removed before the first repair, not written again");
 });

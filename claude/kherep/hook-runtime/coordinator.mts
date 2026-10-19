@@ -44,6 +44,13 @@ export function preloadArg(coordinatorUrl: string, config: Config): string {
   return `--import=data:text/javascript,${encodeURIComponent(program)}`;
 }
 
+// The reasons a target refuses its repair, worded as restore-write.mts words them.
+const REFUSED: Partial<Record<Kind, string>> = {
+  "target-link": "target is a symbolic link; refusing to write through it",
+  "target-irregular": "target is not a regular file; refusing to write",
+  "target-shared": "target has more than one link; refusing to write through a shared inode",
+  "target-outside": "hooks directory or its subdirectory resolves outside the hooks root",
+};
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const recoveryWriter = async (): Promise<WriteExact> => {
   try { return (await import("./recovery/restore-write.mts")).writeExact as WriteExact; } catch { throw refuse("recovery"); }
@@ -166,11 +173,22 @@ function writerCapability(o: Opened, common: Common, deadline: number): WriterCa
       let intent: string;
       try {
         intent = recordIntent(o, rel, bytes).intent;
-        run(o.conn, "COMMIT");
       } catch (error) {
+        // Refused before anything was recorded: the hold stays as it was.
+        const kind = (error as { kherepKind?: Kind }).kherepKind ?? "unavailable";
+        if (kind !== "unavailable") return { proven: false, why: REFUSED[kind] ?? `the repair could not be recorded (${kind})` };
         rollbackQuietly(o.conn);
         holding = false;
-        return { proven: false, why: `the repair could not be recorded (${(error as { kherepKind?: Kind }).kherepKind ?? "unavailable"})` };
+        await begin();
+        return { proven: false, why: "the repair could not be recorded (unavailable)" };
+      }
+      try {
+        run(o.conn, "COMMIT");
+      } catch {
+        rollbackQuietly(o.conn);
+        holding = false;
+        await begin();
+        return { proven: false, why: "the repair could not be committed" };
       }
       holding = false;
       await probe.afterPrepare?.();

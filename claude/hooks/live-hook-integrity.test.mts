@@ -9,13 +9,14 @@
 // payload cwd. GRUND: OP-679, where a contract test with the REAL cwd launched
 // four real full installs per invocation. A test that triggers a process or a
 // file write gets read for WHERE it triggers it.
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const HOOK = path.join(import.meta.dirname, "live-hook-integrity.mts");
+import { coordinated, installIntegrity, runIntegrity } from "./integrity-sandbox.mts";
+
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "live-hook-integrity-"));
 
 // One line of the incident journal, as far as the assertions read it.
@@ -67,6 +68,7 @@ function sandbox(): Box {
   const repoHooks = path.join(cwd, "kherep", "claude", "hooks");
   fs.mkdirSync(hooks, { recursive: true });
   fs.mkdirSync(repoHooks, { recursive: true });
+  installIntegrity(hooks);
   return { home, claude, hooks, repoHooks, cwd };
 }
 
@@ -79,7 +81,7 @@ function place(box: Box, name: string, { live, repo }: { live?: string | null; r
 function wire(box: Box, events: Record<string, string[]>, file: string = "settings.user.json"): void {
   const hooks: Record<string, unknown> = {};
   for (const [event, commands] of Object.entries(events)) {
-    hooks[event] = [{ matcher: "", hooks: commands.map((command) => ({ type: "command", command })) }];
+    hooks[event] = [{ matcher: "", hooks: commands.map((command) => ({ type: "command", command: coordinated(command) })) }];
   }
   fs.writeFileSync(path.join(box.claude, file), JSON.stringify({ hooks }, null, 2), "utf8");
 }
@@ -89,30 +91,19 @@ function wire(box: Box, events: Record<string, string[]>, file: string = "settin
 // `payload` and `extraEnv` exist for the checkout-resolution cases, which are
 // precisely about a session that does NOT sit in the workspace.
 function run(box: Box, payload?: Record<string, unknown>, extraEnv: Record<string, string> = {}): string {
-  try {
-    return execFileSync("node", [HOOK], {
-      input: JSON.stringify(
-        payload === undefined
-          ? { hook_event_name: "SessionStart", cwd: box.cwd.replace(/\\/g, "/") }
-          : payload
-      ),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: box.home,
-        USERPROFILE: box.home, // os.homedir() reads this one on Windows
-        CLAUDE_HOME: box.claude,
-        KHEREP_WORKSPACE: box.cwd,
-        ...extraEnv,
-      },
-    });
-  } catch (caught) {
-    const e = caught as { status?: number | null; stderr?: unknown };
-    throw new Error(
-      `hook exited non-zero (${e.status === undefined ? "no status" : e.status}); it must always exit 0. ` +
-        `stderr: ${String(e.stderr || "").slice(0, 400)}`
-    );
+  const input = JSON.stringify(payload === undefined ? { hook_event_name: "SessionStart", cwd: box.cwd.replace(/\\/g, "/") } : payload);
+  const result = runIntegrity(box.hooks, input, {
+    ...process.env,
+    HOME: box.home,
+    USERPROFILE: box.home, // os.homedir() reads this one on Windows
+    CLAUDE_HOME: box.claude,
+    KHEREP_WORKSPACE: box.cwd,
+    ...extraEnv,
+  });
+  if (result.status !== 0) {
+    throw new Error(`hook exited non-zero (${result.status}); it must always exit 0. stderr: ${result.stderr.slice(0, 400)}`);
   }
+  return result.stdout;
 }
 
 function contextOf(out: string): string | null {
@@ -457,11 +448,9 @@ check(`bootstrap/record-install-source.mts is reachable (looked at ${RECORDER})`
 
 // --- never breaks a session start -------------------------------------------
 {
-  const malformed = spawnSync("node", [HOOK], {
-    input: "not json",
-    encoding: "utf8",
-    env: { ...process.env, HOME: TMP, USERPROFILE: TMP, CLAUDE_HOME: path.join(TMP, "nowhere"), KHEREP_WORKSPACE: "" },
-  });
+  const box = sandbox();
+  const malformed = runIntegrity(box.hooks, "not json",
+    { ...process.env, HOME: TMP, USERPROFILE: TMP, CLAUDE_HOME: path.join(TMP, "nowhere"), KHEREP_WORKSPACE: "" });
   check("malformed stdin still exits 0", malformed.status, 0);
   const seen = contextOf(malformed.stdout || "");
   // An unreadable wiring is not proof that nothing is wired (goldene Regel 12).

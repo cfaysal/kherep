@@ -9,10 +9,11 @@
 // versioned source is a second copy in the same tree, reached through the
 // payload cwd. HOME, USERPROFILE and CLAUDE_HOME point into the tree; neither
 // the real ~/.claude nor the real checkout is written.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+import { runIntegrity } from "./integrity-sandbox.mts";
 
 const SOURCE = import.meta.dirname;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "live-hook-self-"));
@@ -58,11 +59,8 @@ function sandbox(): Box {
 function run(box: Box, withCheckout = true): { status: number | null; seen: string } {
   const home = path.dirname(box.claude);
   const cwd = withCheckout ? box.cwd : path.join(TMP, "elsewhere");
-  const result = spawnSync("node", [path.join(box.hooks, HOOK)], {
-    input: JSON.stringify({ hook_event_name: "SessionStart", cwd: cwd.replace(/\\/g, "/") }),
-    encoding: "utf8",
-    env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_HOME: box.claude, KHEREP_WORKSPACE: withCheckout ? box.cwd : "" },
-  });
+  const result = runIntegrity(box.hooks, JSON.stringify({ hook_event_name: "SessionStart", cwd: cwd.replace(/\\/g, "/") }),
+    { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_HOME: box.claude, KHEREP_WORKSPACE: withCheckout ? box.cwd : "" });
   const out = (result.stdout || "").trim();
   let seen = "";
   try {
@@ -118,7 +116,7 @@ const read = (file: string): string | null => (fs.existsSync(file) ? fs.readFile
   check("it names its own import", seen.includes("own import lib/workspace-scope.mts cannot be loaded"), true);
   check("and claims no restore", seen.includes("RESTORED"), false);
   check("and names the four libs the restore needs",
-    seen.includes("needs integrity-verdict, workspace-scope, orchestra-checkout and restore-write"), true);
+    seen.includes("needs integrity-verdict, workspace-scope, orchestra-checkout and integrity-heartbeat"), true);
   check("the lib is left as it was", read(lib), "");
   const entry = journalOf(box)[0] || {};
   check("the journal records kind self", entry.kind, "self");

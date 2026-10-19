@@ -26,7 +26,8 @@ export const SCHEMA_SQL = "CREATE TABLE pending (id INTEGER PRIMARY KEY CHECK (i
 
 // Fixed reasons only: no path, SQL or SQLite text ever leaves this module.
 export type Kind = "busy" | "unavailable" | "root" | "database" | "schema" | "pending-invalid" | "recovery"
-  | "main-missing" | "main-empty" | "main-outside" | "mode" | "ipc" | "not-holding";
+  | "main-missing" | "main-empty" | "main-outside" | "mode" | "ipc" | "not-holding"
+  | "target-link" | "target-irregular" | "target-shared" | "target-outside";
 export type Refusal = Error & { kherepKind: Kind };
 export const refuse = (kind: Kind): Refusal => Object.assign(new Error(`hook runtime: ${kind}`), { kherepKind: kind });
 export const isRefusal = (error: unknown): error is Refusal => typeof (error as Refusal)?.kherepKind === "string";

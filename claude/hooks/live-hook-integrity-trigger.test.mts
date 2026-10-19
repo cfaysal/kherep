@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Issue #507, part 2. live-hook-integrity.mts --trigger <source>, the re-check
 // guard-dispatch.mts starts: plain lines instead of the SessionStart JSON, the
-// heartbeat only after a fully proven run, and run.lock with one owner.
+// heartbeat only after a fully proven run, and one writer at a time through the
+// hook runtime's coordination (a second one is not admitted while it is busy).
 //
 // Same sandbox as live-hook-integrity.test.mts: a throwaway home and a fixture
 // checkout in one mkdtemp tree, HOME, USERPROFILE and CLAUDE_HOME pointed at it.
@@ -14,11 +15,12 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
-const HOOK = path.join(import.meta.dirname, "live-hook-integrity.mts");
+import { initialize, openDatabase } from "../kherep/hook-runtime/coordinator-db.mts";
+import { coordinated, ENTRY, HOOK, installIntegrity } from "./integrity-sandbox.mts";
+
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "live-hook-trigger-")));
 after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ } });
 const GOOD = "export const enforces = true;\n";
-const MIN = 60_000;
 let seq = 0;
 
 interface Box { claude: string; hooks: string; repoHooks: string; cwd: string; cache: string }
@@ -33,9 +35,10 @@ function sandbox(live: string | null = GOOD, repo: string | null = GOOD): Box {
     cache: path.join(claude, ".cache", "hook-integrity") };
   fs.mkdirSync(box.hooks, { recursive: true });
   fs.mkdirSync(box.repoHooks, { recursive: true });
+  installIntegrity(box.hooks);
   if (live !== null) fs.writeFileSync(path.join(box.hooks, "commit-guard.mts"), live);
   if (repo !== null) fs.writeFileSync(path.join(box.repoHooks, "commit-guard.mts"), repo);
-  const hooks = { PreToolUse: [{ matcher: "", hooks: [{ type: "command", command: "node ~/.claude/hooks/commit-guard.mts" }] }] };
+  const hooks = { PreToolUse: [{ matcher: "", hooks: [{ type: "command", command: coordinated("node ~/.claude/hooks/commit-guard.mts") }] }] };
   fs.writeFileSync(path.join(claude, "settings.user.json"), JSON.stringify({ hooks }));
   return box;
 }
@@ -45,17 +48,17 @@ const options = (box: Box) => ({
   env: { ...process.env, HOME: path.dirname(box.claude), USERPROFILE: path.dirname(box.claude), CLAUDE_HOME: box.claude,
     KHEREP_WORKSPACE: box.cwd },
 });
-const ARGS = [HOOK, "--trigger", "guard-dispatch"];
+const args = (box: Box): string[] => [ENTRY, "writer", path.join(box.hooks, HOOK), "--trigger", "guard-dispatch"];
 
 function run(box: Box): Run {
-  const result = spawnSync(process.execPath, ARGS, { ...options(box), encoding: "utf8" });
+  const result = spawnSync(process.execPath, args(box), { ...options(box), encoding: "utf8" });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
 function start(box: Box): Promise<Run> {
   return new Promise((resolve, reject) => {
     const { input, env } = options(box);
-    const child = spawn(process.execPath, ARGS, { env, windowsHide: true });
+    const child = spawn(process.execPath, args(box), { env, windowsHide: true });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
@@ -73,14 +76,9 @@ const journal = (box: Box): Record<string, unknown>[] => (read(path.join(box.cac
 const guardText = (box: Box): string | null => read(path.join(box.hooks, "commit-guard.mts"));
 const lines = (run: Run): string[] => run.stdout.split(/\r?\n/).filter(Boolean);
 
-// pid 424242 stands for an owner that is gone; the live case plants this test's own pid.
-function plantLock(box: Box, ageMs: number, pid = 424_242): void {
-  fs.mkdirSync(box.cache, { recursive: true });
-  const lock = path.join(box.cache, "run.lock");
-  const then = new Date(Date.now() - ageMs);
-  fs.writeFileSync(lock, JSON.stringify({ pid, ts: then.toISOString(), nonce: "planted" }));
-  fs.utimesSync(lock, then, then);
-}
+// The second writer's fate: admitted after the first ended, or refused while it was busy.
+const admittedOrBusy = (result: Run): boolean =>
+  result.status === 0 || (result.status === 1 && /not admitted: busy/.test(result.stderr));
 
 test("healthy: one plain summary line, heartbeat with trigger guard-dispatch, no journal", () => {
   const box = sandbox();
@@ -139,52 +137,36 @@ test("no wired file: no lock, no heartbeat, no cache directory", () => {
   assert.equal(fs.existsSync(path.join(box.claude, ".cache")), false);
 });
 
-test("a live lock younger than two minutes: already running, nothing checked or written", () => {
+test("while another writer holds the hooks directory: not admitted, nothing checked or written", async () => {
   const box = sandbox("");
-  plantLock(box, 30_000, process.pid);
-  const result = run(box);
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, new RegExp(`^re-check already running \\(pid ${process.pid}, since \\d{4}-\\d\\d-\\d\\dT[^)]+\\)\n$`));
-  assert.equal(guardText(box), "", "the guard is not restored by the loser");
+  const opened = await openDatabase(box.hooks);
+  initialize(opened.conn);
+  opened.conn.exec("BEGIN EXCLUSIVE");
+  let result: Run;
+  try { result = run(box); } finally { opened.conn.exec("ROLLBACK"); opened.conn.close(); }
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /not admitted: busy/);
+  assert.equal(result.stdout, "");
+  assert.equal(guardText(box), "", "nothing was restored");
   assert.equal(beat(box), null);
   assert.deepEqual(journal(box), []);
-  assert.equal(JSON.parse(read(path.join(box.cache, "run.lock")) ?? "{}").nonce, "planted");
 });
 
-test("a stale lock is reported and the run proceeds: restored, heartbeat written, lock removed", () => {
-  const box = sandbox("");
-  plantLock(box, 3 * MIN);
-  const result = run(box);
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(lines(result)[0] ?? "", /^run lock stale \(pid 424242 since \d{4}-[^,]+, owner gone\); checked without exclusion$/);
-  assert.match(lines(result)[1] ?? "", /^commit-guard\.mts: 0 bytes .* -> RESTORED/);
-  assert.equal(lines(result).at(-1), "all 1 files OK (1 restored), heartbeat refreshed");
-  assert.equal(guardText(box), GOOD);
-  assert.equal(journal(box)[0]?.restoreProven, true);
-  assert.deepEqual(fs.readdirSync(box.cache).sort(), ["heartbeat.json", "incidents.jsonl"]);
-});
-
-test("two runs started together: both exit 0, one writes, the journal has one entry", async () => {
+test("two runs started together: one repairs, the other is admitted after it or refused, one journal entry", async () => {
   const box = sandbox("");
   const runs = await Promise.all([start(box), start(box)]);
-  for (const result of runs) assert.equal(result.status, 0, result.stderr);
-  const writers = runs.filter((result) => !result.stdout.includes("already running"));
-  assert.ok(writers.length >= 1, JSON.stringify(runs.map((r) => r.stdout)));
-  assert.ok(writers.some((result) => result.pid === beat(box)?.pid), "the heartbeat is the writer's");
+  for (const result of runs) assert.ok(admittedOrBusy(result), JSON.stringify(result));
   assert.equal(journal(box).length, 1);
   assert.equal(guardText(box), GOOD);
+  assert.equal(beat(box)?.trigger, "guard-dispatch");
   assert.deepEqual(fs.readdirSync(box.cache).sort(), ["heartbeat.json", "incidents.jsonl"]);
 });
 
-// L4: runs that find a stale lock proceed without exclusion and still converge.
-test("four runs at one stale lock converge on the versioned bytes", async () => {
+test("four runs started together converge on the versioned bytes with one repair", async () => {
   const box = sandbox("");
-  plantLock(box, 3 * MIN);
   const runs = await Promise.all([start(box), start(box), start(box), start(box)]);
-  for (const result of runs) assert.equal(result.status, 0, result.stderr);
-  assert.ok(runs.some((result) => result.stdout.includes("checked without exclusion")), JSON.stringify(runs.map((r) => r.stdout)));
+  for (const result of runs) assert.ok(admittedOrBusy(result), JSON.stringify(result));
   assert.equal(guardText(box), GOOD);
-  const heartbeat = beat(box);
-  if (heartbeat) assert.equal(heartbeat.trigger, "guard-dispatch");
-  assert.equal(fs.existsSync(path.join(box.cache, "run.lock")), false);
+  assert.equal(journal(box).length, 1, "exclusion: exactly one run repaired");
+  assert.equal(beat(box)?.trigger, "guard-dispatch");
 });
