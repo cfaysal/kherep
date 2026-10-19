@@ -12,8 +12,6 @@ import { after, test } from "node:test";
 
 import { dispatcherFixture, heartbeatPath, plantHeartbeat } from "./guard-dispatch-fixture.mts";
 
-// The renamed real lib, imported by a fixture lib; spelled so the repo's import scan skips it.
-const REAL = JSON.stringify("./real-recheck.mts");
 const MIN = 60_000;
 const PAYLOAD = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git status ü" } });
 const GOOD = "process.exit(0);\n";
@@ -148,12 +146,9 @@ test("an empty lib/guard-recheck.mts is one unavailable line; the verdict is unc
   assert.deepEqual(traced(b), []);
 });
 
-// A lib that keeps the real state and notice functions but a runRecheck of its own.
-function fakeRunner(b: Box, runRecheck: string): void {
-  const lib = path.join(b.hooks, "lib");
-  fs.renameSync(path.join(lib, "guard-recheck.mts"), path.join(lib, "real-recheck.mts"));
-  fs.writeFileSync(path.join(lib, "guard-recheck.mts"),
-    `export { heartbeatState, recheckNotice } from ${REAL};\nexport ${runRecheck}\n`);
+// A lib whose only entry point, recheckAfter, is replaced by the given function.
+function fakeRunner(b: Box, recheckAfter: string): void {
+  fs.writeFileSync(path.join(b.hooks, "lib", "guard-recheck.mts"), `export ${recheckAfter}\n`);
 }
 
 test("a lib whose import never settles: one unavailable line within 2 s, the deny stays", () => {
@@ -170,7 +165,7 @@ test("a lib whose import never settles: one unavailable line within 2 s, the den
 
 test("a lib that leaves a handle open: the dispatcher still exits right after its output", () => {
   const b = box(31 * MIN);
-  fakeRunner(b, `async function runRecheck() { setInterval(() => {}, 1000); return "re-check fixture left an interval"; }`);
+  fakeRunner(b, `async function recheckAfter() { setInterval(() => {}, 1000); return "re-check fixture left an interval"; }`);
   const begin = Date.now();
   const run = dispatch(b, "allow.mts");
   assert.ok(Date.now() - begin < 3000, `took ${Date.now() - begin} ms`);

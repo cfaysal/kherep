@@ -7,12 +7,13 @@
 // is a deny naming the file; so is stdin that is no JSON object or stays open. A
 // working guard keeps its verdict (exit 2 = deny, stderr the reason); all run in
 // parallel to the end, decisions combine deny > ask > allow, notices join.
-// Part 2: a heartbeat (<home>/.cache/hook-integrity/heartbeat.json, <home> = parent
-// of this file's directory as invoked) older than 30 minutes or missing, or a guard
-// that could not run, starts live-hook-integrity.mts --trigger guard-dispatch; its
-// lines are a notice, never a decision. One deadline 5 s before the 30 s hook
-// timeout bounds stdin, guards and the re-check lib, and the process exits after
-// its write. Static imports are node:* only. Output: at most one JSON document.
+// Part 2: started by kherep/hook-runtime/entry.mts, it holds a read admission and
+// each guard child holds its own. After the guards, a heartbeat (<home>/.cache/
+// hook-integrity/heartbeat.json, <home> = parent of this file's directory as
+// invoked) older than 30 minutes or missing, or a guard that could not run, ends
+// that admission and starts live-hook-integrity.mts as the admitted writer; its
+// lines are a notice, never a decision. One deadline before the 30 s timeout
+// bounds stdin, guards and the re-check; the process exits after its write.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -23,7 +24,13 @@ import { fileURLToPath } from "node:url";
 const HOOK_TIMEOUT_MS = 30_000;
 // Outside this clock: Node start (<= 2 s assumed; 0.09 s on macOS, Windows UNKNOWN), emit (<= 0.5 s).
 const SAFETY_MARGIN_MS = 5_000;
-const DEADLINE = Date.now() + HOOK_TIMEOUT_MS - SAFETY_MARGIN_MS;
+// Admitted by the hook runtime (kherep/hook-runtime): its read capability, whose deadline comes first.
+type Runtime = { mode?: string; deadline: number; release: () => void; childArgs: (f: string) => string[];
+  writerArgs: (f: string) => string[] };
+const RUNTIME = (globalThis as Record<symbol, unknown>)[Symbol.for("kherep.hook-runtime")] as Runtime | undefined;
+const CAP = RUNTIME?.mode === "reader" ? RUNTIME : undefined;
+const NOT_ADMITTED = /\[hook-runtime\] not admitted \(([a-z -]+)\)/;
+const DEADLINE = Math.min(Date.now() + HOOK_TIMEOUT_MS - SAFETY_MARGIN_MS, CAP?.deadline ?? Infinity);
 const remaining = (): number => Math.max(0, DEADLINE - Date.now());
 const GUARD_TIMEOUT_MS = 10_000;
 // A re-check gets <= RECHECK_MAX_MS of what is left, none below RECHECK_MIN_MS; its lib loads within RECHECK_LOAD_MS.
@@ -35,8 +42,7 @@ const HOME = path.dirname(INVOKED_DIR);
 
 const DECISIONS = ["deny", "ask", "allow"] as const;
 type Decision = typeof DECISIONS[number];
-// No decision: exit 0 without output (a plain allow) or a notice only. `broken`:
-// the guard could not run, which starts a re-check; a policy deny does not.
+// No decision: a plain allow or a notice only. `broken`: the guard could not run (a re-check follows).
 interface Verdict { decision?: Decision; reason: string; notice?: string; broken?: boolean }
 interface Outcome { verdict: Verdict; stderr: string }
 
@@ -56,8 +62,7 @@ function readStdin(): Promise<string> {
   });
 }
 
-// The directory a path really lives in: a symlinked Claude home (macOS /var ->
-// /private/var) must not put its own guards outside.
+// Real directory: a symlinked Claude home (macOS /var -> /private/var) keeps its guards inside.
 function realDir(dir: string): string {
   try { return fs.realpathSync(dir); } catch { return path.resolve(dir); }
 }
@@ -67,8 +72,7 @@ function isInside(file: string, dir: string): boolean {
   return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
-// The real path of the file itself, so a symlinked guard counts where it points.
-// A missing file keeps its name under the real directory and fails at stat.
+// A symlinked guard counts where it points; a missing one keeps its name and fails at stat.
 function realFile(file: string): string {
   try { return fs.realpathSync(file); } catch { return path.join(realDir(path.dirname(file)), path.basename(file)); }
 }
@@ -88,15 +92,13 @@ function unrunnable(file: string, ownDir: string): string | undefined {
   return undefined;
 }
 
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  !!value && typeof value === "object" && !Array.isArray(value);
+const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
 const NOT_DECISION = "stdout is not a PreToolUse decision";
 const FIELDS = ["hookEventName", "permissionDecision", "permissionDecisionReason", "additionalContext"];
 
-// The verdict a guard printed on exit 0, or why stdout is not the accepted
-// shape. A field the dispatcher would drop changes the guard's intent, so an
-// unknown field fails instead of being ignored.
+// The verdict a guard printed on exit 0, or why stdout is not the accepted shape. A field
+// the dispatcher would drop changes the guard's intent, so an unknown field fails.
 function printed(stdout: string): Verdict | string {
   let parsed: unknown;
   try { parsed = JSON.parse(stdout); } catch { return NOT_DECISION; }
@@ -137,8 +139,7 @@ function judge(file: string, code: number | null, signal: string | null, stdout:
 }
 
 // Node versions that strip types with a warning print this one for a .mts guard.
-// It is no diagnostic of the guard, so only this exact warning is dropped; every
-// other warning of the guard stays in its stderr and in an exit-2 reason.
+// No diagnostic of the guard: only this exact warning is dropped, every other one stays.
 const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
   + "feature and might change at any time\\r?\\n(?:\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning "
   + "was created\\)\\r?\\n)?", "gm");
@@ -153,7 +154,11 @@ function runGuard(file: string, payload: string): Promise<Outcome> {
       clearTimeout(timer);
       resolve({ verdict, stderr: filtered() });
     };
-    const child = spawn(process.execPath, [file], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    // Under the runtime each guard is admitted itself and reports ready; without that it did not run.
+    const child = spawn(process.execPath, CAP ? CAP.childArgs(file) : [file],
+      { stdio: CAP ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"], windowsHide: true });
+    let ready = !CAP;
+    child.on("message", (m: { kherep?: unknown; pid?: unknown }) => { ready ||= m?.kherep === "ready" && m.pid === child.pid; });
     const cap = Math.min(GUARD_TIMEOUT_MS, remaining());
     const timer = setTimeout(() => {
       settle(failure(file, `timed out after ${Number((cap / 1000).toFixed(1))} s`));
@@ -161,13 +166,14 @@ function runGuard(file: string, payload: string): Promise<Outcome> {
       child.unref();
       for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
     }, cap);
-    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
-    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    child.stdout!.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    child.stderr!.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
     child.on("error", (error) => settle(failure(file, `spawn failed: ${error.message}`)));
-    child.on("close", (code, signal) => settle(judge(file, code, signal, stdout, filtered())));
+    child.on("close", (code, signal) => settle(ready ? judge(file, code, signal, stdout, filtered())
+      : failure(file, `not admitted: ${NOT_ADMITTED.exec(stderr)?.[1] ?? "it ended before admission"}`)));
     // A guard may exit without reading its payload; the broken pipe is no verdict.
-    child.stdin.on("error", () => {});
-    child.stdin.end(payload);
+    child.stdin!.on("error", () => {});
+    child.stdin!.end(payload);
   });
 }
 
@@ -191,21 +197,15 @@ function within<T, L>(work: Promise<T>, ms: number, late: () => L): Promise<T | 
   return Promise.race([work, expired]).finally(() => clearTimeout(timer));
 }
 
-// The re-check notice, or undefined when the heartbeat is fresh and every guard ran. Never a
-// verdict. A broken lib throws here or, empty (an empty namespace), at its first call.
+// The re-check notice (lib/guard-recheck.mts), or undefined. Never a verdict. A broken lib
+// throws here or, empty (an empty namespace), at its first call; a hanging one is not waited for.
 async function recheck(payload: string, guards: Promise<Outcome[]>, ownDir: string): Promise<string | undefined> {
   const loadMs = Math.min(RECHECK_LOAD_MS, remaining());
   const lib = await within(import("./lib/guard-recheck.mts"), loadMs, () => undefined);
   if (!lib) return `hook integrity re-check unavailable (lib/guard-recheck.mts did not load within ${loadMs} ms)`;
-  const { stale, lastOk } = lib.heartbeatState(HOME, HEARTBEAT_WINDOW_MS);
-  if (!stale && !(await guards).some((outcome) => outcome.verdict.broken)) return undefined;
-  const context = { why: !stale ? "guard failure" : lastOk ? "stale heartbeat" : "no heartbeat", lastOk };
-  const script = path.join(INVOKED_DIR, "live-hook-integrity.mts");
-  const why = unrunnable(script, ownDir);
-  if (why) return lib.recheckNotice(context, [`${script} cannot run (${why})`]);
-  const budgetMs = Math.max(0, Math.min(RECHECK_MAX_MS, remaining() - 250)); // ends before the backstop
-  if (budgetMs >= RECHECK_MIN_MS) return lib.runRecheck({ script, home: HOME, payload, budgetMs, ...context });
-  return lib.recheckNotice(context, [`skipped, ${budgetMs} ms left of the hook budget; the next matching call re-checks`]);
+  return lib.recheckAfter({ home: HOME, script: path.join(INVOKED_DIR, "live-hook-integrity.mts"), payload, guards,
+    unrunnable: (file) => unrunnable(file, ownDir), remaining, windowMs: HEARTBEAT_WINDOW_MS,
+    maxMs: RECHECK_MAX_MS, minMs: RECHECK_MIN_MS, runtime: CAP });
 }
 
 async function dispatch(guards: string[]): Promise<{ verdict?: Verdict; stderr: string[] }> {

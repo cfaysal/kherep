@@ -148,12 +148,16 @@ test("install.sh accepts CLAUDE_HOME with a space, where hook commands quote it"
     .flat().flatMap((group) => group.hooks.map((hook) => hook.command))
     .filter((command) => command.includes("/hooks/"));
   assert.ok(hookCommands.length > 0, "no managed hook command rendered");
+  // Issue #507, part 2: node, the quoted hook-runtime entry, its mode, then the quoted hooks/ paths.
   for (const command of hookCommands) {
     const words = wordsAsStored(command);
     assert.equal(words[0], "node", command);
-    assert.ok(words.length >= 2, command);
-    for (const word of words.slice(1)) assert.match(word, /Jane Doe.*\/hooks\/[\w.-]+$/, command);
-    assert.equal(command, `node ${words.slice(1).map((w) => `"${w}"`).join(" ")}`, `every path is double-quoted: ${command}`);
+    assert.match(words[1] ?? "", /Jane Doe.*\/kherep\/hook-runtime\/entry\.mts$/, command);
+    assert.match(words[2] ?? "", /^(pretool|reader|writer)$/, command);
+    assert.ok(words.length >= 4, command);
+    for (const word of words.slice(3)) assert.match(word, /Jane Doe.*\/hooks\/[\w.-]+$/, command);
+    const quoted = words.slice(3).map((w) => `"${w}"`).join(" ");
+    assert.equal(command, `node "${words[1]}" ${words[2]} ${quoted}`, `every path is double-quoted: ${command}`);
   }
   assert.match(settings.env.KHEREP_CREDENTIALS_ROOT, /Jane Doe\/\.kherep\/credentials$/);
 

@@ -75,7 +75,7 @@ test("R2: killing the entry does not end the child's lock; the child's own end d
   const pidFile = path.join(home.root, "child.pid");
   fs.writeFileSync(path.join(home.hooks, "lib", "late.mts"), "export const late = 1;\n");
   const { main } = sentinelMain(home.hooks, `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n`
-    + `while (!fs.existsSync(${JSON.stringify(go)})) await new Promise((r) => setTimeout(r, 20));\nawait import("./lib/late.mts");\n`);
+    + `while (!fs.existsSync(${JSON.stringify(go)})) await new Promise((r) => setTimeout(r, 20));\nawait import(${JSON.stringify("./lib/" + "late.mts")});\n`);
   const running = entryAsync("reader", main);
   assert.ok(await until(() => fs.existsSync(pidFile)));
   const child = Number(fs.readFileSync(pidFile, "utf8"));

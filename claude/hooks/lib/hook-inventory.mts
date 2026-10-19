@@ -95,7 +95,8 @@ export function wiredFiles(
     }
     readAny = true;
     for (const command of commandsIn(parsed)) {
-      const tokens = command.trim().split(/\s+/);
+      // A quoted path may hold spaces (a Claude home under "Jane Doe").
+      const tokens = [...command.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
       let runsHookCode = false;
       for (const token of tokens) {
         const file = expandToken(token, home);
