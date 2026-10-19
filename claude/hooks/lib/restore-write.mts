@@ -23,8 +23,9 @@
  *      fails) and fsync, in the same inode: owner, mode and ACLs stay as they were.
  * Nothing is written before step 5, so a refused swap leaves the file it led to
  * byte-identical. An absent file is never created empty and filled: the bytes go
- * to a fresh temporary file beside it, which is then hard-linked into place, and
- * the link fails if anything appeared at the name (issue #507). A caller that
+ * to a fresh temporary file created beside it, which carries its only name in the
+ * hooks directory before its first byte and is then hard-linked into place; the
+ * link fails if anything appeared at the name (issue #507, see publish). A caller that
  * persisted the identity it judged (the hook runtime's recovery) passes it as
  * `expect`; then a multi-link target is refused as well. This is defence in
  * depth against a same-user writer, not a privilege boundary.
@@ -40,11 +41,14 @@ import { isWithinPath } from "./workspace-scope.mts";
 
 // Test seams: beforeOpen runs between the lstat and the open, where the race
 // lives; beforeLink before an absent target's publication; writeChunk replaces
-// fs.writeSync, so a write that makes no progress can be shown.
+// fs.writeSync, so a write that makes no progress can be shown; anchorLink replaces
+// fs.linkSync for the second name of an absent target's new file, so a failing link
+// can be shown. Only tests pass a probe.
 export type WriteProbe = {
   beforeOpen?: (file: string) => void;
   beforeLink?: (file: string) => void;
   writeChunk?: (fd: number, bytes: Uint8Array, offset: number, length: number) => number;
+  anchorLink?: (from: string, to: string) => void;
 };
 // What the caller judged: the (dev, ino) of an existing target, or its absence.
 export type Expected = { dev: bigint; ino: bigint } | "absent";
@@ -86,28 +90,85 @@ function writeAll(fd: number, bytes: Uint8Array, probe: WriteProbe): void {
 }
 
 const APPEARED = "target appeared before the publication; refusing to replace it";
+const MOVED_DIR = "target directory changed before the publication; refusing to publish";
+const MOVED_STAGING = "staging file or hooks directory changed before the publication; refusing to publish";
+type Id = { dev: bigint; ino: bigint };
+const same = (a: Id | null, b: Id): boolean => !!a && a.dev === b.dev && a.ino === b.ino;
+const statOrNull = (p: string): Id | null => { try { return fs.statSync(p, { bigint: true }); } catch { return null; } };
 
-// The absent target: a complete temporary file, linked into place only if the name is still free.
+// The absent target (issue #507, W5). Its file is created beside it, so it gets that
+// directory's ACL, default ACL and group, and is given a second name in the hooks
+// directory before its first byte; the name beside it is then removed. It is linked
+// into place only while the hooks directory and the target's directory are the ones
+// measured at the start and the second name still holds the file this call created.
+// A target directly in the hooks directory (decided by identity, not by spelling)
+// has its one name from the start. Only this call's own identity is ever removed.
 function publish(file: string, bytes: Uint8Array, hooksDir: string, probe: WriteProbe): string {
-  const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.kherep-tmp`;
+  const dir = path.dirname(file);
+  const name = `${path.basename(file)}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.kherep-tmp`;
+  const beside = path.join(dir, name);
+  let rootId: Id;
+  let parentId: Id;
+  try {
+    rootId = fs.statSync(hooksDir, { bigint: true });
+    parentId = fs.statSync(dir, { bigint: true });
+  } catch (error) {
+    return `open failed (${errorCode(error)}); nothing was written`;
+  }
+  const nested = !same(parentId, rootId);
+  const staged = nested ? path.join(hooksDir, name) : beside;
   let fd: number;
-  try { fd = fs.openSync(tmp, O_WRONLY | O_CREAT | O_EXCL | NOFOLLOW, 0o644); } catch (error) {
+  try { fd = fs.openSync(beside, O_WRONLY | O_CREAT | O_EXCL | NOFOLLOW, 0o644); } catch (error) {
     return `open failed (${errorCode(error)}); nothing was written`;
   }
   let own: fs.BigIntStats | null = null;
+  let refusal = "";
   try {
     own = fs.fstatSync(fd, { bigint: true });
-    writeAll(fd, bytes, probe);
+    if (nested) refusal = secondName(beside, staged, own, probe);
+    if (!refusal) writeAll(fd, bytes, probe);
   } catch (error) {
+    refusal = `write failed (${errorCode(error)}); the target was not touched`;
+  } finally {
     fs.closeSync(fd);
-    dropOwn(tmp, own);
-    return `write failed (${errorCode(error)}); the target was not touched`;
   }
-  fs.closeSync(fd);
+  if (refusal) {
+    dropOwn(beside, own, dir, parentId);
+    dropOwn(staged, own, hooksDir, rootId);
+    return refusal;
+  }
   probe.beforeLink?.(file);
-  const outcome = anchorRefusal(path.dirname(file), hooksDir) || (lstatOrNull(file) ? APPEARED : "") || link(tmp, file);
-  dropOwn(tmp, own);
+  const outcome = anchorRefusal(dir, hooksDir)
+    || (same(statOrNull(hooksDir), rootId) ? "" : MOVED_STAGING)
+    || (same(statOrNull(dir), parentId) ? "" : MOVED_DIR)
+    || (isOwn(staged, own!) ? "" : MOVED_STAGING)
+    || (lstatOrNull(file) ? APPEARED : "")
+    || link(staged, file);
+  dropOwn(staged, own, hooksDir, rootId);
   return outcome;
+}
+
+// Gives the new, still empty file its name in the hooks directory and removes the one
+// beside the target; "" when the file has exactly that one name now.
+function secondName(beside: string, staged: string, own: Id, probe: WriteProbe): string {
+  try { (probe.anchorLink ?? fs.linkSync)(beside, staged); } catch (error) {
+    return `publication failed (${errorCode(error)}); the target stays absent`;
+  }
+  if (!isOwn(beside, own)) return MOVED_DIR;
+  try { fs.unlinkSync(beside); } catch (error) {
+    return `publication failed (${errorCode(error)}); the target stays absent`;
+  }
+  return "";
+}
+
+// true while the name is a regular file with this call's identity.
+function isOwn(name: string, own: Id): boolean {
+  try {
+    const now = fs.lstatSync(name, { bigint: true });
+    return now.isFile() && same(now, own);
+  } catch {
+    return false;
+  }
 }
 
 // Links the complete temporary file to the free name; "" when it is published.
@@ -118,12 +179,11 @@ function link(tmp: string, file: string): string {
   return "";
 }
 
-// Removes the temporary name only while it is still the file this call created.
-function dropOwn(tmp: string, own: fs.BigIntStats | null): void {
-  try {
-    const now = fs.lstatSync(tmp, { bigint: true });
-    if (own && now.isFile() && now.dev === own.dev && now.ino === own.ino) fs.unlinkSync(tmp);
-  } catch { /* gone, or not ours: left alone */ }
+// Removes a temporary name only while it is still the file this call created and its
+// directory is still the one measured: never by name alone, never a foreign file.
+function dropOwn(tmp: string, own: Id | null, dir: string, dirId: Id): void {
+  if (!own || !isOwn(tmp, own) || !same(statOrNull(dir), dirId)) return;
+  try { fs.unlinkSync(tmp); } catch { /* gone, or not ours: left alone */ }
 }
 
 // Writes bytes into file. "" means written; anything else is why nothing was.

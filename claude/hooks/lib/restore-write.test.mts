@@ -20,7 +20,7 @@ const WANTED = Buffer.from("export const restored = 1;\n");
 const OUTSIDE = "outside bytes, never to be touched\n";
 let seq = 0;
 
-interface Box { hooks: string; lib: string; outside: string; outsideDir: string }
+interface Box { root: string; hooks: string; lib: string; outside: string; outsideDir: string }
 
 function box(): Box {
   const root = path.join(TMP, `case-${++seq}`);
@@ -31,7 +31,7 @@ function box(): Box {
   fs.mkdirSync(outsideDir, { recursive: true });
   const outside = path.join(outsideDir, "victim.mts");
   fs.writeFileSync(outside, OUTSIDE, "utf8");
-  return { hooks, lib, outside, outsideDir };
+  return { root, hooks, lib, outside, outsideDir };
 }
 
 // false, with the test marked skipped, when this platform will not create the link.
@@ -44,6 +44,10 @@ function tryLink(t: TestContext, make: () => void, what: string): boolean {
     return false;
   }
 }
+
+// Every *.kherep-tmp name anywhere under dir: a temporary file may sit beside the target or in the hooks directory.
+const tmpLeft = (dir: string): string[] =>
+  (fs.readdirSync(dir, { recursive: true }) as string[]).filter((name) => name.endsWith(".kherep-tmp"));
 
 test.after(() => fs.rmSync(TMP, { recursive: true, force: true }));
 
@@ -150,7 +154,7 @@ test("an absent target stays absent until its complete bytes are linked into pla
   assert.equal(writeExact(file, WANTED, b.hooks, { beforeLink: () => { seen = fs.existsSync(file) ? "present" : null; } }), "");
   assert.equal(seen, null, "nothing is visible at the name before the publication");
   assert.deepEqual(fs.readFileSync(file), WANTED);
-  assert.deepEqual(fs.readdirSync(b.lib).filter((name) => name.endsWith(".kherep-tmp")), []);
+  assert.deepEqual(tmpLeft(b.root), []);
 });
 
 test("a file appearing before the publication is not replaced, and no temporary file stays", () => {
@@ -158,7 +162,7 @@ test("a file appearing before the publication is not replaced, and no temporary 
   const file = path.join(b.lib, "dep.mts");
   assert.match(writeExact(file, WANTED, b.hooks, { beforeLink: () => fs.writeFileSync(file, "theirs\n") }), /appeared/);
   assert.equal(fs.readFileSync(file, "utf8"), "theirs\n");
-  assert.deepEqual(fs.readdirSync(b.lib).filter((name) => name.endsWith(".kherep-tmp")), []);
+  assert.deepEqual(tmpLeft(b.root), []);
 });
 
 test("a dangling link planted at an absent target is refused, nothing is created at its target", (t) => {
@@ -175,7 +179,7 @@ test("a write that makes no progress fails and leaves no temporary file", () => 
   const file = path.join(b.lib, "dep.mts");
   assert.match(writeExact(file, WANTED, b.hooks, { writeChunk: () => 0 }), /write failed \(ENOPROGRESS\)/);
   assert.equal(fs.existsSync(file), false);
-  assert.deepEqual(fs.readdirSync(b.lib).filter((name) => name.endsWith(".kherep-tmp")), []);
+  assert.deepEqual(tmpLeft(b.root), []);
 });
 
 test("with a judged identity: another file at the name, a judged absence and a shared inode are refused", () => {

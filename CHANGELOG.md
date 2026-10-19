@@ -122,6 +122,24 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Publication of a missing hook file (issue #507, part 2). The new file is still
+  created beside its target, so it gets that directory's ACL, default ACL and
+  group, but before its first byte it gets a second name in the hooks directory
+  and the name beside the target is removed. It is linked into place only while
+  the hooks directory, the target's directory and that second name are the ones
+  measured at the start, and only the writer's own file is ever removed: a
+  foreign file renamed to the staging name is no longer published, and a
+  target directory renamed away before the link no longer keeps a complete
+  temporary file (early, crash and hooks-directory-rename windows remain, see
+  docs/INSTALLATION.md). New refusals
+  `target directory changed before the publication; refusing to publish` and
+  `staging file or hooks directory changed before the publication; refusing to
+  publish`. Limitation: a missing file whose directory lies on another volume
+  than the hooks directory, or a hooks directory that may not get a new name, is
+  no longer repaired; the publication fails closed with `publication failed
+  (<code>); the target stays absent` before any byte, and existing files are
+  still written in place. Shared by both `restore-write.mts` copies and Codex
+  hook integrity, which gets no new hold.
 - Reconnect replay of acknowledged legacy rows (issue #493). A message row
   stored before the deletion existed (no `deletable` mark) was replayed to its
   sender after every authentication although the sender had acknowledged its
