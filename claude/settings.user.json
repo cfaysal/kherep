@@ -79,6 +79,10 @@
           },
           {
             "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/umlaut-translit-watch.mts\""
+          },
+          {
+            "type": "command",
             "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/simplify-nudge.mts\""
           },
           {
