@@ -70,11 +70,16 @@ test("R1: an admitted reader keeps a writer out until it ends", async () => {
   assert.equal(await writerFree(home), true);
 });
 
+// On Windows libuv keeps every child in a job object that ends with its parent, so
+// killing the entry ends the child as well; its lock goes only with it, and the
+// late import never runs. Elsewhere the orphan lives on and keeps its lock.
 test("R2: killing the entry does not end the child's lock; the child's own end does", async () => {
   const home = runtimeHome();
   const go = path.join(home.root, "go");
   const pidFile = path.join(home.root, "child.pid");
-  fs.writeFileSync(path.join(home.hooks, "lib", "late.mts"), "export const late = 1;\n");
+  const lateRan = path.join(home.root, "late.txt");
+  fs.writeFileSync(path.join(home.hooks, "lib", "late.mts"),
+    `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(lateRan)}, "");\nexport const late = 1;\n`);
   const { main } = sentinelMain(home.hooks, `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n`
     + `while (!fs.existsSync(${JSON.stringify(go)})) await new Promise((r) => setTimeout(r, 20));\nawait import(${JSON.stringify("./lib/" + "late.mts")});\n`);
   const running = entryAsync("reader", main);
@@ -82,10 +87,18 @@ test("R2: killing the entry does not end the child's lock; the child's own end d
   const child = Number(fs.readFileSync(pidFile, "utf8"));
   process.kill(running.pid!, "SIGKILL");
   await running;
+  if (process.platform === "win32") {
+    assert.ok(await until(() => !alive(child)), "the child ends with its entry");
+    assert.equal(await writerFree(home), true);
+    fs.writeFileSync(go, "");
+    assert.equal(fs.existsSync(lateRan), false, "the late import never ran");
+    return;
+  }
   assert.equal(alive(child), true);
   assert.equal(await writerFree(home), false, "the orphaned child still holds its read lock");
   fs.writeFileSync(go, "");
   assert.ok(await until(() => !alive(child)), "the child ends by itself");
+  assert.equal(fs.existsSync(lateRan), true, "the late import ran under the lock");
   assert.equal(await writerFree(home), true);
 });
 
