@@ -3,7 +3,9 @@
 // issue #507, part 2): an access-control list on the target belongs to the inode,
 // so an in-place write keeps it, and a write-denying one stops the write before a
 // byte lands. Only the target leaf carries the ACL (../acl-fixture.mts); Windows
-// runs both cases with icacls, macOS and Linux with their own tools.
+// runs both cases with icacls, macOS and Linux with their own tools. The W5 cases
+// below change a directory instead: where an absent target's file is created, and
+// whether the hooks directory may get a new name.
 // Runs on its own as `node restore-write-acl.test.mts`, like every suite in CI.
 
 import assert from "node:assert/strict";
@@ -12,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { applyAcl, liftAcl, sameAcl } from "../acl-fixture.mts";
+import { applyAcl, changeDirectory, liftAcl, readAcl, sameAcl } from "../acl-fixture.mts";
 import { writeExact } from "./restore-write.mts";
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "restore-write-acl-"));
@@ -41,3 +43,44 @@ for (const deny of [false, true]) {
     assert.equal(fs.existsSync(file), false, "the file can be removed after the reset");
   });
 }
+
+const tree = (): { hooks: string; lib: string } => {
+  const hooks = path.join(TMP, `case-${++seq}`, "hooks");
+  fs.mkdirSync(path.join(hooks, "lib"), { recursive: true });
+  return { hooks, lib: path.join(hooks, "lib") };
+};
+
+// Issue #507, part 2 (W5): an absent target is created in its own directory, so it gets
+// that directory's inheritable entries, not those of the hooks directory where its
+// second name lives until the publication.
+test("a published nested file has the ACL of a file created in its own directory", (t) => {
+  const { hooks, lib } = tree();
+  if (!changeDirectory(t, lib, "inherit")) return;
+  const file = path.join(lib, "dep.mts");
+  assert.equal(writeExact(file, WANTED, hooks), "");
+  const reference = path.join(lib, "reference.mts");
+  const inRoot = path.join(hooks, "root-reference.mts");
+  fs.writeFileSync(reference, "");
+  fs.writeFileSync(inRoot, "");
+  const [published, wanted, root] = [readAcl(file), readAcl(reference), readAcl(inRoot)];
+  if (!published || !wanted || !root) assert.fail("an ACL could not be read completely");
+  assert.ok(published === wanted, "the published file has the ACL a file created in its directory gets");
+  assert.ok(published !== root, "and not the one a file created in the hooks directory gets");
+});
+
+// The second name needs the right to add a name to the hooks directory. Without it a
+// missing file is not repaired (fail closed, before any byte); an existing one still is.
+test("without the right to add a name to the hooks directory a missing file is refused, an existing one written", (t) => {
+  const { hooks, lib } = tree();
+  const existing = path.join(lib, "existing.mts");
+  fs.writeFileSync(existing, "");
+  if (!changeDirectory(t, hooks, "noNewNames")) return;
+  const file = path.join(lib, "dep.mts");
+  const result = writeExact(file, WANTED, hooks);
+  assert.ok(/^publication failed \((EPERM|EACCES)\); the target stays absent$/.test(result), result);
+  assert.equal(fs.existsSync(file), false);
+  const left = (fs.readdirSync(path.dirname(hooks), { recursive: true }) as string[]).filter((name) => name.endsWith(".kherep-tmp"));
+  assert.deepEqual(left, []);
+  assert.equal(writeExact(existing, WANTED, hooks), "");
+  assert.deepEqual(fs.readFileSync(existing), WANTED);
+});

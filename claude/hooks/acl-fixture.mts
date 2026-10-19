@@ -146,3 +146,36 @@ export function liftAcl(file: string): void {
   }
   assert.equal(writeOpenError(file), "", "a write open succeeds after the reset");
 }
+
+// A directory change of the publication cases (restore-write-acl.test.mts): `inherit` gives
+// dir an inheritable entry of its own, so a file created in it differs from one created
+// in its parent; `noNewNames` takes away the right to add a name to dir (the hooks
+// directory), its subdirectories untouched. The cleanup is registered before the change
+// and checked. null when this platform cannot run the case (never on Windows).
+export function changeDirectory(t: TestContext, dir: string, change: "inherit" | "noNewNames"): true | null {
+  if (!WIN && (!posixTool || process.getuid?.() === 0)) {
+    t.skip("no ACL tool for this platform");
+    return null;
+  }
+  const darwin = process.platform === "darwin";
+  const undo = (): boolean => WIN ? sh(system32("icacls.exe"), [dir, "/reset"]).status === 0
+    : change === "noNewNames" ? (fs.chmodSync(dir, 0o755), true)
+    : sh(posixTool, darwin ? ["-N", dir] : ["-k", dir]).status === 0;
+  t.after(() => assert.ok(undo(), "the directory change could be undone"));
+  let done: boolean;
+  if (WIN) {
+    const ace = change === "inherit" ? "*S-1-5-32-545:(OI)(CI)(R)" : `*${userSid()}:(WD)`;
+    done = sh(system32("icacls.exe"), [dir, change === "inherit" ? "/grant" : "/deny", ace]).status === 0;
+  } else if (change === "noNewNames") {
+    fs.chmodSync(dir, 0o555);
+    done = true;
+  } else {
+    done = sh(posixTool, darwin ? ["+a", "everyone deny delete,file_inherit", dir] : ["-d", "-m", "u:nobody:r", dir]).status === 0;
+  }
+  if (WIN) assert.ok(done, "icacls could change the directory");
+  else if (!done) {
+    t.skip("no ACL tool for this platform");
+    return null;
+  }
+  return true;
+}

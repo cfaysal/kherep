@@ -76,6 +76,7 @@ hooks/lib/hook-syntax.test.mts
 hooks/lib/restore-write.mts
 hooks/lib/restore-write.test.mts
 hooks/lib/restore-write-acl.test.mts
+hooks/lib/restore-write-publish.test.mts
 hooks/lib/integrity-verdict.mts
 hooks/lib/integrity-verdict.test.mts
 hooks/lib/integrity-heartbeat.mts
