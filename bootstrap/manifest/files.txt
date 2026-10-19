@@ -12,6 +12,7 @@ hooks/guard-dispatch-fixture.mts
 hooks/guard-dispatch-recheck.test.mts
 hooks/guard-dispatch-deadline.test.mts
 hooks/hook-runtime-fixture.mts
+hooks/hook-runtime-child.mts
 hooks/hook-runtime-db.test.mts
 hooks/hook-runtime-intent.test.mts
 hooks/hook-runtime-entry.test.mts

@@ -26,10 +26,10 @@ const PID = path.join(TMP, "pid.txt");
 const SCRIPTS: Record<string, string> = {
   "healthy.mts": `import fs from "node:fs";
 const input = fs.readFileSync(0, "utf8");
-fs.writeFileSync(${JSON.stringify(TRACE)}, JSON.stringify({ argv: process.argv.slice(2), input, home: process.env.CLAUDE_HOME }));
+fs.writeFileSync(new URL("./trace.json", import.meta.url), JSON.stringify({ argv: process.argv.slice(2), input, home: process.env.CLAUDE_HOME }));
 process.stdout.write("all 3 files OK (0 restored), heartbeat refreshed\\n");
 `,
-  "hang.mts": `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(PID)}, String(process.pid));\nsetInterval(() => {}, 1000);\n`,
+  "hang.mts": "import fs from \"node:fs\";\nfs.writeFileSync(new URL(\"./pid.txt\", import.meta.url), String(process.pid));\nsetInterval(() => {}, 1000);\n",
   "exit1.mts": `process.stdout.write("one finding\\n");\nprocess.exit(1);\n`,
 };
 for (const [name, source] of Object.entries(SCRIPTS)) fs.writeFileSync(path.join(TMP, name), source);
@@ -103,9 +103,10 @@ test("a timed-out admitted writer that already wrote its heartbeat is reported a
   const home = runtimeHome("guard-recheck-writer-");
   fs.copyFileSync(path.join(import.meta.dirname, "integrity-heartbeat.mts"), path.join(home.hooks, "lib", "integrity-heartbeat.mts"));
   const writer = path.join(home.hooks, "live-hook-integrity.mts");
-  const lib = "./lib/" + "integrity-heartbeat.mts";
-  fs.writeFileSync(writer, `import { writeHeartbeat } from ${JSON.stringify(lib)};\n`
-    + `const why = writeHeartbeat(${JSON.stringify(home.root)}, { trigger: "synthetic", runtime: "claude", files: 1 });\n`
+  // Constant program text: the home is the parent of the writer's hooks/ directory.
+  fs.writeFileSync(writer, "import { fileURLToPath } from \"node:url\";\n"
+    + "const { writeHeartbeat } = await import(\"./lib/\" + \"integrity-heartbeat.mts\");\n"
+    + "const why = writeHeartbeat(fileURLToPath(new URL(\"..\", import.meta.url)), { trigger: \"synthetic\", runtime: \"claude\", files: 1 });\n"
     + "if (why) throw new Error(why);\nsetInterval(() => {}, 1000);\n");
   fs.writeFileSync(path.join(home.hooks, "main.mts"), "export {};\n");
   const { admit } = await import(pathToFileURL(path.join(home.runtime, "coordinator.mts")).href);

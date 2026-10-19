@@ -5,22 +5,19 @@
 // one replacement file the operator confirmed, after binding the intent to it.
 // Synthetic temporary homes only; the command is never run against a live home.
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
-import { pathToFileURL } from "node:url";
 
-import { cleanup, database, entry, type Home, runtimeHome, until } from "./hook-runtime-fixture.mts";
+import { child, childAsync, cleanup, database, entry, type Home, runtimeHome, until } from "./hook-runtime-fixture.mts";
 
 after(cleanup);
-const KILL = "process.kill(process.pid, 'SIGKILL')";
 const PREFIX = "// a guard that proves it ran\n";
 const REPLACED = "// put here by an outside installer\nprocess.stdout.write(\"other\");\n";
 const sha = (text: string | Buffer): string => crypto.createHash("sha256").update(text).digest("hex");
-const url = (home: Home, name: string): string => JSON.stringify(pathToFileURL(path.join(home.runtime, name)).href);
 
 interface Stuck { home: Home; guard: string; good: string; marker: string; ino: bigint; args: Record<string, string> }
 
@@ -32,11 +29,9 @@ async function stuck(rel = "guard.mts"): Promise<Stuck> {
   fs.mkdirSync(path.dirname(guard), { recursive: true });
   fs.writeFileSync(guard, "");
   const marker = path.join(home.root, "ran.txt");
-  const good = `${PREFIX}import fs from "node:fs";\nfs.appendFileSync(${JSON.stringify(marker)}, "ran\\n");\nprocess.stdout.write("ran");\n`;
-  const code = `const db = await import(${url(home, "coordinator-db.mts")}); const it = await import(${url(home, "coordinator-intent.mts")});`
-    + `const o = await db.openDatabase(${JSON.stringify(home.hooks)}); db.initialize(o.conn); o.conn.exec("BEGIN EXCLUSIVE");`
-    + `it.recordIntent(o, ${JSON.stringify(rel)}, new TextEncoder().encode(${JSON.stringify(good)})); o.conn.exec("COMMIT"); ${KILL};`;
-  assert.notEqual(spawnSync(process.execPath, ["--input-type=module", "-e", code]).status, 0, "the writer died");
+  // Constant program text: the marker is found beside the hooks directory, never spliced in.
+  const good = `${PREFIX}import fs from "node:fs";\nfs.appendFileSync(new URL("../ran.txt", import.meta.url), "ran\\n");\nprocess.stdout.write("ran");\n`;
+  assert.notEqual(child(home, "record:kill", { rel, text: good }).status, 0, "the writer died");
   const tmp = `${guard}.installer`;
   fs.writeFileSync(tmp, REPLACED);
   fs.renameSync(tmp, guard);
@@ -77,17 +72,13 @@ const unchanged = async (s: Stuck): Promise<void> => {
 };
 
 // The replay as a module in a child, with seams that kill it or pause it.
-function replayChild(s: Stuck, seams: string): ReturnType<typeof spawn> {
-  const args = JSON.stringify({ hooksRoot: s.args["--hooks-root"], intent: s.args["--intent"], desiredSha: s.args["--desired-sha"],
-    currentDev: s.args["--current-dev"], currentIno: s.args["--current-ino"], currentSha: s.args["--current-sha"] });
-  const code = `const r = await import(${url(s.home, "replay-pending.mts")}); const fs = await import("node:fs");`
-    + `const out = await r.replay(${args}, ${seams}); process.stdout.write("\\n" + JSON.stringify(out));`;
-  return spawn(process.execPath, ["--input-type=module", "-e", code]);
+function replayChild(s: Stuck, seam: string, data: object = {}): ReturnType<typeof childAsync> {
+  return childAsync(s.home, `replay:${seam}`, { args: s.args, prefix: PREFIX, ...data });
 }
-const finished = (child: ReturnType<typeof spawn>): Promise<{ status: number | null; out: string }> => new Promise((resolve) => {
+const finished = (proc: ReturnType<typeof childAsync>): Promise<{ status: number | null; out: string }> => new Promise((resolve) => {
   let out = "";
-  child.stdout!.on("data", (chunk) => (out += chunk));
-  child.on("close", (status) => resolve({ status, out }));
+  proc.stdout!.on("data", (chunk) => (out += chunk));
+  proc.on("close", (status) => resolve({ status, out }));
 });
 
 test("F2.1: ordinary admission stays refused; the confirmed replay lands the recorded bytes in the replacement inode", async () => {
@@ -107,17 +98,17 @@ test("F2.1: ordinary admission stays refused; the confirmed replay lands the rec
 
 describe("F2.2: a replay killed at any point", () => {
   for (const [label, seams, recovers] of [
-    ["before the binding commit", `{ afterRebind: () => ${KILL} }`, false],
-    ["after the binding commit", `{ afterRebindCommit: () => ${KILL} }`, true],
-    ["after the truncate", `{ write: { writeChunk: () => ${KILL} } }`, true],
-    ["after a valid nonempty prefix", `{ write: { writeChunk: (fd) => { fs.writeSync(fd, ${JSON.stringify(PREFIX)}); ${KILL}; } } }`, true],
-    ["before the completion commit", `{ beforeClearCommit: () => ${KILL} }`, true],
+    ["before the binding commit", "kill-after-rebind", false],
+    ["after the binding commit", "kill-after-rebind-commit", true],
+    ["after the truncate", "kill-at-write", true],
+    ["after a valid nonempty prefix", "kill-after-prefix", true],
+    ["before the completion commit", "kill-before-clear-commit", true],
   ] as const) {
     test(label, async () => {
       const s = await stuck();
       const dbIno = fs.statSync(s.home.db).ino;
-      const child = await finished(replayChild(s, seams));
-      assert.notEqual(child.status, 0, "the replay died");
+      const died = await finished(replayChild(s, seams));
+      assert.notEqual(died.status, 0, "the replay died");
       if (!recovers) {
         blocked(s);
         await unchanged(s);
@@ -134,17 +125,17 @@ describe("F2.2: a replay killed at any point", () => {
 });
 
 describe("F2.3: another process completes the intent in the gap", () => {
-  const pause = (s: Stuck) => `{ afterRebindCommit: () => { fs.writeFileSync(${JSON.stringify(path.join(s.home.root, "bound"))}, "");`
-    + ` while (!fs.existsSync(${JSON.stringify(path.join(s.home.root, "go"))})) { const t = Date.now(); while (Date.now() - t < 20); } } }`;
+  const paused = (s: Stuck) => replayChild(s, "pause-after-rebind-commit",
+    { bound: path.join(s.home.root, "bound"), go: path.join(s.home.root, "go") });
 
   test("the replay measures the target itself and does not apply its request again", async () => {
     const s = await stuck();
-    const child = finished(replayChild(s, pause(s)));
+    const replaying = finished(paused(s));
     assert.ok(await until(() => fs.existsSync(path.join(s.home.root, "bound"))));
     assert.equal(entry("reader", s.guard).stdout, "ran", "an admitted reader completed the bound intent");
     fs.writeFileSync(s.guard, `${s.good}// touched after completion\n`);
     fs.writeFileSync(path.join(s.home.root, "go"), "");
-    const out = JSON.parse((await child).out.trim().split("\n").at(-1)!);
+    const out = JSON.parse((await replaying).out.trim().split("\n").at(-1)!);
     assert.deepEqual([out.ok, out.code], [false, "unproven"], "a changed target is not reported as replayed");
     assert.equal(fs.readFileSync(s.guard, "utf8"), `${s.good}// touched after completion\n`, "and is not written again");
   });
@@ -152,15 +143,12 @@ describe("F2.3: another process completes the intent in the gap", () => {
   test("a successor intent is left alone", async () => {
     const s = await stuck();
     fs.writeFileSync(path.join(s.home.hooks, "other.mts"), "");
-    const child = finished(replayChild(s, pause(s)));
+    const replaying = finished(paused(s));
     assert.ok(await until(() => fs.existsSync(path.join(s.home.root, "bound"))));
     assert.equal(entry("reader", s.guard).stdout, "ran");
-    const record = `const db = await import(${url(s.home, "coordinator-db.mts")}); const it = await import(${url(s.home, "coordinator-intent.mts")});`
-      + `const o = await db.openDatabase(${JSON.stringify(s.home.hooks)}); o.conn.exec("BEGIN EXCLUSIVE");`
-      + `it.recordIntent(o, "other.mts", new TextEncoder().encode("export {};\\n")); o.conn.exec("COMMIT"); ${KILL};`;
-    spawnSync(process.execPath, ["--input-type=module", "-e", record]);
+    child(s.home, "record:kill", { rel: "other.mts", text: "export {};\n" });
     fs.writeFileSync(path.join(s.home.root, "go"), "");
-    const out = JSON.parse((await child).out.trim().split("\n").at(-1)!);
+    const out = JSON.parse((await replaying).out.trim().split("\n").at(-1)!);
     assert.deepEqual([out.ok, out.code], [false, "successor-pending"]);
     assert.equal((await pending(s.home)).n, 1, "the successor stays pending");
     assert.equal(fs.readFileSync(path.join(s.home.hooks, "other.mts"), "utf8"), "");
@@ -168,11 +156,11 @@ describe("F2.3: another process completes the intent in the gap", () => {
 
   test("a replay that finds its own intent completed reports it only after measuring", async () => {
     const s = await stuck();
-    const child = finished(replayChild(s, pause(s)));
+    const replaying = finished(paused(s));
     assert.ok(await until(() => fs.existsSync(path.join(s.home.root, "bound"))));
     assert.equal(entry("reader", s.guard).stdout, "ran");
     fs.writeFileSync(path.join(s.home.root, "go"), "");
-    const out = JSON.parse((await child).out.trim().split("\n").at(-1)!);
+    const out = JSON.parse((await replaying).out.trim().split("\n").at(-1)!);
     assert.deepEqual([out.ok, out.code], [true, "replayed-elsewhere"]);
   });
 });
@@ -267,8 +255,7 @@ describe("F2.4: anything not exactly confirmed leaves the intent and the files a
     const s = await stuck();
     const swap = path.join(s.home.root, "swap.mts");
     fs.writeFileSync(swap, "// swapped in\n");
-    const seams = `{ write: { beforeOpen: (file) => fs.renameSync(${JSON.stringify(swap)}, file) } }`;
-    const out = JSON.parse((await finished(replayChild(s, seams))).out.trim().split("\n").at(-1)!);
+    const out = JSON.parse((await finished(replayChild(s, "swap-before-open", { swap }))).out.trim().split("\n").at(-1)!);
     assert.deepEqual([out.ok, out.code], [false, "replay-refused"]);
     assert.equal(fs.readFileSync(s.guard, "utf8"), "// swapped in\n");
     assert.equal((await pending(s.home)).n, 1);
@@ -279,7 +266,7 @@ test("F2.5: a write-denied replay after the binding keeps the replacement bytes,
   const s = await stuck();
   const before = (await pending(s.home)).before;
   assert.equal(before, sha(""), "the before-hash is the original target's");
-  const out = JSON.parse((await finished(replayChild(s, `{ writer: () => "open failed (EACCES); nothing was written" }`))).out.trim().split("\n").at(-1)!);
+  const out = JSON.parse((await finished(replayChild(s, "write-denied"))).out.trim().split("\n").at(-1)!);
   assert.deepEqual([out.ok, out.code], [false, "replay-refused"]);
   const row = await pending(s.home);
   assert.deepEqual([row.n, row.before, row.target], [1, before, `${s.args["--current-dev"]}:${s.args["--current-ino"]}`],

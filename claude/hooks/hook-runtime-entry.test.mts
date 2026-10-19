@@ -17,15 +17,17 @@ import { plantHeartbeat } from "./guard-dispatch-fixture.mts";
 
 after(cleanup);
 const ENTRY_AS_MODULE = pathToFileURL(path.join(RUNTIME, "entry.mts")).href;
-const SENTINEL_LIB = (file: string): string => `import fs from "node:fs";\nfs.appendFileSync(${JSON.stringify(file)}, "import\\n");\nexport {};\n`;
+// Generated hooks are constant program text: the files they touch are named relative to
+// their own location (the home's root is the parent of hooks/), never spliced in.
+const SENTINEL_LIB = "import fs from \"node:fs\";\nfs.appendFileSync(new URL(\"../../trace.txt\", import.meta.url), \"import\\n\");\nexport {};\n";
 const reasonOf = (stdout: string): string => JSON.parse(stdout).hookSpecificOutput.permissionDecisionReason;
 
 // hooks/main.mts and hooks/lib/a.mts, each appending to trace when Node runs it.
 function sentinelMain(hooks: string, body = ""): { main: string; trace: string } {
   const trace = path.join(path.dirname(hooks), "trace.txt");
-  fs.writeFileSync(path.join(hooks, "lib", "a.mts"), SENTINEL_LIB(trace));
+  fs.writeFileSync(path.join(hooks, "lib", "a.mts"), SENTINEL_LIB);
   const main = path.join(hooks, "main.mts");
-  fs.writeFileSync(main, `import fs from "node:fs";\nimport "./lib/a.mts";\nfs.appendFileSync(${JSON.stringify(trace)}, "main\\n");\n${body}`);
+  fs.writeFileSync(main, `import fs from "node:fs";\nimport "./lib/a.mts";\nfs.appendFileSync(new URL("../trace.txt", import.meta.url), "main\\n");\n${body}`);
   return { main, trace };
 }
 
@@ -61,7 +63,7 @@ test("R1: an admitted reader keeps a writer out until it ends", async () => {
   const home = runtimeHome();
   const go = path.join(home.root, "go");
   const { main, trace } = sentinelMain(home.hooks,
-    `while (!fs.existsSync(${JSON.stringify(go)})) await new Promise((r) => setTimeout(r, 20));\n`);
+    "while (!fs.existsSync(new URL(\"../go\", import.meta.url))) await new Promise((r) => setTimeout(r, 20));\n");
   const running = entryAsync("reader", main);
   assert.ok(await until(() => fs.existsSync(trace) && fs.readFileSync(trace, "utf8").includes("main")));
   assert.equal(await writerFree(home), false);
@@ -79,9 +81,10 @@ test("R2: killing the entry does not end the child's lock; the child's own end d
   const pidFile = path.join(home.root, "child.pid");
   const lateRan = path.join(home.root, "late.txt");
   fs.writeFileSync(path.join(home.hooks, "lib", "late.mts"),
-    `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(lateRan)}, "");\nexport const late = 1;\n`);
-  const { main } = sentinelMain(home.hooks, `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n`
-    + `while (!fs.existsSync(${JSON.stringify(go)})) await new Promise((r) => setTimeout(r, 20));\nawait import(${JSON.stringify("./lib/" + "late.mts")});\n`);
+    "import fs from \"node:fs\";\nfs.writeFileSync(new URL(\"../../late.txt\", import.meta.url), \"\");\nexport const late = 1;\n");
+  const { main } = sentinelMain(home.hooks, "fs.writeFileSync(new URL(\"../child.pid\", import.meta.url), String(process.pid));\n"
+    + "while (!fs.existsSync(new URL(\"../go\", import.meta.url))) await new Promise((r) => setTimeout(r, 20));\n"
+    + "await import(\"./lib/\" + \"late.mts\");\n");
   const running = entryAsync("reader", main);
   assert.ok(await until(() => fs.existsSync(pidFile)));
   const child = Number(fs.readFileSync(pidFile, "utf8"));
@@ -164,7 +167,8 @@ test("a deny names the main by its place in the hooks directory, never by an abs
 test("R6: a valid decision, a silent allow and exit 2 pass through unchanged", () => {
   const home = runtimeHome();
   const decision = JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "why" } });
-  const { main } = sentinelMain(home.hooks, `process.stdout.write(${JSON.stringify(decision)});\n`);
+  const { main } = sentinelMain(home.hooks, "process.stdout.write(JSON.stringify({ hookSpecificOutput: "
+    + "{ hookEventName: \"PreToolUse\", permissionDecision: \"ask\", permissionDecisionReason: \"why\" } }));\n");
   assert.equal(entry("pretool", main).stdout, decision);
   fs.writeFileSync(path.join(home.hooks, "quiet.mts"), "process.exitCode = 0;\n");
   const quiet = entry("pretool", path.join(home.hooks, "quiet.mts"));
@@ -177,13 +181,14 @@ test("R6: a valid decision, a silent allow and exit 2 pass through unchanged", (
 // The runtime's own experimental warnings (node:sqlite on Node 22 and 24.1, type
 // stripping of its .mts files) are no output of the hook; the hook's own are.
 // Emitted here by the main itself, so this holds on every Node version.
-const SQLITE = "SQLite is an experimental feature and might change at any time";
-const STRIP = "Type Stripping is an experimental feature and might change at any time";
-const warns = (...texts: string[]): string => texts.map((text) => `process.emitWarning(${JSON.stringify(text)}, "ExperimentalWarning");\n`).join("");
+const SQLITE = "process.emitWarning(\"SQLite is an experimental feature and might change at any time\", \"ExperimentalWarning\");\n";
+const STRIP = "process.emitWarning(\"Type Stripping is an experimental feature and might change at any time\", \"ExperimentalWarning\");\n";
+const OWN = "process.emitWarning(\"synthetic hook warning\", \"ExperimentalWarning\");\n";
+const warns = (...code: string[]): string => code.join("");
 
 test("only the runtime's own experimental warnings are dropped from a hook's stderr", () => {
   const home = runtimeHome();
-  fs.writeFileSync(path.join(home.hooks, "warn.mts"), `${warns(SQLITE, STRIP, "synthetic hook warning")}`
+  fs.writeFileSync(path.join(home.hooks, "warn.mts"), `${warns(SQLITE, STRIP, OWN)}`
     + "process.stderr.write(\"blocked by policy\\n\");\nprocess.exitCode = 2;\n");
   for (const mode of ["pretool", "reader"]) {
     const run = entry(mode, path.join(home.hooks, "warn.mts"));

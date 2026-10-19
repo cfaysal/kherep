@@ -12,15 +12,17 @@ import { plantHeartbeat } from "./guard-dispatch-fixture.mts";
 import { alive, cleanup, entry, entryAsync, holdExclusive, runtimeHome, until, writerFree } from "./hook-runtime-fixture.mts";
 
 after(cleanup);
-const sentinel = (marker: string): string => `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(marker)}, "executed");\n`;
+// Constant program text: each hook names its marker relative to its own place (the home is hooks/..).
+const TOP_MAIN = "import fs from \"node:fs\";\nfs.writeFileSync(new URL(\"../top.marker\", import.meta.url), \"executed\");\n";
+const NESTED_MAIN = "import fs from \"node:fs\";\nfs.writeFileSync(new URL(\"../../nested.marker\", import.meta.url), \"executed\");\n";
 
 test("a main in a subdirectory waits for the root's writer like a main at the root", async () => {
   const home = runtimeHome();
   fs.mkdirSync(path.join(home.hooks, "sub"));
   const top = path.join(home.root, "top.marker");
   const nested = path.join(home.root, "nested.marker");
-  fs.writeFileSync(path.join(home.hooks, "main.mts"), sentinel(top));
-  fs.writeFileSync(path.join(home.hooks, "sub", "main.mts"), sentinel(nested));
+  fs.writeFileSync(path.join(home.hooks, "main.mts"), TOP_MAIN);
+  fs.writeFileSync(path.join(home.hooks, "sub", "main.mts"), NESTED_MAIN);
   const release = await holdExclusive(home);
   const runs = [entryAsync("pretool", path.join(home.hooks, "main.mts")), entryAsync("pretool", path.join(home.hooks, "sub", "main.mts"))];
   await new Promise((resolve) => setTimeout(resolve, 800));
@@ -42,9 +44,9 @@ test("a nested guard under the dispatcher holds the root's database, also when i
   plantHeartbeat(home.root);
   const go = path.join(home.root, "go");
   const pids = path.join(home.root, "pids");
-  fs.writeFileSync(path.join(home.hooks, "sub", "guard.mts"), `import fs from "node:fs";\n`
-    + `fs.writeFileSync(${JSON.stringify(pids)}, JSON.stringify([process.pid, process.ppid]));\n`
-    + `while (!fs.existsSync(${JSON.stringify(go)})) await new Promise((r) => setTimeout(r, 20));\n`);
+  fs.writeFileSync(path.join(home.hooks, "sub", "guard.mts"), "import fs from \"node:fs\";\n"
+    + "fs.writeFileSync(new URL(\"../../pids\", import.meta.url), JSON.stringify([process.pid, process.ppid]));\n"
+    + "while (!fs.existsSync(new URL(\"../../go\", import.meta.url))) await new Promise((r) => setTimeout(r, 20));\n");
   const running = entryAsync("pretool", path.join(home.hooks, "guard-dispatch.mts"), [path.join(home.hooks, "sub", "guard.mts")],
     JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "true" } }));
   assert.ok(await until(() => fs.existsSync(pids)), "the nested guard was admitted and runs");
