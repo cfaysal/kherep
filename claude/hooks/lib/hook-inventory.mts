@@ -71,7 +71,8 @@ function coordinated(command: string, tokens: string[], home: string, hooksDir: 
   const call = tokens[0] === "&";
   if (!singleCommand(call ? command.replace(/^\s*&/, "") : command)) return false;
   const [node, entry, mode, main] = tokens.slice(call ? 1 : 0).map((token) => token.replace(/^['"]+|['"]+$/g, ""));
-  return node === "node" && expandToken(entry ?? "", home) === `${home}/kherep/hook-runtime/entry.mts`
+  // Case folded, as isWithinPath folds it: a Windows home may differ in case from the rendered one.
+  return node === "node" && expandToken(entry ?? "", home).toLowerCase() === `${home}/kherep/hook-runtime/entry.mts`.toLowerCase()
     && ENTRY_MODES.has(mode ?? "") && isWithinPath(expandToken(main ?? "", home), hooksDir);
 }
 
