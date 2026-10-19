@@ -173,3 +173,39 @@ test("wiredFiles reads through the supplied reader and ignores tokens that are n
   assert.deepEqual(notes, []);
   assert.equal(readAny, true);
 });
+
+// Issue #507, part 2: a command counts as coordinated only when it is exactly
+// `node <entry> <mode> <main> [args]`. A shell operator could run hooks/ code
+// next to the entry, so any such command makes repair unavailable.
+test("only a plain entry command is coordinated; a chained one is not", () => {
+  const home = "/home/example/.claude";
+  const entry = `node "${home}/kherep/hook-runtime/entry.mts"`;
+  const uncoordinatedOf = (command: string, claudeHome = home): string[] => wiredFiles(claudeHome, (name) => {
+    if (name === "settings.user.json") return JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command }] }] } });
+    throw Object.assign(new Error("absent"), { code: "ENOENT" });
+  }).uncoordinated;
+  for (const command of [
+    `${entry} reader "${home}/hooks/a.mts"`,
+    `& ${entry} reader "${home}/hooks/a.mts"`,
+    `${entry} pretool "${home}/hooks/guard-dispatch.mts" "${home}/hooks/commit-guard.mts" '${home}/hooks/deploy-guard.mts'`,
+    `node \${CLAUDE_HOME}/kherep/hook-runtime/entry.mts writer \${CLAUDE_HOME}/hooks/live-hook-integrity.mts --trigger x`,
+  ]) assert.deepEqual(uncoordinatedOf(command), [], command);
+  for (const command of [
+    `${entry} reader ${home}/hooks/a.mts && node ${home}/hooks/b.mts`,
+    `${entry} reader ${home}/hooks/a.mts || node ${home}/hooks/b.mts`,
+    `${entry} reader ${home}/hooks/a.mts; node ${home}/hooks/b.mts`,
+    `${entry} reader ${home}/hooks/a.mts | node ${home}/hooks/b.mts`,
+    `${entry} reader ${home}/hooks/a.mts & node ${home}/hooks/b.mts`,
+    `${entry} reader ${home}/hooks/a.mts\nnode ${home}/hooks/b.mts`,
+    `${entry} reader ${home}/hooks/a.mts "$(node ${home}/hooks/b.mts)"`,
+    `${entry} reader ${home}/hooks/a.mts \`node ${home}/hooks/b.mts\``,
+    `${entry} reader ${home}/hooks/a.mts < <(node ${home}/hooks/b.mts)`,
+    `${entry} reader ${home}/hooks/a.mts > >(node ${home}/hooks/b.mts)`,
+    `FOO=1 ${entry} reader ${home}/hooks/a.mts`,
+    `${entry} reader ${home}/hooks/a.mts \\' ; node ${home}/hooks/b.mts ; '`,
+    `${entry} reader "${home}/hooks/a.mts\\" ; node ${home}/hooks/b.mts ; "`,
+  ]) assert.deepEqual(uncoordinatedOf(command), [command], command);
+  const win = "C:\\Users\\Example\\.claude";
+  const winCommand = `node "${win}/kherep/hook-runtime/entry.mts" reader "${win}/hooks/a.mts"`;
+  assert.deepEqual(uncoordinatedOf(winCommand, "C:/Users/Example/.claude"), [], "a Windows path keeps its backslashes inside quotes");
+});

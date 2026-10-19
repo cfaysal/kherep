@@ -67,6 +67,14 @@ test("a wired command that runs hooks/ code outside the runtime makes repair una
   assert.equal(guard(box), "");
 });
 
+test("a coordinated command chained with a raw hook makes repair unavailable", () => {
+  const box = sandbox(`${coordinated("node ~/.claude/hooks/commit-guard.mts")} && node ~/.claude/hooks/commit-guard.mts`);
+  const result = plainOf(box);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /NOT restored \(1 wired command\(s\) run hooks\/ code outside kherep\/hook-runtime\/entry\.mts\)/);
+  assert.equal(guard(box), "");
+});
+
 test("admitted on another hooks directory: nothing is repaired in this home", () => {
   const box = sandbox();
   const other = path.join(TMP, `other-${++seq}`, "hooks");
