@@ -11,8 +11,6 @@ import { after, describe, test } from "node:test";
 import { dispatcherFixture } from "./guard-dispatch-fixture.mts";
 
 const PAYLOAD = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git status" } });
-// The renamed real lib, imported by a fixture lib; spelled so the repo's import scan skips it.
-const REAL = JSON.stringify("./real-recheck.mts");
 const HANG = "setInterval(() => {}, 1000);\n";
 // The exact warning Node versions print for a .mts; the dispatcher drops only this one.
 const STRIP = "(node:1) ExperimentalWarning: Type Stripping is an experimental feature and might change at any time\\n"
@@ -26,10 +24,7 @@ interface Run { status: number | null; stdout: string; stderr: string; ms: numbe
 function run(integrity: string, guards: Record<string, string>, closeStdin = true, lib?: string): Promise<Run> {
   const { root, hooks, dispatch } = dispatcherFixture("guard-dispatch-deadline-");
   roots.push(root);
-  if (lib) {
-    fs.renameSync(path.join(hooks, "lib", "guard-recheck.mts"), path.join(hooks, "lib", "real-recheck.mts"));
-    fs.writeFileSync(path.join(hooks, "lib", "guard-recheck.mts"), lib);
-  }
+  if (lib) fs.writeFileSync(path.join(hooks, "lib", "guard-recheck.mts"), lib);
   fs.writeFileSync(path.join(hooks, "live-hook-integrity.mts"), integrity);
   for (const [name, source] of Object.entries(guards)) fs.writeFileSync(path.join(hooks, name), source);
   return new Promise((resolve, reject) => {
@@ -74,10 +69,8 @@ describe("one shared deadline", { concurrency: true }, () => {
     assert.ok(result.ms >= 24_000 && result.ms <= 27_000, `took ${result.ms} ms`);
   });
 
-  test("the lib's runRecheck never settles and holds an interval: the deny is printed at the deadline", async () => {
-    const lib = `export { heartbeatState, recheckNotice } from ${REAL};
-export function runRecheck() { setInterval(() => {}, 1000); return new Promise(() => {}); }
-`;
+  test("the lib's re-check never settles and holds an interval: the deny is printed at the deadline", async () => {
+    const lib = "export function recheckAfter() { setInterval(() => {}, 1000); return new Promise(() => {}); }\n";
     const result = await run(HANG, { "empty.mts": "" }, true, lib);
     const printed = output(result);
     assert.equal(printed.permissionDecision, "deny");

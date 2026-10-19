@@ -14,8 +14,17 @@ import { after, test } from "node:test";
 import { syntaxVerdict } from "../claude/hooks/lib/hook-syntax.mts";
 
 const repo = path.resolve(import.meta.dirname, "..");
-const claudeSource = path.join(repo, "claude").replace(/\\/g, "/");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "wired-blocking-guards-"));
+// Issue #507, part 2: every wired command runs through kherep/hook-runtime/entry.mts,
+// which keeps its coordination state beside the hooks it admits. A copy of the
+// checkout's hooks and runtime plays the Claude home, so no state lands in the checkout.
+function claudeCopy(name: string): string {
+  const copy = path.join(TMP, name);
+  fs.cpSync(path.join(repo, "claude", "hooks"), path.join(copy, "hooks"), { recursive: true });
+  fs.cpSync(path.join(repo, "claude", "kherep", "hook-runtime"), path.join(copy, "kherep", "hook-runtime"), { recursive: true });
+  return copy.replace(/\\/g, "/");
+}
+const claudeSource = claudeCopy("claude");
 const WORKSPACE = path.join(TMP, "workspace");
 fs.mkdirSync(WORKSPACE, { recursive: true });
 after(() => {
@@ -109,7 +118,7 @@ for (const guard of GUARDS) {
     const { event, matcher, command } = wiredCommand(guard.hook);
     assert.equal(event, guard.event, `${guard.hook} is wired under ${event}`);
     assert.equal(matcher, guard.matcher);
-    assert.match(command, new RegExp(`^node "__KHEREP_CLAUDE_HOME__/hooks/${guard.hook.replace(".", "\\.")}"$`));
+    assert.match(command, new RegExp(`^node "__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry\\.mts" reader "__KHEREP_CLAUDE_HOME__/hooks/${guard.hook.replace(".", "\\.")}"$`));
     assert.ok(fs.existsSync(path.join(repo, "claude", "hooks", guard.hook)), `claude/hooks/${guard.hook} exists`);
   });
 
@@ -207,7 +216,7 @@ for (const guard of PRETOOL_GUARDS) {
     const { event, matcher, command } = wiredCommand(guard.hook);
     assert.equal(event, "PreToolUse");
     assert.equal(matcher, guard.matcher);
-    assert.ok(command.startsWith('node "__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts" ')
+    assert.ok(command.startsWith('node "__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts" pretool "__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts" ')
       && command.split(" ").includes(`"__KHEREP_CLAUDE_HOME__/hooks/${guard.hook}"`), command);
     const file = path.join(repo, "claude", "hooks", guard.hook);
     assert.ok(fs.statSync(file).size > 0, `claude/hooks/${guard.hook} is not empty`);
@@ -232,9 +241,8 @@ test("a dispatch-contract notice (#505) leaves the wired dispatcher as additiona
 // Issue #507. A 0-byte or missing guard used to exit without a decision (fail-open).
 // Through the dispatcher it denies every call, benign included, naming the file.
 test("a 0-byte or missing PreToolUse guard denies every call and names its file", () => {
-  const copy = path.join(TMP, "broken-claude");
-  fs.cpSync(path.join(repo, "claude", "hooks"), path.join(copy, "hooks"), { recursive: true });
-  const home = copy.replace(/\\/g, "/");
+  const home = claudeCopy("broken-claude");
+  const copy = home;
   for (const guard of PRETOOL_GUARDS) {
     const file = path.join(copy, "hooks", guard.hook);
     const original = fs.readFileSync(file);

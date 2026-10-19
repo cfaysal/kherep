@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/privacy-boundary-guard.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/secret-output-guard.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/playwright-file-guard.mts\"",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" pretool \"__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/privacy-boundary-guard.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/secret-output-guard.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/playwright-file-guard.mts\"",
             "timeout": 30
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/dispatch-contract-guard.mts\"",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" pretool \"__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/dispatch-contract-guard.mts\"",
             "timeout": 30
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/commit-guard.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/deploy-guard.mts\"",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" pretool \"__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/commit-guard.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/deploy-guard.mts\"",
             "timeout": 30
           }
         ]
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/main-checkout-guard.mts\"",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" pretool \"__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/main-checkout-guard.mts\"",
             "timeout": 30
           }
         ]
@@ -59,7 +59,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/atlassian-destructive-guard.mts\"",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" pretool \"__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/atlassian-destructive-guard.mts\"",
             "timeout": 30
           }
         ]
@@ -71,19 +71,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/manifest-watch.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/manifest-watch.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/loc-watch.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/loc-watch.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/simplify-nudge.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/simplify-nudge.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/drift-managed-path-watch.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/drift-managed-path-watch.mts\""
           },
           {
             "type": "command",
@@ -107,31 +107,31 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/live-hook-integrity.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" writer \"__KHEREP_CLAUDE_HOME__/hooks/live-hook-integrity.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/orchestra-default.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/orchestra-default.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/runtime-capability-snapshot.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/runtime-capability-snapshot.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/drift-check-nudge.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/drift-check-nudge.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/smoke-test-nudge.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/smoke-test-nudge.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/orphan-check-nudge.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/orphan-check-nudge.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/critical-file-integrity.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/critical-file-integrity.mts\""
           },
           {
             "type": "command",
@@ -148,11 +148,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/maestro-discipline.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/maestro-discipline.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/research-first.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/research-first.mts\""
           },
           {
             "type": "command",
@@ -173,19 +173,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/maestro-banner-gate.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/maestro-banner-gate.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/clq-accept-gate.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/clq-accept-gate.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/observation-stop.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/observation-stop.mts\""
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/research-stop.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/research-stop.mts\""
           },
           {
             "type": "command",
@@ -217,7 +217,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/hooks/obs-result-check.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/obs-result-check.mts\""
           }
         ]
       }
