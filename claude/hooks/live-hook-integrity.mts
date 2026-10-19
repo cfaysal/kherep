@@ -108,16 +108,16 @@ function gateOf(home: string, uncoordinated: string[]): string {
 async function ownImportFailed({ rel, why, loaded }: LoadFailure, payload: ScopePayload | null, home: string): Promise<void> {
   const hooksDir = import.meta.dirname.replace(/\\/g, "/");
   const file = `${hooksDir}/${rel}`;
-  const ours = !!HOLD && realOrEmpty(hooksDir) === HOLD.root;
+  const hold = HOLD && realOrEmpty(hooksDir) === HOLD.root ? HOLD : null;
   let result: Restored = { proven: false, why: "the restore itself needs integrity-verdict, workspace-scope, orchestra-checkout and integrity-heartbeat" };
-  if (!ours) result = { proven: false, why: "this run is not coordinated on this hooks directory" };
+  if (!hold) result = { proven: false, why: "this run is not coordinated on this hooks directory" };
   else if (loaded >= RESTORE_LIBS) {
-    const blocked = realOrEmpty(`${home}/hooks`) === HOLD!.root ? lib.invalidateHeartbeat(home) : "";
+    const blocked = realOrEmpty(`${home}/hooks`) === hold.root ? lib.invalidateHeartbeat(home) : "";
     result = blocked ? { proven: false, why: blocked }
-      : await lib.restore(lib, HOLD, file, rel, lib.checkoutFor(payload, lib.normalizePathLike(home)));
+      : await lib.restore(lib, hold, file, rel, lib.checkoutFor(payload, lib.normalizePathLike(home)));
   }
   // Without integrity-verdict there is no journal function to call; outside the hold no journal at all.
-  if (loaded > 0 && ours && HOLD!.holding()) lib.journal(home, {
+  if (loaded > 0 && hold?.holding()) lib.journal(home, {
     ts: new Date().toISOString(), trigger: TRIGGER, file: rel, path: file, state: "DEFEKT", reason: why, kind: "self",
     importedBy: ["live-hook-integrity.mts"],
     sha256After: result.sha || null, restoreProven: result.proven, restoreDetail: result.proven ? undefined : result.why,

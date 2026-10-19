@@ -60,7 +60,7 @@ function runChild(config: Config, args: string[], input: Buffer, until: number |
     const err: Buffer[] = [];
     let ready = false;
     let done = false;
-    const finish = (code: number | null, signal: string | null, why?: string): void => {
+    const settle = (code: number | null, signal: string | null, why?: string): void => {
       if (done) return;
       done = true;
       if (timer) clearTimeout(timer);
@@ -69,7 +69,7 @@ function runChild(config: Config, args: string[], input: Buffer, until: number |
     const child = spawn(process.execPath, [preloadArg(COORDINATOR, config), config.target, ...args],
       { stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true });
     const timer = until === null ? null : setTimeout(() => {
-      finish(null, null, `timed out after ${Math.round((until - START) / 1000)} s`);
+      settle(null, null, `timed out after ${Math.round((until - START) / 1000)} s`);
       child.kill("SIGKILL");
       child.unref();
       for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
@@ -80,8 +80,8 @@ function runChild(config: Config, args: string[], input: Buffer, until: number |
     });
     child.stdout!.on("data", (chunk: Buffer) => out.push(chunk));
     child.stderr!.on("data", (chunk: Buffer) => err.push(chunk));
-    child.on("error", (error) => finish(null, null, `spawn failed: ${error.message}`));
-    child.on("close", (code, signal) => finish(code, signal));
+    child.on("error", (error) => settle(null, null, `spawn failed: ${error.message}`));
+    child.on("close", (code, signal) => settle(code, signal));
     child.stdin!.on("error", () => {});
     child.stdin!.end(input);
   });
@@ -158,7 +158,7 @@ async function main(): Promise<void> {
   const result = await runChild(config, rest, input, pretool ? OUTER_DEADLINE - 600 : null);
   const failure = failureOf(result);
   if (!pretool) {
-    if (failure.why && !result.ready) return finish("", `[hook-entry] ${target} ${failure.why}\n`, 1);
+    if (!result.ready) return finish("", `[hook-entry] ${target} ${failure.why}\n`, 1);
     return finish(result.stdout, result.stderr, result.signal ? 1 : result.code ?? 1);
   }
   if (!failure.why && result.code === 2) return finish("", result.stderr, 2);

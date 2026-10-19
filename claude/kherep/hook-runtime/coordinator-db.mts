@@ -17,8 +17,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 1;
-export const APPLICATION_ID = 0x4b485250; // "KHRP"
+const SCHEMA_VERSION = 1;
+const APPLICATION_ID = 0x4b485250; // "KHRP"
 export const SCHEMA_SQL = "CREATE TABLE pending (id INTEGER PRIMARY KEY CHECK (id = 1), intent TEXT NOT NULL, "
   + "root_dev TEXT NOT NULL, root_ino TEXT NOT NULL, rel TEXT NOT NULL, parent_dev TEXT NOT NULL, parent_ino TEXT NOT NULL, "
   + "target_dev TEXT, target_ino TEXT, absent INTEGER NOT NULL CHECK (absent IN (0, 1)), before_sha256 TEXT NOT NULL, "
@@ -33,11 +33,11 @@ export const refuse = (kind: Kind): Refusal => Object.assign(new Error(`hook run
 export const isRefusal = (error: unknown): error is Refusal => typeof (error as Refusal)?.kherepKind === "string";
 
 export interface Id { dev: bigint; ino: bigint }
-export interface Opened { conn: DatabaseSync; root: string; rootId: Id; file: string }
+export interface Opened { conn: DatabaseSync; root: string; rootId: Id }
 
 const codeOf = (error: unknown): string | undefined => (error as NodeJS.ErrnoException)?.code;
 const idOf = (st: fs.BigIntStats): Id => ({ dev: st.dev, ino: st.ino });
-const sameId = (a: Id, b: Id): boolean => a.dev === b.dev && a.ino === b.ino;
+export const sameId = (a: Id, b: Id): boolean => a.dev === b.dev && a.ino === b.ino;
 
 // SQLITE_BUSY (5) and SQLITE_LOCKED (6), by Node's numeric field; everything else fails closed.
 export function sqliteKind(error: unknown): Kind {
@@ -67,7 +67,7 @@ function plain(p: string, want: "dir" | "file"): fs.BigIntStats | null {
   return st;
 }
 
-export function canonicalRoot(dir: string): { root: string; rootId: Id } {
+function canonicalRoot(dir: string): { root: string; rootId: Id } {
   try {
     const root = fs.realpathSync(dir);
     const st = fs.statSync(root, { bigint: true });
@@ -109,7 +109,7 @@ export async function openDatabase(dir: string): Promise<Opened> {
     conn.close();
     throw isRefusal(error) ? error : refuse("database");
   }
-  return { conn, root, rootId, file };
+  return { conn, root, rootId };
 }
 
 export function read(conn: DatabaseSync, sql: string, ...params: (string | number | bigint | Uint8Array)[]): Record<string, unknown> | undefined {

@@ -16,7 +16,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { type Id, type Opened, read, refuse } from "./coordinator-db.mts";
+import { type Id, type Opened, read, refuse, sameId } from "./coordinator-db.mts";
 
 export type WriteExact = (file: string, bytes: Uint8Array, hooksDir: string, probe: object, expect: Id | "absent") => string;
 export interface Intent {
@@ -25,12 +25,12 @@ export interface Intent {
 export type Applied = { state: "none" } | { state: "applied"; intent: string; rel: string; sha: string }
   | { state: "refused"; intent: string; rel: string; why: string; cleared: boolean };
 
-const sha256 = (bytes: Uint8Array): string => crypto.createHash("sha256").update(bytes).digest("hex");
+export const sha256 = (bytes: Uint8Array): string => crypto.createHash("sha256").update(bytes).digest("hex");
 const DEC = /^(0|[1-9][0-9]{0,39})$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 
 // A root-relative path of plain segments: no absolute path, drive, .., empty segment or backslash.
-export function safeRel(rel: unknown): rel is string {
+function safeRel(rel: unknown): rel is string {
   if (typeof rel !== "string" || !rel || rel.length > 512 || rel.includes("\\") || rel.includes("\0")) return false;
   return rel.split("/").every((part) => part && part !== "." && part !== ".." && !part.includes(":"));
 }
@@ -42,7 +42,7 @@ const lstatOrNull = (file: string): fs.BigIntStats | null => {
   }
 };
 
-const shaOf = (file: string): string | null => {
+export const shaOf = (file: string): string | null => {
   try { return sha256(fs.readFileSync(file)); } catch { return null; }
 };
 
@@ -51,7 +51,7 @@ const idFrom = (dev: unknown, ino: unknown): Id | null =>
   typeof dev === "string" && typeof ino === "string" && DEC.test(dev) && DEC.test(ino) ? { dev: BigInt(dev), ino: BigInt(ino) } : null;
 
 // The one pending row, validated in full, or null when there is none.
-export function pendingIntent(o: Opened): Intent | null {
+function pendingIntent(o: Opened): Intent | null {
   const count = Number(read(o.conn, "SELECT count(*) AS n FROM pending")?.n);
   if (count === 0) return null;
   const row = read(o.conn, "SELECT * FROM pending WHERE id = 1");
@@ -69,7 +69,7 @@ export function pendingIntent(o: Opened): Intent | null {
     beforeSha: row.before_sha256 as string, bytes: bytes!, sha: row.sha256 as string };
 }
 
-const targetOf = (o: Opened, rel: string): string => path.join(o.root, ...rel.split("/"));
+export const targetOf = (o: Opened, rel: string): string => path.join(o.root, ...rel.split("/"));
 const inside = (root: string, p: string): boolean => {
   try {
     const rel = path.relative(root, fs.realpathSync(p));
@@ -99,12 +99,12 @@ export function recordIntent(o: Opened, rel: string, bytes: Uint8Array): Intent 
   if (existing?.isSymbolicLink()) throw refuse("target-link");
   if (existing && !existing.isFile()) throw refuse("target-irregular");
   if (existing && existing.nlink !== 1n) throw refuse("target-shared");
+  const beforeSha = existing ? shaOf(file) : "absent";
+  if (beforeSha === null) throw refuse("pending-invalid");
   const intent: Intent = {
     intent: crypto.randomBytes(16).toString("hex"), root: o.rootId, rel, parent: { dev: parent.dev, ino: parent.ino },
-    target: existing ? { dev: existing.dev, ino: existing.ino } : null,
-    beforeSha: existing ? shaOf(file) ?? "unreadable" : "absent", bytes, sha: sha256(bytes),
+    target: existing ? { dev: existing.dev, ino: existing.ino } : null, beforeSha, bytes, sha: sha256(bytes),
   };
-  if (intent.beforeSha === "unreadable") throw refuse("pending-invalid");
   try {
     o.conn.prepare("INSERT INTO pending (id, intent, root_dev, root_ino, rel, parent_dev, parent_ino, target_dev, target_ino, "
       + "absent, before_sha256, bytes, sha256) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
@@ -121,8 +121,7 @@ export function applyPending(o: Opened, writeExact: WriteExact): Applied {
   const file = targetOf(o, intent.rel);
   const parent = lstatOrNull(path.dirname(file));
   const rootNow = lstatOrNull(o.root);
-  if (!rootNow || rootNow.dev !== intent.root.dev || rootNow.ino !== intent.root.ino
-    || !parent || parent.dev !== intent.parent.dev || parent.ino !== intent.parent.ino) {
+  if (!rootNow || !sameId(rootNow, intent.root) || !parent || !sameId(parent, intent.parent)) {
     return refused(o, intent, file, "the target's directory is not the one that was recorded", false);
   }
   let why = "";
@@ -136,7 +135,7 @@ export function applyPending(o: Opened, writeExact: WriteExact): Applied {
   if (!why && shaOf(file) !== intent.sha) why = "the target does not hold the recorded bytes after the write";
   if (!why && intent.target) {
     const after = lstatOrNull(file);
-    if (!after || after.dev !== intent.target.dev || after.ino !== intent.target.ino) why = "the target's identity changed";
+    if (!after || !sameId(after, intent.target)) why = "the target's identity changed";
   }
   if (why) return refused(o, intent, file, why);
   clear(o, intent.intent);

@@ -12,14 +12,13 @@
 // hand admission to its own node children (guards, the integrity writer),
 // release a reader early, and run repairs through the persisted intent.
 // Static imports: node:* and this directory only.
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
 import {
   initialize, isRefusal, type Kind, openDatabase, type Opened, read, refuse, rollbackQuietly, run, schemaState, sqliteKind,
 } from "./coordinator-db.mts";
-import { type Applied, applyPending, recordIntent, type WriteExact } from "./coordinator-intent.mts";
+import { type Applied, applyPending, recordIntent, sha256, shaOf, targetOf, type WriteExact } from "./coordinator-intent.mts";
 
 export const PROTOCOL = 1;
 export const CAPABILITY = Symbol.for("kherep.hook-runtime");
@@ -52,6 +51,7 @@ const REFUSED: Partial<Record<Kind, string>> = {
   "target-outside": "hooks directory or its subdirectory resolves outside the hooks root",
 };
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const backoff = (): Promise<void> => sleep(10 + Math.floor(Math.random() * 20));
 const recoveryWriter = async (): Promise<WriteExact> => {
   try { return (await import("./recovery/restore-write.mts")).writeExact as WriteExact; } catch { throw refuse("recovery"); }
 };
@@ -64,17 +64,16 @@ async function retrying<T>(until: number, attempt: () => Promise<T> | T, conn: O
       const kind = sqliteKind(error);
       if (kind !== "busy" || Date.now() >= until) throw refuse(kind);
     }
-    await sleep(10 + Math.floor(Math.random() * 20));
+    await backoff();
   }
 }
 
-// Under one EXCLUSIVE transaction: replays a pending intent and commits; returns what it found.
-async function recoverOnce(o: Opened): Promise<Applied> {
+// Under one EXCLUSIVE transaction: replays a pending intent and commits.
+async function recoverOnce(o: Opened): Promise<void> {
   run(o.conn, "BEGIN EXCLUSIVE");
   const result = applyPending(o, await recoveryWriter());
   run(o.conn, "COMMIT");
   if (result.state === "refused" && !result.cleared) throw refuse("recovery");
-  return result;
 }
 
 // A read transaction over a ready schema without a pending intent, held on return.
@@ -134,7 +133,7 @@ export async function admit(config: Config): Promise<ReaderCapability | WriterCa
     try { o = await openDatabase(path.dirname(config.target)); break; } catch (error) {
       if (sqliteKind(error) !== "busy" || Date.now() >= until) throw error;
     }
-    await sleep(10 + Math.floor(Math.random() * 20));
+    await backoff();
   }
   try {
     if (config.mode === "reader") await admitReader(o, until);
@@ -169,6 +168,13 @@ function writerCapability(o: Opened, common: Common, deadline: number): WriterCa
     ...common, mode: "writer", holding: () => holding, begin,
     end: () => { if (holding) { holding = false; rollbackQuietly(o.conn); } },
     repair: async (rel, bytes, probe = {}) => {
+      // Gives up this attempt: the transaction is rolled back and the hold taken again.
+      const reacquire = async (why: string): Promise<Restored> => {
+        rollbackQuietly(o.conn);
+        holding = false;
+        await begin();
+        return { proven: false, why };
+      };
       if (!holding) return { proven: false, why: "no exclusive hold on the hooks directory" };
       let intent: string;
       try {
@@ -177,18 +183,12 @@ function writerCapability(o: Opened, common: Common, deadline: number): WriterCa
         // Refused before anything was recorded: the hold stays as it was.
         const kind = (error as { kherepKind?: Kind }).kherepKind ?? "unavailable";
         if (kind !== "unavailable") return { proven: false, why: REFUSED[kind] ?? `the repair could not be recorded (${kind})` };
-        rollbackQuietly(o.conn);
-        holding = false;
-        await begin();
-        return { proven: false, why: "the repair could not be recorded (unavailable)" };
+        return reacquire("the repair could not be recorded (unavailable)");
       }
       try {
         run(o.conn, "COMMIT");
       } catch {
-        rollbackQuietly(o.conn);
-        holding = false;
-        await begin();
-        return { proven: false, why: "the repair could not be committed" };
+        return reacquire("the repair could not be committed");
       }
       holding = false;
       await probe.afterPrepare?.();
@@ -197,10 +197,9 @@ function writerCapability(o: Opened, common: Common, deadline: number): WriterCa
       if (mine?.state === "applied") return { proven: true, sha: mine.sha };
       if (mine?.state === "refused") return { proven: false, why: mine.why };
       // Another admitted process replayed this intent in the gap: measured here, not assumed.
-      const want = crypto.createHash("sha256").update(bytes).digest("hex");
-      let got = "";
-      try { got = crypto.createHash("sha256").update(fs.readFileSync(path.join(o.root, ...rel.split("/")))).digest("hex"); } catch { /* absent */ }
-      return got === want ? { proven: true, sha: got } : { proven: false, why: "the recorded repair was replaced before it was applied here" };
+      const want = sha256(bytes);
+      return shaOf(targetOf(o, rel)) === want ? { proven: true, sha: want }
+        : { proven: false, why: "the recorded repair was replaced before it was applied here" };
     },
   };
 }
