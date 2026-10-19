@@ -138,11 +138,11 @@ function judge(file: string, code: number | null, signal: string | null, stdout:
   return typeof result === "string" ? failure(file, result) : result;
 }
 
-// Node versions that strip types with a warning print this one for a .mts guard.
-// No diagnostic of the guard: only this exact warning is dropped, every other one stays.
-const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
+// Node versions that strip types with a warning print this one for a .mts guard, also after its
+// unterminated output. No diagnostic of the guard: only it is dropped, every other one stays.
+const TYPE_STRIPPING_WARNING = new RegExp("\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
   + "feature and might change at any time\\r?\\n(?:\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning "
-  + "was created\\)\\r?\\n)?", "gm");
+  + "was created\\)\\r?\\n)?", "g");
 
 function runGuard(file: string, payload: string): Promise<Outcome> {
   return new Promise((resolve) => {

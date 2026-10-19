@@ -34,9 +34,26 @@ type Mode = typeof MODES[number];
 interface Config { v: number; mode: "reader" | "writer"; target: string; deadline: number }
 interface Result { ready: boolean; code: number | null; signal: string | null; stdout: string; stderr: string; why?: string }
 
+// Drops exactly the runtime's own experimental warnings (node:sqlite, type stripping of
+// its .mts files) and hands every other warning to Node's own listeners. Node prints a
+// warning on a later tick, so this also catches the one this process's load emitted.
+const QUIET = "{const q=new Set([\"SQLite is an experimental feature and might change at any time\",\"Type Stripping is an "
+  + "experimental feature and might change at any time\"]),d=process.listeners(\"warning\");process.removeAllListeners("
+  + "\"warning\");process.on(\"warning\",w=>{if(!(w&&w.name===\"ExperimentalWarning\"&&q.has(w.message)))for(const l "
+  + "of d)l.call(process,w)})}";
+// The entry's own type-stripping warning, emitted while Node loaded this file, is dropped the same way.
+const RUNTIME_WARNINGS = new Set(["SQLite is an experimental feature and might change at any time",
+  "Type Stripping is an experimental feature and might change at any time"]);
+const NODE_WARNING_LISTENERS = process.listeners("warning");
+process.removeAllListeners("warning");
+process.on("warning", (warning) => {
+  if (warning.name === "ExperimentalWarning" && RUNTIME_WARNINGS.has(warning.message)) return;
+  for (const listener of NODE_WARNING_LISTENERS) listener.call(process, warning);
+});
+
 // Identical in coordinator.mts (a test compares them): the --import argument that admits a node process.
 export function preloadArg(coordinatorUrl: string, config: Config): string {
-  const program = `try{const m=await import(${JSON.stringify(coordinatorUrl)});await m.preload(${JSON.stringify(config)})}`
+  const program = `${QUIET}try{const m=await import(${JSON.stringify(coordinatorUrl)});await m.preload(${JSON.stringify(config)})}`
     + "catch(e){const k=e&&e.kherepKind;process.stderr.write(\"[hook-runtime] not admitted (\"+(typeof k===\"string\"&&"
     + "/^[a-z-]{1,24}$/.test(k)?k:\"bootstrap failed\")+\")\\n\");process.exit(70)}";
   return `--import=data:text/javascript,${encodeURIComponent(program)}`;
