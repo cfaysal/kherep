@@ -31,7 +31,9 @@ const OUTER_DEADLINE = START + 28_000;
 const COORDINATOR = new URL("./coordinator.mts", import.meta.url).href;
 const MODES = ["pretool", "reader", "writer"] as const;
 type Mode = typeof MODES[number];
-interface Config { v: number; mode: "reader" | "writer"; target: string; deadline: number }
+interface Config { v: number; mode: "reader" | "writer"; root: string; target: string; deadline: number }
+// The hooks directory of this installation (coordinator.mts derives the same one and refuses any other).
+const HOOKS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks");
 interface Result { ready: boolean; code: number | null; signal: string | null; stdout: string; stderr: string; why?: string }
 
 // Drops exactly the runtime's own experimental warnings (node:sqlite, type stripping of
@@ -148,10 +150,10 @@ const deny = (reason: string, context = ""): string => JSON.stringify({ hookSpec
   permissionDecision: "deny", permissionDecisionReason: reason, ...(context ? { additionalContext: context } : {}) } });
 
 // The one integrity writer a broken PreToolUse main may start, within what is left.
-async function repairAttempt(target: string, input: Buffer): Promise<string> {
-  const script = path.join(path.dirname(target), "live-hook-integrity.mts");
+async function repairAttempt(input: Buffer): Promise<string> {
+  const script = path.join(HOOKS_ROOT, "live-hook-integrity.mts");
   if (Date.now() > OUTER_DEADLINE - 2000 || !fs.existsSync(script)) return "";
-  const result = await runChild({ v: PROTOCOL, mode: "writer", target: script, deadline: OUTER_DEADLINE - 500 },
+  const result = await runChild({ v: PROTOCOL, mode: "writer", root: HOOKS_ROOT, target: script, deadline: OUTER_DEADLINE - 500 },
     ["--trigger", "hook-entry"], input, OUTER_DEADLINE - 500);
   const lines = result.ready ? result.stdout.split(/\r?\n/).filter((line) => line.trim()) : [];
   const status = failureOf(result).why;
@@ -170,7 +172,7 @@ async function main(): Promise<void> {
   const input = await readStdin(pretool ? OUTER_DEADLINE - 1000 : Number.POSITIVE_INFINITY);
   const blocked = (why: string): string => `[hook-entry] ${target} cannot run (${why}); the tool call is blocked until hook integrity restores it`;
   if (input === null) return pretool ? finish(deny(blocked("stdin not closed in time")), "", 0) : finish("", "[hook-entry] stdin unreadable\n", 1);
-  const config: Config = { v: PROTOCOL, mode: mode === "writer" ? "writer" : "reader", target,
+  const config: Config = { v: PROTOCOL, mode: mode === "writer" ? "writer" : "reader", root: HOOKS_ROOT, target,
     deadline: pretool ? CHILD_DEADLINE : START + 600_000 };
   const result = await runChild(config, rest, input, pretool ? OUTER_DEADLINE - 600 : null);
   const failure = failureOf(result);
@@ -181,7 +183,7 @@ async function main(): Promise<void> {
   if (!failure.why && result.code === 2) return finish("", result.stderr, 2);
   const shape = failure.why || !result.stdout.trim() ? "" : preToolShape(result.stdout);
   if (!failure.why && !shape) return finish(result.stdout, result.stderr, 0);
-  const context = failure.mainFailed ? await repairAttempt(target, input) : "";
+  const context = failure.mainFailed ? await repairAttempt(input) : "";
   finish(deny(blocked(failure.why || shape), context), result.ready ? result.stderr : "", 0);
 }
 

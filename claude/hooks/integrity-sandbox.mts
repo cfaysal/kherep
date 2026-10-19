@@ -13,9 +13,18 @@ const HOOKS_SOURCE = import.meta.dirname;
 export const ENTRY = path.resolve(HOOKS_SOURCE, "..", "kherep", "hook-runtime", "entry.mts");
 export const HOOK = "live-hook-integrity.mts";
 
-// The hook and every non-test lib, byte for byte, into hooksDir.
+// The entry of the installation hooksDir belongs to: <home>/kherep/hook-runtime beside <home>/hooks.
+export const entryFor = (hooksDir: string): string => path.join(path.dirname(hooksDir), "kherep", "hook-runtime", "entry.mts");
+
+// This checkout's runtime beside hooksDir, once.
+function ensureRuntime(hooksDir: string): void {
+  if (!fs.existsSync(entryFor(hooksDir))) fs.cpSync(path.dirname(ENTRY), path.dirname(entryFor(hooksDir)), { recursive: true });
+}
+
+// The hook and every non-test lib, byte for byte, into hooksDir, and the runtime beside it.
 export function installIntegrity(hooksDir: string): void {
   fs.mkdirSync(path.join(hooksDir, "lib"), { recursive: true });
+  ensureRuntime(hooksDir);
   fs.copyFileSync(path.join(HOOKS_SOURCE, HOOK), path.join(hooksDir, HOOK));
   for (const name of fs.readdirSync(path.join(HOOKS_SOURCE, "lib"))) {
     if (name.endsWith(".mts") && !name.endsWith(".test.mts")) {
@@ -34,7 +43,8 @@ export interface Result { status: number | null; stdout: string; stderr: string 
 
 // The hook in hooksDir, admitted as the integrity writer.
 export function runIntegrity(hooksDir: string, input: string, env: NodeJS.ProcessEnv, args: string[] = []): Result {
-  const run = spawnSync(process.execPath, [ENTRY, "writer", path.join(hooksDir, HOOK), ...args],
+  ensureRuntime(hooksDir);
+  const run = spawnSync(process.execPath, [entryFor(hooksDir), "writer", path.join(hooksDir, HOOK), ...args],
     { input, encoding: "utf8", env, windowsHide: true, timeout: 60_000 });
   return { status: run.status, stdout: run.stdout, stderr: run.stderr };
 }

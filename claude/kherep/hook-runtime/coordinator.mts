@@ -14,6 +14,7 @@
 // Static imports: node:* and this directory only.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   initialize, isRefusal, type Kind, openDatabase, type Opened, read, refuse, rollbackQuietly, run, schemaState, sqliteKind,
@@ -23,7 +24,11 @@ import { type Applied, applyPending, recordIntent, sha256, shaOf, targetOf, type
 export const PROTOCOL = 1;
 export const CAPABILITY = Symbol.for("kherep.hook-runtime");
 export type Mode = "reader" | "writer";
-export interface Config { v: number; mode: Mode; target: string; deadline: number }
+// root: the hooks directory this installation repairs, <home>/hooks beside <home>/kherep/hook-runtime.
+// Every process of one installation is admitted on that one root's database, a main in a
+// subdirectory of it included; the root is never derived from the main's own directory.
+export interface Config { v: number; mode: Mode; root: string; target: string; deadline: number }
+export const HOOKS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks");
 export interface Restored { proven: boolean; sha?: string; why?: string }
 interface Common { root: string; deadline: number; childArgs: (file: string) => string[]; writerArgs: (file: string) => string[] }
 export interface ReaderCapability extends Common { mode: "reader"; release: () => void }
@@ -124,11 +129,12 @@ function checkMain(root: string, target: string, mode: Mode): void {
   const st = fs.statSync(real);
   if (!st.isFile()) throw refuse("main-missing");
   if (st.size === 0) throw refuse("main-empty");
-  if (mode === "writer" && path.basename(real) !== "live-hook-integrity.mts") throw refuse("mode");
+  if (mode === "writer" && (path.basename(real) !== "live-hook-integrity.mts" || path.dirname(real) !== root)) throw refuse("mode");
 }
 
 function validConfig(config: Config): boolean {
   return !!config && config.v === PROTOCOL && (config.mode === "reader" || config.mode === "writer")
+    && typeof config.root === "string" && path.resolve(config.root) === HOOKS_ROOT
     && typeof config.target === "string" && path.isAbsolute(config.target) && Number.isFinite(config.deadline);
 }
 
@@ -138,7 +144,7 @@ export async function admit(config: Config): Promise<ReaderCapability | WriterCa
   // Reading the journal mode while a writer holds EXCLUSIVE is busy as well.
   let o: Opened;
   for (;;) {
-    try { o = await openDatabase(path.dirname(config.target)); break; } catch (error) {
+    try { o = await openDatabase(config.root); break; } catch (error) {
       if (sqliteKind(error) !== "busy" || Date.now() >= until) throw error;
     }
     await backoff();
@@ -153,7 +159,7 @@ export async function admit(config: Config): Promise<ReaderCapability | WriterCa
     throw isRefusal(error) ? error : refuse("unavailable");
   }
   const args = (mode: Mode) => (file: string): string[] =>
-    [preloadArg(import.meta.url, { v: PROTOCOL, mode, target: file, deadline: config.deadline }), file];
+    [preloadArg(import.meta.url, { v: PROTOCOL, mode, root: config.root, target: file, deadline: config.deadline }), file];
   const common = { root: o.root, deadline: config.deadline, childArgs: args("reader"), writerArgs: args("writer") };
   if (config.mode === "reader") {
     let open = true;
