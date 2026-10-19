@@ -96,10 +96,13 @@ const realOrEmpty = (dir: string): string => {
   try { return fs.realpathSync(dir); } catch { return ""; }
 };
 
-// Why this run may not repair, or "" when it may.
-function gateOf(home: string, uncoordinated: string[]): string {
+// Why this run may not repair, or "" when it may. Settings that could not be read
+// (notes) leave the wiring UNKNOWN, so an uncoordinated reader cannot be ruled out.
+function gateOf(home: string, wiring: { uncoordinated: string[]; notes: string[] }): string {
   if (!HOLD) return "this run is not coordinated: start it through kherep/hook-runtime/entry.mts";
   if (realOrEmpty(`${home}/hooks`) !== HOLD.root) return `the coordinated hooks directory is not ${home}/hooks`;
+  if (wiring.notes.length) return "the live settings were not read completely, so the wiring is UNKNOWN";
+  const { uncoordinated } = wiring;
   if (uncoordinated.length) return `${uncoordinated.length} wired command(s) run hooks/ code outside kherep/hook-runtime/entry.mts`;
   return "";
 }
@@ -113,17 +116,21 @@ async function ownImportFailed({ rel, why, loaded }: LoadFailure, payload: Scope
   const file = `${hooksDir}/${rel}`;
   const hold = HOLD && realOrEmpty(hooksDir) === HOLD.root ? HOLD : null;
   let result: Restored = { proven: false, why: "the restore itself needs integrity-verdict, workspace-scope, orchestra-checkout and integrity-heartbeat" };
+  let gated = false;
   if (!hold) result = { proven: false, why: "this run is not coordinated on this hooks directory" };
   else if (loaded >= RESTORE_LIBS && loaded < INVENTORY_LIBS) {
     result = { proven: false, why: "the wiring cannot be checked without lib/hook-inventory.mts; the next installation restores it" };
   } else if (loaded >= INVENTORY_LIBS) {
     const normalized = lib.normalizePathLike(home);
-    const blocked = gateOf(normalized, lib.wiredFiles(normalized).uncoordinated) || lib.invalidateHeartbeat(home);
+    const gate = gateOf(normalized, lib.wiredFiles(normalized));
+    gated = !!gate;
+    const blocked = gate || lib.invalidateHeartbeat(home);
     result = blocked ? { proven: false, why: blocked }
       : await lib.restore(lib, hold, file, rel, lib.checkoutFor(payload, normalized));
   }
-  // Without integrity-verdict there is no journal function to call; outside the hold no journal at all.
-  if (loaded > 0 && hold?.holding()) lib.journal(home, {
+  // Without integrity-verdict there is no journal function to call; outside the hold, or
+  // where the gate refuses every repair, no journal at all (as in the ordinary run).
+  if (loaded > 0 && !gated && hold?.holding()) lib.journal(home, {
     ts: new Date().toISOString(), trigger: TRIGGER, file: rel, path: file, state: "DEFEKT", reason: why, kind: "self",
     importedBy: ["live-hook-integrity.mts"],
     sha256After: result.sha || null, restoreProven: result.proven, restoreDetail: result.proven ? undefined : result.why,
@@ -156,7 +163,7 @@ async function main(): Promise<void> {
     if (PLAIN) lines.push(`heartbeat not written (no hook file is wired under ${home})`);
     return emit(lines);
   }
-  await lib.runIntegrity({ lib, hold: HOLD, gate: gateOf(home, uncoordinated), files, notes, lines, payload, home, trigger: TRIGGER, plain: PLAIN });
+  await lib.runIntegrity({ lib, hold: HOLD, gate: gateOf(home, { uncoordinated, notes }), files, notes, lines, payload, home, trigger: TRIGGER, plain: PLAIN });
   emit(lines);
 }
 
