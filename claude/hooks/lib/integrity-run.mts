@@ -24,6 +24,10 @@ export interface WriterHold extends Repairer { root: string; holding: () => bool
 export interface Run {
   lib: RunLibs; hold: WriterHold | null; gate: string; files: HookFile[]; notes: string[]; lines: string[];
   payload: ScopePayload | null; home: string; trigger: string; plain: boolean;
+  // Test seam: pauses the run between the final proof and the heartbeat. It takes
+  // nothing and returns nothing; it cannot substitute a check, the hold, the root or
+  // the heartbeat. Production (live-hook-integrity.mts) never sets it.
+  probe?: { beforeHeartbeat?: () => Promise<void> | void };
 }
 type Outcome = { unproven: string; restored: boolean };
 const LOST = "the exclusive hold on the hooks directory was lost";
@@ -64,6 +68,7 @@ export async function runIntegrity(run: Run): Promise<void> {
   if (!unproven && !hold?.holding()) unproven = LOST;
   let count = inventory.length;
   if (!unproven) ({ why: unproven, count } = await lib.finalProof(lib, home, hold!.root, files));
+  await run.probe?.beforeHeartbeat?.();
   if (!unproven) unproven = lib.writeHeartbeat(home, { trigger, runtime: "claude", files: count });
   if (plain) lines.push(unproven ? `heartbeat not written (${unproven})` : `all ${count} files OK (${restored} restored), heartbeat refreshed`);
 }
