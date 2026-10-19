@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
 
+import { applyAcl, liftAcl, sameAcl } from "./acl-fixture.mts";
 import { child, childAsync, cleanup, database, entry, type Home, runtimeHome, until } from "./hook-runtime-fixture.mts";
 
 after(cleanup);
@@ -291,27 +292,35 @@ test("F2.5: a write-denied replay after the binding keeps the replacement bytes,
   assert.equal(fs.statSync(s.guard, { bigint: true }).ino, s.ino);
 });
 
-// F2.6, as restore-write.test.mts: macOS chmod +a and Linux setfacl; skipped elsewhere and as root.
-const aclTool = process.platform === "darwin" ? "chmod" : process.platform === "linux" ? "setfacl" : "";
-const sh = (cmd: string, args: string[]) => spawnSync(cmd, args, { encoding: "utf8" });
-const acl = (file: string): string => process.platform === "darwin"
-  ? sh("ls", ["-le", file]).stdout.split("\n").slice(1).join("\n") : sh("getfacl", ["-cp", file]).stdout;
-const addAcl = (file: string, deny: boolean): boolean => sh(aclTool, process.platform === "darwin"
-  ? ["+a", `group:everyone ${deny ? "deny write" : "deny delete"}`, file]
-  : ["-m", deny ? "u::r--,u:nobody:r--,m::r--" : "u:nobody:r--", file]).status === 0;
-
+// F2.6, with the ACL fixture of lib/restore-write-acl.test.mts: an ACL on the replacement
+// leaf survives the replay, a write-denying one refuses it and keeps the intent, and once
+// that ACL is lifted the same confirmed replay completes. Windows runs both, never skipped.
 for (const deny of [false, true]) {
   test(`F2.6: a replacement with ${deny ? "a write-denying" : "a restricting"} ACL keeps it, its inode, mode and owner`, async (t) => {
     const s = await stuck();
-    if (!aclTool || process.getuid?.() === 0 || !addAcl(s.guard, deny)) return t.skip("no ACL tool for this platform");
-    t.after(() => sh(aclTool, process.platform === "darwin" ? ["-N", s.guard] : ["-b", s.guard]));
-    const before = { acl: acl(s.guard), stat: fs.statSync(s.guard, { bigint: true }) };
+    const acl = applyAcl(t, s.guard, deny);
+    if (!acl) return;
+    const before = { stat: fs.statSync(s.guard, { bigint: true }), row: await pending(s.home) };
     const run = replayCli(s);
     assert.equal(run.code, deny ? "replay-refused" : "replayed", run.stdout);
+    if (deny) assert.equal(run.fields.reason, "open-failed", run.stdout);
+    sameAcl(s.guard, acl.before);
     const now = fs.statSync(s.guard, { bigint: true });
-    assert.equal(acl(s.guard), before.acl);
-    assert.deepEqual([now.ino, now.uid, now.gid, now.mode], [before.stat.ino, before.stat.uid, before.stat.gid, before.stat.mode]);
+    assert.deepEqual([now.dev, now.ino, now.uid, now.gid, now.mode],
+      [before.stat.dev, s.ino, before.stat.uid, before.stat.gid, before.stat.mode]);
     assert.equal(fs.readFileSync(s.guard, "utf8"), deny ? REPLACED : s.good);
-    assert.equal((await pending(s.home)).n, deny ? 1 : 0);
+    const row = await pending(s.home);
+    assert.equal(row.n, deny ? 1 : 0);
+    if (deny) assert.equal(row.before, before.row.before, "the before-hash is not rewritten");
+    liftAcl(s.guard);
+    if (deny) {
+      const again = replayCli(s);
+      assert.equal(again.code, "replayed", again.stdout);
+      assert.equal(fs.readFileSync(s.guard, "utf8"), s.good);
+      assert.equal(fs.statSync(s.guard, { bigint: true }).ino, s.ino);
+      assert.equal((await pending(s.home)).n, 0);
+    }
+    fs.rmSync(s.guard);
+    assert.equal(fs.existsSync(s.guard), false, "the file can be removed after the reset");
   });
 }
