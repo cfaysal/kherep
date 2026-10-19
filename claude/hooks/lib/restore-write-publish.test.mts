@@ -243,3 +243,30 @@ test("a foreign file with a staging-like name in the hooks root is left as it is
   assert.equal(fs.readFileSync(planted, "utf8"), FOREIGN);
   assert.deepEqual(tmpLeft(b.root), [`hooks/dep.mts.${process.pid}.000000000000.kherep-tmp`]);
 });
+
+// Review of 59908e3 (MX, Astra): the cleanup checks the directory the staging name
+// really resolves to, not the hooks directory. Here the target is reached through
+// hooks/alias, a link to hooks itself (the root fast path); before the link the
+// writer's own file is moved outside and the alias re-pointed there. The publication
+// is refused and the writer's file outside is left alone.
+test("a re-pointed alias of the hooks directory: refused, and the writer's own file outside is not removed", (t: TestContext) => {
+  const b = box();
+  const alias = path.join(b.hooks, "alias");
+  try { fs.symlinkSync(b.hooks, alias, "junction"); } catch (error) {
+    return t.skip(`directory link: ${(error as NodeJS.ErrnoException).code ?? "unavailable"}`);
+  }
+  const file = path.join(alias, "guard.mts");
+  let moved = "";
+  const result = writeExact(file, WANTED, b.hooks, { beforeLink: () => {
+    const own = fs.readdirSync(b.hooks).filter((name) => name.endsWith(".kherep-tmp")); // not recursive: alias loops
+    assert.equal(own.length, 1, "exactly one staging name");
+    moved = path.join(b.outsideDir, path.basename(own[0]!));
+    fs.renameSync(path.join(b.hooks, own[0]!), moved);
+    fs.unlinkSync(alias);
+    fs.symlinkSync(b.outsideDir, alias, "junction");
+  } });
+  assert.match(result, /resolves outside/);
+  assert.deepEqual(fs.readFileSync(moved), WANTED, "the writer's own file outside stays");
+  assert.equal(fs.existsSync(path.join(b.outsideDir, "guard.mts")), false, "nothing was published outside");
+  assert.equal(fs.readFileSync(b.outside, "utf8"), OUTSIDE);
+});
