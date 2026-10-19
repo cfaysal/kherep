@@ -228,13 +228,12 @@ test("spaceIndex follows the cursor and collects the parent set", async () => {
   assert.equal(index.byTitle.get("a leaf")?.id, "12");
 });
 
-test("spaceIndex stops on a cursor that returns nothing instead of looping", async () => {
+test("spaceIndex refuses a stalled cursor instead of claiming completeness", async () => {
   const { session, specs } = recorder([
     { results: [], _links: { next: "/api/v2/spaces/1/pages?cursor=forever" } },
   ]);
-  const index = await spaceIndex(session, "1");
-  assert.equal(specs.length, 1, "an empty page ends the walk - this shape hung two runs for two hours");
-  assert.equal(index.byId.size, 0);
+  await assert.rejects(() => spaceIndex(session, "1"), /incomplete/);
+  assert.equal(specs.length, 1, "a stalled read fails promptly");
 });
 
 test("textSearch scopes the CQL to the space and reads both result shapes", async () => {
@@ -381,4 +380,8 @@ test("requireResolvableAnchors names every bad id and what to do instead", async
 test("requireResolvableAnchors passes a body whose links all resolve here", async () => {
   const { session } = recorder([{ id: "1", spaceId: "42" }]);
   await requireResolvableAnchors(session, '<a href="/wiki/spaces/KB/pages/1">ok</a>', "42");
+});
+
+test('inventory malformed success must not become an empty space', async () => {
+  await assert.rejects(() => spaceIndex(recorder([{}]).session, '1'), /malformed/i);
 });

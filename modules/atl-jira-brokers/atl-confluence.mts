@@ -46,6 +46,9 @@ import {
   currentUser,
 } from "./confluence-session.mts";
 
+import { parseExpectedVersion } from './confluence-pagination.mts';
+import { cmdDrainage } from './confluence-drainage-cli.mts';
+
 const CRED_ENV = "KHEREP_ATL_CRED_FILE_CODEX";
 // An absent value is UNKNOWN and says so. A blank line here would read like an
 // answer, and an unverifiable author is the one thing this broker exists for.
@@ -85,7 +88,7 @@ export const FLAGS = {
     oneOf: [BODY],
     optional: { parent: "<id>", labels: "<a,b>" },
   },
-  update: { required: { id: "<id>", format: "<storage|wiki|adf>" }, oneOf: [BODY], optional: { title: "<title>", message: "<text>" } },
+  update: { required: { id: "<id>", format: "<storage|wiki|adf>" }, oneOf: [BODY], optional: { title: "<title>", message: "<text>", "expected-version": "<n>" } },
   get: { required: { id: "<id>" }, optional: { format: "<storage|adf>" }, valueless: ["body-only"] },
   delete: { required: { id: "<id>" } },
   purge: { required: { id: "<id>" } },
@@ -99,6 +102,7 @@ export const FLAGS = {
   context: { required: { space: "<key>", id: "<id>" } },
   orphans: { required: { space: "<key>" } },
   stitch: { required: { space: "<key>" }, optional: { id: "<id>", limit: "<n>", "per-orphan": "<n>" }, valueless: ["dry-run"] },
+  drainage: { required: { space: "<key>" }, optional: { ids: "<id,id>", "exclude-ids": "<id,id>" }, valueless: ["metadata-approved"] },
   selftest: {},
 } satisfies VerbTable;
 
@@ -160,6 +164,7 @@ async function cmdCreate(ctx: CliContext, args: Args): Promise<number> {
 }
 
 async function cmdUpdate(ctx: CliContext, args: Args): Promise<number> {
+  const expectedVersion = parseExpectedVersion(args["expected-version"]);
   const representation = representationFor(args.format);
   const value = await bodyOf(ctx, args);
   const session = createSession(ctx);
@@ -167,7 +172,7 @@ async function cmdUpdate(ctx: CliContext, args: Args): Promise<number> {
   const current = await getPage(session, args.id ?? "");
   await requireResolvableAnchors(session, value, current.spaceId);
   const result = await updatePage(session, {
-    id: args.id ?? "", representation, value, title: args.title, message: args.message,
+    id: args.id ?? "", representation, value, title: args.title, message: args.message, expectedVersion,
   });
   ctx.log(`version read: ${result.readVersion}`);
   ctx.log(`version sent: ${result.sentVersion}`);
@@ -229,6 +234,7 @@ const COMMANDS: Record<Verb, (ctx: CliContext, args: Args) => Promise<number>> =
   context: cmdContext,
   orphans: cmdOrphans,
   stitch: cmdStitch,
+  drainage: cmdDrainage,
   selftest: cmdSelftest,
 };
 
@@ -254,7 +260,7 @@ export async function runCli(argv: string[], injected: Injected = {}): Promise<n
   try {
     // One line on purpose: the contract test reads this source and requires the
     // verbs of this usage string to be exactly the keys of FLAGS.
-    if (!Object.hasOwn(FLAGS, command)) fail("Usage: create | update | get | delete | purge | labels | move | space | children | related | search | list | context | orphans | stitch | selftest. Run help for the flags of each verb.");
+    if (!Object.hasOwn(FLAGS, command)) fail("Usage: create | update | get | delete | purge | labels | move | space | children | related | search | list | context | orphans | stitch | drainage | selftest. Run help for the flags of each verb.");
     const verb = command as Verb;
     return await COMMANDS[verb](ctx, parseVerbArgs(verb, FLAGS[verb], rest, EN));
   } catch (error) {

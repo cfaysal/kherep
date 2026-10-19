@@ -180,3 +180,7 @@ Repairs accept the exact owned environment as either an inline table or Codex's 
 All writes use the existing install transaction and backup. Rollback restores the prior configuration and managed files.
 
 The Central Brain Confluence space is the supported shared knowledge base. Configured unrelated MCP services remain optional and preserve their transport and authorization rules. Obsolete or edited managed configurations require explicit operator recovery when exact ownership cannot be verified.
+
+## Knowledge-space maintenance
+
+The shared, manually invoked `brain-drainage` skill is projected from `claude/skills/brain-drainage` with its review guide and normal skill discovery. Both runtime service-account broker CLIs expose the same `drainage` command through the installed `confluence-drainage-*` modules and strict `confluence-pagination.mts` helper. The path is Maestro -> configured broker -> GET-only scanner -> bounded candidate report; changes return through operator-reviewed, version-guarded broker updates. No daemon, additional backend or autonomous publication path is installed. Content classification and private local-route constraints precede invocation. See the [broker contract](../modules/atl-jira-brokers/README.md#brain-drainage).

@@ -22,6 +22,8 @@
 // either alone.
 import { ConfluenceError, SCOPES, v1, v2, type ConfluenceSession } from "./confluence-contract.mts";
 
+import { strictRows, nextPath, ReadFailure, readFailure } from './confluence-pagination.mts';
+
 export interface IndexedPage {
   id: string;
   title: string;
@@ -43,39 +45,47 @@ function text(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-function rowsOf(json: unknown): Record<string, unknown>[] {
-  const results = (json as { results?: unknown })?.results;
-  return Array.isArray(results) ? (results as Record<string, unknown>[]) : [];
+export class InventoryError extends ConfluenceError {
+  index: SpaceIndex;
+  failure: {reason: string; httpStatus?: number};
+  constructor(index: SpaceIndex, error: unknown) {
+    super('Space inventory incomplete: malformed, stalled or failed read.');
+    this.index = index;
+    this.failure = readFailure(error);
+  }
 }
 
-// Reads the whole space in one paginated pass. One request per 250 pages beats
-// two requests per candidate, and the parent set falls out for free.
+// Preserve successfully read rows on failure, but never return a partial index as complete.
 export async function spaceIndex(session: ConfluenceSession, spaceId: string): Promise<SpaceIndex> {
-  const byId = new Map<string, IndexedPage>();
-  const byTitle = new Map<string, IndexedPage>();
-  const parents = new Set<string>();
-
-  let path: string | null = v2(`/spaces/${spaceId}/pages?limit=250&status=current`);
-  while (path) {
-    const { json } = await session.request({ method: "GET", path, scope: SCOPES.get });
-    const rows = rowsOf(json);
-    const before = byId.size;
-    for (const row of rows) {
-      const id = text(row.id);
-      if (!id) continue;
-      const parentId = text(row.parentId) || null;
-      const page: IndexedPage = { id, title: text(row.title), parentId };
-      byId.set(id, page);
-      if (page.title) byTitle.set(page.title.toLowerCase(), page);
-      if (parentId) parents.add(parentId);
+  if (!/^\d+$/.test(spaceId)) throw new ConfluenceError('Space id must be numeric.');
+  const index: SpaceIndex = { byId: new Map(), byTitle: new Map(), parents: new Set() };
+  const endpoint = v2(`/spaces/${spaceId}/pages`);
+  let path: string | null = `${endpoint}?limit=250&status=current`;
+  const visited = new Set<string>();
+  try {
+    while (path) {
+      if (visited.has(path)) throw new ReadFailure('pagination-loop');
+      visited.add(path);
+      const { json } = await session.request({ method: 'GET', path, scope: SCOPES.get });
+      const before = index.byId.size;
+      for (const row of strictRows(json)) {
+        if (typeof row.id !== 'string' || !/^\d+$/.test(row.id) || typeof row.title !== 'string'
+          || (row.spaceId !== undefined && row.spaceId !== spaceId)
+          || (row.parentId !== undefined && row.parentId !== null && typeof row.parentId !== 'string')) {
+          throw new ReadFailure('malformed-inventory-page');
+        }
+        const page: IndexedPage = { id: row.id, title: row.title, parentId: text(row.parentId) || null };
+        index.byId.set(page.id, page);
+        index.byTitle.set(page.title.toLowerCase(), page);
+        if (page.parentId) index.parents.add(page.parentId);
+      }
+      path = nextPath(json, endpoint);
+      if (path && index.byId.size === before) throw new ReadFailure('stalled-pagination');
     }
-    const next = (json as { _links?: { next?: unknown } })?._links?.next;
-    const link = typeof next === "string" ? next : "";
-    // Only follow a cursor that added a page. A link that returns the same page
-    // forever is the shape that hung two runs on 2026-09-21 for two hours.
-    path = link && byId.size > before ? (link.startsWith("/wiki") ? link : `/wiki${link}`) : null;
+    return index;
+  } catch (error) {
+    throw new InventoryError(index, error);
   }
-  return { byId, byTitle, parents };
 }
 
 // English only: everything in this space is written in English by convention.
@@ -204,7 +214,7 @@ export async function textSearch(
   const cql = `space=${JSON.stringify(spaceKey)} and type=page and text ~ ${JSON.stringify(phrase)}`;
   const path = v1(`/search?cql=${encodeURIComponent(cql)}&limit=${limit}`);
   const { json } = await session.request({ method: "GET", path, scope: SCOPES.get });
-  return rowsOf(json)
+  return strictRows(json)
     .map((row) => text((row.content as { title?: unknown } | undefined)?.title) || text(row.title))
     .filter(Boolean);
 }

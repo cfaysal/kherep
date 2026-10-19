@@ -689,6 +689,12 @@ test("installs the Mac-compatible projection without replacing user state", asyn
     "atl-confluence-ccoder.mts",
     "confluence-contract.mts",
     "confluence-content.mts",
+    "confluence-pagination.mts",
+    "confluence-drainage-rules.mts",
+    "confluence-drainage-snapshot.mts",
+    "confluence-drainage-scan.mts",
+    "confluence-drainage-cli.mts",
+
     "confluence-session.mts",
   ]) {
     const target = path.join(workspace, "tools", name);
@@ -1041,6 +1047,12 @@ test("default install projects observation delivery without optional Jira toolin
     "atl-confluence.mts",
     "confluence-contract.mts",
     "confluence-content.mts",
+    "confluence-pagination.mts",
+    "confluence-drainage-rules.mts",
+    "confluence-drainage-snapshot.mts",
+    "confluence-drainage-scan.mts",
+    "confluence-drainage-cli.mts",
+
     "confluence-session.mts",
     "confluence-related.mts",
     "confluence-semantic.mts",
@@ -1233,6 +1245,12 @@ test("rolls every managed target back when installation fails", (t) => {
     "confluence-session",
     "confluence-related", "confluence-semantic", "confluence-neighbours", "confluence-neighbour-cli", "confluence-runtime-label",
     "confluence-label-cli",
+    "confluence-pagination",
+    "confluence-drainage-rules",
+    "confluence-drainage-snapshot",
+    "confluence-drainage-scan",
+    "confluence-drainage-cli",
+
   ];
   for (const name of brokerNames) {
     const target = path.join(workspace, "tools", `${name}.mts`);

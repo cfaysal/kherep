@@ -56,3 +56,26 @@ Labels are written by two verbs only, `create` and `labels`; every other verb re
 Missing or invalid bindings stop the operation. Neither broker falls back to the other runtime's credentials or an author's account. The installer preserves operator settings but does not invent these values. Configure them before using the brokers after upgrading from a deployment with embedded bindings.
 
 Run `npm run test:brokers` from the repository root for synthetic configuration, authority and request tests. A passing test suite does not verify access to an operator's real Jira site.
+
+## Brain drainage
+
+The manually invoked `brain-drainage` skill is installed for Claude and Codex. It uses each runtime's configured service-account broker and space. Classification precedes tool use: page IDs, versions and structural findings can be private too. The scanner performs local structural analysis and emits no body excerpts or titles. Private content requires an authorized local route with no private outputs returning to a cloud model. Without that route, exclude known pages or stop the dependent review. The output flag records that preflight decision; it does not grant access.
+
+```text
+<configured broker> drainage --space <key> --metadata-approved
+<configured broker> drainage --space <key> --ids <id,id> --exclude-ids <id,id> --metadata-approved
+```
+
+The JSON report contains candidate rows with page ID, read version, problem, proposed action class, bounded structural evidence and uncertainty. Scope, exclusions, counts, read errors and time span are separate from semantic review, which remains UNKNOWN. Inventory status is `complete`, `partial` or `failed`; exit 0 means the requested inventory completed, exit 2 means incomplete coverage, and exit 1 means invalid arguments or setup. A subset can have complete requested coverage while its space graph remains unevaluated. Hidden pages are outside visible coverage. Empty candidates never prove the space clean.
+
+The scanner uses GET only, follows endpoint-bound pagination, brackets page/label reads for observed drift, and repeats inventory before graph evaluation. Stalled, looping, malformed and escaping cursors fail visibly. These are bracket reads, not an atomic snapshot. Incoming-link findings describe only explicit page-ID links in the complete visible current graph, not hierarchy navigation or external links. Near duplicates use meaningful content, excluding Related navigation. Code-bound observations with missing or invalid Revision lines, explicit search-only link justification and tracker-status wording become review candidates. No tracker lookup or content judgment is fabricated. Historical measurements remain valid in their original scope even after later fixes.
+
+No findings are automatically applied. The Maestro reviews permitted content and concrete diffs, obtains explicit repair authority, reads target identity/body/version/labels, and uses:
+
+```text
+<configured broker> update --id <id> --format storage --body-file <reviewed-file> --expected-version <n>
+```
+
+Both update CLIs accept `--expected-version`. The shared update function re-reads immediately before PUT, rejects missing/invalid versions or mismatch without writing, and sends the reviewed version plus one. Guarded storage/ADF updates compare the target ID, space, title, status, version and body after PUT. Wiki input cannot provide exact API body readback and is refused for guarded updates. A failed readback may follow an actual write: report UNVERIFIED and investigate before retrying. Legacy calls without the flag retain their previous behavior; the maintenance skill always supplies it. Independently read the target after repair. Body updates preserve labels by leaving them untouched. Labels and multiple pages are separate operations without atomicity.
+
+The [review rules](../../claude/skills/brain-drainage/references/review-rules.md) cover historical evidence, duplicate scope, original revision recovery, provenance links and graph limits. This feature adds no daemon, database, scheduler, scopes or credentials.

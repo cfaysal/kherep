@@ -230,6 +230,16 @@ cmp_file "project/tools/confluence-runtime-label.mts" \
   "$HERE/../modules/atl-jira-brokers/confluence-runtime-label.mts" "$WS/tools/confluence-runtime-label.mts"
 cmp_file "project/tools/confluence-label-cli.mts" \
   "$HERE/../modules/atl-jira-brokers/confluence-label-cli.mts" "$WS/tools/confluence-label-cli.mts"
+cmp_file "project/tools/confluence-pagination.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-pagination.mts" "$WS/tools/confluence-pagination.mts"
+cmp_file "project/tools/confluence-drainage-rules.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-drainage-rules.mts" "$WS/tools/confluence-drainage-rules.mts"
+cmp_file "project/tools/confluence-drainage-snapshot.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-drainage-snapshot.mts" "$WS/tools/confluence-drainage-snapshot.mts"
+cmp_file "project/tools/confluence-drainage-scan.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-drainage-scan.mts" "$WS/tools/confluence-drainage-scan.mts"
+cmp_file "project/tools/confluence-drainage-cli.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-drainage-cli.mts" "$WS/tools/confluence-drainage-cli.mts"
 # Issue #302. The Jira set is optional, but presence decides: the flag adds it,
 # and a host that has any of its files is compared like a flagged one, so a stale
 # broker cannot hide behind a missing flag. Only these exact names count, never

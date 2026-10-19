@@ -12,6 +12,8 @@ import {
   type ConfluenceSession,
 } from "./confluence-contract.mts";
 
+import { positiveVersion } from './confluence-pagination.mts';
+
 // There is no markdown representation in this API. A caller that asks for one
 // gets a refusal, not a guess.
 const FORMATS = { storage: "storage", wiki: "wiki", adf: "atlas_doc_format" } as const;
@@ -157,6 +159,7 @@ export async function getPageBody(
 }
 
 export interface UpdateInput {
+  expectedVersion?: number;
   id: string;
   representation: Representation;
   value: string;
@@ -174,16 +177,25 @@ export interface UpdateResult {
   sentVersion: number;
 }
 
-// PUT /wiki/api/v2/pages/{id}. The version number is READ here rather than
-// accepted from the caller: a caller holding a stale number would otherwise
-// clobber a version written since it last looked. A page that reports no
-// version at all is refused - an absent number is unknown, not one.
+// Re-read before PUT. A supplied review version must match; legacy callers
+// keep their read-current behavior. Guarded writes additionally verify target bytes.
 export async function updatePage(session: ConfluenceSession, input: UpdateInput): Promise<UpdateResult> {
+  if (input.expectedVersion !== undefined) {
+    positiveVersion(input.expectedVersion);
+    if (input.representation === 'wiki') throw new ConfluenceError('Guarded updates require storage or adf for exact readback.');
+  }
   const current = await getPage(session, input.id);
-  if (!current.version) {
+  if (!Number.isSafeInteger(current.version) || current.version < 1) {
     throw new ConfluenceError(`Page ${input.id} reported no version number; refusing to invent one.`);
   }
-  const sentVersion = current.version + 1;
+  if (input.expectedVersion !== undefined && input.expectedVersion !== current.version) {
+    throw new ConfluenceError(`Review version mismatch: expected ${input.expectedVersion}, current ${current.version}. Re-read and review the diff.`);
+  }
+  if (input.expectedVersion !== undefined && (current.id !== input.id.trim() || !/^\d+$/.test(current.spaceId)
+    || !current.title || current.status !== 'current')) {
+    throw new ConfluenceError('Malformed current page identity; guarded update refused.');
+  }
+  const sentVersion = positiveVersion(current.version + 1);
   const { json } = await session.request({
     method: "PUT",
     path: v2(`/pages/${current.id || input.id.trim()}`),
@@ -197,7 +209,23 @@ export async function updatePage(session: ConfluenceSession, input: UpdateInput)
       ...(input.parentId ? { parentId: contentId(input.parentId, "--parent") } : {}),
     },
   });
-  return { page: asPage(json), readVersion: current.version, sentVersion };
+  let page = asPage(json);
+  if (input.expectedVersion !== undefined) {
+    const { json: after } = await session.request({
+      method: 'GET', path: v2(`/pages/${input.id.trim()}?body-format=${input.representation}`), scope: SCOPES.get,
+    }).catch(() => {
+      throw new ConfluenceError('Update was sent, but target readback failed. Result UNVERIFIED. Inspect the target before retrying.');
+    });
+    page = asPage(after);
+    const raw = after as {body?: Record<string, {value?: unknown}>; parentId?: unknown} | null;
+    if (page.id !== input.id.trim() || page.version !== sentVersion || page.spaceId !== current.spaceId
+      || page.title !== (input.title?.trim() || current.title) || page.status !== 'current'
+      || raw?.body?.[input.representation]?.value !== input.value
+      || (input.parentId && raw?.parentId !== input.parentId)) {
+      throw new ConfluenceError('Update was sent, but target readback differs from the reviewed page. Result UNVERIFIED.');
+    }
+  }
+  return { page, readVersion: current.version, sentVersion };
 }
 
 // DELETE moves the page to the trash. It does NOT remove it.

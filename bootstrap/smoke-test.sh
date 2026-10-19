@@ -181,7 +181,7 @@ check_profile() {
     hooks/lib/workspace-scope.mts hooks/lib/workspace-scope.test.mts
     hooks/lib/hook-inventory.mts hooks/lib/hook-syntax.mts hooks/lib/restore-write.mts
     hooks/cbm-code-discovery-gate hooks/cbm-session-reminder hooks/cbm-subagent-reminder
-    skills/codebase-memory skills/kherep-twg agents/kherep-builder.md
+    skills/codebase-memory skills/kherep-twg skills/brain-drainage agents/kherep-builder.md
     teams/kherep/ROUTING.md teams/kherep/config.json
     session-kickoff/protocol.md settings.json CLAUDE.md
     statusline-command.sh kherep/local-inference/runner.mts
@@ -242,7 +242,7 @@ check_profile() {
   [ -e "$workspace/.claude/settings.local.json" ] || { note_fail "MISSING [$profile] project settings"; }
   [ -e "$workspace/CLAUDE.md" ] || { note_fail "MISSING [$profile] project CLAUDE.md"; }
   # OP-1432. The Confluence set ships with the observation agent: present by default.
-  local confluence_tools=(atlassian-credentials.mts atlassian-cli-args.mts atl-confluence.mts atl-confluence-ccoder.mts confluence-contract.mts confluence-content.mts confluence-session.mts confluence-related.mts confluence-semantic.mts confluence-neighbours.mts confluence-neighbour-cli.mts confluence-runtime-label.mts confluence-label-cli.mts)
+  local confluence_tools=(atlassian-credentials.mts atlassian-cli-args.mts atl-confluence.mts atl-confluence-ccoder.mts confluence-contract.mts confluence-content.mts confluence-session.mts confluence-related.mts confluence-semantic.mts confluence-neighbours.mts confluence-neighbour-cli.mts confluence-runtime-label.mts confluence-label-cli.mts confluence-pagination.mts confluence-drainage-rules.mts confluence-drainage-snapshot.mts confluence-drainage-scan.mts confluence-drainage-cli.mts)
   for tool in "${confluence_tools[@]}"; do
     cmp -s "$TMP/repo/modules/atl-jira-brokers/$tool" "$workspace/tools/$tool" || {
       note_fail "CONFLUENCE BROKER [$profile]: default install did not project $tool";
