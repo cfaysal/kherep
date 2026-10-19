@@ -199,4 +199,6 @@ async function main(): Promise<void> {
 const self = fileURLToPath(import.meta.url);
 const invoked = process.argv[1] ? path.resolve(process.argv[1]) : "";
 const real = (file: string): string => { try { return fs.realpathSync(file); } catch { return file; } };
-if (invoked && real(invoked) === real(self)) main().catch(() => finish(deny("[hook-entry] internal error; the tool call is blocked"), "", 0));
+// An internal error is a deny only for PreToolUse; any other event gets the fixed line and exit 1.
+if (invoked && real(invoked) === real(self)) main().catch(() => (process.argv[2] === "pretool"
+  ? finish(deny("[hook-entry] internal error; the tool call is blocked"), "", 0) : finish("", "[hook-entry] internal error\n", 1)));
