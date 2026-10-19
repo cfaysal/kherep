@@ -242,3 +242,33 @@ test("the package scope search reads the file system root's package.json", () =>
   fs.rmSync(path.join(top, "package.json"));
   assert.equal(proof.scopeOf(path.join(t.hooks, "guard.js"), t.root, () => null, new Set(), parentOf), "none");
 });
+
+// Review of 59908e3 (MX, Astra): a wired name that is a link is loaded by Node as its
+// target, so its grammar and package scope come from the target's real path and
+// extension, the alias names it in messages only. File links need a privilege this
+// Windows host lacks (EPERM); there the two alias cases skip and CI proves them.
+function fileLink(t: TestContext, link: string, target: string): boolean {
+  try {
+    fs.symlinkSync(target, link, "file");
+    return true;
+  } catch (error) {
+    t.skip(`file symlink: ${(error as NodeJS.ErrnoException).code ?? "unavailable"}`);
+    return false;
+  }
+}
+
+for (const [label, source, ok] of [["valid ESM", EXP, true], ["a top-level return", RET, false]] as const) {
+  test(`a .js alias of a .mjs target under a commonjs scope is judged as that module: ${label}`, async (t) => {
+    const tr = tree({ "hooks/package.json": '{"type":"commonjs"}', "hooks/target.mjs": source });
+    if (!fileLink(t, path.join(tr.hooks, "guard.js"), path.join(tr.hooks, "target.mjs"))) return;
+    assert.equal((await prove(tr, "guard.js")).why, ok ? "" : NOT_OK("guard.js"));
+  });
+}
+
+test("a hook reached through a directory junction gets the package scope of its real directory", async (t) => {
+  const tr = tree({ "hooks/cjs/package.json": '{"type":"commonjs"}', "hooks/esm/package.json": '{"type":"module"}', "hooks/esm/guard.js": EXP });
+  try { fs.symlinkSync(path.join(tr.hooks, "esm"), path.join(tr.hooks, "cjs", "link"), "junction"); } catch (error) {
+    return t.skip(`directory link: ${(error as NodeJS.ErrnoException).code ?? "unavailable"}`);
+  }
+  assert.equal((await prove(tr, "cjs/link/guard.js")).why, "");
+});
