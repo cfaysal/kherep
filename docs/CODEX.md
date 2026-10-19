@@ -4,7 +4,7 @@ Kherep projects shared rules, skills and agents into Codex through a separate ad
 
 ## Install
 
-Use Node.js 24 and the shared dependencies described in [Installation](INSTALLATION.md). From the checkout:
+Use Node.js 24 (at least 22.18 on the 22 line, or 23.6) and the shared dependencies described in [Installation](INSTALLATION.md). From the checkout:
 
 ```sh
 node codex/install.mts --workspace "$HOME/projects"
