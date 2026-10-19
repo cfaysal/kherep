@@ -29,8 +29,6 @@ function userSid(): string {
   }
   return sidOnce;
 }
-// Assertion messages name the user's SID only as <sid>.
-const redact = (text: string): string => (sidOnce ? text.split(sidOnce).join("<sid>") : text);
 
 const SNAPSHOT = "$ProgressPreference = 'SilentlyContinue'; try { $a = Get-Acl -LiteralPath $env:KHEREP_ACL_PATH -ErrorAction Stop; "
   + "$a.GetSecurityDescriptorSddlForm('Access'); $a.AreAccessRulesProtected } catch { exit 3 }";
@@ -116,10 +114,10 @@ export function applyAcl(t: TestContext, file: string, deny: boolean): Applied |
   if (!before) assert.fail("the ACL could not be read completely before the call");
   if (WIN) {
     const ace = new RegExp(`\\(${deny ? "D" : "A"};[^;()]*;[^;()]+;;;${userSid()}\\)`);
-    // Booleans only: no SDDL and no SID reaches an assertion's actual or expected value.
-    assert.ok(ace.test(before), `the ${deny ? "deny" : "allow"} ACE for <sid> is in place: ${redact(before)}`);
-    assert.ok(before.endsWith(deny ? "\nprotected=False" : "\nprotected=True"), redact(before));
-    if (!deny) assert.ok(!/\([AD];[^;()]*ID/.test(before), `no inherited ACE is left: ${redact(before)}`);
+    // Booleans and fixed messages only: no SDDL and no SID reaches any assertion output.
+    assert.ok(ace.test(before), `the ${deny ? "deny" : "allow"} ACE for the current user is in place`);
+    assert.ok(before.endsWith(deny ? "\nprotected=False" : "\nprotected=True"), "the inheritance is as set");
+    if (!deny) assert.ok(!/\([AD];[^;()]*ID/.test(before), "no inherited ACE is left");
   }
   const denied = writeOpenError(file);
   if (deny) assert.ok(denied === "EPERM" || denied === "EACCES", `a write open under the deny ACL is refused, got ${denied || "an open file"}`);
@@ -132,7 +130,7 @@ export function applyAcl(t: TestContext, file: string, deny: boolean): Applied |
 export function sameAcl(file: string, before: string): void {
   const now = readAcl(file);
   if (!now) assert.fail("the ACL could not be read completely after the call");
-  assert.ok(now === before, `the ACL changed:\n${redact(before)}\n->\n${redact(now)}`);
+  assert.ok(now === before, "the ACL is the one read before the call");
 }
 
 // Lifts the ACL and proves it is gone: on Windows the inherited ACL is back and no
@@ -144,7 +142,7 @@ export function liftAcl(file: string): void {
   if (WIN) {
     const now = readAcl(file);
     if (!now) assert.fail("the ACL could not be read completely after the reset");
-    assert.ok(now.endsWith("\nprotected=False") && !now.includes("(D;"), `the reset restored inheritance: ${redact(now)}`);
+    assert.ok(now.endsWith("\nprotected=False") && !now.includes("(D;"), "the reset restored inheritance and left no deny ACE");
   }
   assert.equal(writeOpenError(file), "", "a write open succeeds after the reset");
 }
