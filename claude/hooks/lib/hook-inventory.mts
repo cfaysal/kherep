@@ -71,9 +71,15 @@ function coordinated(command: string, tokens: string[], home: string, hooksDir: 
   const call = tokens[0] === "&";
   if (!singleCommand(call ? command.replace(/^\s*&/, "") : command)) return false;
   const [node, entry, mode, main] = tokens.slice(call ? 1 : 0).map((token) => token.replace(/^['"]+|['"]+$/g, ""));
-  // Case folded, as isWithinPath folds it: a Windows home may differ in case from the rendered one.
-  return node === "node" && expandToken(entry ?? "", home).toLowerCase() === `${home}/kherep/hook-runtime/entry.mts`.toLowerCase()
+  return node === "node" && sameEntryPath(expandToken(entry ?? "", home), `${home}/kherep/hook-runtime/entry.mts`)
     && ENTRY_MODES.has(mode ?? "") && isWithinPath(expandToken(main ?? "", home), hooksDir);
+}
+
+// The installed entry, by its normalized path: exact everywhere but on Windows, whose file
+// systems ignore case (a home may differ in case from the rendered one). On a
+// case-sensitive file system another case may be another program, never admitted.
+export function sameEntryPath(candidate: string, entry: string, platform: string = process.platform): boolean {
+  return platform === "win32" ? candidate.toLowerCase() === entry.toLowerCase() : candidate === entry;
 }
 
 // True when the shell runs exactly one command: no operator, separator,

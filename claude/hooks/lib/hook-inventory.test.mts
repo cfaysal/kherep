@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { hookInventory, relativeSpecifiers, wiredFiles, type HookFile } from "./hook-inventory.mts";
+import { hookInventory, relativeSpecifiers, sameEntryPath, wiredFiles, type HookFile } from "./hook-inventory.mts";
 
 const HOOKS = "/home/example/.claude/hooks";
 
@@ -208,7 +208,19 @@ test("only a plain entry command is coordinated; a chained one is not", () => {
   const win = "C:\\Users\\Example\\.claude";
   const winCommand = `node "${win}/kherep/hook-runtime/entry.mts" reader "${win}/hooks/a.mts"`;
   assert.deepEqual(uncoordinatedOf(winCommand, "C:/Users/Example/.claude"), [], "a Windows path keeps its backslashes inside quotes");
-  // Second review of 1dd1ca9 (P3-4): the entry path folds case like every other path here.
+  // P3-4 and review of bcab653 (H3): a case-differing entry path is the same entry only on
+  // Windows; on a case-sensitive file system it may be another program.
   const otherCase = `node "c:/users/example/.CLAUDE/kherep/hook-runtime/entry.mts" reader "C:/Users/Example/.claude/hooks/a.mts"`;
-  assert.deepEqual(uncoordinatedOf(otherCase, "C:/Users/Example/.claude"), [], "a case-differing Windows entry path");
+  assert.deepEqual(uncoordinatedOf(otherCase, "C:/Users/Example/.claude"), process.platform === "win32" ? [] : [otherCase]);
+  const posixOther = `node "${home}/Kherep/hook-runtime/entry.mts" reader "${home}/hooks/a.mts"`;
+  assert.deepEqual(uncoordinatedOf(posixOther), process.platform === "win32" ? [] : [posixOther], "Kherep is not kherep off Windows");
+});
+
+test("an entry path matches case-insensitively on Windows only", () => {
+  const a = "/home/example/.claude/kherep/hook-runtime/entry.mts";
+  const b = "/home/example/.claude/Kherep/hook-runtime/entry.mts";
+  assert.equal(sameEntryPath(a, a, "linux"), true);
+  assert.equal(sameEntryPath(a, b, "linux"), false);
+  assert.equal(sameEntryPath(a, b, "darwin"), false);
+  assert.equal(sameEntryPath("C:/Users/X/.claude/kherep/hook-runtime/entry.mts", "c:/users/x/.CLAUDE/kherep/hook-runtime/entry.mts", "win32"), true);
 });
