@@ -85,6 +85,8 @@ function writeAll(fd: number, bytes: Uint8Array, probe: WriteProbe): void {
   fs.fsyncSync(fd);
 }
 
+const APPEARED = "target appeared before the publication; refusing to replace it";
+
 // The absent target: a complete temporary file, linked into place only if the name is still free.
 function publish(file: string, bytes: Uint8Array, hooksDir: string, probe: WriteProbe): string {
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.kherep-tmp`;
@@ -103,18 +105,16 @@ function publish(file: string, bytes: Uint8Array, hooksDir: string, probe: Write
   }
   fs.closeSync(fd);
   probe.beforeLink?.(file);
-  const refusal = anchorRefusal(path.dirname(file), hooksDir)
-    || (lstatOrNull(file) ? "target appeared before the publication; refusing to replace it" : "");
-  if (refusal) {
-    dropOwn(tmp, own);
-    return refusal;
-  }
-  try { fs.linkSync(tmp, file); } catch (error) {
-    dropOwn(tmp, own);
-    return errorCode(error) === "EEXIST" ? "target appeared before the publication; refusing to replace it"
-      : `publication failed (${errorCode(error)}); the target stays absent`;
-  }
+  const outcome = anchorRefusal(path.dirname(file), hooksDir) || (lstatOrNull(file) ? APPEARED : "") || link(tmp, file);
   dropOwn(tmp, own);
+  return outcome;
+}
+
+// Links the complete temporary file to the free name; "" when it is published.
+function link(tmp: string, file: string): string {
+  try { fs.linkSync(tmp, file); } catch (error) {
+    return errorCode(error) === "EEXIST" ? APPEARED : `publication failed (${errorCode(error)}); the target stays absent`;
+  }
   return "";
 }
 

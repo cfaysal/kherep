@@ -147,8 +147,10 @@ function hookOf(command: unknown, prefixes: string[]): { rel: string; main: stri
   const rel = scriptUnder(command, prefixes);
   if (rel === undefined) return undefined;
   const args = argumentScriptsUnder(command, prefixes);
-  if (scriptStem(rel) !== ENTRY || args.length === 0) return { rel, main: scriptStem(rel), wrapped: false, args };
-  return { rel: args[0]!, main: scriptStem(args[0]!), wrapped: true, args: args.slice(1) };
+  const stem = scriptStem(rel);
+  const [first, ...rest] = args;
+  if (stem !== ENTRY || first === undefined) return { rel, main: stem, wrapped: false, args };
+  return { rel: first, main: scriptStem(first), wrapped: true, args: rest };
 }
 
 export function unwireMovedHooks(

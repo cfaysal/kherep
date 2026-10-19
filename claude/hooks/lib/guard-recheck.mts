@@ -27,7 +27,7 @@ export function heartbeatState(home: string, windowMs: number, now: number = Dat
 // args: the node arguments when the hook runtime admits the writer (its
 // preload, the script, the trigger); then the child must report "ready".
 export interface Recheck {
-  script: string; home: string; payload: string; budgetMs: number; why: string; lastOk?: string; args?: string[]; admitted?: boolean;
+  script: string; home: string; payload: string; budgetMs: number; why: string; lastOk?: string; args?: string[];
 }
 
 // What a dispatcher admitted by the hook runtime holds (kherep/hook-runtime/coordinator.mts).
@@ -53,7 +53,7 @@ export async function recheckAfter(plan: Plan): Promise<string | undefined> {
   const budgetMs = Math.max(0, Math.min(plan.maxMs, plan.remaining() - 250)); // ends before the dispatcher's backstop
   if (budgetMs < plan.minMs) return recheckNotice(context, [`skipped, ${budgetMs} ms left of the hook budget; the next matching call re-checks`]);
   const args = plan.runtime && [...plan.runtime.writerArgs(plan.script), "--trigger", "guard-dispatch"];
-  return runRecheck({ script: plan.script, home: plan.home, payload: plan.payload, budgetMs, ...context, args, admitted: !!plan.runtime });
+  return runRecheck({ script: plan.script, home: plan.home, payload: plan.payload, budgetMs, ...context, args });
 }
 
 export const recheckNotice = ({ why, lastOk }: { why: string; lastOk?: string }, lines: string[]): string =>
@@ -66,7 +66,8 @@ export function runRecheck(recheck: Recheck): Promise<string> {
     let stdout = "";
     let stderr = "";
     let settled = false;
-    let ready = !recheck.admitted;
+    const admitted = recheck.args !== undefined;
+    let ready = !admitted;
     const settle = (lines: string[]): void => {
       if (settled) return;
       settled = true;
@@ -75,7 +76,7 @@ export function runRecheck(recheck: Recheck): Promise<string> {
     };
     const child = spawn(process.execPath, recheck.args ?? [recheck.script, "--trigger", "guard-dispatch"], {
       env: { ...process.env, CLAUDE_HOME: recheck.home }, windowsHide: true,
-      stdio: recheck.admitted ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "ignore"],
+      stdio: admitted ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "ignore"],
     });
     child.on("message", (message: { kherep?: unknown; v?: unknown; pid?: unknown }) => {
       if (message?.kherep === "ready" && message.v === 1 && message.pid === child.pid) ready = true;
