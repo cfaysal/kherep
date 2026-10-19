@@ -132,7 +132,9 @@ increments the minor version; every other release increments the patch version.
   `~/.claude`, `$HOME/.claude`, `${HOME}/.claude` or `%USERPROFILE%/.claude`
   form (the script quoted or not, with `/` or `\`) when the Claude home is the
   default one, the command is exactly `node <script>` with nothing glued to the
-  script, no argument, operator, redirect or line break after it, in a hook
+  script, no argument, operator, redirect or line break after it, the path
+  below the token a plain literal one (letters, digits, `.`, `_`, `-` and `/`;
+  no expansion, glob or escape, no `.`, `..` or empty segment), in a hook
   with no field besides `type` and `command`, the template runs that main
   through `kherep/hook-runtime/entry.mts` or passes it to the dispatcher behind
   it, and the template does not run it in that form at that event; the install

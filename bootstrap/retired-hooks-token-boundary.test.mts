@@ -61,6 +61,23 @@ test("a token-form hook the operator gave fields of their own stays", () => {
   assertStays(custom);
 });
 
+// Review of ffdb920: the shell expands or resolves what follows the token before
+// node sees it, and relativeUnder normalised `x/../` away, so
+// `node "$HOME/.claude/hooks/$(operator-check)/../loc-watch.mts"` counted as loc-watch.
+// Below the token only a plain literal path counts: no expansion, glob, escape,
+// `.`, `..` or empty segment.
+test("a token-form path with an expansion, a glob or a dot or empty segment stays", () => {
+  const rests = ["hooks/$(operator-check)/../loc-watch.mts", "hooks/`operator-check`/../loc-watch.mts",
+    "hooks/$OPERATOR/../loc-watch.mts", "hooks/${OPERATOR}/../loc-watch.mts", "hooks/sub/../loc-watch.mts",
+    "hooks/./loc-watch.mts", "./hooks/loc-watch.mts", "hooks//loc-watch.mts", "hooks/*/../loc-watch.mts",
+    "hooks/[a-z]*/../loc-watch.mts", "hooks/{a,b}/../loc-watch.mts", "hooks/?/../loc-watch.mts", "hooks/~/../loc-watch.mts",
+    "hooks/sub\\/../loc-watch.mts"];
+  const commands = TOKENS.flatMap((token) => rests.flatMap((rest) =>
+    ["", ...QUOTES].map((q) => `node ${q}${token}/.claude/${rest}${q}`)));
+  assert.equal(commands.length, TOKENS.length * rests.length * 3);
+  assertStays(commands.map(run));
+});
+
 test("exactly the 12 standalone token-form invocations go", () => {
   const standalone = SCRIPTS.map((script) => `node ${script}`);
   assert.equal(standalone.length, 12);
