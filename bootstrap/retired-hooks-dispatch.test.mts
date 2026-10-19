@@ -9,6 +9,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { renderSettings } from "./render-profile.mts";
+import { resolveProfilePath } from "./render-profile-paths.mts";
 import type { HookEntry, Settings } from "./render-profile-settings.mts";
 import { unwireMovedHooks } from "./retired-hooks.mts";
 
@@ -68,13 +69,15 @@ test("a command through the runtime entry counts by its main", () => {
   const existing: Settings = { hooks: {
     PreToolUse: [{ matcher: "Bash", hooks: [run(entry("pretool", DISPATCH.slice(5))), run(`node ${at("commit-guard.mts")}`),
       run(entry("reader", at("clq-accept-gate.mts")))] }],
-    Stop: [{ matcher: "", hooks: [run(`node ${at("clq-accept-gate.mts")}`), run(entry("reader", at("clq-accept-gate.mts")))] }],
+    Stop: [{ matcher: "", hooks: [run(`node ${at("clq-accept-gate.mts")}`), run(entry("reader", at("clq-accept-gate.mts"))),
+      run('node "C:\\Users\\Example\\.claude\\hooks\\clq-accept-gate.mts"')] }],
   } };
   const { removed } = unwireMovedHooks(existing, source, winHome);
   assert.deepEqual(removed.map((item) => `${item.event} [${item.managedAt.join(",")}] ${item.command}`), [
     `PreToolUse [PreToolUse via hooks/guard-dispatch.mts] node ${at("commit-guard.mts")}`,
     `PreToolUse [Stop] ${entry("reader", at("clq-accept-gate.mts"))}`,
     `Stop [Stop] node ${at("clq-accept-gate.mts")}`,
+    'Stop [Stop] node "C:\\Users\\Example\\.claude\\hooks\\clq-accept-gate.mts"',
   ]);
 });
 
@@ -145,14 +148,17 @@ test("an upgrade from raw managed commands leaves every managed hook once, wrapp
   raw.hooks.Stop.push({ matcher: "", hooks: [run("node ~/.claude/hooks/custom-reader.mts"), run("echo operator-hook")] });
   fs.writeFileSync(path.join(dir, "raw.json"), JSON.stringify(raw));
   const project = path.join(repo, "claude", "settings.project.json");
-  const render = (source: string, existing: string, output: string) => renderSettings(["mac", "/Example/Kherep",
-    "/Example/credentials", home, source, project, existing, "-", output, path.join(dir, "project.json")]);
+  // The host's own profile, so a Windows host renders and matches its drive form.
+  const profile = process.platform === "win32" ? "win" : "mac";
+  const base = process.platform === "win32" ? "C:/Example" : "/Example";
+  const render = (source: string, existing: string, output: string) => renderSettings([profile, `${base}/Kherep`,
+    `${base}/credentials`, home, source, project, existing, "-", output, path.join(dir, "project.json")]);
   render(path.join(dir, "raw.json"), "-", path.join(dir, "installed.json"));
   lines.length = 0;
   render(path.join(repo, "claude", "settings.user.json"), path.join(dir, "installed.json"), path.join(dir, "upgraded.json"));
   const upgraded = JSON.parse(fs.readFileSync(path.join(dir, "upgraded.json"), "utf8")) as Settings;
   const commands = Object.values(upgraded.hooks ?? {}).flatMap((groups) => groups.flatMap((group) => (group.hooks ?? []).map((hook) => String(hook.command))));
-  const managed = commands.filter((command) => command.includes(`${home}/hooks/`));
+  const managed = commands.filter((command) => command.includes(`${resolveProfilePath(profile, home)}/hooks/`));
   const managedTemplate = (template.match(/__KHEREP_CLAUDE_HOME__\/kherep\/hook-runtime\/entry\.mts/g) ?? []).length;
   assert.equal(managed.length, managedTemplate, JSON.stringify(managed, null, 1));
   for (const command of managed) assert.match(command, /^node "[^"]+\/kherep\/hook-runtime\/entry\.mts" (pretool|reader|writer) "/);
