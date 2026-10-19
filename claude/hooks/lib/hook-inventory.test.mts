@@ -208,4 +208,7 @@ test("only a plain entry command is coordinated; a chained one is not", () => {
   const win = "C:\\Users\\Example\\.claude";
   const winCommand = `node "${win}/kherep/hook-runtime/entry.mts" reader "${win}/hooks/a.mts"`;
   assert.deepEqual(uncoordinatedOf(winCommand, "C:/Users/Example/.claude"), [], "a Windows path keeps its backslashes inside quotes");
+  // Second review of 1dd1ca9 (P3-4): the entry path folds case like every other path here.
+  const otherCase = `node "c:/users/example/.CLAUDE/kherep/hook-runtime/entry.mts" reader "C:/Users/Example/.claude/hooks/a.mts"`;
+  assert.deepEqual(uncoordinatedOf(otherCase, "C:/Users/Example/.claude"), [], "a case-differing Windows entry path");
 });
