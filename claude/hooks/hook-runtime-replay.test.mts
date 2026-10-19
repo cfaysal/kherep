@@ -268,6 +268,8 @@ test("a parent swapped to a link outside at the before-open seam is refused with
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), "replay-outside-"));
   fs.writeFileSync(path.join(outside, "guard.mts"), "// outside\n");
   const out = JSON.parse((await finished(replayChild(s, "swap-parent-before-open", { swap: outside }))).out.trim().split("\n").at(-1)!);
+  const lib = path.dirname(s.guard);
+  assert.ok(fs.lstatSync(lib).isSymbolicLink() && fs.existsSync(`${lib}-old`), "the seam swapped the parent");
   assert.deepEqual([out.ok, out.code, out.lines], [false, "replay-refused", ["reason=parent-outside"]]);
   assert.ok(!JSON.stringify(out).includes("/"), JSON.stringify(out));
   assert.equal(fs.readFileSync(path.join(outside, "guard.mts"), "utf8"), "// outside\n");

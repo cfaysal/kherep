@@ -5,6 +5,7 @@
 // Several of them end the process with SIGKILL at a chosen point, which is the
 // crash the suites study.
 import fs from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 interface Data {
@@ -14,7 +15,7 @@ interface Data {
 
 const [scenario, dataFile] = process.argv.slice(2);
 const data = JSON.parse(fs.readFileSync(dataFile!, "utf8")) as Data;
-const runtime = (name: string): Promise<Record<string, any>> => import(pathToFileURL(`${data.runtime}/${name}`).href);
+const runtime = (name: string): Promise<Record<string, any>> => import(pathToFileURL(path.join(data.runtime, name)).href);
 const kill = (): never => { process.kill(process.pid, "SIGKILL"); throw new Error("not reached"); };
 const bytes = (): Uint8Array => new TextEncoder().encode(data.text!);
 const waitFor = (file: string): void => { while (!fs.existsSync(file)) { const t = Date.now(); while (Date.now() - t < 20); } };
@@ -54,7 +55,7 @@ function seams(name: string): Record<string, unknown> {
     case "pause-after-rebind-commit": return { afterRebindCommit: () => { fs.writeFileSync(data.bound!, ""); waitFor(data.go!); } };
     case "swap-before-open": return { write: { beforeOpen: (file: string) => fs.renameSync(data.swap!, file) } };
     case "swap-parent-before-open": return { write: { beforeOpen: (file: string) => {
-      const dir = file.slice(0, file.lastIndexOf("/"));
+      const dir = path.dirname(file); // a Windows target is joined with backslashes
       fs.renameSync(dir, `${dir}-old`);
       fs.symlinkSync(data.swap!, dir, "dir");
     } } };
