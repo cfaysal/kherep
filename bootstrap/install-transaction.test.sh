@@ -706,10 +706,11 @@ test_upgrade_moves_clq_to_stop() {
     const where = Object.entries(s.hooks).flatMap(([event, groups]) => groups.flatMap((g) =>
       (g.hooks || []).filter((h) => String(h.command).includes("clq-accept-gate")).map(() => `${event}[${g.matcher}]`)));
     if (where.join(",") !== "Stop[]") { console.error(`clq wired at: ${where.join(",") || "nowhere"}`); process.exit(1); }
-    // Issue #507: the Bash group is exactly the dispatcher entry for commit-guard and deploy-guard, with the
-    // Claude home as the win profile renders it: resolveProfilePath, the host path.resolve, no slash rewrite.
-    const dispatcher = (claudeHome) =>
-      `node ${["guard-dispatch", "commit-guard", "deploy-guard"].map((n) => `"${claudeHome}/hooks/${n}.mts"`).join(" ")}`;
+    // Issue #507: the Bash group is exactly the dispatcher entry for commit-guard and deploy-guard, started
+    // through the hook runtime entry (part 2), with the Claude home as the win profile renders it:
+    // resolveProfilePath, the host path.resolve, no slash rewrite.
+    const dispatcher = (claudeHome) => `node "${claudeHome}/kherep/hook-runtime/entry.mts" pretool `
+      + ["guard-dispatch", "commit-guard", "deploy-guard"].map((n) => `"${claudeHome}/hooks/${n}.mts"`).join(" ");
     import(require("url").pathToFileURL(renderer).href).then(({ resolveProfilePath }) => {
       if (resolveProfilePath("win", home) !== path.resolve(home)) fail("the win profile no longer renders the home with path.resolve");
       // On any host: a Windows home keeps its backslashes under path.win32, as the renderer substitutes it.
