@@ -175,3 +175,25 @@ for (const [label, spoil] of [
     assert.equal(read(path.join(box.cache, "incidents.jsonl")), null, "no journal entry either");
   });
 }
+
+// Review of 74468ea (H1 residual): with neither settings file present nothing shows how
+// the hooks are wired, so no repair is made: no write, no journal, the bytes stay.
+test("with both settings files missing the ordinary run repairs nothing", () => {
+  const box = sandbox();
+  fs.rmSync(path.join(box.claude, "settings.user.json"));
+  const result = plainOf(box);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /RESTORED from/);
+  assert.equal(guard(box), "");
+  assert.equal(read(path.join(box.cache, "incidents.jsonl")), null);
+});
+
+test("with both settings files missing an own-lib repair is not made either", () => {
+  const box = sandbox();
+  fs.rmSync(path.join(box.claude, "settings.user.json"));
+  fs.writeFileSync(path.join(box.hooks, "lib", "hook-syntax.mts"), "");
+  const result = plainOf(box);
+  assert.match(result.stdout, /own import lib\/hook-syntax\.mts cannot be loaded .* NOT restored \(no live settings could be read, so the wiring is UNKNOWN\)/);
+  assert.equal(read(path.join(box.hooks, "lib", "hook-syntax.mts")), "");
+  assert.equal(read(path.join(box.cache, "incidents.jsonl")), null);
+});
