@@ -147,6 +147,20 @@ describe("R6: a runtime that cannot admit denies PreToolUse and runs no main", (
   });
 });
 
+// Second review of 1dd1ca9 (P3-1): the deny reason reaches the model, so it names the
+// main relative to the hooks directory and carries no absolute path.
+test("a deny names the main by its place in the hooks directory, never by an absolute path", () => {
+  const home = runtimeHome();
+  fs.mkdirSync(path.join(home.hooks, "sub"));
+  for (const [target, label] of [[path.join(home.hooks, "gone.mts"), "gone.mts"], [path.join(home.hooks, "sub", "gone.mts"), "sub/gone.mts"]]) {
+    const reason = reasonOf(entry("pretool", target).stdout);
+    assert.ok(reason.startsWith(`[hook-entry] ${label} cannot run (not admitted: main-missing)`), reason);
+    assert.ok(!reason.includes(home.root), reason);
+    const other = entry("reader", target);
+    assert.equal(other.stderr, `[hook-entry] ${label} not admitted: main-missing\n`);
+  }
+});
+
 test("R6: a valid decision, a silent allow and exit 2 pass through unchanged", () => {
   const home = runtimeHome();
   const decision = JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "why" } });

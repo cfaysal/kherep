@@ -91,7 +91,7 @@ export function runRecheck(recheck: Recheck): Promise<string> {
       if (child.connected) child.disconnect();
     }, recheck.budgetMs);
     child.stdout!.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
-    child.on("error", (error) => settle([`could not start ${recheck.script}: ${error.message}`]));
+    child.on("error", (error) => settle([`could not start ${path.basename(recheck.script)} (${(error as NodeJS.ErrnoException).code ?? "unknown"})`]));
     child.on("close", (code, signal) => {
       if (!ready) {
         const kind = /\[hook-runtime\] not admitted \(([a-z -]+)\)/.exec(stderr)?.[1] ?? "it ended before admission";
