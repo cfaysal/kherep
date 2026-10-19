@@ -18,15 +18,16 @@ const GOOD = "process.exit(0);\n";
 const roots: string[] = [];
 after(() => { for (const root of roots) try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ } });
 
-const integrity = (trace: string): string => `import fs from "node:fs";
+// Constant program text: the fake writes its trace into CLAUDE_HOME, where the box keeps it.
+const INTEGRITY = `import fs from "node:fs";
 import path from "node:path";
 const home = process.env.CLAUDE_HOME;
-fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ argv: process.argv.slice(2), input: fs.readFileSync(0, "utf8"), home }) + "\\n");
+fs.appendFileSync(path.join(home, "trace.jsonl"), JSON.stringify({ argv: process.argv.slice(2), input: fs.readFileSync(0, "utf8"), home }) + "\\n");
 let restored = 0;
 for (const name of fs.readdirSync(path.join(home, "hooks"))) {
   const file = path.join(home, "hooks", name);
   if (!name.endsWith(".mts") || !fs.statSync(file).isFile() || fs.statSync(file).size > 0) continue;
-  fs.writeFileSync(file, ${JSON.stringify(GOOD)});
+  fs.writeFileSync(file, "process.exit(0);\\n");
   restored++;
   console.log(name + ": 0 bytes -> RESTORED from the repo, verified at the target (sha256 0123456789ab)");
 }
@@ -37,8 +38,8 @@ console.log("all 2 files OK (" + restored + " restored), heartbeat refreshed");
 
 const GUARDS: Record<string, string> = {
   "allow.mts": GOOD,
-  "json-deny.mts": `process.stdout.write(${JSON.stringify(JSON.stringify({
-    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "json says no" } }))});\n`,
+  "json-deny.mts": "process.stdout.write(JSON.stringify({ hookSpecificOutput: "
+    + "{ hookEventName: \"PreToolUse\", permissionDecision: \"deny\", permissionDecisionReason: \"json says no\" } }));\n",
 };
 
 interface Box { root: string; hooks: string; dispatch: string; trace: string }
@@ -48,7 +49,7 @@ function box(heartbeatAgeMs: number | null): Box {
   const fixture = dispatcherFixture("guard-dispatch-recheck-", { heartbeat: false });
   roots.push(fixture.root);
   const trace = path.join(fixture.root, "trace.jsonl");
-  fs.writeFileSync(path.join(fixture.hooks, "live-hook-integrity.mts"), integrity(trace));
+  fs.writeFileSync(path.join(fixture.hooks, "live-hook-integrity.mts"), INTEGRITY);
   for (const [name, source] of Object.entries(GUARDS)) fs.writeFileSync(path.join(fixture.hooks, name), source);
   if (heartbeatAgeMs !== null) plantHeartbeat(fixture.root, heartbeatAgeMs);
   return { ...fixture, trace };

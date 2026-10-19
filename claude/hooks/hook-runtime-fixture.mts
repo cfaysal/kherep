@@ -36,6 +36,23 @@ export function entryOf(target: string): string {
   }
 }
 
+// The suites' fixed child program (hook-runtime-child.mts): a scenario name and a JSON
+// data file in the home, so no test ever builds program text from its values.
+export const CHILD = path.join(import.meta.dirname, "hook-runtime-child.mts");
+let dataSeq = 0;
+function dataFile(home: Home, data: object): string {
+  const file = path.join(home.root, `child-data-${++dataSeq}.json`);
+  fs.writeFileSync(file, JSON.stringify({ runtime: home.runtime, hooks: home.hooks, ...data }));
+  return file;
+}
+export function child(home: Home, scenario: string, data: object = {}): { status: number | null; stdout: string; stderr: string } {
+  const run = spawnSync(process.execPath, [CHILD, scenario, dataFile(home, data)], { encoding: "utf8", windowsHide: true });
+  return { status: run.status, stdout: run.stdout, stderr: run.stderr };
+}
+export function childAsync(home: Home, scenario: string, data: object = {}): ReturnType<typeof spawn> {
+  return spawn(process.execPath, [CHILD, scenario, dataFile(home, data)], { windowsHide: true });
+}
+
 export function cleanup(): void {
   for (const root of roots.splice(0)) {
     try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }

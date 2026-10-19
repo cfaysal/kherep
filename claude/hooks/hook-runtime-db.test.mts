@@ -5,18 +5,15 @@
 // WAL and unreadable files are refused without repair; the file is never
 // replaced. Everything runs in mkdtemp homes (hook-runtime-fixture.mts).
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
-import { pathToFileURL } from "node:url";
 
 import { initialize, openDatabase, SCHEMA_SQL, schemaState } from "../kherep/hook-runtime/coordinator-db.mts";
-import { cleanup, entry, holdExclusive, RUNTIME, runtimeHome, writerFree } from "./hook-runtime-fixture.mts";
+import { child, childAsync, cleanup, entry, holdExclusive, runtimeHome, writerFree } from "./hook-runtime-fixture.mts";
 
 after(cleanup);
-const DB_URL = pathToFileURL(path.join(RUNTIME, "coordinator-db.mts")).href;
 const kind = (error: unknown): unknown => (error as { kherepKind?: unknown })?.kherepKind;
 
 // A plain guard that proves it ran by its output.
@@ -54,9 +51,7 @@ test("R0: a crash after the database file was created leaves a file that the nex
 
 test("R0: a crash between the schema DDL and its commit rolls back; the next admission initializes the same inode", async () => {
   const home = runtimeHome();
-  const code = `const m = await import(${JSON.stringify(DB_URL)}); const o = await m.openDatabase(${JSON.stringify(home.hooks)});`
-    + "m.initialize(o.conn, { afterCreate: () => process.kill(process.pid, 'SIGKILL') });";
-  const crashed = spawnSync(process.execPath, ["--input-type=module", "-e", code], { encoding: "utf8" });
+  const crashed = child(home, "init-crash");
   assert.notEqual(crashed.status, 0, crashed.stderr);
   const ino = fs.statSync(home.db).ino;
   const opened = await openDatabase(home.hooks);
@@ -68,11 +63,8 @@ test("R0: a crash between the schema DDL and its commit rolls back; the next adm
 
 test("R0: two initializers at once both end with one exact schema", async () => {
   const home = runtimeHome();
-  const code = `const m = await import(${JSON.stringify(DB_URL)}); for (let i = 0; i < 200; i++) {`
-    + `try { const o = await m.openDatabase(${JSON.stringify(home.hooks)}); m.initialize(o.conn); o.conn.close(); break; }`
-    + "catch (e) { if (e.kherepKind !== 'busy') throw e; await new Promise((r) => setTimeout(r, 10)); } }";
   const runs = await Promise.all([0, 1].map(() => new Promise<number | null>((resolve) => {
-    spawn(process.execPath, ["--input-type=module", "-e", code]).on("close", resolve);
+    childAsync(home, "init-retry").on("close", resolve);
   })));
   assert.deepEqual(runs, [0, 0]);
   const opened = await openDatabase(home.hooks);

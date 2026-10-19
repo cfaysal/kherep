@@ -17,7 +17,7 @@ describe("bounded native PreToolUse runs", { concurrency: true }, () => {
     const home = runtimeHome();
     const trace = path.join(home.root, "trace.txt");
     const main = path.join(home.hooks, "main.mts");
-    fs.writeFileSync(main, `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(trace)}, "ran");\n`);
+    fs.writeFileSync(main, "import fs from \"node:fs\";\nfs.writeFileSync(new URL(\"../trace.txt\", import.meta.url), \"ran\");\n");
     const release = await holdExclusive(home);
     try {
       const run = await entryAsync("pretool", main);
@@ -34,7 +34,7 @@ describe("bounded native PreToolUse runs", { concurrency: true }, () => {
     const home = runtimeHome();
     const pidFile = path.join(home.root, "child.pid");
     const main = path.join(home.hooks, "hang.mts");
-    fs.writeFileSync(main, `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nsetInterval(() => {}, 1000);\n`);
+    fs.writeFileSync(main, "import fs from \"node:fs\";\nfs.writeFileSync(new URL(\"../child.pid\", import.meta.url), String(process.pid));\nsetInterval(() => {}, 1000);\n");
     const run = await entryAsync("pretool", main);
     assert.equal(run.status, 0, run.stderr);
     assert.match(reasonOf(run.stdout), /timed out after \d+ s/);
