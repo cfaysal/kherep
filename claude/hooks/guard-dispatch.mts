@@ -168,7 +168,7 @@ function runGuard(file: string, payload: string): Promise<Outcome> {
     }, cap);
     child.stdout!.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
     child.stderr!.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
-    child.on("error", (error) => settle(failure(file, `spawn failed: ${error.message}`)));
+    child.on("error", (error) => settle(failure(file, `spawn failed (${(error as NodeJS.ErrnoException).code ?? "unknown"})`)));
     child.on("close", (code, signal) => settle(ready ? judge(file, code, signal, stdout, filtered())
       : failure(file, `not admitted: ${NOT_ADMITTED.exec(stderr)?.[1] ?? "it ended before admission"}`)));
     // A guard may exit without reading its payload; the broken pipe is no verdict.

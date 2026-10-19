@@ -99,7 +99,7 @@ function runChild(config: Config, args: string[], input: Buffer, until: number |
     });
     child.stdout!.on("data", (chunk: Buffer) => out.push(chunk));
     child.stderr!.on("data", (chunk: Buffer) => err.push(chunk));
-    child.on("error", (error) => settle(null, null, `spawn failed: ${error.message}`));
+    child.on("error", (error) => settle(null, null, `spawn failed (${(error as NodeJS.ErrnoException).code ?? "unknown"})`));
     child.on("close", (code, signal) => settle(code, signal));
     child.stdin!.on("error", () => {});
     child.stdin!.end(input);
@@ -149,6 +149,13 @@ function finish(stdout: string, stderr: string, code: number): void {
 const deny = (reason: string, context = ""): string => JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse",
   permissionDecision: "deny", permissionDecisionReason: reason, ...(context ? { additionalContext: context } : {}) } });
 
+// A main as diagnostics name it: its path inside the hooks directory, else its file name.
+// Reasons reach the model, so no absolute path and no raw error text goes into them.
+function labelOf(target: string): string {
+  const rel = path.relative(HOOKS_ROOT, target);
+  return rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel.split(path.sep).join("/") : path.basename(target);
+}
+
 // The one integrity writer a broken PreToolUse main may start, within what is left.
 async function repairAttempt(input: Buffer): Promise<string> {
   const script = path.join(HOOKS_ROOT, "live-hook-integrity.mts");
@@ -170,14 +177,15 @@ async function main(): Promise<void> {
   }
   const target = path.resolve(targetArg);
   const input = await readStdin(pretool ? OUTER_DEADLINE - 1000 : Number.POSITIVE_INFINITY);
-  const blocked = (why: string): string => `[hook-entry] ${target} cannot run (${why}); the tool call is blocked until hook integrity restores it`;
+  const label = labelOf(target);
+  const blocked = (why: string): string => `[hook-entry] ${label} cannot run (${why}); the tool call is blocked until hook integrity restores it`;
   if (input === null) return pretool ? finish(deny(blocked("stdin not closed in time")), "", 0) : finish("", "[hook-entry] stdin unreadable\n", 1);
   const config: Config = { v: PROTOCOL, mode: mode === "writer" ? "writer" : "reader", root: HOOKS_ROOT, target,
     deadline: pretool ? CHILD_DEADLINE : START + 600_000 };
   const result = await runChild(config, rest, input, pretool ? OUTER_DEADLINE - 600 : null);
   const failure = failureOf(result);
   if (!pretool) {
-    if (!result.ready) return finish("", `[hook-entry] ${target} ${failure.why}\n`, 1);
+    if (!result.ready) return finish("", `[hook-entry] ${label} ${failure.why}\n`, 1);
     return finish(result.stdout, result.stderr, result.signal ? 1 : result.code ?? 1);
   }
   if (!failure.why && result.code === 2) return finish("", result.stderr, 2);
