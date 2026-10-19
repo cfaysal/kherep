@@ -64,12 +64,34 @@ function expandToken(token: string, home: string): string {
 
 // Issue #507, part 2: the coordinated form of a command that runs hooks/ code,
 //   node <home>/kherep/hook-runtime/entry.mts <pretool|reader|writer> <home>/hooks/<main> ...
+// and nothing else: every later token is an argument of that main. A leading `&`
+// is PowerShell's call operator.
 const ENTRY_MODES = new Set(["pretool", "reader", "writer"]);
-// A leading `&` is PowerShell's call operator.
-function coordinated(tokens: string[], home: string, hooksDir: string): boolean {
-  const [node, entry, mode, main] = tokens.slice(tokens[0] === "&" ? 1 : 0).map((token) => token.replace(/^['"]+|['"]+$/g, ""));
+function coordinated(command: string, tokens: string[], home: string, hooksDir: string): boolean {
+  const call = tokens[0] === "&";
+  if (!singleCommand(call ? command.replace(/^\s*&/, "") : command)) return false;
+  const [node, entry, mode, main] = tokens.slice(call ? 1 : 0).map((token) => token.replace(/^['"]+|['"]+$/g, ""));
   return node === "node" && expandToken(entry ?? "", home) === `${home}/kherep/hook-runtime/entry.mts`
     && ENTRY_MODES.has(mode ?? "") && isWithinPath(expandToken(main ?? "", home), hooksDir);
+}
+
+// True when the shell runs exactly one command: no operator, separator,
+// redirection or line break outside quotes, and no command substitution
+// anywhere outside single quotes. A backslash before a quote or an operator is
+// refused, since bash and PowerShell read it differently; elsewhere it is part
+// of a Windows path. Anything else could run more code.
+function singleCommand(command: string): boolean {
+  let quote = "";
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i]!;
+    if (quote === "'") { if (c === "'") quote = ""; continue; }
+    if (c === "\\" && /['"`$;&|<>\r\n]/.test(command[i + 1] ?? "")) return false;
+    if (c === "`" || (c === "$" && command[i + 1] === "(")) return false;
+    if (quote === '"') { if (c === '"') quote = ""; continue; }
+    if (c === "'" || c === '"') quote = c;
+    else if (/[;&|<>\r\n]/.test(c)) return false;
+  }
+  return quote === "";
 }
 
 // Only .js and .mts under <CLAUDE_HOME>/hooks/ are in scope: an extension-less
@@ -106,7 +128,7 @@ export function wiredFiles(
           found.set(file.toLowerCase(), { file, rel: file.slice(hooksDir.length + 1) });
         }
       }
-      if (runsHookCode && !coordinated(tokens, home, hooksDir)) uncoordinated.push(command);
+      if (runsHookCode && !coordinated(command, tokens, home, hooksDir)) uncoordinated.push(command);
     }
   }
   return { files: [...found.values()], notes, readAny, uncoordinated };
