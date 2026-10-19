@@ -8,6 +8,7 @@
 // Runs on its own as `node restore-write.test.mts`, like every suite in CI.
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -141,3 +142,96 @@ test("a file planted at an absent target before the create is refused, the outsi
   assert.notEqual(writeExact(file, WANTED, b.hooks, { beforeOpen: plant }), "");
   assert.equal(fs.readFileSync(b.outside, "utf8"), OUTSIDE);
 });
+
+// Issue #507, part 2: an absent target is published complete or not at all.
+test("an absent target stays absent until its complete bytes are linked into place", () => {
+  const b = box();
+  const file = path.join(b.lib, "dep.mts");
+  let seen: string | null = "unset";
+  assert.equal(writeExact(file, WANTED, b.hooks, { beforeLink: () => { seen = fs.existsSync(file) ? "present" : null; } }), "");
+  assert.equal(seen, null, "nothing is visible at the name before the publication");
+  assert.deepEqual(fs.readFileSync(file), WANTED);
+  assert.deepEqual(fs.readdirSync(b.lib).filter((name) => name.endsWith(".kherep-tmp")), []);
+});
+
+test("a file appearing before the publication is not replaced, and no temporary file stays", () => {
+  const b = box();
+  const file = path.join(b.lib, "dep.mts");
+  assert.match(writeExact(file, WANTED, b.hooks, { beforeLink: () => fs.writeFileSync(file, "theirs\n") }), /appeared/);
+  assert.equal(fs.readFileSync(file, "utf8"), "theirs\n");
+  assert.deepEqual(fs.readdirSync(b.lib).filter((name) => name.endsWith(".kherep-tmp")), []);
+});
+
+test("a dangling link planted at an absent target is refused, nothing is created at its target", (t) => {
+  const b = box();
+  const file = path.join(b.lib, "dep.mts");
+  const target = path.join(b.outsideDir, "created-through-link.mts");
+  if (!tryLink(t, () => fs.symlinkSync(target, file, "file"), "file symlink")) return;
+  assert.notEqual(writeExact(file, WANTED, b.hooks), "");
+  assert.equal(fs.existsSync(target), false);
+});
+
+test("a write that makes no progress fails and leaves no temporary file", () => {
+  const b = box();
+  const file = path.join(b.lib, "dep.mts");
+  assert.match(writeExact(file, WANTED, b.hooks, { writeChunk: () => 0 }), /write failed \(ENOPROGRESS\)/);
+  assert.equal(fs.existsSync(file), false);
+  assert.deepEqual(fs.readdirSync(b.lib).filter((name) => name.endsWith(".kherep-tmp")), []);
+});
+
+test("with a judged identity: another file at the name, a judged absence and a shared inode are refused", () => {
+  const b = box();
+  const file = path.join(b.lib, "dep.mts");
+  fs.writeFileSync(file, "", "utf8");
+  const judged = fs.lstatSync(file, { bigint: true });
+  assert.match(writeExact(file, WANTED, b.hooks, {}, "absent"), /judged absent/);
+  fs.unlinkSync(file);
+  fs.writeFileSync(file, "", "utf8");
+  assert.match(writeExact(file, WANTED, b.hooks, {}, { dev: judged.dev + 1n, ino: judged.ino }), /not the file that was judged/);
+  const now = fs.lstatSync(file, { bigint: true });
+  fs.linkSync(file, path.join(b.outsideDir, "second-name.mts"));
+  assert.match(writeExact(file, WANTED, b.hooks, {}, { dev: now.dev, ino: now.ino }), /more than one link/);
+  assert.equal(fs.readFileSync(file, "utf8"), "");
+});
+
+test("an existing file keeps its inode, owner and mode when it is written", () => {
+  const b = box();
+  const file = path.join(b.lib, "dep.mts");
+  fs.writeFileSync(file, "", "utf8");
+  fs.chmodSync(file, 0o640);
+  const before = fs.statSync(file, { bigint: true });
+  assert.equal(writeExact(file, WANTED, b.hooks, {}, { dev: before.dev, ino: before.ino }), "");
+  const after = fs.statSync(file, { bigint: true });
+  assert.deepEqual([after.ino, after.uid, after.gid, after.mode], [before.ino, before.uid, before.gid, before.mode]);
+  assert.deepEqual(fs.readFileSync(file), WANTED);
+});
+
+// R5: an access-control list on the target is the inode's, so an in-place write keeps it.
+// macOS chmod +a and Linux setfacl only; elsewhere the case is skipped, not passed.
+const aclTool = process.platform === "darwin" ? ["chmod", "ls"] : process.platform === "linux" ? ["setfacl", "getfacl"] : [];
+const run = (cmd: string, args: string[]) => spawnSync(cmd, args, { encoding: "utf8" });
+const acl = (file: string): string => process.platform === "darwin"
+  ? run("ls", ["-le", file]).stdout.split("\n").slice(1).join("\n") : run("getfacl", ["-cp", file]).stdout;
+function addAcl(file: string, deny: boolean): boolean {
+  const entry = process.platform === "darwin" ? [`+a`, `group:everyone ${deny ? "deny write" : "deny delete"}`, file]
+    : ["-m", deny ? `u:${os.userInfo().username}:r--,m::r--` : "u:nobody:r--", file];
+  return run(aclTool[0], entry).status === 0;
+}
+
+for (const deny of [false, true]) {
+  test(`a target with ${deny ? "a write-denying" : "a restricting"} ACL keeps that ACL and its inode`, (t) => {
+    const b = box();
+    const file = path.join(b.lib, "dep.mts");
+    fs.writeFileSync(file, "", "utf8");
+    if (!aclTool.length || process.getuid?.() === 0 || !addAcl(file, deny)) return t.skip("no ACL tool for this platform");
+    t.after(() => run(aclTool[0], process.platform === "darwin" ? ["-N", file] : ["-b", file])); // so the tree can go
+    const before = { acl: acl(file), stat: fs.statSync(file, { bigint: true }) };
+    assert.ok(before.acl.trim(), "the ACL is visible before the write");
+    const result = writeExact(file, WANTED, b.hooks, {}, { dev: before.stat.dev, ino: before.stat.ino });
+    if (deny) assert.match(result, /open failed/);
+    else assert.equal(result, "");
+    assert.equal(acl(file), before.acl);
+    assert.equal(fs.statSync(file, { bigint: true }).ino, before.stat.ino);
+    assert.equal(fs.readFileSync(file, "utf8"), deny ? "" : WANTED.toString());
+  });
+}
