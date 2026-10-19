@@ -56,6 +56,28 @@ test("a script that is both wired directly and passed as an argument keeps its d
   assert.equal(unwireMovedHooks(existing, source, winHome).removed.length, 0);
 });
 
+// Part 2. Behind kherep/hook-runtime/entry.mts a command counts by the main it
+// starts: a raw command for a wrapped main goes, a wrapped one stays only at an
+// event where the template runs it (review of #254).
+test("a command through the runtime entry counts by its main", () => {
+  const entry = (mode: string, rest: string) => `node "${winHome}/kherep/hook-runtime/entry.mts" ${mode} ${rest}`;
+  const source: Settings = { hooks: {
+    PreToolUse: [{ matcher: "Bash", hooks: [run(entry("pretool", DISPATCH.slice(5)))] }],
+    Stop: [{ matcher: "", hooks: [run(entry("reader", at("clq-accept-gate.mts")))] }],
+  } };
+  const existing: Settings = { hooks: {
+    PreToolUse: [{ matcher: "Bash", hooks: [run(entry("pretool", DISPATCH.slice(5))), run(`node ${at("commit-guard.mts")}`),
+      run(entry("reader", at("clq-accept-gate.mts")))] }],
+    Stop: [{ matcher: "", hooks: [run(`node ${at("clq-accept-gate.mts")}`), run(entry("reader", at("clq-accept-gate.mts")))] }],
+  } };
+  const { removed } = unwireMovedHooks(existing, source, winHome);
+  assert.deepEqual(removed.map((item) => `${item.event} [${item.managedAt.join(",")}] ${item.command}`), [
+    `PreToolUse [PreToolUse via hooks/guard-dispatch.mts] node ${at("commit-guard.mts")}`,
+    `PreToolUse [Stop] ${entry("reader", at("clq-accept-gate.mts"))}`,
+    `Stop [Stop] node ${at("clq-accept-gate.mts")}`,
+  ]);
+});
+
 // The template as it stood before issue #507: one direct entry per guard.
 function directTemplate(): Settings {
   const template = JSON.parse(fs.readFileSync(path.join(repo, "claude", "settings.user.json"), "utf8")) as Settings;
@@ -102,7 +124,7 @@ test("an upgrade from direct guard entries leaves each guard in one dispatcher e
   assert.equal(commands.length, 5, `one dispatcher entry per group: ${JSON.stringify(commands)}`);
   const unwired = lines.filter((line) => line.startsWith("hooks: unwire PreToolUse "));
   assert.equal(unwired.length, guards.length, lines.join("\n"));
-  for (const line of unwired) assert.match(line, /\(managed under PreToolUse via kherep\/hook-runtime\/entry\.mts\)$/);
+  for (const line of unwired) assert.match(line, /\(managed under PreToolUse via hooks\/guard-dispatch\.mts\)$/);
 });
 
 // Issue #507, part 2 (R8). Every managed command now runs through the hook runtime
