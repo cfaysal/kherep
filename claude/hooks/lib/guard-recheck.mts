@@ -95,7 +95,8 @@ export function runRecheck(recheck: Recheck): Promise<string> {
     child.on("close", (code, signal) => {
       if (!ready) {
         const kind = /\[hook-runtime\] not admitted \(([a-z -]+)\)/.exec(stderr)?.[1] ?? "it ended before admission";
-        return settle([kind === "busy" ? "re-check already running (another integrity run holds the hooks directory)"
+        // Busy says only that the hooks directory is in use: readers of parallel calls count too.
+        return settle([kind === "busy" ? "re-check not admitted (busy): the hooks directory is in use, holder UNKNOWN; the next matching call re-checks"
           : `re-check not admitted (${kind})`]);
       }
       const lines = stdout.split(/\r?\n/).filter((line) => line.trim());
