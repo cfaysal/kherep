@@ -139,34 +139,46 @@ const scriptStem = (rel: string): string => rel.replace(/\.(?:js|mjs|cjs|mts)$/,
 // Issue #507. A script the template passes as an argument (a guard that
 // guard-dispatch.mts runs) is managed "<event> via <first script>". A direct
 // entry for it is removed, or it would run a second time next to the dispatcher.
+// Part 2: a command through kherep/hook-runtime/entry.mts counts by the main it
+// starts. A raw command for a main the template runs through the entry, or an
+// entry command at an event the template has dropped, is removed.
+const ENTRY = "kherep/hook-runtime/entry";
+function hookOf(command: unknown, prefixes: string[]): { rel: string; main: string; wrapped: boolean; args: string[] } | undefined {
+  const rel = scriptUnder(command, prefixes);
+  if (rel === undefined) return undefined;
+  const args = argumentScriptsUnder(command, prefixes);
+  if (scriptStem(rel) !== ENTRY || args.length === 0) return { rel, main: scriptStem(rel), wrapped: false, args };
+  return { rel: args[0]!, main: scriptStem(args[0]!), wrapped: true, args: args.slice(1) };
+}
+
 export function unwireMovedHooks(
   existing: Settings, source: Settings, claudeHome: string,
 ): { settings: Settings; removed: Array<HookFinding & { managedAt: string[] }> } {
   const prefixes = [absoluteHome(claudeHome)];
-  const direct = new Map<string, Set<string>>();
+  const raw = new Map<string, Set<string>>();
+  const wrapped = new Map<string, Set<string>>();
   const via = new Map<string, Set<string>>();
-  const add = (map: Map<string, Set<string>>, rel: string, label: string): void => {
-    map.set(scriptStem(rel), (map.get(scriptStem(rel)) || new Set()).add(label));
+  const add = (map: Map<string, Set<string>>, stem: string, label: string): void => {
+    map.set(stem, (map.get(stem) || new Set()).add(label));
   };
   for (const [event, entries] of Object.entries(source.hooks || {})) {
     for (const hook of (Array.isArray(entries) ? entries : []).flatMap((entry) => entry?.hooks || [])) {
-      const rel = scriptUnder(hook?.command, prefixes);
-      if (rel === undefined) continue;
-      add(direct, rel, event);
-      for (const arg of argumentScriptsUnder(hook?.command, prefixes)) add(via, arg, `${event} via ${rel}`);
+      const found = hookOf(hook?.command, prefixes);
+      if (found === undefined) continue;
+      add(found.wrapped ? wrapped : raw, found.main, event);
+      for (const arg of found.args) add(via, scriptStem(arg), `${event} via ${found.rel}`);
     }
   }
-  const stemOf = (command: unknown): string => {
-    const rel = scriptUnder(command, prefixes);
-    return rel === undefined ? "" : scriptStem(rel);
-  };
-  const managedAt = (command: unknown): string[] =>
-    [...(direct.get(stemOf(command)) || []), ...(via.get(stemOf(command)) || [])];
-  const result = removeHooks(existing, (event, command) =>
-    managedAt(command).length > 0 && !direct.get(stemOf(command))?.has(event));
+  const managedAt = (main: string): string[] =>
+    [...new Set([...(raw.get(main) || []), ...(wrapped.get(main) || [])]), ...(via.get(main) || [])];
+  const result = removeHooks(existing, (event, command) => {
+    const found = hookOf(command, prefixes);
+    return found !== undefined && managedAt(found.main).length > 0
+      && !(found.wrapped ? wrapped : raw).get(found.main)?.has(event);
+  });
   return {
     settings: result.settings,
-    removed: result.removed.map((item) => ({ ...item, managedAt: managedAt(item.command) })),
+    removed: result.removed.map((item) => ({ ...item, managedAt: managedAt(hookOf(item.command, prefixes)!.main) })),
   };
 }
 
