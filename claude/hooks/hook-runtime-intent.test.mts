@@ -83,8 +83,8 @@ test("R4: a second writer in the commit gap replays the first one's bytes, not i
   const guard = path.join(home.hooks, "guard.mts");
   fs.writeFileSync(guard, "");
   const go = path.join(home.root, "go");
-  const code = `const c = await import(${url("coordinator.mts")});`
-    + `const cap = await c.admit({ v: 1, mode: "writer", target: ${JSON.stringify(path.join(home.hooks, "live-hook-integrity.mts"))}, deadline: Date.now() + 60000 });`
+  const code = `const c = await import(${JSON.stringify(pathToFileURL(path.join(home.runtime, "coordinator.mts")).href)});`
+    + `const cap = await c.admit({ v: 1, mode: "writer", root: ${JSON.stringify(home.hooks)}, target: ${JSON.stringify(path.join(home.hooks, "live-hook-integrity.mts"))}, deadline: Date.now() + 60000 });`
     + `const r = await cap.repair("guard.mts", new TextEncoder().encode(${JSON.stringify(GOOD)}), { afterPrepare: async () => {`
     + `process.stdout.write("prepared\\n"); while (!(await import("node:fs")).existsSync(${JSON.stringify(go)})) await new Promise((x) => setTimeout(x, 20)); } });`
     + "cap.end(); process.stdout.write(JSON.stringify(r));";
@@ -95,8 +95,8 @@ test("R4: a second writer in the commit gap replays the first one's bytes, not i
   const closed = new Promise((resolve) => a.on("close", resolve));
   assert.ok(await until(() => out.includes("prepared")), "A recorded its intent");
   // B: another writer, admitted in A's gap, replays A's recorded bytes before anything else.
-  const b = spawnSync(process.execPath, ["--input-type=module", "-e", `const c = await import(${url("coordinator.mts")});`
-    + `const cap = await c.admit({ v: 1, mode: "writer", target: ${JSON.stringify(path.join(home.hooks, "live-hook-integrity.mts"))}, deadline: Date.now() + 60000 });`
+  const b = spawnSync(process.execPath, ["--input-type=module", "-e", `const c = await import(${JSON.stringify(pathToFileURL(path.join(home.runtime, "coordinator.mts")).href)});`
+    + `const cap = await c.admit({ v: 1, mode: "writer", root: ${JSON.stringify(home.hooks)}, target: ${JSON.stringify(path.join(home.hooks, "live-hook-integrity.mts"))}, deadline: Date.now() + 60000 });`
     + `const fs = await import("node:fs"); process.stdout.write(fs.readFileSync(${JSON.stringify(guard)}, "utf8") === ${JSON.stringify(GOOD)} ? "A's bytes" : "other"); cap.end();`],
   { encoding: "utf8" });
   assert.equal(b.stdout, "A's bytes", b.stderr);

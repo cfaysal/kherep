@@ -16,7 +16,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 
 import { initialize, openDatabase } from "../kherep/hook-runtime/coordinator-db.mts";
-import { coordinated, ENTRY, HOOK, installIntegrity } from "./integrity-sandbox.mts";
+import { coordinated, entryFor, HOOK, installIntegrity } from "./integrity-sandbox.mts";
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "live-hook-trigger-")));
 after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ } });
@@ -48,7 +48,7 @@ const options = (box: Box) => ({
   env: { ...process.env, HOME: path.dirname(box.claude), USERPROFILE: path.dirname(box.claude), CLAUDE_HOME: box.claude,
     KHEREP_WORKSPACE: box.cwd },
 });
-const args = (box: Box): string[] => [ENTRY, "writer", path.join(box.hooks, HOOK), "--trigger", "guard-dispatch"];
+const args = (box: Box): string[] => [entryFor(box.hooks), "writer", path.join(box.hooks, HOOK), "--trigger", "guard-dispatch"];
 
 function run(box: Box): Run {
   const result = spawnSync(process.execPath, args(box), { ...options(box), encoding: "utf8" });

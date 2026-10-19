@@ -1,6 +1,7 @@
 // Shared fixture of the hook-runtime suites (issue #507, part 2). Every case
-// gets its own mkdtemp "Claude home" with a hooks/ directory; the runtime is
-// this checkout's kherep/hook-runtime, started on the temporary hooks. Nothing
+// gets its own mkdtemp "Claude home" with a hooks/ directory and a copy of this
+// checkout's kherep/hook-runtime beside it, laid out as an installation: the
+// runtime admits only on the hooks directory of its own home. Nothing
 // under the developer's real ~/.claude is read or written. The coordination
 // database is only ever opened through node:sqlite, never as a plain file.
 import { spawn, spawnSync } from "node:child_process";
@@ -14,14 +15,25 @@ export const RUNTIME = path.resolve(import.meta.dirname, "..", "kherep", "hook-r
 export const ENTRY = path.join(RUNTIME, "entry.mts");
 const roots: string[] = [];
 
-export interface Home { root: string; hooks: string; db: string }
+export interface Home { root: string; hooks: string; db: string; runtime: string }
 
 export function runtimeHome(prefix = "hook-runtime-"): Home {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   roots.push(root);
   const hooks = path.join(root, "hooks");
   fs.mkdirSync(path.join(hooks, "lib"), { recursive: true });
-  return { root, hooks, db: path.join(hooks, ".kherep-integrity", "run.sqlite") };
+  const runtime = path.join(root, "kherep", "hook-runtime");
+  fs.cpSync(RUNTIME, runtime, { recursive: true });
+  return { root, hooks, db: path.join(hooks, ".kherep-integrity", "run.sqlite"), runtime };
+}
+
+// The entry of the installation a target belongs to: the nearest ancestor with kherep/hook-runtime.
+export function entryOf(target: string): string {
+  for (let dir = path.dirname(target); ; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, "kherep", "hook-runtime", "entry.mts");
+    if (fs.existsSync(candidate)) return candidate;
+    if (path.dirname(dir) === dir) return ENTRY;
+  }
 }
 
 export function cleanup(): void {
@@ -32,16 +44,18 @@ export function cleanup(): void {
 
 export interface Run { status: number | null; signal: string | null; stdout: string; stderr: string; ms: number }
 
-// The entry exactly as a wired command starts it.
-export function entry(mode: string, target: string, args: string[] = [], input = "{}", timeout = 40_000, env: NodeJS.ProcessEnv = process.env): Run {
+// The entry exactly as a wired command starts it; `via` names another installation's entry.
+export function entry(mode: string, target: string, args: string[] = [], input = "{}", timeout = 40_000,
+  env: NodeJS.ProcessEnv = process.env, via?: Home): Run {
   const start = Date.now();
-  const run = spawnSync(process.execPath, [ENTRY, mode, target, ...args], { input, encoding: "utf8", timeout, windowsHide: true, env });
+  const script = via ? path.join(via.runtime, "entry.mts") : entryOf(target);
+  const run = spawnSync(process.execPath, [script, mode, target, ...args], { input, encoding: "utf8", timeout, windowsHide: true, env });
   return { status: run.status, signal: run.signal, stdout: run.stdout, stderr: run.stderr, ms: Date.now() - start };
 }
 
 export function entryAsync(mode: string, target: string, args: string[] = [], input = "{}"): Promise<Run> & { pid?: number } {
   const start = Date.now();
-  const child = spawn(process.execPath, [ENTRY, mode, target, ...args], { windowsHide: true });
+  const child = spawn(process.execPath, [entryOf(target), mode, target, ...args], { windowsHide: true });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk) => (stdout += chunk));

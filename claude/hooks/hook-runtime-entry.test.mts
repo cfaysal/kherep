@@ -40,7 +40,7 @@ function brokenRuntime(root: string, coordinator: string | null): string {
 
 test("the entry builds the same admission argument as the coordinator", async () => {
   const { preloadArg: entryArg } = await import(ENTRY_AS_MODULE) as typeof import("../kherep/hook-runtime/entry.mts");
-  const config = { v: 1, mode: "reader" as const, target: "/x/hooks/a.mts", deadline: 123 };
+  const config = { v: 1, mode: "reader" as const, root: "/x/hooks", target: "/x/hooks/a.mts", deadline: 123 };
   assert.equal(entryArg("file:///c.mts", config), coordinatorArg("file:///c.mts", config));
 });
 
