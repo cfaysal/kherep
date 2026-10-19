@@ -97,11 +97,13 @@ const realOrEmpty = (dir: string): string => {
 };
 
 // Why this run may not repair, or "" when it may. Settings that could not be read
-// (notes) leave the wiring UNKNOWN, so an uncoordinated reader cannot be ruled out.
-function gateOf(home: string, wiring: { uncoordinated: string[]; notes: string[] }): string {
+// (notes), or none read at all, leave the wiring UNKNOWN, so an uncoordinated reader
+// cannot be ruled out.
+function gateOf(home: string, wiring: { uncoordinated: string[]; notes: string[]; readAny: boolean }): string {
   if (!HOLD) return "this run is not coordinated: start it through kherep/hook-runtime/entry.mts";
   if (realOrEmpty(`${home}/hooks`) !== HOLD.root) return `the coordinated hooks directory is not ${home}/hooks`;
   if (wiring.notes.length) return "the live settings were not read completely, so the wiring is UNKNOWN";
+  if (!wiring.readAny) return "no live settings could be read, so the wiring is UNKNOWN";
   const { uncoordinated } = wiring;
   if (uncoordinated.length) return `${uncoordinated.length} wired command(s) run hooks/ code outside kherep/hook-runtime/entry.mts`;
   return "";
@@ -163,7 +165,7 @@ async function main(): Promise<void> {
     if (PLAIN) lines.push(`heartbeat not written (no hook file is wired under ${home})`);
     return emit(lines);
   }
-  await lib.runIntegrity({ lib, hold: HOLD, gate: gateOf(home, { uncoordinated, notes }), files, notes, lines, payload, home, trigger: TRIGGER, plain: PLAIN });
+  await lib.runIntegrity({ lib, hold: HOLD, gate: gateOf(home, { uncoordinated, notes, readAny }), files, notes, lines, payload, home, trigger: TRIGGER, plain: PLAIN });
   emit(lines);
 }
 
