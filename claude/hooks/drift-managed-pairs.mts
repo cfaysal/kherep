@@ -153,6 +153,26 @@ export function fixedPairs(home: string, workspace: string): ManagedPair[] {
       live: joinPathLike(workspace, "tools/confluence-label-cli.mts"),
       source: "modules/atl-jira-brokers/confluence-label-cli.mts",
     },
+    {
+      live: joinPathLike(workspace, "tools/confluence-pagination.mts"),
+      source: "modules/atl-jira-brokers/confluence-pagination.mts",
+    },
+    {
+      live: joinPathLike(workspace, "tools/confluence-drainage-rules.mts"),
+      source: "modules/atl-jira-brokers/confluence-drainage-rules.mts",
+    },
+    {
+      live: joinPathLike(workspace, "tools/confluence-drainage-snapshot.mts"),
+      source: "modules/atl-jira-brokers/confluence-drainage-snapshot.mts",
+    },
+    {
+      live: joinPathLike(workspace, "tools/confluence-drainage-scan.mts"),
+      source: "modules/atl-jira-brokers/confluence-drainage-scan.mts",
+    },
+    {
+      live: joinPathLike(workspace, "tools/confluence-drainage-cli.mts"),
+      source: "modules/atl-jira-brokers/confluence-drainage-cli.mts",
+    },
   ]);
 }
 

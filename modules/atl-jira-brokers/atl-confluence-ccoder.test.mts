@@ -24,7 +24,7 @@ const AUTHOR = "service-account-for-tests";
 // Compared whole: a regex with an unescaped "|" matched this line on any one of
 // its words and so asserted nothing.
 const VERBS = ["create", "update", "get", "delete", "purge", "labels", "move", "space", "children", "related",
-  "search", "list", "context", "orphans", "stitch", "selftest"];
+  "search", "list", "context", "orphans", "stitch", "drainage", "selftest"];
 const USAGE = `Usage: ${VERBS.join(" | ")}. Run help for the flags of each verb.`;
 
 interface Call {
@@ -456,4 +456,60 @@ test(`${BROKER} plain get still prints the metadata lines and asks for no body`,
   assert.deepEqual(err, []);
   assert.deepEqual(written, []);
   assert.deepEqual(pageReads(calls), ["/wiki/api/v2/pages/5001"]);
+});
+
+
+test(`${BROKER} validates expected-version before network and refuses stale reviewed bodies`, async () => {
+  for (const version of ['0','-1','1.5','NaN','1e2',' 1','9007199254740992']) {
+    const h = harness();
+    assert.equal(await runCli(['update','--id','5001','--format','storage','--body','x','--expected-version',version],h.injected),1);
+    assert.match(h.printed(),/expected-version/);
+    assert.equal(h.calls.length,0);
+  }
+  const h = harness({api:defaultApi});
+  assert.equal(await runCli(['update','--id','5001','--format','storage','--body','x','--expected-version','2'],h.injected),1);
+  assert.match(h.printed(),/version mismatch/);
+  assert.ok(!h.calls.some(c=>c.options?.method === 'PUT'));
+});
+test(`${BROKER} guarded update verifies target bytes through its shared implementation`, async () => {
+  let wrote=false;
+  const h = harness({api: call => {
+    if (call.options?.method === 'PUT') wrote=true;
+    return response(200,{...PAGE,version:{number:wrote?2:1},body:{storage:{value:'reviewed'}}});
+  }});
+  assert.equal(await runCli(['update','--id','5001','--format','storage','--body','reviewed','--expected-version','1'],h.injected),0);
+  assert.ok(wrote);
+  assert.match(h.printed(),/version sent: 2/);
+});
+test(`${BROKER} drainage requires classified metadata and prints a bounded JSON report`, async () => {
+  const refused = harness();
+  assert.equal(await runCli(['drainage','--space','KB'],refused.injected),1);
+  assert.equal(refused.calls.length,0);
+  const h = harness({api: call => {
+    if (call.url.includes('/spaces?keys=')) return response(200,SPACE);
+    if (call.url.includes('/spaces/9001/pages')) return response(200,{results:[{...PAGE,parentId:null}]});
+    if (call.url.includes('/labels')) return response(200,{results:[]});
+    return response(200,{...PAGE,parentId:null,body:{storage:{value:'Never emit this private fixture body'}}});
+  }});
+  assert.equal(await runCli(['drainage','--space','KB','--metadata-approved'],h.injected),0);
+  const report = JSON.parse(h.out.join(''));
+  assert.equal(report.inventory.status,'complete');
+  assert.equal(report.semanticReview,'UNKNOWN');
+  assert.ok(!h.printed().includes('Never emit'));
+  assert.ok(!h.calls.some(c=>(c.options?.method ?? 'GET') !== 'GET' && !c.url.startsWith('https://auth.atlassian.com')));
+});
+
+test(`${BROKER} a successful PUT followed by readback failure is safely UNVERIFIED`, async () => {
+  for (const malformed of [false,true]) {
+    let wrote=false;
+    const h = harness({api:call => {
+      if (call.options?.method === 'PUT') { wrote=true; return response(200,{...PAGE,version:{number:2}}); }
+      if (wrote) return malformed ? response(200,{}) : response(500,{message:'SENSITIVE synthetic server detail'});
+      return response(200,PAGE);
+    }});
+    assert.equal(await runCli(['update','--id','5001','--format','storage','--body','reviewed','--expected-version','1'],h.injected),1);
+    assert.equal(h.calls.filter(c=>c.options?.method === 'PUT').length,1);
+    assert.match(h.printed(),/UNVERIFIED/);
+    assert.ok(!h.printed().includes('SENSITIVE'));
+  }
 });

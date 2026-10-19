@@ -92,7 +92,7 @@ for (const broker of BROKERS) {
     assert.ok(urls.some((url) => url.includes("cursor=c2")), "the second cursor page is read");
   });
 
-  test(`${broker.name} list ends on a cursor that repeats instead of spinning`, async () => {
+  test(`${broker.name} list refuses a repeating inventory cursor instead of claiming completeness`, async () => {
     // The same cursor with the same rows, every time. A fake that eventually
     // fails keeps an unguarded loop from hanging the suite: it then exits 1.
     let calls = 0;
@@ -102,9 +102,9 @@ for (const broker of BROKERS) {
       return { results: SECOND, _links: { next: NEXT } };
     });
     const { out, urls, injected } = harness(broker.env, repeating);
-    assert.equal(await broker.run(["list", "--space", "KB"], injected), 0);
-    assert.ok(out.includes("total: 280"));
-    assert.ok(urls.filter((url) => url.includes("cursor=c2")).length <= 2, "the repeated cursor is not followed forever");
+    assert.equal(await broker.run(["list", "--space", "KB"], injected), 1);
+    assert.ok(!out.some(line => line.startsWith('total:')));
+    assert.ok(urls.length < 10, 'stalled cursor fails promptly');
   });
 
   test(`${broker.name} list reads only the named space`, async () => {

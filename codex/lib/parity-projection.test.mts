@@ -112,6 +112,12 @@ test("projects Kherep and local Claude plugin components without writing Claude"
   assert.match(fs.readFileSync(path.join(codexHome, "agents", "demo-agent.toml"), "utf8"), /gpt-6\.10-sol/);
   assert.equal(fs.existsSync(path.join(codexHome, "skills", "gepeto")), false);
   assert.equal(fs.existsSync(path.join(codexHome, "skills", "pinokio")), false);
+  const drainageRoot = path.join(codexHome, "skills", "brain-drainage");
+  assert.ok(receipt.skills.some(entry => entry.name === "brain-drainage"));
+  assert.match(fs.readFileSync(path.join(drainageRoot, "SKILL.md"), "utf8"), /--expected-version/);
+  assert.equal(fs.readFileSync(path.join(drainageRoot, "references", "review-rules.md"), "utf8"),
+    fs.readFileSync(path.join(repoRoot, "claude", "skills", "brain-drainage", "references", "review-rules.md"), "utf8"));
+  assert.equal(fs.existsSync(path.join(drainageRoot, "agents", "openai.yaml")), false, "normal discovery needs no explicit-only override");
   const twgSkill = fs.readFileSync(path.join(codexHome, "skills", "kherep-twg", "SKILL.md"), "utf8");
   assert.doesNotMatch(twgSkill, /~\/\.claude\/kherep\/twg/);
   assert.equal(fs.readFileSync(path.join(claudeHome, "plugins", "installed_plugins.json"), "utf8"), before);

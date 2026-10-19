@@ -7,12 +7,12 @@ import type { ConfluenceSession } from "./confluence-contract.mts";
 import { reportStitch, type NeighbourDeps } from "./confluence-neighbours.mts";
 
 const PAGES = [
-  { id: "node", title: "Acme", parentId: null },
-  { id: "src", title: "Acme brand banner: visual identity and color palette", parentId: "node" },
-  { id: "1", title: "macOS product-node daemon launchd agent configuration", parentId: "node" },
-  { id: "2", title: "Acme architecture: governance layer, not agent harness", parentId: "node" },
-  { id: "3", title: "Acme color palette tokens", parentId: "node" },
-  { id: "4", title: "Acme installer backup rotation", parentId: "node" },
+  { id: "900", title: "Acme", parentId: null },
+  { id: "901", title: "Acme brand banner: visual identity and color palette", parentId: "900" },
+  { id: "1", title: "macOS product-node daemon launchd agent configuration", parentId: "900" },
+  { id: "2", title: "Acme architecture: governance layer, not agent harness", parentId: "900" },
+  { id: "3", title: "Acme color palette tokens", parentId: "900" },
+  { id: "4", title: "Acme installer backup rotation", parentId: "900" },
 ];
 
 function deps(log: string[]): NeighbourDeps {
@@ -36,10 +36,10 @@ function deps(log: string[]): NeighbourDeps {
 
 test("reportStitch links only on a distinctive word and logs the reason per link", async () => {
   const log: string[] = [];
-  const code = await reportStitch(deps(log), { only: "src", perOrphan: 3, dryRun: true });
+  const code = await reportStitch(deps(log), { only: "901", perOrphan: 3, dryRun: true });
   assert.equal(code, 0);
   const links = log.filter((line) => line.startsWith("link\t"));
-  assert.deepEqual(links, ["link\t3\tsrc\tterm=color,palette\tsibling"],
+  assert.deepEqual(links, ["link\t3\t901\tterm=color,palette\tsibling"],
     "the sibling with no shared word and the page sharing only the product name are not linked");
   assert.ok(log.includes("pages that would be written: 1"));
 });
@@ -49,9 +49,9 @@ test("reportStitch links only on a distinctive word and logs the reason per link
 // wrapped in a paragraph), so the bytes read back are not the bytes written.
 // "Already linked" has to survive that, for a sibling neighbour as for any.
 const SIBLINGS = [
-  { id: "node", title: "Acme", parentId: null },
-  { id: "101", title: "Broker output differs between hosts", parentId: "node" },
-  { id: "102", title: "Why the runtime label differs", parentId: "node" },
+  { id: "900", title: "Acme", parentId: null },
+  { id: "101", title: "Broker output differs between hosts", parentId: "900" },
+  { id: "102", title: "Why the runtime label differs", parentId: "900" },
   { id: "103", title: "Release checklist", parentId: null },
 ];
 
