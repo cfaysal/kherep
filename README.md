@@ -19,9 +19,11 @@ Use Kherep to give your agents consistent working rules, reusable skills and a s
 - [Configuration](#configuration)
 - [Security model](#security-model)
 - [Documentation](#documentation)
+- [Repository layout](#repository-layout)
 - [Development](#development)
 - [Contributing](#contributing)
 - [Roadmap](#roadmap)
+- [Acknowledgements](#acknowledgements)
 - [License](#license)
 
 ## Key capabilities
@@ -29,13 +31,19 @@ Use Kherep to give your agents consistent working rules, reusable skills and a s
 - **Maestro agent orchestration:** plan work, delegate focused tasks and verify the combined result.
 - **Claude Code and Codex adapters:** shared rules with installation and hooks for each runtime.
 - **Rules, hooks and skills:** reusable workflows for implementation, review, debugging and delivery.
-- **Model and tool routing:** choose available capabilities through operator-configured policies.
+- **Model and tool routing:** choose available capabilities through operator-configured policies. Codex roles name model families, not versions: installation resolves them against the available models into native agent files and one dispatch snapshot, which a reinstall keeps until `--refresh-models`; see [Codex integration](docs/CODEX.md#install).
 - **MCP integration:** connect explicitly configured services through transport and authentication adapters.
 - **Local inference:** use configured local processing routes, including a separate path for private inputs.
-- **Central Brain:** a shared knowledge base in a dedicated Confluence space. With a configured space and brokers, durable findings from completed turns become pages: the Claude observation agent files them itself, and the Codex observation agent returns candidates that the Maestro validates and, when authorized, publishes.
+- **Central Brain:** a shared knowledge base in a dedicated Confluence space. With a configured space and brokers, durable findings from completed turns become pages: the Claude observation agent files them itself, and the Codex observation agent returns candidates that the Maestro validates and, when authorized, publishes. A finding about repository code counts as `confirmed` only when it names each repository as `<name>@<full commit sha>` measured on a clean tree; otherwise it is filed as `assumed`.
 - **Brain drainage:** operator-invoked knowledge-space hygiene review through the read-only service-account scanner, with explicit-authority repairs and reviewed-version protection. See [broker workflow](modules/atl-jira-brokers/README.md#brain-drainage).
 - **Turn-completion observations:** after a substantial Claude turn a Stop hook has the Maestro dispatch `claude-obs`, and Codex can dispatch one bounded `codex-obs` pass; see [Codex integration](docs/CODEX.md#turn-completion-observations).
-- **Control Plane:** enrolled nodes connect to a Cloudflare Worker. Authorized Codex original owners receive compact CP hints in the running turn and, with `wake.nativeQueue` opted in (off by default), a bounded native Queue pointer for exact-addressed messages, and, with `wake.codexFork` opted in (off by default, darwin only), an ephemeral fork of an idle Codex chat relays one bounded, labelled proxy answer to the peer while the owner stays idle. With that opt-in the native runtime waits during an active turn and starts the same loaded owner from idle, without changing Composer preferences or owner permissions. CP retains peer content until actual Receive and confirming Stop. Hint admission costs no autonomous turn; native attempts use the existing turn budget and durable duplicate protection. A running Claude Code session receives accepted messages after its next successful tool call; its Stop confirms delivery. Its native idle listener may wake an eligible owner. A missing-mode restart additionally needs an exact `wake.sessions` entry, a known safe mode and a successful launch check. Doctor reports observed policy eligibility, exact restart authorization, remembered permission and live listed-listener evidence separately, without deriving a ready verdict. Installation, native activation and each host's actual owner processing require separate verification. See [Control Plane](modules/control-plane/README.md) for prerequisites, task controls and platform limits.
+- **Control Plane:** enrolled nodes connect to a Cloudflare Worker to exchange session messages and start tasks on each other. Sessions use one stable command per host, `node "<config directory>/bin/kherep-node.mjs"`, which follows the active service pin. The details are in [Control Plane](modules/control-plane/README.md), including prerequisites, task controls and platform limits:
+  - **Delivery:** a running Claude Code session receives accepted messages after its next successful tool call, and its Stop confirms delivery. The Control Plane keeps peer content until the actual receipt and a confirming Stop.
+  - **Waking idle sessions:** an idle Claude Code listener may wake an eligible owner. Restarting a session for which no permission mode was recorded also needs an exact `wake.sessions` entry, a known safe mode and a successful launch check.
+  - **Codex owners:** authorized Codex original owners receive compact hints in the running turn. Two opt-ins exist, both off by default: `wake.nativeQueue` adds a bounded native Queue pointer for exact-addressed messages, and `wake.codexFork` (darwin only) lets an ephemeral fork of an idle Codex chat relay one bounded, labelled proxy answer while the owner stays idle. Hint admission costs no autonomous turn; native attempts use the existing turn budget and durable duplicate protection.
+  - **Confirmed stop:** `task stop` and `msg stop` end a Claude Code background task the node started and confirm it on macOS and Linux. Windows refuses this stop.
+  - **Doctor:** `kherep-node doctor` reports each piece of evidence separately and derives no ready verdict.
+  - Installation, native activation and each host's actual processing need separate verification.
 
 Backends and integrations are configured separately. Installing an adapter does not provision a model, MCP service or Confluence space.
 
@@ -55,7 +63,7 @@ flowchart LR
       claude["Claude Code<br/>rules, hooks, skills, agents"]
       codex["Codex<br/>adapter projection"]
     end
-    githook["Git commit-msg hook"]
+    githook["Git hooks<br/>commit-msg, post-checkout, pre-push"]
     brokers["Atlassian brokers"]
     runner["Local inference runner"]
     bridge["MCP auth bridge"]
@@ -132,7 +140,7 @@ Each integration is optional unless a component's guide says otherwise, and each
 
 ## Installation
 
-Use Node.js 24, npm and Git. The Claude installer also needs Bash; on Windows use Git Bash.
+Use Node.js 24 (at least 22.18 on the 22 line, or 23.6), npm and Git. The Claude installer also needs Bash; on Windows use Git Bash.
 
 ```sh
 git clone https://github.com/cfaysal/kherep.git
@@ -145,6 +153,8 @@ Follow the [installation guide](docs/INSTALLATION.md) to select your workspace, 
 Runtime adapters target Windows and macOS. See each component's documentation for its requirements.
 
 After installation, confirm the result in the runtime itself as described in [Verify the installed runtime](docs/INSTALLATION.md#verify-the-installed-runtime). `bootstrap/drift-check.sh` compares the managed source with the installed files and exits non-zero on drift.
+
+An enrolled Control Plane node runs its daemon as a per-user login service on macOS or Windows, installed from a clean committed checkout with `kherep-node service install --workspace <absolute workspace> --source <absolute checkout>`. Later, `service upgrade` and `service rollback` change the active source pin. These commands also write the stable command `node "<config directory>/bin/kherep-node.mjs"`, and both installers render it into the always-loaded agent instructions. See [Upgrades and rollback](docs/INSTALLATION.md#upgrades-and-rollback), [Intercom command](docs/INSTALLATION.md#intercom-command) and [Control Plane: Node](modules/control-plane/README.md#node).
 
 ## Configuration
 
@@ -171,6 +181,7 @@ To report a vulnerability, follow the [security policy](.github/SECURITY.md).
 | [Installation](docs/INSTALLATION.md) | Claude setup, isolated preview, upgrades and rollback |
 | [Codex integration](docs/CODEX.md) | Codex installer options and runtime verification |
 | [Codex adapter architecture](codex/ARCHITECTURE.md) | Memory backends, research enforcement, hook integrity and MCP projection in Codex |
+| [Codex hook starts](docs/CODEX-HOOK-RUNS.md) | Reproducible comparison of Codex hook starts with the shell dispatcher |
 | [Atlassian brokers](modules/atl-jira-brokers/README.md) | Jira and Confluence service-account operations, including the Central Brain space |
 | [Control Plane](modules/control-plane/README.md) | Cloudflare Worker and node daemon for node enrollment, liveness, session messaging and task sessions |
 | [Teamwork Graph](modules/twg/README.md) | Runtime contract and installation of the Teamwork Graph integration |

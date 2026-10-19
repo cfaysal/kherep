@@ -1,6 +1,6 @@
 # Installation
 
-Kherep installs rules, hooks, skills and runtime adapters into your existing coding-agent setup. Use Node.js 24, npm, Git and a working Claude Code or Codex installation. The Claude installer needs Bash; on Windows use Git Bash.
+Kherep installs rules, hooks, skills and runtime adapters into your existing coding-agent setup. Use Node.js 24 (at least 22.18 on the 22 line, or 23.6), npm, Git and a working Claude Code or Codex installation. The Claude installer needs Bash; on Windows use Git Bash.
 
 Choose the workspace in which Kherep should apply. The source checkout can be anywhere; the workspace is the set of repositories your agents work on.
 

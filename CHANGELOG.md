@@ -119,6 +119,18 @@ increments the minor version; every other release increments the patch version.
   history through its index and is logged as `registry.sql` path
   `messageSummary`. Read-only: replay, acknowledgement, retention and the
   protocol are unchanged.
+- Brain drainage (issue #517). The manually invoked `brain-drainage` skill is
+  installed for Claude and Codex. Its scanner, `<broker> drainage --space
+  <key> --metadata-approved` (optionally with `--ids` and `--exclude-ids`),
+  uses GET only and reports candidate rows with page ID, read version,
+  problem, proposed action class, bounded structural evidence and uncertainty,
+  without titles or body excerpts. Inventory status is `complete`, `partial`
+  or `failed`, and semantic review stays UNKNOWN. Nothing is applied
+  automatically: a repair needs explicit authority and goes through `update
+  --expected-version <n>`, which both update CLIs now accept and which refuses
+  to write on a missing, invalid or mismatched version. No daemon, database,
+  scheduler, scope or credential is added. See
+  `modules/atl-jira-brokers/README.md`.
 
 ### Fixed
 
