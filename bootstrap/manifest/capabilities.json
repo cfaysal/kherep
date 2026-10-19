@@ -84,6 +84,8 @@
     "lib/hook-inventory.mts",
     "lib/hook-syntax.mts",
     "lib/integrity-heartbeat.mts",
+    "lib/integrity-proof.mts",
+    "lib/integrity-run.mts",
     "lib/integrity-verdict.mts",
     "lib/orchestra-checkout.mts",
     "lib/private-path-policy.mts",
@@ -115,7 +117,13 @@
     "kherep/local-inference/lib/transport.mts",
     "kherep/local-inference/config.json",
     "kherep/twg/cli.mts",
-    "kherep/mcp-auth-bridge/supergateway-secret-wrapper.mts"
+    "kherep/mcp-auth-bridge/supergateway-secret-wrapper.mts",
+    "kherep/hook-runtime/entry.mts",
+    "kherep/hook-runtime/coordinator.mts",
+    "kherep/hook-runtime/coordinator-db.mts",
+    "kherep/hook-runtime/coordinator-intent.mts",
+    "kherep/hook-runtime/recovery/restore-write.mts",
+    "kherep/hook-runtime/recovery/workspace-scope.mts"
   ],
   "profileBaselines": {
     "win": {
