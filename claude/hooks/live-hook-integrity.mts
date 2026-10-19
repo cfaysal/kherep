@@ -61,7 +61,7 @@ async function loadLibs(): Promise<LoadFailure | null> {
     ["lib/orchestra-checkout.mts", () => import("./lib/orchestra-checkout.mts"), ["checkoutFor"]],
     ["lib/integrity-heartbeat.mts", () => import("./lib/integrity-heartbeat.mts"), ["invalidateHeartbeat", "writeHeartbeat"]],
     ["lib/hook-inventory.mts", () => import("./lib/hook-inventory.mts"), ["hookInventory", "wiredFiles"]],
-    ["lib/hook-syntax.mts", () => import("./lib/hook-syntax.mts"), ["quietStripWarning", "syntaxVerdict"]],
+    ["lib/hook-syntax.mts", () => import("./lib/hook-syntax.mts"), ["quietStripWarning", "syntaxVerdict", "esmParses", "cjsParses"]],
     ["lib/integrity-proof.mts", () => import("./lib/integrity-proof.mts"), ["finalProof"]],
     ["lib/integrity-run.mts", () => import("./lib/integrity-run.mts"), ["runIntegrity"]],
   ];
