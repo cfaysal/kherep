@@ -140,3 +140,38 @@ test("an own-lib repair is not made while hook-inventory itself cannot load", ()
   assert.match(result.stdout, /own import lib\/hook-inventory\.mts cannot be loaded .* NOT restored \(the wiring cannot be checked without lib\/hook-inventory\.mts/);
   assert.equal(read(path.join(box.hooks, "lib", "hook-inventory.mts")), "");
 });
+
+// Review of bcab653 (H1): settings that could not be read leave the wiring UNKNOWN,
+// so no repair is made at all: no write, no journal, the bytes stay as they are.
+for (const [label, spoil] of [
+  ["not valid JSON", (file: string) => fs.writeFileSync(file, "{ not json")],
+  ["a directory", (file: string) => fs.mkdirSync(file)],
+  ["unreadable", (file: string) => { fs.writeFileSync(file, "{}"); fs.chmodSync(file, 0o000); }],
+] as const) {
+  test(`a settings.json that is ${label} beside a valid settings.user.json stops every repair`, (t) => {
+    if (label === "unreadable" && (process.platform === "win32" || process.getuid?.() === 0)) return t.skip("no unreadable file here");
+    const box = sandbox();
+    const file = path.join(box.claude, "settings.json");
+    spoil(file);
+    t.after(() => { try { fs.chmodSync(file, 0o600); } catch { /* a directory or gone */ } });
+    const result = plainOf(box);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /NOT restored \(the live settings were not read completely, so the wiring is UNKNOWN\)/);
+    assert.doesNotMatch(result.stdout, /RESTORED from/);
+    assert.equal(guard(box), "");
+    assert.equal(read(path.join(box.cache, "incidents.jsonl")), null);
+  });
+
+  test(`an own-lib repair is not made either while settings.json is ${label}`, (t) => {
+    if (label === "unreadable" && (process.platform === "win32" || process.getuid?.() === 0)) return t.skip("no unreadable file here");
+    const box = sandbox();
+    const file = path.join(box.claude, "settings.json");
+    spoil(file);
+    t.after(() => { try { fs.chmodSync(file, 0o600); } catch { /* a directory or gone */ } });
+    fs.writeFileSync(path.join(box.hooks, "lib", "hook-syntax.mts"), "");
+    const result = plainOf(box);
+    assert.match(result.stdout, /own import lib\/hook-syntax\.mts cannot be loaded .* NOT restored \(the live settings were not read completely, so the wiring is UNKNOWN\)/);
+    assert.equal(read(path.join(box.hooks, "lib", "hook-syntax.mts")), "");
+    assert.equal(read(path.join(box.cache, "incidents.jsonl")), null, "no journal entry either");
+  });
+}
