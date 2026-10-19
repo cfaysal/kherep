@@ -21,6 +21,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 const PROTOCOL = 1;
 const START = Date.now();
@@ -108,7 +109,7 @@ function preToolShape(stdout: string): string {
 function failureOf(result: Result): { why: string; mainFailed: boolean } {
   if (result.why) return { why: result.why, mainFailed: false };
   if (!result.ready) {
-    const kind = /\[hook-runtime\] not admitted \(([a-z-]+)\)/.exec(result.stderr)?.[1] ?? "it ended before admission";
+    const kind = /\[hook-runtime\] not admitted \(([a-z -]+)\)/.exec(result.stderr)?.[1] ?? "it ended before admission";
     return { why: `not admitted: ${kind}`, mainFailed: kind === "main-missing" || kind === "main-empty" };
   }
   if (result.signal) return { why: `killed by ${result.signal}`, mainFailed: true };
@@ -167,4 +168,8 @@ async function main(): Promise<void> {
   finish(deny(blocked(failure.why || shape), context), result.ready ? result.stderr : "", 0);
 }
 
-main().catch(() => finish(deny("[hook-entry] internal error; the tool call is blocked"), "", 0));
+// Imported (a test compares preloadArg) it does nothing; run as the main it is the hook.
+const self = fileURLToPath(import.meta.url);
+const invoked = process.argv[1] ? path.resolve(process.argv[1]) : "";
+const real = (file: string): string => { try { return fs.realpathSync(file); } catch { return file; } };
+if (invoked && real(invoked) === real(self)) main().catch(() => finish(deny("[hook-entry] internal error; the tool call is blocked"), "", 0));
