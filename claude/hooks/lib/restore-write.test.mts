@@ -8,7 +8,6 @@
 // Runs on its own as `node restore-write.test.mts`, like every suite in CI.
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -206,35 +205,4 @@ test("an existing file keeps its inode, owner and mode when it is written", () =
   assert.deepEqual(fs.readFileSync(file), WANTED);
 });
 
-// R5: an access-control list on the target is the inode's, so an in-place write keeps it.
-// macOS chmod +a and Linux setfacl only; elsewhere the case is skipped, not passed.
-const aclTool = process.platform === "darwin" ? ["chmod", "ls"] : process.platform === "linux" ? ["setfacl", "getfacl"] : [];
-const run = (cmd: string, args: string[]) => spawnSync(cmd, args, { encoding: "utf8" });
-const acl = (file: string): string => process.platform === "darwin"
-  ? run("ls", ["-le", file]).stdout.split("\n").slice(1).join("\n") : run("getfacl", ["-cp", file]).stdout;
-// A POSIX ACL grants the file owner through its owner entry (u::), never through a
-// named entry for the same user, so the Linux deny case narrows u:: and keeps a
-// named entry and the mask, which makes the ACL an extended one.
-function addAcl(file: string, deny: boolean): boolean {
-  const entry = process.platform === "darwin" ? [`+a`, `group:everyone ${deny ? "deny write" : "deny delete"}`, file]
-    : ["-m", deny ? "u::r--,u:nobody:r--,m::r--" : "u:nobody:r--", file];
-  return run(aclTool[0], entry).status === 0;
-}
-
-for (const deny of [false, true]) {
-  test(`a target with ${deny ? "a write-denying" : "a restricting"} ACL keeps that ACL and its inode`, (t) => {
-    const b = box();
-    const file = path.join(b.lib, "dep.mts");
-    fs.writeFileSync(file, "", "utf8");
-    if (!aclTool.length || process.getuid?.() === 0 || !addAcl(file, deny)) return t.skip("no ACL tool for this platform");
-    t.after(() => run(aclTool[0], process.platform === "darwin" ? ["-N", file] : ["-b", file])); // so the tree can go
-    const before = { acl: acl(file), stat: fs.statSync(file, { bigint: true }) };
-    assert.ok(before.acl.trim(), "the ACL is visible before the write");
-    const result = writeExact(file, WANTED, b.hooks, {}, { dev: before.stat.dev, ino: before.stat.ino });
-    if (deny) assert.match(result, /open failed/);
-    else assert.equal(result, "");
-    assert.equal(acl(file), before.acl);
-    assert.equal(fs.statSync(file, { bigint: true }).ino, before.stat.ino);
-    assert.equal(fs.readFileSync(file, "utf8"), deny ? "" : WANTED.toString());
-  });
-}
+// R5, the ACL cases, live in restore-write-acl.test.mts.
