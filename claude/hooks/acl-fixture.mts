@@ -48,9 +48,25 @@ export function readAcl(file: string): string | null {
     if ((protectedRules === "True") !== /^D:[A-Z]*P/.test(access)) return null;
     return `${access}\nprotected=${protectedRules}`;
   }
-  const out = process.platform === "darwin" ? sh("ls", ["-le", file]) : sh("getfacl", ["-cp", file]);
-  const text = process.platform === "darwin" ? out.stdout.split("\n").slice(1).join("\n") : out.stdout;
-  return out.status === 0 && text.trim() ? text : null;
+  if (process.platform === "darwin") {
+    const out = sh("ls", ["-le", file]);
+    return lsAcl(out.status, out.stdout);
+  }
+  const out = sh("getfacl", ["-cp", file]);
+  return out.status === 0 && out.stdout.trim() ? out.stdout : null;
+}
+
+// macOS `ls -le <file>`: the long-listing line, then one line per ACE ("<n>: ..."). A run
+// that exited 0 with that line and nothing but ACE lines after it is complete, also with
+// no ACE at all, which is a valid, empty ACL ("aces 0"); anything else is null. Neither
+// the listing line nor its mode flag (@ or +) is part of the ACL.
+export function lsAcl(status: number | null, stdout: string): string | null {
+  const lines = stdout.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  const [head, ...aces] = lines;
+  if (status !== 0 || !head || !/^[-bcdlps][-rwxsStT]{9}[@+]?\s/.test(head)) return null;
+  if (aces.some((line) => !/^\s*\d+: \S/.test(line))) return null;
+  return `aces ${aces.length}\n${aces.join("\n")}`;
 }
 
 // The code a write open of file fails with under this process's token, "" when it opens.
