@@ -12,7 +12,7 @@ import { retireCentralBrainHooks } from "./central-brain-retirement.mts";
 import { captureIntercom, intercomValues, renderIntercom } from "./render-intercom.mts";
 import { substituteTemplatePaths, toBashPath, workspaceEnvPath } from "./render-profile-paths.mts";
 import { filterMacPermissions, filterManagedDisallowedPermissions, mergeSettings, unique, type Settings } from "./render-profile-settings.mts";
-import { readRetiredHomeEntries, retireHookCommands, unwireMovedHooks } from "./retired-hooks.mts";
+import { readRetiredHomeEntries, retireHookCommands, unwireMovedHooks, userHomeNow } from "./retired-hooks.mts";
 import { errorMessage } from "./shape.mts";
 
 interface LocalInferenceConfig {
@@ -65,10 +65,12 @@ export function renderSettings(args: string[], platform: string = process.platfo
   // wired at an event the template no longer uses (#254). The lines go to
   // stdout, which install.sh shows and drift-check.sh discards.
   const retiredScripts = readRetiredHomeEntries();
+  // Both passes resolve ~ and $HOME through the same home within one render.
+  const userHome = userHomeNow();
   const unwire = (settings: Settings, source: Settings): Settings => {
-    const result = retireHookCommands(settings, retiredScripts, claudeHome);
+    const result = retireHookCommands(settings, retiredScripts, claudeHome, userHome);
     for (const item of result.removed) console.log(`retire: unwire ${item.event} ${item.command}`);
-    const moved = unwireMovedHooks(result.settings, source, claudeHome);
+    const moved = unwireMovedHooks(result.settings, source, claudeHome, userHome);
     for (const item of moved.removed) {
       console.log(`hooks: unwire ${item.event} ${item.command} (managed under ${item.managedAt.join(", ")})`);
     }

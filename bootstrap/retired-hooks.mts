@@ -30,7 +30,7 @@ import { errorMessage } from "./shape.mts";
 const RETIRED_MANIFEST = path.join(import.meta.dirname, "manifest", "retired.txt");
 const HOME_TOKENS = ["~/.claude/", "$HOME/.claude/", "${HOME}/.claude/", "%USERPROFILE%/.claude/"];
 // The home `~` and `$HOME` expand to in the shell that runs the hook.
-const userHomeNow = (): string => process.env.HOME || os.homedir();
+export const userHomeNow = (): string => process.env.HOME || os.homedir();
 
 export interface HookFinding { event: string; command: string; }
 
@@ -51,11 +51,13 @@ function comparable(value: string): string {
 
 const absoluteHome = (claudeHome: string): string => `${comparable(claudeHome).replace(/\/+$/, "")}/`;
 
-function homePrefixes(claudeHome: string, userHome: string): string[] {
-  const home = absoluteHome(claudeHome);
-  const isDefault = home === `${comparable(userHome).replace(/\/+$/, "")}/.claude/`;
-  return isDefault ? [home, ...HOME_TOKENS] : [home];
+// The shell spellings of the default Claude home; none when CLAUDE_HOME is another directory.
+function homeTokenPrefixes(claudeHome: string, userHome: string): string[] {
+  return absoluteHome(claudeHome) === `${comparable(userHome).replace(/\/+$/, "")}/.claude/` ? HOME_TOKENS : [];
 }
+
+const homePrefixes = (claudeHome: string, userHome: string): string[] =>
+  [absoluteHome(claudeHome), ...homeTokenPrefixes(claudeHome, userHome)];
 
 // A path relative to the first matching prefix, or undefined.
 function relativeUnder(token: string | undefined, prefixes: string[]): string | undefined {
@@ -135,7 +137,9 @@ const scriptStem = (rel: string): string => rel.replace(/\.(?:js|mjs|cjs|mts)$/,
 // mergeHooks keeps every existing hook, so an entry the installer wrote at an
 // event the template has since dropped would run on. Such an entry (the hook
 // under the absolute Claude home, .js and .mts folded) is removed; a hand-written
-// ~/.claude form and every hook the template does not manage stay.
+// ~/.claude form stays unless it is a raw command for a main the template runs
+// through kherep/hook-runtime/entry.mts or passes to the dispatcher behind it
+// (then it is that entry's duplicate); every hook the template does not manage stays.
 // Issue #507. A script the template passes as an argument (a guard that
 // guard-dispatch.mts runs) is managed "<event> via <first script>". A direct
 // entry for it is removed, or it would run a second time next to the dispatcher.
@@ -154,9 +158,11 @@ function hookOf(command: unknown, prefixes: string[]): { rel: string; main: stri
 }
 
 export function unwireMovedHooks(
-  existing: Settings, source: Settings, claudeHome: string,
+  existing: Settings, source: Settings, claudeHome: string, userHome: string = userHomeNow(),
 ): { settings: Settings; removed: Array<HookFinding & { managedAt: string[] }> } {
+  // The template is rendered with the absolute home; a token form in it is not managed.
   const prefixes = [absoluteHome(claudeHome)];
+  const tokens = homeTokenPrefixes(claudeHome, userHome);
   const raw = new Map<string, Set<string>>();
   const wrapped = new Map<string, Set<string>>();
   const via = new Map<string, Set<string>>();
@@ -173,14 +179,23 @@ export function unwireMovedHooks(
   }
   const managedAt = (main: string): string[] =>
     [...new Set([...(raw.get(main) || []), ...(wrapped.get(main) || [])]), ...(via.get(main) || [])];
+  const classify = (command: unknown) => {
+    const direct = hookOf(command, prefixes);
+    if (direct) return { ...direct, viaToken: false };
+    const token = hookOf(command, tokens);
+    return token && { ...token, viaToken: true };
+  };
   const result = removeHooks(existing, (event, command) => {
-    const found = hookOf(command, prefixes);
-    return found !== undefined && managedAt(found.main).length > 0
-      && !(found.wrapped ? wrapped : raw).get(found.main)?.has(event);
+    const found = classify(command);
+    if (found === undefined) return false;
+    const movedAway = managedAt(found.main).length > 0 && !(found.wrapped ? wrapped : raw).get(found.main)?.has(event);
+    // Issue #507 follow-up: a ~/.claude form goes only as the raw duplicate of an entry.
+    if (found.viaToken) return !found.wrapped && (wrapped.has(found.main) || via.has(found.main)) && movedAway;
+    return movedAway;
   });
   return {
     settings: result.settings,
-    removed: result.removed.map((item) => ({ ...item, managedAt: managedAt(hookOf(item.command, prefixes)!.main) })),
+    removed: result.removed.map((item) => ({ ...item, managedAt: managedAt(classify(item.command)!.main) })),
   };
 }
 
