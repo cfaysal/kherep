@@ -40,9 +40,11 @@ type Libs = RunLibs & typeof import("./lib/integrity-run.mts");
 // The first lib that did not load or lacks a used function; `loaded` libs did.
 type LoadFailure = { rel: string; why: string; loaded: number };
 
-// Filled by loadLibs. A repair of an own lib needs only the first RESTORE_LIBS of its steps.
+// Filled by loadLibs. A repair of an own lib needs the first RESTORE_LIBS of its steps
+// and hook-inventory (step INVENTORY_LIBS) to check the wiring first.
 const lib = {} as Libs;
 const RESTORE_LIBS = 4;
+const INVENTORY_LIBS = 5;
 const TRIGGER_AT = process.argv.indexOf("--trigger");
 const PLAIN = TRIGGER_AT >= 0;
 const TRIGGER = PLAIN ? process.argv[TRIGGER_AT + 1] || "unnamed" : "session-start";
@@ -104,17 +106,21 @@ function gateOf(home: string, uncoordinated: string[]): string {
 
 // This hook without one of its libs: one line, journalled as kind "self". The lib
 // is repaired next to this file only inside the runtime's hold on this directory,
-// and only when the libs that repair needs loaded. It never publishes a heartbeat.
+// only when the libs that repair needs loaded, and only when the wiring passes the
+// same gate as every other repair. It never publishes a heartbeat.
 async function ownImportFailed({ rel, why, loaded }: LoadFailure, payload: ScopePayload | null, home: string): Promise<void> {
   const hooksDir = import.meta.dirname.replace(/\\/g, "/");
   const file = `${hooksDir}/${rel}`;
   const hold = HOLD && realOrEmpty(hooksDir) === HOLD.root ? HOLD : null;
   let result: Restored = { proven: false, why: "the restore itself needs integrity-verdict, workspace-scope, orchestra-checkout and integrity-heartbeat" };
   if (!hold) result = { proven: false, why: "this run is not coordinated on this hooks directory" };
-  else if (loaded >= RESTORE_LIBS) {
-    const blocked = realOrEmpty(`${home}/hooks`) === hold.root ? lib.invalidateHeartbeat(home) : "";
+  else if (loaded >= RESTORE_LIBS && loaded < INVENTORY_LIBS) {
+    result = { proven: false, why: "the wiring cannot be checked without lib/hook-inventory.mts; the next installation restores it" };
+  } else if (loaded >= INVENTORY_LIBS) {
+    const normalized = lib.normalizePathLike(home);
+    const blocked = gateOf(normalized, lib.wiredFiles(normalized).uncoordinated) || lib.invalidateHeartbeat(home);
     result = blocked ? { proven: false, why: blocked }
-      : await lib.restore(lib, hold, file, rel, lib.checkoutFor(payload, lib.normalizePathLike(home)));
+      : await lib.restore(lib, hold, file, rel, lib.checkoutFor(payload, normalized));
   }
   // Without integrity-verdict there is no journal function to call; outside the hold no journal at all.
   if (loaded > 0 && hold?.holding()) lib.journal(home, {

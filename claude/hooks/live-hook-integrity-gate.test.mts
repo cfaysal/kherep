@@ -120,3 +120,23 @@ test("an own-lib repair invalidates this home's heartbeat and publishes none", (
   assert.equal(read(path.join(box.cache, "heartbeat.json")), null);
   assert.equal(guard(box), "", "the guard waits for the next full run");
 });
+
+// Second review of 1dd1ca9 (P2-2): the own-lib repair obeys the same wiring gate.
+test("an own-lib repair next to a wired command outside the runtime is not made", () => {
+  const box = sandbox(`${coordinated("node ~/.claude/hooks/commit-guard.mts")}`);
+  const settings = JSON.parse(read(path.join(box.claude, "settings.user.json"))!);
+  settings.hooks.PreToolUse[0].hooks.push({ type: "command", command: "node ~/.claude/hooks/commit-guard.mts" });
+  fs.writeFileSync(path.join(box.claude, "settings.user.json"), JSON.stringify(settings));
+  fs.writeFileSync(path.join(box.hooks, "lib", "hook-syntax.mts"), "");
+  const result = plainOf(box);
+  assert.match(result.stdout, /own import lib\/hook-syntax\.mts cannot be loaded .* NOT restored \(1 wired command\(s\) run hooks\/ code outside/);
+  assert.equal(read(path.join(box.hooks, "lib", "hook-syntax.mts")), "");
+});
+
+test("an own-lib repair is not made while hook-inventory itself cannot load", () => {
+  const box = sandbox();
+  fs.writeFileSync(path.join(box.hooks, "lib", "hook-inventory.mts"), "");
+  const result = plainOf(box);
+  assert.match(result.stdout, /own import lib\/hook-inventory\.mts cannot be loaded .* NOT restored \(the wiring cannot be checked without lib\/hook-inventory\.mts/);
+  assert.equal(read(path.join(box.hooks, "lib", "hook-inventory.mts")), "");
+});
