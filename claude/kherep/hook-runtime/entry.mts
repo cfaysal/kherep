@@ -73,7 +73,8 @@ function readStdin(until: number): Promise<Buffer | null> {
 
 // Runs one admitted child. Resolves at the latest at `until`; a child still
 // running then is killed and not waited for (its own lock ends with it).
-function runChild(config: Config, args: string[], input: Buffer, until: number | null): Promise<Result> {
+function runChild(config: Config, args: string[], input: Buffer, until: number | null,
+  childEnv: NodeJS.ProcessEnv = process.env): Promise<Result> {
   return new Promise((resolve) => {
     const out: Buffer[] = [];
     const err: Buffer[] = [];
@@ -86,7 +87,7 @@ function runChild(config: Config, args: string[], input: Buffer, until: number |
       resolve({ ready, code, signal, stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8"), why });
     };
     const child = spawn(process.execPath, [preloadArg(COORDINATOR, config), config.target, ...args],
-      { stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true });
+      { stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true, env: childEnv });
     const timer = until === null ? null : setTimeout(() => {
       settle(null, null, `timed out after ${Math.round((until - START) / 1000)} s`);
       child.kill("SIGKILL");
@@ -160,8 +161,9 @@ function labelOf(target: string): string {
 async function repairAttempt(input: Buffer): Promise<string> {
   const script = path.join(HOOKS_ROOT, "live-hook-integrity.mts");
   if (Date.now() > OUTER_DEADLINE - 2000 || !fs.existsSync(script)) return "";
+  // Its home is this installation's, as the dispatcher passes it: Claude Code sets no CLAUDE_HOME.
   const result = await runChild({ v: PROTOCOL, mode: "writer", root: HOOKS_ROOT, target: script, deadline: OUTER_DEADLINE - 500 },
-    ["--trigger", "hook-entry"], input, OUTER_DEADLINE - 500);
+    ["--trigger", "hook-entry"], input, OUTER_DEADLINE - 500, { ...process.env, CLAUDE_HOME: path.dirname(HOOKS_ROOT) });
   const lines = result.ready ? result.stdout.split(/\r?\n/).filter((line) => line.trim()) : [];
   const status = failureOf(result).why;
   return `hook integrity re-check (hook entry):\n${[...lines, ...(status ? [status] : [])].map((line) => `  - ${line}`).join("\n")}`;
