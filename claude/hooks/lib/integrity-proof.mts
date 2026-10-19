@@ -14,14 +14,14 @@
 // The syntax verdict is bound to the snapshot: it parses the string built from
 // the snapshot's bytes, in process, and opens no path (P2). A .js file gets the
 // grammar Node loads it with: its package scope is the nearest package.json from
-// the file's real directory upward, stopping at a directory named node_modules
-// and before the file system root. Inside the hooks root every candidate is
+// the file's real directory upward to the file system root, stopping at a
+// directory named node_modules. Inside the hooks root every candidate is
 // present (snapshotted like a hook file and re-checked at the end), proven absent
 // (and still absent at the end), or not proven, which proves nothing. Limits: a
 // package.json above the hooks root is outside the hold and read once; a read
 // error, or a package.json that is not a regular file, is not proven although
 // Node would pass it over; the accepted forms are those Node 26.10 accepts
-// (measured): a JSON object whose `type` and `name`, when present, are strings.
+// (measured, see configScope).
 // "CommonJS, else ESM" follows Node's syntax detection on every measured case.
 // Static imports: node:* only; the libs arrive as a parameter.
 import crypto from "node:crypto";
@@ -75,39 +75,82 @@ function absentName(file: string): boolean {
   }
 }
 
-// The scope a package.json text gives, in the forms Node 26.10 accepts (measured).
-function configScope(text: string): Scope {
-  let config: unknown;
-  try { config = JSON.parse(text.replace(/^\uFEFF/, "")); } catch { return "invalid"; }
-  if (!config || typeof config !== "object" || Array.isArray(config)) return "invalid";
-  const { type, name } = config as Record<string, unknown>;
-  if ((type !== undefined && typeof type !== "string") || (name !== undefined && typeof name !== "string")) return "invalid";
-  return type === "module" || type === "commonjs" ? type : "none";
+// The top-level members of an object text JSON.parse accepted, as raw key and value
+// tokens, every duplicate included: JSON.parse keeps only the last of each key.
+function members(text: string): [string, string][] {
+  const out: [string, string][] = [];
+  let depth = 0;
+  let key = "";
+  let value = -1;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\"") {
+      const from = i;
+      for (i++; text[i] !== "\""; i++) if (text[i] === "\\") i++;
+      if (depth === 1 && value < 0) key = text.slice(from, i + 1);
+    } else if (c === "{" || c === "[") depth++;
+    else if (depth === 1 && value < 0 && c === ":") value = i + 1;
+    else if (depth === 1 && value >= 0 && (c === "," || c === "}")) {
+      out.push([key, text.slice(value, i).trim()]);
+      value = -1;
+      if (c === "}") depth--;
+    } else if (c === "}" || c === "]") depth--;
+  }
+  return out;
 }
 
-// The package scope of the .js file `file`, as the header describes it; `absent`
-// collects the candidates inside the root that were proven absent.
-function scopeOf(file: string, root: string, take: (file: string) => Snap | null, absent: Set<string>): Scope {
+// The scope a package.json text gives, as Node 26.10 reads it (measured): an object;
+// every top-level "type" and "name", duplicates included, must be a string, matched by
+// its raw key (an escaped key is another key); the last "type" that is "module" or
+// "commonjs" decides, any other string leaves it as it was. Anything else is "invalid".
+function configScope(text: string): Scope {
+  const clean = text.replace(/^\uFEFF/, "");
+  let config: unknown;
+  try { config = JSON.parse(clean); } catch { return "invalid"; }
+  if (!config || typeof config !== "object" || Array.isArray(config)) return "invalid";
+  let scope: Scope = "none";
+  for (const [key, value] of members(clean)) {
+    if (key !== "\"type\"" && key !== "\"name\"") continue;
+    if (!value.startsWith("\"")) return "invalid";
+    const text = JSON.parse(value) as string;
+    if (key === "\"type\"" && (text === "module" || text === "commonjs")) scope = text;
+  }
+  return scope;
+}
+
+// One package.json candidate in dir: its scope, or null when it is absent there.
+function candidateScope(dir: string, root: string, take: (file: string) => Snap | null, absent: Set<string>): Scope | null {
+  const candidate = path.join(dir, "package.json");
+  const rel = path.relative(root, dir);
+  if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
+    if (absentName(candidate)) {
+      absent.add(candidate);
+      return null;
+    }
+    const snap = take(candidate);
+    return snap ? configScope(snap.buf.toString("utf8")) : "invalid";
+  }
+  try {
+    return configScope(fs.readFileSync(candidate, "utf8"));
+  } catch (error) {
+    return codeOf(error) === "ENOENT" ? null : "invalid";
+  }
+}
+
+// The package scope of the .js file `file`, as the header describes it, the file
+// system root included; `absent` collects the candidates inside the root that were
+// proven absent. `parentOf` is a test seam (an injected file system root); the proof
+// never passes it.
+export function scopeOf(file: string, root: string, take: (file: string) => Snap | null, absent: Set<string>,
+  parentOf: (dir: string) => string = path.dirname): Scope {
   let dir: string;
   try { dir = path.dirname(fs.realpathSync(file)); } catch { return "invalid"; }
-  for (; path.dirname(dir) !== dir; dir = path.dirname(dir)) {
+  for (;; dir = parentOf(dir)) {
     if (path.basename(dir) === "node_modules") return "none";
-    const candidate = path.join(dir, "package.json");
-    const rel = path.relative(root, dir);
-    if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
-      if (absentName(candidate)) { absent.add(candidate); continue; }
-      const snap = take(candidate);
-      if (!snap) return "invalid";
-      return configScope(snap.buf.toString("utf8"));
-    }
-    let text: string;
-    try { text = fs.readFileSync(candidate, "utf8"); } catch (error) {
-      if (codeOf(error) === "ENOENT") continue;
-      return "invalid";
-    }
-    return configScope(text);
+    const scope = candidateScope(dir, root, take, absent);
+    if (scope) return scope;
+    if (parentOf(dir) === dir) return "none";
   }
-  return "none";
 }
 
 // The verdict over exactly `source`: `file` picks the grammar by its extension and

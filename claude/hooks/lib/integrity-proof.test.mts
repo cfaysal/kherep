@@ -186,3 +186,37 @@ test("a nearer package.json created during the verdict is caught", async () => {
   assert.equal(result.why, CHANGED);
   assert.equal(fs.readFileSync(nearer, "utf8"), '{"type":"module"}', "the nearer scope stayed");
 });
+
+// Review of 4a0aaa9: Node checks every top-level "type" and "name", duplicates included,
+// by its raw key, and an unrecognized type string leaves the scope as it was (measured
+// against node --check on 26.10). JSON.parse keeps only the last value of a key.
+const B = String.fromCharCode(92); // a backslash, for the escaped-key rows
+const DUPLICATES: [string, string, string, boolean][] = [
+  ["an invalid type before a valid one", '{"type":7,"type":"module"}', EXP, false],
+  ["an invalid name before a valid one", '{"name":7,"name":"a"}', RET, false],
+  ["two valid types, the last decides", '{"type":"commonjs","type":"module"}', EXP, true],
+  ["two valid types, the last decides (return)", '{"type":"commonjs","type":"module"}', RET, false],
+  ["an unknown type after module keeps module", '{"type":"module","type":"other"}', RET, false],
+  ["two valid names", '{"name":"a","name":"b"}', RET, true],
+  ["an escaped type key is another key", `{"typ${B}u0065":7}`, RET, true],
+  ["an escaped type key does not override commonjs", `{"type":"commonjs","typ${B}u0065":"module"}`, EXP, false],
+  ["an escaped type value is that value", `{"type":"modul${B}u0065"}`, RET, false],
+  ["a nested type is not the package type", '{"x":{"type":7},"y":[{"type":7}],"z":"}\\",\\"type\\":7","type":"module"}', EXP, true],
+];
+for (const [label, config, source, ok] of DUPLICATES) {
+  test(`package scope fields: ${label}`, async () => {
+    const t = tree({ "hooks/lib/package.json": config, "hooks/lib/guard.js": source });
+    assert.equal((await prove(t, "lib/guard.js")).why, ok ? "" : NOT_OK("lib/guard.js"));
+  });
+}
+
+// Node reads a package.json at the file system root too. The walk takes its parent
+// through a seam here, so `top` stands in for the root and nothing at the real root is read.
+test("the package scope search reads the file system root's package.json", () => {
+  const t = tree({ "package.json": '{"type":"commonjs"}', "hooks/guard.js": EXP });
+  const top = path.dirname(t.hooks);
+  const parentOf = (dir: string): string => (dir === top ? dir : path.dirname(dir));
+  assert.equal(proof.scopeOf(path.join(t.hooks, "guard.js"), t.root, () => null, new Set(), parentOf), "commonjs");
+  fs.rmSync(path.join(top, "package.json"));
+  assert.equal(proof.scopeOf(path.join(t.hooks, "guard.js"), t.root, () => null, new Set(), parentOf), "none");
+});
