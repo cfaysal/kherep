@@ -93,8 +93,10 @@ test("R7: a guard's deny survives a writer that cannot be admitted, and says so"
   }
   assert.equal(run.output?.permissionDecision, "deny", run.stdout);
   assert.match(String(run.output?.permissionDecisionReason), /secret-output-guard/);
-  assert.match(String(run.output?.additionalContext), /re-check already running \(another integrity run holds the hooks directory\)/);
-  assert.match(run.stderr, /re-check already running/);
+  // The holder is a plain reader here: the notice must not guess that it is another integrity run.
+  assert.match(String(run.output?.additionalContext), /re-check not admitted \(busy\): the hooks directory is in use, holder UNKNOWN; the next matching call re-checks/);
+  assert.doesNotMatch(String(run.output?.additionalContext), /integrity run holds|already running/);
+  assert.match(run.stderr, /re-check not admitted \(busy\)/);
 });
 
 test("R8: the SessionStart writer runs through its rendered command and publishes a heartbeat", () => {
