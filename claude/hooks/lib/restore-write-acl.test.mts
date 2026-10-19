@@ -44,16 +44,18 @@ for (const deny of [false, true]) {
   });
 }
 
-// The macOS reader on synthetic `ls -le` output, on every platform: a complete listing
-// without an ACE is a valid empty ACL, distinct from one with an ACE; a failed or
-// incomplete read is null.
-test("an ls -le listing without an ACE is a complete, empty ACL; a failed or partial one is none", () => {
+// The macOS reader on synthetic `ls -le` output, on every platform: a listing with ACE
+// lines is a read, and another ACE is another ACL; a listing without an ACE proves
+// nothing (ls prints the same for an ACL it could not read), nor does a failed or
+// incomplete one.
+test("an ls -le listing is a read only with its ACE lines; without one, failed or partial it is none", () => {
   const head = "-rw-r--r--@ 1 someone staff 0 Oct 19 12:00 /tmp/example\n";
-  const empty = lsAcl(0, head);
-  const one = lsAcl(0, `${head} 0: group:everyone deny delete\n`);
-  assert.ok(empty !== null && one !== null, "both listings are complete reads");
-  assert.ok(empty !== one, "an added ACE is a different ACL");
-  assert.equal(lsAcl(0, head.replace("@", "+")), empty, "the mode flag is not part of the ACL");
+  const one = lsAcl(0, `${head} 0: group:everyone allow readattr\n`);
+  const two = lsAcl(0, `${head} 0: group:everyone allow readattr\n 1: group:everyone allow readextattr\n`);
+  assert.ok(one !== null && two !== null, "both listings are complete reads");
+  assert.ok(one !== two, "an added ACE is a different ACL");
+  assert.equal(lsAcl(0, `${head.replace("@", "+")} 0: group:everyone allow readattr\n`), one, "the mode flag is not part of the ACL");
+  assert.equal(lsAcl(0, head), null, "no ACE line: an empty ACL and an unread one look the same");
   assert.equal(lsAcl(1, head), null, "a failed run");
   assert.equal(lsAcl(0, ""), null, "no listing line");
   assert.equal(lsAcl(0, `${head}ls: something else\n`), null, "a line that is no ACE");
@@ -68,10 +70,11 @@ const tree = (): { hooks: string; lib: string } => {
 
 // Issue #507, part 2 (W5): an absent target is created in its own directory, so it gets
 // that directory's inheritable entries, not those of the hooks directory where its
-// second name lives until the publication.
+// second name lives until the publication. Both directories carry an entry of their
+// own, so every compared file has an ACE (macOS cannot read an empty ACL as one).
 test("a published nested file has the ACL of a file created in its own directory", (t) => {
   const { hooks, lib } = tree();
-  if (!changeDirectory(t, lib, "inherit")) return;
+  if (!changeDirectory(t, hooks, "inheritOther") || !changeDirectory(t, lib, "inherit")) return;
   const file = path.join(lib, "dep.mts");
   assert.equal(writeExact(file, WANTED, hooks), "");
   const reference = path.join(lib, "reference.mts");

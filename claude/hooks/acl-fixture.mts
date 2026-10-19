@@ -56,17 +56,19 @@ export function readAcl(file: string): string | null {
   return out.status === 0 && out.stdout.trim() ? out.stdout : null;
 }
 
-// macOS `ls -le <file>`: the long-listing line, then one line per ACE ("<n>: ..."). A run
-// that exited 0 with that line and nothing but ACE lines after it is complete, also with
-// no ACE at all, which is a valid, empty ACL ("aces 0"); anything else is null. Neither
-// the listing line nor its mode flag (@ or +) is part of the ACL.
+// macOS `ls -le <file>`: the long-listing line, then one line per ACE ("<n>: ..."). Only a
+// run that exited 0 with that line and at least one ACE line, nothing else, is a read: ls
+// prints the listing line alone both for a file without an ACL and when it could not read
+// the ACL (file_cmds ls.c, acl_get_link_np), so no ACE proves nothing and is null. The
+// cases give every file they compare an ACE. Neither the listing line nor its mode flag
+// (@ or +) is part of the ACL.
 export function lsAcl(status: number | null, stdout: string): string | null {
   const lines = stdout.split("\n");
   if (lines.at(-1) === "") lines.pop();
   const [head, ...aces] = lines;
   if (status !== 0 || !head || !/^[-bcdlps][-rwxsStT]{9}[@+]?\s/.test(head)) return null;
   if (aces.some((line) => !/^\s*\d+: \S/.test(line))) return null;
-  return `aces ${aces.length}\n${aces.join("\n")}`;
+  return aces.length ? aces.join("\n") : null;
 }
 
 // The code a write open of file fails with under this process's token, "" when it opens.
@@ -165,12 +167,13 @@ export function liftAcl(file: string): void {
   assert.equal(writeOpenError(file), "", "a write open succeeds after the reset");
 }
 
-// A directory change of the publication cases (restore-write-acl.test.mts): `inherit` gives
-// dir an inheritable entry of its own, so a file created in it differs from one created
-// in its parent; `noNewNames` takes away the right to add a name to dir (the hooks
+// A directory change of the publication cases (restore-write-acl.test.mts): `inherit` and
+// `inheritOther` give dir one of two different, harmless inheritable allow entries, so a
+// file created in it has an ACE of its own and differs from one created in a directory
+// with the other entry; `noNewNames` takes away the right to add a name to dir (the hooks
 // directory), its subdirectories untouched. The cleanup is registered before the change
 // and checked. null when this platform cannot run the case (never on Windows).
-export function changeDirectory(t: TestContext, dir: string, change: "inherit" | "noNewNames"): true | null {
+export function changeDirectory(t: TestContext, dir: string, change: "inherit" | "inheritOther" | "noNewNames"): true | null {
   if (!WIN && (!posixTool || process.getuid?.() === 0)) {
     t.skip("no ACL tool for this platform");
     return null;
@@ -186,14 +189,16 @@ export function changeDirectory(t: TestContext, dir: string, change: "inherit" |
   };
   t.after(() => assert.ok(undo(), "the directory change could be undone"));
   let done: boolean;
+  const other = change === "inheritOther";
   if (WIN) {
-    const ace = change === "inherit" ? "*S-1-5-32-545:(OI)(CI)(R)" : `*${userSid()}:(WD)`;
-    done = sh(system32("icacls.exe"), [dir, change === "inherit" ? "/grant" : "/deny", ace]).status === 0;
+    const ace = change === "noNewNames" ? `*${userSid()}:(WD)` : `*S-1-5-32-545:(OI)(CI)(${other ? "RA" : "R"})`;
+    done = sh(system32("icacls.exe"), [dir, change === "noNewNames" ? "/deny" : "/grant", ace]).status === 0;
   } else if (change === "noNewNames") {
     fs.chmodSync(dir, 0o555);
     done = true;
   } else {
-    done = sh(posixTool, darwin ? ["+a", "everyone deny delete,file_inherit", dir] : ["-d", "-m", "u:nobody:r", dir]).status === 0;
+    done = sh(posixTool, darwin ? ["+a", `everyone allow ${other ? "readattr" : "readextattr"},file_inherit`, dir]
+      : ["-d", "-m", `u:nobody:${other ? "x" : "r"}`, dir]).status === 0;
   }
   if (WIN) assert.ok(done, "icacls could change the directory");
   else if (!done) {
