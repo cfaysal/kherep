@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Unit test for the heartbeat half of integrity-heartbeat.mts (issue #507, part
 // 2): written atomically or not at all, with a 30-minute boundary on its age.
-// The run lock has its own suite, integrity-lock.test.mts. Every case runs in
-// its own mkdtemp home.
+// Runs are serialized by the hook runtime (hook-runtime-*.test.mts). Every case
+// runs in its own mkdtemp home.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
