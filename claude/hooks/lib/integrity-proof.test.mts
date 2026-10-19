@@ -22,6 +22,7 @@ import * as inventory from "./hook-inventory.mts";
 import * as proof from "./integrity-proof.mts";
 import * as syntax from "./hook-syntax.mts";
 import { normalizePathLike } from "./workspace-scope.mts";
+import { hasRule, identity, READ_DENY, windowsAcl } from "../acl-fixture.mts";
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "integrity-proof-")));
 after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ } });
@@ -150,25 +151,46 @@ test("a package.json above the root that cannot be read as a file is not passed 
   assert.equal((await prove(t, "guard.js")).why, NOT_OK("guard.js"));
 });
 
-// A real read error on a present package.json: denied to Everyone (a well-known SID) or mode 000.
-function unreadable(t: TestContext, file: string): boolean {
+// A real read error on a present package.json: denied to Everyone (a well-known SID) or
+// mode 000. "" when this process can no longer read the file. The one read is the probe:
+// only when it succeeds although the deny was read back complete, with the expected
+// rights and acting on the file itself, and the file, its bytes and that ACL are
+// unchanged after it, the measured fact comes back as a skip reason. Anything else fails.
+function unreadable(t: TestContext, file: string): string {
+  const id = identity(file);
+  const bytes = fs.readFileSync(file);
+  let acl = "";
   if (process.platform !== "win32") {
-    if (process.getuid?.() === 0) return false;
+    if (process.getuid?.() === 0) return "root reads every file";
     fs.chmodSync(file, 0o000);
     t.after(() => fs.chmodSync(file, 0o600));
-    return true;
+  } else {
+    const icacls = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "icacls.exe");
+    t.after(() => assert.equal(spawnSync(icacls, [file, "/reset"]).status, 0, "the read deny could be lifted"));
+    assert.equal(spawnSync(icacls, [file, "/deny", "*S-1-1-0:(R)"]).status, 0, "icacls denied the read");
+    const denied = windowsAcl(file, "S-1-1-0");
+    assert.ok(hasRule(denied, "Deny", READ_DENY), "the read deny entry is in place");
+    acl = denied!.text;
   }
-  const icacls = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "icacls.exe");
-  t.after(() => assert.equal(spawnSync(icacls, [file, "/reset"]).status, 0, "the read deny could be lifted"));
-  assert.equal(spawnSync(icacls, [file, "/deny", "*S-1-1-0:(R)"]).status, 0, "icacls denied the read");
-  return true;
+  assert.equal(identity(file), id, "the file is the one written");
+  let read: Buffer;
+  try {
+    read = fs.readFileSync(file);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    assert.ok(code === "EPERM" || code === "EACCES", `the read is refused by the OS, got ${code}`);
+    return "";
+  }
+  assert.ok(read.equals(bytes) && identity(file) === id, "the read returned the file's own bytes");
+  if (process.platform === "win32") assert.equal(windowsAcl(file, "S-1-1-0")?.text, acl, "the deny entry is unchanged after the read");
+  return process.platform === "win32" ? "this process reads a file its DACL denies" : "this process reads a file of mode 000";
 }
 
 test("a package.json that cannot be read is not passed over for the outer scope", async (t) => {
   const tr = tree({ "hooks/package.json": '{"type":"commonjs"}', "hooks/lib/package.json": "{}", "hooks/lib/guard.js": RET });
   const pkg = path.join(tr.hooks, "lib", "package.json");
-  if (!unreadable(t, pkg)) return t.skip("root reads every file");
-  assert.throws(() => fs.readFileSync(pkg), "the read really fails");
+  const bypass = unreadable(t, pkg);
+  if (bypass) return t.skip(bypass);
   assert.equal((await prove(tr, "lib/guard.js")).why, NOT_OK("lib/guard.js"));
 });
 
