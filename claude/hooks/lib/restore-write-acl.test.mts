@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { applyAcl, changeDirectory, liftAcl, lsAcl, readAcl, sameAcl } from "../acl-fixture.mts";
+import { ADD_FILE_DENY, applyAcl, changeDirectory, hasRule, liftAcl, lsAcl, parseWindowsSnapshot, readAcl, sameAcl, WRITE_DENY } from "../acl-fixture.mts";
 import { writeExact } from "./restore-write.mts";
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "restore-write-acl-"));
@@ -60,6 +60,27 @@ test("an ls -le listing is a read only with its ACE lines; without one, failed o
   assert.equal(lsAcl(0, ""), null, "no listing line");
   assert.equal(lsAcl(0, `${head}ls: something else\n`), null, "a line that is no ACE");
   assert.equal(lsAcl(null, head), null, "a run that never ended");
+});
+
+// The Windows snapshot on synthetic Get-Acl output, on every platform. Whether a rule of
+// the current user is there comes from the access rules by SID, so an SDDL that writes
+// the user as an alias (LA here) still shows it; a failed, short or inconsistent
+// snapshot is none. Synthetic values only.
+test("a Windows ACL snapshot finds the user's rule by SID whatever the SDDL calls it; a broken one is none", () => {
+  const out = (own: string, sddl = "D:PAI(A;;0x12019f;;;LA)(A;;FR;;;BU)", prot = "True") => `${sddl}\r\n${prot}\r\n${own}\r\ninherited=0\r\n`;
+  const allow = parseWindowsSnapshot(0, out("own=Allow:1180063:0"), "");
+  assert.ok(allow !== null && hasRule(allow, "Allow") && !hasRule(allow, "Deny"), "the aliased user's allow rule is found");
+  const deny = parseWindowsSnapshot(0, out("own=Deny:6:0", "D:AI(D;;DCLC;;;LA)(A;ID;FA;;;BA)", "False"), "");
+  assert.ok(hasRule(deny, "Deny", WRITE_DENY) && !hasRule(deny, "Deny", ADD_FILE_DENY), "a deny rule counts only with its rights");
+  assert.equal(parseWindowsSnapshot(3, out("own=Allow:1180063:0"), ""), null, "a failed run");
+  assert.equal(parseWindowsSnapshot(0, out("own=Allow:1180063:0"), "warning"), null, "anything on stderr");
+  assert.equal(parseWindowsSnapshot(0, "D:PAI(A;;FR;;;BU)\r\nTrue\r\n", ""), null, "a short snapshot");
+  assert.equal(parseWindowsSnapshot(0, out("own=Allow:1180063:0", "D:AI(A;;FR;;;BU)"), ""), null, "protection that contradicts the SDDL");
+  assert.equal(parseWindowsSnapshot(0, out("own=Allow"), ""), null, "a rule without its rights");
+  const inheritOnly = parseWindowsSnapshot(0, out("own=Deny:6:1", "D:AI(D;OIIO;DCLC;;;LA)(A;ID;FA;;;BA)", "False"), "");
+  assert.ok(inheritOnly !== null && !hasRule(inheritOnly, "Deny", WRITE_DENY), "an inherit-only rule does not act on the object");
+  assert.equal(parseWindowsSnapshot(0, out("own=Allow:1180063"), ""), null, "a rule without its propagation");
+  assert.equal(hasRule(null, "Allow"), false, "no snapshot, no rule");
 });
 
 const tree = (): { hooks: string; lib: string } => {

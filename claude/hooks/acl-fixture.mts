@@ -4,9 +4,12 @@
 // file, one before and one after the product call. A read that failed, came back
 // partial or came back empty is null and fails the case: no ACL is ever inferred from
 // silence. Windows: icacls sets the ACL for the current user's SID, resolved at run
-// time; one complete Get-Acl snapshot (the Access SDDL and AreAccessRulesProtected)
-// reads it; nothing skips. macOS chmod +a / ls -le and Linux setfacl / getfacl as
-// before; there a missing tool or a root user skips the case.
+// time; one complete Get-Acl snapshot (the Access SDDL, AreAccessRulesProtected and the
+// explicit rules of that SID) reads it. Only a denial this process is measured to pass
+// through, after its rule was read back with the expected rights and with the file and
+// ACL unchanged by the probe, is a skip naming that fact; everything else fails. macOS chmod +a /
+// ls -le and Linux setfacl / getfacl as before; there a missing tool or a root user
+// skips the case.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -17,6 +20,10 @@ const WIN = process.platform === "win32";
 const system32 = (...rest: string[]): string => path.join(process.env.SystemRoot || "C:\\Windows", "System32", ...rest);
 const sh = (cmd: string, args: string[], env: NodeJS.ProcessEnv = process.env) =>
   spawnSync(cmd, args, { encoding: "utf8", windowsHide: true, env });
+// Rights masks as icacls sets them: (WD,AD) on a file, (WD) on a directory, (R).
+export const WRITE_DENY = 0x6;
+export const ADD_FILE_DENY = 0x2;
+export const READ_DENY = 0x120089;
 const posixTool = process.platform === "darwin" ? "chmod" : process.platform === "linux" ? "setfacl" : "";
 
 let sidOnce = "";
@@ -30,24 +37,52 @@ function userSid(): string {
   return sidOnce;
 }
 
+// One complete Get-Acl snapshot: the Access SDDL, AreAccessRulesProtected, the type and
+// rights mask of each explicit (not inherited) rule for the SID in KHEREP_ACL_SID, read
+// as SecurityIdentifier so that no account name or SDDL alias decides, and the number
+// of inherited rules.
 const SNAPSHOT = "$ProgressPreference = 'SilentlyContinue'; try { $a = Get-Acl -LiteralPath $env:KHEREP_ACL_PATH -ErrorAction Stop; "
-  + "$a.GetSecurityDescriptorSddlForm('Access'); $a.AreAccessRulesProtected } catch { exit 3 }";
+  + "$a.GetSecurityDescriptorSddlForm('Access'); $a.AreAccessRulesProtected; "
+  + "$r = @($a.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])); "
+  + "'own=' + ((@($r | Where-Object { -not $_.IsInherited -and $_.IdentityReference.Value -eq $env:KHEREP_ACL_SID }) "
+  + "| ForEach-Object { [string]$_.AccessControlType + ':' + [int]$_.FileSystemRights + ':' "
+  + "+ [int]$_.PropagationFlags.HasFlag([System.Security.AccessControl.PropagationFlags]::InheritOnly) }) -join ','); "
+  + "'inherited=' + @($r | Where-Object { $_.IsInherited }).Count } catch { exit 3 }";
+
+export interface WindowsAcl { text: string; protectedRules: boolean; own: { type: string; mask: number; inheritOnly: boolean }[]; inherited: number }
+
+// The snapshot as Windows PowerShell printed it, or null unless it is complete and consistent.
+export function parseWindowsSnapshot(status: number | null, stdout: string, stderr: string): WindowsAcl | null {
+  const lines = stdout.split(/\r?\n/).filter((line) => line.trim());
+  if (status !== 0 || stderr || lines.length !== 4) return null;
+  const [access, protectedRules, own, inherited] = lines as [string, string, string, string];
+  if (!/^D:[A-Z]*(\([^()]+\))+$/.test(access) || !/^(True|False)$/.test(protectedRules)) return null;
+  if ((protectedRules === "True") !== /^D:[A-Z]*P/.test(access)) return null;
+  if (!/^own=((Allow|Deny):\d+:[01](,(Allow|Deny):\d+:[01])*)?$/.test(own) || !/^inherited=\d+$/.test(inherited)) return null;
+  const rules = own.slice(4).split(",").filter(Boolean).map((rule) => rule.split(":"));
+  return { text: lines.join("\n"), protectedRules: protectedRules === "True",
+    own: rules.map(([type, mask, io]) => ({ type: type!, mask: Number(mask), inheritOnly: io === "1" })), inherited: Number(inherited.slice(10)) };
+}
+
+// true when the snapshot has an explicit rule of that type, exactly that rights mask
+// (when given) and effect on the object itself (not InheritOnly).
+export const hasRule = (acl: WindowsAcl | null, type: "Allow" | "Deny", mask?: number): boolean =>
+  !!acl?.own.some((rule) => rule.type === type && !rule.inheritOnly && (mask === undefined || rule.mask === mask));
+
+// The Windows ACL of a file or directory, with the explicit rules of `sid` (default: the
+// current user), or null when the read failed or is not complete.
+export function windowsAcl(file: string, sid: string = userSid()): WindowsAcl | null {
+  // Windows PowerShell builds its own module path; one inherited from PowerShell 7
+  // points at modules it cannot load, and Get-Acl would never autoload.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "PSMODULEPATH"));
+  const out = sh(system32("WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", SNAPSHOT],
+    { ...env, KHEREP_ACL_PATH: path.resolve(file), KHEREP_ACL_SID: sid });
+  return parseWindowsSnapshot(out.status, out.stdout, out.stderr);
+}
 
 // The ACL of file, or null when the read failed or is not complete.
 export function readAcl(file: string): string | null {
-  if (WIN) {
-    // Windows PowerShell builds its own module path; one inherited from PowerShell 7
-    // points at modules it cannot load, and Get-Acl would never autoload.
-    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "PSMODULEPATH"));
-    const out = sh(system32("WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", SNAPSHOT],
-      { ...env, KHEREP_ACL_PATH: path.resolve(file) });
-    const lines = out.stdout.split(/\r?\n/).filter((line) => line.trim());
-    if (out.status !== 0 || out.stderr || lines.length !== 2) return null;
-    const [access, protectedRules] = lines as [string, string];
-    if (!/^D:[A-Z]*(\([^()]+\))+$/.test(access) || !/^(True|False)$/.test(protectedRules)) return null;
-    if ((protectedRules === "True") !== /^D:[A-Z]*P/.test(access)) return null;
-    return `${access}\nprotected=${protectedRules}`;
-  }
+  if (WIN) return windowsAcl(file)?.text ?? null;
   if (process.platform === "darwin") {
     const out = sh("ls", ["-le", file]);
     return lsAcl(out.status, out.stdout);
@@ -133,13 +168,22 @@ export function applyAcl(t: TestContext, file: string, deny: boolean): Applied |
   const before = readAcl(file);
   if (!before) assert.fail("the ACL could not be read completely before the call");
   if (WIN) {
-    const ace = new RegExp(`\\(${deny ? "D" : "A"};[^;()]*;[^;()]+;;;${userSid()}\\)`);
-    // Booleans and fixed messages only: no SDDL and no SID reaches any assertion output.
-    assert.ok(ace.test(before), `the ${deny ? "deny" : "allow"} ACE for the current user is in place`);
-    assert.ok(before.endsWith(deny ? "\nprotected=False" : "\nprotected=True"), "the inheritance is as set");
-    if (!deny) assert.ok(!/\([AD];[^;()]*ID/.test(before), "no inherited ACE is left");
+    // From the access rules by SID, not from the SDDL text, which may write the user as an
+    // alias. Booleans and fixed messages only: no SDDL and no SID reaches any assertion output.
+    const acl = windowsAcl(file);
+    assert.ok(deny ? hasRule(acl, "Deny", WRITE_DENY) : hasRule(acl, "Allow"), `the ${deny ? "deny" : "allow"} ACE for the current user is in place`);
+    assert.equal(acl!.protectedRules, !deny, "the inheritance is as set");
+    if (!deny) assert.equal(acl!.inherited, 0, "no inherited ACE is left");
   }
+  const held = { id: identity(file), bytes: fs.readFileSync(file) };
   const denied = writeOpenError(file);
+  if (WIN && deny && !denied) {
+    // Measured only: the same file, bytes and ACL as read before the open.
+    assert.ok(identity(file) === held.id && fs.readFileSync(file).equals(held.bytes) && readAcl(file) === before,
+      "the file and its ACL are unchanged by the write open");
+    t.skip("this process opens for writing a file its DACL denies writing");
+    return null;
+  }
   if (deny) assert.ok(denied === "EPERM" || denied === "EACCES", `a write open under the deny ACL is refused, got ${denied || "an open file"}`);
   else assert.equal(denied, "", "a write open under the restricting ACL succeeds");
   fs.readFileSync(file); // the file stays readable
@@ -160,9 +204,9 @@ export function liftAcl(file: string): void {
   assert.ok(resetAcl(file), "the ACL could be reset");
   if (process.platform === "linux") fs.chmodSync(file, fs.statSync(file).mode | 0o200);
   if (WIN) {
-    const now = readAcl(file);
+    const now = windowsAcl(file);
     if (!now) assert.fail("the ACL could not be read completely after the reset");
-    assert.ok(now.endsWith("\nprotected=False") && !now.includes("(D;"), "the reset restored inheritance and left no deny ACE");
+    assert.ok(!now.protectedRules && !now.own.length && !now.text.includes("(D;"), "the reset restored inheritance and left no deny ACE");
   }
   assert.equal(writeOpenError(file), "", "a write open succeeds after the reset");
 }
@@ -205,5 +249,44 @@ export function changeDirectory(t: TestContext, dir: string, change: "inherit" |
     t.skip("no ACL tool for this platform");
     return null;
   }
+  if (change === "noNewNames") {
+    const acl = WIN ? windowsAcl(dir) : null;
+    if (WIN) assert.ok(hasRule(acl, "Deny", ADD_FILE_DENY), "the deny entry for the current user is in place");
+    const id = identity(dir);
+    addsName(dir, "create");
+    // The publication adds its name by a hard link: only that operation decides.
+    if (addsName(dir, "link")) {
+      assert.ok(identity(dir) === id && (!WIN || windowsAcl(dir)?.text === acl!.text), "the directory and its ACL are unchanged by the probes");
+      t.skip("this process adds a hard link to a directory whose ACL denies adding names");
+      return null;
+    }
+  }
+  return true;
+}
+
+// The (dev, ino) of a path that must be a directory or a regular file, as one string.
+export function identity(p: string): string {
+  const st = fs.lstatSync(p, { bigint: true });
+  assert.ok(st.isFile() || st.isDirectory(), "the path is a regular file or a directory");
+  return `${st.dev}:${st.ino}`;
+}
+
+// true when this process can still add a name to dir by creating a file or a hard link;
+// false when the OS refused it (EPERM or EACCES, anything else fails the case).
+function addsName(dir: string, how: "create" | "link"): boolean {
+  const source = path.join(path.dirname(dir), ".acl-probe-source");
+  const probe = path.join(dir, `.acl-probe-${how}`);
+  if (how === "link") fs.writeFileSync(source, "");
+  try {
+    if (how === "link") fs.linkSync(source, probe);
+    else fs.closeSync(fs.openSync(probe, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    assert.ok(code === "EPERM" || code === "EACCES", `adding a name is refused by the OS, got ${code}`);
+    return false;
+  } finally {
+    if (how === "link") fs.rmSync(source);
+  }
+  fs.rmSync(probe);
   return true;
 }
