@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
 
 import { preloadArg as coordinatorArg } from "../kherep/hook-runtime/coordinator.mts";
 import { alive, cleanup, entry, entryAsync, holdExclusive, RUNTIME, runtimeHome, until, writerFree } from "./hook-runtime-fixture.mts";
+import { plantHeartbeat } from "./guard-dispatch-fixture.mts";
 
 after(cleanup);
 const ENTRY_AS_MODULE = pathToFileURL(path.join(RUNTIME, "entry.mts")).href;
@@ -144,6 +145,38 @@ test("R6: a valid decision, a silent allow and exit 2 pass through unchanged", (
   fs.writeFileSync(path.join(home.hooks, "block.mts"), "process.stderr.write(\"blocked by policy\\n\");\nprocess.exitCode = 2;\n");
   const block = entry("pretool", path.join(home.hooks, "block.mts"));
   assert.deepEqual([block.status, block.stdout, block.stderr], [2, "", "blocked by policy\n"]);
+});
+
+// The runtime's own experimental warnings (node:sqlite on Node 22 and 24.1, type
+// stripping of its .mts files) are no output of the hook; the hook's own are.
+// Emitted here by the main itself, so this holds on every Node version.
+const SQLITE = "SQLite is an experimental feature and might change at any time";
+const STRIP = "Type Stripping is an experimental feature and might change at any time";
+const warns = (...texts: string[]): string => texts.map((text) => `process.emitWarning(${JSON.stringify(text)}, "ExperimentalWarning");\n`).join("");
+
+test("only the runtime's own experimental warnings are dropped from a hook's stderr", () => {
+  const home = runtimeHome();
+  fs.writeFileSync(path.join(home.hooks, "warn.mts"), `${warns(SQLITE, STRIP, "synthetic hook warning")}`
+    + "process.stderr.write(\"blocked by policy\\n\");\nprocess.exitCode = 2;\n");
+  for (const mode of ["pretool", "reader"]) {
+    const run = entry(mode, path.join(home.hooks, "warn.mts"));
+    assert.equal(run.status, 2, run.stderr);
+    assert.doesNotMatch(run.stderr, /SQLite is an experimental|Type Stripping is an experimental/, mode);
+    assert.match(run.stderr, /ExperimentalWarning: synthetic hook warning/, mode);
+    assert.match(run.stderr, /blocked by policy\n/, mode);
+  }
+});
+
+test("a guard under the admitted dispatcher keeps its exit-2 reason free of the runtime's warnings", () => {
+  const home = runtimeHome();
+  fs.copyFileSync(path.join(import.meta.dirname, "guard-dispatch.mts"), path.join(home.hooks, "guard-dispatch.mts"));
+  fs.copyFileSync(path.join(import.meta.dirname, "lib", "guard-recheck.mts"), path.join(home.hooks, "lib", "guard-recheck.mts"));
+  plantHeartbeat(home.root);
+  fs.writeFileSync(path.join(home.hooks, "guard.mts"), `${warns(SQLITE, STRIP)}process.stderr.write("own reason\\n");\nprocess.exitCode = 2;\n`);
+  const run = entry("pretool", path.join(home.hooks, "guard-dispatch.mts"), [path.join(home.hooks, "guard.mts")],
+    JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "true" } }));
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(reasonOf(run.stdout), "own reason");
 });
 
 test("R6: another event is never given a PreToolUse decision; its own output and exit pass through", () => {

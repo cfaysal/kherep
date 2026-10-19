@@ -28,6 +28,8 @@ const GUARDS: Record<string, string> = {
   "warn-exit2.mts": `${warning("synthetic guard reason")}process.exitCode = 2;\n`,
   "warn-exit0.mts": `${warning("synthetic guard reason")}process.exitCode = 0;\n`,
   "strip-warning.mts": `${warning(STRIP)}process.stderr.write("own reason\\n");\nprocess.exitCode = 2;\n`,
+  // Node prints a warning on its next tick: after a main's own unterminated output.
+  "strip-warning-late.mts": `process.stderr.write("own reason");\n${warning(STRIP)}process.exitCode = 2;\n`,
 };
 for (const [name, source] of Object.entries(GUARDS)) fs.writeFileSync(path.join(HOOKS, name), source);
 
@@ -72,6 +74,11 @@ test("a guard's own warning on exit 0 is forwarded to stderr", () => {
   const run = dispatch("warn-exit0.mts");
   assert.equal(run.stdout, "");
   assert.match(run.stderr, /ExperimentalWarning: synthetic guard reason/);
+});
+
+test("the type-stripping warning is dropped also after unterminated output of the guard", () => {
+  const { output } = dispatch("strip-warning-late.mts");
+  assert.equal(output?.permissionDecisionReason, "own reason");
 });
 
 test("only the type-stripping warning is dropped from a guard's stderr", () => {
