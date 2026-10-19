@@ -115,6 +115,21 @@ export async function esmParses(js: string): Promise<SyntaxVerdict> {
   return { state: "UNGEPRUEFT", detail: "module linked; the probe import did not stop evaluation" };
 }
 
+const CJS_PARAMS = ["exports", "require", "module", "__filename", "__dirname"];
+// V8's parse of `source` as the wrapper function Node's CommonJS loader compiles, in
+// process and without reading `filename` (it only names the source in errors): a
+// top-level return is valid here; import, export, import.meta, top-level await and a
+// lexical redeclaration of a wrapper parameter are not. The final proof
+// (integrity-proof.mts) uses it on its snapshot.
+export function cjsParses(source: string, filename: string): SyntaxVerdict {
+  try {
+    vm.compileFunction(source, CJS_PARAMS, { filename });
+    return OK;
+  } catch (error) {
+    return { state: "DEFEKT", detail: `rejected by Node's parser: ${firstLine(error)}` };
+  }
+}
+
 function stripVerdict(source: string): SyntaxVerdict | string {
   const strip = (module as { stripTypeScriptTypes?: (code: string) => string }).stripTypeScriptTypes;
   if (typeof strip !== "function") return { state: "UNGEPRUEFT", detail: "this Node has no module.stripTypeScriptTypes" };
