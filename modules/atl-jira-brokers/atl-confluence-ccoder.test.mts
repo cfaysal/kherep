@@ -496,7 +496,7 @@ test(`${BROKER} drainage requires classified metadata and prints a bounded JSON 
   assert.equal(report.inventory.status,'complete');
   assert.equal(report.semanticReview,'UNKNOWN');
   assert.ok(!h.printed().includes('Never emit'));
-  assert.ok(!h.calls.some(c=>(c.options?.method ?? 'GET') !== 'GET' && !c.url.startsWith('https://auth.atlassian.com')));
+  assert.ok(!h.calls.some(c=>(c.options?.method ?? 'GET') !== 'GET' && new URL(c.url).origin !== 'https://auth.atlassian.com'));
 });
 
 test(`${BROKER} a successful PUT followed by readback failure is safely UNVERIFIED`, async () => {
