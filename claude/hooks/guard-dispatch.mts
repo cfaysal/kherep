@@ -158,7 +158,7 @@ function runGuard(file: string, payload: string): Promise<Outcome> {
     const child = spawn(process.execPath, CAP ? CAP.childArgs(file) : [file],
       { stdio: CAP ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"], windowsHide: true });
     let ready = !CAP;
-    child.on("message", (m: { kherep?: unknown; pid?: unknown }) => { ready ||= m?.kherep === "ready" && m.pid === child.pid; });
+    child.on("message", (m: { kherep?: unknown; v?: unknown; pid?: unknown }) => { ready ||= m?.kherep === "ready" && m.v === 1 && m.pid === child.pid; });
     const cap = Math.min(GUARD_TIMEOUT_MS, remaining());
     const timer = setTimeout(() => {
       settle(failure(file, `timed out after ${Number((cap / 1000).toFixed(1))} s`));

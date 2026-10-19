@@ -86,7 +86,9 @@ export async function openDatabase(dir: string): Promise<Opened> {
     try { fs.mkdirSync(home, { mode: 0o700 }); } catch (error) { if (codeOf(error) !== "EEXIST") throw refuse("database"); }
     plain(home, "dir");
   }
-  if (fs.realpathSync(home) !== home) throw refuse("database");
+  let real: string;
+  try { real = fs.realpathSync(home); } catch { throw refuse("database"); }
+  if (real !== home) throw refuse("database");
   const file = path.join(home, "run.sqlite");
   if (!plain(file, "file")) {
     try { fs.closeSync(fs.openSync(file, "wx", 0o600)); } catch (error) { if (codeOf(error) !== "EEXIST") throw refuse("database"); }
