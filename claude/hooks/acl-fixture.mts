@@ -38,8 +38,11 @@ const SNAPSHOT = "$ProgressPreference = 'SilentlyContinue'; try { $a = Get-Acl -
 // The ACL of file, or null when the read failed or is not complete.
 export function readAcl(file: string): string | null {
   if (WIN) {
+    // Windows PowerShell builds its own module path; one inherited from PowerShell 7
+    // points at modules it cannot load, and Get-Acl would never autoload.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "PSMODULEPATH"));
     const out = sh(system32("WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", SNAPSHOT],
-      { ...process.env, KHEREP_ACL_PATH: path.resolve(file) });
+      { ...env, KHEREP_ACL_PATH: path.resolve(file) });
     const lines = out.stdout.split(/\r?\n/).filter((line) => line.trim());
     if (out.status !== 0 || out.stderr || lines.length !== 2) return null;
     const [access, protectedRules] = lines as [string, string];
@@ -79,26 +82,44 @@ function setAcl(file: string, deny: boolean): boolean {
 const resetAcl = (file: string): boolean =>
   sh(WIN ? system32("icacls.exe") : posixTool, WIN ? [file, "/reset"] : process.platform === "darwin" ? ["-N", file] : ["-b", file]).status === 0;
 
+// true only when file is proven gone (ENOENT), not when it merely could not be seen.
+function removed(file: string): boolean {
+  try {
+    fs.lstatSync(file);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
+
 export interface Applied { before: string; denied: string }
 
 // Puts a restricting or a write-denying ACL on file, proves it took effect, and returns
 // it as read back with the code a write open now fails with ("" when restricting).
 // null when this platform cannot run the case (never on Windows).
 export function applyAcl(t: TestContext, file: string, deny: boolean): Applied | null {
-  const unavailable = !WIN && (!posixTool || process.getuid?.() === 0);
-  if (unavailable || !setAcl(file, deny)) {
-    if (WIN) assert.fail(`icacls could not set the ${deny ? "deny" : "restricting"} ACL`);
+  if (!WIN && (!posixTool || process.getuid?.() === 0)) {
     t.skip("no ACL tool for this platform");
     return null;
   }
-  t.after(() => resetAcl(file)); // so the tree can go, whatever the case did
+  // Before the first change, which may land half: a leaf that is still there is lifted
+  // and checked, so the tree can go; one whose removal was proven needs nothing.
+  let lift = true;
+  t.after(() => { if (lift && !removed(file)) liftAcl(file); });
+  if (!setAcl(file, deny)) {
+    if (WIN) assert.fail(`icacls could not set the ${deny ? "deny" : "restricting"} ACL`);
+    lift = false; // the POSIX tool refused the entry: nothing to lift
+    t.skip("no ACL tool for this platform");
+    return null;
+  }
   const before = readAcl(file);
   if (!before) assert.fail("the ACL could not be read completely before the call");
   if (WIN) {
     const ace = new RegExp(`\\(${deny ? "D" : "A"};[^;()]*;[^;()]+;;;${userSid()}\\)`);
-    assert.match(before, ace, `the ${deny ? "deny" : "allow"} ACE for <sid> is in place: ${redact(before)}`);
+    // Booleans only: no SDDL and no SID reaches an assertion's actual or expected value.
+    assert.ok(ace.test(before), `the ${deny ? "deny" : "allow"} ACE for <sid> is in place: ${redact(before)}`);
     assert.ok(before.endsWith(deny ? "\nprotected=False" : "\nprotected=True"), redact(before));
-    if (!deny) assert.doesNotMatch(before, /\([AD];[^;()]*ID/, `no inherited ACE is left: ${redact(before)}`);
+    if (!deny) assert.ok(!/\([AD];[^;()]*ID/.test(before), `no inherited ACE is left: ${redact(before)}`);
   }
   const denied = writeOpenError(file);
   if (deny) assert.ok(denied === "EPERM" || denied === "EACCES", `a write open under the deny ACL is refused, got ${denied || "an open file"}`);
