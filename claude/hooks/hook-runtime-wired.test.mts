@@ -37,9 +37,9 @@ const commandOf = (h: Home, event: string, matcher: string, file: string): strin
 };
 
 interface Out { status: number | null; stdout: string; stderr: string; output?: Record<string, string> }
-function runCommand(h: Home, command: string, payload: Record<string, unknown>): Out {
+function runCommand(h: Home, command: string, payload: Record<string, unknown>, env: NodeJS.ProcessEnv = { CLAUDE_HOME: h.claude }): Out {
   const result = spawnSync(command, { shell: true, encoding: "utf8", input: JSON.stringify(payload), windowsHide: true, timeout: 40_000,
-    env: { ...process.env, CLAUDE_HOME: h.claude, KHEREP_WORKSPACE: path.join(TMP, "no-workspace"), KHEREP_WORK_ITEM_REQUIRED: "" } });
+    env: { ...process.env, CLAUDE_HOME: undefined, ...env, KHEREP_WORKSPACE: path.join(TMP, "no-workspace"), KHEREP_WORK_ITEM_REQUIRED: "" } });
   let output: Record<string, string> | undefined;
   try { output = JSON.parse(result.stdout).hookSpecificOutput; } catch { /* no JSON */ }
   return { status: result.status, stdout: result.stdout, stderr: result.stderr, output };
@@ -69,6 +69,21 @@ for (const [label, breakIt] of [
     assert.notEqual(second.output?.permissionDecision, "deny", second.stdout);
   });
 }
+
+// Second review of 1dd1ca9 (P3-2): Claude Code sets no CLAUDE_HOME, so the entry's one
+// repair must find the home it belongs to by itself, also when it is not ~/.claude.
+test("R6: without CLAUDE_HOME, a broken dispatcher of a home other than ~/.claude is still restored", () => {
+  const h = home();
+  const dispatcher = path.join(h.claude, "hooks", "guard-dispatch.mts");
+  const original = fs.readFileSync(dispatcher);
+  fs.writeFileSync(dispatcher, "");
+  const elsewhere = fs.mkdtempSync(path.join(TMP, "other-user-"));
+  const run = runCommand(h, commandOf(h, "PreToolUse", "Bash", "commit-guard.mts"), bash("git status"), { HOME: elsewhere, USERPROFILE: elsewhere });
+  assert.equal(run.output?.permissionDecision, "deny", run.stdout);
+  assert.match(String(run.output?.additionalContext), /hook integrity re-check \(hook entry\)[\s\S]*guard-dispatch\.mts: .*RESTORED/);
+  assert.deepEqual(fs.readFileSync(dispatcher), original);
+  assert.equal(fs.readdirSync(elsewhere).length, 0, "nothing was written under the other home");
+});
 
 test("R7: a stale heartbeat re-checks after the guards, as the admitted writer, and refreshes it", () => {
   const h = home();
