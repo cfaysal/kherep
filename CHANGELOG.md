@@ -125,26 +125,32 @@ increments the minor version; every other release increments the patch version.
 - Upgrade from a legacy `~/.claude` watcher group (issue #507, part 2). A host
   that still ran `manifest-watch`, `loc-watch`, `umlaut-translit-watch`,
   `simplify-nudge` and `drift-managed-path-watch` raw as
-  `node ~/.claude/hooks/<name>.mts` kept those commands next to the template's
-  entry commands: each watcher ran twice, and the five raw commands made
-  `live-hook-integrity.mts` refuse every repair and write no heartbeat. The
-  settings render now removes a raw command in the `~/.claude`,
-  `$HOME/.claude`, `${HOME}/.claude` or `%USERPROFILE%/.claude` form (quoted
-  or not, with `/` or `\`) when the Claude home is the default one, the
-  template runs that main through `kherep/hook-runtime/entry.mts` or passes it
-  to the dispatcher behind it, and the template does not run it in that form
-  at that event; the install output names each with
+  `node ~/.claude/hooks/<name>.mts` kept those commands after an upgrade: the
+  four watchers the template already ran through the entry ran twice, and the
+  five raw commands made `live-hook-integrity.mts` refuse every repair and
+  write no heartbeat. The settings render now removes a raw command in the
+  `~/.claude`, `$HOME/.claude`, `${HOME}/.claude` or `%USERPROFILE%/.claude`
+  form (the script quoted or not, with `/` or `\`) when the Claude home is the
+  default one, the command is exactly `node <script>` with nothing glued to the
+  script, no argument, operator, redirect or line break after it, in a hook
+  with no field besides `type` and `command`, the template runs that main
+  through `kherep/hook-runtime/entry.mts` or passes it to the dispatcher behind
+  it, and the template does not run it in that form at that event; the install
+  output names each with
   `hooks: unwire <event> <command> (managed under <events>)`. As for the
   absolute form since part 1, this also removes such a raw command at an event
   or matcher the template's entry does not cover: a hand-written
   `node ~/.claude/hooks/commit-guard.mts` under `PreToolUse` `Edit` goes, and
   the guard then runs only where the template's dispatcher runs it. A
-  `~/.claude` command for a main the template does not manage, an entry
-  command in that form and a main the template runs raw stay; so do
+  `~/.claude` command for a main the template does not manage, one with more
+  than the script (`node "~/.claude/hooks/loc-watch.mts"-x.mts`,
+  `... && node <other>`, an argument, a `timeout` or other own field), an
+  entry command in that form and a main the template runs raw stay; so do
   `node.exe`, `node <flags>` and `& node` forms, which still count as outside
-  the runtime. `umlaut-translit-watch` is now a managed `reader` hook in the
-  template's `PostToolUse` `""` group, directly after `loc-watch`, as Codex
-  already runs it.
+  the runtime.
+  `umlaut-translit-watch`, which the template did not wire before, is now a
+  managed `reader` hook in its `PostToolUse` `""` group, directly after
+  `loc-watch`, as Codex already runs it.
 - Publication of a missing hook file (issue #507, part 2). The new file is still
   created beside its target, so it gets that directory's ACL, default ACL and
   group, but before its first byte it gets a second name in the hooks directory

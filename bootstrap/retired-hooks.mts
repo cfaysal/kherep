@@ -24,7 +24,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { toBashPath } from "./render-profile-paths.mts";
-import type { HookEntry, Settings } from "./render-profile-settings.mts";
+import type { HookCommand, HookEntry, Settings } from "./render-profile-settings.mts";
 import { errorMessage } from "./shape.mts";
 
 const RETIRED_MANIFEST = path.join(import.meta.dirname, "manifest", "retired.txt");
@@ -100,7 +100,7 @@ export function claudeHomeScript(
 // Removes every hook command the predicate selects, from any event and group.
 // A group left without hooks goes with them; everything else stays as written.
 function removeHooks(
-  existing: Settings, select: (event: string, command: unknown) => boolean,
+  existing: Settings, select: (event: string, command: unknown, hook: HookCommand | undefined) => boolean,
 ): { settings: Settings; removed: HookFinding[] } {
   const removed: HookFinding[] = [];
   if (!existing.hooks || typeof existing.hooks !== "object") return { settings: existing, removed };
@@ -110,7 +110,7 @@ function removeHooks(
     hooks[event] = entries.flatMap((entry) => {
       if (!entry || !Array.isArray(entry.hooks)) return [entry];
       const remaining = entry.hooks.filter((hook) => {
-        if (!select(event, hook?.command)) return true;
+        if (!select(event, hook?.command, hook)) return true;
         removed.push({ event, command: String(hook.command) });
         return false;
       });
@@ -147,6 +147,12 @@ const scriptStem = (rel: string): string => rel.replace(/\.(?:js|mjs|cjs|mts)$/,
 // starts. A raw command for a main the template runs through the entry, or an
 // entry command at an event the template has dropped, is removed.
 const ENTRY = "kherep/hook-runtime/entry";
+// A home-token command goes only as exactly `node <script>`: one closed quote or one
+// plain word, nothing glued to it, no argument, operator, redirect or line break,
+// in a hook that is the bare { type, command } the old installer wrote.
+const SINGLE_INVOCATION = /^[ \t]*node[ \t]+(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;&|<>"'`]+)[ \t]*$/;
+const bareHook = (hook: HookCommand | undefined): boolean =>
+  hook?.type === "command" && Object.keys(hook).every((key) => key === "type" || key === "command");
 function hookOf(command: unknown, prefixes: string[]): { rel: string; main: string; wrapped: boolean; args: string[] } | undefined {
   const rel = scriptUnder(command, prefixes);
   if (rel === undefined) return undefined;
@@ -182,15 +188,15 @@ export function unwireMovedHooks(
   const classify = (command: unknown) => {
     const direct = hookOf(command, prefixes);
     if (direct) return { ...direct, viaToken: false };
-    const token = hookOf(command, tokens);
+    const token = SINGLE_INVOCATION.test(String(command)) ? hookOf(command, tokens) : undefined;
     return token && { ...token, viaToken: true };
   };
-  const result = removeHooks(existing, (event, command) => {
+  const result = removeHooks(existing, (event, command, hook) => {
     const found = classify(command);
     if (found === undefined) return false;
     const movedAway = managedAt(found.main).length > 0 && !(found.wrapped ? wrapped : raw).get(found.main)?.has(event);
     // Issue #507 follow-up: a ~/.claude form goes only as the raw duplicate of an entry.
-    if (found.viaToken) return !found.wrapped && (wrapped.has(found.main) || via.has(found.main)) && movedAway;
+    if (found.viaToken) return bareHook(hook) && !found.wrapped && (wrapped.has(found.main) || via.has(found.main)) && movedAway;
     return movedAway;
   });
   return {
