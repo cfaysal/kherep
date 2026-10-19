@@ -153,12 +153,12 @@ export async function run(argv: string[], runtime: Runtime = {}): Promise<RunRes
       model,
       messages: [{ role: "system", content: system }, { role: "user", content: `${args.task}${fileText}` }],
       temperature: 0.2,
-      max_tokens: args.mode === "reasoning" ? 2048 : 700,
+      max_tokens: args.mode === "reasoning" ? 8192 : 700,
     };
     if (schemaInput) body.response_format = schemaInput.responseFormat;
     if (backend === "win" && args.mode !== "reasoning") body.chat_template_kwargs = { enable_thinking: false };
 
-    const completion = await call<ChatCompletion>("/chat/completions", "POST", body, 120_000);
+    const completion = await call<ChatCompletion>("/chat/completions", "POST", body, args.mode === "reasoning" ? 300_000 : 120_000);
     const message = completion.choices?.[0]?.message;
     response = message && (message.content || message.reasoning_content);
     if (!response) throw new Error("Local model returned no usable content");
