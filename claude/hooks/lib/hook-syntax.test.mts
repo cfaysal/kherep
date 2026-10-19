@@ -14,8 +14,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { after, test } from "node:test";
 
-import { linkFailureVerdict, syntaxVerdict, type SyntaxVerdict } from "./hook-syntax.mts";
-import * as hookSyntax from "./hook-syntax.mts";
+import { cjsParses, linkFailureVerdict, syntaxVerdict, type SyntaxVerdict } from "./hook-syntax.mts";
 
 const LIB = path.join(import.meta.dirname, "hook-syntax.mts");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "hook-syntax-"));
@@ -214,7 +213,6 @@ test("a loader hook that resolves the probe gives UNGEPRUEFT before anything run
 
 // Issue #507, part 2 (P2): the CommonJS wrapper parse the final proof uses on the snapshot.
 test("cjsParses parses a source as the function body Node's CommonJS loader compiles", () => {
-  const cjsParses = (hookSyntax as unknown as { cjsParses: (source: string, file: string) => SyntaxVerdict }).cjsParses;
   assert.equal(cjsParses("return 1;\n", "x.js").state, "OK");
   assert.equal(cjsParses("require(\"node:fs\");\n", "x.js").state, "OK");
   assert.deepEqual(cjsParses("const x = ;\n", "x.js"), { state: "DEFEKT", detail: "rejected by Node's parser: Unexpected token ';'" });

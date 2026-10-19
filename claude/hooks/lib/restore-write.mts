@@ -151,11 +151,11 @@ function publish(file: string, bytes: Uint8Array, hooksDir: string, probe: Write
 // Gives the new, still empty file its name in the hooks directory and removes the one
 // beside the target; "" when the file has exactly that one name now.
 function secondName(beside: string, staged: string, own: Id, probe: WriteProbe): string {
-  try { (probe.anchorLink ?? fs.linkSync)(beside, staged); } catch (error) {
-    return `publication failed (${errorCode(error)}); the target stays absent`;
-  }
-  if (!isOwn(beside, own)) return MOVED_DIR;
-  try { fs.unlinkSync(beside); } catch (error) {
+  try {
+    (probe.anchorLink ?? fs.linkSync)(beside, staged);
+    if (!isOwn(beside, own)) return MOVED_DIR;
+    fs.unlinkSync(beside);
+  } catch (error) {
     return `publication failed (${errorCode(error)}); the target stays absent`;
   }
   return "";
