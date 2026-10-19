@@ -53,6 +53,11 @@ function seams(name: string): Record<string, unknown> {
     case "kill-before-clear-commit": return { beforeClearCommit: kill };
     case "pause-after-rebind-commit": return { afterRebindCommit: () => { fs.writeFileSync(data.bound!, ""); waitFor(data.go!); } };
     case "swap-before-open": return { write: { beforeOpen: (file: string) => fs.renameSync(data.swap!, file) } };
+    case "swap-parent-before-open": return { write: { beforeOpen: (file: string) => {
+      const dir = file.slice(0, file.lastIndexOf("/"));
+      fs.renameSync(dir, `${dir}-old`);
+      fs.symlinkSync(data.swap!, dir, "dir");
+    } } };
     case "write-denied": return { writer: writers.denied };
     default: throw new Error(`unknown seam ${name}`);
   }

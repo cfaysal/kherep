@@ -256,10 +256,23 @@ describe("F2.4: anything not exactly confirmed leaves the intent and the files a
     const swap = path.join(s.home.root, "swap.mts");
     fs.writeFileSync(swap, "// swapped in\n");
     const out = JSON.parse((await finished(replayChild(s, "swap-before-open", { swap }))).out.trim().split("\n").at(-1)!);
-    assert.deepEqual([out.ok, out.code], [false, "replay-refused"]);
+    assert.deepEqual([out.ok, out.code, out.lines], [false, "replay-refused", ["reason=target-changed"]]);
     assert.equal(fs.readFileSync(s.guard, "utf8"), "// swapped in\n");
     assert.equal((await pending(s.home)).n, 1);
   });
+});
+
+// Review of bcab653 (H2): a refused replay prints a fixed reason code, never raw text or a path.
+test("a parent swapped to a link outside at the before-open seam is refused with a fixed code and no path", async () => {
+  const s = await stuck("lib/guard.mts");
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "replay-outside-"));
+  fs.writeFileSync(path.join(outside, "guard.mts"), "// outside\n");
+  const out = JSON.parse((await finished(replayChild(s, "swap-parent-before-open", { swap: outside }))).out.trim().split("\n").at(-1)!);
+  assert.deepEqual([out.ok, out.code, out.lines], [false, "replay-refused", ["reason=parent-outside"]]);
+  assert.ok(!JSON.stringify(out).includes("/"), JSON.stringify(out));
+  assert.equal(fs.readFileSync(path.join(outside, "guard.mts"), "utf8"), "// outside\n");
+  assert.equal((await pending(s.home)).n, 1);
+  fs.rmSync(outside, { recursive: true, force: true });
 });
 
 test("F2.5: a write-denied replay after the binding keeps the replacement bytes, the intent and its before-hash", async () => {
@@ -267,7 +280,7 @@ test("F2.5: a write-denied replay after the binding keeps the replacement bytes,
   const before = (await pending(s.home)).before;
   assert.equal(before, sha(""), "the before-hash is the original target's");
   const out = JSON.parse((await finished(replayChild(s, "write-denied"))).out.trim().split("\n").at(-1)!);
-  assert.deepEqual([out.ok, out.code], [false, "replay-refused"]);
+  assert.deepEqual([out.ok, out.code, out.lines], [false, "replay-refused", ["reason=open-failed"]]);
   const row = await pending(s.home);
   assert.deepEqual([row.n, row.before, row.target], [1, before, `${s.args["--current-dev"]}:${s.args["--current-ino"]}`],
     "still pending, bound to the replacement, before-hash not rewritten");

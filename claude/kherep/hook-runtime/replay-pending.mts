@@ -87,6 +87,17 @@ export function measureTarget(o: Opened, intent: Intent): { id: Id; sha: string 
   return { id: { dev: leaf!.dev, ino: leaf!.ino }, sha: sha256(bytes!) };
 }
 
+// The writer's refusal as a fixed code: its text may carry a path, which is never printed.
+const REASONS: [RegExp, string][] = [
+  [/^open failed/, "open-failed"], [/^write failed/, "write-failed"], [/^publication failed/, "publication-failed"],
+  [/^mkdir failed|^realpath failed|^target lstat failed/, "target-unreadable"], [/resolves outside/, "parent-outside"],
+  [/symbolic link/, "target-link"], [/not a regular file/, "target-irregular"], [/more than one link/, "target-shared"],
+  [/not the file that was judged|changed between check and open|identity changed|no file id/, "target-changed"],
+  [/directory is not the one that was recorded/, "parent-moved"], [/appeared/, "target-appeared"],
+  [/does not hold the recorded bytes/, "unproven"],
+];
+const reasonOf = (why: string): string => REASONS.find(([pattern]) => pattern.test(why))?.[1] ?? "refused";
+
 // BEGIN EXCLUSIVE, retried while SQLite reports busy, for a bounded time.
 async function exclusive(o: Opened): Promise<void> {
   const until = Date.now() + BUSY_MS;
@@ -173,7 +184,7 @@ export async function replay(a: ReplayArgs, seams: Seams = {}): Promise<Outcome>
       seams.beforeClearCommit?.();
     }
     run(o.conn, "COMMIT");
-    if (why) return done(false, "replay-refused", [`why=${why}`]);
+    if (why) return done(false, "replay-refused", [`reason=${reasonOf(why)}`]);
     // 3. Success only on measurement: the intent is gone and the confirmed file holds the desired bytes.
     run(o.conn, "BEGIN");
     const left = Number(read(o.conn, "SELECT count(*) AS n FROM pending WHERE intent = ?", intent.intent)?.n);
