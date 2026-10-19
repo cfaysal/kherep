@@ -182,7 +182,7 @@ function unreadable(t: TestContext, file: string): string {
     return "";
   }
   assert.ok(read.equals(bytes) && identity(file) === id, "the read returned the file's own bytes");
-  if (process.platform === "win32") assert.equal(windowsAcl(file, "S-1-1-0")?.text, acl, "the deny entry is unchanged after the read");
+  if (process.platform === "win32") assert.ok(windowsAcl(file, "S-1-1-0")?.text === acl, "the deny entry is unchanged after the read");
   return process.platform === "win32" ? "this process reads a file its DACL denies" : "this process reads a file of mode 000";
 }
 
