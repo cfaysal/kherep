@@ -88,7 +88,6 @@ test("healthy: one plain summary line, heartbeat with trigger guard-dispatch, no
   assert.equal(beat(box)?.trigger, "guard-dispatch");
   assert.equal(beat(box)?.files, 1);
   assert.deepEqual(journal(box), []);
-  assert.equal(fs.existsSync(path.join(box.cache, "run.lock")), false, "the lock is released");
 });
 
 test("a 0-byte guard: restored with proof, journalled with the trigger, heartbeat written", () => {

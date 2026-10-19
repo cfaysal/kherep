@@ -11,31 +11,36 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
-- Hook integrity heartbeat and re-check (issue #507, part 2 of 4).
-  `hooks/live-hook-integrity.mts` writes
-  `<CLAUDE_HOME>/.cache/hook-integrity/heartbeat.json` atomically after a
-  fully proven run only, takes `run.lock` (a second run reports
-  `re-check already running` while the owner lives and the lock is younger
-  than 2 minutes; a run that finds a dead or 2-minute-old owner proceeds
-  without exclusion and removes that lock at its end, which is safe because
-  concurrent runs write the same versioned bytes and each proves its own
-  result) and
-  gains a `--trigger <source>` mode that prints plain lines. The guard
-  dispatcher re-checks on the next guarded tool call when the heartbeat is
-  older than 30 minutes or missing (in parallel with the guards) or when a
-  guard could not run (after them), with at most 20 s of one shared deadline
-  25 s after it starts; stdin is bounded by the same deadline. The re-check is
-  reported as `additionalContext` and on stderr and never changes the
-  decision; a guard restored during a call runs from the next call. Journal
-  entries name their `trigger`. `classify`, `restore` and `journal` moved to
-  `hooks/lib/integrity-verdict.mts`; a broken copy of that file is reported but
-  not restored until the next installation. The re-check lib must load within
-  2 s and answer before the deadline, and the dispatcher exits once stdout and
-  stderr are flushed, so a lib or guard that leaves a handle open cannot hold
-  the hook past the cancel. After a restore the import closure is walked again
-  (at most three passes) before a heartbeat is written. Limits: no timer, so an idle
-  session is not re-checked; whether the session shows a `PreToolUse`
-  `additionalContext` is UNVERIFIED.
+- Hook integrity heartbeat, re-check and hook runtime (issue #507, part 2 of
+  4). Every managed Claude hook command now starts through
+  `kherep/hook-runtime/entry.mts`, which admits the hook process to its hooks
+  directory (`<real hooks>/.kherep-integrity/run.sqlite`, `node:sqlite`,
+  rollback journal `DELETE`) before Node loads the hook or its imports: hooks
+  hold a read transaction, `live-hook-integrity.mts` an `EXCLUSIVE` one. A
+  repair is recorded with its complete bytes before the first byte is
+  written, written in the same inode (owner, mode and ACLs stay) or published
+  complete through a hard link, and replayed by the next admitted process when
+  its writer died; the integrity run repairs nothing outside that hold, on
+  another hooks directory, or next to a wired command that bypasses the
+  entry. The heartbeat `<CLAUDE_HOME>/.cache/hook-integrity/heartbeat.json`
+  is removed before the first repair and written only after a final
+  read-only check of the live import closure (walked again after restores, at
+  most three passes) within one hold. The guard dispatcher re-checks after
+  its guards when the heartbeat is older than 30 minutes or missing or a
+  guard could not run, within one deadline 25 s after it starts (stdin
+  included), reports it as `additionalContext` and on stderr, never as a
+  decision, and exits once stdout and stderr are flushed. For `PreToolUse`
+  the entry turns every runtime failure, a missing, empty or broken
+  dispatcher included, into a deny and starts one repair for the next call.
+  `live-hook-integrity.mts` gains a `--trigger <source>` mode that prints
+  plain lines, and journal entries name their `trigger`; `classify`,
+  `restore` and `journal` moved to `hooks/lib/integrity-verdict.mts`. The
+  upgrade replaces each raw managed command with its entry form and removes
+  an entry command at an event the template no longer uses. Limits: the entry itself cannot be checked; writers and readers outside
+  the runtime are not covered; a persistently failing recorded repair keeps
+  that hooks directory's hooks out; no timer, so an idle session is not
+  re-checked; whether the session shows a `PreToolUse` `additionalContext`
+  is UNVERIFIED; Windows DACL preservation is UNVERIFIED.
 - Fail-closed Claude guard dispatcher (issue #507, part 1 of 4). The five
   `PreToolUse` groups of `claude/settings.user.json` each run one
   `hooks/guard-dispatch.mts` entry that starts the group's guards in parallel.
@@ -51,7 +56,8 @@ increments the minor version; every other release increments the patch version.
   each removal, and `drift-check.sh` reports a dispatcher entry whose guard
   argument is missing or retired as `DANGLING-HOOK`. Limits: the dispatcher
   cannot check itself, so an empty `guard-dispatch.mts` fails open until the
-  next session start; a hook cancelled at its 30 s `timeout` loses its output,
+  next session start (part 2 moves this boundary to the hook runtime entry);
+  a hook cancelled at its 30 s `timeout` loses its output,
   so each guard is capped at 10 s, within one deadline 25 s after the
   dispatcher starts (part 2); `onFailure` is not set, because no minimum
   Claude Code version is declared.
