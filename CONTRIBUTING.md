@@ -1,6 +1,6 @@
 # Contributing
 
-Use Node.js 24, npm and a Git checkout. Source development and portable tests do not require access to an Atlassian site.
+Use Node.js 24 (at least 22.18 on the 22 line, or 23.6), npm and a Git checkout. Source development and portable tests do not require access to an Atlassian site.
 
 ## Source setup
 
