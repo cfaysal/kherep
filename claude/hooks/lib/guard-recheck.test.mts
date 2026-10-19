@@ -8,11 +8,17 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
+import { pathToFileURL } from "node:url";
+
+import { cleanup, runtimeHome } from "../hook-runtime-fixture.mts";
 import { heartbeatState, runRecheck } from "./guard-recheck.mts";
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "guard-recheck-")));
 after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ } });
+after(cleanup);
 const MIN = 60_000;
+// A timed-out re-check proves nothing about its heartbeat: the writer may have written it already.
+const TIMED_OUT = (ms: number): string => `timed out after ${ms} ms; outcome UNKNOWN (a heartbeat may have been written)`;
 const WINDOW = 30 * MIN;
 const TRACE = path.join(TMP, "trace.json");
 const PID = path.join(TMP, "pid.txt");
@@ -69,7 +75,7 @@ test("a hanging re-check is killed at its budget and says so", async () => {
   const begin = Date.now();
   const text = await runRecheck({ ...base, why: "no heartbeat", script: path.join(TMP, "hang.mts"), budgetMs: 500 });
   assert.ok(Date.now() - begin < 1500, `took ${Date.now() - begin} ms`);
-  assert.equal(text, "hook integrity re-check (no heartbeat, last OK none):\n  - timed out after 500 ms, no heartbeat written");
+  assert.equal(text, `hook integrity re-check (no heartbeat, last OK none):\n  - ${TIMED_OUT(500)}`);
   const pid = Number(fs.readFileSync(PID, "utf8"));
   let alive = true;
   for (let i = 0; i < 50 && alive; i++) {
@@ -88,4 +94,26 @@ test("a missing script is a line, not a throw", async () => {
   const script = path.join(TMP, "missing.mts");
   const text = await runRecheck({ ...base, script });
   assert.match(text, /exited with code 1$/);
+});
+
+// Review of 1dd1ca9 (P2): an admitted writer that already published its heartbeat
+// through the real writeHeartbeat and then hangs is reported as UNKNOWN, never as
+// "no heartbeat written".
+test("a timed-out admitted writer that already wrote its heartbeat is reported as UNKNOWN", async () => {
+  const home = runtimeHome("guard-recheck-writer-");
+  fs.copyFileSync(path.join(import.meta.dirname, "integrity-heartbeat.mts"), path.join(home.hooks, "lib", "integrity-heartbeat.mts"));
+  const writer = path.join(home.hooks, "live-hook-integrity.mts");
+  const lib = "./lib/" + "integrity-heartbeat.mts";
+  fs.writeFileSync(writer, `import { writeHeartbeat } from ${JSON.stringify(lib)};\n`
+    + `const why = writeHeartbeat(${JSON.stringify(home.root)}, { trigger: "synthetic", runtime: "claude", files: 1 });\n`
+    + "if (why) throw new Error(why);\nsetInterval(() => {}, 1000);\n");
+  fs.writeFileSync(path.join(home.hooks, "main.mts"), "export {};\n");
+  const { admit } = await import(pathToFileURL(path.join(home.runtime, "coordinator.mts")).href);
+  const cap = await admit({ v: 1, mode: "reader", root: home.hooks, target: path.join(home.hooks, "main.mts"), deadline: Date.now() + 10_000 });
+  const args = cap.writerArgs(writer);
+  cap.release();
+  const text = await runRecheck({ script: writer, home: home.root, payload: "{}", budgetMs: 1000, why: "no heartbeat", args });
+  assert.equal(heartbeatState(home.root, WINDOW).stale, false, "the writer did publish its heartbeat");
+  assert.doesNotMatch(text, /no heartbeat written/);
+  assert.equal(text, `hook integrity re-check (no heartbeat, last OK none):\n  - ${TIMED_OUT(1000)}`);
 });

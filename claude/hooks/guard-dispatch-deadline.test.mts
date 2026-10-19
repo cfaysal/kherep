@@ -56,7 +56,7 @@ describe("one shared deadline", { concurrency: true }, () => {
     const printed = output(result);
     assert.equal(printed.permissionDecision, "deny");
     assert.match(printed.permissionDecisionReason!, /hang\.mts cannot run \(timed out after 10 s\)/);
-    const budget = Number(/timed out after (\d+) ms, no heartbeat written/.exec(printed.additionalContext ?? "")?.[1]);
+    const budget = Number(/timed out after (\d+) ms; outcome UNKNOWN \(a heartbeat may have been written\)/.exec(printed.additionalContext ?? "")?.[1]);
     assert.ok(budget >= 12_000 && budget <= 15_500, `re-check budget ${budget} ms; context ${printed.additionalContext}`);
     assert.ok(result.ms >= 24_000 && result.ms <= 27_000, `took ${result.ms} ms`);
   });
