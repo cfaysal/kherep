@@ -133,8 +133,8 @@ function publish(file: string, bytes: Uint8Array, hooksDir: string, probe: Write
     fs.closeSync(fd);
   }
   if (refusal) {
-    dropOwn(beside, own, dir, parentId);
-    dropOwn(staged, own, hooksDir, rootId);
+    dropOwn(beside, own, parentId);
+    dropOwn(staged, own, rootId);
     return refusal;
   }
   probe.beforeLink?.(file);
@@ -144,7 +144,7 @@ function publish(file: string, bytes: Uint8Array, hooksDir: string, probe: Write
     || (isOwn(staged, own!) ? "" : MOVED_STAGING)
     || (lstatOrNull(file) ? APPEARED : "")
     || link(staged, file);
-  dropOwn(staged, own, hooksDir, rootId);
+  dropOwn(staged, own, rootId);
   return outcome;
 }
 
@@ -179,10 +179,11 @@ function link(tmp: string, file: string): string {
   return "";
 }
 
-// Removes a temporary name only while it is still the file this call created and its
-// directory is still the one measured: never by name alone, never a foreign file.
-function dropOwn(tmp: string, own: Id | null, dir: string, dirId: Id): void {
-  if (!own || !isOwn(tmp, own) || !same(statOrNull(dir), dirId)) return;
+// Removes a temporary name only while it is still the file this call created and the
+// directory the name resolves into now is still the one measured (an alias of it may
+// have been re-pointed): never by name alone, never a foreign file.
+function dropOwn(tmp: string, own: Id | null, dirId: Id): void {
+  if (!own || !isOwn(tmp, own) || !same(statOrNull(path.dirname(tmp)), dirId)) return;
   try { fs.unlinkSync(tmp); } catch { /* gone, or not ours: left alone */ }
 }
 
