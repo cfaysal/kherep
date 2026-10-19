@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { applyAcl, changeDirectory, liftAcl, readAcl, sameAcl } from "../acl-fixture.mts";
+import { applyAcl, changeDirectory, liftAcl, lsAcl, readAcl, sameAcl } from "../acl-fixture.mts";
 import { writeExact } from "./restore-write.mts";
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "restore-write-acl-"));
@@ -43,6 +43,22 @@ for (const deny of [false, true]) {
     assert.equal(fs.existsSync(file), false, "the file can be removed after the reset");
   });
 }
+
+// The macOS reader on synthetic `ls -le` output, on every platform: a complete listing
+// without an ACE is a valid empty ACL, distinct from one with an ACE; a failed or
+// incomplete read is null.
+test("an ls -le listing without an ACE is a complete, empty ACL; a failed or partial one is none", () => {
+  const head = "-rw-r--r--@ 1 someone staff 0 Oct 19 12:00 /tmp/example\n";
+  const empty = lsAcl(0, head);
+  const one = lsAcl(0, `${head} 0: group:everyone deny delete\n`);
+  assert.ok(empty !== null && one !== null, "both listings are complete reads");
+  assert.ok(empty !== one, "an added ACE is a different ACL");
+  assert.equal(lsAcl(0, head.replace("@", "+")), empty, "the mode flag is not part of the ACL");
+  assert.equal(lsAcl(1, head), null, "a failed run");
+  assert.equal(lsAcl(0, ""), null, "no listing line");
+  assert.equal(lsAcl(0, `${head}ls: something else\n`), null, "a line that is no ACE");
+  assert.equal(lsAcl(null, head), null, "a run that never ended");
+});
 
 const tree = (): { hooks: string; lib: string } => {
   const hooks = path.join(TMP, `case-${++seq}`, "hooks");
