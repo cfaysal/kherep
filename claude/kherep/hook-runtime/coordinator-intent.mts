@@ -19,6 +19,10 @@ import path from "node:path";
 import { type Id, type Opened, read, refuse, sameId } from "./coordinator-db.mts";
 
 export type WriteExact = (file: string, bytes: Uint8Array, hooksDir: string, probe: object, expect: Id | "absent") => string;
+// Test seams of the recovery writer (restore-write.mts WriteProbe), passed through unchanged.
+export type WriteSeams = {
+  beforeOpen?: (file: string) => void; writeChunk?: (fd: number, bytes: Uint8Array, offset: number, length: number) => number;
+};
 export interface Intent {
   intent: string; root: Id; rel: string; parent: Id; target: Id | null; beforeSha: string; bytes: Uint8Array; sha: string;
 }
@@ -51,7 +55,7 @@ const idFrom = (dev: unknown, ino: unknown): Id | null =>
   typeof dev === "string" && typeof ino === "string" && DEC.test(dev) && DEC.test(ino) ? { dev: BigInt(dev), ino: BigInt(ino) } : null;
 
 // The one pending row, validated in full, or null when there is none.
-function pendingIntent(o: Opened): Intent | null {
+export function pendingIntent(o: Opened): Intent | null {
   const count = Number(read(o.conn, "SELECT count(*) AS n FROM pending")?.n);
   if (count === 0) return null;
   const row = read(o.conn, "SELECT * FROM pending WHERE id = 1");
@@ -115,7 +119,7 @@ export function recordIntent(o: Opened, rel: string, bytes: Uint8Array): Intent 
 }
 
 // Replays the pending intent, if any, and deletes it once the target is proven.
-export function applyPending(o: Opened, writeExact: WriteExact): Applied {
+export function applyPending(o: Opened, writeExact: WriteExact, seams: WriteSeams = {}): Applied {
   const intent = pendingIntent(o);
   if (!intent) return { state: "none" };
   const file = targetOf(o, intent.rel);
@@ -130,7 +134,7 @@ export function applyPending(o: Opened, writeExact: WriteExact): Applied {
     // A complete publication the crash interrupted after its link, or something else.
     if (!(now.isFile() && shaOf(file) === intent.sha)) why = "something else appeared at the absent target";
   } else {
-    why = writeExact(file, intent.bytes, o.root, {}, intent.target ?? "absent");
+    why = writeExact(file, intent.bytes, o.root, seams, intent.target ?? "absent");
   }
   if (!why && shaOf(file) !== intent.sha) why = "the target does not hold the recorded bytes after the write";
   if (!why && intent.target) {

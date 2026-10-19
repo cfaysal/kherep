@@ -18,6 +18,7 @@ hooks/hook-runtime-entry.test.mts
 hooks/hook-runtime-slow.test.mts
 hooks/hook-runtime-wired.test.mts
 hooks/hook-runtime-root.test.mts
+hooks/hook-runtime-replay.test.mts
 hooks/main-checkout-guard.mts
 hooks/main-checkout-guard.test.mts
 hooks/maestro-discipline.mts
@@ -151,6 +152,7 @@ kherep/hook-runtime/entry.mts
 kherep/hook-runtime/coordinator.mts
 kherep/hook-runtime/coordinator-db.mts
 kherep/hook-runtime/coordinator-intent.mts
+kherep/hook-runtime/replay-pending.mts
 kherep/hook-runtime/recovery/restore-write.mts
 kherep/hook-runtime/recovery/workspace-scope.mts
 skills/domain-modeling

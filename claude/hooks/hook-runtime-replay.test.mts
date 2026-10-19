@@ -1,0 +1,315 @@
+// Issue #507, part 2, F2: kherep/hook-runtime/replay-pending.mts. A writer
+// recorded a repair of hooks/guard.mts and died; an outside writer then
+// replaced the file with another inode and other bytes. Ordinary admission
+// refuses that for good. The explicit replay writes the recorded bytes into the
+// one replacement file the operator confirmed, after binding the intent to it.
+// Synthetic temporary homes only; the command is never run against a live home.
+import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { after, describe, test } from "node:test";
+import { pathToFileURL } from "node:url";
+
+import { cleanup, database, entry, type Home, runtimeHome, until } from "./hook-runtime-fixture.mts";
+
+after(cleanup);
+const KILL = "process.kill(process.pid, 'SIGKILL')";
+const PREFIX = "// a guard that proves it ran\n";
+const REPLACED = "// put here by an outside installer\nprocess.stdout.write(\"other\");\n";
+const sha = (text: string | Buffer): string => crypto.createHash("sha256").update(text).digest("hex");
+const url = (home: Home, name: string): string => JSON.stringify(pathToFileURL(path.join(home.runtime, name)).href);
+
+interface Stuck { home: Home; guard: string; good: string; marker: string; ino: bigint; args: Record<string, string> }
+
+// The F2 state: an intent for rel recorded and its writer killed, then rel replaced
+// by an outside writer with another inode and other bytes.
+async function stuck(rel = "guard.mts"): Promise<Stuck> {
+  const home = runtimeHome("hook-runtime-replay-");
+  const guard = path.join(home.hooks, rel);
+  fs.mkdirSync(path.dirname(guard), { recursive: true });
+  fs.writeFileSync(guard, "");
+  const marker = path.join(home.root, "ran.txt");
+  const good = `${PREFIX}import fs from "node:fs";\nfs.appendFileSync(${JSON.stringify(marker)}, "ran\\n");\nprocess.stdout.write("ran");\n`;
+  const code = `const db = await import(${url(home, "coordinator-db.mts")}); const it = await import(${url(home, "coordinator-intent.mts")});`
+    + `const o = await db.openDatabase(${JSON.stringify(home.hooks)}); db.initialize(o.conn); o.conn.exec("BEGIN EXCLUSIVE");`
+    + `it.recordIntent(o, ${JSON.stringify(rel)}, new TextEncoder().encode(${JSON.stringify(good)})); o.conn.exec("COMMIT"); ${KILL};`;
+  assert.notEqual(spawnSync(process.execPath, ["--input-type=module", "-e", code]).status, 0, "the writer died");
+  const tmp = `${guard}.installer`;
+  fs.writeFileSync(tmp, REPLACED);
+  fs.renameSync(tmp, guard);
+  const st = fs.statSync(guard, { bigint: true });
+  const seen = cli(home, "inspect", "--hooks-root", home.hooks);
+  assert.equal(seen.code, "pending", seen.stdout);
+  assert.equal(seen.fields["current-ino"], String(st.ino));
+  const args = { "--hooks-root": home.hooks, "--intent": seen.fields.intent!, "--desired-sha": seen.fields["desired-sha"]!,
+    "--current-dev": seen.fields["current-dev"]!, "--current-ino": seen.fields["current-ino"]!, "--current-sha": seen.fields["current-sha"]! };
+  return { home, guard, good, marker, ino: st.ino, args };
+}
+
+function cli(home: Home, ...argv: string[]): { status: number | null; code: string; fields: Record<string, string>; stdout: string } {
+  const run = spawnSync(process.execPath, [path.join(home.runtime, "replay-pending.mts"), ...argv], { encoding: "utf8" });
+  const [first, ...rest] = run.stdout.trim().split("\n");
+  const fields = Object.fromEntries(rest.map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]));
+  return { status: run.status, code: first?.replace("replay-pending: ", "") ?? "", fields, stdout: run.stdout + run.stderr };
+}
+const replayCli = (s: Stuck, change: Record<string, string> = {}) =>
+  cli(s.home, "replay", ...Object.entries({ ...s.args, ...change }).flat());
+
+async function pending(home: Home): Promise<{ n: number; target: string; before: string }> {
+  const o = await database(home);
+  try {
+    const row = o.conn.prepare("SELECT count(*) AS n, max(target_dev) AS dev, max(target_ino) AS ino, max(before_sha256) AS b FROM pending").get() as
+      { n: number; dev: string; ino: string; b: string };
+    return { n: Number(row.n), target: `${row.dev}:${row.ino}`, before: row.b };
+  } finally { o.conn.close(); }
+}
+const blocked = (s: Stuck): void => {
+  const run = entry("reader", s.guard);
+  assert.equal(run.status, 1, run.stdout);
+  assert.match(run.stderr, /not admitted: recovery/);
+};
+const unchanged = async (s: Stuck): Promise<void> => {
+  assert.equal(fs.readFileSync(s.guard, "utf8"), REPLACED);
+  assert.equal((await pending(s.home)).n, 1);
+};
+
+// The replay as a module in a child, with seams that kill it or pause it.
+function replayChild(s: Stuck, seams: string): ReturnType<typeof spawn> {
+  const args = JSON.stringify({ hooksRoot: s.args["--hooks-root"], intent: s.args["--intent"], desiredSha: s.args["--desired-sha"],
+    currentDev: s.args["--current-dev"], currentIno: s.args["--current-ino"], currentSha: s.args["--current-sha"] });
+  const code = `const r = await import(${url(s.home, "replay-pending.mts")}); const fs = await import("node:fs");`
+    + `const out = await r.replay(${args}, ${seams}); process.stdout.write("\\n" + JSON.stringify(out));`;
+  return spawn(process.execPath, ["--input-type=module", "-e", code]);
+}
+const finished = (child: ReturnType<typeof spawn>): Promise<{ status: number | null; out: string }> => new Promise((resolve) => {
+  let out = "";
+  child.stdout!.on("data", (chunk) => (out += chunk));
+  child.on("close", (status) => resolve({ status, out }));
+});
+
+test("F2.1: ordinary admission stays refused; the confirmed replay lands the recorded bytes in the replacement inode", async () => {
+  const s = await stuck();
+  blocked(s);
+  await unchanged(s);
+  const run = replayCli(s);
+  assert.equal(run.status, 0, run.stdout);
+  assert.equal(run.code, "replayed");
+  assert.equal(fs.readFileSync(s.guard, "utf8"), s.good);
+  assert.equal(fs.statSync(s.guard, { bigint: true }).ino, s.ino, "the replacement inode, written in place");
+  assert.equal((await pending(s.home)).n, 0);
+  assert.equal(fs.existsSync(s.marker), false, "the replay ran no hook");
+  assert.equal(fs.existsSync(path.join(s.home.root, ".cache")), false, "and wrote no heartbeat");
+  assert.equal(entry("reader", s.guard).stdout, "ran", "the next ordinary invocation runs");
+});
+
+describe("F2.2: a replay killed at any point", () => {
+  for (const [label, seams, recovers] of [
+    ["before the binding commit", `{ afterRebind: () => ${KILL} }`, false],
+    ["after the binding commit", `{ afterRebindCommit: () => ${KILL} }`, true],
+    ["after the truncate", `{ write: { writeChunk: () => ${KILL} } }`, true],
+    ["after a valid nonempty prefix", `{ write: { writeChunk: (fd) => { fs.writeSync(fd, ${JSON.stringify(PREFIX)}); ${KILL}; } } }`, true],
+    ["before the completion commit", `{ beforeClearCommit: () => ${KILL} }`, true],
+  ] as const) {
+    test(label, async () => {
+      const s = await stuck();
+      const dbIno = fs.statSync(s.home.db).ino;
+      const child = await finished(replayChild(s, seams));
+      assert.notEqual(child.status, 0, "the replay died");
+      if (!recovers) {
+        blocked(s);
+        await unchanged(s);
+        assert.notEqual((await pending(s.home)).target, `${s.args["--current-dev"]}:${s.args["--current-ino"]}`, "not bound");
+      } else {
+        assert.equal(entry("reader", s.guard).stdout, "ran", "the next admission completes the recorded bytes");
+        assert.equal(fs.readFileSync(s.guard, "utf8"), s.good);
+        assert.equal((await pending(s.home)).n, 0);
+      }
+      assert.equal(fs.statSync(s.guard, { bigint: true }).ino, s.ino, "the same confirmed replacement inode");
+      assert.equal(fs.statSync(s.home.db).ino, dbIno, "the same database inode");
+    });
+  }
+});
+
+describe("F2.3: another process completes the intent in the gap", () => {
+  const pause = (s: Stuck) => `{ afterRebindCommit: () => { fs.writeFileSync(${JSON.stringify(path.join(s.home.root, "bound"))}, "");`
+    + ` while (!fs.existsSync(${JSON.stringify(path.join(s.home.root, "go"))})) { const t = Date.now(); while (Date.now() - t < 20); } } }`;
+
+  test("the replay measures the target itself and does not apply its request again", async () => {
+    const s = await stuck();
+    const child = finished(replayChild(s, pause(s)));
+    assert.ok(await until(() => fs.existsSync(path.join(s.home.root, "bound"))));
+    assert.equal(entry("reader", s.guard).stdout, "ran", "an admitted reader completed the bound intent");
+    fs.writeFileSync(s.guard, `${s.good}// touched after completion\n`);
+    fs.writeFileSync(path.join(s.home.root, "go"), "");
+    const out = JSON.parse((await child).out.trim().split("\n").at(-1)!);
+    assert.deepEqual([out.ok, out.code], [false, "unproven"], "a changed target is not reported as replayed");
+    assert.equal(fs.readFileSync(s.guard, "utf8"), `${s.good}// touched after completion\n`, "and is not written again");
+  });
+
+  test("a successor intent is left alone", async () => {
+    const s = await stuck();
+    fs.writeFileSync(path.join(s.home.hooks, "other.mts"), "");
+    const child = finished(replayChild(s, pause(s)));
+    assert.ok(await until(() => fs.existsSync(path.join(s.home.root, "bound"))));
+    assert.equal(entry("reader", s.guard).stdout, "ran");
+    const record = `const db = await import(${url(s.home, "coordinator-db.mts")}); const it = await import(${url(s.home, "coordinator-intent.mts")});`
+      + `const o = await db.openDatabase(${JSON.stringify(s.home.hooks)}); o.conn.exec("BEGIN EXCLUSIVE");`
+      + `it.recordIntent(o, "other.mts", new TextEncoder().encode("export {};\\n")); o.conn.exec("COMMIT"); ${KILL};`;
+    spawnSync(process.execPath, ["--input-type=module", "-e", record]);
+    fs.writeFileSync(path.join(s.home.root, "go"), "");
+    const out = JSON.parse((await child).out.trim().split("\n").at(-1)!);
+    assert.deepEqual([out.ok, out.code], [false, "successor-pending"]);
+    assert.equal((await pending(s.home)).n, 1, "the successor stays pending");
+    assert.equal(fs.readFileSync(path.join(s.home.hooks, "other.mts"), "utf8"), "");
+  });
+
+  test("a replay that finds its own intent completed reports it only after measuring", async () => {
+    const s = await stuck();
+    const child = finished(replayChild(s, pause(s)));
+    assert.ok(await until(() => fs.existsSync(path.join(s.home.root, "bound"))));
+    assert.equal(entry("reader", s.guard).stdout, "ran");
+    fs.writeFileSync(path.join(s.home.root, "go"), "");
+    const out = JSON.parse((await child).out.trim().split("\n").at(-1)!);
+    assert.deepEqual([out.ok, out.code], [true, "replayed-elsewhere"]);
+  });
+});
+
+describe("F2.4: anything not exactly confirmed leaves the intent and the files as they are", () => {
+  for (const [label, change, code] of [
+    ["a wrong intent", { "--intent": "0".repeat(32) }, "intent-mismatch"],
+    ["a wrong desired hash", { "--desired-sha": "0".repeat(64) }, "desired-mismatch"],
+    ["a wrong current device", { "--current-dev": "1" }, "current-mismatch"],
+    ["a wrong current inode", { "--current-ino": "1" }, "current-mismatch"],
+    ["a wrong current hash", { "--current-sha": "0".repeat(64) }, "current-mismatch"],
+    ["a malformed value", { "--current-ino": "-1" }, "usage"],
+  ] as const) {
+    test(label, async () => {
+      const s = await stuck();
+      const run = replayCli(s, change);
+      assert.equal(run.code, code, run.stdout);
+      assert.equal(run.status, code === "usage" ? 2 : 1);
+      await unchanged(s);
+    });
+  }
+
+  test("incomplete arguments", async () => {
+    const s = await stuck();
+    const run = cli(s.home, "replay", "--hooks-root", s.home.hooks, "--intent", s.args["--intent"]!);
+    assert.deepEqual([run.status, run.code], [2, "usage"]);
+    await unchanged(s);
+  });
+
+  test("an invalid pending row", async () => {
+    const s = await stuck();
+    const o = await database(s.home);
+    o.conn.prepare("UPDATE pending SET rel = ?").run("../outside.mts");
+    o.conn.close();
+    assert.equal(replayCli(s).code, "pending-invalid");
+    assert.equal(fs.readFileSync(s.guard, "utf8"), REPLACED);
+    assert.equal((await pending(s.home)).n, 1);
+  });
+
+  test("a hooks root that is no longer the recorded one", async () => {
+    const s = await stuck();
+    fs.cpSync(s.home.hooks, `${s.home.hooks}-copy`, { recursive: true });
+    fs.renameSync(s.home.hooks, `${s.home.hooks}-old`);
+    fs.renameSync(`${s.home.hooks}-copy`, s.home.hooks);
+    assert.equal(replayCli(s).code, "root-moved");
+    await unchanged(s);
+  });
+
+  test("a parent directory that is no longer the recorded one, or a link elsewhere", async () => {
+    const s = await stuck("lib/guard.mts");
+    const lib = path.join(s.home.hooks, "lib");
+    fs.renameSync(lib, `${lib}-old`);
+    fs.mkdirSync(lib);
+    fs.copyFileSync(path.join(`${lib}-old`, "guard.mts"), s.guard);
+    assert.equal(replayCli(s).code, "parent-moved");
+    fs.rmSync(lib, { recursive: true });
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "replay-outside-"));
+    fs.copyFileSync(path.join(`${lib}-old`, "guard.mts"), path.join(outside, "guard.mts"));
+    fs.symlinkSync(outside, lib, "dir");
+    assert.match(replayCli(s).code, /^parent-(moved|outside)$/);
+    assert.equal(fs.readFileSync(path.join(outside, "guard.mts"), "utf8"), REPLACED);
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
+  test("a leaf that is a link, or has a second name", async () => {
+    const s = await stuck();
+    const elsewhere = path.join(s.home.root, "elsewhere.mts");
+    fs.renameSync(s.guard, elsewhere);
+    fs.symlinkSync(elsewhere, s.guard);
+    assert.equal(replayCli(s).code, "target-link");
+    assert.equal(fs.readFileSync(elsewhere, "utf8"), REPLACED);
+    fs.rmSync(s.guard);
+    fs.renameSync(elsewhere, s.guard);
+    fs.linkSync(s.guard, path.join(s.home.root, "second-name.mts"));
+    assert.equal(replayCli(s).code, "target-shared");
+    await unchanged(s);
+  });
+
+  test("an unavailable database is refused and never created", async () => {
+    const s = await stuck();
+    const bare = path.join(s.home.root, "bare-hooks");
+    fs.mkdirSync(bare);
+    const run = cli(s.home, "replay", ...Object.entries({ ...s.args, "--hooks-root": bare }).flat());
+    assert.equal(run.code, "database");
+    assert.equal(fs.existsSync(path.join(bare, ".kherep-integrity")), false);
+    assert.equal(cli(s.home, "inspect", "--hooks-root", bare).code, "database");
+    assert.equal(fs.existsSync(path.join(bare, ".kherep-integrity")), false);
+    await unchanged(s);
+  });
+
+  test("a target swapped at the before-open seam stays unwritten", async () => {
+    const s = await stuck();
+    const swap = path.join(s.home.root, "swap.mts");
+    fs.writeFileSync(swap, "// swapped in\n");
+    const seams = `{ write: { beforeOpen: (file) => fs.renameSync(${JSON.stringify(swap)}, file) } }`;
+    const out = JSON.parse((await finished(replayChild(s, seams))).out.trim().split("\n").at(-1)!);
+    assert.deepEqual([out.ok, out.code], [false, "replay-refused"]);
+    assert.equal(fs.readFileSync(s.guard, "utf8"), "// swapped in\n");
+    assert.equal((await pending(s.home)).n, 1);
+  });
+});
+
+test("F2.5: a write-denied replay after the binding keeps the replacement bytes, the intent and its before-hash", async () => {
+  const s = await stuck();
+  const before = (await pending(s.home)).before;
+  assert.equal(before, sha(""), "the before-hash is the original target's");
+  const out = JSON.parse((await finished(replayChild(s, `{ writer: () => "open failed (EACCES); nothing was written" }`))).out.trim().split("\n").at(-1)!);
+  assert.deepEqual([out.ok, out.code], [false, "replay-refused"]);
+  const row = await pending(s.home);
+  assert.deepEqual([row.n, row.before, row.target], [1, before, `${s.args["--current-dev"]}:${s.args["--current-ino"]}`],
+    "still pending, bound to the replacement, before-hash not rewritten");
+  assert.equal(fs.readFileSync(s.guard, "utf8"), REPLACED);
+  assert.equal(entry("reader", s.guard).stdout, "ran", "a later permitted replay needs no second binding");
+  assert.equal(fs.statSync(s.guard, { bigint: true }).ino, s.ino);
+});
+
+// F2.6, as restore-write.test.mts: macOS chmod +a and Linux setfacl; skipped elsewhere and as root.
+const aclTool = process.platform === "darwin" ? "chmod" : process.platform === "linux" ? "setfacl" : "";
+const sh = (cmd: string, args: string[]) => spawnSync(cmd, args, { encoding: "utf8" });
+const acl = (file: string): string => process.platform === "darwin"
+  ? sh("ls", ["-le", file]).stdout.split("\n").slice(1).join("\n") : sh("getfacl", ["-cp", file]).stdout;
+const addAcl = (file: string, deny: boolean): boolean => sh(aclTool, process.platform === "darwin"
+  ? ["+a", `group:everyone ${deny ? "deny write" : "deny delete"}`, file]
+  : ["-m", deny ? "u::r--,u:nobody:r--,m::r--" : "u:nobody:r--", file]).status === 0;
+
+for (const deny of [false, true]) {
+  test(`F2.6: a replacement with ${deny ? "a write-denying" : "a restricting"} ACL keeps it, its inode, mode and owner`, async (t) => {
+    const s = await stuck();
+    if (!aclTool || process.getuid?.() === 0 || !addAcl(s.guard, deny)) return t.skip("no ACL tool for this platform");
+    t.after(() => sh(aclTool, process.platform === "darwin" ? ["-N", s.guard] : ["-b", s.guard]));
+    const before = { acl: acl(s.guard), stat: fs.statSync(s.guard, { bigint: true }) };
+    const run = replayCli(s);
+    assert.equal(run.code, deny ? "replay-refused" : "replayed", run.stdout);
+    const now = fs.statSync(s.guard, { bigint: true });
+    assert.equal(acl(s.guard), before.acl);
+    assert.deepEqual([now.ino, now.uid, now.gid, now.mode], [before.stat.ino, before.stat.uid, before.stat.gid, before.stat.mode]);
+    assert.equal(fs.readFileSync(s.guard, "utf8"), deny ? REPLACED : s.good);
+    assert.equal((await pending(s.home)).n, deny ? 1 : 0);
+  });
+}

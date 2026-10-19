@@ -122,6 +122,7 @@
     "kherep/hook-runtime/coordinator.mts",
     "kherep/hook-runtime/coordinator-db.mts",
     "kherep/hook-runtime/coordinator-intent.mts",
+    "kherep/hook-runtime/replay-pending.mts",
     "kherep/hook-runtime/recovery/restore-write.mts",
     "kherep/hook-runtime/recovery/workspace-scope.mts"
   ],

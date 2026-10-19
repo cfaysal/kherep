@@ -13,8 +13,9 @@ increments the minor version; every other release increments the patch version.
 
 - Hook integrity heartbeat, re-check and hook runtime (issue #507, part 2 of
   4). Every managed Claude hook command now starts through
-  `kherep/hook-runtime/entry.mts`, which admits the hook process to its hooks
-  directory (`<real hooks>/.kherep-integrity/run.sqlite`, `node:sqlite`,
+  `kherep/hook-runtime/entry.mts`, which admits the hook process to the
+  installation's hooks directory, also for a hook in a subdirectory of it
+  (`<real hooks>/.kherep-integrity/run.sqlite`, `node:sqlite`,
   rollback journal `DELETE`) before Node loads the hook or its imports: hooks
   hold a read transaction, `live-hook-integrity.mts` an `EXCLUSIVE` one. A
   repair is recorded with its complete bytes before the first byte is
@@ -36,9 +37,15 @@ increments the minor version; every other release increments the patch version.
   plain lines, and journal entries name their `trigger`; `classify`,
   `restore` and `journal` moved to `hooks/lib/integrity-verdict.mts`. The
   upgrade replaces each raw managed command with its entry form and removes
-  an entry command at an event the template no longer uses. Limits: the entry itself cannot be checked; writers and readers outside
+  an entry command at an event the template no longer uses. A recorded
+  repair whose target an outside writer replaced stays refused until an
+  operator runs `kherep/hook-runtime/replay-pending.mts`: `inspect` shows the
+  intent and the current file, `replay` with exactly those values binds the
+  intent to that file and writes the recorded bytes into it in place.
+  Limits: the entry itself cannot be checked; writers and readers outside
   the runtime are not covered; a persistently failing recorded repair keeps
-  that hooks directory's hooks out; no timer, so an idle session is not
+  that hooks directory's hooks out; a timed-out re-check reports its outcome
+  as UNKNOWN; no timer, so an idle session is not
   re-checked; whether the session shows a `PreToolUse` `additionalContext`
   is UNVERIFIED; Windows DACL preservation is UNVERIFIED.
 - Fail-closed Claude guard dispatcher (issue #507, part 1 of 4). The five

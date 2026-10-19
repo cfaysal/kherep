@@ -78,11 +78,13 @@ function canonicalRoot(dir: string): { root: string; rootId: Id } {
   }
 }
 
-// Opens the database of the hooks directory dir, creating only it and its directory.
-export async function openDatabase(dir: string): Promise<Opened> {
+// Opens the database of the hooks directory dir, creating only it and its directory;
+// with existing, a missing database or directory is refused and nothing is created.
+export async function openDatabase(dir: string, { existing = false } = {}): Promise<Opened> {
   const { root, rootId } = canonicalRoot(dir);
   const home = path.join(root, ".kherep-integrity");
   if (!plain(home, "dir")) {
+    if (existing) throw refuse("database");
     try { fs.mkdirSync(home, { mode: 0o700 }); } catch (error) { if (codeOf(error) !== "EEXIST") throw refuse("database"); }
     plain(home, "dir");
   }
@@ -91,6 +93,7 @@ export async function openDatabase(dir: string): Promise<Opened> {
   if (real !== home) throw refuse("database");
   const file = path.join(home, "run.sqlite");
   if (!plain(file, "file")) {
+    if (existing) throw refuse("database");
     try { fs.closeSync(fs.openSync(file, "wx", 0o600)); } catch (error) { if (codeOf(error) !== "EEXIST") throw refuse("database"); }
   }
   const before = plain(file, "file")!;

@@ -36,7 +36,7 @@ test("the recovery writer is the one restore-write implementation, byte for byte
 test("the entry imports node:* only, the coordinator never reaches into hooks/", () => {
   const imports = (file: string) => [...fs.readFileSync(path.join(runtime, file), "utf8").matchAll(/^import .* from "([^"]+)";$/gm)].map((m) => m[1]);
   for (const specifier of imports("entry.mts")) assert.match(specifier!, /^node:/, `entry.mts imports ${specifier}`);
-  for (const file of ["coordinator.mts", "coordinator-db.mts", "coordinator-intent.mts"]) {
+  for (const file of ["coordinator.mts", "coordinator-db.mts", "coordinator-intent.mts", "replay-pending.mts"]) {
     for (const specifier of imports(file)) assert.match(specifier!, /^(node:|\.\/[\w-]+\.mts$)/, `${file} imports ${specifier}`);
   }
 });
