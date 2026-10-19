@@ -149,10 +149,21 @@ const scriptStem = (rel: string): string => rel.replace(/\.(?:js|mjs|cjs|mts)$/,
 const ENTRY = "kherep/hook-runtime/entry";
 // A home-token command goes only as exactly `node <script>`: one closed quote or one
 // plain word, nothing glued to it, no argument, operator, redirect or line break,
-// in a hook that is the bare { type, command } the old installer wrote.
-const SINGLE_INVOCATION = /^[ \t]*node[ \t]+(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;&|<>"'`]+)[ \t]*$/;
+// in a hook that is the bare { type, command } the old installer wrote. Below the
+// token the path is a plain literal one: no expansion, glob or escape, and no `.`,
+// `..` or empty segment, so neither the shell nor normalising can change it.
+const SINGLE_INVOCATION = /^[ \t]*node[ \t]+(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s;&|<>"'`]+))[ \t]*$/;
+const LITERAL_PATH = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 const bareHook = (hook: HookCommand | undefined): boolean =>
   hook?.type === "command" && Object.keys(hook).every((key) => key === "type" || key === "command");
+function literalTokenScript(command: unknown, tokens: string[]): boolean {
+  const match = typeof command === "string" ? SINGLE_INVOCATION.exec(command) : null;
+  const script = (match?.[1] ?? match?.[2] ?? match?.[3])?.replace(/\\/g, "/");
+  const token = script === undefined ? undefined : tokens.find((prefix) => script.startsWith(prefix));
+  const rest = token === undefined ? undefined : script!.slice(token.length);
+  return rest !== undefined && LITERAL_PATH.test(rest) && path.posix.normalize(rest) === rest
+    && !rest.split("/").some((segment) => segment === "." || segment === "..");
+}
 function hookOf(command: unknown, prefixes: string[]): { rel: string; main: string; wrapped: boolean; args: string[] } | undefined {
   const rel = scriptUnder(command, prefixes);
   if (rel === undefined) return undefined;
@@ -188,7 +199,7 @@ export function unwireMovedHooks(
   const classify = (command: unknown) => {
     const direct = hookOf(command, prefixes);
     if (direct) return { ...direct, viaToken: false };
-    const token = SINGLE_INVOCATION.test(String(command)) ? hookOf(command, tokens) : undefined;
+    const token = literalTokenScript(command, tokens) ? hookOf(command, tokens) : undefined;
     return token && { ...token, viaToken: true };
   };
   const result = removeHooks(existing, (event, command, hook) => {
