@@ -83,7 +83,8 @@ export function runRecheck(recheck: Recheck): Promise<string> {
     });
     child.stderr?.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
     const timer = setTimeout(() => {
-      settle([`timed out after ${recheck.budgetMs} ms, no heartbeat written`]);
+      // Killing it proves nothing about what it already wrote, a heartbeat included.
+      settle([`timed out after ${recheck.budgetMs} ms; outcome UNKNOWN (a heartbeat may have been written)`]);
       child.kill("SIGKILL");
       child.unref();
       for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
