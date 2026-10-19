@@ -16,6 +16,7 @@ hooks/hook-runtime-db.test.mts
 hooks/hook-runtime-intent.test.mts
 hooks/hook-runtime-entry.test.mts
 hooks/hook-runtime-slow.test.mts
+hooks/hook-runtime-wired.test.mts
 hooks/main-checkout-guard.mts
 hooks/main-checkout-guard.test.mts
 hooks/maestro-discipline.mts
