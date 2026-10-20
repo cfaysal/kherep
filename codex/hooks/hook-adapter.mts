@@ -162,7 +162,8 @@ const MIN_SPAWN_MS = 100; // a spawn costs about 85 ms; with less left none is s
 // A re-check gets <= RECHECK_MAX_MS of what is left, none below RECHECK_MIN_MS; its lib loads within RECHECK_LOAD_MS.
 const RECHECK_MAX_MS = 6_000, RECHECK_MIN_MS = 1_000, RECHECK_LOAD_MS = 2_000;
 const HEARTBEAT_WINDOW_MS = 1_800_000; // = claude/hooks/lib/integrity-heartbeat.mts
-const INVOKED_DIR = path.dirname(path.resolve(process.argv[1] ?? fileURLToPath(import.meta.url)));
+const SELF = path.resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
+const INVOKED_DIR = path.dirname(SELF);
 
 const DECISIONS = ["deny", "ask", "allow"] as const;
 type Decision = typeof DECISIONS[number];
@@ -195,6 +196,15 @@ function unrunnable(file: string): string | undefined {
 const NOT_DECISION = "stdout is not a PreToolUse decision";
 const FIELDS = ["hookEventName", "permissionDecision", "permissionDecisionReason", "additionalContext"];
 
+// The first decision field with a value Codex would reject or drop, or undefined.
+function invalidField({ permissionDecision, permissionDecisionReason, additionalContext }: Record<string, unknown>): string | undefined {
+  if (permissionDecision !== undefined && !DECISIONS.includes(permissionDecision as Decision)) return "permissionDecision";
+  // A reason without a decision would be dropped.
+  if (permissionDecisionReason !== undefined && (typeof permissionDecisionReason !== "string" || !permissionDecision)) return "permissionDecisionReason";
+  if (additionalContext !== undefined && (typeof additionalContext !== "string" || !additionalContext)) return "additionalContext";
+  return undefined;
+}
+
 // The verdict a guard printed on exit 0, or why stdout is not the accepted shape
 // (claude/hooks/guard-dispatch.mts): a field that would be dropped fails.
 function printed(stdout: string): Verdict | string {
@@ -206,12 +216,9 @@ function printed(stdout: string): Verdict | string {
   const extra = Object.keys(parsed).find((key) => key !== "hookSpecificOutput")
     ?? Object.keys(output).find((key) => !FIELDS.includes(key));
   if (extra !== undefined) return `${NOT_DECISION} (unsupported field ${extra || '""'})`;
-  const { permissionDecision, permissionDecisionReason, additionalContext } = output;
-  // A reason without a decision would be dropped.
-  const invalid = permissionDecision !== undefined && !DECISIONS.includes(permissionDecision as Decision) ? "permissionDecision"
-    : permissionDecisionReason !== undefined && (typeof permissionDecisionReason !== "string" || !permissionDecision) ? "permissionDecisionReason"
-      : additionalContext !== undefined && (typeof additionalContext !== "string" || !additionalContext) ? "additionalContext" : "";
+  const invalid = invalidField(output);
   if (invalid) return `${NOT_DECISION} (invalid field ${invalid})`;
+  const { permissionDecision, permissionDecisionReason, additionalContext } = output;
   if (permissionDecision === undefined && additionalContext === undefined) return NOT_DECISION;
   return { decision: permissionDecision as Decision | undefined, reason: (permissionDecisionReason as string | undefined) ?? "",
     ...(additionalContext ? { notice: additionalContext as string } : {}) };
@@ -390,14 +397,13 @@ function postMain(target: string | undefined, phase: string): void {
 }
 
 async function main(target: string | undefined, phase: string): Promise<void> {
-  const self = path.resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
-  if (!target) return emit(failure(self, "no guard given"), "");
-  if (!path.isAbsolute(target)) return emit(failure(self, "guard path is not absolute"), "");
+  if (!target) return emit(failure(SELF, "no guard given"), "");
+  if (!path.isAbsolute(target)) return emit(failure(SELF, "guard path is not absolute"), "");
   let raw: string;
-  try { raw = await readStdin(); } catch (error) { return emit(failure(self, firstLine(error)), ""); }
+  try { raw = await readStdin(); } catch (error) { return emit(failure(SELF, firstLine(error)), ""); }
   let payload: unknown;
   try { payload = JSON.parse(raw); } catch { /* not JSON */ }
-  if (!isObject(payload)) return emit(failure(self, "stdin is not a JSON object"), "");
+  if (!isObject(payload)) return emit(failure(SELF, "stdin is not a JSON object"), "");
   const result = preToolUse(target, phase, payload as HookPayload, Math.min(GUARD_TIMEOUT_MS, remaining()),
     { guardArgs: process.argv.slice(4), deadline: DEADLINE });
   const notice = await within(recheck(raw, result.broken)
@@ -424,5 +430,5 @@ if (isMainModule()) {
   const target = process.argv[2];
   const phase = process.argv[3] || "pre";
   if (!PRE_TOOL_USE_PHASES.has(phase)) postMain(target, phase);
-  else main(target, phase).catch((error: unknown) => emit(failure(path.resolve(process.argv[1] ?? ""), `internal error: ${firstLine(error)}`), ""));
+  else main(target, phase).catch((error: unknown) => emit(failure(SELF, `internal error: ${firstLine(error)}`), ""));
 }
