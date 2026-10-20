@@ -90,12 +90,13 @@ jobs:
   # Windows runs the same suites as `unit`, split across runners: the bootstrap
   # install tests drive install.sh under Git Bash at 80-330 s each (issue #424).
   # The shard map and its completeness guard are bootstrap/ci-shard.mts and
-  # bootstrap/ci-shard.test.mts.
+  # bootstrap/ci-shard.test.mts. The codex shard runs the whole
+  # `npm run test:codex` file set (issue #534); it is not a bootstrap shard.
   unit-windows:
     strategy:
       fail-fast: false
       matrix:
-        suite: [hooks, control-plane, install-preview-safety, project-rules-install, commit-policy-install, drift-check-optional-tools, control-plane-hook-install, bootstrap-rest]
+        suite: [hooks, control-plane, install-preview-safety, project-rules-install, commit-policy-install, drift-check-optional-tools, control-plane-hook-install, bootstrap-rest, codex]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -124,12 +125,23 @@ jobs:
         if: matrix.suite == 'control-plane'
         # Bound simultaneous native process/PowerShell fixtures on the hosted runner (PR #155).
         run: node --test --test-concurrency=1 "modules/control-plane/*.test.mts" "modules/control-plane/node/*.test.mts"
+      - name: Codex projection suites (Windows)
+        if: matrix.suite == 'codex'
+        # The whole test:codex file set, as on ubuntu (typescript, unit-engines-floor)
+        # and on the Windows host (issue #534). No npm ci: nothing under codex/
+        # imports a package. Default node --test concurrency, as on ubuntu; the
+        # step timeout turns a hang (the #535 lock-holder class) into a failure
+        # instead of the 360-minute job default.
+        timeout-minutes: 40
+        run: npm run test:codex
       - name: Bootstrap shard (TypeScript on Node, no build)
-        if: matrix.suite != 'hooks' && matrix.suite != 'control-plane'
+        if: matrix.suite != 'hooks' && matrix.suite != 'control-plane' && matrix.suite != 'codex'
         run: node bootstrap/ci-shard.mts run ${{ matrix.suite }}
 
   # The ruleset requires the check "unit (windows-latest)"; this job carries that
-  # name and fails unless every unit-windows shard succeeded. `if: always()` is
+  # name and fails unless every unit-windows shard succeeded, the codex shard
+  # included, so that check now also covers the Codex suites on Windows
+  # (issue #534). `if: always()` is
   # load-bearing: without it the gate is skipped when a shard fails, and a job
   # skipped that way does not block the merge (GitHub docs, "Handling skipped
   # but required checks").

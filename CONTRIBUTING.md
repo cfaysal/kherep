@@ -24,7 +24,7 @@ Read [AGENTS.md](AGENTS.md) and the instructions in the component you change. Ne
 | Control Plane node and protocol | `npm run test:control-plane` |
 | Control Plane Worker | In `modules/control-plane/worker`: `npm ci`, `npm run typecheck`, `npm test`, `npm run check:bundle` |
 
-Windows CI runs the bootstrap suites in parallel shards defined in `bootstrap/ci-shard.mts`. A new install test that runs for minutes on Windows gets its own named shard there and in the `unit-windows` suite list of `.github/workflows/ci.yml`; `bootstrap/ci-shard.test.mts` fails until both agree. Locally, `npm run test:bootstrap` stays the command.
+Windows CI runs the bootstrap suites in parallel shards defined in `bootstrap/ci-shard.mts`. A new install test that runs for minutes on Windows gets its own named shard there and in the `unit-windows` suite list of `.github/workflows/ci.yml`; `bootstrap/ci-shard.test.mts` fails until both agree. Locally, `npm run test:bootstrap` stays the command. The same matrix also runs `npm run test:codex` as the `codex` shard, outside the bootstrap shard map, so the required check `unit (windows-latest)` covers the Codex suites as well.
 
 On Windows, select Git for Windows Bash in the test process's `PATH` before WSL Bash. Do not change global shell configuration for a test run.
 
