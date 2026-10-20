@@ -246,5 +246,5 @@ function emit(verdict: Verdict | undefined, stderr: string[]): void {
 
 dispatch(process.argv.slice(2)).then(
   ({ verdict, stderr }) => emit(verdict, stderr),
-  (error: unknown) => emit(failure(SELF, `internal error: ${error instanceof Error ? error.message : String(error)}`), []),
+  () => emit(failure("guard-dispatch.mts", "internal error"), []), // fixed text: no raw error, no path
 );
