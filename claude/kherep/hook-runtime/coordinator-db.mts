@@ -7,6 +7,11 @@
 // database opens is refused. The journal mode must read DELETE: only there does
 // an EXCLUSIVE transaction exclude readers (WAL would not). Readers hold a read
 // transaction, writers an EXCLUSIVE one; busy_timeout is 0, the callers retry.
+// A database this process can read but not write opens read-only, and there
+// BEGIN EXCLUSIVE excludes nothing: writers and every replay therefore run a
+// write that changes nothing inside their transaction first (coordinator.mts),
+// so they are refused `unavailable` before anything is written; readers without
+// a pending repair stay admitted, their shared lock still excludes a writer.
 //
 // The schema is created only when SQLite itself shows an uninitialized file
 // (no objects, user_version 0, application_id 0), inside BEGIN EXCLUSIVE, with

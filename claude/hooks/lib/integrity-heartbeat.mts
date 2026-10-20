@@ -17,8 +17,10 @@
 // timeout 0). The operating system keeps that lock for the holding process and
 // releases it when the process ends, so it is never taken over, moved or deleted
 // by another run; a second run is told "busy, holder UNKNOWN" at once. Nothing is
-// written into the database: the transaction is the lock, and the file is
-// permanent. Network filesystems are not supported for it.
+// written into the database: the transaction is the lock and is never committed,
+// and the file is permanent. `PRAGMA user_version = 0` inside it proves the file
+// writable: a read-only file, whose BEGIN EXCLUSIVE would exclude nothing, is
+// refused as unavailable. Network filesystems are not supported for it.
 // Static imports: node:* only; node:sqlite is loaded when the lock is taken, so a
 // Node without it still loads this file and only the lock is unavailable.
 import crypto from "node:crypto";
@@ -153,6 +155,7 @@ export function takeRunLock(home: string, seams: LockSeams = {}): RunLock | stri
     if (mode !== "delete") throw { journalMode: String(mode) };
     seams.beforeBegin?.();
     conn.exec("BEGIN EXCLUSIVE");
+    conn.exec("PRAGMA user_version = 0");
   } catch (error) {
     try { conn.close(); } catch { /* already closed */ }
     return refusal(error);
