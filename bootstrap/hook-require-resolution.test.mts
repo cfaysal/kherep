@@ -120,6 +120,17 @@ test("der Codex-Privacy-Guard benennt Lib-Dateien, die in claude/hooks/lib liege
   assert.deepEqual(missing, [], `benannt, aber nicht in claude/hooks/lib: ${JSON.stringify(missing)}`);
 });
 
+// Issue #507, Teil 3. Der Codex-Hook-Adapter lädt lib/guard-recheck.mts über einen
+// berechneten Pfad (es gibt kein codex/hooks/lib); der Dateiname steht im Quelltext.
+test("der Codex-Hook-Adapter benennt Lib-Dateien, die in claude/hooks/lib liegen", () => {
+  const adapter = path.join("codex", "hooks", "hook-adapter.mts");
+  const text = fs.readFileSync(path.join(repo, adapter), "utf8");
+  const named = [...text.matchAll(/"lib",\s*(["'])([^"']+\.mts)\1/g)].map((m) => m[2]);
+  assert.ok(named.includes("guard-recheck.mts"), `${adapter} benennt lib/guard-recheck.mts nicht mehr - Test nachziehen`);
+  const missing = named.filter((name) => !fs.existsSync(path.join(repo, "claude", "hooks", "lib", name))).sort();
+  assert.deepEqual(missing, [], `benannt, aber nicht in claude/hooks/lib: ${JSON.stringify(missing)}`);
+});
+
 // Issue #273. live-hook-integrity misst zur Laufzeit die Importhülle der
 // verdrahteten Hooks mit lib/hook-inventory.mts. Dieselben Funktionen zeigen
 // hier, dass die Installation jede Datei dieser Hülle mitliefert: ein gesundes

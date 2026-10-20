@@ -171,6 +171,8 @@ test("5. a 0-byte own lib hook-syntax is reported as kind self and restored", (t
   assert.equal(entry?.restoreProven, true);
 });
 
+// Issue #507, part 3: without the libs a restore needs, run.lock included, nothing is
+// written, a journal line included.
 test("6. a 0-byte own lib workspace-scope is reported only", (t) => {
   const ctx = fixture(t);
   const file = path.join(ctx.hookDir, "lib", "workspace-scope.mts");
@@ -179,9 +181,7 @@ test("6. a 0-byte own lib workspace-scope is reported only", (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(String(result.context), /own import lib\/workspace-scope\.mts cannot be loaded .*NOT restored \(the restore itself needs/);
   assert.equal(fs.statSync(file).size, 0);
-  const [entry] = journal(ctx.codexHome);
-  assert.equal(entry?.kind, "self");
-  assert.equal(entry?.restoreProven, false);
+  assert.deepEqual(journal(ctx.codexHome), []);
 });
 
 test("7. without a checkout nothing is written and the result is NOT restored", (t) => {
@@ -237,6 +237,33 @@ test("8b. a hook behind a directory junction has its imports resolved from the r
     /kherep-maestro\/real\/dep\.mts \(imported by [^)]*kherep-maestro\/alias\/link\/guard\.mts\): .*report only \(not installed by Kherep/);
   assert.doesNotMatch(String(result.context), /alias\/dep\.mts/);
   assert.equal(fs.readFileSync(path.join(ctx.hookDir, "real", "dep.mts"), "utf8"), "export const x = ;\n");
+});
+
+// Issue #507, part 3. The installed adapter re-checks through the installed hook.
+test("10. the installed adapter without a heartbeat runs the installed integrity hook, and the heartbeat appears", (t) => {
+  const ctx = fixture(t);
+  const input = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Read", cwd: ctx.root,
+    tool_input: { file_path: path.join(ctx.root, "workspace", "Kherep", "README.md") } });
+  const result = spawnSync(process.execPath, [path.join(ctx.hookDir, "codex-hook-adapter.mts"), path.join(ctx.hookDir, "codex-privacy-boundary-guard.mts"), "pre-privacy"],
+    { input, encoding: "utf8", env: ctx.env, windowsHide: true, timeout: 15_000 });
+  assert.equal(result.status, 0, result.stderr);
+  const output = (JSON.parse(result.stdout) as { hookSpecificOutput: { permissionDecision?: string; additionalContext?: string } }).hookSpecificOutput;
+  assert.equal(output.permissionDecision, undefined, result.stdout);
+  assert.match(String(output.additionalContext), /^hook integrity re-check \(no heartbeat, last OK none\):\n {2}- all \d+ files OK \(0 restored\), heartbeat refreshed$/);
+  const beat = JSON.parse(fs.readFileSync(path.join(ctx.codexHome, ".cache", "hook-integrity", "heartbeat.json"), "utf8"));
+  assert.deepEqual([beat.trigger, beat.runtime], ["hook-adapter", "codex"]);
+});
+
+test("11. a healthy installed run ends well inside the adapter's 6 s re-check budget", (t) => {
+  const ctx = fixture(t);
+  const begin = Date.now();
+  const result = spawnSync(process.execPath, [path.join(ctx.hookDir, "codex-hook-integrity.mts"), "--trigger", "hook-adapter"],
+    { input: "{}", encoding: "utf8", env: ctx.env, windowsHide: true, timeout: 30_000 });
+  const ms = Date.now() - begin;
+  t.diagnostic(`healthy Codex integrity run: ${ms} ms`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^all \d+ files OK \(0 restored\), heartbeat refreshed\n$/);
+  assert.ok(ms < 6000, `took ${ms} ms`);
 });
 
 const PWSH = spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"], { windowsHide: true }).status === 0;

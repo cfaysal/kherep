@@ -31,6 +31,10 @@ process.stdout.write("all 3 files OK (0 restored), heartbeat refreshed\\n");
 `,
   "hang.mts": "import fs from \"node:fs\";\nfs.writeFileSync(new URL(\"./pid.txt\", import.meta.url), String(process.pid));\nsetInterval(() => {}, 1000);\n",
   "exit1.mts": `process.stdout.write("one finding\\n");\nprocess.exit(1);\n`,
+  "codex.mts": `import fs from "node:fs";
+fs.writeFileSync(new URL("./codex-trace.json", import.meta.url), JSON.stringify({ argv: process.argv.slice(2), codex: process.env.CODEX_HOME }));
+process.stdout.write("all 1 files OK (0 restored), heartbeat refreshed\\n");
+`,
 };
 for (const [name, source] of Object.entries(SCRIPTS)) fs.writeFileSync(path.join(TMP, name), source);
 
@@ -68,6 +72,14 @@ test("a healthy re-check: its lines in one block, the payload and CLAUDE_HOME re
   assert.deepEqual(trace.argv, ["--trigger", "guard-dispatch"]);
   assert.equal(trace.input, payload);
   assert.equal(trace.home, "/some/home");
+});
+
+// Issue #507, part 3: the Codex adapter names its own trigger and passes CODEX_HOME.
+test("a re-check with its own trigger and environment: both reach the child", async () => {
+  const text = await runRecheck({ ...base, script: path.join(TMP, "codex.mts"), home: "/codex/home", trigger: "hook-adapter", env: { CODEX_HOME: "/codex/home" } });
+  assert.equal(text, "hook integrity re-check (stale heartbeat, last OK none):\n  - all 1 files OK (0 restored), heartbeat refreshed");
+  const trace = JSON.parse(fs.readFileSync(path.join(TMP, "codex-trace.json"), "utf8"));
+  assert.deepEqual(trace, { argv: ["--trigger", "hook-adapter"], codex: "/codex/home" });
 });
 
 test("a hanging re-check is killed at its budget and says so", async () => {

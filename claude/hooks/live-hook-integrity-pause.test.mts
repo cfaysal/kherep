@@ -17,6 +17,7 @@ import { installIntegrity } from "./integrity-sandbox.mts";
 import * as heartbeat from "./lib/integrity-heartbeat.mts";
 import * as inventory from "./lib/hook-inventory.mts";
 import * as checkout from "./lib/orchestra-checkout.mts";
+import * as passes from "./lib/integrity-passes.mts";
 import * as proof from "./lib/integrity-proof.mts";
 import { runIntegrity, type RunLibs, type WriterHold } from "./lib/integrity-run.mts";
 import * as syntax from "./lib/hook-syntax.mts";
@@ -55,7 +56,7 @@ test("L1: between the final proof and the heartbeat the hold admits no reader an
     const { admit } = await import(pathToFileURL(path.join(home.runtime, "coordinator.mts")).href);
     const held = await admit({ v: 1, mode: "writer", root: home.hooks, target: writer, deadline: Date.now() + 120_000 }) as WriterHold;
     hold = held;
-    const lib = { ...verdict, ...scope, ...checkout, ...inventory, ...syntax, ...heartbeat, ...proof } as RunLibs;
+    const lib = { ...verdict, ...scope, ...checkout, ...inventory, ...syntax, ...heartbeat, ...proof, ...passes } as RunLibs;
     const lines: string[] = [];
     const start = Date.now();
     let paused = "no";

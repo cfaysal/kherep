@@ -9,17 +9,19 @@
 // journalled or published. The heartbeat is removed before the first repair
 // and written only after the final read-only proof (integrity-proof.mts),
 // within one uninterrupted hold. At most three passes repair what the
-// previous one brought in; a fourth walk only checks that nothing is left.
+// previous one brought in; a fourth walk only checks that nothing is left
+// (integrity-passes.mts, shared with the Codex hook since #507 part 3).
 // Static imports: node:* only; the libs arrive as a parameter.
 import fs from "node:fs";
 
 import type { HookFile, InventoryEntry, SourceText } from "./hook-inventory.mts";
+import type { Outcome } from "./integrity-passes.mts";
 import type { Repairer, Restored } from "./integrity-verdict.mts";
 import type { ScopePayload } from "./workspace-scope.mts";
 
 export type RunLibs = typeof import("./integrity-verdict.mts") & typeof import("./workspace-scope.mts")
   & typeof import("./orchestra-checkout.mts") & typeof import("./hook-inventory.mts") & typeof import("./hook-syntax.mts")
-  & typeof import("./integrity-heartbeat.mts") & typeof import("./integrity-proof.mts");
+  & typeof import("./integrity-heartbeat.mts") & typeof import("./integrity-proof.mts") & typeof import("./integrity-passes.mts");
 export interface WriterHold extends Repairer { root: string; holding: () => boolean; end: () => void }
 export interface Run {
   lib: RunLibs; hold: WriterHold | null; gate: string; files: HookFile[]; notes: string[]; lines: string[];
@@ -29,13 +31,11 @@ export interface Run {
   // the heartbeat. Production (live-hook-integrity.mts) never sets it.
   probe?: { beforeHeartbeat?: () => Promise<void> | void };
 }
-type Outcome = { unproven: string; restored: boolean };
 const LOST = "the exclusive hold on the hooks directory was lost";
 
 export async function runIntegrity(run: Run): Promise<void> {
   const { lib, hold, gate, files, notes, lines, payload, home, trigger, plain } = run;
   let unproven = notes.length ? "the live settings were not read completely" : gate;
-  let restored = 0;
   const state = { invalidated: false, blocked: "" };
   const repoRoot = lib.checkoutFor(payload, home);
   // The walk reads the live file, and the versioned one when the live file is
@@ -55,22 +55,14 @@ export async function runIntegrity(run: Run): Promise<void> {
     }
     return null;
   };
-  const seen = new Set<string>();
-  let inventory: InventoryEntry[] = [];
-  for (let pass = 0; ; pass++) {
-    inventory = lib.hookInventory(files, hooksDir, readSource, realHooks);
-    const fresh = inventory.filter((entry) => !seen.has(entry.rel));
-    if (!fresh.length) break;
-    if (pass === 3) { unproven ||= "the import closure did not settle"; break; }
-    for (const entry of fresh) {
-      seen.add(entry.rel);
-      const outcome = await checkOne(run, entry, repoRoot, state);
-      unproven ||= outcome.unproven;
-      if (outcome.restored) restored++;
-    }
-  }
+  const passes = await lib.repairPasses({
+    walk: () => lib.hookInventory(files, hooksDir, readSource, realHooks),
+    checkOne: (entry) => checkOne(run, entry, repoRoot, state),
+  });
+  unproven ||= passes.unproven;
+  const { restored } = passes;
   if (!unproven && !hold?.holding()) unproven = LOST;
-  let count = inventory.length;
+  let count = passes.inventory.length;
   if (!unproven) ({ why: unproven, count } = await lib.finalProof(lib, home, hold!.root, files));
   await run.probe?.beforeHeartbeat?.();
   if (!unproven) unproven = lib.writeHeartbeat(home, { trigger, runtime: "claude", files: count });

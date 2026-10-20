@@ -17,9 +17,23 @@ before(async () => {
 });
 
 test("loads every lib it uses as functions", () => {
-  for (const fn of ["isWithinPath", "joinPathLike", "normalizePathLike", "checkoutFor", "isCheckout", "writeExact", "hookInventory", "syntaxVerdict"]) {
+  for (const fn of ["isWithinPath", "joinPathLike", "normalizePathLike", "checkoutFor", "isCheckout", "writeExact", "hookInventory", "syntaxVerdict",
+    "takeRunLock", "invalidateHeartbeat", "writeHeartbeat", "classify", "repairPasses", "finalPass"]) {
     assert.equal(typeof Reflect.get(lib, fn), "function", fn);
   }
+});
+
+// Issue #507, part 3: run.lock and the heartbeat come before every lib a restore does not
+// need, and the shared pass loop is one of the steps; the adapter's computed lib is checked.
+test("loads the lock lib fourth and the shared pass loop last; the adapter's re-check lib is always checked", () => {
+  const source = fs.readFileSync(path.join(REPO, "codex", "hooks", "hook-integrity.mts"), "utf8");
+  const steps = [...source.matchAll(/\["([a-z-]+\.mts)", \[/g)].map((match) => match[1]);
+  assert.deepEqual(steps, ["workspace-scope.mts", "orchestra-checkout.mts", "restore-write.mts", "integrity-heartbeat.mts",
+    "hook-inventory.mts", "hook-syntax.mts", "integrity-verdict.mts", "integrity-passes.mts"]);
+  assert.match(source, /^const RESTORE_LIBS = 4;$/m);
+  assert.ok(ALWAYS_CHECK.includes("./lib/guard-recheck.mts"));
+  const adapter = fs.readFileSync(path.join(REPO, "codex", "hooks", "hook-adapter.mts"), "utf8");
+  assert.match(adapter, /"lib", "guard-recheck\.mts"/);
 });
 
 test("reads the double-quoted parts of every command in every hooks table, and nothing else", () => {

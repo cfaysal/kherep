@@ -145,6 +145,47 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Fail-closed Codex hook adapter and Codex hook-integrity re-check (issue #507,
+  part 3 of 4). `hooks/kherep-maestro/codex-hook-adapter.mts` now denies a
+  `PreToolUse` tool call, with a reason that names the file, when its guard is
+  missing, empty, not a regular file, not spawnable (a spawn that throws
+  included), killed, still running at its cap (the child is killed with
+  SIGKILL; on Windows every signal is a forced termination), out of budget
+  before it could start, exits with a code other than 0 or 2, prints more than
+  1 MiB, or prints anything other than a `PreToolUse` decision; a printed
+  `ask`, which Codex does not support, is a deny; a missing guard argument,
+  stdin that is not a JSON object or stdin that stays open are denied too. One
+  integer clock from the adapter's start bounds stdin, every guard item, the
+  re-check lib load and the re-check itself, so the adapter answers at least
+  1.5 s before its 10 s hook timeout and exits as soon as its output is
+  written; PostToolUse phases are unchanged. Before, each of these let the call
+  through, a guard that ignored SIGTERM was waited for, and in the privacy
+  phase a guard's exit code and stderr were lost once it had printed.
+  Arguments after the phase reach the guard unchanged.
+  `codex-hook-integrity.mts` gains a `--trigger <source>` mode with plain
+  lines. Before anything is restored or journalled, its own libs included, it
+  takes `<CODEX_HOME>/.cache/hook-integrity/run.lock.sqlite` as an `EXCLUSIVE`
+  SQLite transaction (`node:sqlite`, rollback journal `DELETE`, busy timeout
+  0): a lock the operating system keeps for the holding process and releases
+  when that process ends, so it is never taken over, moved or deleted by
+  another run; a second run reports `busy, holder UNKNOWN` and changes
+  nothing. The hook removes the heartbeat before its first repair (a failed
+  removal blocks the repair), walks the import closure again after each repair
+  pass through the new shared `hooks/lib/integrity-passes.mts`, which
+  `live-hook-integrity.mts` now uses for the same loop, at most three passes,
+  checks the live closure once more read-only, and writes `heartbeat.json`
+  only when all of that passed and the write itself succeeded; journal entries
+  name the `trigger`. The adapter starts that re-check after its guards when
+  the heartbeat is older than 30 minutes or missing or a guard could not run,
+  with at most 6 s of what is left; its lines go to stderr and, on an allowed
+  call, to `additionalContext`, on a denied call to `systemMessage`, never
+  into the decision. No Codex hook command definition changes, so no trust
+  review is needed. Limits: the adapter itself is not checked; Codex has no
+  hook runtime, so a file under repair may be loaded by a parallel call; a
+  Codex home on a network filesystem is not supported for the lock; a broken
+  `lib/integrity-heartbeat.mts` is reported, not repaired, until the next
+  installation; whether Codex shows the notice is UNVERIFIED. The three direct
+  Codex guards stay as they are until part 4.
 - Upgrade from a legacy `~/.claude` watcher group (issue #507, part 2). A host
   that still ran `manifest-watch`, `loc-watch`, `umlaut-translit-watch`,
   `simplify-nudge` and `drift-managed-path-watch` raw as
