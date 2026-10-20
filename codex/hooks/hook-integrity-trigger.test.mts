@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 
-import { holdLock as hold, tryLock } from "../../claude/hooks/lib/lock-holder.fixture.mts";
+import { holdLock as hold, killHolders, tryLock } from "../../claude/hooks/lib/lock-holder.fixture.mts";
 import { install } from "../install.mts";
 import { fixtureModelOptions } from "../lib/model-policy.fixture.mts";
 
@@ -19,7 +19,9 @@ const BUSY = "another integrity run holds run.lock (busy, holder UNKNOWN)";
 
 function fixture(t: TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-codex-trigger-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Holders first: after() hooks run in registration order and stop at a throw, and
+  // on Windows a holder with run.lock.sqlite open makes this rmSync fail (issue #534).
+  t.after(async () => { await killHolders(); fs.rmSync(root, { recursive: true, force: true }); });
   const codexHome = path.join(root, "home", ".codex");
   const claudeRegistryFile = path.join(root, "home", ".claude.json");
   fs.mkdirSync(codexHome, { recursive: true });
