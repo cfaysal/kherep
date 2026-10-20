@@ -4,6 +4,8 @@
 // bootstrap suites split across the unit-windows matrix, and a gate job carries
 // that check name. Coverage holds only while three things agree: the shard map,
 // the bootstrap/*.test.mts population, and the suite list and gate in ci.yml.
+// The matrix also carries the hooks, control-plane and codex suites (codex runs
+// `npm run test:codex`, issue #534); they are not in the shard map.
 // The workflow is scanned as plain text; the repository has no YAML parser and
 // this guard does not need one.
 import assert from "node:assert/strict";
@@ -65,7 +67,7 @@ test("the unit-windows suite list in ci.yml names every shard and nothing else",
   assert.equal(lists.length, 1, "unit-windows needs exactly one `suite: [...]` flow sequence");
   const suites = lists[0][1].split(",").map((item) => item.trim()).filter(Boolean);
   assert.equal(new Set(suites).size, suites.length, `duplicate suite in ci.yml: ${suites.join(", ")}`);
-  assert.deepEqual([...suites].sort(), ["control-plane", "hooks", ...SHARDS].sort());
+  assert.deepEqual([...suites].sort(), ["codex", "control-plane", "hooks", ...SHARDS].sort());
 });
 
 test("the unit-windows-gate job is the required check and runs after every shard", () => {

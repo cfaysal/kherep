@@ -125,7 +125,7 @@ These three command definitions change, and their `commandWindows` forms with th
 | `Stop`, `SubagentStop` | not applicable | own `decision: block` continuation contract; a deny on breakage would lock the operator in a loop. Inventoried and restored |
 | `UserPromptSubmit`, `PostToolUse`, `SessionStart`, `PreCompact`, `SubagentStart` | not applicable | no permission decision; a broken hook is silent or visible, never a block. Inventoried and restored |
 
-No Windows CI job runs the Codex suites yet; the `commandWindows` forms of the three changed entries are not accepted on a live Windows host.
+CI runs the Codex suites on `windows-latest` as the `codex` shard of the `unit-windows` matrix, gated by the required check `unit (windows-latest)`; the `commandWindows` forms of the three changed entries are not accepted on a live Windows host.
 
 The per-turn Maestro reminder is shorter but retains its evidence, privacy, delegation, acceptance and observation rules. It remains present on every prompt. Research and the session-bound receive recipe are not cached away, so compacted or restarted sessions still get the current instructions.
 

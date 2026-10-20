@@ -142,6 +142,14 @@ increments the minor version; every other release increments the patch version.
   `<event>`. Nothing is printed when every command is coordinated, the stored
   command is unchanged, and `drift-check.sh` discards the lines as before
   (issue #525).
+- Windows CI runs the Codex suites (issue #534). The `unit-windows` matrix
+  gains a `codex` shard that runs the whole `npm run test:codex` file set on
+  `windows-latest`, gated by the required check `unit (windows-latest)` like
+  the bootstrap shards, with a 40-minute step timeout so a hang fails instead
+  of running to the job default. `bootstrap/ci-shard.test.mts` names the new
+  shard. Before this, only the ubuntu `typescript` and `unit-engines-floor`
+  jobs ran `codex/`, so the three Windows-only failures fixed in #535 and
+  #539 were first seen on a host.
 
 ### Fixed
 
