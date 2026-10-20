@@ -160,6 +160,7 @@ describe("deletion after the sender's acknowledgement", () => {
     frame(sender, "message.send", { messageId: id, fromSession: "s-a", to: { nodeId: b.nodeId, session: "s-b" }, text: "synthetic" });
     expect((await until(sender, "message.status", { messageId: id, state: "delivered" })).map((envelope) => [envelope.type, envelope.body]))
       .toEqual([["message.status", { messageId: id, state: "delivered" } satisfies MessageStatusBody]]);
+    expect(await sync(sender)).toEqual([]); // no second frame for the sender before its directory answer
     expect(await row(id)).toBeUndefined(); // answered from the tombstone: no row came back
     expect(await sync(target)).toEqual([]); // nothing for the target before its directory answer
     const other = await node("retention-foreign");
