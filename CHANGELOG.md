@@ -145,6 +145,20 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- A Claude task past its max runtime whose `claude stop` cannot be confirmed
+  is no longer stopped again every watch round for ever (issue #541). After a
+  failed stop the watch measures the run as owner status does
+  (`measureClaude`): a session without a live process is recorded at once
+  (`done` stays `done`, otherwise `stopped`) with the reason "max runtime
+  reached; claude stop not confirmed, fresh status shows no live run"; a run
+  whose process still lives, also behind a row that shows it ended, or whose
+  status cannot be measured is stopped again for at most `MAX_STOP_ROUNDS`
+  (10) rounds, counted on the task record (`stopAttempts`) so a daemon restart
+  does not reset it, then recorded `stopped` with the reason "max runtime
+  reached; claude stop not confirmed after 10 rounds". Each outcome is logged
+  once. Codex tasks are not changed here; the Codex deadline stop still
+  retries every round when the recorded pid was reused by a live foreign
+  process (issue #544).
 - The three Codex guards that still ran directly now run through the
   fail-closed hook adapter (issue #507, part 4 of 4, the last part).
   `atlassian-destructive-guard.mts --runtime codex` (last entry of the Agent,
