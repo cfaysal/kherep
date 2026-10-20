@@ -35,7 +35,7 @@ export interface ReaderCapability extends Common { mode: "reader"; release: () =
 export interface WriterCapability extends Common {
   mode: "writer";
   holding: () => boolean;
-  begin: () => Promise<boolean>;
+  begin: () => Promise<Kind | "">;
   end: () => void;
   repair: (rel: string, bytes: Uint8Array, probe?: { afterPrepare?: () => unknown }) => Promise<Restored>;
 }
@@ -65,6 +65,8 @@ const REFUSED: Partial<Record<Kind, string>> = {
 };
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const backoff = (): Promise<void> => sleep(10 + Math.floor(Math.random() * 20));
+// A replay admitWriter saw, and whether its COMMIT went through.
+type Replayed = Exclude<Applied, { state: "none" }> & { committed: boolean };
 const recoveryWriter = async (): Promise<WriteExact> => {
   try { return (await import("./recovery/restore-write.mts")).writeExact as WriteExact; } catch { throw refuse("recovery"); }
 };
@@ -107,7 +109,7 @@ async function admitReader(o: Opened, until: number): Promise<void> {
 }
 
 // EXCLUSIVE over a ready schema without a pending intent, held on return.
-async function admitWriter(o: Opened, until: number, seen: Applied[] = []): Promise<void> {
+async function admitWriter(o: Opened, until: number, seen: Replayed[] = []): Promise<void> {
   await retrying(until, async () => {
     for (;;) {
       if (schemaState(o.conn) === "empty") initialize(o.conn);
@@ -116,8 +118,10 @@ async function admitWriter(o: Opened, until: number, seen: Applied[] = []): Prom
       run(o.conn, "DELETE FROM pending WHERE 0");
       const result = applyPending(o, await recoveryWriter());
       if (result.state === "none") return;
+      const replayed: Replayed = { ...result, committed: false };
+      seen.push(replayed);
       run(o.conn, "COMMIT");
-      seen.push(result);
+      replayed.committed = true;
       if (result.state === "refused" && !result.cleared) throw refuse("recovery");
     }
   }, o.conn);
@@ -173,13 +177,16 @@ export async function admit(config: Config): Promise<ReaderCapability | WriterCa
 
 function writerCapability(o: Opened, common: Common, deadline: number): WriterCapability {
   let holding = true;
-  let seen: Applied[] = [];
-  const begin = async (): Promise<boolean> => {
-    if (holding) return true;
+  let seen: Replayed[] = [];
+  // "" once the hold is taken again, otherwise the kind that refused it.
+  const begin = async (): Promise<Kind | ""> => {
+    if (holding) return "";
     seen = [];
-    try { await admitWriter(o, Math.min(deadline - 1000, Date.now() + 3000), seen); } catch { return false; }
+    try { await admitWriter(o, Math.min(deadline - 1000, Date.now() + 3000), seen); } catch (error) {
+      return (error as { kherepKind?: Kind }).kherepKind ?? "unavailable";
+    }
     holding = true;
-    return true;
+    return "";
   };
   return {
     ...common, mode: "writer", holding: () => holding, begin,
@@ -209,11 +216,20 @@ function writerCapability(o: Opened, common: Common, deadline: number): WriterCa
       }
       holding = false;
       await probe.afterPrepare?.();
-      if (!(await begin())) return { proven: false, why: "busy after the repair was recorded; the next admitted run completes it" };
-      const mine = seen.find((item) => item.state !== "none" && item.intent === intent);
-      if (mine?.state === "applied") return { proven: true, sha: mine.sha };
+      // One retake only: a replay that failed here stays pending for the next admitted run.
+      const kind = await begin();
+      const mine = seen.findLast((item) => item.intent === intent);
       if (mine?.state === "refused") return { proven: false, why: mine.why };
-      // Another admitted process replayed this intent in the gap: measured here, not assumed.
+      if (mine && !mine.committed) {
+        return { proven: false, why: `the repair was written but its record could not be cleared (${kind}); the next admitted run completes it` };
+      }
+      if (mine && !kind) return { proven: true, sha: mine.sha };
+      if (!mine && kind) {
+        return { proven: false, why: kind === "busy" ? "busy after the repair was recorded; the next admitted run completes it"
+          : `the repair could not be completed (${kind}); the next admitted run completes it` };
+      }
+      // Replayed and committed here before the retake failed, or by another admitted process
+      // in the gap: measured here, not assumed.
       const want = sha256(bytes);
       return shaOf(targetOf(o, rel)) === want ? { proven: true, sha: want }
         : { proven: false, why: "the recorded repair was replaced before it was applied here" };
