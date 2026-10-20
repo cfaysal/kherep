@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { NodePaths } from "./config.mts";
 import type { SourceIdentity } from "./daemon-source.mts";
+import { writeJsonAtomic } from "./inbox.mts";
 import { acquireServiceOwnerFile, type ServiceOwnerProbe } from "./service-drain.mts";
 import type { NativeServiceSnapshot, ServiceBinding } from "./service-types.mts";
 
@@ -35,11 +36,11 @@ export const snapshotDigests = (snapshot: NativeServiceSnapshot) =>
 export const serviceRoot = (paths: NodePaths): string => path.join(paths.dir, "service");
 const receiptFile = (paths: NodePaths): string => path.join(serviceRoot(paths), "receipt.json");
 
+// Through writeJsonAtomic: a Windows hold on the target is retried (issue
+// #540) and a failed write leaves no temp file behind.
 function writeJson(file: string, value: unknown): void {
-  const temp = `${file}.${process.pid}.tmp`;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(temp, file);
+  writeJsonAtomic(file, value);
 }
 
 function validSource(value: SourceIdentity | undefined, requirePin = false): value is SourceIdentity {
