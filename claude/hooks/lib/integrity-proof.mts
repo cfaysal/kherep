@@ -6,8 +6,9 @@
 // once into a snapshot (bytes, SHA-256, identity), its imports come from that
 // snapshot and resolve from its real path (issue #524), and its syntax is
 // checked; before and after each check, and once more for all of them at the
-// end, the bytes on disk must still be the snapshot. A file whose real path leaves the hooks directory is not covered by
-// the hold and counts as unchecked. The wiring must read the same at the end.
+// end, the bytes on disk must still be the snapshot. A file whose real path
+// leaves the hooks directory is not covered by the hold and counts as
+// unchecked. The wiring must read the same at the end.
 // Only then may the heartbeat be written. What this proves is the supported
 // inventory and syntax checks, not that every module can execute.
 //

@@ -251,7 +251,7 @@ async function main(): Promise<void> {
     const source = sourceOf(rel);
     const versioned = repoRoot && "from" in source ? read(lib.joinPathLike(repoRoot, source.from)) : "";
     const text = typeof versioned === "string" ? "" : versioned.toString("utf8");
-    return COMPUTED[rel] ? `${text}${computedImports(rel)}` : text || null;
+    return COMPUTED[rel] ? text + computedImports(rel) : text || null;
   };
 
   for (const { file, rel, wired: isWired, importedBy } of lib.hookInventory(wired, hooksDir, readSource, realOrNull(hooksDir) ?? hooksDir)) {
