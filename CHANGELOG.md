@@ -211,7 +211,7 @@ increments the minor version; every other release increments the patch version.
   stopped again every watch round for ever (issue #544). The watch now measures
   the run by pid and start identity before the deadline stop, as it already
   did after it: a run whose root is no longer the recorded process settles
-  from its own outcome in the next round (`done` after `turn.completed`,
+  from its own outcome in one round (`done` after `turn.completed`,
   otherwise `failed` with "codex ended without completing the turn"), and its
   recorded descendants that still have their start identity are ended by pid
   (issue #233); a run that ended on its own past the deadline is therefore
