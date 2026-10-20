@@ -5,6 +5,7 @@
 // its trust bytes and the operator's own groups are kept.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { test } from "node:test";
 
 import { prepareManagedConfig } from "./config-preservation.mts";
@@ -19,17 +20,17 @@ const options = { ...OPTIONS, memoryProvider: "unconfigured" as const, startMark
 const BASE_SHA = ["884ffa3348166c920a277c48545d505a36a410a49097d4d490d024447b8c2138",
   "ca32d9fc26a77ef7d69bad08c20421602d4ab6af9e232e07ebffcc52f98b8aed", "9fb30bc11ab37062a448128d94ba8df9451016953c59fbfe961dd02b95ab6d99"];
 const VARIANTS = [OPTIONS, { ...OPTIONS, windowsHookCommands: false }, { ...OPTIONS, controlPlaneHook: undefined }];
-const ADAPTER = '\\"/synthetic/hooks/codex-hook-adapter.mts\\"';
-const DIRECT = [
-  '"\\"/synthetic/node\\" \\"/synthetic/hooks/atlassian-destructive-guard.mts\\" \\"--runtime\\" \\"codex\\""',
-  '"\\"/synthetic/node\\" \\"/synthetic/hooks/codex-dispatch-contract-guard.mts\\""',
-  '"\\"/synthetic/node\\" \\"/synthetic/hooks/playwright-file-guard.mts\\""',
+// The renderer joins hook paths with path.join, so on win32 they carry backslashes
+// (issue #534). The expected commands are built the same way and TOML-escaped as the
+// render writes them; on POSIX they are exactly "\"/synthetic/node\" \"/synthetic/hooks/...\"".
+const hook = (name: string): string => path.join(OPTIONS.hookDir, name);
+const toml = (...parts: string[]): string => JSON.stringify(parity.command(OPTIONS.node, ...parts));
+const ADAPTER = JSON.stringify(`"${hook("codex-hook-adapter.mts")}"`).slice(1, -1);
+const GUARDS: Array<[string, string[]]> = [
+  ["atlassian-destructive-guard.mts", ["--runtime", "codex"]], ["codex-dispatch-contract-guard.mts", []], ["playwright-file-guard.mts", []],
 ];
-const ADAPTED = [
-  `"\\"/synthetic/node\\" ${ADAPTER} \\"/synthetic/hooks/atlassian-destructive-guard.mts\\" \\"pre\\" \\"--runtime\\" \\"codex\\""`,
-  `"\\"/synthetic/node\\" ${ADAPTER} \\"/synthetic/hooks/codex-dispatch-contract-guard.mts\\" \\"pre\\""`,
-  `"\\"/synthetic/node\\" ${ADAPTER} \\"/synthetic/hooks/playwright-file-guard.mts\\" \\"pre\\""`,
-];
+const DIRECT = GUARDS.map(([name, args]) => toml(hook(name), ...args));
+const ADAPTED = GUARDS.map(([name, args]) => toml(hook("codex-hook-adapter.mts"), hook(name), "pre", ...args));
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
 // Each [[hooks.PreToolUse.hooks]] entry of a render, in order.
 const preEntries = (config: string): string[] => config.split(/^\[\[hooks\.PreToolUse\.hooks\]\]$/m).slice(1)
@@ -51,7 +52,10 @@ test("T1a every adapter command of the render has timeout 10 and its Windows for
   }
 });
 
-test("T1b renderBeforeAdaptedDirectGuards reproduces the 3054123 render byte for byte", () => {
+// The byte pins were recorded on POSIX; on win32 the joined hook paths differ, and T1c
+// still proves there that exactly the three guard entries differ (issue #534).
+test("T1b renderBeforeAdaptedDirectGuards reproduces the 3054123 render byte for byte",
+  { skip: process.platform === "win32" && "the 3054123 byte pins are POSIX renders; T1c covers win32" }, () => {
   for (const [index, o] of VARIANTS.entries()) assert.equal(sha256(renderBeforeAdapted(o)), BASE_SHA[index], `variant ${index}`);
 });
 

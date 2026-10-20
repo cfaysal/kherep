@@ -252,7 +252,19 @@ for (const swap of ["hard link", "symlink"] as const) {
     const then = new Date("2020-01-01T00:00:00Z");
     fs.utimesSync(old, then, then);
     fs.rmSync(b.peer);
-    if (swap === "hard link") fs.linkSync(old, b.peer); else fs.symlinkSync(old, b.peer);
+    if (swap === "hard link") fs.linkSync(old, b.peer);
+    else {
+      // A host without the symlink privilege refuses with EPERM at symlink; skip only
+      // that, as the other symlink tests do, and CI proves the case (issue #534).
+      try {
+        fs.symlinkSync(old, b.peer);
+      } catch (error) {
+        const { code, syscall } = error as NodeJS.ErrnoException;
+        if (code !== "EPERM" || syscall !== "symlink") throw error;
+        t.skip("symlink creation unavailable (EPERM)");
+        return;
+      }
+    }
     assert.ok(fs.statSync(b.peer).mtimeMs < fs.statSync(b.beat).mtimeMs, "older than the heartbeat");
     const run = call(b, "allow.mts");
     assert.equal(firstLine(run), `${b.peer} cannot be trusted (inode changed since the last proven check)`);
