@@ -53,7 +53,7 @@ export function midTurnOutput(input: Record<string, unknown>, sessionId: string,
   // waits and no failure or receipt notice is due.
   const waiting = sessionInbox(deps.paths, refs).some((record) => record.state === "accepted");
   // One read of sent/ per call: deliveryContext rechecks only these records.
-  const notices = waiting ? undefined : unnoticedNotices(deps.paths, refs);
+  const notices = waiting ? undefined : unnoticedNotices(deps.paths, refs, deps.now?.() ?? Date.now());
   if (notices && notices.failures.length === 0 && notices.receipts.length === 0) return "";
   const call: HookDeps = notices ? { ...deps, notices } : deps;
   return withMidTurnLock(deps.paths, sessionId, () => contextOutput("PostToolUse", deliveryContext("PostToolUse", refs, call))) ?? "";

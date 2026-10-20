@@ -682,10 +682,18 @@ says only `was received (confirmed <updatedAt>)`, with the time this node
 recorded `delivered`, because the Worker's status carries no timestamp. A
 `PostToolUse` call reads `sent/` once
 for its early exit and hands the found records to `deliveryContext`, which
-rereads only those (`stillUnnoticed`), so each hook call reads `sent/` once. A message already `replied`, or whose
-reply sits in this node's inbox by the Worker's replied rule (`repliesTo`, also
-used by `msg status`), gets no receipt: the reply proves receipt and the Worker
-may record `replied` after the reply arrived. `deliveryContext` in
+rereads only those (`stillUnnoticed`), so each hook call reads `sent/` once. A message already `replied` gets no
+receipt. A reply that reaches this node by the Worker's replied rule
+(`repliesTo`, also used by `msg status`) records the sent message `replied`
+(issue #520): the daemon on arrival (`settleReplied`), the delivery hook at its
+next read (`unnoticedNotices`, which therefore writes), and every daemon start
+before its inbox purge (`settleAnsweredAtStart` in `startInboxMaintenance`,
+`node/inbox-start.mts`). The Worker cannot do it: it deletes the row on the
+sender's ack of `delivered`, so a later reply finds no row to mark. The purge
+at daemon start is the only inbox purge and runs at every service restart or
+upgrade; with the settle before it, the inbox's 7-day retention plays no part.
+Each settle is fail-soft: a failed read or write of `sent/<id>.json` leaves the
+record as it was and is retried at the next read. `deliveryContext` in
 `node/deliver-core.mts` frames both after the intro and marks each shown record
 `noticedAt`, so each is told once.
 
