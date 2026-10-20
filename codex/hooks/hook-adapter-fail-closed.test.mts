@@ -59,7 +59,12 @@ test("T1.2 the adapter as a process answers within its 8.5 s clock with a guard 
 });
 
 test("T1.3 one budget across three items: the third is denied, the total stays inside the cap", (t) => {
-  const { guard, log } = fixture(t, `${IGNORES_TERM} setTimeout(() => { fs.appendFileSync(LOG, JSON.parse(input).tool_input.command + '\\n'); process.exit(0); }, 2000);`);
+  // Items one and two take 1 s each, item three never ends. Without one budget the run
+  // would take about 1 + 1 + 5 s; with it the cap ends item three. The 1 s items leave
+  // headroom for slow process starts under load, so "one\ntwo\n" is not timing-bound.
+  const { guard, log } = fixture(t, `${IGNORES_TERM} const command = JSON.parse(input).tool_input.command;`
+    + ` if (command !== 'three') setTimeout(() => { fs.appendFileSync(LOG, command + '\\n'); process.exit(0); }, 1000);`
+    + " else setInterval(() => {}, 1000);");
   const source = ["one", "two", "three"].map((name) => `tools.shell_command({command:'${name}'})`).join("; ");
   const begin = Date.now();
   const result = runAdaptedHook(guard, "pre", { tool_name: "functions.exec", tool_input: source }, 5_000, { deadline: Date.now() + 8_500 });
