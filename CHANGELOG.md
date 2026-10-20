@@ -172,6 +172,26 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Hook runtime error paths under injected faults (issue #521). A
+  coordination database the hook process can read but not write
+  (`run.sqlite` mode 0444, a read-only mount, another owner) is opened
+  read-only by SQLite, where `BEGIN EXCLUSIVE` excludes nothing: the
+  integrity writer and every replay of a recorded repair are now refused as
+  `not admitted: unavailable` before a byte is written, where a reader with
+  a pending repair used to write the target under that hollow hold; readers
+  without a pending repair stay admitted. The Codex `run.lock.sqlite` in the
+  same state is refused as `run.lock unavailable (ERR_SQLITE_ERROR)`
+  instead of granting a second owner. A repair whose hold could not be
+  taken back reports what happened instead of "busy after the repair was
+  recorded": `write failed (ENOSPC)` for a write that left a prefix (the
+  intent stays pending), `the repair was written but its record could not
+  be cleared (<kind>); ...` for a clear that SQLite rolled back, and a
+  proven repair when its replay had committed. The dispatcher's
+  last-resort deny is the fixed `[guard-dispatch] guard-dispatch.mts cannot
+  run (internal error); ...` without the raw Node message or a path. New
+  suites `claude/hooks/hook-runtime-fault-*.test.mts` inject SQLite
+  auto-rollback, ENOSPC, EACCES, spawn failures and the last-resort catches
+  through `fault-preload.fixture.mts` and in-process patches.
 - Windows: `writeJsonAtomic` (daemon.json, inbox records, task and session
   records, receipt.json) retries the replace-by-rename on `EPERM`, `EBUSY` and
   `EACCES` up to 8 attempts with 10–640 ms backoff (1.27 s in total) while
