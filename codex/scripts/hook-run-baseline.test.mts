@@ -17,7 +17,13 @@ test("actual hook/process counts for the fixed event sequence retain guard decis
   }
   assert.equal(measured.totals.hookCommands, 41);
   assert.equal(measured.totals.nodeProcesses, 79 + entryRuns.length);
-  assert.equal(measured.totals.totalProcesses, 85 + entryRuns.length);
+  // On Windows the two Stop replays (stop-empty, stop-confirm) each resolve the service
+  // owner once, which starts one powershell.exe (service-owner-probe.mts currentOwner);
+  // POSIX reads os.userInfo() and starts nothing (issue #534).
+  const ownerProbes = measured.rows
+    .flatMap(r => r.children.filter(c => /^powershell(?:\.exe)?$/i.test(c.file)).map(() => r.label)).sort();
+  assert.deepEqual(ownerProbes, process.platform === "win32" ? ["stop-confirm", "stop-empty"] : []);
+  assert.equal(measured.totals.totalProcesses, 85 + entryRuns.length + ownerProbes.length);
   for (const label of ["lookup", "intercom-empty", "intercom-message"]) {
     const rows = measured.rows.filter(r => r.label === label && r.event === "PostToolUse");
     assert.equal(rows.length, 3, "the native return-point consumer is retained");
