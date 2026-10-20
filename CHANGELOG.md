@@ -131,6 +131,17 @@ increments the minor version; every other release increments the patch version.
   to write on a missing, invalid or mismatched version. No daemon, database,
   scheduler, scope or credential is added. See
   `modules/atl-jira-brokers/README.md`.
+- The settings render prints `hooks: keep <event> [<matcher>]
+  <claude-home>/hooks/<file>[, ...] (uncoordinated, blocks
+  live-hook-integrity)` for every kept hook command that runs `hooks/` code
+  outside `kherep/hook-runtime/entry.mts`, judged by the rule
+  `live-hook-integrity.mts` itself applies and naming the files it counts
+  (`hooks/lib/hook-inventory.mts`), so the install output says why no
+  heartbeat will be written. The command itself is not printed, so no path of
+  the host appears, and an event that is not a plain name is shown as
+  `<event>`. Nothing is printed when every command is coordinated, the stored
+  command is unchanged, and `drift-check.sh` discards the lines as before
+  (issue #525).
 
 ### Fixed
 

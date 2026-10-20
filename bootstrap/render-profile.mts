@@ -14,6 +14,7 @@ import { substituteTemplatePaths, toBashPath, workspaceEnvPath } from "./render-
 import { filterMacPermissions, filterManagedDisallowedPermissions, mergeSettings, unique, type Settings } from "./render-profile-settings.mts";
 import { readRetiredHomeEntries, retireHookCommands, unwireMovedHooks, userHomeNow } from "./retired-hooks.mts";
 import { errorMessage } from "./shape.mts";
+import { keptHookLines } from "./uncoordinated-hooks.mts";
 
 interface LocalInferenceConfig {
   backends?: Record<string, unknown>;
@@ -110,6 +111,9 @@ export function renderSettings(args: string[], platform: string = process.platfo
     KHEREP_WORKSPACE: workspaceEnvPath(profile, workspace, platform),
     KHEREP_CREDENTIALS_ROOT: toBashPath(credentialsRoot),
   };
+  // Issue #525. Each kept hooks/ command outside the entry makes live-hook-integrity.mts
+  // refuse repairs and write no heartbeat; judged by its own rule. stdout: install.sh shows, drift-check.sh drops.
+  for (const line of keptHookLines(user, claudeHome)) console.log(line);
   writeJson(outputUserFile, user);
   writeJson(outputProjectFile, project);
 }
