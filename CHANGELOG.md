@@ -145,6 +145,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Receipts for messages whose reply had already reached this node no longer
+  appear after a service restart or upgrade (issue #520). They had never been
+  shown: the reply in the inbox kept them quiet, and the daemon start's purge
+  of inbox records older than 7 days removed that reply, after which the
+  `delivered` sent record surfaced with its week-old time. A reply now records
+  the sent message `replied` on this node: on arrival, at the next
+  delivery-hook read, and at every daemon start before the inbox purge. A
+  record whose reply an earlier restart had already purged can still surface
+  once, for a session that had no hook event since; nothing on the node
+  distinguishes it from a receipt never shown.
 - The three Codex guards that still ran directly now run through the
   fail-closed hook adapter (issue #507, part 4 of 4, the last part).
   `atlassian-destructive-guard.mts --runtime codex` (last entry of the Agent,

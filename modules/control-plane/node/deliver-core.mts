@@ -207,7 +207,7 @@ export function deliveryContext(event: DeliveryEvent, refs: string[], deps: Hook
       else markRefused(paths.inbox, r.messageId, exhaustedOfferReason(r, MAX_OFFERS));
     }
   }
-  const notices = deps.notices ? stillUnnoticed(paths, deps.notices) : unnoticedNotices(paths, refs);
+  const notices = deps.notices ? stillUnnoticed(paths, deps.notices) : unnoticedNotices(paths, refs, now);
   const failures = notices.failures.slice(0, MAX_MESSAGES_PER_CALL);
   // A receipt alone never continues a turn at Stop (issue #402): it waits for
   // the next event, or rides along with messages or failures.

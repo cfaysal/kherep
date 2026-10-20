@@ -87,6 +87,8 @@ test("no receipt before delivered, after replied, when a reply arrived, or for a
     assert.ok(!context.includes(`Your message ${messageId}`), messageId);
     assert.equal(getSent(paths, messageId)?.noticedAt, undefined);
   }
+  // Issue #520: the reply settles the answered record replied on this node.
+  assert.equal(getSent(paths, answered)?.state, "replied");
   // A message that becomes delivered later is reported then.
   recordSent(paths, accepted, "delivered", undefined, NOW + 7);
   assert.ok(hook(paths, "UserPromptSubmit").includes(receipt(accepted, 7)));
