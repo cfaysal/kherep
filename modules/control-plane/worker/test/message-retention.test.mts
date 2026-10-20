@@ -81,14 +81,14 @@ async function holdNextSend(): Promise<{ release: () => void; restore: () => Pro
   const held = new Promise<void>((resolve) => { release = resolve; });
   const original = await runInDurableObject(registry(), (instance) => {
     const target = instance as unknown as Tx;
-    const original = target.messageTx;
+    const method = target.messageTx;
     let armed = true;
     target.messageTx = async function (this: unknown, path, run) {
-      const result = await original.call(this, path, run);
+      const result = await method.call(this, path, run);
       if (path === "sendMessage" && armed) { armed = false; await held; }
       return result;
     };
-    return original;
+    return method;
   });
   return { release, restore: () => runInDurableObject(registry(), (instance) => { (instance as unknown as Tx).messageTx = original; }) };
 }
