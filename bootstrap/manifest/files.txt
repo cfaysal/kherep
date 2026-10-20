@@ -86,6 +86,9 @@ hooks/lib/guard-recheck.test.mts
 hooks/lib/integrity-proof.mts
 hooks/lib/integrity-proof.test.mts
 hooks/lib/integrity-run.mts
+hooks/lib/integrity-passes.mts
+hooks/lib/integrity-passes.test.mts
+hooks/lib/lock-holder.fixture.mts
 hooks/cbm-code-discovery-gate
 hooks/playwright-file-guard.mts
 hooks/atlassian-destructive-guard.mts

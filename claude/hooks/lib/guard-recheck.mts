@@ -26,8 +26,11 @@ export function heartbeatState(home: string, windowMs: number, now: number = Dat
 
 // args: the node arguments when the hook runtime admits the writer (its
 // preload, the script, the trigger); then the child must report "ready".
+// trigger and env: the Codex adapter's own (issue #507, part 3); by default
+// guard-dispatch and CLAUDE_HOME = home.
 export interface Recheck {
   script: string; home: string; payload: string; budgetMs: number; why: string; lastOk?: string; args?: string[];
+  trigger?: string; env?: NodeJS.ProcessEnv;
 }
 
 // What a dispatcher admitted by the hook runtime holds (kherep/hook-runtime/coordinator.mts).
@@ -74,8 +77,8 @@ export function runRecheck(recheck: Recheck): Promise<string> {
       clearTimeout(timer);
       resolve(recheckNotice(recheck, lines));
     };
-    const child = spawn(process.execPath, recheck.args ?? [recheck.script, "--trigger", "guard-dispatch"], {
-      env: { ...process.env, CLAUDE_HOME: recheck.home }, windowsHide: true,
+    const child = spawn(process.execPath, recheck.args ?? [recheck.script, "--trigger", recheck.trigger ?? "guard-dispatch"], {
+      env: { ...process.env, ...(recheck.env ?? { CLAUDE_HOME: recheck.home }) }, windowsHide: true,
       stdio: admitted ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "ignore"],
     });
     child.on("message", (message: { kherep?: unknown; v?: unknown; pid?: unknown }) => {

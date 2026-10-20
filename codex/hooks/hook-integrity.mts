@@ -8,6 +8,16 @@
  * one from the checkout and counts it only when MEASURED (size > 0, SHA-256 equal
  * to the checkout bytes). Own libs load dynamically, so a broken one is reported
  * (kind "self"). Cannot block: silent when OK, always exit 0.
+ *
+ * Issue #507, part 3. Codex has no hook runtime, so before anything is restored
+ * or journalled, own libs included, the hook takes run.lock (lib/integrity-
+ * heartbeat.mts: an EXCLUSIVE SQLite transaction the OS releases with this
+ * process); without it, it reports and changes nothing. It removes the heartbeat
+ * before its first repair, walks the closure again after each repair pass
+ * (lib/integrity-passes.mts, at most three), checks the live closure once more
+ * read-only and writes <CODEX_HOME>/.cache/hook-integrity/heartbeat.json only
+ * when all of that passed. `--trigger <source>` (the hook adapter's re-check)
+ * prints plain lines instead of the SessionStart JSON.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -15,13 +25,15 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import type { HookFile, SourceText } from "../../claude/hooks/lib/hook-inventory.mts";
+import type { HookFile, InventoryEntry, SourceText } from "../../claude/hooks/lib/hook-inventory.mts";
+import type { RunLock } from "../../claude/hooks/lib/integrity-heartbeat.mts";
+import type { Outcome } from "../../claude/hooks/lib/integrity-passes.mts";
 import type { ScopePayload } from "../../claude/hooks/lib/workspace-scope.mts";
 
 type Libs = typeof import("../../claude/hooks/lib/workspace-scope.mts") & typeof import("../../claude/hooks/lib/orchestra-checkout.mts") &
-  typeof import("../../claude/hooks/lib/restore-write.mts") & typeof import("../../claude/hooks/lib/hook-inventory.mts") &
-  typeof import("../../claude/hooks/lib/hook-syntax.mts");
-type Verdict = { state: "OK" | "DEFEKT" | "UNGEPRUEFT"; reason?: string; before?: { size?: number; mtime?: string; ino?: number } };
+  typeof import("../../claude/hooks/lib/restore-write.mts") & typeof import("../../claude/hooks/lib/integrity-heartbeat.mts") &
+  typeof import("../../claude/hooks/lib/hook-inventory.mts") & typeof import("../../claude/hooks/lib/hook-syntax.mts") &
+  typeof import("../../claude/hooks/lib/integrity-verdict.mts") & typeof import("../../claude/hooks/lib/integrity-passes.mts");
 type Restored = { proven: boolean; sha?: string; why?: string };
 // The first lib that did not load or lacks a used function; `loaded` libs did.
 type LoadFailure = { rel: string; why: string; loaded: number };
@@ -36,6 +48,9 @@ const COMPUTED: Record<string, string[]> = {
   "kherep-maestro/codex-shell-checks.mts": [],
   "kherep-maestro/codex-privacy-boundary-guard.mts": ["workspace-scope", "private-path-policy", "private-path-rules", "real-path-policy"],
   "kherep-maestro/codex-dispatch-contract-guard.mts": ["obs-brief-policy"],
+  // The adapter loads its re-check lib by a computed path (issue #507, part 3).
+  "kherep-maestro/codex-hook-adapter.mts": ["guard-recheck"],
+  "kherep-maestro/hook-adapter.mts": ["guard-recheck"],
 };
 export const ALWAYS_CHECK = Object.values(COMPUTED).flat().map((name) => `./lib/${name}.mts`);
 const computedImports = (rel: string): string => (COMPUTED[rel] || []).map((name) => `\nimport "./lib/${name}.mts";`).join("")
@@ -53,17 +68,23 @@ const errorCode = (error: unknown): string => (error as NodeJS.ErrnoException | 
 function read(file: string | number): Buffer | string {
   try { return fs.readFileSync(file); } catch (error) { return errorCode(error); }
 }
-// Filled by loadLibs. A restore needs only the first RESTORE_LIBS of its steps.
+// Filled by loadLibs. A restore needs only the first RESTORE_LIBS of its steps, run.lock included.
 export const lib = {} as Libs;
-const RESTORE_LIBS = 3;
+const RESTORE_LIBS = 4;
 const LIB_DIR = fs.existsSync(path.join(import.meta.dirname, "lib"))
   ? path.join(import.meta.dirname, "lib") : path.resolve(import.meta.dirname, "..", "..", "claude", "hooks", "lib");
+const TRIGGER_AT = process.argv.indexOf("--trigger");
+const PLAIN = TRIGGER_AT >= 0;
+const TRIGGER = PLAIN ? process.argv[TRIGGER_AT + 1] || "unnamed" : "session-start";
+const LOST = "the run lock was lost";
 
 // Dependency order, so a broken lib is named before the libs importing it.
 export async function loadLibs(): Promise<LoadFailure | null> {
   const steps: [string, string[]][] = [
     ["workspace-scope.mts", ["isWithinPath", "joinPathLike", "normalizePathLike"]], ["orchestra-checkout.mts", ["checkoutFor", "isCheckout"]],
-    ["restore-write.mts", ["writeExact"]], ["hook-inventory.mts", ["hookInventory"]], ["hook-syntax.mts", ["syntaxVerdict"]],
+    ["restore-write.mts", ["writeExact"]], ["integrity-heartbeat.mts", ["takeRunLock", "invalidateHeartbeat", "writeHeartbeat"]],
+    ["hook-inventory.mts", ["hookInventory"]], ["hook-syntax.mts", ["syntaxVerdict"]],
+    ["integrity-verdict.mts", ["classify"]], ["integrity-passes.mts", ["repairPasses", "finalPass"]],
   ];
   for (const [index, [name, used]] of steps.entries()) {
     const rel = `lib/${name}`;
@@ -154,24 +175,6 @@ export function checkoutOf(parts: string[], payload: ScopePayload | null, env: N
   return lib.checkoutFor(payload, lib.normalizePathLike(env.CLAUDE_HOME || path.join(os.homedir(), ".claude")), env);
 }
 
-// `kind` only words the absent case: "wired but" or "imported but" not present.
-async function classify(file: string, kind: string): Promise<Verdict> {
-  let stat: fs.Stats;
-  try { stat = fs.statSync(file); } catch (error) {
-    const code = errorCode(error);
-    return code === "ENOENT" ? { state: "DEFEKT", reason: `${kind} but not present on disk` } : { state: "UNGEPRUEFT", reason: `stat failed (${code})` };
-  }
-  // A directory reports size 0 on Windows; it is not the 0-byte incident.
-  if (!stat.isFile()) return { state: "UNGEPRUEFT", reason: "not a regular file" };
-  const before = { size: stat.size, mtime: new Date(stat.mtimeMs).toISOString(), ino: stat.ino };
-  if (stat.size === 0) return { state: "DEFEKT", reason: "0 bytes - it runs, enforces nothing and exits 0 (fail-open)", before };
-  const source = read(file);
-  if (typeof source === "string") return { state: "UNGEPRUEFT", reason: `unreadable (${source})`, before };
-  const verdict = await lib.syntaxVerdict(file, source.toString("utf8"));
-  if (verdict.state === "OK") return { state: "OK", before };
-  return { state: verdict.state, reason: verdict.state === "DEFEKT" ? verdict.detail : `syntax unchecked (${verdict.detail})`, before };
-}
-
 function restore(file: string, from: string, repoRoot: string, hooksDir: string): Restored {
   if (!repoRoot) return { proven: false, why: "no checkout resolved via the control-plane pointer, the deliver-hook command, workspace, KHEREP_WORKSPACE or install note" };
   const source = lib.joinPathLike(repoRoot, from);
@@ -196,6 +199,7 @@ function journal(home: string, entry: Record<string, unknown>): void {
 
 function emit(lines: string[]): void {
   if (!lines.length) return;
+  if (PLAIN) return void process.stdout.write(lines.map((line) => `${line}\n`).join(""));
   const more = lines.length > 1 ? ` (+${lines.length - 1} more)` : "";
   const additionalContext = `KHEREP CODEX HOOK-INTEGRITY:\n${lines.map((l) => `  - ${l}`).join("\n")}`;
   process.stdout.write(JSON.stringify({ systemMessage: `Kherep hook integrity: ${lines[0]}${more}`,
@@ -206,18 +210,29 @@ const outcome = (result: Restored): string => result.proven
   ? `RESTORED from the repo, verified at the target (sha256 ${result.sha!.slice(0, 12)})`
   : `NOT restored (${result.why}). ENFORCEMENT IS OFF for this hook`;
 
-// This hook without one of its libs: one line, journalled as kind "self". The
-// lib is restored only when the libs the restore needs loaded.
-function ownImportFailed({ rel, why, loaded }: LoadFailure, payload: ScopePayload | null, home: string, parts: string[]): void {
+// This hook without one of its libs: one line. The lib is restored, after the
+// heartbeat is gone, and journalled as kind "self" (with this file's own journal:
+// integrity-verdict.mts may be the broken one) only under run.lock, and only when
+// the libs the restore needs loaded. It never writes a heartbeat.
+function ownImportFailed({ rel, why, loaded }: LoadFailure, payload: ScopePayload | null, home: string, parts: string[],
+  lock: RunLock | string | null): string[] {
   const file = path.join(LIB_DIR, path.basename(rel)).replace(/\\/g, "/");
-  const result: Restored = loaded >= RESTORE_LIBS
-    ? restore(file, `claude/hooks/${rel}`, checkoutOf(parts, payload, process.env, home), `${lib.normalizePathLike(home)}/hooks`)
-    : { proven: false, why: "the restore itself needs workspace-scope, orchestra-checkout and restore-write" };
-  journal(home, {
-    ts: new Date().toISOString(), file: `kherep-maestro/${rel}`, path: file, state: "DEFEKT", reason: why, kind: "self",
-    importedBy: [SELF], sha256After: result.sha || null, restoreProven: result.proven, restoreDetail: result.proven ? undefined : result.why,
-  });
-  emit([`own import ${rel} cannot be loaded (${why}); nothing was verified this session -> ${outcome(result)}`]);
+  let result: Restored;
+  if (!lock || loaded < RESTORE_LIBS) {
+    result = { proven: false, why: "the restore itself needs workspace-scope, orchestra-checkout, restore-write and integrity-heartbeat (run.lock)" };
+  } else if (typeof lock === "string") {
+    result = { proven: false, why: lock };
+  } else {
+    const blocked = lock.holding() ? lib.invalidateHeartbeat(home) : LOST;
+    result = blocked ? { proven: false, why: blocked }
+      : restore(file, `claude/hooks/${rel}`, checkoutOf(parts, payload, process.env, home), `${lib.normalizePathLike(home)}/hooks`);
+    if (lock.holding()) journal(home, {
+      ts: new Date().toISOString(), trigger: TRIGGER, file: `kherep-maestro/${rel}`, path: file, state: "DEFEKT", reason: why, kind: "self",
+      importedBy: [SELF], sha256After: result.sha || null, restoreProven: result.proven, restoreDetail: result.proven ? undefined : result.why,
+    });
+  }
+  return [`own import ${rel} cannot be loaded (${why}); nothing was verified this session -> ${outcome(result)}`,
+    ...(PLAIN ? [`heartbeat not written (own import ${rel} cannot be loaded)`] : [])];
 }
 
 // The install this file belongs to; run from anywhere else, CODEX_HOME or ~/.codex.
@@ -227,6 +242,80 @@ function codexHome(): string {
   return process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 }
 
+// One run under run.lock: the repair passes, the final read-only pass, the heartbeat.
+async function check(lock: RunLock, payload: ScopePayload | null, home: string, parts: string[]): Promise<string[]> {
+  const hooksDir = `${lib.normalizePathLike(home)}/hooks`;
+  const realHooks = realOrNull(hooksDir) ?? hooksDir;
+  const repoRoot = checkoutOf(parts, payload, process.env, home);
+  const wired = wiredHookFiles(parts, hooksDir);
+  const lines = wired.length ? [] : [`no hook file under ${hooksDir} is wired in config.toml, so WHICH hooks run is UNKNOWN here`];
+  let unproven = wired.length ? "" : "no wired file";
+  // The live file, named by its real path: Node loads its imports from there (issue #524).
+  const liveOnly = (file: string, rel: string): SourceText | null => {
+    const live = read(file);
+    if (typeof live === "string" || !live.length) return null;
+    const text = live.toString("utf8");
+    return { text: COMPUTED[rel] ? text + computedImports(rel) : text, real: realOrNull(file) ?? undefined };
+  };
+  // The live file, else the versioned one, so one broken file does not hide the files behind it.
+  const readSource = (file: string, rel: string): string | SourceText | null => {
+    const live = liveOnly(file, rel);
+    if (live) return live;
+    const source = sourceOf(rel);
+    const versioned = repoRoot && "from" in source ? read(lib.joinPathLike(repoRoot, source.from)) : "";
+    const text = typeof versioned === "string" ? "" : versioned.toString("utf8");
+    return COMPUTED[rel] ? text + computedImports(rel) : text || null;
+  };
+  const state = { invalidated: false, blocked: "" };
+  // A journal line is a mutation too: only while this run holds the lock.
+  const record = (entry: Record<string, unknown>): void => { if (lock.holding()) journal(home, entry); };
+  const checkOne = async ({ file, rel, wired: isWired, importedBy }: InventoryEntry): Promise<Outcome> => {
+    const { state: verdict, reason, before = {} } = await lib.classify(lib, file, isWired ? "wired" : "imported");
+    if (verdict === "OK") return { unproven: "", restored: false };
+    const label = importedBy.length ? `${rel} (imported by ${importedBy.join(", ")})` : rel;
+    const entry: Record<string, unknown> = {
+      ts: new Date().toISOString(), trigger: TRIGGER, file: rel, path: file, state: verdict, reason, kind: isWired ? "wired" : "import", importedBy,
+      sizeBefore: before.size ?? null, mtimeBefore: before.mtime || null, inoBefore: before.ino ?? null,
+      sha256After: null, restoreProven: false,
+    };
+    const source = sourceOf(rel);
+    if (verdict === "UNGEPRUEFT") {
+      lines.push(`${label}: UNCHECKED - ${reason}. Neither proven healthy nor proven broken.`);
+      record(entry);
+      return { unproven: `${rel} is unchecked`, restored: false };
+    }
+    if ("hint" in source) {
+      entry.restoreDetail = source.hint;
+      lines.push(`${label}: ${reason} -> NOT restored, report only (${source.hint}). ENFORCEMENT IS OFF for this hook.`);
+      record(entry);
+      return { unproven: `${rel} is not restored`, restored: false };
+    }
+    let result: Restored = { proven: false, why: LOST };
+    if (lock.holding()) {
+      // Once per run, before the first repair; a heartbeat that stays blocks every repair.
+      if (!state.invalidated) { state.invalidated = true; state.blocked = lib.invalidateHeartbeat(home); }
+      result = state.blocked ? { proven: false, why: state.blocked } : restore(file, source.from, repoRoot, hooksDir);
+    }
+    Object.assign(entry, { sha256After: result.sha || null, restoreProven: result.proven, restoreDetail: result.proven ? undefined : result.why });
+    lines.push(`${label}: ${reason} -> ${outcome(result)}`);
+    record(entry);
+    if (!result.proven) return { unproven: `${rel} is not restored`, restored: false };
+    const after = (await lib.classify(lib, file, "restored")).state;
+    if (after !== "OK") lines.push(`${label}: still ${after} after the restore`);
+    return { unproven: after === "OK" ? "" : `${rel} is not OK after the restore`, restored: true };
+  };
+  const walk = (reader: typeof readSource) => (): InventoryEntry[] => lib.hookInventory(wired, hooksDir, reader, realHooks);
+  const passes = await lib.repairPasses({ walk: walk(readSource), checkOne });
+  unproven ||= passes.unproven;
+  if (!unproven) unproven = await lib.finalPass({ walk: walk(liveOnly), expected: passes.inventory,
+    classify: (entry) => lib.classify(lib, entry.file, entry.wired ? "wired" : "imported") });
+  if (!unproven && !lock.holding()) unproven = LOST;
+  const files = passes.inventory.length;
+  if (!unproven) unproven = lib.writeHeartbeat(home, { trigger: TRIGGER, runtime: "codex", files });
+  if (PLAIN) lines.push(unproven ? `heartbeat not written (${unproven})` : `all ${files} files OK (${passes.restored} restored), heartbeat refreshed`);
+  return lines;
+}
+
 async function main(): Promise<void> {
   let payload: ScopePayload | null = {};
   try { payload = JSON.parse(String(read(0)) || "{}") as ScopePayload | null; } catch { /* no payload: no cwd */ }
@@ -234,47 +323,19 @@ async function main(): Promise<void> {
   const config = read(path.join(home, "config.toml"));
   const parts = typeof config === "string" ? [] : hookCommandParts(config.toString("utf8"));
   const failed = await loadLibs();
-  if (failed) return ownImportFailed(failed, payload, home, parts);
-  if (typeof config === "string") return emit([`config.toml under ${home} unreadable (${config}), so WHICH hooks are wired is UNKNOWN here`]);
-  const hooksDir = `${lib.normalizePathLike(home)}/hooks`;
-  const repoRoot = checkoutOf(parts, payload, process.env, home);
-  const wired = wiredHookFiles(parts, hooksDir);
-  const lines = wired.length ? [] : [`no hook file under ${hooksDir} is wired in config.toml, so WHICH hooks run is UNKNOWN here`];
-  // The live file, else the versioned one, so one broken file does not hide the files behind it.
-  // A live file is named by its real path: Node loads its imports from there (issue #524).
-  const readSource = (file: string, rel: string): string | SourceText | null => {
-    const live = read(file);
-    if (typeof live !== "string" && live.length) {
-      const text = live.toString("utf8");
-      return { text: COMPUTED[rel] ? text + computedImports(rel) : text, real: realOrNull(file) ?? undefined };
-    }
-    const source = sourceOf(rel);
-    const versioned = repoRoot && "from" in source ? read(lib.joinPathLike(repoRoot, source.from)) : "";
-    const text = typeof versioned === "string" ? "" : versioned.toString("utf8");
-    return COMPUTED[rel] ? text + computedImports(rel) : text || null;
-  };
-
-  for (const { file, rel, wired: isWired, importedBy } of lib.hookInventory(wired, hooksDir, readSource, realOrNull(hooksDir) ?? hooksDir)) {
-    const { state, reason, before = {} } = await classify(file, isWired ? "wired" : "imported");
-    if (state === "OK") continue;
-    const label = importedBy.length ? `${rel} (imported by ${importedBy.join(", ")})` : rel;
-    const entry: Record<string, unknown> = {
-      ts: new Date().toISOString(), file: rel, path: file, state, reason, kind: isWired ? "wired" : "import", importedBy,
-      sizeBefore: before.size ?? null, mtimeBefore: before.mtime || null, inoBefore: before.ino ?? null,
-      sha256After: null, restoreProven: false,
-    };
-    const source = sourceOf(rel);
-    if (state === "UNGEPRUEFT") {
-      lines.push(`${label}: UNCHECKED - ${reason}. Neither proven healthy nor proven broken.`);
-    } else if ("hint" in source) {
-      entry.restoreDetail = source.hint;
-      lines.push(`${label}: ${reason} -> NOT restored, report only (${source.hint}). ENFORCEMENT IS OFF for this hook.`);
-    } else {
-      const result = restore(file, source.from, repoRoot, hooksDir);
-      Object.assign(entry, { sha256After: result.sha || null, restoreProven: result.proven, restoreDetail: result.proven ? undefined : result.why });
-      lines.push(`${label}: ${reason} -> ${outcome(result)}`);
-    }
-    journal(home, entry);
+  // Ownership before any mutation: without run.lock nothing is restored, journalled or published.
+  const lock = failed && failed.loaded < RESTORE_LIBS ? null : lib.takeRunLock(home);
+  let lines: string[] = [];
+  try {
+    if (failed) lines = ownImportFailed(failed, payload, home, parts, lock);
+    else if (typeof lock === "string" || !lock) lines = [`${lock}; nothing checked, heartbeat not written`];
+    else if (typeof config === "string") {
+      lines = [`config.toml under ${home} unreadable (${config}), so WHICH hooks are wired is UNKNOWN here`,
+        ...(PLAIN ? ["heartbeat not written (config.toml unreadable)"] : [])];
+    } else lines = await check(lock, payload, home, parts);
+  } finally {
+    const why = lock && typeof lock !== "string" ? lock.release() : "";
+    if (why) lines.push(why);
   }
   emit(lines);
 }

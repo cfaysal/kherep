@@ -181,11 +181,13 @@ test("passes a guard's own JSON decision through unchanged", (t) => {
 const withoutTypeStrippingWarning = (stderr: string): string =>
   stderr.replace(/\(node:\d+\) ExperimentalWarning: Type Stripping[^\n]*\n(\(Use `node --trace-warnings[^\n]*\n)?/g, "");
 
-test("leaves any other non-zero exit and every PostToolUse exit as it was", (t) => {
+// Issue #507, part 3: a PreToolUse guard that exits 1 is a deny naming it; PostToolUse is unchanged.
+test("denies a PreToolUse guard's other non-zero exit and leaves every PostToolUse exit as it was", (t) => {
   const failing = syntheticGuard(t, "process.stderr.write('fixture-guard crashed\\n'); process.exit(1);");
   const failed = runAdapter(failing.guard, "pre", SHELL);
-  assert.equal(failed.status, 1);
-  assert.equal(failed.stdout, "");
+  assert.equal(failed.status, 0);
+  assert.equal(denyReason(failed.stdout),
+    `[hook-adapter] ${failing.guard} cannot run (exit code 1); the tool call is blocked until hook integrity restores it`);
   assert.equal(withoutTypeStrippingWarning(failed.stderr), "fixture-guard crashed\n");
   const blocking = syntheticGuard(t, "process.stderr.write('fixture-guard post\\n'); process.exit(2);");
   const post = runAdapter(blocking.guard, "post", SHELL);
@@ -194,9 +196,9 @@ test("leaves any other non-zero exit and every PostToolUse exit as it was", (t) 
   assert.equal(withoutTypeStrippingWarning(post.stderr), "fixture-guard post\n");
 });
 
+// Item one stays silent: plain stdout is no PreToolUse decision, so it would be a deny itself.
 test("answers the first block of a multi-command payload alone and runs nothing after it", (t) => {
   const { guard, log } = syntheticGuard(t, [
-    "process.stdout.write('note for ' + payload.tool_input.command + '\\n');",
     "if (payload.tool_input.command === 'two') { process.stderr.write('fixture-guard blocked two'); process.exit(2); }",
   ].join("\n"));
   const source = ["one", "two", "three"].map((name) => `tools.shell_command({command:'${name}'})`).join("; ");

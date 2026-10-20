@@ -63,6 +63,7 @@ async function loadLibs(): Promise<LoadFailure | null> {
     ["lib/hook-inventory.mts", () => import("./lib/hook-inventory.mts"), ["hookInventory", "wiredFiles"]],
     ["lib/hook-syntax.mts", () => import("./lib/hook-syntax.mts"), ["quietStripWarning", "syntaxVerdict", "esmParses", "cjsParses"]],
     ["lib/integrity-proof.mts", () => import("./lib/integrity-proof.mts"), ["finalProof"]],
+    ["lib/integrity-passes.mts", () => import("./lib/integrity-passes.mts"), ["repairPasses"]],
     ["lib/integrity-run.mts", () => import("./lib/integrity-run.mts"), ["runIntegrity"]],
   ];
   for (const [index, [rel, load, used]] of steps.entries()) {

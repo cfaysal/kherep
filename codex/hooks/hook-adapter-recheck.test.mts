@@ -1,0 +1,180 @@
+// Issue #507, part 3. In its installed layout (<home>/hooks/kherep-maestro) the
+// Codex hook adapter re-checks hook integrity after its guards when the heartbeat
+// is stale or missing, or a guard could not run; its lines never change the
+// decision. Each case copies the adapter as codex-hook-adapter.mts with the real
+// lib/guard-recheck.mts beside a synthetic codex-hook-integrity.mts that traces
+// argv, stdin and CODEX_HOME, restores every 0-byte .mts beside it and writes the
+// heartbeat. No real hook, home or checkout is involved.
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { test, type TestContext } from "node:test";
+
+const MIN = 60_000;
+const REPO = path.resolve(import.meta.dirname, "..", "..");
+const PAYLOAD = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "shell_command", tool_input: { command: "git status ü" } });
+const GOOD = "process.exit(0);\n";
+
+// Constant program text: the fake writes its trace into CODEX_HOME.
+const INTEGRITY = `import fs from "node:fs";
+import path from "node:path";
+const home = process.env.CODEX_HOME;
+const dir = path.join(home, "hooks", "kherep-maestro");
+fs.appendFileSync(path.join(home, "trace.jsonl"), JSON.stringify({ argv: process.argv.slice(2), input: fs.readFileSync(0, "utf8"), home }) + "\\n");
+let restored = 0;
+for (const name of fs.readdirSync(dir)) {
+  const file = path.join(dir, name);
+  if (!name.endsWith(".mts") || !fs.statSync(file).isFile() || fs.statSync(file).size > 0) continue;
+  fs.writeFileSync(file, "process.exit(0);\\n");
+  restored++;
+  console.log(name + ": 0 bytes -> RESTORED from the repo, verified at the target (sha256 0123456789ab)");
+}
+fs.mkdirSync(path.join(home, ".cache", "hook-integrity"), { recursive: true });
+fs.writeFileSync(path.join(home, ".cache", "hook-integrity", "heartbeat.json"), "{}\\n");
+console.log("all 2 files OK (" + restored + " restored), heartbeat refreshed");
+`;
+const GUARDS: Record<string, string> = {
+  "allow.mts": GOOD,
+  "json-deny.mts": "process.stdout.write(JSON.stringify({ hookSpecificOutput: "
+    + "{ hookEventName: \"PreToolUse\", permissionDecision: \"deny\", permissionDecisionReason: \"json says no\" } }));\n",
+};
+
+interface Box { root: string; dir: string; adapter: string; trace: string; beat: string }
+
+// heartbeatAgeMs null: no heartbeat at all.
+function box(t: TestContext, heartbeatAgeMs: number | null): Box {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kherep-adapter-recheck-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const dir = path.join(root, "hooks", "kherep-maestro");
+  fs.mkdirSync(path.join(dir, "lib"), { recursive: true });
+  const adapter = path.join(dir, "codex-hook-adapter.mts");
+  fs.copyFileSync(path.join(import.meta.dirname, "hook-adapter.mts"), adapter);
+  fs.copyFileSync(path.join(REPO, "claude", "hooks", "lib", "guard-recheck.mts"), path.join(dir, "lib", "guard-recheck.mts"));
+  fs.writeFileSync(path.join(dir, "codex-hook-integrity.mts"), INTEGRITY);
+  for (const [name, source] of Object.entries(GUARDS)) fs.writeFileSync(path.join(dir, name), source);
+  const beat = path.join(root, ".cache", "hook-integrity", "heartbeat.json");
+  if (heartbeatAgeMs !== null) {
+    fs.mkdirSync(path.dirname(beat), { recursive: true });
+    fs.writeFileSync(beat, "{}\n");
+    const then = new Date(Date.now() - heartbeatAgeMs);
+    fs.utimesSync(beat, then, then);
+  }
+  return { root, dir, adapter, trace: path.join(root, "trace.jsonl"), beat };
+}
+
+interface Printed { permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string }
+interface Run { stdout: string; stderr: string; output?: Printed; systemMessage?: string; ms: number }
+
+function call(b: Box, guard: string): Run {
+  const begin = Date.now();
+  const run = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", b.adapter, path.join(b.dir, guard), "pre"],
+    { input: PAYLOAD, encoding: "utf8", windowsHide: true, timeout: 12_000 });
+  const ms = Date.now() - begin;
+  assert.equal(run.status, 0, `adapter exit ${run.status}; stderr ${run.stderr}`);
+  const parsed = run.stdout ? JSON.parse(run.stdout) as { hookSpecificOutput: Printed; systemMessage?: string } : undefined;
+  return { stdout: run.stdout, stderr: run.stderr, output: parsed?.hookSpecificOutput, systemMessage: parsed?.systemMessage, ms };
+}
+
+const traced = (b: Box): { argv: string[]; input: string; home: string }[] => fs.existsSync(b.trace)
+  ? fs.readFileSync(b.trace, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
+
+test("a heartbeat 29 minutes old: no re-check, no output", (t) => {
+  const b = box(t, 29 * MIN);
+  assert.equal(call(b, "allow.mts").stdout, "");
+  assert.deepEqual(traced(b), []);
+});
+
+test("a heartbeat 31 minutes old: one re-check with --trigger hook-adapter, the exact payload and CODEX_HOME, no decision", (t) => {
+  const b = box(t, 31 * MIN);
+  const lastOk = new Date(fs.statSync(b.beat).mtimeMs).toISOString();
+  const run = call(b, "allow.mts");
+  assert.deepEqual(traced(b), [{ argv: ["--trigger", "hook-adapter"], input: PAYLOAD, home: b.root }]);
+  assert.equal(run.output?.permissionDecision, undefined, run.stdout);
+  assert.equal(run.output?.additionalContext, `hook integrity re-check (stale heartbeat, last OK ${lastOk}):\n`
+    + "  - all 2 files OK (0 restored), heartbeat refreshed");
+  assert.ok(run.stderr.includes(String(run.output?.additionalContext)), "the block also goes to stderr");
+  assert.ok(Date.now() - fs.statSync(b.beat).mtimeMs < MIN, "the heartbeat mtime moved");
+});
+
+test("no heartbeat: re-checked with last OK none", (t) => {
+  const b = box(t, null);
+  const run = call(b, "allow.mts");
+  assert.equal(traced(b).length, 1);
+  assert.match(String(run.output?.additionalContext), /^hook integrity re-check \(no heartbeat, last OK none\):\n {2}- all 2 files OK/);
+});
+
+test("a stale heartbeat next to a policy deny: the deny and its reason stay, systemMessage and stderr carry the block", (t) => {
+  const b = box(t, 31 * MIN);
+  const run = call(b, "json-deny.mts");
+  assert.equal(run.output?.permissionDecision, "deny");
+  assert.equal(run.output?.permissionDecisionReason, "json says no");
+  assert.match(String(run.systemMessage), /^Kherep hook integrity: hook integrity re-check \(stale heartbeat, last OK [^)]+\): \(\+1 more\)$/);
+  assert.match(run.stderr, /hook integrity re-check \(stale heartbeat, .*\n {2}- all 2 files OK \(0 restored\), heartbeat refreshed/);
+});
+
+for (const [label, age, why] of [["stale", 31 * MIN, "stale heartbeat"], ["fresh", 0, "guard failure"]] as const) {
+  test(`${label} heartbeat, empty guard: this call stays denied, the next runs the restored guard`, (t) => {
+    const b = box(t, age);
+    fs.writeFileSync(path.join(b.dir, "empty.mts"), "");
+    const first = call(b, "empty.mts");
+    assert.equal(first.output?.permissionDecision, "deny");
+    assert.ok(String(first.output?.permissionDecisionReason).includes("empty.mts cannot run (empty, 0 bytes)"));
+    assert.ok(String(first.systemMessage).startsWith(`Kherep hook integrity: hook integrity re-check (${why}, last OK `), first.systemMessage);
+    assert.ok(first.stderr.includes("empty.mts: 0 bytes -> RESTORED"), first.stderr);
+    assert.equal(fs.readFileSync(path.join(b.dir, "empty.mts"), "utf8"), GOOD);
+    const second = call(b, "empty.mts");
+    assert.equal(second.stdout, "", "allow, no re-check");
+    assert.equal(traced(b).length, 1, "no further re-check");
+  });
+}
+
+test("an unrunnable codex-hook-integrity.mts is named and spawns nothing", (t) => {
+  const b = box(t, 31 * MIN);
+  const script = path.join(b.dir, "codex-hook-integrity.mts");
+  fs.writeFileSync(script, "");
+  const run = call(b, "json-deny.mts");
+  assert.equal(run.output?.permissionDecisionReason, "json says no");
+  assert.ok(run.stderr.includes(`${script} cannot run (empty, 0 bytes)`), run.stderr);
+  assert.deepEqual(traced(b), []);
+});
+
+test("an empty lib/guard-recheck.mts is one unavailable line; the verdict is unchanged", (t) => {
+  const b = box(t, 31 * MIN);
+  fs.writeFileSync(path.join(b.dir, "lib", "guard-recheck.mts"), "");
+  const run = call(b, "json-deny.mts");
+  assert.equal(run.output?.permissionDecisionReason, "json says no");
+  assert.match(run.stderr, /hook integrity re-check unavailable \(lib\/guard-recheck\.mts cannot be loaded: /);
+  assert.deepEqual(traced(b), []);
+});
+
+test("a lib whose import never settles: one unavailable line within 2 s, the deny stays", (t) => {
+  const b = box(t, 31 * MIN);
+  fs.writeFileSync(path.join(b.dir, "lib", "guard-recheck.mts"), "await new Promise(() => {});\n");
+  const run = call(b, "json-deny.mts");
+  assert.ok(run.ms < 5000, `took ${run.ms} ms`);
+  assert.equal(run.output?.permissionDecisionReason, "json says no");
+  assert.match(run.stderr, /hook integrity re-check unavailable \(lib\/guard-recheck\.mts did not load within 2000 ms\)/);
+});
+
+// T1.7 (design §7): the adapter exits right after its output, even when something it
+// loaded leaves a handle open; the checkout layout has nothing that could.
+test("T1.7 a re-check lib that leaves a handle open: the adapter still exits right after its output", (t) => {
+  const b = box(t, 31 * MIN);
+  fs.writeFileSync(path.join(b.dir, "lib", "guard-recheck.mts"), "export const heartbeatState = () => ({ stale: true });\n"
+    + "export const recheckNotice = (_c, lines) => lines.join(\"\\n\");\n"
+    + "export async function runRecheck() { setInterval(() => {}, 1000); return \"re-check fixture left an interval\"; }\n");
+  const run = call(b, "allow.mts");
+  assert.ok(run.ms < 3000, `took ${run.ms} ms`);
+  assert.equal(run.output?.additionalContext, "re-check fixture left an interval");
+});
+
+test("a re-check that outlives its 6 s budget is killed and reported as UNKNOWN; the adapter ends before 10 s", (t) => {
+  const b = box(t, 31 * MIN);
+  fs.writeFileSync(path.join(b.dir, "codex-hook-integrity.mts"), "setInterval(() => {}, 1000);\n");
+  const run = call(b, "allow.mts");
+  assert.ok(run.ms < 10_000, `took ${run.ms} ms`);
+  assert.match(String(run.output?.additionalContext), /\n {2}- timed out after \d+ ms; outcome UNKNOWN \(a heartbeat may have been written\)$/);
+  assert.equal(run.output?.permissionDecision, undefined);
+});
