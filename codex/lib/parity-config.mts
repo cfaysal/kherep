@@ -63,6 +63,9 @@ export interface RenderOptions extends McpRenderOptions {
   // Issue #507, part 4. Renders from before it, which ran the Atlassian, dispatch-contract
   // and Playwright guards directly, for managed upgrade recognition only.
   omitAdaptedDirectGuards?: boolean;
+  // Issue #538. Renders from before it, which ran the messaging intent hook directly, for managed
+  // upgrade recognition only; omitAdaptedDirectGuards implies it.
+  omitAdaptedIntentHook?: boolean;
   // Legacy renders only: true was the combined macOS Stop hook, false was the
   // separate Windows observation Stop hook. Omitted means quiet observations.
   observationStopHook?: boolean;
@@ -173,6 +176,13 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
   // Issue #507, part 4. The three guards that ran directly now run through the fail-closed
   // adapter; each stays the same entry of the same group, so no positional trust key moves.
   const direct = options.omitAdaptedDirectGuards;
+  // Issue #538. The messaging intent hook runs through the adapter in pre-intent, same entry of the same group;
+  // timeout 15 holds its 8 s receipt wait plus two Node starts inside the adapter's 13.5 s clock.
+  const messaging = options.messagingClient;
+  const intent = (client: MessagingClientRenderOptions): HookSpec => options.omitAdaptedIntentHook || direct
+    ? { command: command(node, client.intentHook, "--config-root", client.configRoot) }
+    : { command: command(node, path.join(hookDir, "codex-hook-adapter.mts"), client.intentHook, "pre-intent", "--config-root", client.configRoot),
+      timeout: 15 };
   const native = (cli: string | undefined, timeout = 15): HookSpec[] =>
     options.memoryProvider === "central-brain" && options.nativeHooks && cli
       ? [{ command: previousNative ? command(node, cli, "codex", "--profile", options.nativeHooks.profile)
@@ -203,10 +213,7 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
       }]),
     group("PreToolUse", "Agent|spawn_agent", [direct ? hook("codex-dispatch-contract-guard.mts") : adapted("codex-dispatch-contract-guard.mts", "pre")]),
     group("PreToolUse", "mcp__playwright__browser_navigate", [direct ? hook("playwright-file-guard.mts") : adapted("playwright-file-guard.mts", "pre")]),
-    ...(options.messagingClient?.enabled
-      ? [group("PreToolUse", "^mcp__kherep_messaging__(sessions|send|inbox|reply|status)$",
-        [{ command: command(node, options.messagingClient.intentHook, "--config-root", options.messagingClient.configRoot) }])]
-      : []),
+    ...(messaging?.enabled ? [group("PreToolUse", "^mcp__kherep_messaging__(sessions|send|inbox|reply|status)$", [intent(messaging)])] : []),
     group("UserPromptSubmit", "", [
       {
         command: command(node, contextHook),
@@ -388,6 +395,11 @@ export function renderBeforeShellDispatcher(options: RenderOptions): string {
 // Issue #507, part 4. Exact predecessor of the three adapted guards: the 3054123 render.
 export function renderBeforeAdaptedDirectGuards(options: RenderOptions): string {
   return render({ ...options, omitAdaptedDirectGuards: true });
+}
+
+// Issue #538. Exact predecessor of the adapted messaging intent entry: the c44f3e4 render.
+export function renderBeforeAdaptedIntentHook(options: RenderOptions): string {
+  return render({ ...options, omitAdaptedIntentHook: true });
 }
 
 // Exact predecessor of the busy-hint projection, which also predates the guard.

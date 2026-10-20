@@ -147,17 +147,23 @@ export function normalizePayloads(payload: HookPayload, phase = "pre"): HookPayl
 // budget and then killed with SIGKILL, no budget left, exit other than 0 or 2, over
 // 1 MiB of output, stdout that is no decision); a printed "ask", which Codex parses
 // but does not support, is a deny. PostToolUse phases run exactly as before.
-const PRE_TOOL_USE_PHASES = new Set(["pre", "pre-no-transcript", "pre-privacy"]);
+// Issue #538: pre-intent runs the messaging intent hook (see failureFor and intentRewrite).
+const INTENT_PHASE = "pre-intent";
+const PRE_TOOL_USE_PHASES = new Set(["pre", "pre-no-transcript", "pre-privacy", INTENT_PHASE]);
 
 // One integer clock from this process's start, SAFETY_MARGIN_MS before the `timeout = 10`
 // of both rendered pre-privacy entries (a test pins it). spawnSync throws on a fractional
 // timeout (ERR_OUT_OF_RANGE, measured on Node 26.10), so every budget is an integer.
+// The pre-intent entry has `timeout = 15` (pinned too): the hook waits up to 8 s for its receipt.
 const HOOK_TIMEOUT_MS = 10_000;
+const INTENT_HOOK_TIMEOUT_MS = 15_000;
 const SAFETY_MARGIN_MS = 1_500;
+const PHASE_ARG = process.argv[3] || "pre"; // never pre-intent when the shell dispatcher imports this module
 const START = Math.floor(Number.isFinite(performance.timeOrigin) ? performance.timeOrigin : Date.now());
-const DEADLINE = START + HOOK_TIMEOUT_MS - SAFETY_MARGIN_MS;
+const DEADLINE = START + (PHASE_ARG === INTENT_PHASE ? INTENT_HOOK_TIMEOUT_MS : HOOK_TIMEOUT_MS) - SAFETY_MARGIN_MS;
 const remaining = (): number => Math.max(0, DEADLINE - Date.now());
 const GUARD_TIMEOUT_MS = 5_000;
+const INTENT_GUARD_TIMEOUT_MS = 12_000;
 const MIN_SPAWN_MS = 100; // a spawn costs about 85 ms; with less left none is started
 // A re-check gets <= RECHECK_MAX_MS of what is left, none below RECHECK_MIN_MS; its lib loads within RECHECK_LOAD_MS.
 const RECHECK_MAX_MS = 6_000, RECHECK_MIN_MS = 1_000, RECHECK_LOAD_MS = 2_000;
@@ -168,8 +174,8 @@ const INVOKED_DIR = path.dirname(SELF);
 const DECISIONS = ["deny", "ask", "allow"] as const;
 type Decision = typeof DECISIONS[number];
 // No decision: a plain allow or a notice only. `broken`: the guard file could not run (a re-check follows).
-// `system`: the guard's top-level systemMessage (issue #507, part 4).
-interface Verdict { decision?: Decision; reason: string; notice?: string; system?: string; broken?: boolean }
+// `system`: the guard's top-level systemMessage (issue #507, part 4). `updated`: the pre-intent rewrite (issue #538).
+interface Verdict { decision?: Decision; reason: string; notice?: string; system?: string; broken?: boolean; updated?: Record<string, unknown> }
 type Spawn = (command: string, args: string[], options: SpawnSyncOptionsWithStringEncoding) => SpawnSyncReturns<string>;
 // guardArgs reach the guard after its path; deadline is an absolute end (ms since the epoch); spawn is a test seam.
 export interface AdaptedOptions { guardArgs?: string[]; deadline?: number; spawn?: Spawn }
@@ -178,6 +184,19 @@ export interface AdaptedResult { stdout: string; stderr: string; status: number;
 const failure = (file: string, why: string, broken = true): Verdict => ({ decision: "deny", broken,
   reason: `[hook-adapter] ${file} cannot run (${why}); the tool call is blocked until hook integrity restores it`,
 });
+type Failure = (file: string, why: string, broken?: boolean) => Verdict;
+// Issue #538. In pre-intent every reason is fixed text: the basename, a why with an error code at most, and the
+// installer as the repair path. The intent hook lives outside hooks/, so integrity cannot restore it: never `broken`.
+const intentReason = (file: string, why: string, until: string): string =>
+  `[hook-adapter] ${path.basename(file)} cannot run (${why}); the messaging call is blocked until ${until}`;
+function failureFor(phase: string): Failure {
+  if (phase !== INTENT_PHASE) return failure;
+  return (file, why) => ({ decision: "deny", broken: false, reason: intentReason(file,
+    /^stat failed: (?![A-Z][A-Z0-9_]*$)/.test(why) ? "stat failed: unknown" : why, "the Codex installer reinstalls the messaging client") });
+}
+// The adapter's own failures; it is in integrity scope, so its pre-intent form keeps that repair path.
+const adapterFailure = (phase: string, why: string): Verdict => phase === INTENT_PHASE
+  ? { decision: "deny", broken: false, reason: intentReason(SELF, why, "hook integrity restores it") } : failure(SELF, why);
 const firstLine = (error: unknown): string => String((error as Error)?.message || error).split(/\r?\n/)[0];
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
@@ -206,17 +225,37 @@ function invalidField({ permissionDecision, permissionDecisionReason, additional
   return undefined;
 }
 
+// RFC 9562 versions 1-8 as the Worker's zod uuid() checks them (without its nil and max forms); the hook mints randomUUID().
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// Issue #538. The pre-intent rules: a decision is required, and updatedInput passes only with an allow and only
+// as the call's tool_input plus a UUID requestId; the rewrite is rebuilt from the adapter's own payload.
+function intentRewrite(output: Record<string, unknown>, toolInput: unknown): Pick<Verdict, "updated"> | string {
+  const { permissionDecision, updatedInput } = output;
+  if (permissionDecision === undefined) return `${NOT_DECISION} (no permissionDecision)`;
+  if (!DECISIONS.includes(permissionDecision as Decision)) return `${NOT_DECISION} (invalid field permissionDecision)`;
+  if (updatedInput === undefined) return permissionDecision === "allow" ? `${NOT_DECISION} (allow without updatedInput)` : {};
+  if (!isObject(updatedInput) || permissionDecision !== "allow") return `${NOT_DECISION} (invalid field updatedInput)`;
+  const { requestId, ...rest } = updatedInput;
+  if (typeof requestId !== "string" || JSON.stringify(rest) !== JSON.stringify(toolInput)) return `${NOT_DECISION} (updatedInput is not tool_input plus requestId)`;
+  if (!UUID.test(requestId)) return `${NOT_DECISION} (requestId is not a UUID)`;
+  return { updated: { ...(toolInput as Record<string, unknown>), requestId } };
+}
+
 // The verdict a guard printed on exit 0, or why stdout is not the accepted shape
 // (claude/hooks/guard-dispatch.mts): a field that would be dropped fails.
-function printed(stdout: string): Verdict | string {
+function printed(stdout: string, phase: string, toolInput: unknown): Verdict | string {
   let parsed: unknown;
   try { parsed = JSON.parse(stdout); } catch { return NOT_DECISION; }
   if (!isObject(parsed) || !isObject(parsed.hookSpecificOutput)) return NOT_DECISION;
   const output = parsed.hookSpecificOutput;
   if (output.hookEventName !== "PreToolUse") return NOT_DECISION;
+  const fields = phase === INTENT_PHASE ? [...FIELDS, "updatedInput"] : FIELDS;
   const extra = Object.keys(parsed).find((key) => key !== "hookSpecificOutput" && key !== "systemMessage")
-    ?? Object.keys(output).find((key) => !FIELDS.includes(key));
+    ?? Object.keys(output).find((key) => !fields.includes(key));
   if (extra !== undefined) return `${NOT_DECISION} (unsupported field ${extra || '""'})`;
+  const rewrite = phase === INTENT_PHASE ? intentRewrite(output, toolInput) : {};
+  if (typeof rewrite === "string") return rewrite;
   // Issue #507, part 4. Codex documents a top-level systemMessage for PreToolUse: a non-empty string passes through.
   const { systemMessage } = parsed;
   if (systemMessage !== undefined && (typeof systemMessage !== "string" || !systemMessage)) return `${NOT_DECISION} (invalid field systemMessage)`;
@@ -225,27 +264,31 @@ function printed(stdout: string): Verdict | string {
   const { permissionDecision, permissionDecisionReason, additionalContext } = output;
   if (permissionDecision === undefined && additionalContext === undefined) return NOT_DECISION;
   return { decision: permissionDecision as Decision | undefined, reason: (permissionDecisionReason as string | undefined) ?? "",
-    ...(additionalContext ? { notice: additionalContext as string } : {}), ...(systemMessage ? { system: systemMessage as string } : {}) };
+    ...(additionalContext ? { notice: additionalContext as string } : {}), ...(systemMessage ? { system: systemMessage as string } : {}), ...rewrite };
 }
 
-// error first: a grandchild that holds the pipe leaves status 0 with ETIMEDOUT.
-function judge(file: string, result: SpawnSyncReturns<string>, budget: number): Verdict {
+// error first: a grandchild that holds the pipe leaves status 0 with ETIMEDOUT. In pre-intent an exit 2,
+// silence and an ask are outside the hook's contract (it always exits 0 with a decision).
+function judge(file: string, result: SpawnSyncReturns<string>, budget: number, phase: string, toolInput: unknown): Verdict {
+  const fail = failureFor(phase);
+  const intent = phase === INTENT_PHASE;
   if (result.error) {
     const code = (result.error as NodeJS.ErrnoException).code;
-    if (code === "ETIMEDOUT") return failure(file, `timed out after ${(budget / 1000).toFixed(1)} s`);
-    if (code === "ENOBUFS") return failure(file, "output exceeded the 1 MiB buffer");
-    return failure(file, `spawn failed (${code ?? "unknown"})`);
+    if (code === "ETIMEDOUT") return fail(file, `timed out after ${(budget / 1000).toFixed(1)} s`);
+    if (code === "ENOBUFS") return fail(file, "output exceeded the 1 MiB buffer");
+    return fail(file, `spawn failed (${code ?? "unknown"})`);
   }
-  if (result.signal) return failure(file, `killed by ${result.signal}`);
-  if (result.status === 2) {
+  if (result.signal) return fail(file, `killed by ${result.signal}`);
+  if (result.status === 2 && !intent) {
     return { decision: "deny", reason: result.stderr.trim() || `${path.basename(file)} blocked this tool call without giving a reason.` };
   }
-  if (result.status !== 0) return failure(file, `exit code ${result.status}`);
-  if (!result.stdout.trim()) return { reason: "" };
-  const shown = printed(result.stdout);
-  if (typeof shown === "string") return failure(file, shown);
-  return shown.decision === "ask"
-    ? { ...shown, decision: "deny", reason: `${file} asked for confirmation; Codex has no ask, so the call is denied` } : shown;
+  if (result.status !== 0) return fail(file, `exit code ${result.status}`);
+  if (!result.stdout.trim()) return intent ? fail(file, "printed no decision") : { reason: "" };
+  const shown = printed(result.stdout, phase, toolInput);
+  if (typeof shown === "string") return fail(file, shown);
+  if (shown.decision !== "ask") return shown;
+  return intent ? fail(file, "asked for confirmation; Codex has no ask")
+    : { ...shown, decision: "deny", reason: `${file} asked for confirmation; Codex has no ask, so the call is denied` };
 }
 
 // The strongest decision with its reasons, plus every notice in order.
@@ -255,13 +298,18 @@ function combine(verdicts: Verdict[]): Verdict | undefined {
     .map((verdict) => verdict.reason).filter(Boolean).join("\n");
   const notice = verdicts.map((verdict) => verdict.notice).filter(Boolean).join("\n");
   const system = verdicts.map((verdict) => verdict.system).filter(Boolean).join("\n");
+  // Issue #538: at most one pre-intent item carries a rewrite; two would be a defect of this adapter.
+  const rewrites = verdicts.filter((verdict) => verdict.updated);
+  if (rewrites.length > 1) return adapterFailure(INTENT_PHASE, "conflicting rewrites");
   if (!decision && !notice) return undefined;
-  return { decision, reason, ...(notice ? { notice } : {}), ...(system ? { system } : {}) };
+  return { decision, reason, ...(notice ? { notice } : {}), ...(system ? { system } : {}),
+    ...(decision === "allow" && rewrites[0] ? { updated: rewrites[0].updated } : {}) };
 }
 
 const render = (verdict: Verdict | undefined, top: Record<string, string> = {}): string => verdict ? JSON.stringify({
   hookSpecificOutput: { hookEventName: "PreToolUse", ...(verdict.decision ? { permissionDecision: verdict.decision } : {}),
-    ...(verdict.reason ? { permissionDecisionReason: verdict.reason } : {}), ...(verdict.notice ? { additionalContext: verdict.notice } : {}) },
+    ...(verdict.reason ? { permissionDecisionReason: verdict.reason } : {}), ...(verdict.notice ? { additionalContext: verdict.notice } : {}),
+    ...(verdict.updated ? { updatedInput: verdict.updated } : {}) },
   ...(verdict.system ? { systemMessage: verdict.system } : {}), ...top }) : "";
 
 // The budget of one guard item: an integer, whatever the clock's fraction.
@@ -270,12 +318,18 @@ export const budgetFor = (capEnd: number, hardEnd: number, now: number): number 
 // Every item of a PreToolUse phase within one budget; the first deny ends the loop.
 function preToolUse(target: string, phase: string, payload: HookPayload, timeoutMs: number | undefined,
   options: AdaptedOptions): { verdict?: Verdict; stderr: string; broken: boolean } {
+  const fail = failureFor(phase);
+  const intent = phase === INTENT_PHASE;
   const why = unrunnable(target);
-  if (why) return { verdict: failure(target, why), stderr: "", broken: true };
+  if (why) {
+    const verdict = fail(target, why);
+    return { verdict, stderr: "", broken: verdict.broken === true };
+  }
   const begin = Date.now();
   const capEnd = timeoutMs === undefined ? Infinity : begin + timeoutMs;
   const hardEnd = options.deadline ?? Infinity;
-  const items = normalizePayloads(payload, phase);
+  // pre-intent: one item by construction, so the rewrite never depends on normalization.
+  const items = intent ? [payload] : normalizePayloads(payload, phase);
   const verdicts: Verdict[] = [];
   let stderr = "";
   for (const [index, item] of items.entries()) {
@@ -283,17 +337,18 @@ function preToolUse(target: string, phase: string, payload: HookPayload, timeout
     const budget = budgetFor(capEnd, hardEnd, Date.now());
     let verdict: Verdict;
     if (budget < MIN_SPAWN_MS) {
-      verdict = failure(target, `budget exhausted before item ${index + 1} of ${items.length} (${Date.now() - begin} ms used)`, false);
+      verdict = fail(target, `budget exhausted before item ${index + 1} of ${items.length} (${Date.now() - begin} ms used)`, false);
     } else {
       try {
         // Node 22/24 print a type-stripping ExperimentalWarning for an .mts guard on stderr.
         const result = (options.spawn ?? spawnSync)(process.execPath, ["--disable-warning=ExperimentalWarning", target, ...(options.guardArgs ?? [])],
           { encoding: "utf8", input: JSON.stringify(normalized), windowsHide: true, timeout: budget, killSignal: "SIGKILL" });
-        stderr += result.stderr ?? "";
-        verdict = judge(target, result, budget);
+        if (!intent) stderr += result.stderr ?? ""; // pre-intent forwards no raw error text (issue #538)
+        verdict = judge(target, result, budget, phase, normalized.tool_input);
       } catch (error) {
         // Option validation or anything else Node throws before the child exists: no file fault.
-        verdict = failure(target, `spawn threw (${(error as NodeJS.ErrnoException)?.code ?? "unknown"}: ${firstLine(error)})`, false);
+        const code = (error as NodeJS.ErrnoException)?.code ?? "unknown";
+        verdict = fail(target, intent ? `spawn threw (${code})` : `spawn threw (${code}: ${firstLine(error)})`, false);
       }
     }
     verdicts.push(verdict);
@@ -403,10 +458,13 @@ async function recheckRun(home: string, payload: string, broken: boolean): Promi
 
 // One document on stdout, the guards' stderr and the re-check block on stderr; exits
 // once every write called back. The notice goes to additionalContext on an allow,
-// to a top-level systemMessage on a deny, never into the decision.
-function emit(verdict: Verdict | undefined, stderr: string, notice?: string): void {
+// to a top-level systemMessage on a deny, never into the decision. In pre-intent it goes
+// to stderr only, so the document is exactly the hook's own (issue #538).
+function emit(verdict: Verdict | undefined, stderr: string, notice?: string, phase = "pre"): void {
   let doc: string;
-  if (verdict?.decision === "deny") {
+  if (phase === INTENT_PHASE) {
+    doc = render(verdict);
+  } else if (verdict?.decision === "deny") {
     const lines = notice ? notice.split("\n") : [];
     const integrity = notice ? `Kherep hook integrity: ${lines[0]}${lines.length > 1 ? ` (+${lines.length - 1} more)` : ""}` : "";
     // render() writes the guard's own systemMessage; the integrity line follows it (issue #507, part 4).
@@ -434,19 +492,28 @@ function postMain(target: string | undefined, phase: string): void {
   process.exitCode = result.status;
 }
 
+// pre-intent keeps readStdin's own timeout text and names a stream error by its code only.
+function stdinWhy(error: unknown, phase: string): string {
+  const text = firstLine(error);
+  return phase !== INTENT_PHASE || /^stdin not closed within \d+ ms$/.test(text) ? text
+    : `stdin read failed (${(error as NodeJS.ErrnoException)?.code ?? "unknown"})`;
+}
+
 async function main(target: string | undefined, phase: string): Promise<void> {
-  if (!target) return emit(failure(SELF, "no guard given"), "");
-  if (!path.isAbsolute(target)) return emit(failure(SELF, "guard path is not absolute"), "");
+  const fail = (why: string): void => emit(adapterFailure(phase, why), "", undefined, phase);
+  if (!target) return fail("no guard given");
+  if (!path.isAbsolute(target)) return fail("guard path is not absolute");
   let raw: string;
-  try { raw = await readStdin(); } catch (error) { return emit(failure(SELF, firstLine(error)), ""); }
+  try { raw = await readStdin(); } catch (error) { return fail(stdinWhy(error, phase)); }
   let payload: unknown;
   try { payload = JSON.parse(raw); } catch { /* not JSON */ }
-  if (!isObject(payload)) return emit(failure(SELF, "stdin is not a JSON object"), "");
-  const result = preToolUse(target, phase, payload as HookPayload, Math.min(GUARD_TIMEOUT_MS, remaining()),
+  if (!isObject(payload)) return fail("stdin is not a JSON object");
+  const cap = phase === INTENT_PHASE ? INTENT_GUARD_TIMEOUT_MS : GUARD_TIMEOUT_MS;
+  const result = preToolUse(target, phase, payload as HookPayload, Math.min(cap, remaining()),
     { guardArgs: process.argv.slice(4), deadline: DEADLINE });
   const notice = await within(recheck(raw, result.broken), remaining(),
     () => "hook integrity re-check unavailable (no result before the hook deadline)");
-  emit(result.verdict, result.stderr, notice);
+  emit(result.verdict, result.stderr, notice, phase);
 }
 
 // Node loads the main module from its real path, so a script started through a
@@ -467,5 +534,6 @@ if (isMainModule()) {
   const target = process.argv[2];
   const phase = process.argv[3] || "pre";
   if (!PRE_TOOL_USE_PHASES.has(phase)) postMain(target, phase);
-  else main(target, phase).catch((error: unknown) => emit(failure(SELF, `internal error: ${firstLine(error)}`), ""));
+  else main(target, phase).catch((error: unknown) => emit(adapterFailure(phase,
+    phase === INTENT_PHASE ? "internal error" : `internal error: ${firstLine(error)}`), "", undefined, phase));
 }

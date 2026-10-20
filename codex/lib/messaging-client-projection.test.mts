@@ -22,7 +22,8 @@ test("renders the messaging client table and exact intent hook only when opted i
   const enabled = render(options(true));
   assert.equal(enabled.match(/\[mcp_servers\.kherep_messaging\]/g)?.length, 1);
   assert.match(enabled, new RegExp(`matcher = ${JSON.stringify(MATCHER).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-  assert.match(enabled, /command = "\\\"\/usr\/bin\/node\\\" \\\"\/codex\/orchestra\/control-plane\/node\/mcp-intent-hook\.mts\\\" \\\"--config-root\\\" \\\"\/operator\/config\\\""/);
+  // Issue #538: the intent hook runs through the hook adapter in pre-intent.
+  assert.match(enabled, /command = "\\\"\/usr\/bin\/node\\\" \\\"\/codex\/hooks\/kherep\/codex-hook-adapter\.mts\\\" \\\"\/codex\/orchestra\/control-plane\/node\/mcp-intent-hook\.mts\\\" \\\"pre-intent\\\" \\\"--config-root\\\" \\\"\/operator\/config\\\""/);
   assert.match(enabled, /command = "\/usr\/bin\/node"/);
   assert.match(enabled, /args = \["\/codex\/orchestra\/control-plane\/node\/mcp-stdio-bridge\.mts", "--config-root", "\/operator\/config"\]/);
   assert.doesNotMatch(enabled, /approval_mode|permissionDecision|Authorization|Bearer|token/i);

@@ -187,12 +187,21 @@ export async function installFromCli(options: InstallOptions, readCatalog: Model
 
 // Issue #507, part 4 (lead decision 8). Codex skips a changed hook definition until it is
 // trusted in /hooks; a previous block that ran the three guards directly loses them until then.
-function trustReviewLine(previous: string, node: string, hookDir: string): string {
+// Issue #538: the same for the messaging intent entry when the previous block ran it directly.
+function trustReviewLine(previous: string, node: string, hookDir: string,
+  messaging: { enabled: boolean; intentHook: string; configRoot: string }): string {
   const lines = previous.split(/\r?\n/);
-  const moved = [atlassianDestructiveGuard(node, hookDir).command, command(node, path.join(hookDir, "codex-dispatch-contract-guard.mts")),
-    command(node, path.join(hookDir, "playwright-file-guard.mts"))].some((direct) => lines.includes(`command = ${JSON.stringify(direct)}`));
+  const ran = (direct: string): boolean => lines.includes(`command = ${JSON.stringify(direct)}`);
+  const changed = [
+    ...([atlassianDestructiveGuard(node, hookDir).command, command(node, path.join(hookDir, "codex-dispatch-contract-guard.mts")),
+      command(node, path.join(hookDir, "playwright-file-guard.mts"))].some(ran)
+      ? ["atlassian-destructive-guard", "codex-dispatch-contract-guard", "playwright-file-guard"] : []),
+    ...(messaging.enabled && ran(command(node, messaging.intentHook, "--config-root", messaging.configRoot)) ? ["messaging intent"] : []),
+  ];
+  const named = changed.length > 1 ? `${changed.slice(0, -1).join(", ")} and ${changed.at(-1)} entries, which do not`
+    : `${changed[0]} entry, which does not`;
   return "config.toml: the managed hook block was replaced; Codex skips a changed hook definition until it is reviewed and trusted in /hooks"
-    + (moved ? " (this upgrade changes the atlassian-destructive-guard, codex-dispatch-contract-guard and playwright-file-guard entries, which do not run until then)" : "");
+    + (changed.length ? ` (this upgrade changes the ${named} run until then)` : "");
 }
 
 export function install(options: InstallOptions = {}) {
@@ -589,7 +598,7 @@ export function install(options: InstallOptions = {}) {
     const latestPlugin = localPlugin.ownedPluginConfig(latestConfig);
     const preparedConfig = prepareManagedConfig(latestPlugin.config, managedConfigOptions);
     if (preparedConfig.managedFragment === "replaced") {
-      (options.log || ((line) => process.stdout.write(`${line}\n`)))(trustReviewLine(latestPlugin.config, mcp.node, targets.hookDir));
+      (options.log || ((line) => process.stdout.write(`${line}\n`)))(trustReviewLine(latestPlugin.config, mcp.node, targets.hookDir, messagingClient));
     }
     const {
       existingManagedMcp, pluginMcpServers, recoveredMcpServers,

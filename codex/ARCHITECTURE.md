@@ -40,7 +40,7 @@ The current installer recognizes the exact managed block from immediately before
 
 The hook adapter expands a framed `apply_patch` input into explicit file operations before `pre-privacy` evaluation. It accepts a raw patch string or an `input`/`patch`/`command` wrapper and checks every add, update, delete and move target. Ambiguous headers or missing targets retain a denied file-tool shape. The normalized input keeps the full original payload and a content view without diff prefixes, so protected paths in added/removed content remain visible to the existing privacy evaluator. The privacy guard, shell handling and best-effort post-hook scanner are unchanged.
 
-In the PreToolUse phases (`pre`, `pre-no-transcript`, `pre-privacy`) the adapter answers a wrapped guard's exit 2 with the documented Codex deny on stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}`, and exits 0. The reason is the guard's trimmed stderr, or a fixed text naming the guard when stderr is empty. Codex blocks only on exit 2 with a stderr reason or on that JSON with exit 0, and on Windows it runs `commandWindows` under pwsh, which reports a native exit 2 as 1, a non-blocking failure. The first blocking item of a multi-command payload answers alone; nothing after it runs, and output earlier items wrote to stdout is dropped so the deny stays the only JSON document. A guard's own JSON on exit 0 passes through, any other exit keeps its code, and the PostToolUse `post` phase is unchanged (issue #258).
+In the PreToolUse phases (`pre`, `pre-no-transcript`, `pre-privacy`) the adapter answers a wrapped guard's exit 2 with the documented Codex deny on stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}`, and exits 0. The reason is the guard's trimmed stderr, or a fixed text naming the guard when stderr is empty. Codex blocks only on exit 2 with a stderr reason or on that JSON with exit 0, and on Windows it runs `commandWindows` under pwsh, which reports a native exit 2 as 1, a non-blocking failure. The first blocking item of a multi-command payload answers alone; nothing after it runs, and output earlier items wrote to stdout is dropped so the deny stays the only JSON document. A guard's own JSON on exit 0 passes through, any other exit keeps its code, and the PostToolUse `post` phase is unchanged (issue #258). The phase `pre-intent` (issue #538) carries the messaging intent hook: its deny reasons are fixed text with the basename and the installer as repair path, the guard's stderr is not forwarded, and its allow passes only with `updatedInput` equal to the call's `tool_input` plus a UUID `requestId`.
 
 ## Post-edit dispatcher
 
@@ -166,7 +166,8 @@ The Control Plane messaging client is a separate opt-in stdio projection selecte
 runtime, installed bridge and non-secret config-root paths only. The installer copies the bridge,
 intent hook and their public Control Plane dependency graph together. It also renders one exact
 PreToolUse matcher for the five messaging tools. The hook supplies updated arguments after durable
-intent registration and adds no approval decision.
+intent registration and adds no approval decision. Its entry runs through the hook adapter's
+`pre-intent` phase, which denies when the hook cannot run or prints anything but its contract.
 
 The bridge reads current policy and the private credential for every HTTP call, so rotation and
 disable take effect without restarting the stdio process. It verifies POSIX ownership and private

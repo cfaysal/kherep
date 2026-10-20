@@ -80,6 +80,12 @@ for (const windows of [false, true]) {
         assert.equal(group[0], beforePre[index]![0]);
         assert.equal(group.length, 2);
         assert.match(group[1]!, /^command = .*codex-hook-adapter\.mts\\" \\".*\\" \\"pre\\""$/m);
+      } else if (group[0]!.includes("^mcp__kherep_messaging__")) {
+        // Issue #538: the messaging intent entry now runs through the adapter in pre-intent.
+        assert.equal(group[0], beforePre[index]![0]);
+        assert.equal(group.length, 2);
+        assert.match(group[1]!, /^command = .*codex-hook-adapter\.mts\\" \\".*intent\.mts\\" \\"pre-intent\\" \\"--config-root\\" .*$/m);
+        assert.match(group[1]!, /^timeout = 15$/m);
       } else assert.deepEqual(index === mcpIndex ? group.slice(0, -1) : group, beforePre[index]);
     });
     assert.match(afterPre[shellIndex]!.at(-1)!, /codex-control-plane-hook\.mts\\" \\"attribution/);

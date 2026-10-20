@@ -339,7 +339,8 @@ function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
     );
     return [
       ...[...currentVariants, ...beforeControlPlaneWindowsVariants].flatMap((value) =>
-        [parityConfig.renderBeforeShellDispatcher(value), parityConfig.renderBeforeAdaptedDirectGuards(value)]),
+        [parityConfig.renderBeforeShellDispatcher(value), parityConfig.renderBeforeAdaptedDirectGuards(value),
+          parityConfig.renderBeforeAdaptedIntentHook(value)]),
       ...[...currentVariants, ...beforeControlPlaneWindowsVariants,
         beforeWindowsCommands, beforeControlPlane].flatMap((current) => {
         const previousStop = { ...current, observationStopHook: false };

@@ -208,6 +208,24 @@ function beforeAdaptedDirectGuards(config: string, hookDir: string): string {
   return config;
 }
 
+// Issue #538. The messaging intent entry as the installer renders it now (adapted) and as
+// every installer before wrote it (direct, timeout 10).
+function intentCommands(codexHome: string, outbox: string): { adapted: string; direct: string } {
+  const intentHook = path.join(codexHome, "orchestra", "control-plane", "node", "mcp-intent-hook.mts");
+  const configRoot = path.dirname(path.dirname(path.resolve(outbox)));
+  const adapter = path.join(codexHome, "hooks", "kherep-maestro", "codex-hook-adapter.mts");
+  return { adapted: command(process.execPath, adapter, intentHook, "pre-intent", "--config-root", configRoot),
+    direct: command(process.execPath, intentHook, "--config-root", configRoot) };
+}
+
+function beforeAdaptedIntentHook(config: string, codexHome: string, outbox: string): string {
+  const { adapted, direct } = intentCommands(codexHome, outbox);
+  const entry = (value: string, timeout: number): string =>
+    `command = ${JSON.stringify(value)}\ncommandWindows = ${JSON.stringify(`& ${value}`)}\ntimeout = ${timeout}\n`;
+  assert.equal(occurrences(config, entry(adapted, 15)), 1, "the adapted intent entry must be present exactly once");
+  return config.replace(entry(adapted, 15), entry(direct, 10));
+}
+
 // Reconstruct the exact pre-#386 group before deriving older fixtures. Every
 // installer before issue #503 wrote this checkout into the Control Plane hooks.
 function beforeShellDispatcher(config: string, hookDir: string): string {
@@ -1843,6 +1861,11 @@ test("installs the disabled-by-default messaging client with its public dependen
   const clientTable = mcpTable(config, "kherep_messaging");
   const clientHook = config.split(`matcher = ${JSON.stringify(matcher)}`)[1]!.split("[[hooks.")[0]!;
   assert.doesNotMatch(`${clientTable}\n${clientHook}`, /Authorization|Bearer|token|approval_mode/i);
+  // Issue #538: the intent entry runs through the adapter in pre-intent; the direct form is gone.
+  const { adapted: adaptedIntent, direct: directIntent } = intentCommands(codexHome, installOptions.controlPlaneOutbox);
+  assert.equal(occurrences(config, `command = ${JSON.stringify(adaptedIntent)}\n`
+    + `commandWindows = ${JSON.stringify(`& ${adaptedIntent}`)}\ntimeout = 15\n`), 1);
+  assert.equal(occurrences(config, `command = ${JSON.stringify(directIntent)}`), 0);
   for (const relative of [
     "protocol.mts", "protocol-mcp.mts", "protocol-messages.mts", "protocol-task-control.mts", "protocol-tasks.mts",
     "node/config.mts", "node/inbox.mts", "node/mcp-local.mts", "node/mcp-credential-file.mts",
@@ -1970,6 +1993,27 @@ test("T13 replacing the managed block prints one trust-review line naming the th
   assert.ok(!fresh.lines.some((line) => line.startsWith("config.toml: the managed hook block")), fresh.lines.join("\n"));
   const config = fs.readFileSync(fresh.result.targets.config, "utf8");
   fs.writeFileSync(fresh.result.targets.config, beforeAdaptedDirectGuards(config, path.join(codexHome, "hooks", "kherep-maestro")));
+  const upgrade = logged();
+  assert.deepEqual(upgrade.lines.filter((line) => line.startsWith("config.toml:")), [LINE]);
+  assert.equal(fs.readFileSync(upgrade.result.targets.config, "utf8"), config);
+  const again = logged();
+  assert.ok(!again.lines.some((line) => line.startsWith("config.toml:")), again.lines.join("\n"));
+});
+
+// Issue #538: an upgrade from a c44f3e4 messaging block changes only the intent entry, and the
+// trust-review line names it and none of the part 4 guards.
+test("T14 replacing a c44f3e4 messaging block prints one trust-review line naming the messaging intent entry", (t) => {
+  const { root, codexHome, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const LINE = "config.toml: the managed hook block was replaced; Codex skips a changed hook definition until it is reviewed and trusted in /hooks"
+    + " (this upgrade changes the messaging intent entry, which does not run until then)";
+  const logged = (): { lines: string[]; result: ReturnType<typeof install> } => {
+    const lines: string[] = [];
+    return { lines, result: install({ ...installOptions, messagingClient: true, log: (line: string) => { lines.push(line); } }) };
+  };
+  const fresh = logged();
+  const config = fs.readFileSync(fresh.result.targets.config, "utf8");
+  fs.writeFileSync(fresh.result.targets.config, beforeAdaptedIntentHook(config, codexHome, installOptions.controlPlaneOutbox));
   const upgrade = logged();
   assert.deepEqual(upgrade.lines.filter((line) => line.startsWith("config.toml:")), [LINE]);
   assert.equal(fs.readFileSync(upgrade.result.targets.config, "utf8"), config);
