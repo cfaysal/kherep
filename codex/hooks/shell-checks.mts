@@ -92,7 +92,7 @@ async function recheck(payload: string, broken: boolean, remaining: () => number
     return lib.runRecheck({ script, home, payload, budgetMs, ...context, trigger: "codex-shell-checks", env: { CODEX_HOME: home } });
   };
   const notice = await run().catch((error) => `hook integrity re-check unavailable (lib/guard-recheck.mts cannot be loaded: ${firstLine(error)})`);
-  return [...peers, ...(notice ? [notice] : [])].join("\n") || undefined;
+  return [...peers, notice].filter(Boolean).join("\n") || undefined;
 }
 
 // deadline: an absolute end (ms since the epoch), a test seam; raw: the payload as read, for the re-check.

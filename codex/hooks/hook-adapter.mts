@@ -409,9 +409,8 @@ function emit(verdict: Verdict | undefined, stderr: string, notice?: string): vo
   if (verdict?.decision === "deny") {
     const lines = notice ? notice.split("\n") : [];
     const integrity = notice ? `Kherep hook integrity: ${lines[0]}${lines.length > 1 ? ` (+${lines.length - 1} more)` : ""}` : "";
-    // The guard's own systemMessage first, then the integrity line (issue #507, part 4).
-    const systemMessage = [verdict.system, integrity].filter(Boolean).join("\n");
-    doc = render(verdict, systemMessage ? { systemMessage } : {});
+    // render() writes the guard's own systemMessage; the integrity line follows it (issue #507, part 4).
+    doc = render(verdict, integrity ? { systemMessage: [verdict.system, integrity].filter(Boolean).join("\n") } : {});
   } else {
     doc = render(notice ? combine([...(verdict ? [verdict] : []), { reason: "", notice }]) : verdict);
   }
