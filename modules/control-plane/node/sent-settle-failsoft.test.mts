@@ -156,41 +156,59 @@ test("F3: the start pass skips a corrupt record, logs a failed write, settles th
   for (const n of [40, 41, 42]) assert.equal(getMessage(paths.inbox, id(n)), null);
 });
 
-test("F4: startDaemon settles an answered record before its inbox purge removes the reply", async (t) => {
+test("F4: startDaemon settles an answered record before its purge, and its client settles a reply on arrival", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-settle-daemon-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const paths = nodePaths(root);
   fs.mkdirSync(paths.dir, { recursive: true });
   const identity = generateIdentity();
   writePrivateKey(paths.privateKey, identity);
+  fs.writeFileSync(paths.policy, JSON.stringify(DEFAULT_POLICY));
   const config: NodeConfig = { version: 1, controlUrl: "https://control.example.invalid", nodeId: NODE, name: "synthetic-node",
     publicKey: identity.publicKey, privateKeyFile: paths.privateKey, policyFile: paths.policy, enrolledAt: new Date(0).toISOString() };
   const past = Date.now() - 8 * DAY;
   const message = sent(paths, 1, past);
   reply(paths, 40, message, past + 5);
-  // No Worker: a socket that never opens and closes on stop, and no interval timers (daemon-exchange.test.mts).
+  // No Worker: an open socket whose frames the test feeds and records, and no interval timers (daemon-exchange.test.mts).
   const original = { socket: globalThis.WebSocket, interval: globalThis.setInterval, clear: globalThis.clearInterval };
   t.after(() => {
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: original.socket });
     globalThis.setInterval = original.interval;
     globalThis.clearInterval = original.clear;
   });
-  const listeners = new Map<string, (event: { code?: number }) => void>();
+  const listeners = new Map<string, (event: { code?: number; data?: string }) => void>();
+  const out: string[] = [];
   Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: class {
     static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
-    readyState = 0;
-    addEventListener(name: string, callback: (event: { code?: number }) => void) { listeners.set(name, callback); }
-    send(_data: string) {}
+    readyState = 1;
+    addEventListener(name: string, callback: (event: { code?: number; data?: string }) => void) { listeners.set(name, callback); }
+    send(data: string) { out.push(data); }
     close(code = 1000) { this.readyState = 3; listeners.get("close")?.({ code }); }
   } });
   globalThis.setInterval = (() => ({ interval: 0 })) as unknown as typeof setInterval;
   globalThis.clearInterval = (() => {}) as typeof clearInterval;
   const logs: string[] = [];
   const handle = startDaemon(config, paths, (line) => logs.push(line), async () => []);
-  handle.stop();
-  await handle.done;
+  t.after(() => handle.stop());
   assert.equal(getSent(paths, message)?.state, "replied", logs.join("\n"));
   assert.equal(getMessage(paths.inbox, id(40)), null, "the reply was purged");
   const settled = logs.indexOf("kherep-node: recorded 1 sent message(s) replied before the inbox purge");
   assert.ok(settled >= 0 && settled < logs.indexOf("kherep-node: removed 1 inbox message(s) older than 7 days"), logs.join("\n"));
+
+  // On arrival (the storeMessage callback in daemon.mts): a reply through the daemon's own socket, with no hook run.
+  const answered = sent(paths, 2, Date.now());
+  const frame = (type: "event" | "message.deliver", body: unknown, seq: number): void =>
+    listeners.get("message")?.({ data: JSON.stringify(makeEnvelope(type, body, seq, 0)) });
+  listeners.get("open")?.({});
+  frame("event", { name: "auth.ok" }, 0);
+  frame("message.deliver", replyBody(41, answered), 1);
+  const deadline = Date.now() + 5_000;
+  while (!getMessage(paths.inbox, id(41)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(getMessage(paths.inbox, id(41)), logs.join("\n"));
+  assert.equal(getSent(paths, answered)?.state, "replied", logs.join("\n"));
+  const accepted = out.map((raw) => parseEnvelope(raw)).some((parsed) => parsed.ok && parsed.envelope.type === "message.status"
+    && JSON.stringify(parsed.envelope.body) === JSON.stringify({ messageId: id(41), state: "accepted" }));
+  assert.ok(accepted, out.join("\n"));
+  handle.stop();
+  await handle.done;
 });
