@@ -84,7 +84,19 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
       }
       continue;
     }
-    if (!ended && now >= Date.parse(record.deadline)) {
+    // Issue #544: the run is measured before the deadline stop. A root that is no
+    // longer the recorded process (ended, or its pid reused after a reboot or
+    // downtime past the deadline) settles below from the run's own outcome, and
+    // only its recorded descendants are ended (issue #233); the process that
+    // holds the pid now is read once, for its start time, and never signalled.
+    let running: boolean;
+    try {
+      running = !ended && await stillRuns(codex, record.pid, record.pidStart);
+    } catch (error) {
+      log(`kherep-node: task ${record.taskId}: ${String((error as Error).message ?? error)}`);
+      continue; // a failed read decides nothing
+    }
+    if (running && now >= Date.parse(record.deadline)) {
       if (mapped.sessionId !== record.sessionId) writeTask(deps.paths, mapped, now);
       try {
         await stopCodex({ taskId: record.taskId }, deps, MAX_RUNTIME_REASON);
@@ -92,13 +104,6 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
         log(`kherep-node: could not stop task ${record.taskId}: ${String((error as Error).message ?? error)}`);
       }
       continue;
-    }
-    let running: boolean;
-    try {
-      running = !ended && await stillRuns(codex, record.pid, record.pidStart);
-    } catch (error) {
-      log(`kherep-node: task ${record.taskId}: ${String((error as Error).message ?? error)}`);
-      continue; // a failed read decides nothing
     }
     // Issue #197: a live run whose turn shows no progress (run-progress.mts) is
     // stopped and failed; its messages are offered again, the runtime probed again.
@@ -128,6 +133,10 @@ export async function watchCodexTasks(deps: RunnerDeps, log: (line: string) => v
         if (!record.running) queueReport(deps.paths, { taskId: saved.taskId, state: saved.state, ...sessionOf(saved) });
       }
       continue;
+    }
+    // Issue #544: why a run without exit.json settles here, for the operator.
+    if (!ended) {
+      log(`kherep-node: task ${record.taskId}: its root (pid ${record.pid ?? "unknown"}) is no longer the recorded process; settled from its outcome`);
     }
     // Reported done by the session (task done), or a run for peer messages:
     // released without a new report.

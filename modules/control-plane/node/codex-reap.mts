@@ -28,7 +28,7 @@ const sameIdentities = (a: readonly ProcessIdentity[], b: readonly ProcessIdenti
 export async function refreshDescendants(codex: CodexDeps, record: TaskRecord): Promise<ProcessIdentity[] | null> {
   if (record.pid === undefined) return null;
   const previous = record.descendants ?? [];
-  const tree = await processTree(codex, record.pid, previous);
+  const tree = await processTree(codex, record.pid, previous, record.pidStart);
   const root = tree.find((entry) => entry.pid === record.pid);
   if (!root || (record.pidStart !== undefined && root.start !== record.pidStart)) return null;
   const descendants = tree.filter((entry) => entry.pid !== record.pid).slice(0, MAX_DESCENDANTS);
