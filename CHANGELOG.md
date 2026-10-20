@@ -153,6 +153,15 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Windows: `writeJsonAtomic` (daemon.json, inbox records, task and session
+  records, receipt.json) retries the replace-by-rename on `EPERM`, `EBUSY` and
+  `EACCES` up to 8 attempts with 10–640 ms backoff (1.27 s in total) while
+  another process holds the target open; the temporary file is removed only
+  after the last attempt and the original error is rethrown unchanged. A
+  `kherep-node service upgrade` is less likely to fail at stage `health` with
+  recovery `restored` when a reader briefly holds `daemon.json` open while the
+  new daemon records its state; a hold longer than the budget still fails the
+  write as before. POSIX is unchanged (issue #540).
 - The three Codex guards that still ran directly now run through the
   fail-closed hook adapter (issue #507, part 4 of 4, the last part).
   `atlassian-destructive-guard.mts --runtime codex` (last entry of the Agent,

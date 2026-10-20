@@ -9,7 +9,9 @@ import { listenerDir } from "./autonomy.mts";
 import { NodeClient } from "./client.mts";
 import { nodePaths, type NodeConfig } from "./config.mts";
 import { startDaemon } from "./daemon.mts";
-import { carriedOver, daemonStateFile, pidAlive, readDaemonState, withVerdict, type DaemonState } from "./daemon-state.mts";
+import {
+  carriedOver, daemonStateFile, pidAlive, readDaemonState, recordDaemonState, withVerdict, type DaemonState,
+} from "./daemon-state.mts";
 import { generateIdentity, writePrivateKey } from "./identity.mts";
 
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -122,4 +124,30 @@ test("a ready Claude verdict clears the interrupted probe; a not-ready one keeps
   assert.deepEqual(withVerdict(state, "codex", { ready: true, at }).interruptedProbe, interruptedProbe);
   const cleared = withVerdict(state, "claude", { ready: true, at });
   assert.equal(JSON.parse(JSON.stringify(cleared)).interruptedProbe, undefined);
+});
+
+// Issue #540: on Windows a reader that briefly holds daemon.json open no
+// longer costs the record; the retried rename writes it without a log line.
+test("win32: a transient EPERM on the daemon.json rename still records the state", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-daemon-state-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = nodePaths(root);
+  fs.mkdirSync(paths.dir, { recursive: true });
+  const platform = Object.getOwnPropertyDescriptor(process, "platform") as PropertyDescriptor;
+  const rename = fs.renameSync;
+  let calls = 0;
+  t.mock.method(fs, "renameSync", (from: fs.PathLike, to: fs.PathLike) => {
+    if (calls++ === 0) throw Object.assign(new Error("synthetic hold"), { code: "EPERM" });
+    return rename(from, to);
+  });
+  const lines: string[] = [];
+  const state: DaemonState = { pid: process.pid, startedAt: new Date(0).toISOString() };
+  try {
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    recordDaemonState(paths, state, (line) => lines.push(line));
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
+  assert.deepEqual(lines, []);
+  assert.deepEqual(readDaemonState(paths), state);
 });

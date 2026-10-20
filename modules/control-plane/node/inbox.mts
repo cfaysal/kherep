@@ -98,13 +98,37 @@ export function proxiedFileOf(dir: string, messageId: string): string {
   return path.join(dir, "proxied", `${messageId}.json`);
 }
 
+// Issue #540: on Windows a replace-by-rename fails with EPERM, EBUSY or EACCES
+// while another process holds the target (or the temp) open. There it is
+// retried after these pauses, 8 attempts and 1.27 s at most; the last error is
+// rethrown unchanged. Every other platform and code gets a single attempt.
+export const RENAME_RETRY_DELAYS_MS: readonly number[] = [10, 20, 40, 80, 160, 320, 640];
+const RETRYABLE_WIN32_RENAME = new Set(["EPERM", "EACCES", "EBUSY"]);
+const pause = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+export interface RenameDeps { platform?: NodeJS.Platform; sleep?: (ms: number) => void }
+
+export function renameReplacing(temp: string, file: string, deps: RenameDeps = {}): void {
+  const { platform = process.platform, sleep = pause } = deps;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.renameSync(temp, file);
+      return;
+    } catch (error) {
+      if (platform !== "win32" || attempt === RENAME_RETRY_DELAYS_MS.length
+        || !RETRYABLE_WIN32_RENAME.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      sleep(RENAME_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
 // Temp file plus rename, so a reader never sees a half-written record. Also
-// used for the other files the daemon and the session tools exchange.
-export function writeJsonAtomic(file: string, value: unknown): void {
+// used for the other files the daemon and the session tools exchange. The temp
+// is removed only after the last rename attempt.
+export function writeJsonAtomic(file: string, value: unknown, deps: RenameDeps = {}): void {
   const temp = path.join(path.dirname(file), `.${path.basename(file)}.${crypto.randomUUID()}.tmp`);
   fs.writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: "wx" });
   try {
-    fs.renameSync(temp, file);
+    renameReplacing(temp, file, deps);
   } catch (error) {
     fs.rmSync(temp, { force: true });
     throw error;
