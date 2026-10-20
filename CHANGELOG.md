@@ -257,6 +257,18 @@ increments the minor version; every other release increments the patch version.
   the force after a timeout each compare the child held when the stop began
   after the awaited read, right before the send. Such a stop still completes
   when a fresh read confirms that the captured processes ended.
+- Import closure of a linked hook (issue #524). A wired hook file that is a
+  link, or sits in a linked directory, now has its relative imports resolved
+  from the real directory of the file Node loads and bounded by the real hooks
+  directory, then named under the wired hooks directory: in the Claude
+  integrity run, in its final read-only proof (from the same snapshot as the
+  syntax verdict) and in `codex-hook-integrity.mts`. Before, imports were
+  resolved from the alias directory, so a dependency the hook never loads could
+  be checked and the one it loads missed, also where a `..` crosses a linked
+  hooks root, and a healthy decoy beside the alias could let the heartbeat be
+  written. A link whose target lies outside the hooks directory contributes no
+  imports; the alias still names the file in reports and the journal; restore
+  targets are unchanged.
 
 ## [0.4.0] - 2026-10-18
 

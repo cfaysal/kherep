@@ -22,6 +22,12 @@
  * the closure against the install manifest with these same functions. A
  * leading byte order mark (PowerShell 5.1, Notepad) is dropped before the scan.
  *
+ * A file that is a link, or sits in a linked directory, is loaded by Node from its
+ * target (issue #524): when the reader names the real path, its imports resolve
+ * from the real directory, bounded by the real hooks directory, and are named
+ * under the wired hooks directory. Known limit: a link in the middle of a
+ * specifier path (`../<alias>/x.mts` back through the alias) is not followed.
+ *
  * Runtime-neutral on purpose: hooks directory and readers are parameters, so a
  * Codex counterpart can reuse the walk. Paths are strings (workspace-scope), so
  * POSIX and Windows payloads resolve the same way.
@@ -34,8 +40,10 @@ import { isWithinPath, joinPathLike, normalizePathLike } from "./workspace-scope
 
 export type HookFile = { file: string; rel: string };
 export type InventoryEntry = HookFile & { wired: boolean; importedBy: string[] };
+// `real` is the path the bytes were read from; imports resolve from there, as Node does.
+export type SourceText = { text: string; real?: string };
 // Returns the source to scan, or null when there is none to read.
-export type SourceReader = (file: string, rel: string) => string | null;
+export type SourceReader = (file: string, rel: string) => string | SourceText | null;
 
 const SETTINGS_FILES = ["settings.json", "settings.user.json"];
 const errorCode = (error: unknown): string | undefined => (error ? (error as NodeJS.ErrnoException).code : undefined);
@@ -176,8 +184,11 @@ export function relativeSpecifiers(source: string): string[] {
 // hooksDir are skipped like a wired file outside it: not this inventory's
 // business, and never a place a restore may write to. Case-insensitive dedupe,
 // a visited set ends cycles, importedBy names every importer by its rel path.
-export function hookInventory(roots: HookFile[], hooksDir: string, readSource: SourceReader): InventoryEntry[] {
+const parentOf = (p: string): string => p.slice(0, p.lastIndexOf("/"));
+export function hookInventory(roots: HookFile[], hooksDir: string, readSource: SourceReader,
+  realHooksDir: string = hooksDir): InventoryEntry[] {
   const dir = normalizePathLike(hooksDir);
+  const realDir = normalizePathLike(realHooksDir) || dir;
   const byKey = new Map<string, InventoryEntry>();
   const queue: InventoryEntry[] = [];
   for (const { file, rel } of roots) {
@@ -188,14 +199,24 @@ export function hookInventory(roots: HookFile[], hooksDir: string, readSource: S
     queue.push(entry);
   }
   for (let next = queue.shift(); next; next = queue.shift()) {
-    const source = readSource(next.file, next.rel);
-    if (!source) continue;
-    const base = next.file.slice(0, next.file.lastIndexOf("/"));
-    for (const specifier of relativeSpecifiers(source)) {
+    const read = readSource(next.file, next.rel);
+    const source = typeof read === "string" ? { text: read } : read;
+    if (!source?.text) continue;
+    // A plain read resolves from the alias directory, bounded by dir. A read the reader
+    // names by its real path resolves from the real directory, bounded by the real hooks
+    // directory, as Node does. An importer whose real path lies outside the real hooks
+    // directory is skipped on purpose, even though its imports could point back inside:
+    // that file is not this inventory's business. The dependency is then named at the
+    // same place under dir.
+    const real = source.real ? normalizePathLike(source.real) : "";
+    if (real && !(isWithinPath(real, realDir) && real.length > realDir.length)) continue;
+    const [base, bound] = real ? [parentOf(real), realDir] : [parentOf(next.file), dir];
+    for (const specifier of relativeSpecifiers(source.text)) {
       // joinPathLike keeps a leading .. of the specifier; normalizing folds
       // lib/../x.mts onto x.mts, so both spellings share one dedupe key.
-      const file = normalizePathLike(joinPathLike(base, specifier));
-      if (!isWithinPath(file, dir) || file.length <= dir.length) continue;
+      const resolved = normalizePathLike(joinPathLike(base, specifier));
+      if (!isWithinPath(resolved, bound) || resolved.length <= bound.length) continue;
+      const file = bound === dir ? resolved : `${dir}${resolved.slice(bound.length)}`;
       let entry = byKey.get(file.toLowerCase());
       if (!entry) {
         entry = { file, rel: file.slice(dir.length + 1), wired: false, importedBy: [] };

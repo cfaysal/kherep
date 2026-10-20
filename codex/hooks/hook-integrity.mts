@@ -15,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import type { HookFile } from "../../claude/hooks/lib/hook-inventory.mts";
+import type { HookFile, SourceText } from "../../claude/hooks/lib/hook-inventory.mts";
 import type { ScopePayload } from "../../claude/hooks/lib/workspace-scope.mts";
 
 type Libs = typeof import("../../claude/hooks/lib/workspace-scope.mts") & typeof import("../../claude/hooks/lib/orchestra-checkout.mts") &
@@ -241,14 +241,20 @@ async function main(): Promise<void> {
   const wired = wiredHookFiles(parts, hooksDir);
   const lines = wired.length ? [] : [`no hook file under ${hooksDir} is wired in config.toml, so WHICH hooks run is UNKNOWN here`];
   // The live file, else the versioned one, so one broken file does not hide the files behind it.
-  const readSource = (file: string, rel: string): string | null => {
+  // A live file is named by its real path: Node loads its imports from there (issue #524).
+  const readSource = (file: string, rel: string): string | SourceText | null => {
+    const live = read(file);
+    if (typeof live !== "string" && live.length) {
+      const text = live.toString("utf8");
+      return { text: COMPUTED[rel] ? text + computedImports(rel) : text, real: realOrNull(file) ?? undefined };
+    }
     const source = sourceOf(rel);
-    const text = [file, repoRoot && "from" in source ? lib.joinPathLike(repoRoot, source.from) : ""]
-      .map((candidate) => (candidate ? read(candidate) : "")).find((bytes) => typeof bytes !== "string" && bytes.length)?.toString("utf8");
-    return COMPUTED[rel] ? `${text || ""}${computedImports(rel)}` : text || null;
+    const versioned = repoRoot && "from" in source ? read(lib.joinPathLike(repoRoot, source.from)) : "";
+    const text = typeof versioned === "string" ? "" : versioned.toString("utf8");
+    return COMPUTED[rel] ? `${text}${computedImports(rel)}` : text || null;
   };
 
-  for (const { file, rel, wired: isWired, importedBy } of lib.hookInventory(wired, hooksDir, readSource)) {
+  for (const { file, rel, wired: isWired, importedBy } of lib.hookInventory(wired, hooksDir, readSource, realOrNull(hooksDir) ?? hooksDir)) {
     const { state, reason, before = {} } = await classify(file, isWired ? "wired" : "imported");
     if (state === "OK") continue;
     const label = importedBy.length ? `${rel} (imported by ${importedBy.join(", ")})` : rel;

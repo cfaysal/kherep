@@ -13,7 +13,7 @@
 // Static imports: node:* only; the libs arrive as a parameter.
 import fs from "node:fs";
 
-import type { HookFile, InventoryEntry } from "./hook-inventory.mts";
+import type { HookFile, InventoryEntry, SourceText } from "./hook-inventory.mts";
 import type { Repairer, Restored } from "./integrity-verdict.mts";
 import type { ScopePayload } from "./workspace-scope.mts";
 
@@ -39,22 +39,26 @@ export async function runIntegrity(run: Run): Promise<void> {
   const state = { invalidated: false, blocked: "" };
   const repoRoot = lib.checkoutFor(payload, home);
   // The walk reads the live file, and the versioned one when the live file is
-  // gone or empty, so one broken link does not hide the files behind it.
-  const readSource = (file: string, rel: string): string | null => {
+  // gone or empty, so one broken link does not hide the files behind it. A live
+  // file is named by its real path, so its imports resolve where Node loads them
+  // from (issue #524); this walk is no proof, the final proof below is the gate.
+  const hooksDir = `${home}/hooks`;
+  let realHooks = hooksDir;
+  try { realHooks = fs.realpathSync(hooksDir); } catch { /* the wired spelling */ }
+  const readSource = (file: string, rel: string): string | SourceText | null => {
     for (const candidate of [file, repoRoot && lib.joinPathLike(repoRoot, `claude/hooks/${rel}`)]) {
-      try {
-        const text = candidate ? fs.readFileSync(candidate, "utf8") : "";
-        if (text) return text;
-      } catch {
-        /* next candidate */
-      }
+      let text = "";
+      try { text = candidate ? fs.readFileSync(candidate, "utf8") : ""; } catch { /* next candidate */ }
+      if (!text) continue;
+      if (candidate !== file) return text;
+      try { return { text, real: fs.realpathSync(file) }; } catch { return { text }; }
     }
     return null;
   };
   const seen = new Set<string>();
   let inventory: InventoryEntry[] = [];
   for (let pass = 0; ; pass++) {
-    inventory = lib.hookInventory(files, `${home}/hooks`, readSource);
+    inventory = lib.hookInventory(files, hooksDir, readSource, realHooks);
     const fresh = inventory.filter((entry) => !seen.has(entry.rel));
     if (!fresh.length) break;
     if (pass === 3) { unproven ||= "the import closure did not settle"; break; }

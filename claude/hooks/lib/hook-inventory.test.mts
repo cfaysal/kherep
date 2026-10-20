@@ -224,3 +224,65 @@ test("an entry path matches case-insensitively on Windows only", () => {
   assert.equal(sameEntryPath(a, b, "darwin"), false);
   assert.equal(sameEntryPath("C:/Users/X/.claude/kherep/hook-runtime/entry.mts", "c:/users/x/.CLAUDE/kherep/hook-runtime/entry.mts", "win32"), true);
 });
+
+// Issue #524. Node loads a linked hook from its real path, so its relative imports
+// resolve from the real directory, bounded by the real hooks directory, and are named
+// at the same place under the wired hooks directory. A reader names the real path by
+// returning { text, real }; a plain string resolves from the alias as before.
+type Read = string | { text: string; real?: string } | null;
+const linked = (sources: Record<string, Read>) => (file: string): Read => sources[file] ?? null;
+const relsOf = (inventory: { rel: string }[]): string[] => inventory.map((entry) => entry.rel);
+
+test("a file link: its imports resolve from the target's directory, not the alias's", () => {
+  const inventory = hookInventory([root("alias/guard.mts")], HOOKS, linked({
+    [`${HOOKS}/alias/guard.mts`]: { text: `import { x } ${from("./dep.mts")};`, real: `${HOOKS}/real/guard.mts` },
+    [`${HOOKS}/alias/dep.mts`]: `import { y } ${from("./leaf-alias.mts")};`,
+    [`${HOOKS}/real/dep.mts`]: { text: `import { y } ${from("./leaf-real.mts")};`, real: `${HOOKS}/real/dep.mts` },
+  }), HOOKS);
+  assert.deepEqual(relsOf(inventory), ["alias/guard.mts", "real/dep.mts", "real/leaf-real.mts"]);
+  assert.deepEqual(inventory.find((entry) => entry.rel === "real/dep.mts")?.importedBy, ["alias/guard.mts"]);
+});
+
+test("a directory link: a .. resolves from the real directory", () => {
+  const inventory = hookInventory([root("alias/link/guard.mts")], HOOKS, linked({
+    [`${HOOKS}/alias/link/guard.mts`]: { text: `import { x } ${from("../dep.mts")};`, real: `${HOOKS}/real/sub/guard.mts` },
+  }), HOOKS);
+  assert.deepEqual(relsOf(inventory), ["alias/link/guard.mts", "real/dep.mts"]);
+});
+
+test("a linked hooks root with another basename: a .. is resolved in the real namespace", () => {
+  const home = "/home/example/hooks";
+  const inventory = hookInventory([{ file: `${home}/guard.mts`, rel: "guard.mts" }], home, linked({
+    [`${home}/guard.mts`]: {
+      text: `import { x } ${from("../managed-hooks/dep.mts")};\nimport { y } ${from("../hooks/other.mts")};`,
+      real: "/srv/managed-hooks/guard.mts",
+    },
+    [`${home}/dep.mts`]: { text: "export {}", real: "/srv/managed-hooks/dep.mts" },
+  }), "/srv/managed-hooks");
+  assert.deepEqual(relsOf(inventory), ["guard.mts", "dep.mts"]);
+  assert.equal(inventory[1]?.file, `${home}/dep.mts`);
+  assert.deepEqual(inventory[1]?.importedBy, ["guard.mts"]);
+});
+
+test("a file whose real path lies outside the real hooks directory contributes no imports", () => {
+  const inventory = hookInventory([root("guard.mts")], HOOKS, linked({
+    [`${HOOKS}/guard.mts`]: { text: `import { a } ${from("./lib/a.mts")};`, real: "/srv/elsewhere/guard.mts" },
+  }), HOOKS);
+  assert.deepEqual(relsOf(inventory), ["guard.mts"]);
+  const transitive = hookInventory([root("guard.mts")], HOOKS, linked({
+    [`${HOOKS}/guard.mts`]: `import { a } ${from("./lib/a.mts")};`,
+    [`${HOOKS}/lib/a.mts`]: { text: `import { b } ${from("./b.mts")};`, real: "/srv/elsewhere/lib/a.mts" },
+  }), HOOKS);
+  assert.deepEqual(relsOf(transitive), ["guard.mts", "lib/a.mts"]);
+});
+
+test("a plain-string reader resolves from the alias directory in the four-argument form too", () => {
+  const sources = {
+    [`${HOOKS}/guard.mts`]: `import { a } ${from("./lib/a.mts")};\nimport { o } ${from("../outside.mts")};`,
+    [`${HOOKS}/lib/a.mts`]: `import { s } ${from("../shared.mts")};`,
+  };
+  const three = hookInventory([root("guard.mts")], HOOKS, reader(sources));
+  const four = hookInventory([root("guard.mts")], HOOKS, reader(sources), "/srv/managed-hooks");
+  assert.deepEqual(four, three);
+  assert.deepEqual(relsOf(four), ["guard.mts", "lib/a.mts", "shared.mts"]);
+});
