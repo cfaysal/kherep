@@ -47,6 +47,10 @@ export interface TaskRecord {
   // run, so the record stays counted and watched (limits, deadline) until
   // `claude agents` shows the session ended or the deadline stopped it.
   running?: boolean;
+  // Issue #541: failed max-runtime stops of the current run whose fresh status
+  // still showed a live process or decided nothing (task-watch.mts); the
+  // record is settled after MAX_STOP_ROUNDS.
+  stopAttempts?: number;
   // A record the Worker does not know (issue #102, closed-delivery.mts): an
   // intercom session the node started on its own, or (written before issue
   // #105) a closed session it resumed for peer messages. No task.report is

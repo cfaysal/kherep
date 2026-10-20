@@ -47,7 +47,8 @@ const reasonOf = (error: unknown): string => String((error as Error).message ?? 
 
 // The intercom record for the run: the working directory checked again, a new deadline.
 function rerunRecord(deps: RunnerDeps, task: TaskRecord, cwd: string, now: number): TaskRecord {
-  return { ...task, cwd, deadline: new Date(now + deps.policy.sessions!.maxRuntimeMinutes * 60_000).toISOString(), reason: undefined };
+  return { ...task, cwd, deadline: new Date(now + deps.policy.sessions!.maxRuntimeMinutes * 60_000).toISOString(), reason: undefined,
+    stopAttempts: undefined };
 }
 
 // task: an ended intercom session with a known session id. The record is

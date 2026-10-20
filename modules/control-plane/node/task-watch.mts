@@ -5,8 +5,9 @@ import { retireCopies } from "./copy-retire.mts";
 import { resolveDelivery, updateDeliverySession } from "./delivery-identity.mts";
 import { readdress } from "./inbox.mts";
 import { claudeProgressed, failStalledClaude, progressOverdue, refuseCarried, settleCarried } from "./run-progress.mts";
-import { agentRows, findRow, mapIds, runClaude, stopTask, type RunnerDeps } from "./session-runner.mts";
-import { isActive, listTasks, mappingPendingAt, queueReport, writeTask } from "./task-records.mts";
+import { agentRows, findRow, mapIds, markClaudeStopped, runClaude, stopTask, type RunnerDeps } from "./session-runner.mts";
+import { measureClaude } from "./task-control-claude.mts";
+import { isActive, listTasks, mappingPendingAt, queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
 
 // The watch round for started task sessions (issue #31, item 5), run with the
 // daemon's session snapshot. The `state` values of `claude agents --json`
@@ -17,6 +18,38 @@ import { isActive, listTasks, mappingPendingAt, queueReport, writeTask } from ".
 export const AGENT_STATES: Readonly<Record<string, TaskState>> = {
   working: "running", blocked: "needs-input", done: "done", failed: "failed", stopped: "stopped",
 };
+
+// Issue #541: a max-runtime stop that `claude stop` cannot confirm.
+export const MAX_STOP_ROUNDS = 10;
+export const STOP_UNCONFIRMED_NO_RUN = "max runtime reached; claude stop not confirmed, fresh status shows no live run";
+export const STOP_UNCONFIRMED_GAVE_UP = `max runtime reached; claude stop not confirmed after ${MAX_STOP_ROUNDS} rounds`;
+
+// After a failed max-runtime stop the run is measured as owner status measures
+// it. No live process measured (a session without one, no run version) settles
+// the record at once. A live process, also behind an ended row, and a
+// measurement that decides nothing (unknown) are stopped again next round, for
+// at most MAX_STOP_ROUNDS rounds counted on the record, so a daemon restart
+// neither resets nor prolongs them. The measurement may re-capture the process
+// identity, so every write starts from the record on disk.
+async function stopUnconfirmed(deps: RunnerDeps, mapped: TaskRecord, row: Record<string, unknown> | undefined, error: unknown,
+  log: (line: string) => void, now: number): Promise<void> {
+  const message = String((error as Error).message ?? error);
+  const measured = await measureClaude(mapped, deps, now);
+  const current = readTask(deps.paths, mapped.taskId);
+  if (!current || !isActive(current)) return; // settled by another writer meanwhile
+  const base = mapIds(current, row);
+  const attempt = (current.stopAttempts ?? 0) + 1;
+  if ((measured.processState === "closed" || measured.processState === "idle") && measured.runVersion === undefined) {
+    const saved = markClaudeStopped(deps, base, STOP_UNCONFIRMED_NO_RUN);
+    log(`kherep-node: task ${mapped.taskId}: max-runtime stop not confirmed (${message}); fresh status shows no live run (${measured.processState}), recorded ${saved.state}`);
+  } else if (attempt >= MAX_STOP_ROUNDS) {
+    const saved = markClaudeStopped(deps, base, STOP_UNCONFIRMED_GAVE_UP);
+    log(`kherep-node: task ${mapped.taskId}: max-runtime stop not confirmed after ${MAX_STOP_ROUNDS} rounds (${message}); recorded ${saved.state}`);
+  } else {
+    writeTask(deps.paths, { ...base, stopAttempts: attempt }, now);
+    log(`kherep-node: could not stop task ${mapped.taskId}: ${message} (attempt ${attempt} of ${MAX_STOP_ROUNDS})`);
+  }
+}
 
 export async function watchTasks(deps: RunnerDeps, log: (line: string) => void = () => {}): Promise<void> {
   await watchCodexTasks(deps, log);
@@ -45,7 +78,7 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
       try {
         await stopTask({ taskId: record.taskId }, deps, MAX_RUNTIME_REASON);
       } catch (error) {
-        log(`kherep-node: could not stop task ${record.taskId}: ${String((error as Error).message ?? error)}`);
+        await stopUnconfirmed(deps, mapped, row, error, log, now);
       }
       continue;
     }
