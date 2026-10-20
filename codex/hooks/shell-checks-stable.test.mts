@@ -42,6 +42,17 @@ export function handleAttributionHook(payload,runtime){fs.appendFileSync(${JSON.
   const pointer = path.join(home, "orchestra", "control-plane-source.json");
   fs.mkdirSync(path.dirname(pointer));
   fs.writeFileSync(pointer, JSON.stringify({ version: 1, root: source, kind: "checkout", verified: true }));
+  // Issue #507, part 4. This installed layout re-checks hook integrity unless the heartbeat is
+  // fresh and records both adapter copies as they are; these cases are about attribution only.
+  fs.copyFileSync(path.join(import.meta.dirname, "hook-adapter.mts"), path.join(hookDir, "codex-hook-adapter.mts"));
+  fs.mkdirSync(path.join(hookDir, "lib"));
+  fs.copyFileSync(path.join(import.meta.dirname, "..", "..", "claude", "hooks", "lib", "guard-recheck.mts"), path.join(hookDir, "lib", "guard-recheck.mts"));
+  const peers = Object.fromEntries(["codex-hook-adapter.mts", "hook-adapter.mts"].map((name) => {
+    const s = fs.statSync(path.join(hookDir, name), { bigint: true });
+    return [name, { dev: String(s.dev), ino: String(s.ino), size: String(s.size), mtimeNs: String(s.mtimeNs) }];
+  }));
+  fs.mkdirSync(path.join(home, ".cache", "hook-integrity"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".cache", "hook-integrity", "heartbeat.json"), `${JSON.stringify({ peers })}\n`);
   const run = () => spawnSync(process.execPath, [path.join(hookDir, "shell-checks.mts"), entry, "attribution", "--runtime", "codex"], {
     input: JSON.stringify(PAYLOAD), encoding: "utf8", timeout: 20_000,
     env: { ...process.env, KHEREP_CONFIG_DIR: root, KHEREP_WORKSPACE: root, CODEX_HOME: path.join(root, "elsewhere") },

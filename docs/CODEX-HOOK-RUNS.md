@@ -130,7 +130,10 @@ and one original-owner Desktop turn:
 1. Inspect an isolated candidate and its receipt against this PR. Preserve
    operator settings and the backup. Review the changed shell definition in
    `/hooks` and restart the affected native owner; unchanged trust bytes alone
-   do not activate a changed command.
+   do not activate a changed command. Since issue #507 part 4 the Atlassian
+   destructive, dispatch-contract and Playwright entries changed as well and
+   do not run until they are trusted there; the installer prints one line
+   saying so when it replaces the managed hook block.
 2. Use a synthetic Git repository under that workspace. Record starts by
    event and exact hook command for one benign shell lookup and one Edit,
    comparing the pre-change candidate with the new candidate. Expect three

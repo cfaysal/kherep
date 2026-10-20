@@ -75,6 +75,11 @@ for (const windows of [false, true]) {
         assert.equal(group[0], beforePre[index]![0], "shell group position and matcher stay intact");
         assert.equal(group.length, 2, "one dispatcher includes attribution");
         assert.match(group[1]!, /codex-shell-checks\.mts.*codex-control-plane-hook\.mts\\" \\"attribution/);
+      } else if (/Agent\|spawn_agent"$|mcp__playwright__browser_navigate"$/.test(group[0]!)) {
+        // Issue #507, part 4: the guard of these one-entry groups now runs through the adapter.
+        assert.equal(group[0], beforePre[index]![0]);
+        assert.equal(group.length, 2);
+        assert.match(group[1]!, /^command = .*codex-hook-adapter\.mts\\" \\".*\\" \\"pre\\""$/m);
       } else assert.deepEqual(index === mcpIndex ? group.slice(0, -1) : group, beforePre[index]);
     });
     assert.match(afterPre[shellIndex]!.at(-1)!, /codex-control-plane-hook\.mts\\" \\"attribution/);

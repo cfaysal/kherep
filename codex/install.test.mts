@@ -194,10 +194,24 @@ function beforePostEditDispatcher(config: string, hookDir: string): string {
   return withoutAtlassianDestructiveGuard(predecessor, hookDir).replace(/\n\n\[\[hooks\.PostToolUse\]\]\nmatcher = "\.\*"\n\n\[\[hooks\.PostToolUse\.hooks\]\]\ntype = "command"\ncommand = .*deliver-hook\.mts.*\n(?:commandWindows = .*\n)?timeout = 10(?=\n)/, "");
 }
 
+// Issue #507, part 4. The three guards that ran directly until then, as every
+// earlier installer wrote them: command and commandWindows of each, in place.
+function beforeAdaptedDirectGuards(config: string, hookDir: string): string {
+  const adapter = path.join(hookDir, "codex-hook-adapter.mts");
+  for (const [script, args] of [["atlassian-destructive-guard.mts", ["--runtime", "codex"]],
+    ["codex-dispatch-contract-guard.mts", []], ["playwright-file-guard.mts", []]] as const) {
+    const adapted = JSON.stringify(command(process.execPath, adapter, path.join(hookDir, script), "pre", ...args)).slice(1, -1);
+    const direct = JSON.stringify(command(process.execPath, path.join(hookDir, script), ...args)).slice(1, -1);
+    assert.ok(occurrences(config, `command = "${adapted}"`) === 1, `the adapted ${script} entry must be present exactly once`);
+    config = config.replaceAll(adapted, direct);
+  }
+  return config;
+}
+
 // Reconstruct the exact pre-#386 group before deriving older fixtures. Every
 // installer before issue #503 wrote this checkout into the Control Plane hooks.
 function beforeShellDispatcher(config: string, hookDir: string): string {
-  config = legacyForm(config, path.resolve(here, ".."));
+  config = legacyForm(beforeAdaptedDirectGuards(config, hookDir), path.resolve(here, ".."));
   const attribution = path.resolve(here, "..", "modules", "control-plane", "node", "attribution-hook.mts");
   const current = command(process.execPath, path.join(hookDir, "codex-shell-checks.mts"), attribution, "--runtime", "codex");
   const matcher = "Bash|shell_command|exec_command|functions\\.exec";
@@ -1905,4 +1919,60 @@ test("makes the Control Plane outbox a sandbox writable root without ever writin
   assert.equal(read(skipped.targets.config), inline);
   assert.equal(headers(inline), 0);
   assert.deepEqual(skipped.receipt.controlPlaneOutbox, { status: "skipped-inline-table" });
+});
+
+// Issue #507, part 4. The dispatch-contract guard runs through the adapter; its deny
+// reasons and its brief notice keep their top-level systemMessage (issue #505).
+test("T3b the wired dispatch-contract command keeps the guard's deny, notice and systemMessage", (t) => {
+  const { root, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const result = install(installOptions);
+  const config = fs.readFileSync(result.targets.config, "utf8");
+  const group = config.split("[[hooks.PreToolUse]]").find((block) => block.startsWith('\nmatcher = "Agent|spawn_agent"\n'))!;
+  const wired = JSON.parse(/^command = (".*")$/m.exec(group)![1]!) as string;
+  assert.match(wired, /codex-hook-adapter\.mts" ".*codex-dispatch-contract-guard\.mts" "pre"$/);
+  // A proven integrity run first, so no re-check notice joins the guard's output.
+  spawnSync(process.execPath, [path.join(result.targets.hookDir, "codex-hook-integrity.mts"), "--trigger", "fixture"],
+    { input: "{}", encoding: "utf8", windowsHide: true, env: { ...process.env, CODEX_HOME: undefined } });
+  const obsModel = fs.readFileSync(path.join(installOptions.codexHome, "agents", "codex-obs.toml"), "utf8").match(/^model = "(.*)"$/m)?.[1] ?? "";
+  const run = (extra: Record<string, unknown>) => {
+    const out = spawnSync(wired, { shell: true, encoding: "utf8", windowsHide: true, input: JSON.stringify({ hook_event_name: "PreToolUse",
+      tool_name: "spawn_agent", tool_input: { task_name: "obs", message: "m", agent_type: "codex-obs", ...extra } }) });
+    assert.equal(out.status, 0, out.stderr);
+    return out.stdout ? JSON.parse(out.stdout) as { hookSpecificOutput: Record<string, string>; systemMessage?: string } : undefined;
+  };
+  const denied = run({})!;
+  assert.equal(denied.hookSpecificOutput.permissionDecision, "deny");
+  assert.ok(denied.hookSpecificOutput.permissionDecisionReason!.includes(`pinned to model ${obsModel};`));
+  assert.equal(denied.systemMessage, denied.hookSpecificOutput.permissionDecisionReason);
+  const format = run({ model: obsModel })!;
+  assert.match(String(format.hookSpecificOutput.permissionDecisionReason), /^Observation brief format: the brief marks no finding/);
+  assert.equal(format.systemMessage, format.hookSpecificOutput.permissionDecisionReason);
+  const notice = run({ model: obsModel, message: "- measured: code `npm test` -> 42 pass" })!;
+  assert.equal(notice.hookSpecificOutput.permissionDecision, undefined, JSON.stringify(notice));
+  assert.match(String(notice.hookSpecificOutput.additionalContext), /^Observation brief revision: finding 1 \(measured:\) is code-bound/);
+  assert.equal(notice.systemMessage, notice.hookSpecificOutput.additionalContext);
+  assert.equal(run({ model: obsModel, message: "- measured: code kherep@2733b35e2c102ac54295568509c68b18b6d92cab `node t.mts` -> 1 pass\n- relayed: the operator" }), undefined);
+});
+
+// Issue #507, part 4 (lead decision 8): the trust review leaves the three changed
+// guards unrun until the operator trusts them, so the installer says so.
+test("T13 replacing the managed block prints one trust-review line naming the three guards", (t) => {
+  const { root, codexHome, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const LINE = "config.toml: the managed hook block was replaced; Codex skips a changed hook definition until it is reviewed and trusted in /hooks"
+    + " (this upgrade changes the atlassian-destructive-guard, codex-dispatch-contract-guard and playwright-file-guard entries, which do not run until then)";
+  const logged = (): { lines: string[]; result: ReturnType<typeof install> } => {
+    const lines: string[] = [];
+    return { lines, result: install({ ...installOptions, log: (line: string) => { lines.push(line); } }) };
+  };
+  const fresh = logged();
+  assert.ok(!fresh.lines.some((line) => line.startsWith("config.toml: the managed hook block")), fresh.lines.join("\n"));
+  const config = fs.readFileSync(fresh.result.targets.config, "utf8");
+  fs.writeFileSync(fresh.result.targets.config, beforeAdaptedDirectGuards(config, path.join(codexHome, "hooks", "kherep-maestro")));
+  const upgrade = logged();
+  assert.deepEqual(upgrade.lines.filter((line) => line.startsWith("config.toml:")), [LINE]);
+  assert.equal(fs.readFileSync(upgrade.result.targets.config, "utf8"), config);
+  const again = logged();
+  assert.ok(!again.lines.some((line) => line.startsWith("config.toml:")), again.lines.join("\n"));
 });

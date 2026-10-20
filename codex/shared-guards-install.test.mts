@@ -66,7 +66,7 @@ function wiredHooks(config: string): WiredHook[] {
   return found;
 }
 
-// Shell guards run through one installed dispatcher; Playwright stays direct.
+// Shell guards run through one installed dispatcher; Playwright through the adapter (issue #507, part 4).
 function wiredGuard(config: string, hookDir: string, guard: string): WiredHook {
   const target = guard === "playwright-file-guard" ? `${guard}.mts` : "codex-shell-checks.mts";
   const script = `"${path.join(hookDir, target)}"`;
@@ -213,7 +213,14 @@ test("missing or empty installed shell guards deny benign commands", (t) => {
       const original = fs.readFileSync(file);
       if (broken === "missing") fs.rmSync(file); else fs.writeFileSync(file, "");
       if (guard === "playwright-file-guard") {
-        assert.throws(() => assertGuardsBlock(config, hookDir), assert.AssertionError, `${broken} ${guard}`);
+        // Issue #507, part 4: through the adapter both navigations are denied naming the file. Broken
+        // again before each call: the adapter's re-check may restore it from the checkout.
+        for (const url of ["file:///C:/report/index.html", "http://localhost:8080/index.html"]) {
+          if (broken === "missing") fs.rmSync(file, { force: true }); else fs.writeFileSync(file, "");
+          const result = runWired(wiredGuard(config, hookDir, guard), { tool_name: "mcp__playwright__browser_navigate", tool_input: { url } });
+          assert.deepEqual([result.status, result.decision], [0, "deny"], `${broken} ${guard} ${url}: ${result.stderr}`);
+          assert.ok(String(result.reason).includes(`playwright-file-guard.mts cannot run (${broken === "missing" ? "missing" : "empty, 0 bytes"})`), String(result.reason));
+        }
       } else {
         const result = runWired(wiredGuard(config, hookDir, guard), {
           tool_name: "shell_command", tool_input: { command: "git status --short" }, cwd: hookDir,

@@ -16,8 +16,9 @@
  * before its first repair, walks the closure again after each repair pass
  * (lib/integrity-passes.mts, at most three), checks the live closure once more
  * read-only and writes <CODEX_HOME>/.cache/hook-integrity/heartbeat.json only
- * when all of that passed. `--trigger <source>` (the hook adapter's re-check)
- * prints plain lines instead of the SessionStart JSON.
+ * when all of that passed, with the fd-bound record of the three dispatcher files
+ * (issue #507, part 4). `--trigger <source>` (the re-check of the hook adapter or
+ * the shell dispatcher) prints plain lines instead of the SessionStart JSON.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -26,7 +27,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { HookFile, InventoryEntry, SourceText } from "../../claude/hooks/lib/hook-inventory.mts";
-import type { RunLock } from "../../claude/hooks/lib/integrity-heartbeat.mts";
+import type { PeerTuple, RunLock } from "../../claude/hooks/lib/integrity-heartbeat.mts";
 import type { Outcome } from "../../claude/hooks/lib/integrity-passes.mts";
 import type { ScopePayload } from "../../claude/hooks/lib/workspace-scope.mts";
 
@@ -44,8 +45,9 @@ const SELF = "kherep-maestro/codex-hook-integrity.mts";
 // dispatch-contract-guard.mts requires obs-brief-policy the same way (issue #331),
 // so the walk reads them as imports of the guard that loads them.
 const COMPUTED: Record<string, string[]> = {
-  // Registers the child guard edges appended by computedImports below.
-  "kherep-maestro/codex-shell-checks.mts": [],
+  // Registers the child guard edges appended by computedImports below; its re-check lib
+  // is loaded by a computed path like the adapter's (issue #507, part 4).
+  "kherep-maestro/codex-shell-checks.mts": ["guard-recheck"],
   "kherep-maestro/codex-privacy-boundary-guard.mts": ["workspace-scope", "private-path-policy", "private-path-rules", "real-path-policy"],
   "kherep-maestro/codex-dispatch-contract-guard.mts": ["obs-brief-policy"],
   // The adapter loads its re-check lib by a computed path (issue #507, part 3).
@@ -56,6 +58,9 @@ export const ALWAYS_CHECK = Object.values(COMPUTED).flat().map((name) => `./lib/
 const computedImports = (rel: string): string => (COMPUTED[rel] || []).map((name) => `\nimport "./lib/${name}.mts";`).join("")
   + (rel === "kherep-maestro/codex-shell-checks.mts"
     ? ["commit-guard", "deploy-guard", "main-checkout-guard"].map(name => `\nimport "./${name}.mts";`).join("") : "");
+// Issue #507, part 4. Files no hook checks for itself; each dispatcher compares the other's stat
+// with the record a proven run leaves in heartbeat.json "peers" (lib/integrity-heartbeat.mts provenPeer).
+const DISPATCHERS = new Set(["kherep-maestro/codex-hook-adapter.mts", "kherep-maestro/hook-adapter.mts", "kherep-maestro/codex-shell-checks.mts"]);
 const RENDERED = new Set(["kherep-maestro/codex-observation-stop.mts", "kherep-maestro/codex-observation-turn-completion.mts"]);
 // Copied from codex/hooks under their own name; every other plain name is a shared Claude guard.
 const CODEX_HELPERS = new Set(["acceptance-policy.mts", "obs-candidate-policy.mts", "research-common.mts", "research-exec-parser.mts",
@@ -82,7 +87,7 @@ const LOST = "the run lock was lost";
 export async function loadLibs(): Promise<LoadFailure | null> {
   const steps: [string, string[]][] = [
     ["workspace-scope.mts", ["isWithinPath", "joinPathLike", "normalizePathLike"]], ["orchestra-checkout.mts", ["checkoutFor", "isCheckout"]],
-    ["restore-write.mts", ["writeExact"]], ["integrity-heartbeat.mts", ["takeRunLock", "invalidateHeartbeat", "writeHeartbeat"]],
+    ["restore-write.mts", ["writeExact"]], ["integrity-heartbeat.mts", ["takeRunLock", "invalidateHeartbeat", "writeHeartbeat", "provenPeer"]],
     ["hook-inventory.mts", ["hookInventory"]], ["hook-syntax.mts", ["syntaxVerdict"]],
     ["integrity-verdict.mts", ["classify"]], ["integrity-passes.mts", ["repairPasses", "finalPass"]],
   ];
@@ -307,11 +312,18 @@ async function check(lock: RunLock, payload: ScopePayload | null, home: string, 
   const walk = (reader: typeof readSource) => (): InventoryEntry[] => lib.hookInventory(wired, hooksDir, reader, realHooks);
   const passes = await lib.repairPasses({ walk: walk(readSource), checkOne });
   unproven ||= passes.unproven;
-  if (!unproven) unproven = await lib.finalPass({ walk: walk(liveOnly), expected: passes.inventory,
-    classify: (entry) => lib.classify(lib, entry.file, entry.wired ? "wired" : "imported") });
+  // A dispatcher's record comes from its own fd-bound snapshot of the bytes judged, never from
+  // classify's stat; a dispatcher without one is re-checked by the other on its next call.
+  const peers: Record<string, PeerTuple> = {};
+  if (!unproven) unproven = await lib.finalPass({ walk: walk(liveOnly), expected: passes.inventory, classify: async (entry) => {
+    const verdict = await lib.classify(lib, entry.file, entry.wired ? "wired" : "imported");
+    const peer = verdict.state === "OK" && DISPATCHERS.has(entry.rel) ? await lib.provenPeer(entry.file, lib.syntaxVerdict) : null;
+    if (peer) peers[path.basename(entry.rel)] = peer;
+    return verdict;
+  } });
   if (!unproven && !lock.holding()) unproven = LOST;
   const files = passes.inventory.length;
-  if (!unproven) unproven = lib.writeHeartbeat(home, { trigger: TRIGGER, runtime: "codex", files });
+  if (!unproven) unproven = lib.writeHeartbeat(home, { trigger: TRIGGER, runtime: "codex", files, peers });
   if (PLAIN) lines.push(unproven ? `heartbeat not written (${unproven})` : `all ${files} files OK (${passes.restored} restored), heartbeat refreshed`);
   return lines;
 }

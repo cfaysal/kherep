@@ -143,6 +143,17 @@ test("2d. the raw adapter imported by the dispatcher is restored from codex/hook
   assertRestored(ctx, result, "hook-adapter.mts", "codex/hooks/hook-adapter.mts");
 });
 
+// Issue #507, part 4: the shell dispatcher loads the re-check lib by a computed path too.
+test("2e. a 0-byte lib/guard-recheck.mts is named as imported by both dispatchers and restored", (t) => {
+  const ctx = fixture(t);
+  fs.writeFileSync(path.join(ctx.hookDir, "lib", "guard-recheck.mts"), "");
+  const result = run(ctx);
+  const importers = /lib\/guard-recheck\.mts \(imported by ([^)]*)\)/.exec(String(result.context))?.[1] ?? "";
+  assert.match(importers, /kherep-maestro\/codex-hook-adapter\.mts/, String(result.context));
+  assert.match(importers, /kherep-maestro\/codex-shell-checks\.mts/, String(result.context));
+  assertRestored(ctx, result, "lib/guard-recheck.mts", "claude/hooks/lib/guard-recheck.mts");
+});
+
 test("3. a missing commit-guard.mts is restored", (t) => {
   const ctx = fixture(t);
   fs.rmSync(path.join(ctx.hookDir, "commit-guard.mts"));
@@ -249,7 +260,8 @@ test("10. the installed adapter without a heartbeat runs the installed integrity
   assert.equal(result.status, 0, result.stderr);
   const output = (JSON.parse(result.stdout) as { hookSpecificOutput: { permissionDecision?: string; additionalContext?: string } }).hookSpecificOutput;
   assert.equal(output.permissionDecision, undefined, result.stdout);
-  assert.match(String(output.additionalContext), /^hook integrity re-check \(no heartbeat, last OK none\):\n {2}- all \d+ files OK \(0 restored\), heartbeat refreshed$/);
+  // Issue #507, part 4: no heartbeat is no peers record, so the peer line comes first.
+  assert.match(String(output.additionalContext), /^\S.*codex-shell-checks\.mts cannot be trusted \(no proven record\)\nhook integrity re-check \(no heartbeat, last OK none\):\n {2}- all \d+ files OK \(0 restored\), heartbeat refreshed$/);
   const beat = JSON.parse(fs.readFileSync(path.join(ctx.codexHome, ".cache", "hook-integrity", "heartbeat.json"), "utf8"));
   assert.deepEqual([beat.trigger, beat.runtime], ["hook-adapter", "codex"]);
 });
