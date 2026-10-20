@@ -81,9 +81,11 @@ async function retrying<T>(until: number, attempt: () => Promise<T> | T, conn: O
   }
 }
 
-// Under one EXCLUSIVE transaction: replays a pending intent and commits.
+// Under one EXCLUSIVE transaction: replays a pending intent and commits. A write that
+// changes nothing proves the transaction writable first (coordinator-db.mts header).
 async function recoverOnce(o: Opened): Promise<void> {
   run(o.conn, "BEGIN EXCLUSIVE");
+  run(o.conn, "DELETE FROM pending WHERE 0");
   const result = applyPending(o, await recoveryWriter());
   run(o.conn, "COMMIT");
   if (result.state === "refused" && !result.cleared) throw refuse("recovery");
@@ -111,6 +113,7 @@ async function admitWriter(o: Opened, until: number, seen: Applied[] = []): Prom
       if (schemaState(o.conn) === "empty") initialize(o.conn);
       run(o.conn, "BEGIN EXCLUSIVE");
       if (schemaState(o.conn) !== "ready") throw refuse("schema");
+      run(o.conn, "DELETE FROM pending WHERE 0");
       const result = applyPending(o, await recoveryWriter());
       if (result.state === "none") return;
       run(o.conn, "COMMIT");
