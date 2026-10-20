@@ -153,6 +153,25 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- A Codex task past its max runtime whose recorded pid now belongs to another
+  process (after a reboot, or daemon downtime past the deadline) is no longer
+  stopped again every watch round for ever (issue #544). The watch now measures
+  the run by pid and start identity before the deadline stop, as it already
+  did after it: a run whose root is no longer the recorded process settles
+  from its own outcome in the next round (`done` after `turn.completed`,
+  otherwise `failed` with "codex ended without completing the turn"), and its
+  recorded descendants that still have their start identity are ended by pid
+  (issue #233); a run that ended on its own past the deadline is therefore
+  reported from its outcome, not as `stopped` at the max runtime. The node
+  logs `its root (pid <pid>) is no longer the recorded process; settled from
+  its outcome` for such a settle. A stop of such a run (the retried operator
+  stop, `POST /api/tasks/{id}/stop`) no longer lists or waits on the tree
+  under the reused pid: the capture is empty when a root the daemon does not
+  hold has lost its recorded start identity, and the task is recorded
+  `stopped`; that stop does not end the run's recorded descendants (a
+  follow-up); a run past its deadline whose root is gone is settled by the
+  watch, which does. The process that holds the pid now is read once, for its
+  start time, and never signalled.
 - The three Codex guards that still ran directly now run through the
   fail-closed hook adapter (issue #507, part 4 of 4, the last part).
   `atlassian-destructive-guard.mts --runtime codex` (last entry of the Agent,
