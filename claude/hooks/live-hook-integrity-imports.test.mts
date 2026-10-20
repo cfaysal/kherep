@@ -283,6 +283,38 @@ function chainBox(aLive: string): Box {
   }
 }
 
+// --- 15. and 16. a linked hook: its imports resolve from its real directory -----------
+// Issue #524. Node loads the target, so the lib it imports is the one beside the target;
+// a healthy decoy beside the alias must not hide it. On macOS the temp directory is
+// /var -> /private/var, so this also needs the real hooks directory for the bound.
+function linkedBox(wired: string, guardRel: string, specifier: string): Box {
+  const box = sandbox();
+  const guard = `import { x } ${from(specifier)};\nconsole.log(x);\n`;
+  fs.mkdirSync(path.join(box.hooks, path.dirname(guardRel)), { recursive: true });
+  fs.mkdirSync(path.join(box.hooks, "alias"), { recursive: true });
+  fs.mkdirSync(path.join(box.repoHooks, "real"), { recursive: true });
+  place(box, guardRel, { live: guard });
+  place(box, "real/dep.mts", { repo: LIB });
+  place(box, "alias/dep.mts", { live: LIB });
+  wire(box, `node ~/.claude/hooks/${wired}`);
+  return box;
+}
+function linkedCase(box: Box, wired: string): void {
+  const seen = run(box) || "";
+  check(`${wired}: the lib beside the target is measured`, seen.includes(`real/dep.mts (imported by ${wired})`), true);
+  check(`${wired}: and restored there`, live(box, "real/dep.mts"), LIB);
+  check(`${wired}: the decoy beside the alias is not inventoried`, seen.includes("alias/dep.mts"), false);
+}
+{
+  const box = linkedBox("alias/guard.mts", "real/guard.mts", "./dep.mts");
+  if (trySymlink(path.join(box.hooks, "real", "guard.mts"), path.join(box.hooks, "alias", "guard.mts"), "file")) linkedCase(box, "alias/guard.mts");
+}
+{
+  const box = linkedBox("alias/link/guard.mts", "real/sub/guard.mts", "../dep.mts");
+  fs.symlinkSync(path.join(box.hooks, "real", "sub"), path.join(box.hooks, "alias", "link"), "junction");
+  linkedCase(box, "alias/link/guard.mts");
+}
+
 try {
   fs.rmSync(TMP, { recursive: true, force: true });
 } catch {

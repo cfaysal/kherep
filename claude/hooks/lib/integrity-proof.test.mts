@@ -51,7 +51,7 @@ function tree(files: Record<string, string> = {}): Tree {
 }
 
 // The proof over the one wired file rel, with the real parsers unless `wrap` replaces one.
-function prove(t: Tree, rel: string, wrap: Partial<Record<"syntaxVerdict" | "esmParses" | "cjsParses", unknown>> = {}) {
+function prove(t: Tree, rel: string, wrap: Partial<Record<"syntaxVerdict" | "esmParses" | "cjsParses" | "hookInventory", unknown>> = {}) {
   const files: HookFile[] = [{ file: `${t.home}/hooks/${rel}`, rel }];
   const lib = { hookInventory: inventory.hookInventory, wiredFiles: () => ({ files, notes: [], uncoordinated: [], readAny: true }),
     syntaxVerdict: real.syntaxVerdict, esmParses: real.esmParses, cjsParses: real.cjsParses, ...wrap } as unknown as Libs;
@@ -271,4 +271,59 @@ test("a hook reached through a directory junction gets the package scope of its 
     return t.skip(`directory link: ${(error as NodeJS.ErrnoException).code ?? "unavailable"}`);
   }
   assert.equal((await prove(tr, "cjs/link/guard.js")).why, "");
+});
+
+// Issue #524. The imports of a linked hook come from the snapshot and resolve from its
+// real path, as Node loads them; a healthy decoy beside the alias proves nothing.
+// Fixture sources spell `from` through a helper: bootstrap/hook-require-resolution.test.mts
+// scans every hook file for a relative from-clause and would read a fixture as an import.
+const from = (specifier: string): string => `from "${specifier}"`;
+const importing = (specifier: string): string => `import { x } ${from(specifier)};\nconsole.log(x);\n`;
+
+for (const [label, realDep, aliasDep, why] of [["false green", BROKEN, GOOD, NOT_OK("real/dep.mts")], ["false red", GOOD, BROKEN, ""]]) {
+  test(`a file link resolves its imports from the target's directory: ${label}`, async (t) => {
+    const tr = tree({ "hooks/real/guard.mts": importing("./dep.mts"), "hooks/real/dep.mts": realDep!, "hooks/alias/dep.mts": aliasDep! });
+    if (!fileLink(t, path.join(tr.hooks, "alias", "guard.mts"), path.join(tr.hooks, "real", "guard.mts"))) return;
+    assert.equal((await prove(tr, "alias/guard.mts")).why, why);
+  });
+  test(`a directory junction inside the root resolves a .. from the real directory: ${label}`, async () => {
+    const tr = tree({ "hooks/real/sub/guard.mts": importing("../dep.mts"), "hooks/real/dep.mts": realDep!, "hooks/alias/dep.mts": aliasDep! });
+    fs.symlinkSync(path.join(tr.hooks, "real", "sub"), path.join(tr.hooks, "alias", "link"), "junction");
+    assert.equal((await prove(tr, "alias/link/guard.mts")).why, why);
+  });
+}
+
+// A home whose hooks/ is a junction to <case>/srv/managed-hooks: alias and physical root
+// have different basenames, so a .. across the root differs between the two namespaces.
+function linkedRoot(files: Record<string, string>): Tree {
+  const base = path.join(TMP, "node_modules", `case-${++seq}`);
+  const physical = path.join(base, "srv", "managed-hooks");
+  fs.mkdirSync(path.join(base, "example"), { recursive: true });
+  for (const [rel, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(base, rel)), { recursive: true });
+    fs.writeFileSync(path.join(base, rel), text);
+  }
+  const hooks = path.join(base, "example", "hooks");
+  fs.symlinkSync(physical, hooks, "junction");
+  return { home: normalizePathLike(path.join(base, "example")), hooks, root: fs.realpathSync(hooks) };
+}
+
+test("a linked hooks root with another basename: a .. back into the real root is checked", async () => {
+  for (const [dep, why] of [[BROKEN, NOT_OK("dep.mts")], [GOOD, ""]]) {
+    const tr = linkedRoot({ "srv/managed-hooks/guard.mts": importing("../managed-hooks/dep.mts"), "srv/managed-hooks/dep.mts": dep! });
+    assert.equal((await prove(tr, "guard.mts")).why, why);
+  }
+});
+
+test("a linked hooks root with another basename: a .. through the alias name leaves the root", async () => {
+  const tr = linkedRoot({ "srv/managed-hooks/guard.mts": importing("../hooks/dep.mts"),
+    "srv/hooks/dep.mts": GOOD, "srv/managed-hooks/dep.mts": BROKEN });
+  let rels: string[] = [];
+  const hookInventory = (...args: Parameters<typeof inventory.hookInventory>) => {
+    const found = inventory.hookInventory(...args);
+    rels = found.map((entry) => entry.rel);
+    return found;
+  };
+  assert.equal((await prove(tr, "guard.mts", { hookInventory })).why, "");
+  assert.deepEqual(rels, ["guard.mts"], "dep.mts is outside the real hooks directory, so it is not inventoried");
 });

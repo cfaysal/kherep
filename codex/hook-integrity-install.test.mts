@@ -217,6 +217,28 @@ test("8. a 0-byte rendered observation hook is reported only", (t) => {
   assert.equal(journal(ctx.codexHome)[0]?.restoreProven, false);
 });
 
+// Issue #524. Node loads a hook reached through a directory junction from its real
+// path, so `../dep.mts` is the file beside the real directory, not beside the alias.
+test("8b. a hook behind a directory junction has its imports resolved from the real directory", (t) => {
+  const ctx = fixture(t);
+  fs.mkdirSync(path.join(ctx.hookDir, "real", "sub"), { recursive: true });
+  fs.mkdirSync(path.join(ctx.hookDir, "alias"), { recursive: true });
+  fs.writeFileSync(path.join(ctx.hookDir, "real", "sub", "guard.mts"), `import { x } ${"from"} "../dep.mts";\nconsole.log(x);\n`);
+  fs.writeFileSync(path.join(ctx.hookDir, "real", "dep.mts"), "export const x = ;\n");
+  fs.writeFileSync(path.join(ctx.hookDir, "alias", "dep.mts"), "export const x = 1;\n");
+  fs.symlinkSync(path.join(ctx.hookDir, "real", "sub"), path.join(ctx.hookDir, "alias", "link"), "junction");
+  // Spelled under the real hook directory: a part under another spelling of it (macOS
+  // /var -> /private/var) is mapped through the real path of its directory, junction included.
+  const command = `"${process.execPath}" "${path.join(fs.realpathSync(ctx.hookDir), "alias", "link", "guard.mts")}"`;
+  fs.appendFileSync(ctx.config, `\n[[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = ${JSON.stringify(command)}\ntimeout = 30\n`);
+  const result = run(ctx);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(String(result.context),
+    /kherep-maestro\/real\/dep\.mts \(imported by [^)]*kherep-maestro\/alias\/link\/guard\.mts\): .*report only \(not installed by Kherep/);
+  assert.doesNotMatch(String(result.context), /alias\/dep\.mts/);
+  assert.equal(fs.readFileSync(path.join(ctx.hookDir, "real", "dep.mts"), "utf8"), "export const x = ;\n");
+});
+
 const PWSH = spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"], { windowsHide: true }).status === 0;
 
 test("9. the commandWindows form under pwsh is silent when healthy and restores the same way",

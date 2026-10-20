@@ -4,9 +4,9 @@
 // directory, the closure is walked once more from the live wired files only:
 // no versioned source stands in for a missing file here. Every file is read
 // once into a snapshot (bytes, SHA-256, identity), its imports come from that
-// snapshot, and its syntax is checked; before and after each check, and once
-// more for all of them at the end, the bytes on disk must still be the
-// snapshot. A file whose real path leaves the hooks directory is not covered by
+// snapshot and resolve from its real path (issue #524), and its syntax is
+// checked; before and after each check, and once more for all of them at the
+// end, the bytes on disk must still be the snapshot. A file whose real path leaves the hooks directory is not covered by
 // the hold and counts as unchecked. The wiring must read the same at the end.
 // Only then may the heartbeat be written. What this proves is the supported
 // inventory and syntax checks, not that every module can execute.
@@ -176,8 +176,8 @@ export async function finalProof(lib: ProofLibs, home: string, root: string, fil
   };
   const inventory = lib.hookInventory(files, `${home}/hooks`, (file) => {
     const snap = take(file);
-    return snap && snap.buf.length ? snap.buf.toString("utf8") : null;
-  });
+    return snap && snap.buf.length ? { text: snap.buf.toString("utf8"), real: snap.real } : null;
+  }, root);
   const count = inventory.length;
   for (const { file, rel } of inventory) {
     const snap = take(file);
