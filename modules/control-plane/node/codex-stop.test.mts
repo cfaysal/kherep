@@ -131,6 +131,7 @@ test("a root lost during capture cannot hide a surviving descendant", async () =
   assert.deepEqual(signals, []);
 });
 
+// A root reused during the capture, after its first read (the fake stands for that).
 test("a reused root seen during capture is not accepted as a stopped tree", async () => {
   const signals: NodeJS.Signals[] = [];
   await assert.rejects(terminate({ processTree: () => [{ pid: ROOT, start: "reused-root" }, TREE[1]],
@@ -144,6 +145,20 @@ test("a missing root with ended captured descendants needs no signal", async () 
   await terminate({ processTree: () => [TREE[1]], processStart: () => null,
     signal: () => { assert.fail("an ended tree must not be signalled"); } }, ROOT, "root-start");
 });
+
+// Issue #544: a root that no longer has its recorded start before the capture
+// (its pid reused after a reboot) owns no tree of the run; nothing under it is
+// listed, read or signalled, as for a pid without a process.
+for (const [name, rootStart] of [["reused", "reused-root"], ["free", null]] as const) {
+  test(`a root ${name} before the capture is treated as ended: its tree is not listed, nothing is signalled (issue #544)`, async () => {
+    const reads: number[] = [];
+    let listed = 0;
+    await terminate({ processStart: (pid) => { reads.push(pid); return pid === ROOT ? rootStart : null; },
+      processRelations: () => { listed += 1; return [{ pid: CHILD, ppid: ROOT }]; },
+      signal: () => { assert.fail("a foreign tree must not be signalled"); } }, ROOT, "root-start");
+    assert.deepEqual([reads, listed], [[ROOT], 0]);
+  });
+}
 
 // The runner's error when its timeout ended the child (issue #221; child-run.mts).
 const timeout = () => Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" });
@@ -178,7 +193,10 @@ test("a capture that timed out forces the verified root's tree and still fails t
 test("after a timeout only the recorded root is forced, and a failed force is reported (issue #221)", async () => {
   const signals: NodeJS.Signals[] = [];
   const signal = (_pid: number, sent: NodeJS.Signals) => { signals.push(sent); };
-  await assert.rejects(terminate({ processRelations: timesOut, processStart: () => "reused-root", signal }, ROOT, "root-start"),
+  // The root is the recorded process at the capture's first read and reused by the re-read after the timeout.
+  let rootReads = 0;
+  const reusedAfterCapture = () => (rootReads++ === 0 ? "root-start" : "reused-root");
+  await assert.rejects(terminate({ processRelations: timesOut, processStart: reusedAfterCapture, signal }, ROOT, "root-start"),
     /ETIMEDOUT; the root is no longer the recorded process, so nothing was forced/);
   await assert.rejects(terminate({ processRelations: () => { throw new Error("Add-Type failed"); },
     processStart: () => "root-start", signal }, ROOT, "root-start"), /^Error: Add-Type failed$/);

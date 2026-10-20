@@ -146,6 +146,14 @@ test("a refresh keeps the record when the root ended during the listing, and is 
   assert.deepEqual(await refreshDescendants(many.codex, record), [], "a tree without descendants clears the record");
 });
 
+test("a refresh whose root lost its recorded start lists nothing and keeps the record (issue #544)", async () => {
+  const proc = table();
+  proc.starts.set(ROOT, "reused-start");
+  const record = { taskId: taskId(9), pid: ROOT, pidStart: "root-start", descendants: [{ pid: CHILD, start: "child-start" }] } as TaskRecord;
+  assert.equal(await refreshDescendants(proc.codex, record), null);
+  assert.deepEqual(proc.reads, [ROOT], "only the root's start is read; the tree under the reused pid is not listed");
+});
+
 test("a stop of a run whose root already ended reaps its recorded descendants", async (t) => {
   const node = taskNode(t, { runtimes: ["codex"] });
   const proc = table();

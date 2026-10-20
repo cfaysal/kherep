@@ -160,19 +160,19 @@ test("a stop ends the whole process tree, codex behind a launcher included", pos
   await waitFor(async () => await gone(child) && await gone(node.runs()[0].pid), "the whole tree");
 });
 
-test("a pid this daemon no longer holds is signalled only with its recorded start time", posix, async (t) => {
+test("a pid this daemon no longer holds is never signalled; the stop records the task stopped (issue #544)", posix, async (t) => {
   // After a restart: the recorded pid now names another process (here: this test).
   const node = codexNode(t);
   writeTask(node.paths, { taskId: TASK, runtime: "codex", name: "task-3f2a1b0c", cwd: node.workspace, permissionMode: "auto", state: "started",
     startedAt: new Date(T0).toISOString(), deadline: new Date(T0 + 60 * 60_000).toISOString(), updatedAt: new Date(T0).toISOString(),
     sessionId: THREAD, pid: process.pid, pidStart: "Thu Jan  1 00:00:00 1970" });
   const signals: unknown[] = [];
-  // A reused root is not a signal target and cannot prove that the old tree ended.
-  await assert.rejects(stopTask({ taskId: TASK }, node.deps({ signal: (pid, signal) => { signals.push([pid, signal]); } })),
-    /root process identity changed during capture/);
+  // A reused root is never a signal target; the stop records the task stopped
+  // (issue #544). Its recorded descendants are dropped without a reap (follow-up).
+  await stopTask({ taskId: TASK }, node.deps({ signal: (pid, signal) => { signals.push([pid, signal]); } }));
   assert.deepEqual(signals, []);
-  assert.equal(readTask(node.paths, TASK)?.state, "started");
-  assert.deepEqual(node.reports(), []);
+  assert.equal(readTask(node.paths, TASK)?.state, "stopped");
+  assert.deepEqual(node.reports(), [{ taskId: TASK, state: "stopped", reason: "stopped by the operator", sessionId: THREAD }]);
 });
 
 test("an unknown process identity or failed signal never claims the task stopped", async (t) => {

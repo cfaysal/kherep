@@ -12,11 +12,16 @@ export interface ProcessIdentity { pid: number; start: string }
 // make a later reused pid a different process, never another kill target.
 // known (issue #233): start identities read earlier for descendant pids, kept
 // instead of read again; the root's start is always read.
-export async function processTree(deps: CodexDeps, root: number, known: readonly ProcessIdentity[] = []): Promise<ProcessIdentity[]> {
+// recordedStart (issue #544): the start identity the run recorded for root. A
+// root that no longer has it (ended, or its pid reused) is no process of the
+// run, and whatever holds the pid now owns the tree under it: nothing of that
+// tree is listed or read, and the result is empty, as for a pid without a process.
+export async function processTree(deps: CodexDeps, root: number, known: readonly ProcessIdentity[] = [],
+  recordedStart?: string): Promise<ProcessIdentity[]> {
   if (deps.processTree) return deps.processTree(root);
   const platform = deps.platform ?? process.platform;
   const rootStart = await startTimeOf(deps, root);
-  if (rootStart === null) return [];
+  if (rootStart === null || (recordedStart !== undefined && rootStart !== recordedStart)) return [];
   const relations = await (deps.processRelations?.() ?? (platform === "win32" ? windowsRelations() : posixRelations()));
   const descendants = new Set<number>([root]);
   let changed = true;
@@ -158,9 +163,14 @@ export async function terminate(deps: CodexDeps, pid: number, pidStart: string |
 async function terminateTree(deps: CodexDeps, pid: number, pidStart: string | undefined,
   child: ChildProcess | undefined): Promise<void> {
   if (pidStart === undefined && !child) throw new Error("process identity unknown");
-  const identities = await processTree(deps, pid);
+  // Issue #544: a root this daemon holds is the run's process whatever its start
+  // reads (process-start.mts); only an unheld root is compared with its recorded
+  // start before the capture, and one that lost it arrives below with nothing captured.
+  const identities = await processTree(deps, pid, [], child ? undefined : pidStart);
   // Issue #473: without a start time, a start read after the held child ended or
-  // was replaced is foreign; with one, the recorded start decides below.
+  // was replaced is foreign; with one, the recorded start decides below. The
+  // throw is left for a root that changed during the capture, after its first
+  // read, while a captured process still runs.
   if (pidStart === undefined && child && held.get(pid) !== child) throw new Error("the held process ended during capture; nothing signalled");
   const root = identities.find((entry) => entry.pid === pid);
   if (!root || (pidStart !== undefined && root.start !== pidStart)) {
