@@ -7,7 +7,7 @@ import {
 } from "../../protocol-messages.mts";
 import { FALLBACK_DELETE_MS, RETENTION_BATCH, TOMBSTONE_TTL_MS } from "../src/message-retention.mts";
 import { MessageStore } from "../src/message-store.mts";
-import { authenticate, enroll, FACTS, newKey, nextMessageStatus, registry, type NodeKey, type TestSocket } from "./helpers.mts";
+import { authenticate, enroll, FACTS, newKey, nextMessageStatus, registry, until, type NodeKey, type TestSocket } from "./helpers.mts";
 import { nodes } from "./message-proxy-fixture.mts";
 
 // Issue #308, PR 4: a message row is deleted once its sender acknowledged the
@@ -33,7 +33,11 @@ const deletes = (id: string) => query((sql) => sql.exec("SELECT actor, detail FR
 const settles = (id: string) => query((sql) => sql.exec("SELECT actor, detail FROM audit WHERE action = 'message.settle' AND detail LIKE ?",
   `%${id}%`).toArray());
 
-// Every frame up to the answer to a directory.get, which the Worker handles after all earlier frames.
+// The frames sent before the answer to a directory.get. The Worker starts
+// handling frames in order, but each frame reaches the Registry on its own
+// stub and there is no ordering between different stubs (issue #529): an empty
+// result does not prove that nothing was sent, a frame still awaiting the
+// Registry can follow. An expected frame is awaited with until().
 async function sync(socket: TestSocket): Promise<Envelope[]> {
   frame(socket, "directory.get", {});
   const frames: Envelope[] = [];
@@ -63,6 +67,36 @@ async function legacyRow(from: string, to: string, state = "delivered"): Promise
   await query((sql) => sql.exec(`INSERT INTO messages (id, from_node, from_session, to_node, to_session, state, created_at, updated_at,
     expires_at) VALUES (?, ?, 's-a', ?, 's-b', ?, 1, 1, 1)`, id, from, to, state));
   return id;
+}
+
+type Tx = { messageTx: (path: string, run: () => unknown) => Promise<unknown> };
+// Holds the Registry's answer to its next sendMessage until release(), after
+// the transaction committed. Forces the order of issue #529 (no ordering
+// between different stubs: a directory answer may precede a status sent
+// earlier) with a non-storage await, which keeps the Registry's input gate open
+// for the directory() call. restore() puts the method back: whether a patched
+// instance outlives the test is unknown, so it is not left to chance.
+async function holdNextSend(): Promise<{ release: () => void; restore: () => Promise<void> }> {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const original = await runInDurableObject(registry(), (instance) => {
+    const target = instance as unknown as Tx;
+    const original = target.messageTx;
+    let armed = true;
+    target.messageTx = async function (this: unknown, path, run) {
+      const result = await original.call(this, path, run);
+      if (path === "sendMessage" && armed) { armed = false; await held; }
+      return result;
+    };
+    return original;
+  });
+  return { release, restore: () => runInDurableObject(registry(), (instance) => { (instance as unknown as Tx).messageTx = original; }) };
+}
+
+// Issue #529, step 1: the ack landed, the row is gone and the tombstone is the expected one.
+async function deletedByAck(id: string, from: string, to: string): Promise<void> {
+  await vi.waitFor(async () => expect(await row(id)).toBeUndefined(), WAIT);
+  expect(await tombstone(id)).toMatchObject({ from_node: from, to_node: to, state: "delivered" });
 }
 
 describe("deletion after the sender's acknowledgement", () => {
@@ -118,28 +152,63 @@ describe("deletion after the sender's acknowledgement", () => {
   });
 
   it("answers a late resend and a late target report from the tombstone, and after the prune", async () => {
-    const { sender, target, b } = await pair();
+    const { a, sender, target, b } = await pair();
     const id = await deliveredMessage(sender, target, b.nodeId);
     ack(sender, id, "delivered");
     await sync(sender);
+    await deletedByAck(id, a.nodeId, b.nodeId);
     frame(sender, "message.send", { messageId: id, fromSession: "s-a", to: { nodeId: b.nodeId, session: "s-b" }, text: "synthetic" });
-    expect((await sync(sender)).map((envelope) => [envelope.type, envelope.body]))
+    expect((await until(sender, "message.status", { messageId: id, state: "delivered" })).map((envelope) => [envelope.type, envelope.body]))
       .toEqual([["message.status", { messageId: id, state: "delivered" } satisfies MessageStatusBody]]);
-    expect(await sync(target)).toEqual([]); // not delivered a second time
+    expect(await row(id)).toBeUndefined(); // answered from the tombstone: no row came back
+    expect(await sync(target)).toEqual([]); // nothing for the target before its directory answer
     const other = await node("retention-foreign");
     const foreign = await authenticate(other.nodeId, other.key);
     frame(foreign, "message.send", { messageId: id, fromSession: "s-c", to: { nodeId: b.nodeId, session: "s-b" }, text: "synthetic" });
-    expect((await sync(foreign))[0]).toMatchObject({ type: "error", body: { error: "duplicate messageId", messageId: id } });
+    const refused = await until(foreign, "error", { messageId: id });
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toMatchObject({ type: "error", body: { error: "duplicate messageId", messageId: id } });
 
     frame(target, "message.status", { messageId: id, state: "delivered" });
     frame(foreign, "message.status", { messageId: id, state: "delivered" });
-    expect((await sync(target)).map((envelope) => envelope.body)).toEqual([{ name: "message.receipt", messageId: id,
-      requestedState: "delivered", storedState: "delivered" }]);
+    expect((await until(target, "event", { name: "message.receipt", messageId: id, requestedState: "delivered" })).map((e) => e.body))
+      .toEqual([{ name: "message.receipt", messageId: id, requestedState: "delivered", storedState: "delivered" }]);
     expect(await sync(foreign)).toEqual([]);
     await query((sql) => sql.exec("DELETE FROM message_tombstones WHERE id = ?", id));
     frame(target, "message.status", { messageId: id, state: "accepted" });
-    expect((await sync(target)).map((envelope) => envelope.body)).toEqual([{ name: "message.receipt", messageId: id,
-      requestedState: "accepted", storedState: "expired" }]);
+    expect((await until(target, "event", { name: "message.receipt", messageId: id, requestedState: "accepted" })).map((e) => e.body))
+      .toEqual([{ name: "message.receipt", messageId: id, requestedState: "accepted", storedState: "expired" }]);
+  });
+
+  // Issue #529: the status of a resend reaches the socket after the answer to a
+  // later directory.get. The hold forces that order; sync() alone misses the status.
+  it("answers a resend whose status a directory answer overtakes", async () => {
+    const { a, sender, target, b } = await pair();
+    const id = await deliveredMessage(sender, target, b.nodeId);
+    ack(sender, id, "delivered");
+    await sync(sender);
+    await deletedByAck(id, a.nodeId, b.nodeId);
+    const hold = await holdNextSend();
+    try {
+      frame(sender, "message.send", { messageId: id, fromSession: "s-a", to: { nodeId: b.nodeId, session: "s-b" }, text: "synthetic" });
+      expect(await sync(sender)).toEqual([]); // the failure shape of CI run 39371064143: the directory answer comes first under the hold
+      hold.release();
+      expect((await until(sender, "message.status", { messageId: id, state: "delivered" })).map((e) => [e.type, e.body]))
+        .toEqual([["message.status", { messageId: id, state: "delivered" } satisfies MessageStatusBody]]);
+      expect(await row(id)).toBeUndefined();
+      expect(await sync(sender)).toEqual([]);
+    } finally {
+      hold.release();
+      await hold.restore();
+    }
+  });
+
+  it("until() names the frames seen when the awaited frame never comes", async () => {
+    const { sender, target, b } = await pair();
+    const id = await deliveredMessage(sender, target, b.nodeId);
+    ack(sender, id, "accepted"); // refused by the frame validator: one error frame, then silence
+    await expect(until(sender, "message.status", { messageId: id, state: "replied" })).rejects.toThrow(
+      /^no message\.status \{"messageId":"[^"]+","state":"replied"\} after \[\["error",\{"error":"invalid message\.status\.ack body"\}\]\]$/);
   });
 });
 
