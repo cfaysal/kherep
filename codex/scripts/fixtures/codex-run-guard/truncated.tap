@@ -1,0 +1,19 @@
+TAP version 13
+# Subtest: one passes
+ok 1 - one passes
+  ---
+  duration_ms: 1.5
+  type: 'test'
+  ...
+# Subtest: alpha posix only
+ok 2 - alpha posix only # SKIP
+  ---
+  duration_ms: 0.1
+  type: 'test'
+  ...
+# Subtest: beta needs pwsh
+ok 3 - beta needs pwsh # SKIP pwsh is not on PATH
+  ---
+  duration_ms: 0.1
+  type: 'test'
+  ...

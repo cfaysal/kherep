@@ -5,7 +5,8 @@
 // that check name. Coverage holds only while three things agree: the shard map,
 // the bootstrap/*.test.mts population, and the suite list and gate in ci.yml.
 // The matrix also carries the hooks, control-plane and codex suites (codex runs
-// `npm run test:codex`, issue #534); they are not in the shard map.
+// the test:codex file set through codex/scripts/codex-run-guard.mts, issues
+// #534 and #550); they are not in the shard map.
 // The workflow is scanned as plain text; the repository has no YAML parser and
 // this guard does not need one.
 import assert from "node:assert/strict";

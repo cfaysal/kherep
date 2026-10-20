@@ -1,0 +1,34 @@
+{
+  "$comment": "Issue #550. The accepted shape of a CI run of the test:codex file set per platform, checked by codex-run-guard.mts. Update the list in the same pull request that adds, removes or rewords a skip or changes its condition; on a skip difference the CI step log prints the observed list between the 'observed skips' markers. Raise minTests only after a measured run, never above the smaller platform's test count.",
+  "minTests": 600,
+  "measured": {
+    "win32": "CI run 39514324729 (push to main 990032c), job unit-windows (codex) 118942725807, Node 24.21.0, windows-2025-vs2026 20261007.264.1: tests 650, skipped 12",
+    "linux": "CI run 39514324729 (push to main 990032c), jobs typescript 118942725487 (Node 24.22.0), unit-engines-floor (22.18.0) 118942724978, unit-engines-floor (24.1.0) 118942725438, ubuntu-24.04 20261018.339.1: tests 650, skipped 8"
+  },
+  "skips": {
+    "win32": [
+      { "name": "T1.5 a grandchild that holds the guard's pipe: denied as timed out at the cap", "reason": null },
+      { "name": "T1b renderBeforeAdaptedDirectGuards reproduces the 3054123 render byte for byte", "reason": "the 3054123 byte pins are POSIX renders; T1c covers win32" },
+      { "name": "C2 renderBeforeAdaptedIntentHook reproduces the c44f3e4 render byte for byte", "reason": "the c44f3e4 byte pins are POSIX renders; C3 covers win32" },
+      { "name": "C6 with the messaging client disabled the render is byte-identical to c44f3e4", "reason": "the c44f3e4 byte pin is a POSIX render" },
+      { "name": "codex execpolicy loads the Windows launcher rule and allows only msg subcommands", "reason": "codex is not on PATH" },
+      { "name": "codex execpolicy loads the macOS launcher rule and allows only msg subcommands", "reason": "codex is not on PATH" },
+      { "name": "recognizes complete preserved upgrade artifacts while rejecting modified guards", "reason": "External preserved upgrade fixture not supplied" },
+      { "name": "requires a private registry on POSIX", "reason": null },
+      { "name": "POSIX native command shell passes every accepted argument literally", "reason": null },
+      { "name": "metadata app-server closes its exact owned process group after catalog success", "reason": null },
+      { "name": "metadata deadline kills the owned server without any real Codex or auth call", "reason": null },
+      { "name": "resolveWorkspace keeps a POSIX workspace on a POSIX host", "reason": null }
+    ],
+    "linux": [
+      { "name": "PowerShell parses the rendered broker path without interpolation", "reason": null },
+      { "name": "codex execpolicy loads the Windows launcher rule and allows only msg subcommands", "reason": "codex is not on PATH" },
+      { "name": "codex execpolicy loads the macOS launcher rule and allows only msg subcommands", "reason": "codex is not on PATH" },
+      { "name": "recognizes complete preserved upgrade artifacts while rejecting modified guards", "reason": "External preserved upgrade fixture not supplied" },
+      { "name": "native selection rejects Windows-unrepresentable bindings without changing old three-field compatibility", "reason": null },
+      { "name": "native CA path survives the actual Windows command shell", "reason": null },
+      { "name": "every new native command argument rejects Windows expansion bytes before emission", "reason": null },
+      { "name": "resolveWorkspace turns an MSYS drive path into the Windows drive", "reason": null }
+    ]
+  }
+}
