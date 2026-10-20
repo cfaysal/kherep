@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import { toBashPath } from "./render-profile-paths.mts";
 
@@ -152,6 +152,19 @@ test("an identical install is idempotent and a changed explicit root creates a r
   assertProtected(f);
 });
 
+// A host without the symlink privilege refuses symlinkSync with EPERM; the symlink
+// cases skip there, as the other symlink tests do, and CI proves them (issue #534).
+function symlinked(t: TestContext, make: () => void): boolean {
+  try {
+    make();
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+    t.skip("symlink creation unavailable (EPERM)");
+    return false;
+  }
+}
+
 test("refuses modified, extra and symlinked managed targets before overwrite", { skip: BASH_SKIP }, async (t) => {
   const cases: Array<[string, (f: Fixture) => void, RegExp]> = [
     ["drift", (f) => fs.appendFileSync(path.join(f.target, "mcp.json"), "changed"), /client drift/],
@@ -163,10 +176,11 @@ test("refuses modified, extra and symlinked managed targets before overwrite", {
       /symlink|real directory/],
   ];
   for (const [name, mutate, expected] of cases) {
-    await t.test(name, () => {
+    await t.test(name, (st) => {
       const f = fixture(t);
       assert.equal(install(f).status, 0);
-      mutate(f);
+      if (name !== "symlink") mutate(f);
+      else if (!symlinked(st, () => mutate(f))) return;
       const before = fs.lstatSync(f.target).isSymbolicLink() ? fs.readlinkSync(f.target) : treeDigest(f.target);
       const result = install(f);
       assert.notEqual(result.status, 0);
@@ -182,7 +196,7 @@ test("refuses a symlink target ancestor without writing through it", { skip: BAS
   const f = fixture(t);
   const outside = path.join(f.root, "outside");
   fs.mkdirSync(outside);
-  fs.symlinkSync(outside, path.join(f.home, "kherep"));
+  if (!symlinked(t, () => fs.symlinkSync(outside, path.join(f.home, "kherep")))) return;
   const result = install(f);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /symlink ancestor/);
