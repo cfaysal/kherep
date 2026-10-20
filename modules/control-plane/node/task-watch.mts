@@ -78,7 +78,9 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
       try {
         await stopTask({ taskId: record.taskId }, deps, MAX_RUNTIME_REASON);
       } catch (error) {
-        await stopUnconfirmed(deps, mapped, row, error, log, now);
+        // A failed read, measurement or write here decides nothing and never aborts the round.
+        await stopUnconfirmed(deps, mapped, row, error, log, now).catch((failed: unknown) => log(
+          `kherep-node: could not stop task ${record.taskId}: ${String((error as Error).message ?? error)} (${String((failed as Error).message ?? failed)})`));
       }
       continue;
     }
