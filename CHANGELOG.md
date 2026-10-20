@@ -192,7 +192,8 @@ increments the minor version; every other release increments the patch version.
   (10) rounds, counted on the task record (`stopAttempts`) so a daemon restart
   does not reset it, then recorded `stopped` with the reason "max runtime
   reached; claude stop not confirmed after 10 rounds". Each outcome is logged
-  once. Codex tasks are not changed here; the Codex deadline stop still
+  once; a failure while handling the unconfirmed stop is logged and the watch
+  round goes on with the other tasks. Codex tasks are not changed here; the Codex deadline stop still
   retries every round when the recorded pid was reused by a live foreign
   process (issue #544).
 - The three Codex guards that still ran directly now run through the
