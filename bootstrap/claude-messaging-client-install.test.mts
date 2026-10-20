@@ -159,7 +159,8 @@ function symlinked(t: TestContext, make: () => void): boolean {
     make();
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+    const { code, syscall } = error as NodeJS.ErrnoException;
+    if (code !== "EPERM" || syscall !== "symlink") throw error;
     t.skip("symlink creation unavailable (EPERM)");
     return false;
   }
