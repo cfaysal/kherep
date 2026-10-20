@@ -152,8 +152,8 @@ async function background(deps: RunnerDeps, launched: TaskRecord, args: string[]
     writeTask(deps.paths, { ...launched, state: "failed", reason: "no session id printed" });
     return refuse(deps, record.taskId, `claude --bg printed no session id: ${trim(output)}`);
   }
-  // Every launch is a new run: a continue drops the previous run's process identity.
-  const { pid, pidStart, descendants, ...launch } = record;
+  // Every launch is a new run: a continue drops the previous run's process identity and failed stops.
+  const { pid, pidStart, descendants, stopAttempts, ...launch } = record;
   let mapped: TaskRecord = { ...launch, shortId, state: "started" };
   try {
     const row = findRow(await agentRows(deps), mapped);
@@ -237,7 +237,7 @@ export async function stopTask(args: SessionStopArgs, deps: RunnerDeps, reason =
 // owner stop): a task whose session already reported done stays done.
 export function markClaudeStopped(deps: RunnerDeps, record: TaskRecord, reason: string): TaskRecord {
   const reportedDone = record.state === "done";
-  const saved = writeTask(deps.paths, { ...record, state: reportedDone ? "done" : "stopped", reason, running: undefined }, deps.now?.());
+  const saved = writeTask(deps.paths, { ...record, state: reportedDone ? "done" : "stopped", reason, running: undefined, stopAttempts: undefined }, deps.now?.());
   if (!reportedDone) {
     queueReport(deps.paths, { taskId: saved.taskId, state: "stopped", reason, ...(saved.sessionId ? { sessionId: saved.sessionId } : {}) });
   }
