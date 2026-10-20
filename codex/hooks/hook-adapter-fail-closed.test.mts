@@ -193,12 +193,13 @@ test("no guard, a relative guard path or stdin that is no JSON object is a deny 
   }
 });
 
-test("HOOK_TIMEOUT_MS equals the timeout of both rendered pre-privacy adapter entries", () => {
+// Issue #507, part 4: the three former direct guards are adapter entries too.
+test("HOOK_TIMEOUT_MS equals the timeout of all five rendered PreToolUse adapter entries", () => {
   const source = fs.readFileSync(ADAPTER, "utf8");
   const pinned = Number(/^const HOOK_TIMEOUT_MS = ([\d_]+);/m.exec(source)?.[1]?.replaceAll("_", ""));
   const config = renderHooks({ contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks", node: "node" } as Parameters<typeof renderHooks>[0]);
   const entries = config.split(/^\[\[hooks\.PreToolUse\.hooks\]\]$/m).slice(1)
-    .filter((block) => /codex-hook-adapter\.mts[^\n]*codex-privacy-boundary-guard\.mts\\" \\"pre-privacy\\"/.test(block));
-  assert.equal(entries.length, 2, "both privacy groups");
+    .filter((block) => /^command = .*codex-hook-adapter\.mts[^\n]*\\" \\"pre(?:-privacy)?\\"/m.test(block));
+  assert.equal(entries.length, 5, "both privacy groups and the Atlassian, dispatch-contract and Playwright guards");
   for (const block of entries) assert.equal(Number(/^timeout = (\d+)$/m.exec(block)?.[1]) * 1000, pinned);
 });

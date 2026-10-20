@@ -145,6 +145,61 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- The three Codex guards that still ran directly now run through the
+  fail-closed hook adapter (issue #507, part 4 of 4, the last part).
+  `atlassian-destructive-guard.mts --runtime codex` (last entry of the Agent,
+  web and MCP `PreToolUse` group), `codex-dispatch-contract-guard.mts` and
+  `playwright-file-guard.mts` are wired as
+  `"<node>" ".../codex-hook-adapter.mts" ".../<guard>" "pre" [guard arguments]`,
+  so a guard that is missing, empty, broken, killed or past its budget denies
+  the tool call with a reason that names the file, as the other Codex guard
+  groups have since part 3. The adapter passes a guard's top-level
+  `systemMessage` through when it is a non-empty string (Codex documents it
+  for `PreToolUse`), in its exported `runAdaptedHook` as in its command form,
+  so the dispatch-contract guard's deny reasons and its brief-revision notice
+  reach the session unchanged; any other extra field is still a deny. The
+  shell dispatcher `codex-shell-checks.mts` gets one integer clock ending
+  1.5 s before its 40 s hook timeout, which bounds stdin and every guard, and
+  after its guards, before attribution, starts `codex-hook-integrity.mts
+  --trigger codex-shell-checks` when the heartbeat is older than 30 minutes
+  or missing or a guard could not run, with at most 6 s of what is left;
+  attribution still runs uncapped after it, so the clock bounds the guards
+  and the re-check, not the final answer. Each dispatcher also checks the
+  other (`codex-shell-checks.mts` from the adapter, both adapter copies from
+  the shell dispatcher) and treats it as a guard failure when it is missing,
+  empty, not a regular file, unstatable, or when its device, inode, size or
+  modification time (nanoseconds) differs from what the last proven integrity
+  run recorded in `heartbeat.json` (`peers`). That run takes the record from
+  an fd-bound snapshot of exactly the bytes it syntax-checked (open, `fstat`
+  of that descriptor, read from it, the verdict on those bytes, then a re-stat
+  of the path and its real path) and records nothing when the verdict is not
+  OK or the path no longer names those bytes. The re-check then parses and
+  restores the peer, so a dispatcher broken after the last proven run is
+  restored by the next matched call of the other group, and a heartbeat
+  without that record triggers one re-check (once after every install).
+  Remaining gap: an in-place rewrite that keeps device, inode and size and
+  sets the modification time back to the recorded value (or lands within the
+  same tick on a filesystem with coarse timestamps) is seen only by the next
+  stale-heartbeat or session-start run, a defect the syntax check cannot see
+  (an import that does not resolve, a throw at load) is seen by no check, and
+  both dispatchers broken at once wait for the session start. These three
+  hook command definitions change, and their `commandWindows` forms with
+  them; group count and every entry index stay, so no positional trust key
+  moves and existing `[hooks.state]` bytes are kept. Codex marks exactly these
+  three definitions for review and skips them until they are trusted in
+  `/hooks`: until then the Atlassian destructive guard, the dispatch-contract
+  guard and the Playwright guard do not run; the installer prints one line
+  saying so when it replaces the managed hook block. The upgrade recognises
+  the exact previous block and refuses any other. Every Codex hook group is
+  listed with its fail-closed status in `docs/CODEX.md`: the optional
+  messaging intent group stays direct (it allows with `updatedInput`, waits up
+  to 8 s for its acknowledgement and lives outside `hooks/`, so the adapter
+  cannot carry it), the `Stop` and `SubagentStop` gates keep their own
+  `decision: block` contract, and the remaining events make no permission
+  decision. Whether Codex shows the notices is UNVERIFIED; no Windows CI job
+  runs the Codex suites yet. `codex/ARCHITECTURE.md` now describes the part 3
+  integrity state (eight libs, run lock, heartbeat, triggers).
+  This completes #507.
 - Fail-closed Codex hook adapter and Codex hook-integrity re-check (issue #507,
   part 3 of 4). `hooks/kherep-maestro/codex-hook-adapter.mts` now denies a
   `PreToolUse` tool call, with a reason that names the file, when its guard is

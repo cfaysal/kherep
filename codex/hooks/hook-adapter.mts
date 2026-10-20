@@ -168,7 +168,8 @@ const INVOKED_DIR = path.dirname(SELF);
 const DECISIONS = ["deny", "ask", "allow"] as const;
 type Decision = typeof DECISIONS[number];
 // No decision: a plain allow or a notice only. `broken`: the guard file could not run (a re-check follows).
-interface Verdict { decision?: Decision; reason: string; notice?: string; broken?: boolean }
+// `system`: the guard's top-level systemMessage (issue #507, part 4).
+interface Verdict { decision?: Decision; reason: string; notice?: string; system?: string; broken?: boolean }
 type Spawn = (command: string, args: string[], options: SpawnSyncOptionsWithStringEncoding) => SpawnSyncReturns<string>;
 // guardArgs reach the guard after its path; deadline is an absolute end (ms since the epoch); spawn is a test seam.
 export interface AdaptedOptions { guardArgs?: string[]; deadline?: number; spawn?: Spawn }
@@ -213,15 +214,18 @@ function printed(stdout: string): Verdict | string {
   if (!isObject(parsed) || !isObject(parsed.hookSpecificOutput)) return NOT_DECISION;
   const output = parsed.hookSpecificOutput;
   if (output.hookEventName !== "PreToolUse") return NOT_DECISION;
-  const extra = Object.keys(parsed).find((key) => key !== "hookSpecificOutput")
+  const extra = Object.keys(parsed).find((key) => key !== "hookSpecificOutput" && key !== "systemMessage")
     ?? Object.keys(output).find((key) => !FIELDS.includes(key));
   if (extra !== undefined) return `${NOT_DECISION} (unsupported field ${extra || '""'})`;
+  // Issue #507, part 4. Codex documents a top-level systemMessage for PreToolUse: a non-empty string passes through.
+  const { systemMessage } = parsed;
+  if (systemMessage !== undefined && (typeof systemMessage !== "string" || !systemMessage)) return `${NOT_DECISION} (invalid field systemMessage)`;
   const invalid = invalidField(output);
   if (invalid) return `${NOT_DECISION} (invalid field ${invalid})`;
   const { permissionDecision, permissionDecisionReason, additionalContext } = output;
   if (permissionDecision === undefined && additionalContext === undefined) return NOT_DECISION;
   return { decision: permissionDecision as Decision | undefined, reason: (permissionDecisionReason as string | undefined) ?? "",
-    ...(additionalContext ? { notice: additionalContext as string } : {}) };
+    ...(additionalContext ? { notice: additionalContext as string } : {}), ...(systemMessage ? { system: systemMessage as string } : {}) };
 }
 
 // error first: a grandchild that holds the pipe leaves status 0 with ETIMEDOUT.
@@ -250,14 +254,15 @@ function combine(verdicts: Verdict[]): Verdict | undefined {
   const reason = verdicts.filter((verdict) => decision && verdict.decision === decision)
     .map((verdict) => verdict.reason).filter(Boolean).join("\n");
   const notice = verdicts.map((verdict) => verdict.notice).filter(Boolean).join("\n");
+  const system = verdicts.map((verdict) => verdict.system).filter(Boolean).join("\n");
   if (!decision && !notice) return undefined;
-  return { decision, reason, ...(notice ? { notice } : {}) };
+  return { decision, reason, ...(notice ? { notice } : {}), ...(system ? { system } : {}) };
 }
 
 const render = (verdict: Verdict | undefined, top: Record<string, string> = {}): string => verdict ? JSON.stringify({
   hookSpecificOutput: { hookEventName: "PreToolUse", ...(verdict.decision ? { permissionDecision: verdict.decision } : {}),
     ...(verdict.reason ? { permissionDecisionReason: verdict.reason } : {}), ...(verdict.notice ? { additionalContext: verdict.notice } : {}) },
-  ...top }) : "";
+  ...(verdict.system ? { systemMessage: verdict.system } : {}), ...top }) : "";
 
 // The budget of one guard item: an integer, whatever the clock's fraction.
 export const budgetFor = (capEnd: number, hardEnd: number, now: number): number => Math.floor(Math.min(capEnd, hardEnd) - now);
@@ -343,13 +348,44 @@ function within<T, L>(work: Promise<T>, ms: number, late: () => L): Promise<T | 
 
 type RecheckLib = typeof import("../../claude/hooks/lib/guard-recheck.mts");
 
+// Issue #507, part 4. A peer dispatcher is proven only as the bytes the last integrity run judged:
+// that run records each dispatcher file's (dev, ino, size, mtimeNs) from an fd-bound snapshot in
+// heartbeat.json "peers" (lib/integrity-heartbeat.mts provenPeer). Any difference, no record, or a
+// peer that cannot run is a guard failure: the re-check parses and restores it; this process
+// compares one bigint stat with the record and parses nothing.
+const PEER_FIELDS = [["ino", "inode"], ["dev", "device"], ["size", "size"], ["mtimeNs", "mtime"]] as const;
+function recordedPeers(home: string): Record<string, unknown> | undefined {
+  try {
+    const { peers } = JSON.parse(fs.readFileSync(path.join(home, ".cache", "hook-integrity", "heartbeat.json"), "utf8")) as { peers?: unknown };
+    return isObject(peers) ? peers : undefined;
+  } catch { return undefined; }
+}
+function peerDrift(file: string, peers: Record<string, unknown> | undefined): string | undefined {
+  const record = peers?.[path.basename(file)];
+  if (!isObject(record)) return "no proven record";
+  let stat: fs.BigIntStats;
+  try { stat = fs.statSync(file, { bigint: true }); } catch (error) { return `stat failed: ${(error as NodeJS.ErrnoException).code ?? String(error)}`; }
+  const changed = PEER_FIELDS.find(([key]) => record[key] !== String(stat[key]));
+  return changed && `${changed[1]} changed since the last proven check`;
+}
+
 // The hook integrity re-check notice, or undefined; never a decision. Only the
 // installed copy (<home>/hooks/kherep-maestro) re-checks, through the installed
 // lib/guard-recheck.mts and codex-hook-integrity.mts beside it; no environment
-// variable is read. A broken lib throws here or at its first call.
+// variable is read. The shell dispatcher, which no hook checks for itself, is
+// checked first; a line about it heads the notice.
 async function recheck(payload: string, broken: boolean): Promise<string | undefined> {
   if (path.basename(INVOKED_DIR) !== "kherep-maestro" || path.basename(path.dirname(INVOKED_DIR)) !== "hooks") return undefined;
   const home = path.dirname(path.dirname(INVOKED_DIR));
+  const peer = path.join(INVOKED_DIR, "codex-shell-checks.mts");
+  const drift = unrunnable(peer) ?? peerDrift(peer, recordedPeers(home));
+  const notice = await recheckRun(home, payload, broken || drift !== undefined)
+    .catch((error) => `hook integrity re-check unavailable (lib/guard-recheck.mts cannot be loaded: ${firstLine(error)})`);
+  return drift ? `${peer} cannot be trusted (${drift})\n${notice}` : notice;
+}
+
+// A broken lib throws here or at its first call.
+async function recheckRun(home: string, payload: string, broken: boolean): Promise<string | undefined> {
   const loadMs = Math.min(RECHECK_LOAD_MS, remaining());
   const lib = await within(import(pathToFileURL(path.join(INVOKED_DIR, "lib", "guard-recheck.mts")).href) as Promise<RecheckLib>,
     loadMs, () => undefined);
@@ -372,7 +408,10 @@ function emit(verdict: Verdict | undefined, stderr: string, notice?: string): vo
   let doc: string;
   if (verdict?.decision === "deny") {
     const lines = notice ? notice.split("\n") : [];
-    doc = render(verdict, notice ? { systemMessage: `Kherep hook integrity: ${lines[0]}${lines.length > 1 ? ` (+${lines.length - 1} more)` : ""}` } : {});
+    const integrity = notice ? `Kherep hook integrity: ${lines[0]}${lines.length > 1 ? ` (+${lines.length - 1} more)` : ""}` : "";
+    // The guard's own systemMessage first, then the integrity line (issue #507, part 4).
+    const systemMessage = [verdict.system, integrity].filter(Boolean).join("\n");
+    doc = render(verdict, systemMessage ? { systemMessage } : {});
   } else {
     doc = render(notice ? combine([...(verdict ? [verdict] : []), { reason: "", notice }]) : verdict);
   }
@@ -406,9 +445,8 @@ async function main(target: string | undefined, phase: string): Promise<void> {
   if (!isObject(payload)) return emit(failure(SELF, "stdin is not a JSON object"), "");
   const result = preToolUse(target, phase, payload as HookPayload, Math.min(GUARD_TIMEOUT_MS, remaining()),
     { guardArgs: process.argv.slice(4), deadline: DEADLINE });
-  const notice = await within(recheck(raw, result.broken)
-    .catch((error) => `hook integrity re-check unavailable (lib/guard-recheck.mts cannot be loaded: ${firstLine(error)})`),
-  remaining(), () => "hook integrity re-check unavailable (no result before the hook deadline)");
+  const notice = await within(recheck(raw, result.broken), remaining(),
+    () => "hook integrity re-check unavailable (no result before the hook deadline)");
   emit(result.verdict, result.stderr, notice);
 }
 

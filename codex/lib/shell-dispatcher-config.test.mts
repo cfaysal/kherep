@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { prepareManagedConfig } from "./config-preservation.mts";
 import { legacyForm } from "./legacy-control-plane-form.mts";
-import { render, renderBeforeShellDispatcher, type RenderOptions } from "./parity-config.mts";
+import { renderBeforeAdaptedDirectGuards, renderBeforeShellDispatcher, type RenderOptions } from "./parity-config.mts";
 
 const OPTIONS: RenderOptions = { contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks",
   node: "/synthetic/node", mcpServers: [], controlPlaneHook: "/synthetic/repo/modules/control-plane/node/deliver-hook.mts" };
@@ -23,7 +23,8 @@ test("freezes the exact 87c317b predecessor bytes independently read from Git", 
 test("only the shell group changes from four commands to one, including Windows call operator", () => {
   for (const o of [OPTIONS, { ...OPTIONS, windowsHookCommands: false }, { ...OPTIONS, controlPlaneHook: undefined }]) {
     const before = renderBeforeShellDispatcher(o);
-    const after = render(o);
+    // Issue #507, part 4 changed three other entries later; compare with the render before that.
+    const after = renderBeforeAdaptedDirectGuards(o);
     assert.equal((shellGroup(before).match(/^command = /gm) || []).length, o.controlPlaneHook ? 4 : 3);
     assert.equal((shellGroup(after).match(/^command = /gm) || []).length, 1);
     assert.equal(before.replace(shellGroup(before), "<shell>"), after.replace(shellGroup(after), "<shell>"));

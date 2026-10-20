@@ -19,6 +19,7 @@ import {
 } from "./lib/atlassian-mcp.mts";
 import { componentHash } from "./lib/component-hash.mts";
 import { prepareManagedConfig } from "./lib/config-preservation.mts";
+import { atlassianDestructiveGuard, command } from "./lib/parity-config.mts";
 import type { Capabilities, McpCompatibilityOptions, PluginMcpServer, RunCodex } from "./lib/contracts.mts";
 import { controlPlaneRulesPath, launcherRule, renderControlPlaneRules } from "./lib/control-plane-rules.mts";
 import { controlPlaneOutbox } from "./lib/outbox-writable-root.mts";
@@ -182,6 +183,16 @@ export async function installFromCli(options: InstallOptions, readCatalog: Model
     }
   }
   return install({ ...options, codexHome, modelCatalog });
+}
+
+// Issue #507, part 4 (lead decision 8). Codex skips a changed hook definition until it is
+// trusted in /hooks; a previous block that ran the three guards directly loses them until then.
+function trustReviewLine(previous: string, node: string, hookDir: string): string {
+  const lines = previous.split(/\r?\n/);
+  const moved = [atlassianDestructiveGuard(node, hookDir).command, command(node, path.join(hookDir, "codex-dispatch-contract-guard.mts")),
+    command(node, path.join(hookDir, "playwright-file-guard.mts"))].some((direct) => lines.includes(`command = ${JSON.stringify(direct)}`));
+  return "config.toml: the managed hook block was replaced; Codex skips a changed hook definition until it is reviewed and trusted in /hooks"
+    + (moved ? " (this upgrade changes the atlassian-destructive-guard, codex-dispatch-contract-guard and playwright-file-guard entries, which do not run until then)" : "");
 }
 
 export function install(options: InstallOptions = {}) {
@@ -577,6 +588,9 @@ export function install(options: InstallOptions = {}) {
     const latestConfig = fs.existsSync(targets.config) ? fs.readFileSync(targets.config, "utf8") : "";
     const latestPlugin = localPlugin.ownedPluginConfig(latestConfig);
     const preparedConfig = prepareManagedConfig(latestPlugin.config, managedConfigOptions);
+    if (preparedConfig.managedFragment === "replaced") {
+      (options.log || ((line) => process.stdout.write(`${line}\n`)))(trustReviewLine(latestPlugin.config, mcp.node, targets.hookDir));
+    }
     const {
       existingManagedMcp, pluginMcpServers, recoveredMcpServers,
       repairedMcpServers, retiredMcpServers,

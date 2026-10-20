@@ -2,9 +2,11 @@
 // Codex hook adapter re-checks hook integrity after its guards when the heartbeat
 // is stale or missing, or a guard could not run; its lines never change the
 // decision. Each case copies the adapter as codex-hook-adapter.mts with the real
-// lib/guard-recheck.mts beside a synthetic codex-hook-integrity.mts that traces
-// argv, stdin and CODEX_HOME, restores every 0-byte .mts beside it and writes the
-// heartbeat. No real hook, home or checkout is involved.
+// lib/guard-recheck.mts and a copy of the shell dispatcher (its peer, issue #507
+// part 4) beside a synthetic codex-hook-integrity.mts that traces argv, stdin and
+// CODEX_HOME, restores every 0-byte or `export const broken = ;` .mts beside it
+// (from a pristine copy when there is one) and writes the heartbeat with the
+// peers record. No real hook, home or checkout is involved.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -16,6 +18,20 @@ const MIN = 60_000;
 const REPO = path.resolve(import.meta.dirname, "..", "..");
 const PAYLOAD = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "shell_command", tool_input: { command: "git status ü" } });
 const GOOD = "process.exit(0);\n";
+const BROKEN = "export const broken = ;\n";
+
+// The peers record of heartbeat.json (issue #507, part 4): one bigint stat per
+// dispatcher file present. The fake integrity hook embeds this function's source.
+function peersOf(dir: string): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {};
+  for (const name of ["codex-hook-adapter.mts", "hook-adapter.mts", "codex-shell-checks.mts"]) {
+    try {
+      const s = fs.statSync(path.join(dir, name), { bigint: true });
+      out[name] = { dev: String(s.dev), ino: String(s.ino), size: String(s.size), mtimeNs: String(s.mtimeNs), sha256: "fixture" };
+    } catch { /* not present: no record */ }
+  }
+  return out;
+}
 
 // Constant program text: the fake writes its trace into CODEX_HOME.
 const INTEGRITY = `import fs from "node:fs";
@@ -26,13 +42,16 @@ fs.appendFileSync(path.join(home, "trace.jsonl"), JSON.stringify({ argv: process
 let restored = 0;
 for (const name of fs.readdirSync(dir)) {
   const file = path.join(dir, name);
-  if (!name.endsWith(".mts") || !fs.statSync(file).isFile() || fs.statSync(file).size > 0) continue;
-  fs.writeFileSync(file, "process.exit(0);\\n");
+  if (!name.endsWith(".mts") || !fs.statSync(file).isFile()) continue;
+  const text = fs.readFileSync(file, "utf8");
+  if (text.length && !text.startsWith("export const broken = ;")) continue;
+  const pristine = path.join(home, "pristine", name);
+  if (fs.existsSync(pristine)) fs.copyFileSync(pristine, file); else fs.writeFileSync(file, "process.exit(0);\\n");
   restored++;
-  console.log(name + ": 0 bytes -> RESTORED from the repo, verified at the target (sha256 0123456789ab)");
+  console.log(name + ": " + (text.length ? "broken" : "0 bytes") + " -> RESTORED from the repo, verified at the target (sha256 0123456789ab)");
 }
 fs.mkdirSync(path.join(home, ".cache", "hook-integrity"), { recursive: true });
-fs.writeFileSync(path.join(home, ".cache", "hook-integrity", "heartbeat.json"), "{}\\n");
+fs.writeFileSync(path.join(home, ".cache", "hook-integrity", "heartbeat.json"), JSON.stringify({ peers: (${peersOf.toString()})(dir) }) + "\\n");
 console.log("all 2 files OK (" + restored + " restored), heartbeat refreshed");
 `;
 const GUARDS: Record<string, string> = {
@@ -41,7 +60,15 @@ const GUARDS: Record<string, string> = {
     + "{ hookEventName: \"PreToolUse\", permissionDecision: \"deny\", permissionDecisionReason: \"json says no\" } }));\n",
 };
 
-interface Box { root: string; dir: string; adapter: string; trace: string; beat: string }
+interface Box { root: string; dir: string; adapter: string; peer: string; trace: string; beat: string }
+
+// A heartbeat ageMs old whose peers record the files as they are now, or `body` verbatim.
+function writeBeat(b: Pick<Box, "dir" | "beat">, ageMs: number, body?: string): void {
+  fs.mkdirSync(path.dirname(b.beat), { recursive: true });
+  fs.writeFileSync(b.beat, body ?? `${JSON.stringify({ peers: peersOf(b.dir) })}\n`);
+  const then = new Date(Date.now() - ageMs);
+  fs.utimesSync(b.beat, then, then);
+}
 
 // heartbeatAgeMs null: no heartbeat at all.
 function box(t: TestContext, heartbeatAgeMs: number | null): Box {
@@ -49,19 +76,18 @@ function box(t: TestContext, heartbeatAgeMs: number | null): Box {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const dir = path.join(root, "hooks", "kherep-maestro");
   fs.mkdirSync(path.join(dir, "lib"), { recursive: true });
+  fs.mkdirSync(path.join(root, "pristine"));
   const adapter = path.join(dir, "codex-hook-adapter.mts");
   fs.copyFileSync(path.join(import.meta.dirname, "hook-adapter.mts"), adapter);
+  const peer = path.join(dir, "codex-shell-checks.mts");
+  fs.copyFileSync(path.join(import.meta.dirname, "shell-checks.mts"), peer);
+  fs.copyFileSync(peer, path.join(root, "pristine", "codex-shell-checks.mts"));
   fs.copyFileSync(path.join(REPO, "claude", "hooks", "lib", "guard-recheck.mts"), path.join(dir, "lib", "guard-recheck.mts"));
   fs.writeFileSync(path.join(dir, "codex-hook-integrity.mts"), INTEGRITY);
   for (const [name, source] of Object.entries(GUARDS)) fs.writeFileSync(path.join(dir, name), source);
   const beat = path.join(root, ".cache", "hook-integrity", "heartbeat.json");
-  if (heartbeatAgeMs !== null) {
-    fs.mkdirSync(path.dirname(beat), { recursive: true });
-    fs.writeFileSync(beat, "{}\n");
-    const then = new Date(Date.now() - heartbeatAgeMs);
-    fs.utimesSync(beat, then, then);
-  }
-  return { root, dir, adapter, trace: path.join(root, "trace.jsonl"), beat };
+  if (heartbeatAgeMs !== null) writeBeat({ dir, beat }, heartbeatAgeMs);
+  return { root, dir, adapter, peer, trace: path.join(root, "trace.jsonl"), beat };
 }
 
 interface Printed { permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string }
@@ -102,7 +128,9 @@ test("no heartbeat: re-checked with last OK none", (t) => {
   const b = box(t, null);
   const run = call(b, "allow.mts");
   assert.equal(traced(b).length, 1);
-  assert.match(String(run.output?.additionalContext), /^hook integrity re-check \(no heartbeat, last OK none\):\n {2}- all 2 files OK/);
+  // No heartbeat is no peers record either (issue #507, part 4): the peer line comes first.
+  assert.match(String(run.output?.additionalContext),
+    /^\S+codex-shell-checks\.mts cannot be trusted \(no proven record\)\nhook integrity re-check \(no heartbeat, last OK none\):\n {2}- all 2 files OK/);
 });
 
 test("a stale heartbeat next to a policy deny: the deny and its reason stay, systemMessage and stderr carry the block", (t) => {
@@ -177,4 +205,85 @@ test("a re-check that outlives its 6 s budget is killed and reported as UNKNOWN;
   assert.ok(run.ms < 10_000, `took ${run.ms} ms`);
   assert.match(String(run.output?.additionalContext), /\n {2}- timed out after \d+ ms; outcome UNKNOWN \(a heartbeat may have been written\)$/);
   assert.equal(run.output?.permissionDecision, undefined);
+});
+
+// Issue #507, part 4. The adapter's peer gate: codex-shell-checks.mts is proven only
+// as the bytes the last integrity run recorded in heartbeat.json "peers".
+const runs = (b: Box): number => traced(b).length;
+const restoredPeer = (b: Box): boolean => fs.readFileSync(b.peer).equals(fs.readFileSync(path.join(b.root, "pristine", "codex-shell-checks.mts")));
+const firstLine = (run: Run): string => String(run.output?.additionalContext).split("\n")[0]!;
+
+test("T10a a fresh heartbeat, the peer emptied: allow, one run naming it, restored, then quiet", (t) => {
+  const b = box(t, 0);
+  fs.writeFileSync(b.peer, "");
+  const run = call(b, "allow.mts");
+  assert.equal(run.output?.permissionDecision, undefined, run.stdout);
+  assert.equal(firstLine(run), `${b.peer} cannot be trusted (empty, 0 bytes)`);
+  assert.ok(restoredPeer(b));
+  assert.equal(call(b, "allow.mts").stdout, "");
+  assert.equal(runs(b), 1);
+});
+
+for (const sameSize of [true, false]) {
+  test(`T10b a fresh heartbeat, the peer syntax-broken ${sameSize ? "at the same size" : "at another size"}: the changed field is named, restored, then quiet`, (t) => {
+    const b = box(t, 0);
+    const size = fs.statSync(b.peer).size;
+    fs.writeFileSync(b.peer, sameSize ? `${BROKEN}//${"x".repeat(size - BROKEN.length - 2)}` : BROKEN);
+    assert.equal(fs.statSync(b.peer).size === size, sameSize);
+    const run = call(b, "allow.mts");
+    assert.equal(firstLine(run), `${b.peer} cannot be trusted (${sameSize ? "mtime" : "size"} changed since the last proven check)`);
+    assert.ok(restoredPeer(b));
+    assert.equal(call(b, "allow.mts").stdout, "");
+    assert.equal(runs(b), 1);
+  });
+}
+
+test("T10c a fresh heartbeat, the peer untouched: no run", (t) => {
+  const b = box(t, 0);
+  assert.equal(call(b, "allow.mts").stdout, "");
+  assert.equal(runs(b), 0);
+});
+
+for (const swap of ["hard link", "symlink"] as const) {
+  test(`T10d/e a ${swap} swap to an old broken file: the inode differs, one run`, (t) => {
+    const b = box(t, 0);
+    const old = path.join(b.root, "old-broken.mts");
+    fs.writeFileSync(old, BROKEN);
+    const then = new Date("2020-01-01T00:00:00Z");
+    fs.utimesSync(old, then, then);
+    fs.rmSync(b.peer);
+    if (swap === "hard link") fs.linkSync(old, b.peer); else fs.symlinkSync(old, b.peer);
+    assert.ok(fs.statSync(b.peer).mtimeMs < fs.statSync(b.beat).mtimeMs, "older than the heartbeat");
+    const run = call(b, "allow.mts");
+    assert.equal(firstLine(run), `${b.peer} cannot be trusted (inode changed since the last proven check)`);
+    assert.equal(runs(b), 1);
+  });
+}
+
+for (const [label, body] of [["no record of this peer", '{"peers":{"hook-adapter.mts":{}}}\n'], ["malformed JSON", "{peers"]] as const) {
+  test(`T10f a fresh heartbeat with ${label}: one run (no proven record)`, (t) => {
+    const b = box(t, null);
+    writeBeat(b, 0, body);
+    const run = call(b, "allow.mts");
+    assert.equal(firstLine(run), `${b.peer} cannot be trusted (no proven record)`);
+    assert.equal(runs(b), 1);
+    assert.equal(call(b, "allow.mts").stdout, "", "the run recorded the peer");
+  });
+}
+
+test("T12 residual: an in-place same-size rewrite with the recorded mtime is not seen until the heartbeat is stale", (t) => {
+  const b = box(t, null);
+  const when = new Date(Math.floor(Date.now() / 1000) * 1000 - 5000);
+  fs.utimesSync(b.peer, when, when);
+  writeBeat(b, 0);
+  const { ino, size } = fs.statSync(b.peer);
+  fs.writeFileSync(b.peer, `${BROKEN}//${"x".repeat(size - BROKEN.length - 2)}`);
+  fs.utimesSync(b.peer, when, when);
+  assert.deepEqual([fs.statSync(b.peer).ino, fs.statSync(b.peer).size], [ino, size], "same inode, same size");
+  assert.equal(call(b, "allow.mts").stdout, "", "the gate is blind to this rewrite by design (named residual)");
+  assert.equal(runs(b), 0);
+  const stale = new Date(Date.now() - 31 * MIN);
+  fs.utimesSync(b.beat, stale, stale);
+  assert.match(String(call(b, "allow.mts").output?.additionalContext), /^hook integrity re-check \(stale heartbeat/);
+  assert.ok(restoredPeer(b), "the stale-heartbeat run restores it");
 });
