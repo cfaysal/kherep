@@ -84,6 +84,7 @@
     "lib/hook-inventory.mts",
     "lib/hook-syntax.mts",
     "lib/integrity-heartbeat.mts",
+    "lib/integrity-passes.mts",
     "lib/integrity-proof.mts",
     "lib/integrity-run.mts",
     "lib/integrity-verdict.mts",
