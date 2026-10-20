@@ -77,7 +77,8 @@ test("T1c exactly the three guard entries differ; group count, matchers and entr
 
 test("T1d every other historical renderer renders no adapted direct guard", () => {
   for (const [name, value] of Object.entries(parity)) {
-    if (name === "renderBeforeAdaptedDirectGuards" || !/^render(Before|Previous|Legacy)/.test(name) || typeof value !== "function") continue;
+    // Issue #538: the predecessor of the adapted intent entry already has the adapted guards.
+    if (name === "renderBeforeAdaptedDirectGuards" || name === "renderBeforeAdaptedIntentHook" || !/^render(Before|Previous|Legacy)/.test(name) || typeof value !== "function") continue;
     const config = (value as typeof parity.render)(OPTIONS);
     for (const adapted of ADAPTED) assert.ok(!config.includes(adapted.slice(1, -1)), `${name}: ${adapted}`);
   }
