@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 
 import {
-  challengeMessage, makeEnvelope, parseEnvelope, toBase64Url, type AuthBody, type ChallengeBody, type Envelope,
+  challengeMessage, makeEnvelope, parseEnvelope, toBase64Url, type AuthBody, type ChallengeBody, type Envelope, type MessageType,
 } from "../../protocol.mts";
 import type { MessageStatusBody } from "../../protocol-messages.mts";
 import vectors from "../../test-vectors.json";
@@ -102,6 +102,31 @@ export class TestSocket {
   send(envelope: Envelope): void {
     this.ws.send(JSON.stringify(envelope));
   }
+}
+
+// The frames up to and including the first frame of `type` whose body carries
+// every field of `match`: a bounded wait on the protocol event itself, not on
+// the order in which the Worker finishes frames (issue #529: a frame goes to
+// the Registry on its own stub, and there is no ordering between different
+// stubs, so a directory answer may precede a status sent earlier). Earlier
+// frames stay in the result for the caller's equality check. When the event
+// does not come, within maxFrames or before the socket goes quiet, the error
+// names every frame seen.
+export async function until(socket: TestSocket, type: MessageType, match: Record<string, unknown>, maxFrames = 8): Promise<Envelope[]> {
+  const frames: Envelope[] = [];
+  const seen = () => JSON.stringify(frames.map((f) => [f.type, f.body]));
+  while (frames.length < maxFrames) {
+    let envelope: Envelope;
+    try {
+      envelope = await socket.next();
+    } catch (cause) {
+      throw new Error(`no ${type} ${JSON.stringify(match)} after ${seen()}`, { cause });
+    }
+    frames.push(envelope);
+    const body = envelope.body as Record<string, unknown>;
+    if (envelope.type === type && Object.entries(match).every(([key, value]) => body[key] === value)) return frames;
+  }
+  throw new Error(`no ${type} ${JSON.stringify(match)} within ${maxFrames} frames: ${seen()}`);
 }
 
 const observedStatuses = new WeakMap<TestSocket, Set<string>>();

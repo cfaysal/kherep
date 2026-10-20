@@ -376,6 +376,15 @@ increments the minor version; every other release increments the patch version.
   written. A link whose target lies outside the hooks directory contributes no
   imports; the alias still names the file in reports and the journal; restore
   targets are unchanged.
+- Message-retention Worker test barrier (issue #529): the test took the
+  answer to a later `directory.get` as proof that a resend's `message.status`
+  had been sent. Each frame reaches the Registry on its own stub, and there
+  is no ordering between different stubs, so the directory answer may come
+  first. The test now waits for the status, error or receipt frame itself,
+  by message id and state, with every earlier frame still asserted, checks
+  the row and tombstone before the resend, and a regression forces this order
+  with a non-storage hold on the Registry's resend answer. The Worker is
+  unchanged; the cause of the one observed CI failure is not established.
 
 ## [0.4.0] - 2026-10-18
 
