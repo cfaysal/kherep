@@ -184,7 +184,7 @@ export interface AdaptedResult { stdout: string; stderr: string; status: number;
 const failure = (file: string, why: string, broken = true): Verdict => ({ decision: "deny", broken,
   reason: `[hook-adapter] ${file} cannot run (${why}); the tool call is blocked until hook integrity restores it`,
 });
-type Failure = (file: string, why: string, broken?: boolean) => Verdict;
+type Failure = typeof failure;
 // Issue #538. In pre-intent every reason is fixed text: the basename, a why with an error code at most, and the
 // installer as the repair path. The intent hook lives outside hooks/, so integrity cannot restore it: never `broken`.
 const intentReason = (file: string, why: string, until: string): string =>
@@ -250,11 +250,13 @@ function printed(stdout: string, phase: string, toolInput: unknown): Verdict | s
   if (!isObject(parsed) || !isObject(parsed.hookSpecificOutput)) return NOT_DECISION;
   const output = parsed.hookSpecificOutput;
   if (output.hookEventName !== "PreToolUse") return NOT_DECISION;
-  const fields = phase === INTENT_PHASE ? [...FIELDS, "updatedInput"] : FIELDS;
+  const intent = phase === INTENT_PHASE;
+  const fields = intent ? [...FIELDS, "updatedInput"] : FIELDS;
   const extra = Object.keys(parsed).find((key) => key !== "hookSpecificOutput" && key !== "systemMessage")
     ?? Object.keys(output).find((key) => !fields.includes(key));
-  if (extra !== undefined) return `${NOT_DECISION} (unsupported field ${extra || '""'})`;
-  const rewrite = phase === INTENT_PHASE ? intentRewrite(output, toolInput) : {};
+  // In pre-intent the key is not echoed: every reason there is fixed text (issue #538).
+  if (extra !== undefined) return intent ? `${NOT_DECISION} (unsupported field)` : `${NOT_DECISION} (unsupported field ${extra || '""'})`;
+  const rewrite = intent ? intentRewrite(output, toolInput) : {};
   if (typeof rewrite === "string") return rewrite;
   // Issue #507, part 4. Codex documents a top-level systemMessage for PreToolUse: a non-empty string passes through.
   const { systemMessage } = parsed;

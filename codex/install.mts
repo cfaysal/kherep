@@ -198,10 +198,11 @@ function trustReviewLine(previous: string, node: string, hookDir: string,
       ? ["atlassian-destructive-guard", "codex-dispatch-contract-guard", "playwright-file-guard"] : []),
     ...(messaging.enabled && ran(command(node, messaging.intentHook, "--config-root", messaging.configRoot)) ? ["messaging intent"] : []),
   ];
+  const head = "config.toml: the managed hook block was replaced; Codex skips a changed hook definition until it is reviewed and trusted in /hooks";
+  if (!changed.length) return head;
   const named = changed.length > 1 ? `${changed.slice(0, -1).join(", ")} and ${changed.at(-1)} entries, which do not`
     : `${changed[0]} entry, which does not`;
-  return "config.toml: the managed hook block was replaced; Codex skips a changed hook definition until it is reviewed and trusted in /hooks"
-    + (changed.length ? ` (this upgrade changes the ${named} run until then)` : "");
+  return `${head} (this upgrade changes the ${named} run until then)`;
 }
 
 export function install(options: InstallOptions = {}) {
