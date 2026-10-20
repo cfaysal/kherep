@@ -203,3 +203,16 @@ test("HOOK_TIMEOUT_MS equals the timeout of all five rendered PreToolUse adapter
   assert.equal(entries.length, 5, "both privacy groups and the Atlassian, dispatch-contract and Playwright guards");
   for (const block of entries) assert.equal(Number(/^timeout = (\d+)$/m.exec(block)?.[1]) * 1000, pinned);
 });
+
+// Issue #538: the messaging intent entry has its own clock, pinned against its rendered timeout.
+test("INTENT_HOOK_TIMEOUT_MS equals the timeout of the rendered pre-intent entry", () => {
+  const source = fs.readFileSync(ADAPTER, "utf8");
+  const pinned = Number(/^const INTENT_HOOK_TIMEOUT_MS = ([\d_]+);/m.exec(source)?.[1]?.replaceAll("_", ""));
+  const config = renderHooks({ contextHook: "/synthetic/context.mts", hookDir: "/synthetic/hooks", node: "node",
+    messagingClient: { enabled: true, bridge: "/synthetic/bridge.mts", intentHook: "/synthetic/mcp-intent-hook.mts", configRoot: "/synthetic/root" },
+  } as Parameters<typeof renderHooks>[0]);
+  const entries = config.split(/^\[\[hooks\.PreToolUse\.hooks\]\]$/m).slice(1)
+    .filter((block) => /^command = .*codex-hook-adapter\.mts[^\n]*\\" \\"pre-intent\\"/m.test(block));
+  assert.equal(entries.length, 1, "the messaging intent entry");
+  assert.equal(Number(/^timeout = (\d+)$/m.exec(entries[0]!)?.[1]) * 1000, pinned);
+});

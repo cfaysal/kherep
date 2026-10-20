@@ -151,6 +151,25 @@ increments the minor version; every other release increments the patch version.
   jobs ran `codex/`, so the three Windows-only failures fixed in #535 and
   #539 were first seen on a host.
 
+### Changed
+
+- Codex messaging intent hook fails closed (issue #538). The optional
+  `PreToolUse` messaging intent entry runs through `codex-hook-adapter.mts`
+  in a new `pre-intent` phase: a missing, empty, broken, silent or late
+  `mcp-intent-hook.mts` is a deny that names the file by its basename and the
+  installer, without the guard's stderr; the hook's `allow` with
+  `updatedInput` passes through only as the call's `tool_input` plus a UUID
+  `requestId`, and every other shape is a deny. The entry's `timeout` is 15 s
+  and the guard cap 12 s, so the 8 s acknowledgement wait is kept. Integrity
+  re-check notices of this entry go to stderr only, so the documents Codex
+  reads are the hook's own. Exactly this one definition changes (`command`,
+  `commandWindows`, `timeout`), no entry index moves, the exact previous
+  block is recognised and replaced, and Codex skips the entry until it is
+  trusted in `/hooks`; until then the five messaging tools are unavailable,
+  because the Worker rejects a call without the hook's `requestId`. The file
+  stays outside `hooks/` and is not restored by hook integrity. Host
+  behaviour (#537) and Windows (#534) remain UNKNOWN.
+
 ### Fixed
 
 - Windows: `writeJsonAtomic` (daemon.json, inbox records, task and session

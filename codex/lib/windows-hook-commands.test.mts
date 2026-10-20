@@ -71,6 +71,45 @@ test("the Windows form parses and runs in pwsh; the plain form does not",
     }
   });
 
+// Issue #538. The messaging intent entry in its adapter form, with Windows paths.
+const MESSAGING = { enabled: true, bridge: String.raw`C:\codex\orchestra\control-plane\node\mcp-stdio-bridge.mts`,
+  intentHook: String.raw`C:\codex\orchestra\control-plane\node\mcp-intent-hook.mts`, configRoot: String.raw`C:\kherep` };
+
+test("the messaging intent entry runs through the adapter and carries its call-operator form", () => {
+  const hooks = hookPairs(render({ ...RENDER_OPTIONS, messagingClient: MESSAGING }));
+  for (const hook of hooks) {
+    assert.match(hook.command, /^"/);
+    assert.equal(hook.commandWindows, `& ${hook.command}`);
+  }
+  const intent = hooks.filter((hook) => hook.command.includes("mcp-intent-hook.mts"));
+  // The renderer joins the adapter path with the host's path.join, as every adapted entry.
+  assert.deepEqual(intent.map((hook) => hook.command), [[NODE, path.join(RENDER_OPTIONS.hookDir, "codex-hook-adapter.mts"),
+    MESSAGING.intentHook, "pre-intent", "--config-root", MESSAGING.configRoot].map((part) => `"${part}"`).join(" ")]);
+});
+
+test("the Windows form of the intent entry parses and runs the adapter in pwsh",
+  { skip: spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"]).status !== 0 && "pwsh is not on PATH" }, () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-pwsh-intent-"));
+    try {
+      const hookDir = path.join(dir, "hooks");
+      fs.mkdirSync(hookDir);
+      fs.copyFileSync(path.join(import.meta.dirname, "..", "hooks", "hook-adapter.mts"), path.join(hookDir, "codex-hook-adapter.mts"));
+      const intentHook = path.join(dir, "mcp-intent-hook.mts");
+      fs.writeFileSync(intentHook, "import fs from 'node:fs'; const input = JSON.parse(fs.readFileSync(0, 'utf8'));\n"
+        + "process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow',"
+        + " updatedInput: { ...input.tool_input, requestId: '123e4567-e89b-42d3-a456-426614174000' } } }));\n");
+      const hook = hookPairs(render({ ...RENDER_OPTIONS, node: process.execPath, hookDir,
+        messagingClient: { ...MESSAGING, intentHook, configRoot: dir } })).find((entry) => entry.command.includes("pre-intent"))!;
+      const input = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "mcp__kherep_messaging__sessions",
+        session_id: "s", tool_use_id: "c", tool_input: {} });
+      const run = spawnSync("pwsh", ["-NoProfile", "-Command", hook.commandWindows!], { input, encoding: "utf8" });
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(JSON.parse(run.stdout).hookSpecificOutput.permissionDecision, "allow", run.stdout);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
 test("replaces a block the previous release wrote without Windows commands", () => {
   const current = prepareManagedConfig("", MANAGED_OPTIONS).config;
   const previous = current.replace(render(RENDER_OPTIONS).trim(),

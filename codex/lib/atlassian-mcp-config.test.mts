@@ -49,7 +49,8 @@ test("the guard is the last entry of the MCP group, and no PreToolUse key moves"
 test("every historical renderer predates the guard", () => {
   for (const [name, value] of Object.entries(parity)) {
     // Issue #507, part 4. The block right before the adapted guards already had the guard.
-    if (!["renderBeforeShellDispatcher", "renderBeforeAdaptedDirectGuards"].includes(name)
+    // Issue #538. So had the block right before the adapted messaging intent entry.
+    if (!["renderBeforeShellDispatcher", "renderBeforeAdaptedDirectGuards", "renderBeforeAdaptedIntentHook"].includes(name)
         && /^render(Before|Previous|Legacy)/.test(name) && typeof value === "function") {
       assert.doesNotMatch((value as typeof parity.render)(renderOptions), /atlassian-destructive-guard/, name);
     }
