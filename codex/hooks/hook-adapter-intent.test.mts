@@ -176,6 +176,7 @@ test("I5 every stdout outside the hook's contract is a deny naming the rule", (t
     [{ permissionDecision: "allow", updatedInput: { ...TOOL_INPUT, requestId: "not-a-uuid" } }, "requestId is not a UUID"],
     [{ permissionDecision: "allow", updatedInput: { ...TOOL_INPUT, requestId: "123e4567-e89b-02d3-a456-426614174000" } }, "requestId is not a UUID"],
     [{ additionalContext: "x" }, "no permissionDecision"],
+    [{ permissionDecision: "deny", permissionDecisionReason: "r", "/Users/secret/path": 1 }, "unsupported field"],
   ];
   for (const [output, rule] of cases) {
     const run = runAdapter(intentArgs(fixture(t, print(doc(output)))));
