@@ -19,10 +19,12 @@ const REPO = path.resolve(import.meta.dirname, "..", "..");
 const PAYLOAD = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "shell_command", tool_input: { command: "git status ü" } });
 const GUARDS = ["commit-guard", "deploy-guard", "main-checkout-guard"];
 const BROKEN = "export const broken = ;\n";
-const PEERS = ["codex-hook-adapter.mts", "hook-adapter.mts", "codex-shell-checks.mts"];
+// One source literal: the test parses it as data, the fake integrity hook embeds it as code.
+const PEERS_SOURCE = '["codex-hook-adapter.mts", "hook-adapter.mts", "codex-shell-checks.mts"]';
+const PEERS: string[] = JSON.parse(PEERS_SOURCE);
 const now = "performance.timeOrigin + performance.now()";
 // The peers record the fake integrity hook writes, from one bigint stat per dispatcher file (as beat() below).
-const PEERS_OF = `(dir) => Object.fromEntries(${JSON.stringify(PEERS)}.flatMap((name) => { try {
+const PEERS_OF = `(dir) => Object.fromEntries(${PEERS_SOURCE}.flatMap((name) => { try {
   const s = fs.statSync(path.join(dir, name), { bigint: true });
   return [[name, { dev: String(s.dev), ino: String(s.ino), size: String(s.size), mtimeNs: String(s.mtimeNs), sha256: "fixture" }]];
 } catch { return []; } }))`;
