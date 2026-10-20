@@ -125,15 +125,19 @@ jobs:
         if: matrix.suite == 'control-plane'
         # Bound simultaneous native process/PowerShell fixtures on the hosted runner (PR #155).
         run: node --test --test-concurrency=1 "modules/control-plane/*.test.mts" "modules/control-plane/node/*.test.mts"
-      - name: Codex projection suites (Windows)
+      - name: Codex projection suites and run guard (Windows, issues #534 and #550)
         if: matrix.suite == 'codex'
         # The whole test:codex file set, as on ubuntu (typescript, unit-engines-floor)
-        # and on the Windows host (issue #534). No npm ci: nothing under codex/
-        # imports a package. Default node --test concurrency, as on ubuntu; the
-        # step timeout turns a hang (the #535 lock-holder class) into a failure
-        # instead of the 360-minute job default.
+        # and on the Windows host (issue #534), started by the run guard (issue #550):
+        # it reads the patterns from the test:codex script, runs them with a spec
+        # and a TAP reporter, and fails the step when a pattern selects no file,
+        # the test count falls below its floor or the skipped tests differ from
+        # the list in codex/scripts/codex-run-expected.json. No npm ci: nothing
+        # under codex/ imports a package. Default node --test concurrency, as on
+        # ubuntu; the step timeout turns a hang (the #535 lock-holder class) into
+        # a failure instead of the 360-minute job default.
         timeout-minutes: 40
-        run: npm run test:codex
+        run: node codex/scripts/codex-run-guard.mts run --platform win32 --tap "${{ runner.temp }}/codex-run.tap"
       - name: Bootstrap shard (TypeScript on Node, no build)
         if: matrix.suite != 'hooks' && matrix.suite != 'control-plane' && matrix.suite != 'codex'
         run: node bootstrap/ci-shard.mts run ${{ matrix.suite }}
@@ -189,8 +193,8 @@ jobs:
       - name: Bootstrap suites (TypeScript on Node, no build)
         run: npm run test:bootstrap
       - run: npm ci
-      - name: Codex projection suites
-        run: npm run test:codex
+      - name: Codex projection suites and run guard (issue #550)
+        run: node codex/scripts/codex-run-guard.mts run --platform linux --tap "${{ runner.temp }}/codex-run.tap"
       - name: local-inference and mcp-auth-bridge suites
         run: npm run test:modules
       - name: atl-jira broker suites
@@ -241,8 +245,8 @@ jobs:
       - run: npm ci
       - name: Type check (tsc --noEmit, strict, erasableSyntaxOnly)
         run: npm run typecheck
-      - name: Codex projection suites
-        run: npm run test:codex
+      - name: Codex projection suites and run guard (issue #550)
+        run: node codex/scripts/codex-run-guard.mts run --platform linux --tap "${{ runner.temp }}/codex-run.tap"
       - name: local-inference and mcp-auth-bridge suites
         run: npm run test:modules
       - name: atl-jira broker suites

@@ -1,0 +1,16 @@
+{
+  "$comment": "Fixture expectation for codex-run-guard.test.mts and codex-run-tap.test.mts only; the CI expectation is codex/scripts/codex-run-expected.json.",
+  "minTests": 5,
+  "measured": {
+    "win32": "synthetic fixture",
+    "linux": "synthetic fixture"
+  },
+  "skips": {
+    "win32": [
+      { "name": "alpha posix only", "reason": null },
+      { "name": "beta needs pwsh", "reason": "pwsh is not on PATH" },
+      { "name": "inner posix only", "reason": null }
+    ],
+    "linux": []
+  }
+}

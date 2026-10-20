@@ -150,6 +150,15 @@ increments the minor version; every other release increments the patch version.
   shard. Before this, only the ubuntu `typescript` and `unit-engines-floor`
   jobs ran `codex/`, so the three Windows-only failures fixed in #535 and
   #539 were first seen on a host.
+- Codex run guard (issue #550). The three CI jobs that run the Codex suites
+  (`unit-windows (codex)`, `typescript`, `unit-engines-floor`) start them
+  through `codex/scripts/codex-run-guard.mts run`, which reads the patterns
+  from the `test:codex` script and fails the step when a pattern selects no
+  file, the run has fewer than 600 tests, a test is `todo`, fails or is
+  cancelled, a suite is skipped, or the skipped tests differ from the
+  accepted list for the platform in `codex/scripts/codex-run-expected.json`.
+  Before this a run that selected nothing or skipped more than before was
+  green. `npm run test:codex` stays the local command.
 
 ### Changed
 
