@@ -18,14 +18,16 @@ import { enqueued, frameKind, intakeLane, laneTimer, type IntakeConnection, type
 import { deliveryDepth, DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, recordingSessions } from "./exchange.mts";
 import { readPrivateKey } from "./identity.mts";
 import { installPaused, markedProbe, noticeInterruptedProbe } from "./install-pause.mts";
-import { purgeInbox, storeMessage } from "./inbox.mts";
+import { storeMessage } from "./inbox.mts";
 import { inboxIndex } from "./inbox-index.mts";
+import { startInboxMaintenance } from "./inbox-start.mts";
 import { scheduleListenerSweep } from "./listener-sweep.mts";
 import { loadPolicy, type NodePolicy } from "./policy.mts";
 import { routeFrame } from "./readiness-lane.mts";
 import { classifySocketError, roundTally, tallyKind, type SocketErrorClass } from "./round-tally.mts";
 import { probeRuntime, type ProbeResult } from "./runtime-probe.mts";
 import { createReadiness } from "./runtime-readiness.mts";
+import { settleReplied } from "./sent-notices.mts";
 import { retainServiceAdmission, waitForServiceAdmission } from "./service-drain.mts";
 import { reportSlowSync } from "./sync-timing.mts";
 import { continueTask, startTask, stopTask, type RunnerDeps } from "./session-runner.mts";
@@ -91,12 +93,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   let state: DaemonState = { pid: process.pid, startedAt: new Date().toISOString(), source: captureRuntimeSourceIdentity(),
     ...(service ? { service } : {}), ...carriedOver(previousDaemonState(paths), noticeInterruptedProbe(paths, log), Date.now()) };
   recordDaemonState(paths, state, log);
-  try {
-    const purged = purgeInbox(paths.inbox);
-    if (purged > 0) log(`kherep-node: removed ${purged} inbox message(s) older than 7 days`);
-  } catch (error) {
-    log(`kherep-node: inbox purge failed: ${String(error)}`);
-  }
+  startInboxMaintenance(paths, log);
   // Issue #225: locks of wake listeners whose process is gone, now and hourly.
   const stopSweep = scheduleListenerSweep(paths, log);
   // Successful listings update sessions.json and include hook-recorded Codex sessions.
@@ -152,7 +149,12 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     nodeId: config.nodeId, identity, policy, handlers: commandHandlers(config, Date.now(), sessions, live, runtimeDiscovery),
     facts: detectFacts, runtimes: runtimeDiscovery, readyRuntimes: () => readiness.ready(),
     sessions, deferInitialSessions: true,
-    storeMessage: (body) => { storeMessage(paths.inbox, body, Date.now(), deliveryDepth(paths, body)); },
+    // Issue #520: a reply records the sent message it answers replied; settleReplied never throws.
+    storeMessage: (body) => {
+      const now = Date.now();
+      storeMessage(paths.inbox, body, now, deliveryDepth(paths, body));
+      settleReplied(paths, body, now, (error) => log(`kherep-node: could not record ${body.inReplyTo} replied: ${String((error as Error).message ?? error)}`));
+    },
     taskRequestResult: (result) => recordRequestResult(paths, result),
     taskControlRegistrationReceipt: (body) => {
       taskControlInflight.delete("register:" + body.registrationId);

@@ -1,6 +1,6 @@
-import type { DirectoryBody } from "../protocol-messages.mts";
+import { isMessageId, type DirectoryBody, type MessageDeliverBody } from "../protocol-messages.mts";
 import type { NodePaths } from "./config.mts";
-import { getSent, type SentRecord } from "./exchange.mts";
+import { getSent, recordSent, type SentRecord } from "./exchange.mts";
 import { listInbox, messageIds, type InboxRecord } from "./inbox.mts";
 import { nodeLabel } from "./msg-resolve.mts";
 
@@ -31,15 +31,54 @@ export function repliesTo(inbox: InboxRecord[], sent: SentRecord): InboxRecord[]
     && (r.closedTo ?? r.toSession) === sent.fromSession);
 }
 
+// Issue #520: a sent message a reply answers is recorded replied on this node,
+// as the Worker's markReplied does while its row exists (the row is deleted on
+// the sender's ack of delivered, so no replied status ever reaches this node).
+// Records state only: no proxy logic here (message-store.mts refuses queued
+// proxies Worker-side). Fail-soft: a failed read or write of sent/<id>.json is
+// reported to onError and leaves the record as it was; the next read retries.
+export function settleAnswered(paths: NodePaths, sent: SentRecord, now: number, onError?: (error: unknown) => void): boolean {
+  try {
+    return recordSent(paths, sent.messageId, "replied", undefined, now);
+  } catch (error) {
+    onError?.(error);
+    return false;
+  }
+}
+
+// The arrival rule (daemon, on message.deliver): the reply comes from the sent
+// record's target node and is addressed to its sender session (the Worker's
+// markReplied rule; repliesTo is the same rule read from the inbox side).
+export function settleReplied(paths: NodePaths, body: Pick<MessageDeliverBody, "inReplyTo" | "from" | "toSession">, now: number,
+  onError?: (error: unknown) => void): boolean {
+  if (!body.inReplyTo || !isMessageId(body.inReplyTo)) return false;
+  const sent = read(paths, body.inReplyTo);
+  if (!sent || sent.to?.nodeId !== body.from.nodeId || sent.fromSession !== body.toSession) return false;
+  return settleAnswered(paths, sent, now, onError);
+}
+
+// Issue #520, the start pass: every delivered record, whatever its session,
+// whose reply sits in the inbox is settled before purgeInbox removes that
+// reply. One read of sent/ and one of the inbox. Returns the number settled.
+export function settleAnsweredAtStart(paths: NodePaths, now: number, onError?: (error: unknown) => void): number {
+  const delivered = messageIds(paths.sent).map((id) => read(paths, id))
+    .filter((r): r is SentRecord => r !== null && r.state === "delivered" && r.fromSession !== undefined && r.proxyOf === undefined);
+  if (delivered.length === 0) return 0;
+  const inbox = listInbox(paths.inbox);
+  return delivered.filter((r) => repliesTo(inbox, r).length > 0 && settleAnswered(paths, r, now, onError)).length;
+}
+
 // One read of sent/ for the session's references (id, name), oldest first:
 // failures of records whose fromSession is one of them (unchanged since issue
 // #31), and receipts for messages delivered (the target's turn completed, issue
-// #308) without a reply, since a reply already proves receipt and the Worker may
-// record replied after the reply arrived. A receipt matches the sender's
-// session id (fromSessionId), and fromSession only for a record without one
-// (an older sender), as the reply grant does (wake-reply.mts): a renamed
-// session still gets it, a later session reusing the name does not.
-export function unnoticedNotices(paths: NodePaths, refs: string[]): SentNotices {
+// #308) without a reply. A receipt matches the sender's session id
+// (fromSessionId), and fromSession only for a record without one (an older
+// sender), as the reply grant does (wake-reply.mts): a renamed session still
+// gets it, a later session reusing the name does not.
+// It reads sent/ and the inbox, and writes: a delivered record that a reply in
+// the inbox answers is settled replied here (issue #520), fail-soft; it has no
+// other side effect.
+export function unnoticedNotices(paths: NodePaths, refs: string[], now: number = Date.now()): SentNotices {
   const records = messageIds(paths.sent).map((id) => read(paths, id))
     // A proxy answer (issue #408) was never sent by the session: its outcome is the proxied line.
     .filter((r): r is SentRecord => r !== null && r.noticedAt === undefined && r.fromSession !== undefined && r.proxyOf === undefined)
@@ -47,7 +86,9 @@ export function unnoticedNotices(paths: NodePaths, refs: string[]): SentNotices 
   const failures = records.filter((r) => failed(r) && refs.includes(r.fromSession!));
   const delivered = records.filter((r) => r.state === "delivered" && refs.includes(r.fromSessionId ?? r.fromSession!));
   const inbox = delivered.length > 0 ? listInbox(paths.inbox) : [];
-  return { failures, receipts: delivered.filter((r) => repliesTo(inbox, r).length === 0) };
+  const answered = delivered.filter((r) => repliesTo(inbox, r).length > 0);
+  for (const r of answered) settleAnswered(paths, r, now);
+  return { failures, receipts: delivered.filter((r) => !answered.includes(r)) };
 }
 
 // The notices of an earlier unnoticedNotices that are still due, from one read
