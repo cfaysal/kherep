@@ -106,8 +106,8 @@ test("control-plane scripts stay with the #31 rule; without a callback nothing i
 // what live-hook-integrity calls coordinated.
 const SOURCE = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "claude", "settings.user.json"), "utf8"));
 const HOMES = process.platform === "win32"
-  ? ["C:\\Users\\x\\.claude", "D:\\Claude Home\\.claude", path.join(os.homedir(), ".claude")]
-  : ["/example/.claude", path.join(os.homedir(), ".claude"), "/Volumes/My Disk/.claude"];
+  ? ["C:\\Users\\x\\.claude", "D:\\Claude Home\\.claude", "D:\\R&D\\.claude", path.join(os.homedir(), ".claude")]
+  : ["/example/.claude", path.join(os.homedir(), ".claude"), "/Volumes/My Disk/.claude", "/Volumes/R&D;x|y/.claude"];
 const PROFILE = process.platform === "win32" ? "win" : "mac";
 
 for (const home of HOMES) {
@@ -122,7 +122,9 @@ for (const home of HOMES) {
       assert.equal(new Set(matchers).size, matchers.length, `${event}: two groups share a matcher`);
       for (const group of groups) for (const h of group.hooks || []) {
         const found = managedHookKey(normalizeHookCommand(h.command!));
-        assert.doesNotMatch(h.command!, /[;&|\r\n]/, `${event}: the template renders a shell control operator`);
+        // Outside double quotes: a home such as R&D sits inside the quoted paths.
+        assert.doesNotMatch(h.command!.replace(/"[^"]*"/g, ""), /[;&|<>\r\n`]|\$\(/,
+          `${event}: the template renders a shell control operator`);
         if (/[\\/]kherep[\\/]hook-runtime[\\/]entry\.mts"/.test(h.command!)) {
           entries++;
           assert.ok(found, `${event}: entry-form command not recognised`);
