@@ -169,6 +169,9 @@ async function repairAttempt(input: Buffer): Promise<string> {
   return `hook integrity re-check (hook entry):\n${[...lines, ...(status ? [status] : [])].map((line) => `  - ${line}`).join("\n")}`;
 }
 
+// The cap of one journal step: limit, cut so that it ends by end; a test pins its use in journalDeny.
+export const capBefore = (limit: number, end: number, now = Date.now()): number => Math.max(0, Math.min(limit, end - now));
+
 // `work` settled within ms: true when it resolved, false when it failed or the time ran out.
 function settled(work: () => Promise<unknown>, ms: number): Promise<boolean> {
   let timer: NodeJS.Timeout | undefined;
@@ -188,9 +191,9 @@ async function journalDeny(input: Buffer, reason: string): Promise<void> {
   const line = JSON.stringify({ v: 1, kind: "entry-deny", at: new Date().toISOString(),
     id: typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 128) : null, tool: typeof tool === "string" ? tool.slice(0, 80) : null, reason });
   if (await settled(() => fs.promises.mkdir(dir, { recursive: true, mode: 0o700 })
-    .then(() => fs.promises.appendFile(`${base}.jsonl`, `${line}\n`, { mode: 0o600 })), Math.min(500, end - Date.now()))) return;
+    .then(() => fs.promises.appendFile(`${base}.jsonl`, `${line}\n`, { mode: 0o600 })), capBefore(500, end))) return;
   await settled(() => fs.promises.appendFile(`${base}.failed`, "append\n", { mode: 0o600 })
-    .catch(() => fs.promises.rename(`${base}.jsonl`, `${base}.failed`)), Math.min(400, end - Date.now()));
+    .catch(() => fs.promises.rename(`${base}.jsonl`, `${base}.failed`)), capBefore(400, end));
 }
 
 async function main(): Promise<void> {
