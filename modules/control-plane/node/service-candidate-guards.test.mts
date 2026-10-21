@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { safeServiceFailure } from "./service-cli.mts";
 import {
-  candidateFile, caught, failedUpgrade, noPath, readRecord, secondCall, staleDrain, status, tamper, why, world, type Harness,
+  candidateFile, caught, failedFreshInstall, failedUpgrade, noPath, readRecord, secondCall, staleDrain, status, tamper, why, world, type Harness,
 } from "./service-candidate-fixture.mts";
 import * as records from "./service-records.mts";
 import { activateManagedService, readServiceReceipt, rollbackManagedService } from "./service-transaction.mts";
@@ -205,4 +205,19 @@ test("B-15: a record string field that is not a string makes the record invalid"
       assert.equal(world(h), before, name);
     }
   }
+});
+
+test("B-16: a record service name the CLI could not have selected makes the record invalid", async (t) => {
+  const leak = "/Users/x582leak/x";
+  const { h } = await failedFreshInstall(t); // no receipt: status would echo the record's name
+  tamper(h, r => { r.binding = { ...(r.binding as ServiceBinding), serviceName: leak }; });
+  assert.throws(() => records.readServiceCandidate(h.paths), /^Error: managed service candidate record is invalid$/);
+  const s = await status(h);
+  assert.deepEqual([s.exit, s.report], [0, { ok: true, managed: false, candidate: "invalid" }]);
+  assert.equal(s.text.includes("x582leak"), false);
+  const { serviceName: _name, taskPath: _task, logFile: _log, supervisorGeneration: _generation, ...shared } = h.candidate;
+  const darwin = { ...readRecord(h)!, binding: { ...shared, platform: "darwin" as const, serviceName: "org.kherep.node" } } as records.ServiceCandidate;
+  records.writeServiceCandidate(h.paths, darwin);
+  assert.throws(() => records.writeServiceCandidate(h.paths, { ...darwin, binding: { ...darwin.binding, serviceName: "../escape" } }),
+    /^Error: managed service candidate record is invalid$/);
 });

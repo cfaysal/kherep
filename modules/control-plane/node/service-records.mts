@@ -6,6 +6,7 @@ import type { NodePaths } from "./config.mts";
 import type { SourceIdentity } from "./daemon-source.mts";
 import { writeJsonAtomic } from "./inbox.mts";
 import { acquireServiceOwnerFile, type ServiceOwnerProbe } from "./service-drain.mts";
+import { serviceSelector } from "./service-platform.mts";
 import { STOP_CODES, type NativeServiceSnapshot, type ServiceBinding, type StopCode } from "./service-types.mts";
 
 export interface ServiceReceipt {
@@ -102,8 +103,15 @@ const candidateFile = (paths: NodePaths): string => path.join(serviceRoot(paths)
 const BACKUP_ID = /^[0-9]{8,14}-[0-9a-f-]{36}$/;
 // #582: failedAt is printed by status, so only the shape toISOString() writes is accepted (no embedded text).
 const ISO_INSTANT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,3})?Z$/;
+// PR #599 P3-2: status echoes a record's service name, so it must be one the CLI could have selected (serviceSelector).
+function selectable(binding: ServiceBinding): boolean {
+  try {
+    const selected = serviceSelector(binding.platform, binding.serviceName, binding.taskPath);
+    return selected.serviceName === binding.serviceName && selected.taskPath === binding.taskPath;
+  } catch { return false; }
+}
 function validCandidate(value: ServiceCandidate | undefined): value is ServiceCandidate {
-  return Boolean(value && value.version === 1 && validBinding(value.binding)
+  return Boolean(value && value.version === 1 && validBinding(value.binding) && selectable(value.binding)
     && matches(/^[0-9a-f]{64}$/, value.definitionDigest) && matches(/^[0-9a-f]{64}$/, value.securityDigest)
     && (value.backupId === undefined ? value.command === "install" : matches(BACKUP_ID, value.backupId))
     && (CANDIDATE_COMMANDS as readonly string[]).includes(value.command)
