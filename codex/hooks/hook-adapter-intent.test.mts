@@ -14,6 +14,7 @@ import { test, type TestContext } from "node:test";
 
 import { nodePaths, type NodePaths } from "../../modules/control-plane/node/config.mts";
 import { recordMcpIntentReceipt } from "../../modules/control-plane/node/mcp-local.mts";
+import { copyAdapter } from "./hook-adapter.fixture.mts";
 
 const REPO = path.resolve(import.meta.dirname, "..", "..");
 const ADAPTER = path.join(import.meta.dirname, "hook-adapter.mts");
@@ -149,7 +150,7 @@ test("I4 a hook that cannot run or breaks its contract is a deny in fixed text w
 
 test("I4 adapter-level failures in pre-intent name codex-hook-adapter.mts by its basename", (t) => {
   const adapter = path.join(tmp(t, "kherep-intent-self-"), "codex-hook-adapter.mts");
-  fs.copyFileSync(ADAPTER, adapter);
+  copyAdapter(path.dirname(adapter), "codex-hook-adapter.mts");
   const guard = fixture(t, REWRITE);
   for (const [args, input, why] of [[["", "pre-intent"], "{}", "no guard given"],
     [["mcp-intent-hook.mts", "pre-intent"], "{}", "guard path is not absolute"],
@@ -209,7 +210,7 @@ function installedBox(t: TestContext, guardBody: string): { adapter: string; gua
   const dir = path.join(root, "hooks", "kherep-maestro");
   fs.mkdirSync(path.join(dir, "lib"), { recursive: true });
   const adapter = path.join(dir, "codex-hook-adapter.mts");
-  fs.copyFileSync(ADAPTER, adapter);
+  copyAdapter(dir, "codex-hook-adapter.mts");
   fs.copyFileSync(path.join(import.meta.dirname, "shell-checks.mts"), path.join(dir, "codex-shell-checks.mts"));
   fs.copyFileSync(path.join(REPO, "claude", "hooks", "lib", "guard-recheck.mts"), path.join(dir, "lib", "guard-recheck.mts"));
   fs.writeFileSync(path.join(dir, "codex-hook-integrity.mts"), "console.log('all 2 files OK (0 restored), heartbeat refreshed');\n");
