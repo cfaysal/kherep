@@ -36,9 +36,18 @@ not ok 5 - broke
   duration_ms: 0.1
   type: 'test'
   ...
+# Subtest: stopped
+not ok 6 - stopped
+  ---
+  duration_ms: 200.1
+  type: 'test'
+  failureType: 'testTimeoutFailure'
+  error: 'test timed out after 200ms'
+  code: 'ERR_TEST_FAILURE'
+  ...
 # kherep-maestro-context: ok
-1..5
-# tests 6
+1..6
+# tests 7
 # suites 0
 # pass 2
 # fail 1

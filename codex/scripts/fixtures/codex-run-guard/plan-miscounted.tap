@@ -1,0 +1,42 @@
+TAP version 13
+# Subtest: one passes
+ok 1 - one passes
+  ---
+  duration_ms: 1.5
+  type: 'test'
+  ...
+# Subtest: alpha posix only
+ok 2 - alpha posix only # SKIP
+  ---
+  duration_ms: 0.1
+  type: 'test'
+  ...
+# Subtest: beta needs pwsh
+ok 3 - beta needs pwsh # SKIP pwsh is not on PATH
+  ---
+  duration_ms: 0.1
+  type: 'test'
+  ...
+# Subtest: group
+    # Subtest: inner posix only
+    ok 1 - inner posix only # SKIP
+      ---
+      duration_ms: 0.1
+      type: 'test'
+      ...
+    1..1
+ok 4 - group
+  ---
+  duration_ms: 0.4
+  type: 'test'
+  ...
+# kherep-maestro-context: ok
+1..5
+# tests 5
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 3
+# todo 0
+# duration_ms 12.5
