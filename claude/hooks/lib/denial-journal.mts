@@ -14,7 +14,7 @@ import { isWithinPath, joinPathLike, normalizePathLike } from "./workspace-scope
 
 export const AGENT_KEY = /^[A-Za-z0-9_-]{1,64}$/;
 // Lead decision 3: a fourth copy of the private marker pattern, the three guard copies stay
-// untouched; bootstrap/private-marker-copies.test.mts holds source and flags of all four equal.
+// untouched; bootstrap/denied-calls-contract.test.mts holds source and flags of all four equal.
 export const PRIVATE_MARKER_PATTERN = /work-credentials|\b(?:host_vars|group_vars)\b|customer[ -]?internals?|forge service cred|<private>/i;
 export const WITHHELD = "<withheld>";
 const REASON_MAX = 240;
@@ -113,10 +113,11 @@ export function redactReason(reason: unknown): string {
   return PRIVATE_MARKER_PATTERN.test(reduced) ? WITHHELD : reduced.slice(0, REASON_MAX);
 }
 
-// The bracket tag a reason starts with, else the word before ` blocked`, else `guard`.
+// The bracket tag a reason starts with, else its leading word when ` blocked` follows it (absolute
+// paths reduced first), else `guard`: "x.mts failed; this tool call is blocked." has no tag.
 export function guardOf(reason: unknown): string {
-  const first = String(reason ?? "").split(/\r?\n/)[0]!.trim();
-  const tag = /^\[([A-Za-z0-9._-]{1,40})\]/.exec(first)?.[1] ?? /([A-Za-z0-9._-]{1,40}) blocked\b/.exec(first)?.[1];
+  const first = String(reason ?? "").split(/\r?\n/)[0]!.replace(ABSOLUTE_PATH, basenameOf).trim();
+  const tag = /^\[([A-Za-z0-9._-]{1,40})\]/.exec(first)?.[1] ?? /^([A-Za-z0-9._-]{1,40}) blocked\b/.exec(first)?.[1];
   return tag && !PRIVATE_MARKER_PATTERN.test(tag) ? tag : "guard";
 }
 
@@ -130,14 +131,14 @@ const idOf = (payload: Payload): string | null => typeof payload.tool_use_id ===
 export function callLine(payload: Payload, verdicts: VerdictLike[], now = new Date()): string {
   const decision = (["deny", "ask", "allow"] as const).find((d) => verdicts.some((verdict) => verdict.decision === d)) ?? "none";
   const target = targetOf(payload);
-  const denials = (cut: number): Denial[] => verdicts.filter((verdict) => verdict.decision === "deny").map((verdict) => {
+  const denials: Denial[] = verdicts.filter((verdict) => verdict.decision === "deny").map((verdict) => {
     const guard = guardOf(verdict.reason);
-    return { guard, target: guard === "privacy-boundary" ? WITHHELD : target.slice(0, cut), reason: redactReason(verdict.reason).slice(0, cut),
-      broken: verdict.broken === true };
+    return { guard, target: guard === "privacy-boundary" ? WITHHELD : target, reason: redactReason(verdict.reason), broken: verdict.broken === true };
   });
-  const agentType = typeof payload.agent_type === "string" && AGENT_TYPE.test(payload.agent_type) ? payload.agent_type : null;
+  const type = payload.agent_type;
+  const agentType = typeof type === "string" && AGENT_TYPE.test(type) ? (PRIVATE_MARKER_PATTERN.test(type) ? WITHHELD : type) : null;
   const line = (cut: number): string => JSON.stringify({ v: 1, kind: "call", at: now.toISOString(), id: idOf(payload), tool: toolOf(payload),
-    agent_type: agentType, decision, denials: denials(cut) });
+    agent_type: agentType, decision, denials: denials.map((d) => ({ ...d, target: d.target.slice(0, cut), reason: d.reason.slice(0, cut) })) });
   const full = line(REASON_MAX);
   return Buffer.byteLength(full) <= LINE_MAX ? full : line(80); // a line stays one short append
 }
@@ -145,22 +146,21 @@ export function callLine(payload: Payload, verdicts: VerdictLike[], now = new Da
 export const deliveredLine = (payload: Payload, now = new Date()): string =>
   JSON.stringify({ v: 1, kind: "delivered", at: now.toISOString(), id: idOf(payload) });
 
-const attempt = (work: () => Promise<unknown>): Promise<unknown> => Promise.resolve().then(work);
-
-// "ok", "failed" or "timeout" for work raced against until; the timer never outlives the race.
-async function settle(work: Promise<unknown>, until: number, onError?: (error: unknown) => void): Promise<"ok" | "failed" | "timeout"> {
+// "ok", "failed" or "timeout" for work raced against until (a synchronous throw is a failure);
+// the timer never outlives the race.
+async function settle(work: () => Promise<unknown>, until: number, onError?: (error: unknown) => void): Promise<"ok" | "failed" | "timeout"> {
   let timer: NodeJS.Timeout | undefined;
   const late = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), Math.max(0, until - Date.now())); });
-  const done = work.then(() => "ok" as const, (error) => { onError?.(error); return "failed" as const; });
+  const done = Promise.resolve().then(work).then(() => "ok" as const, (error) => { onError?.(error); return "failed" as const; });
   try { return await Promise.race([done, late]); } finally { clearTimeout(timer); }
 }
 
 // Appends one line to the worker's journal before until: "" when confirmed, else the failure code.
 export async function appendLine(home: string, id: string, line: string, until: number, fsp: Fsp = fs.promises): Promise<string> {
   const { dir, journal } = journalPaths(home, id);
-  const made = await settle(attempt(() => fsp.mkdir(dir, { recursive: true, mode: 0o700 })), until);
+  const made = await settle(() => fsp.mkdir(dir, { recursive: true, mode: 0o700 }), until);
   if (made !== "ok") return made === "timeout" ? "append-timeout" : "mkdir";
-  const written = await settle(attempt(() => fsp.appendFile(journal, `${line}\n`, { mode: 0o600 })), until);
+  const written = await settle(() => fsp.appendFile(journal, `${line}\n`, { mode: 0o600 }), until);
   return written === "ok" ? "" : written === "timeout" ? "append-timeout" : "append";
 }
 
@@ -183,10 +183,10 @@ const RETRYABLE = new Set(["EPERM", "EACCES", "EBUSY"]);
 // residual limit named in docs/INSTALLATION.md. true when the marker is known to exist.
 export async function markCaptureFailed(home: string, id: string, code: string, until: number, fsp: Fsp = fs.promises): Promise<boolean> {
   const { journal, marker } = journalPaths(home, id);
-  if (await settle(attempt(() => fsp.appendFile(marker, `${code}\n`, { mode: 0o600 })), until) === "ok") return true;
+  if (await settle(() => fsp.appendFile(marker, `${code}\n`, { mode: 0o600 }), until) === "ok") return true;
   for (let pause = 10; Date.now() < until; pause *= 2) {
     let errorCode = "";
-    const renamed = await settle(attempt(() => fsp.rename(journal, marker)), until,
+    const renamed = await settle(() => fsp.rename(journal, marker), until,
       (error) => { errorCode = String((error as NodeJS.ErrnoException)?.code ?? ""); });
     if (renamed === "ok") return true;
     if (renamed === "timeout" || !RETRYABLE.has(errorCode) || Date.now() + pause >= until) return false;
