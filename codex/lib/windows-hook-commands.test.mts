@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
+import { copyAdapter } from "../hooks/hook-adapter.fixture.mts";
 import { prepareManagedConfig } from "./config-preservation.mts";
 import type { McpProjection, McpServerSpec } from "./contracts.mts";
 import { render } from "./parity-config.mts";
@@ -93,7 +94,7 @@ test("the Windows form of the intent entry parses and runs the adapter in pwsh",
     try {
       const hookDir = path.join(dir, "hooks");
       fs.mkdirSync(hookDir);
-      fs.copyFileSync(path.join(import.meta.dirname, "..", "hooks", "hook-adapter.mts"), path.join(hookDir, "codex-hook-adapter.mts"));
+      copyAdapter(hookDir, "codex-hook-adapter.mts");
       const intentHook = path.join(dir, "mcp-intent-hook.mts");
       fs.writeFileSync(intentHook, "import fs from 'node:fs'; const input = JSON.parse(fs.readFileSync(0, 'utf8'));\n"
         + "process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow',"

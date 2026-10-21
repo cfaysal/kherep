@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 
+import { copyAdapter } from "./hook-adapter.fixture.mts";
 import { runAdaptedHook } from "./hook-adapter.mts";
 
 const REPO = path.resolve(import.meta.dirname, "..", "..");
@@ -49,7 +50,7 @@ test("T5c installed box, stale heartbeat: the guard's line comes before the inte
   const root = dir(t, "kherep-sysmsg-box-");
   const hooks = path.join(root, "hooks", "kherep-maestro");
   fs.mkdirSync(path.join(hooks, "lib"), { recursive: true });
-  fs.copyFileSync(ADAPTER, path.join(hooks, "codex-hook-adapter.mts"));
+  copyAdapter(hooks, "codex-hook-adapter.mts");
   fs.copyFileSync(path.join(REPO, "claude", "hooks", "lib", "guard-recheck.mts"), path.join(hooks, "lib", "guard-recheck.mts"));
   fs.writeFileSync(path.join(hooks, "codex-hook-integrity.mts"), "console.log('all 1 files OK (0 restored), heartbeat refreshed');\n");
   const target = guard(hooks, { hookSpecificOutput: DENY, systemMessage: "guard line" });
@@ -89,7 +90,8 @@ test("T5f the exported runAdaptedHook carries the guard's systemMessage for a de
 
 test("T5g the shell dispatcher returns a guard's deny with systemMessage unchanged", (t) => {
   const root = dir(t, "kherep-sysmsg-shell-");
-  for (const name of ["shell-checks", "hook-adapter"]) fs.copyFileSync(path.join(import.meta.dirname, `${name}.mts`), path.join(root, `${name}.mts`));
+  fs.copyFileSync(path.join(import.meta.dirname, "shell-checks.mts"), path.join(root, "shell-checks.mts"));
+  copyAdapter(root);
   for (const name of ["deploy-guard.mts", "main-checkout-guard.mts"]) fs.writeFileSync(path.join(root, name), "process.exit(0);\n");
   const doc = { hookSpecificOutput: { ...DENY, permissionDecisionReason: "commit says no" }, systemMessage: "commit line" };
   guard(root, doc, "commit-guard.mts");

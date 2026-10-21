@@ -14,6 +14,8 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 
+import { ADAPTER_MODULES } from "./hook-adapter.fixture.mts";
+
 const MIN = 60_000;
 const REPO = path.resolve(import.meta.dirname, "..", "..");
 const PAYLOAD = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "shell_command", tool_input: { command: "git status ü" } });
@@ -67,6 +69,7 @@ function box(t: TestContext, installed = true): Box {
     "codex-shell-checks.mts": fs.readFileSync(path.join(import.meta.dirname, "shell-checks.mts"), "utf8"),
     "hook-adapter.mts": fs.readFileSync(path.join(import.meta.dirname, "hook-adapter.mts"), "utf8"),
     "codex-hook-adapter.mts": fs.readFileSync(path.join(import.meta.dirname, "hook-adapter.mts"), "utf8"),
+    ...Object.fromEntries(ADAPTER_MODULES.map((name) => [name, fs.readFileSync(path.join(import.meta.dirname, name), "utf8")])),
     "codex-hook-integrity.mts": INTEGRITY,
     ...Object.fromEntries(GUARDS.map((name) => [`${name}.mts`, guardSource(trace, name)])),
   };

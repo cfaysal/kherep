@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
+import { copyAdapter } from "./hook-adapter.fixture.mts";
+
 const HERE = import.meta.dirname;
 const SOURCE = path.join(HERE, "post-edit-checks.mts");
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "post-edit-process-"));
@@ -18,10 +20,11 @@ function materialize(): string {
   assert.ok(fs.existsSync(SOURCE), "the fixed post-edit dispatcher must exist");
   fs.mkdirSync(HOOKS, { recursive: true });
   for (const dependency of [
-    "post-edit-checks.mts", "post-edit-tool-calls.mts", "hook-adapter.mts", "research-exec-parser.mts",
+    "post-edit-checks.mts", "post-edit-tool-calls.mts", "research-exec-parser.mts",
   ]) {
     fs.copyFileSync(path.join(HERE, dependency), path.join(HOOKS, dependency));
   }
+  copyAdapter(HOOKS);
   for (const watcher of WATCHERS) {
     fs.writeFileSync(path.join(HOOKS, `${watcher}.mts`), [
       "import fs from 'node:fs';",

@@ -247,6 +247,9 @@ export function install(options: InstallOptions = {}) {
     observationStopHook: path.join(sourceRoot, "hooks", "observation-stop.mts"),
     observationHook: path.join(sourceRoot, "hooks", "observation-turn-completion.mts"),
     hookAdapter: path.join(sourceRoot, "hooks", "hook-adapter.mts"),
+    hookAdapterPayload: path.join(sourceRoot, "hooks", "hook-adapter-payload.mts"),
+    hookAdapterVerdict: path.join(sourceRoot, "hooks", "hook-adapter-verdict.mts"),
+    hookAdapterRun: path.join(sourceRoot, "hooks", "hook-adapter-run.mts"),
     postEditDispatcher: path.join(sourceRoot, "hooks", "post-edit-checks.mts"),
     shellDispatcher: path.join(sourceRoot, "hooks", "shell-checks.mts"),
     controlPlaneEntry: path.join(sourceRoot, "hooks", "control-plane-hook.mts"),
@@ -538,6 +541,9 @@ export function install(options: InstallOptions = {}) {
     );
     transaction.copyFile(sources.hookAdapter, path.join(targets.hookDir, "codex-hook-adapter.mts"));
     transaction.copyFile(sources.hookAdapter, path.join(targets.hookDir, "hook-adapter.mts"));
+    transaction.copyFile(sources.hookAdapterPayload, path.join(targets.hookDir, "hook-adapter-payload.mts"));
+    transaction.copyFile(sources.hookAdapterVerdict, path.join(targets.hookDir, "hook-adapter-verdict.mts"));
+    transaction.copyFile(sources.hookAdapterRun, path.join(targets.hookDir, "hook-adapter-run.mts"));
     transaction.copyFile(sources.postEditDispatcher, path.join(targets.hookDir, "codex-post-edit-checks.mts"));
     transaction.copyFile(sources.shellDispatcher, path.join(targets.hookDir, "codex-shell-checks.mts"));
     // Issue #503. Every Control Plane hook command names this entry point, which
