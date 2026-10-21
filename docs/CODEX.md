@@ -449,7 +449,7 @@ Earlier installers could select a separate Central Brain MCP server with native 
 
 ## Verify and upgrade
 
-The installer manages routing, hooks, plugin registration and an installation receipt. It preserves unrelated settings and uses recoverable transactions.
+The installer manages routing, hooks, plugin registration and an installation receipt. It preserves unrelated settings and uses recoverable transactions. The managed hook block is replaced as a unit: a changed field of a managed hook, such as a `timeout`, never leaves the old entry next to the new one, and a previous block the installer does not recognise, one with an operator edit included, is refused instead of merged (issue #568).
 
 The top-level `model_reasoning_effort` in `config.toml` belongs to you. If it is set, the installer keeps that line byte for byte. Only when it is absent does the installer write the default `model_reasoning_effort = "xhigh"`, which matches the Maestro's default root tier. A value inside a table such as `[profiles.<name>]` does not count as top-level and is never changed. The receipt records the outcome as `reasoningEffort`, with `status` `preserved-existing` or `configured` and the `value` kept or written.
 

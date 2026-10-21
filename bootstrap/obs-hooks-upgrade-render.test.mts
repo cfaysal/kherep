@@ -1,10 +1,11 @@
 // Issue #555. An upgrade renders the new settings template over the settings
-// the previous template produced. The merge identifies a hook by every field
-// but its command, so a changed field such as a timeout on an existing entry
-// would keep the old entry next to the new one, and two obs-result-check
-// instances would race over the same handback record. The previous template is
-// this one without the SubagentHandback PostToolUse group, with the SubagentStop
-// entry as main carried it before #555.
+// the previous template produced. Until issue #568 the merge identified a hook
+// by every field but its command, so a changed field such as a timeout on an
+// existing entry kept the old entry next to the new one, and two
+// obs-result-check instances would have raced over the same handback record;
+// managed-hook-upgrade-render.test.mts now covers that replace rule. The
+// previous template is this one without the SubagentHandback PostToolUse group,
+// with the SubagentStop entry as main carried it before #555.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
