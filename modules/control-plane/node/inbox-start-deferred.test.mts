@@ -9,6 +9,7 @@ import { captureRuntimeSourceIdentity } from "./daemon-source.mts";
 import { getSent } from "./exchange.mts";
 import { getMessage } from "./inbox.mts";
 import { fakeSocket, fixture, seconds, until } from "./inbox-start-fixture.mts";
+import { MAINTENANCE_SLICE_MS } from "./inbox-start.mts";
 import { healthy } from "./service-lifecycle.mts";
 import type { ServiceAdapter, ServiceBinding } from "./service-types.mts";
 
@@ -81,6 +82,14 @@ test("T2: the health stage accepts the connection before the start maintenance h
   const logs: string[] = [];
   const maintenanceLines = (): string[] => logs.filter((line) => /before the inbox purge|older than 7 days|start maintenance/.test(line));
   let slices = 0; // slices begun
+  // #589 item 1: the slicer reads a clock that advances CLOCK_STEP_MS per read, so a slice holds exactly
+  // MAINTENANCE_SLICE_MS / CLOCK_STEP_MS = 5 steps on any host. The pass has at least one step per sent and per
+  // inbox record read, so its slice count has a fixed lower bound. STEPS_PER_SLICE is written out, not derived
+  // from the constant: it pins the 50 ms slice (a longer production slice is the regression this guards).
+  let tick = 0;
+  const CLOCK_STEP_MS = 10;
+  const STEPS_PER_SLICE = 5;
+  const STEPS_AT_LEAST = 3000 + 1500;
   // What the health stage's check sees the first time connectedAt is recorded.
   let accepted: { slices: number; sent?: string; reply: boolean; lines: string[] } | null = null;
   const readState = (paths: NodePaths): DaemonState | null => {
@@ -96,7 +105,7 @@ test("T2: the health stage accepts the connection before the start maintenance h
 
   const health = healthy(binding, undefined, { paths: node.paths, adapter, readDaemonState: readState, sleep: turn });
   const handle = startDaemon(node.config, node.paths, (line) => logs.push(line), () => new Promise<never>(() => {}), undefined,
-    { name: binding.serviceName, platform: "darwin" }, {}, { yield: async () => { await turn(); slices++; } });
+    { name: binding.serviceName, platform: "darwin" }, {}, { yield: async () => { await turn(); slices++; }, clock: () => (tick += CLOCK_STEP_MS) });
   t.after(() => handle.stop());
   socket.open();
   socket.feed("event", { name: "auth.ok" }, 0);
@@ -109,7 +118,9 @@ test("T2: the health stage accepts the connection before the start maintenance h
   await until(() => seconds(logs) !== null, logs);
   assert.equal(getSent(node.paths, node.answered)?.state, "replied");
   assert.equal(getMessage(node.paths.inbox, node.oldReply), null, "the old reply was purged");
-  assert.ok(slices >= 2, `the maintenance ran in ${slices} slice(s), done in ${seconds(logs)} s; log:\n${maintenanceLines().join("\n")}`);
+  assert.equal(MAINTENANCE_SLICE_MS, STEPS_PER_SLICE * CLOCK_STEP_MS, "the slice length this test pins");
+  const expected = Math.floor(STEPS_AT_LEAST / STEPS_PER_SLICE);
+  assert.ok(slices >= expected, `the maintenance ran in ${slices} slice(s), at least ${expected} expected, done in ${seconds(logs)} s; log:\n${maintenanceLines().join("\n")}`);
   t.diagnostic(`T2: ${slices} slices, done in ${seconds(logs)} s`);
   handle.stop();
   await handle.done;

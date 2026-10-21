@@ -8,6 +8,8 @@ import { startDaemon, type DaemonHandle } from "./daemon.mts";
 import { getSent } from "./exchange.mts";
 import { getMessage, getReceipt } from "./inbox.mts";
 import { fakeSocket, fixture, id, PEER, seconds, until } from "./inbox-start-fixture.mts";
+// A namespace import, so a run against code without the export fails per test, not at link time.
+import * as inboxStart from "./inbox-start.mts";
 
 // Issue #581: the start maintenance runs in slices off the frame lanes after
 // the first authenticated connection. Between slices the daemon handles
@@ -15,6 +17,7 @@ import { fakeSocket, fixture, id, PEER, seconds, until } from "./inbox-start-fix
 // after the fallback delay.
 
 const SENT = 10;
+const DAY = 24 * 60 * 60_000;
 const reply = (n: number, inReplyTo: string): MessageDeliverBody => ({ messageId: id(n), from: { nodeId: PEER, session: "planner" },
   toSession: "review", text: "done", inReplyTo, createdAt: new Date().toISOString() });
 const lines = (logs: string[], prefix: string): number => logs.filter((line) => line.startsWith(prefix)).length;
@@ -58,8 +61,9 @@ test("T3: replies that arrive during the settle are kept and settled once each, 
   assert.deepEqual([writes.get(b), writes.get(c)], [1, 1], "one write each: the second settle of b found it replied");
   assert.ok(getMessage(node.paths.inbox, id(41)) && getMessage(node.paths.inbox, id(42)), "the new replies are kept");
   assert.equal(getMessage(node.paths.inbox, node.oldReply), null, "the old reply is purged");
-  // The start pass counts id(1) and b, whose reply it saw; c's reply came after its inbox listing.
-  assert.ok(logs.includes("kherep-node: recorded 2 sent message(s) replied before the inbox purge"), logs.join("\n"));
+  // The start pass saw the replies of id(1) and b, but b was already settled on arrival, so it recorded one (#589);
+  // c's reply came after its inbox listing.
+  assert.ok(logs.includes("kherep-node: recorded 1 sent message(s) replied before the inbox purge"), logs.join("\n"));
   assert.ok(logs.includes("kherep-node: removed 1 inbox message(s) older than 7 days"), logs.join("\n"));
   handle.stop();
   await handle.done;
@@ -135,6 +139,46 @@ test("T5: without a connection the start maintenance runs once after the fallbac
   await until(() => lines(logs, "kherep-node: connected as ") === 1, logs);
   await settleTurns();
   assert.equal(lines(logs, "kherep-node: start maintenance "), 1, logs.join("\n"));
+  handle.stop();
+  await handle.done;
+});
+
+// Issue #589 item 2: a coarse file clock (Linux: one timer tick; NTFS: the system time's 1 to 15.6 ms; an ext4 inode
+// without the extra field: whole seconds) can stamp a write made just after the pass began below Date.now() read at its
+// start, so the touchedSince skip of T6 would miss it. The sliced purge therefore also leaves files touched within
+// TOUCHED_MARGIN_MS before it began; a file touched earlier than that goes as before. Here the file times are set.
+test("T7: the sliced purge leaves a record touched within the margin before the pass began, and removes one touched earlier", async (t) => {
+  const node = fixture(t, { inbox: 20, sent: SENT });
+  const socket = fakeSocket(t);
+  const at = new Date(Date.now() - 15 * DAY).toISOString();
+  const file = (m: string): string => path.join(node.paths.inbox, `${m}.json`);
+  const confirmed = (n: number): string => { // delivered 15 days ago and receipted: the purge removes it unless it was touched
+    const m = id(n);
+    fs.writeFileSync(file(m), JSON.stringify({ messageId: m, from: { nodeId: PEER, session: "planner" }, toSession: "review",
+      text: "old", createdAt: at, receivedAt: at, state: "delivered", depth: 0 }));
+    fs.writeFileSync(path.join(node.paths.inbox, "receipts", `${m}.json`), JSON.stringify({ reportedAt: at, reportedState: "delivered", workerState: "delivered" }));
+    return m;
+  };
+  const margin = inboxStart.TOUCHED_MARGIN_MS;
+  assert.equal(margin, 2_000, "the margin inbox-start.mts exports");
+  const [inside, outside] = [confirmed(300), confirmed(301)];
+  const logs: string[] = [];
+  let began = 0; // an upper bound of the pass start: the pass reads its touchedSince before its first pause
+  const handle = startDaemon(node.config, node.paths, (line) => logs.push(line), async () => [], undefined, undefined, {},
+    { yield: async () => { began ||= Date.now(); await new Promise((resolve) => setImmediate(resolve)); } });
+  t.after(() => handle.stop());
+  const now = Date.now();
+  fs.utimesSync(file(inside), new Date(now - margin / 4), new Date(now - margin / 4));
+  fs.utimesSync(file(outside), new Date(now - margin - 1_000), new Date(now - margin - 1_000));
+  socket.open();
+  socket.feed("event", { name: "auth.ok" }, 0);
+  await until(() => seconds(logs) !== null, logs);
+  // inside is a quarter margin old, so it is kept only while the pass began within three quarters of it (review P3-1).
+  assert.ok(began - now <= (margin * 3) / 4, `the pass began ${began - now} ms after the file times were set, past the test's headroom`);
+  assert.ok(getMessage(node.paths.inbox, inside), "touched within the margin before the pass: left to the next start");
+  assert.equal(getMessage(node.paths.inbox, outside), null, "touched before the margin: removed");
+  assert.equal(getMessage(node.paths.inbox, node.oldReply), null, "the old reply is still purged");
+  assert.ok(logs.includes("kherep-node: removed 2 inbox message(s) older than 7 days"), logs.join("\n"));
   handle.stop();
   await handle.done;
 });

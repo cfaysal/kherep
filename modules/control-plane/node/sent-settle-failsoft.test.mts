@@ -55,6 +55,7 @@ function reply(paths: NodePaths, n: number, inReplyTo: string, at: number): void
   storeMessage(paths.inbox, replyBody(n, inReplyTo), at);
   markDelivered(paths.inbox, id(n));
   markReported(paths.inbox, id(n), "delivered", "delivered", at + 1);
+  fs.utimesSync(path.join(paths.inbox, `${id(n)}.json`), new Date(at), new Date(at)); // its file time is its age (#589)
 }
 
 // renameSync throws EPERM for a write onto sent/<messageId>.json (the path-filter pattern of codex-busy-consume.test.mts).

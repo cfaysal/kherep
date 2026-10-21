@@ -48,6 +48,7 @@ export function fixture(t: TestContext, counts: { inbox: number; sent: number })
     const at = n === 1 ? now - 8 * DAY : now - 60 * 60_000;
     fs.writeFileSync(path.join(paths.inbox, `${messageId}.json`), JSON.stringify({ messageId, from: { nodeId: PEER, session: "planner" },
       toSession: "review", text, ...(n === 1 ? { inReplyTo: id(1) } : {}), createdAt: iso(at), receivedAt: iso(at), state: "delivered", depth: 0 }));
+    fs.utimesSync(path.join(paths.inbox, `${messageId}.json`), new Date(at), new Date(at)); // its file time is its age (#589)
     if (n === 1) fs.writeFileSync(path.join(paths.inbox, "receipts", `${messageId}.json`),
       JSON.stringify({ reportedAt: iso(at + 1), reportedState: "delivered", workerState: "delivered" }));
   }
@@ -73,7 +74,7 @@ export function fakeSocket(t: TestContext) {
   globalThis.clearInterval = (() => {}) as typeof clearInterval;
   return {
     open: (): void => listeners.get("open")?.({}),
-    feed: (type: "event" | "message.deliver", body: unknown, seq: number): void =>
+    feed: (type: "event" | "message.deliver" | "command", body: unknown, seq: number): void =>
       listeners.get("message")?.({ data: JSON.stringify(makeEnvelope(type, body, seq, 0)) }),
   };
 }
