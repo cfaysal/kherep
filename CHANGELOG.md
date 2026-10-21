@@ -278,15 +278,36 @@ increments the minor version; every other release increments the patch version.
   <key>` outside pre-intent. The pre-intent texts of issue #538 change only
   where an error had no code: it now reads its class name instead of
   `unknown`. Tests assert that no POSIX, drive, UNC or home-relative path,
-  and no `..` escape, appears in the lines those components build. Not
-  covered, tracked in #576: the restore lines `versioned source <checkout
-  path> …` (`lib/integrity-verdict.mts`, `hook-integrity-repair.mts`), the
-  restore refusal in `lib/restore-write.mts` that names the hooks
-  directory, Node's parser messages in `rejected by Node's parser: …`
-  (`lib/hook-syntax.mts`), and the error text of
-  `lib/integrity-heartbeat.mts` (`run.lock unavailable (…)` for a code-less
-  error). No command definition, timeout, exit code or Codex trust hash
-  changes.
+  and no `..` escape, appears in the lines those components build. The
+  restore and library texts followed in #576 (next entry). No command
+  definition, timeout, exit code or Codex trust hash changes.
+- Restore and integrity-library texts name no absolute path (issue #576,
+  follow-up of #564). The restore lines of `hooks/lib/integrity-verdict.mts`,
+  `codex/hooks/hook-integrity-repair.mts` and `hooks/critical-file-integrity.mts`
+  name the versioned source by its path inside the checkout:
+  `NOT restored (versioned source claude/hooks/lib/x.mts unreadable (ENOENT))`,
+  `… codex/hooks/shell-checks.mts is itself 0 bytes`,
+  `… claude/kherep/githooks/commit-msg unreadable (ENOENT)`. Which checkout
+  was tried moves from the notice into the journal: the per-file entries of
+  `incidents.jsonl` written by all three restore writers gain one key,
+  `checkout`. `hooks/lib/restore-write.mts` refuses a linked hooks
+  subdirectory as `hooks directory or its subdirectory resolves outside the
+  hooks root`, the sentence the hook runtime already uses.
+  `hooks/lib/hook-syntax.mts` keeps Node's parser message but reduces every
+  absolute path in it to the file name: `rejected by node --check:
+  SyntaxError: … (Node named it other.js)`, `… could not confirm (exit 1:
+  g.js:1)`; a check that could not run reads a Node error code, else the
+  error's class name, else `unknown`, as do the catch-alls `the
+  critical-file check itself failed (<code>)` and the CLI's `UNGEPRUEFT the
+  check itself failed (<code>)`. `hooks/lib/integrity-heartbeat.mts` prints a
+  code-less error the same way (`run.lock unavailable (TypeError)`,
+  `heartbeat write failed: unknown`), never its message. Tests assert that no
+  POSIX, drive, UNC or home-relative path appears in any restore, parser or
+  heartbeat line on either runtime. Limit: a path with a space inside a Node
+  message (not a location line) keeps its tail after the space, as a deny
+  reason does; the default Windows Node install reads `exit 9: Program
+  Files\nodejs\node.exe: bad option: …`. No command definition, timeout, exit
+  code or Codex trust hash changes.
 
 ### Fixed
 
