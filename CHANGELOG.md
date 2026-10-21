@@ -343,6 +343,11 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- The header of `modules/control-plane/node/wake-hook.mts` no longer quotes
+  "There is no deduplication" from the Claude Code hooks page, which no
+  longer carries that sentence (issue #613). It cites the current
+  "Limitations" line on separate background processes and names the
+  section the `timeout` sentence comes from. Comment only.
 - Client binding probe: on Windows the lock that serialises intent creation
   and verification (`locks/create.lock`, `locks/<requestId>.lock`) is no
   longer abandoned when another process is releasing it. An exclusive
