@@ -130,7 +130,12 @@ test("staging refuses a source graph reached through a symlink ancestor", (t) =>
   for (const relative of CLAUDE_CLIENT_GRAPH.filter((entry) => !entry.startsWith("node/"))) {
     fs.copyFileSync(path.join(import.meta.dirname, "..", relative), path.join(sourceRoot, relative));
   }
-  fs.symlinkSync(import.meta.dirname, path.join(sourceRoot, "node"));
+  try {
+    fs.symlinkSync(import.meta.dirname, path.join(sourceRoot, "node"));
+  } catch (error) {
+    if (["EPERM", "ENOSYS"].includes((error as NodeJS.ErrnoException).code ?? "")) return t.skip("directory symlinks are unavailable");
+    throw error;
+  }
   assert.throws(() => stageClaudeClient({ outputRoot, clientRoot, configRoot,
     nodeCommand: process.execPath, sourceRoot }), /symlink ancestor/);
 });
