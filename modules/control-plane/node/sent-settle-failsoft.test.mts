@@ -156,6 +156,20 @@ test("F3: the start pass skips a corrupt record, logs a failed write, settles th
   for (const n of [40, 41, 42]) assert.equal(getMessage(paths.inbox, id(n)), null);
 });
 
+// Issue #581: the start pass joins sent records with the inbox records in reply to them; the rest of the rule still applies.
+test("F5: the start pass settles only records a reply from the target node to the sender session answers", (t) => {
+  const paths = setup(t);
+  const now = Date.UTC(2026, 9, 12, 12);
+  const [a, b, c] = [1, 2, 3].map((n) => sent(paths, n, now));
+  for (let n = 0; n < 46; n++) storeMessage(paths.inbox, replyBody(100 + n), now);
+  reply(paths, 40, a, now);
+  reply(paths, 41, b, now);
+  storeMessage(paths.inbox, { ...replyBody(42, c), from: { nodeId: NODE, session: "planner" } }, now);
+  storeMessage(paths.inbox, { ...replyBody(43, c), toSession: "other" }, now);
+  assert.equal(sentNotices.settleAnsweredAtStart(paths, now + 1), 2);
+  assert.deepEqual([a, b, c].map((m) => getSent(paths, m)?.state), ["replied", "replied", "delivered"]);
+});
+
 test("F4: startDaemon settles an answered record before its purge, and its client settles a reply on arrival", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-settle-daemon-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

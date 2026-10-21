@@ -7,7 +7,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { nodePaths, type NodePaths } from "./config.mts";
-import { getMessage, INBOX_RETENTION_MS, markDelivered, markReported, purgeInbox, storeMessage } from "./inbox.mts";
+import { getMessage, INBOX_RETENTION_MS, markDelivered, markReported, storeMessage } from "./inbox.mts";
+import { purgeInbox } from "./inbox-purge.mts";
 import { recordSent, writeOutbox } from "./exchange.mts";
 import {
   claimProxied, getProxied, proxiedFileOf, relayState, removeProxied, setUnconfirmed, setUnresolved, type ProxiedRecord,

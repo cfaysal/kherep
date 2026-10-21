@@ -5,7 +5,8 @@ import path from "node:path";
 import test from "node:test";
 
 import type { MessageDeliverBody } from "../protocol-messages.mts";
-import { getMessage, getMessageProgress, getReceipt, INBOX_RETENTION_MS, listInbox, markDelivered, markOffered, markReported, markRetry, purgeInbox, setDeliveryTask, setMessageProgress, storeMessage } from "./inbox.mts";
+import { getMessage, getMessageProgress, getReceipt, INBOX_RETENTION_MS, listInbox, markDelivered, markOffered, markReported, markRetry, setDeliveryTask, setMessageProgress, storeMessage } from "./inbox.mts";
+import { drain, purgeInbox, purgeInboxSteps } from "./inbox-purge.mts";
 
 const ID_A = "00000000-0000-4000-8000-0000000000a1";
 const ID_B = "00000000-0000-4000-8000-0000000000b2";
@@ -119,6 +120,21 @@ test("purges records older than seven days and stale temp files", (t) => {
   assert.deepEqual(fs.readdirSync(dir).sort(), [`${ID_B}.json`, "receipts"]);
   assert.equal(getReceipt(dir, ID_A), null);
   assert.equal(purgeInbox(path.join(dir, "missing"), NOW), 0);
+});
+
+// Issue #581: a second purge (an orphaned daemon, issue #582) may remove an entry after this purge listed it.
+test("a purge skips an entry removed after its listing and finishes the rest", (t) => {
+  const dir = tempInbox(t);
+  for (const id of [ID_A, ID_B]) {
+    storeMessage(dir, deliver(id), NOW - INBOX_RETENTION_MS - 1);
+    markDelivered(dir, id);
+    markReported(dir, id, "delivered", "delivered", NOW - INBOX_RETENTION_MS - 1);
+  }
+  const steps = purgeInboxSteps(dir, NOW);
+  steps.next();
+  fs.rmSync(path.join(dir, `${ID_A}.json`));
+  assert.equal(drain(steps), 1);
+  assert.deepEqual(fs.readdirSync(dir).sort(), ["receipts"]);
 });
 
 test("delivery task identity is separate from the grant and survives offers, retries, receipts and confirmation", (t) => {
