@@ -3,18 +3,19 @@ import path from "node:path";
 
 import type { DaemonState } from "./daemon-state.mts";
 import {
-  acquireServiceLock, readServiceReceipt, saveServiceBackup, serviceRoot, snapshotDigests, writeServiceReceipt,
+  acquireServiceLock, readServiceCandidate, readServiceReceipt, removeServiceCandidate, saveServiceBackup,
+  serviceRoot, snapshotDigests, writeServiceCandidate, writeServiceReceipt,
 } from "./service-records.mts";
 import { pinServiceSource } from "./service-source.mts";
 import { beginServiceDrain } from "./service-drain.mts";
 import { issueServiceLaunchPermit } from "./service-launch-permit.mts";
 import {
   healthy, lifecycleDefaults, prepareStop, proveStopped, removeFresh, restorePrior, sourceMatches, verifyExact, verifyStopOwnership,
-  type LifecycleDependencies,
+  type CandidateLoadedError, type LifecycleDependencies,
 } from "./service-lifecycle.mts";
 import {
-  assertSettled, exact, failedWriteSnapshot, receiptFor, recoveryBlocker, sameBinding, serviceFailure, stopNotIssued, type ServiceStage,
-  type ServiceTransactionResult,
+  assertSettled, candidateInPlace, exact, failedWriteSnapshot, receiptFor, recordedPriorBackup, recoveryBlocker, sameBinding, sameSelector,
+  serviceFailure, stopNotIssued, type ServiceStage, type ServiceTransactionResult,
 } from "./service-transaction-support.mts";
 import type { NativeServiceSnapshot, ServiceBinding } from "./service-types.mts";
 
@@ -48,8 +49,19 @@ export async function activateManagedService(options: ActivateOptions, input: De
     if (existing?.running === false && recordedBefore && deps.alive(recordedBefore.pid)) {
       throw new Error("a live daemon remains outside the stopped selected service");
     }
+    const digests = existing ? snapshotDigests(existing) : undefined;
+    const receiptMatch = Boolean(receipt && digests && digests.definitionDigest === receipt.definitionDigest && digests.securityDigest === receipt.securityDigest);
+    // #582: the record is consulted only while the receipt does not match (A2 P2-A); an invalid record then throws before any mutation.
+    const pending = receiptMatch ? null : readServiceCandidate(input.paths);
+    // #582 (A2 P1-A): an install record carries the node executable and log path the adoption rewrote; the repeated
+    // install (same selector, no receipt) inherits them before the binding match, so the record is reachable on real hosts.
+    if (!receipt && pending?.command === "install" && sameSelector(pending.binding, binding)) {
+      binding = { ...binding, nodeExecutable: pending.binding.nodeExecutable, logFile: pending.binding.logFile };
+    }
+    const pendingMatch = !receiptMatch && candidateInPlace(pending, existing, binding);
+    if (pendingMatch && options.adopt) throw new Error("a recorded failed candidate cannot be adopted; repeat the install without --adopt or run service rollback");
     let legacySourceRoot: string | undefined;
-    if (existing && !receipt && options.adopt) {
+    if (existing && !receipt && !pendingMatch && options.adopt) {
       binding = { ...binding, nodeExecutable: await input.adapter.adoptionNode(existing, recordedBefore?.pid) };
       legacySourceRoot = await input.adapter.adoptionSourceRoot(existing, recordedBefore?.pid);
       const logFile = await input.adapter.adoptionLogFile(existing);
@@ -58,26 +70,24 @@ export async function activateManagedService(options: ActivateOptions, input: De
     }
     if (receipt) {
       if (!existing) throw new Error("managed service definition is missing");
-      const digests = snapshotDigests(existing);
-      if (digests.definitionDigest !== receipt.definitionDigest || digests.securityDigest !== receipt.securityDigest) {
-        throw new Error("managed service definition drifted from its receipt");
-      }
-      await input.adapter.validateManaged(existing, receipt.binding);
-    } else if (existing && (!options.adopt || !options.explicitServiceName)) {
+      if (!receiptMatch && !pendingMatch) throw new Error("managed service definition drifted from its receipt");
+    } else if (existing && !pendingMatch && (!options.adopt || !options.explicitServiceName)) {
       throw new Error("an existing service requires explicit --service-name and --adopt");
     }
+    if (receipt || pendingMatch) await input.adapter.validateManaged(existing!, pendingMatch ? pending.binding : receipt!.binding);
+    const prior = pendingMatch && pending.backupId ? recordedPriorBackup(input.paths, pending, receipt) : null;
+    if (pendingMatch && pending.backupId && !prior) throw new Error("managed service candidate record does not bind to the receipt");
 
     let oldState: DaemonState | null = null;
-    let oldBinding: ServiceBinding | undefined = receipt?.binding;
+    let oldBinding: ServiceBinding | undefined = pendingMatch ? pending.binding : receipt?.binding;
     if (existing) {
       oldState = recordedBefore;
-      // #472: only a running service must match its daemon record; a live daemon beside a stopped one is refused above.
-      if (receipt && existing.running === true && (!oldState?.source?.verified || !sourceMatches(receipt.binding.source, oldState.source)
-        || oldState.service?.name !== receipt.binding.serviceName || oldState.service.platform !== receipt.binding.platform
-        || oldState.service.taskPath !== receipt.binding.taskPath)) {
+      if ((receipt || pendingMatch) && existing.running === true && (!oldState?.source?.verified || !sourceMatches(oldBinding!.source, oldState.source)
+        || oldState.service?.name !== oldBinding!.serviceName || oldState.service.platform !== oldBinding!.platform
+        || oldState.service.taskPath !== oldBinding!.taskPath)) {
         throw new Error("running daemon does not match the managed service receipt");
       }
-      if (!receipt && oldState?.source?.verified) {
+      if (!receipt && !pendingMatch && oldState?.source?.verified) {
         oldBinding = { ...binding, source: oldState.source, supervisorGeneration: undefined };
         if (path.resolve(oldState.source.root) !== path.resolve(legacySourceRoot!)) {
           throw new Error("legacy native source root does not match recorded daemon source");
@@ -85,7 +95,7 @@ export async function activateManagedService(options: ActivateOptions, input: De
       }
       const provenanceRoot = oldBinding ? undefined : legacySourceRoot;
       if (existing.running === true) {
-        if (!oldState?.connectedAt || oldState.disconnectedAt) throw new Error("selected service does not own the recorded daemon");
+        if (!oldState || (!pendingMatch && (!oldState.connectedAt || oldState.disconnectedAt))) throw new Error("selected service does not own the recorded daemon");
         const selectedBinding = oldBinding ?? binding;
         const context = { pid: oldState.pid, startedAt: oldState.startedAt, ...(provenanceRoot ? { sourceRoot: provenanceRoot } : {}) };
         if (deps.alive(oldState.pid)) {
@@ -99,12 +109,14 @@ export async function activateManagedService(options: ActivateOptions, input: De
       }
     }
     const definition = existing
-      ? receipt
+      ? (receipt || pendingMatch)
         ? await input.adapter.retargeted(existing, binding)
         : await input.adapter.adopted(existing, binding, legacySourceRoot!)
       : await input.adapter.fresh(binding);
     const security = existing ? existing.security : await input.adapter.freshSecurity(binding);
-    const backup = existing ? saveServiceBackup(input.paths, existing, { receipt, priorSource: oldBinding?.source, now: deps.now() }) : undefined;
+    const backup = !existing ? undefined
+      : pendingMatch ? prior?.backup
+        : saveServiceBackup(input.paths, existing, { receipt, priorSource: oldBinding?.source, now: deps.now() });
     let endDrain = () => {};
     let clearLaunchPermit = () => {};
     let drainSafeToRelease = true;
@@ -147,6 +159,7 @@ export async function activateManagedService(options: ActivateOptions, input: De
       const active = await assertSettled(input, binding, written, healthyState, true);
       stage = "receipt";
       writeServiceReceipt(input.paths, receiptFor(binding, active, deps.now(), backup));
+      removeServiceCandidate(input.paths);
       return { serviceName: binding.serviceName, ...(binding.taskPath ? { taskPath: binding.taskPath } : {}),
         platform: binding.platform, source: binding.source, ...(backup ? { backupId: backup.id } : {}) };
     } catch (cause) {
@@ -154,12 +167,21 @@ export async function activateManagedService(options: ActivateOptions, input: De
       candidateSnapshot ??= failedWriteSnapshot(cause);
       if (stopNotIssued(stage, cause)) stopIssued = false;
       let recovery = "unknown", blocker: string | undefined;
+      const recordCandidate = (error: unknown): void => {
+        if (blocker !== "RECOVERY_CANDIDATE_LOADED" || !candidateSnapshot) return;
+        const d = snapshotDigests(candidateSnapshot);
+        if (receipt && d.definitionDigest === receipt.definitionDigest && d.securityDigest === receipt.securityDigest) return;
+        try {
+          writeServiceCandidate(input.paths, { version: 1, binding, ...d, ...(backup ? { backupId: backup.id } : {}),
+            command: options.mode, stage, blocker, stopCode: (error as Partial<CandidateLoadedError>).stopCode ?? "STOP_FAILED_OTHER", failedAt: deps.now() });
+        } catch { /* review P3 */ }
+      };
       try {
         if (existing) await restorePrior({ binding, previous: existing, previousBinding: oldBinding,
           previousPid: oldState?.pid, deps: input, candidate: candidateSnapshot, priorStopIssued: stopIssued });
         else await removeFresh(binding, input);
         recovery = "restored";
-      } catch (error) { blocker = recoveryBlocker(error); }
+      } catch (error) { blocker = recoveryBlocker(error); recordCandidate(error); }
       // #472: keep the drain once a write was attempted or while a daemon told to stop is still alive.
       if (recovery === "unknown" && (writeAttempted || (stopIssued && deps.alive(oldState?.pid)))) drainSafeToRelease = false;
       throw serviceFailure("SERVICE_ACTIVATION_FAILED", cause, recovery, stage, blocker);
