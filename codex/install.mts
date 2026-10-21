@@ -548,6 +548,8 @@ export function install(options: InstallOptions = {}) {
     transaction.copyFile(sources.hookAdapterRun, path.join(targets.hookDir, "hook-adapter-run.mts"));
     transaction.copyFile(sources.postEditDispatcher, path.join(targets.hookDir, "codex-post-edit-checks.mts"));
     transaction.copyFile(sources.shellDispatcher, path.join(targets.hookDir, "codex-shell-checks.mts"));
+    // Issue #504: the denied-call renderer, an operator CLI beside the installed lib/, never a hook.
+    transaction.copyFile(path.join(sources.claudeHooks, "denied-calls.mts"), path.join(targets.hookDir, "denied-calls.mts"));
     // Issue #503. Every Control Plane hook command names this entry point, which
     // runs the hooks of the source the pointer names: this installer's root.
     transaction.copyFile(sources.controlPlaneEntry, path.join(targets.hookDir, "codex-control-plane-hook.mts"));

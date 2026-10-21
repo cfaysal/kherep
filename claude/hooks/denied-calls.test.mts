@@ -62,15 +62,15 @@ test("list and prune; a malformed command is usage with exit 2", () => {
 
 test("the home is the installation's: parent of hooks/, or of hooks/kherep-maestro/ for the Codex copy", () => {
   assert.equal(homeOf(path.join("/h", ".claude", "hooks", "denied-calls.mts")), path.resolve("/h/.claude"));
-  assert.equal(homeOf(path.join("/h", ".codex", "hooks", "kherep-maestro", "codex-denied-calls.mts")), path.resolve("/h/.codex"));
+  assert.equal(homeOf(path.join("/h", ".codex", "hooks", "kherep-maestro", "denied-calls.mts")), path.resolve("/h/.codex"));
   const root = home();
   const hooks = path.join(root, "hooks", "kherep-maestro");
   fs.mkdirSync(path.join(hooks, "lib"), { recursive: true });
-  fs.copyFileSync(CLI, path.join(hooks, "codex-denied-calls.mts"));
+  fs.copyFileSync(CLI, path.join(hooks, "denied-calls.mts"));
   for (const lib of ["denial-report.mts", "denial-journal.mts", "workspace-scope.mts"]) {
     fs.copyFileSync(path.join(import.meta.dirname, "lib", lib), path.join(hooks, "lib", lib));
   }
   fs.writeFileSync(journalPaths(root, "a1").journal, callWith([]));
-  const run = cli(["render", "a1"], path.join(hooks, "codex-denied-calls.mts"));
+  const run = cli(["render", "a1"], path.join(hooks, "denied-calls.mts"));
   assert.equal(run.stdout.split("\n")[0], "DENIED-CALLS: none", run.stderr);
 });

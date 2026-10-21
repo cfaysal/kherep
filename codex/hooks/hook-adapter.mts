@@ -114,6 +114,32 @@ async function recheckRun(home: string, payload: string, broken: boolean): Promi
   return lib.runRecheck({ script, home, payload, budgetMs, ...context, trigger: "hook-adapter", env: { CODEX_HOME: home } });
 }
 
+type JournalLib = typeof import("../../claude/hooks/lib/denial-journal.mts");
+type Verdicts = { decision?: string; reason?: string; broken?: boolean }[];
+// The Codex home of the installed copy (<home>/hooks/kherep-maestro), else undefined.
+const installedHome = (): string | undefined => path.basename(INVOKED_DIR) === "kherep-maestro"
+  && path.basename(path.dirname(INVOKED_DIR)) === "hooks" ? path.dirname(path.dirname(INVOKED_DIR)) : undefined;
+
+// Issue #504. A delegated run's call line in <home>/.cache/denied-calls through the installed
+// lib/denial-journal.mts beside this copy, else a capture-failed marker; never a decision, within
+// min(1 s, the deadline - 250 ms). Inert until a Codex child payload carries agent_id (#537). The
+// lib loads by a computed path, so hook integrity does not inventory it (docs/CODEX.md).
+export async function journalCall(payload: HookPayload, verdicts: Verdicts, end = DEADLINE - 250): Promise<void> {
+  const home = installedHome(), id = payload.agent_id;
+  if (!home || typeof id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(id) || payload.tool_name === "SubagentHandback") return;
+  const cap = Math.max(0, Math.min(1_000, end - Date.now()));
+  const fail = await within((import(pathToFileURL(path.join(INVOKED_DIR, "lib", "denial-journal.mts")).href) as Promise<JournalLib>)
+    .then((lib) => lib.journalVerdict(home, payload, verdicts, Date.now() + cap - 50)), cap, () => "lib-timeout").catch(() => "lib-load");
+  if (fail) await within(markUnjournalled(home, id, fail), Math.max(0, end - Date.now()), () => {}).catch(() => {});
+}
+
+// The marker without the lib: one line, else the journal renamed to it.
+function markUnjournalled(home: string, id: string, code: string): Promise<unknown> {
+  const dir = path.join(home, ".cache", "denied-calls"), base = path.join(dir, id);
+  return fs.promises.mkdir(dir, { recursive: true, mode: 0o700 }).then(() => fs.promises.appendFile(`${base}.failed`, `${code}\n`, { mode: 0o600 }))
+    .catch(() => fs.promises.rename(`${base}.jsonl`, `${base}.failed`));
+}
+
 // One document on stdout, the guards' stderr and the re-check block on stderr; exits
 // once every write called back. The notice goes to additionalContext on an allow,
 // to a top-level systemMessage on a deny, never into the decision. In pre-intent it goes
@@ -169,8 +195,8 @@ async function main(target: string | undefined, phase: string): Promise<void> {
   const cap = phase === INTENT_PHASE ? INTENT_GUARD_TIMEOUT_MS : GUARD_TIMEOUT_MS;
   const result = preToolUse(target, phase, payload as HookPayload, Math.min(cap, remaining()),
     { guardArgs: process.argv.slice(4), deadline: DEADLINE });
-  const notice = await within(recheck(raw, result.broken), remaining(),
-    () => "hook integrity re-check unavailable (no result before the hook deadline)");
+  const [notice] = await Promise.all([within(recheck(raw, result.broken), remaining(),
+    () => "hook integrity re-check unavailable (no result before the hook deadline)"), journalCall(payload as HookPayload, result.verdicts)]);
   emit(result.verdict, result.stderr, notice, phase);
 }
 
