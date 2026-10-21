@@ -125,7 +125,7 @@ test("service status reports a stale drain and its recovery", async () => {
     assert.equal(stale.exit, 1);
     assert.equal(stale.report.ok, false);
     assert.equal(stale.report.drain, "stale");
-    assert.equal(stale.report.recovery, `kherep-node service upgrade --source <clean checkout at ${source.commit}> reclaims the stale drain`);
+    assert.equal(stale.report.recovery, `kherep-node service upgrade --source <clean checkout> reclaims the stale drain (installed source ${source.commit})`);
     assert.equal(JSON.stringify(stale.report).includes(String(owner.pid)), false, "the drain owner pid is not reported");
     assert.equal(JSON.stringify(stale.report).includes(root), false, "status prints no local path");
     ownerActive = "unknown";
@@ -139,7 +139,7 @@ test("service status reports a stale drain and its recovery", async () => {
     alive = false;
     const stopped = await status();
     assert.equal(stopped.report.ok, false);
-    assert.equal(stopped.report.recovery, `kherep-node service upgrade --source <clean checkout at ${source.commit}>`);
+    assert.equal(stopped.report.recovery, `kherep-node service upgrade --source <clean checkout> (installed source ${source.commit})`);
     assert.equal(JSON.stringify(stopped.report).includes(root), false);
     assert.equal("pid" in stopped.report, false);
   } finally {
