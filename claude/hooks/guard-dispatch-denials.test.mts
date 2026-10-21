@@ -92,6 +92,17 @@ test("an allow is a call line without denials, the handback is not journalled, a
   assert.deepEqual(fs.readdirSync(journalPaths(fx.root, "x").dir), ["agent-t1.jsonl"]);
 });
 
+test("an agent_id that is no string: the decision as without one, no journal, never the internal-error deny", async () => {
+  const fx = fixture();
+  for (const guards of [["allow.mts"], ["exit2.mts"]]) {
+    const plain = await dispatch(fx, guards, payload({ agent_id: undefined }));
+    const odd = await dispatch(fx, guards, payload({ agent_id: { toString: 1 } }));
+    assert.deepEqual([odd.status, odd.stdout], [plain.status, plain.stdout]);
+    assert.doesNotMatch(odd.stdout, /internal error/);
+  }
+  assert.equal(fs.existsSync(journalPaths(fx.root, "x").dir), false);
+});
+
 for (const lib of ["missing", "empty", "throwing", "hanging"] as const) {
   test(`a journal lib that is ${lib}: identical decision, exit 0, a marker, never the internal-error deny`, async () => {
     const reference = await dispatch(fixture(), ["exit2.mts"], payload());

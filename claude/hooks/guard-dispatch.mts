@@ -198,10 +198,10 @@ async function recheck(payload: string, guards: Promise<Outcome[]>, ownDir: stri
 
 // Issue #504: a delegated run's call line (lib/denial-journal.mts), else a marker; never a verdict, never past its caps.
 async function journal(payload: Record<string, unknown>, verdicts: Verdict[]): Promise<void> {
-  const id = payload.agent_id, cap = Math.min(JOURNAL_CAP_MS, remaining()), base = path.join(HOME, ".cache", "denied-calls", String(id));
+  const id = payload.agent_id, cap = Math.min(JOURNAL_CAP_MS, remaining()); // a lib that is missing, empty, throws or hangs is caught
   if (typeof id !== "string" || !AGENT_KEY.test(id) || payload.tool_name === "SubagentHandback") return;
   const fail = await within(import("./lib/denial-journal.mts").then((lib) => lib.journalVerdict(HOME, payload, verdicts, Date.now() + cap - 50)),
-    cap, () => "lib-timeout").catch(() => "lib-load"); // a lib that is missing, empty, throws or hangs
+    cap, () => "lib-timeout").catch(() => "lib-load"), base = path.join(HOME, ".cache", "denied-calls", id);
   if (fail) await within(fs.promises.mkdir(path.dirname(base), { recursive: true, mode: 0o700 }).then(() => fs.promises.appendFile(`${base}.failed`,
     `${fail}\n`, { mode: 0o600 })).catch(() => fs.promises.rename(`${base}.jsonl`, `${base}.failed`)), Math.min(MARK_GRACE_MS, remaining()), () => {})
     .catch(() => {});
