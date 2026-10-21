@@ -1,4 +1,5 @@
 import type { DaemonState } from "./daemon-state.mts";
+import type { SourceIdentity } from "./daemon-source.mts";
 import { lifecycleDefaults, type LifecycleDependencies } from "./service-lifecycle.mts";
 import { snapshotDigests, type ServiceBackup, type ServiceReceipt } from "./service-records.mts";
 import {
@@ -18,6 +19,8 @@ export function failedWriteSnapshot(cause: unknown): NativeServiceSnapshot | und
   const snapshot = (cause as FailedServiceWrite)[FAILED_WRITE_SNAPSHOT];
   return snapshot && Buffer.isBuffer(snapshot.definition) && Buffer.isBuffer(snapshot.security) ? snapshot : undefined;
 }
+
+export interface ServiceTransactionResult { serviceName: string; taskPath?: string; platform: string; source: SourceIdentity; backupId?: string; recovery?: string }
 
 export function receiptFor(binding: ServiceBinding, snapshot: NativeServiceSnapshot, now: string, backup?: ServiceBackup): ServiceReceipt {
   return { version: 1, binding, ...snapshotDigests(snapshot), activatedAt: now, ...(backup ? { previousBackup: backup.id } : {}) };
