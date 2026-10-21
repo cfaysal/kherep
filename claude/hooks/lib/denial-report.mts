@@ -42,7 +42,8 @@ function parse(text: string, state: JournalState): UnknownCode | undefined {
   if (text && !text.endsWith("\n")) return "journal-corrupt"; // a partial last line
   const seen = new Set<string>();
   const add = (id: unknown, denial: Listed): void => {
-    const key = isText(id) ? `${id}\u0000${denial.guard}` : undefined; // id null is never merged
+    // The dispatcher processes of one call repeat a denial; distinct denials of one guard tag stay. id null never merges.
+    const key = isText(id) ? `${id}\u0000${denial.guard}\u0000${denial.reason}` : undefined;
     if (key && seen.has(key)) return;
     if (key) seen.add(key);
     state.denials.push(denial);
@@ -63,7 +64,7 @@ function parse(text: string, state: JournalState): UnknownCode | undefined {
       state.delivered = line.at;
     } else return "journal-corrupt";
   }
-  return state.calls ? undefined : state.denials.length ? undefined : "no-calls";
+  return state.calls || state.denials.length ? undefined : "no-calls";
 }
 
 // The state of one worker's journal. A marker wins over every other state.

@@ -63,22 +63,25 @@ test("a marker wins over every other state, whatever its content, also a renamed
   assert.equal(render(root).text, `DENIED-CALLS: unknown (capture-failed)\nstatus: delivered ${at(9)}\n`);
 });
 
-test("denials: deduplicated by (id, guard) across dispatcher processes, id null never merged, entry-deny listed", () => {
+test("denials: deduplicated by (id, guard, reason) across dispatcher processes, id null never merged, entry-deny listed", () => {
   const root = home();
   write(root, [
     call(1, "t1", "Bash", [denial("commit-guard", "git")]),
     call(1, "t1", "Bash", [denial("commit-guard", "git")]),
     call(1, "t1", "Bash", [denial("main-checkout-guard", "git")]),
+    call(1, "t1", "Bash", [denial("hook-adapter", "git", "[hook-adapter] a.mts cannot run"), denial("hook-adapter", "git", "[hook-adapter] b.mts cannot run")]),
     call(2, null, "Read", [denial("secret-output")]),
     call(3, null, "Read", [denial("secret-output")]),
     JSON.stringify({ v: 1, kind: "entry-deny", at: at(4), id: "t4", tool: "Bash", reason: "[hook-entry] guard-dispatch.mts cannot run (exit code 1)" }),
   ]);
   const { text, exit } = render(root);
   assert.equal(exit, 0);
-  assert.deepEqual(text.split("\n").slice(0, 6), [
-    "DENIED-CALLS: 5",
+  assert.deepEqual(text.split("\n").slice(0, 8), [
+    "DENIED-CALLS: 7",
     "- Bash git [commit-guard] no",
     "- Bash git [main-checkout-guard] no",
+    "- Bash git [hook-adapter] a.mts cannot run",
+    "- Bash git [hook-adapter] b.mts cannot run",
     "- Read - [secret-output] no",
     "- Read - [secret-output] no",
     "- Bash - [hook-entry] guard-dispatch.mts cannot run (exit code 1)",

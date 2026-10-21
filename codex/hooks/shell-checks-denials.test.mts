@@ -28,6 +28,17 @@ test("two denying guards: two denials journalled, the decision as without agent_
   assert.equal(first(home), "DENIED-CALLS: 2");
 });
 
+test("two guards that cannot run stay two denials, each with its guard's tag", async () => {
+  for (const [source, tag] of [["", "commit-guard"], ["process.exit(1);\n", "hook-adapter"]] as const) {
+    const home = codexHome({ ...GUARDS, "commit-guard.mts": source, "main-checkout-guard.mts": source });
+    await shell(home, shellPayload());
+    const rendered = renderReport(readJournal(home.root, "agent-c1")).text.split("\n");
+    assert.equal(rendered[0], "DENIED-CALLS: 2", rendered.join("\n"));
+    assert.ok(rendered.every((line) => !line.includes("[is]")), rendered.join("\n"));
+    assert.ok(rendered[1]!.includes(`[${tag}]`), rendered[1]);
+  }
+});
+
 test("a journal lib that throws: the same decision and a marker", async () => {
   const referenceHome = codexHome(GUARDS);
   const reference = await shell(referenceHome, shellPayload());
