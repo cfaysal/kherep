@@ -213,6 +213,32 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- The Claude control-plane hooks run through a stable entry point (issue
+  #592). The eight control-plane commands of `settings.json` now read
+  `node "<CLAUDE_HOME>/kherep/control-plane/claude-control-plane-hook.mts"
+  deliver` (`wake --timeout 86400` with `asyncRewake` and `timeout` 86400,
+  `attribution`) and name no checkout, so they stay the same across upgrades
+  and across the roots an install runs from. The entry, a manifest file,
+  reads `<CLAUDE_HOME>/kherep/control-plane/source.json`, the Codex pointer
+  record naming the source `install.sh` last ran from, and imports that
+  source's hook into its own process: no second process, and the hook's
+  parent, stdin, environment, working directory and exit code are a direct
+  call's. Without a usable pointer, hook name or hook file it runs nothing,
+  writes `kherep control-plane-hook: <reason>; pointer <file>; run
+  bootstrap/install.sh` to stderr and exits 1, never 2, with no fallback.
+  `install.sh` renders the pointer in preflight and installs it in the same
+  transaction as `settings.json`. An install replaces path-form entries of
+  any root with the stable set. `drift-check.sh` compares the pointer by
+  commit, not root: `ok kherep/control-plane/source.json (<kind>
+  <commit7>|unverified)`, `MISSING-LIVE`, `POINTER-INVALID`,
+  `POINTER-UNRESOLVED (<reason>: ...)`, `POINTER-STALE (commit <a> != <b>)`.
+  The `hooks` check of `kherep-node doctor` resolves stable Claude deliver
+  and wake commands through the pointer and reports `pointer`, `stable`,
+  `legacy` and `entry` for Claude as for Codex; a path-form command is
+  `legacy` with a note. A revert is not self-healing: `docs/INSTALLATION.md`
+  ("Rolling back the stable entry") lists the five steps per host. Merging
+  delivers nothing: a host has it after `bootstrap/install.sh` from the new
+  source and a session restart.
 - `service status` drain hints no longer embed the commit in the source
   placeholder (issue #582): a stale drain reads `kherep-node service upgrade
   --source <clean checkout> reclaims the stale drain (installed source
@@ -358,6 +384,14 @@ increments the minor version; every other release increments the patch version.
   already; a test pins it.
   The test fixture gains the fault `marker-slow` (an append on `*.failed`
   that settles after 700 ms), which is red against the previous adapter.
+- `kherep-node doctor` hooks check (issue #592): the duplicate scan reads
+  the installer template of the running source and ran in the same step as
+  the settings read, so a missing template (`ENOENT`) reported a present
+  Claude `settings.json` as absent. The scan now runs after the read, in its
+  own step; when it cannot read the template it reports `duplicatesUnknown:
+  true` and the check fails with `the control-plane template of this source
+  is unreadable; duplicates unknown` instead of reading as clean or absent.
+  An absent `settings.json` is still reported as absent.
 - Client binding probe: on Windows the lock that serialises intent creation
   and verification (`locks/create.lock`, `locks/<requestId>.lock`) is no
   longer abandoned when another process is releasing it. An exclusive
