@@ -6,7 +6,8 @@
 // and the user home are already folded. Mode and later arguments are not part
 // of the key. Not recognised, and so kept as operator hooks: `& node`,
 // `node <flags>`, single quotes, mixed quoting, the Git Bash `/c/...` form of
-// a drive path and `.`/`..` segments in the main path.
+// a drive path, `.`/`..` segments in the main path, and a shell control
+// operator after the main.
 
 const ENTRY = String.raw`\/kherep\/hook-runtime\/entry\.(?:js|mjs|cjs|mts)`;
 const MODE = String.raw`\s+(?:pretool|reader|writer)\s+`;
@@ -24,9 +25,14 @@ export interface ManagedHookKey {
   main: string;
 }
 
+// A shell control operator after the main runs more than the hook: the command
+// is operator-shaped and kept, never replaced.
+const CONTROL_OPERATOR = /[;&|\r\n]/;
+
 export function managedHookKey(command: string, platform: string = process.platform): ManagedHookKey | undefined {
-  const groups = MANAGED_ENTRY.exec(command)?.groups;
-  if (!groups) return undefined;
+  const match = MANAGED_ENTRY.exec(command);
+  const groups = match?.groups;
+  if (!groups || CONTROL_OPERATOR.test(command.slice(match[0].length))) return undefined;
   const home = groups.qh ?? groups.uh!;
   const main = groups.qm ?? groups.um!;
   const path = `${home}/hooks/${main}`;
