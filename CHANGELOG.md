@@ -223,8 +223,10 @@ increments the minor version; every other release increments the patch version.
   one entry. Entries for another hook file, at another matcher or under
   another home, and forms the template never renders (`& node`,
   `node <flags>`, single quotes, mixed quoting, `/c/...`, `.` or `..` in the
-  main path, a shell control operator after the main) stay. A template change to a managed group's matcher is not
-  covered. The recogniser is the new leaf module
+  main path, a line break between the parts, and a shell control operator,
+  substitution or redirection after the main outside double quotes) stay.
+  A template change to a managed group's matcher is not covered. The
+  recogniser is the new leaf module
   `bootstrap/managed-hook-key.mts`. Codex needed no change: its installer
   replaces the managed hook block as a unit and refuses an unrecognised or
   edited previous block instead of keeping both.

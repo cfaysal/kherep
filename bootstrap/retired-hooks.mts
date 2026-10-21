@@ -134,12 +134,12 @@ export function retireHookCommands(
 const scriptStem = (rel: string): string => rel.replace(/\.(?:js|mjs|cjs|mts)$/, "");
 
 // Review of #254. The template decides at which events a managed hook runs, but
-// mergeHooks replaces only within a group the template still has (#568), so an
-// entry the installer wrote at an event the template has since dropped would run on. Such an entry (the hook
-// under the absolute Claude home, .js and .mts folded) is removed; a hand-written
-// ~/.claude form stays unless it is a raw command for a main the template runs
-// through kherep/hook-runtime/entry.mts or passes to the dispatcher behind it
-// (then it is that entry's duplicate); every hook the template does not manage stays.
+// mergeHooks replaces only in a group the template still has (#568): an entry the
+// installer wrote at an event the template dropped would run on. Such an entry
+// (the hook under the absolute Claude home, .js and .mts folded) is removed; a
+// hand-written ~/.claude form stays unless it is a raw command for a main the
+// template runs through kherep/hook-runtime/entry.mts or passes to the dispatcher
+// behind it (then it is that entry's duplicate); every unmanaged hook stays.
 // Issue #507. A script the template passes as an argument (a guard that
 // guard-dispatch.mts runs) is managed "<event> via <first script>". A direct
 // entry for it is removed, or it would run a second time next to the dispatcher.
