@@ -20,7 +20,7 @@ import {
 // leaves a record another writer changed during the pass, such as a refusal
 // not yet reported (#195), to the next start.
 export function* purgeInboxSteps(dir: string, now: number = Date.now(), maxAgeMs: number = INBOX_RETENTION_MS,
-  touchedSince = Infinity): Generator<void, number> {
+  touchedSince: number = Infinity): Generator<void, number> {
   let entries: string[];
   try {
     entries = fs.readdirSync(dir);

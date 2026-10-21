@@ -62,10 +62,16 @@ export async function runInboxMaintenance(paths: NodePaths, log: (line: string) 
   const steps = inboxMaintenanceSteps(paths, log, now, Date.now());
   for (;;) {
     await pause();
-    if (signal?.aborted) return log(`kherep-node: start maintenance stopped after ${seconds()} s`);
+    if (signal?.aborted) {
+      log(`kherep-node: start maintenance stopped after ${seconds()} s`);
+      return;
+    }
     const end = performance.now() + sliceMs;
     let step = steps.next();
     while (!step.done && performance.now() < end) step = steps.next();
-    if (step.done) return log(`kherep-node: start maintenance done in ${seconds()} s`);
+    if (step.done) {
+      log(`kherep-node: start maintenance done in ${seconds()} s`);
+      return;
+    }
   }
 }
