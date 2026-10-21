@@ -75,7 +75,7 @@ test("R1: an admitted reader keeps a writer out until it ends", async () => {
 // On Windows libuv keeps every child in a job object that ends with its parent, so
 // killing the entry ends the child as well; its lock goes only with it, and the
 // late import never runs. Elsewhere the orphan lives on and keeps its lock.
-test("R2: killing the entry does not end the child's lock; the child's own end does", async () => {
+test("R2: killing the entry does not end the child's lock; the child's own end does", async (t) => {
   const home = runtimeHome();
   const go = path.join(home.root, "go");
   const pidFile = path.join(home.root, "child.pid");
@@ -88,6 +88,10 @@ test("R2: killing the entry does not end the child's lock; the child's own end d
     + "while (!fs.existsSync(new URL(\"../go\", import.meta.url))) await new Promise((r) => setTimeout(r, 20));\n"
     + "await import(\"./lib/\" + \"late.mts\");\n");
   const running = entryAsync("reader", main);
+  let ended = false;
+  void running.then(() => { ended = true; });
+  // A failed assertion must not leave the child waiting for go and the entry for it: node would never exit (issue #565).
+  t.after(() => { fs.writeFileSync(go, ""); if (!ended) process.kill(running.pid!, "SIGKILL"); });
   assert.ok(await until(() => fs.existsSync(pidFile)));
   const child = Number(fs.readFileSync(pidFile, "utf8"));
   assert.ok(Number.isInteger(child) && child > 0, `child.pid holds no process id: ${JSON.stringify(fs.readFileSync(pidFile, "utf8"))}`);
