@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { makeEnvelope, type Envelope, type MessageType } from "../../protocol.mts";
 import {
-  MESSAGE_STATUS_ACK, MESSAGING_ACK_CAPABILITY, MESSAGING_CAPABILITY, OPERATOR_NODE_ID, type MessageStatusBody,
+  MESSAGE_STATUS_ACK, MESSAGING_ACK_CAPABILITY, MESSAGING_CAPABILITY, OPERATOR_NODE_ID, type FinalMessageState, type MessageStatusBody,
 } from "../../protocol-messages.mts";
 import { FALLBACK_DELETE_MS, RETENTION_BATCH, TOMBSTONE_TTL_MS } from "../src/message-retention.mts";
 import { MessageStore } from "../src/message-store.mts";
@@ -37,7 +37,10 @@ const settles = (id: string) => query((sql) => sql.exec("SELECT actor, detail FR
 // handling frames in order, but each frame reaches the Registry on its own
 // stub and there is no ordering between different stubs (issue #529): an empty
 // result does not prove that nothing was sent, a frame still awaiting the
-// Registry can follow. An expected frame is awaited with until().
+// Registry can follow. An expected frame is awaited with until(). An ack has no
+// answer frame, so sync() cannot see it land (issue #557): its effect is awaited
+// on the Registry's state (deletedByAck, settledByAck), and an ack without an
+// effect goes through the Registry's RPC (acked), whose answer is the completion.
 async function sync(socket: TestSocket): Promise<Envelope[]> {
   frame(socket, "directory.get", {});
   const frames: Envelope[] = [];
@@ -70,22 +73,27 @@ async function legacyRow(from: string, to: string, state = "delivered"): Promise
 }
 
 type Tx = { messageTx: (path: string, run: () => unknown) => Promise<unknown> };
-// Holds the Registry's answer to its next sendMessage until release(), after
-// the transaction committed. Forces the order of issue #529 (no ordering
-// between different stubs: a directory answer may precede a status sent
-// earlier) with a non-storage await, which keeps the Registry's input gate open
-// for the directory() call. restore() puts the method back: whether a patched
-// instance outlives the test is unknown, so it is not left to chance.
-async function holdNextSend(): Promise<{ release: () => void; restore: () => Promise<void> }> {
+// Holds the Registry's next message transaction of `path` until release(), with
+// a non-storage await that keeps the Registry's input gate open for a
+// directory() call meanwhile. Forces the order the stub docs allow (no ordering
+// between different stubs): "after" the commit delays the frame that reports
+// the result (issue #529, a resend's status), "before" delays the transaction
+// itself (issue #557, an ack whose only trace is the Registry's state).
+// restore() puts the method back: whether a patched instance outlives the test
+// is unknown, so it is not left to chance.
+async function holdNext(path: "sendMessage" | "ackMessageStatus", at: "before" | "after"): Promise<{ release: () => void; restore: () => Promise<void> }> {
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
   const original = await runInDurableObject(registry(), (instance) => {
     const target = instance as unknown as Tx;
     const method = target.messageTx;
     let armed = true;
-    target.messageTx = async function (this: unknown, path, run) {
-      const result = await method.call(this, path, run);
-      if (path === "sendMessage" && armed) { armed = false; await held; }
+    target.messageTx = async function (this: unknown, current, run) {
+      const hit = current === path && armed;
+      if (hit) armed = false;
+      if (hit && at === "before") await held;
+      const result = await method.call(this, current, run);
+      if (hit && at === "after") await held;
       return result;
     };
     return method;
@@ -99,38 +107,41 @@ async function deletedByAck(id: string, from: string, to: string): Promise<void>
   expect(await tombstone(id)).toMatchObject({ from_node: from, to_node: to, state: "delivered" });
 }
 
+// An ack without an effect leaves nothing to wait for (issue #557): it goes
+// through the Registry's RPC, whose answer is the completion. The frame path
+// (node-session.mts, event message.status.ack) is covered by the acks that
+// delete or settle a row.
+const acked = (nodeId: string, messageId: string, state: FinalMessageState) =>
+  registry().ackMessageStatus(nodeId, { name: MESSAGE_STATUS_ACK, messageId, state });
+
 describe("deletion after the sender's acknowledgement", () => {
   it("deletes an acknowledged final row into a metadata-only tombstone, once", async () => {
     const { a, sender, target, b } = await pair();
     const id = await deliveredMessage(sender, target, b.nodeId);
     expect(await row(id)).toMatchObject({ deletable: 1, depth: 0, delete_after: null });
     ack(sender, id, "delivered");
-    await sync(sender);
-    expect(await row(id)).toBeUndefined();
+    await deletedByAck(id, a.nodeId, b.nodeId);
     const stone = await tombstone(id);
     expect(stone).toMatchObject({ from_node: a.nodeId, to_node: b.nodeId, state: "delivered", depth: 0 });
     expect(Object.keys(stone ?? {}).sort()).toEqual(["deleted_at", "depth", "from_node", "id", "reason", "reply_message_id", "state", "to_node"]);
     expect(await deletes(id)).toEqual([{ actor: `node:${a.nodeId}`, detail: JSON.stringify({ messageId: id, via: "ack" }) }]);
     expect(await settles(id)).toEqual([]); // issue #493: a deletable row is deleted, never settled
     expect((await registry().listMessages(a.nodeId, 100)).map((m) => m.messageId)).not.toContain(id);
-    // Idempotent: a repeated ack changes nothing and gets no error.
-    ack(sender, id, "delivered");
-    expect(await sync(sender)).toEqual([]);
+    // Idempotent: a repeated ack changes nothing.
+    await acked(a.nodeId, id, "delivered");
     expect(await tombstone(id)).toEqual(stone);
     expect(await deletes(id)).toHaveLength(1);
   });
 
   it("ignores acks from another node, for another state or an unknown id, and refuses invalid bodies", async () => {
-    const { sender, target, b } = await pair();
+    const { a, sender, target, b } = await pair();
     const id = await deliveredMessage(sender, target, b.nodeId);
-    ack(target, id, "delivered");
-    ack(sender, id, "refused");
-    ack(sender, crypto.randomUUID(), "delivered");
-    expect(await sync(target)).toEqual([]);
-    expect(await sync(sender)).toEqual([]);
+    await acked(b.nodeId, id, "delivered"); // another node
+    await acked(a.nodeId, id, "refused"); // another state
+    await acked(a.nodeId, crypto.randomUUID(), "delivered"); // an unknown id
     expect(await row(id)).toMatchObject({ state: "delivered" });
     ack(sender, id, "accepted");
-    const [error] = await sync(sender);
+    const [error] = await sync(sender); // the validator's error is sent before any await, so it precedes the directory answer
     expect(error).toMatchObject({ type: "error", body: { error: "invalid message.status.ack body" } });
     expect(await row(id)).toMatchObject({ state: "delivered" });
   });
@@ -147,15 +158,13 @@ describe("deletion after the sender's acknowledgement", () => {
     const back = await authenticate(a.nodeId, a.key);
     expect(await nextMessageStatus(back, { messageId: id, state: "delivered" })).toEqual({ messageId: id, state: "delivered" });
     ack(back, id, "delivered");
-    await sync(back);
-    expect(await row(id)).toBeUndefined();
+    await deletedByAck(id, a.nodeId, b.nodeId);
   });
 
   it("answers a late resend and a late target report from the tombstone, and after the prune", async () => {
     const { a, sender, target, b } = await pair();
     const id = await deliveredMessage(sender, target, b.nodeId);
     ack(sender, id, "delivered");
-    await sync(sender);
     await deletedByAck(id, a.nodeId, b.nodeId);
     frame(sender, "message.send", { messageId: id, fromSession: "s-a", to: { nodeId: b.nodeId, session: "s-b" }, text: "synthetic" });
     expect((await until(sender, "message.status", { messageId: id, state: "delivered" })).map((envelope) => [envelope.type, envelope.body]))
@@ -187,9 +196,8 @@ describe("deletion after the sender's acknowledgement", () => {
     const { a, sender, target, b } = await pair();
     const id = await deliveredMessage(sender, target, b.nodeId);
     ack(sender, id, "delivered");
-    await sync(sender);
     await deletedByAck(id, a.nodeId, b.nodeId);
-    const hold = await holdNextSend();
+    const hold = await holdNext("sendMessage", "after");
     try {
       frame(sender, "message.send", { messageId: id, fromSession: "s-a", to: { nodeId: b.nodeId, session: "s-b" }, text: "synthetic" });
       expect(await sync(sender)).toEqual([]); // the failure shape of CI run 39371064143: the directory answer comes first under the hold
@@ -198,6 +206,25 @@ describe("deletion after the sender's acknowledgement", () => {
         .toEqual([["message.status", { messageId: id, state: "delivered" } satisfies MessageStatusBody]]);
       expect(await row(id)).toBeUndefined();
       expect(await sync(sender)).toEqual([]);
+    } finally {
+      hold.release();
+      await hold.restore();
+    }
+  });
+
+  // Issue #557: an ack has no answer frame, and the directory answer may be
+  // handled before it. The hold forces that order; sync() alone proves nothing.
+  it("deletes after an ack that a directory answer overtakes", async () => {
+    const { a, sender, target, b } = await pair();
+    const id = await deliveredMessage(sender, target, b.nodeId);
+    const hold = await holdNext("ackMessageStatus", "before");
+    try {
+      ack(sender, id, "delivered");
+      expect(await sync(sender)).toEqual([]);
+      expect(await row(id)).toMatchObject({ state: "delivered" }); // after sync(): the row is still there, the old barrier passed falsely
+      hold.release();
+      await deletedByAck(id, a.nodeId, b.nodeId);
+      expect(await deletes(id)).toHaveLength(1);
     } finally {
       hold.release();
       await hold.restore();
@@ -310,6 +337,8 @@ async function statusOf(socket: TestSocket, messageId: string): Promise<MessageS
 }
 
 const settledState = async (id: string) => (await row(id))?.settled_state;
+// The ack landed: the row carries the acknowledged state as settled (issue #493).
+const settledByAck = (id: string, state: string) => vi.waitFor(async () => expect(await settledState(id)).toBe(state), WAIT);
 // The [settled bucket, count] groups of one sender's legacy rows in one state.
 const legacyGroups = async (nodeId: string, state: string) => (await registry().messageSummary(nodeId, Date.now())).groups
   .filter((g) => g.state === state && g.deletable === "null").map((g) => [g.settled, g.count]);
@@ -327,18 +356,15 @@ describe("rows stored before this version", () => {
     const old = await legacyRow(a.nodeId, b.nodeId);
     const queued = await legacyRow(OPERATOR_NODE_ID, b.nodeId, "queued");
     ack(sender, old, "delivered");
-    await sync(sender);
-    const settled = await row(old);
-    expect(settled).toMatchObject({ state: "delivered", deletable: null, delete_after: null });
-    expect(settled?.settled_state).toBe("delivered");
+    await settledByAck(old, "delivered");
+    expect(await row(old)).toMatchObject({ state: "delivered", deletable: null, delete_after: null });
     expect(await tombstone(old)).toBeUndefined();
     expect(await deletes(old)).toEqual([]);
     expect(await settles(old)).toEqual([{ actor: `node:${a.nodeId}`, detail: JSON.stringify({ messageId: old }) }]);
     const back = await reconnect(a);
     expect(back.replayed).not.toContain(old);
     // A repeated ack writes nothing: no second audit entry, settled_state unchanged.
-    ack(back.socket, old, "delivered");
-    await sync(back.socket);
+    await acked(a.nodeId, old, "delivered");
     expect(await settledState(old)).toBe("delivered");
     expect(await settles(old)).toHaveLength(1);
     // The alarm expires the operator row without a fallback deadline, and clears
@@ -358,15 +384,13 @@ describe("rows stored before this version", () => {
   });
 
   it("stay unsettled and replayed on an ack from another node, of another state, or of a state that is not final", async () => {
-    const { a, sender, target, b } = await pair();
+    const { a, b } = await pair();
     const foreign = await legacyRow(a.nodeId, b.nodeId);
     const stale = await legacyRow(a.nodeId, b.nodeId);
     const open = await legacyRow(a.nodeId, b.nodeId, "accepted");
-    ack(target, foreign, "delivered");
-    await sync(target);
-    ack(sender, stale, "refused");
-    ack(sender, open, "delivered");
-    await sync(sender);
+    await acked(b.nodeId, foreign, "delivered");
+    await acked(a.nodeId, stale, "refused");
+    await acked(a.nodeId, open, "delivered");
     // The node frame validator refuses an accepted ack; the Registry checks it again.
     await registry().ackMessageStatus(a.nodeId, { name: MESSAGE_STATUS_ACK, messageId: open, state: "accepted" as "delivered" });
     for (const id of [foreign, stale, open]) {
@@ -388,8 +412,7 @@ describe("rows stored before this version", () => {
     const back = await reconnect(a);
     expect(back.statuses.filter((s) => s.messageId === id)).toEqual([{ messageId: id, state: "delivered" }]);
     ack(back.socket, id, "delivered");
-    await sync(back.socket);
-    expect(await settledState(id)).toBe("delivered");
+    await settledByAck(id, "delivered");
     expect((await reconnect(a)).replayed).not.toContain(id);
   });
 
@@ -397,22 +420,19 @@ describe("rows stored before this version", () => {
     const { a, sender, target, b } = await pair();
     const old = await legacyRow(a.nodeId, b.nodeId);
     ack(sender, old, "delivered");
-    await sync(sender);
-    expect(await settledState(old)).toBe("delivered");
+    await settledByAck(old, "delivered");
     replyTo(target, old, { nodeId: a.nodeId, session: "s-a" });
     expect(await statusOf(sender, old)).toEqual({ messageId: old, state: "replied" });
     expect(await row(old)).toMatchObject({ state: "replied", settled_state: "delivered" });
     let back = await reconnect(a);
     expect(back.statuses.filter((s) => s.messageId === old)).toEqual([{ messageId: old, state: "replied" }]);
     // A delivered ack arriving late never settles the replied row.
-    ack(back.socket, old, "delivered");
-    await sync(back.socket);
+    await acked(a.nodeId, old, "delivered");
     expect(await settledState(old)).toBe("delivered");
     back = await reconnect(a);
     expect(back.replayed).toContain(old);
     ack(back.socket, old, "replied");
-    await sync(back.socket);
-    expect(await settledState(old)).toBe("replied");
+    await settledByAck(old, "replied");
     expect(await settles(old)).toHaveLength(2);
     expect(await deletes(old)).toEqual([]);
     expect((await reconnect(a)).replayed).not.toContain(old);
@@ -427,8 +447,7 @@ describe("rows stored before this version", () => {
     expect(await row(old)).toMatchObject({ state: "replied", settled_state: null });
     const back = await reconnect(a);
     expect(back.statuses.filter((s) => s.messageId === old)).toEqual([{ messageId: old, state: "replied" }]);
-    ack(back.socket, old, "delivered");
-    await sync(back.socket);
+    await acked(a.nodeId, old, "delivered");
     expect(await settledState(old)).toBeNull();
     expect(await settles(old)).toEqual([]);
     expect((await reconnect(a)).statuses.filter((s) => s.messageId === old)).toEqual([{ messageId: old, state: "replied" }]);
@@ -441,7 +460,7 @@ describe("rows stored before this version", () => {
     const { a, sender, b } = await pair();
     const old = await legacyRow(a.nodeId, b.nodeId);
     ack(sender, old, "delivered");
-    await sync(sender);
+    await settledByAck(old, "delivered");
     expect(await settles(old)).toHaveLength(1);
     // 36aae53 message-store.mts:379-381, verbatim, for delivered -> replied.
     await query((sql) => sql.exec(`UPDATE messages SET state = ?, reason = ?, text = NULL, progress_phase = ?, progress_code = ?,
@@ -452,12 +471,11 @@ describe("rows stored before this version", () => {
     expect(back.statuses.filter((s) => s.messageId === old)).toEqual([{ messageId: old, state: "replied" }]);
     expect(await row(old)).toMatchObject({ state: "replied", settled_state: "delivered" });
     expect(await legacyGroups(a.nodeId, "replied")).toEqual([["unsettled", 1]]);
-    ack(back.socket, old, "delivered");
-    await sync(back.socket);
+    await acked(a.nodeId, old, "delivered");
     expect(await row(old)).toMatchObject({ state: "replied", settled_state: "delivered" });
     expect(await settles(old)).toHaveLength(1);
     ack(back.socket, old, "replied");
-    await sync(back.socket);
+    await settledByAck(old, "replied");
     expect(await row(old)).toMatchObject({ state: "replied", settled_state: "replied" });
     expect(await settles(old)).toHaveLength(2);
     expect(await legacyGroups(a.nodeId, "replied")).toEqual([["settled", 1]]);
@@ -471,7 +489,7 @@ describe("rows stored before this version", () => {
     const foreign = await authenticate(third.nodeId, third.key);
     const old = await legacyRow(a.nodeId, b.nodeId);
     ack(sender, old, "delivered");
-    await sync(sender);
+    await settledByAck(old, "delivered");
     frame(target, "message.status", { messageId: old, state: "delivered" });
     frame(target, "message.status", { messageId: old, state: "accepted" });
     // markReplied: a reply that does not go to the original's sending session marks nothing.
@@ -514,8 +532,8 @@ describe("rows stored before this version", () => {
       { messageId: expiring, state: "expired" }, { messageId: waiting, state: "refused", reason: "target node revoked" }]);
     ack(back.socket, expiring, "expired");
     ack(back.socket, waiting, "refused");
-    await sync(back.socket);
-    expect([await settledState(expiring), await settledState(waiting)]).toEqual(["expired", "refused"]);
+    await settledByAck(expiring, "expired");
+    await settledByAck(waiting, "refused");
     expect((await reconnect(a)).replayed).toEqual([]);
 
     // A proxy that the owner's read supersedes goes through the same setState.

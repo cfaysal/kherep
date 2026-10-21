@@ -485,6 +485,16 @@ increments the minor version; every other release increments the patch version.
   the row and tombstone before the resend, and a regression forces this order
   with a non-storage hold on the Registry's resend answer. The Worker is
   unchanged; the cause of the one observed CI failure is not established.
+- Message-retention Worker test acks (issue #557): after an acknowledgement
+  frame, which the Worker answers with no frame, the tests took the answer to
+  a later `directory.get` as proof that the ack had run; there is no ordering
+  between different stubs, so it may not have. Of the 25 such barriers, the
+  13 acks that delete or settle a row are now awaited on that row's state,
+  the 11 acks without an effect go through the Registry's RPC, whose answer
+  is the completion, and the one ack the frame validator refuses keeps its
+  barrier, because the error is sent before the ack reaches any stub. A
+  regression holds the ack's transaction with a non-storage hold until the
+  directory answer has passed. The Worker is unchanged.
 
 ## [0.4.0] - 2026-10-18
 
