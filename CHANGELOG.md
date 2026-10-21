@@ -683,6 +683,13 @@ increments the minor version; every other release increments the patch version.
   covered by the budget, as before. Thirteen deterministic tests (each writer
   holding the lock at its rename, two with the lock held from another
   process, three of the purge) are red on the previous code.
+- Record-lock follow-ups (issue #634): a busy Claude intercom handover, or a
+  busy record in a task's `deliveryPending`, defers saving its mapping to the
+  next watch while later tasks still run. Retrying repairs delivery identities
+  for messages already moved from the previous session, and fresh moves retain
+  older provenance. Each executing Codex intake-window frame or coalesced tick
+  gets its own 250 ms lock-wait allowance, shared by its acquisitions,
+  including work after an await. Other errors still propagate.
 - A Claude task past its max runtime whose `claude stop` cannot be confirmed
   is no longer stopped again every watch round for ever (issue #541). After a
   failed stop the watch measures the run as owner status does

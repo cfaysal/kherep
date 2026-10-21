@@ -3,7 +3,8 @@ import { MAX_RUNTIME_REASON } from "./codex-runner.mts";
 import { watchCodexTasks } from "./codex-watch.mts";
 import { retireCopies } from "./copy-retire.mts";
 import { resolveDelivery, updateDeliverySession } from "./delivery-identity.mts";
-import { readdress } from "./inbox.mts";
+import { listInbox, readdress } from "./inbox.mts";
+import { RecordLockBusy } from "./inbox-record-lock.mts";
 import { claudeProgressed, failStalledClaude, progressOverdue, refuseCarried, settleCarried } from "./run-progress.mts";
 import { agentRows, findRow, mapIds, markClaudeStopped, runClaude, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { measureClaude } from "./task-control-claude.mts";
@@ -49,6 +50,14 @@ async function stopUnconfirmed(deps: RunnerDeps, mapped: TaskRecord, row: Record
     writeTask(deps.paths, { ...base, stopAttempts: attempt }, now);
     log(`kherep-node: could not stop task ${mapped.taskId}: ${message} (attempt ${attempt} of ${MAX_STOP_ROUNDS})`);
   }
+}
+
+// Issue #634: a record lock another writer holds leaves the task, its mapping
+// unsaved, to the next watch while later tasks still run; any other error ends
+// the round as before.
+function deferOnBusy(error: unknown, taskId: string, step: string, log: (line: string) => void): void {
+  if (!(error instanceof RecordLockBusy)) throw error;
+  log(`kherep-node: task ${taskId}: ${step} deferred: ${error.code}: ${error.message}`);
 }
 
 export async function watchTasks(deps: RunnerDeps, log: (line: string) => void = () => {}): Promise<void> {
@@ -113,10 +122,25 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
       && mapped.awaitingProgressSince === record.awaitingProgressSince && mapped.carried === record.carried) continue;
     // An intercom session resumed as a copy under a new id (issue #109) takes over its waiting messages.
     if (record.local === "intercom" && record.sessionId && mapped.sessionId && mapped.sessionId !== record.sessionId) {
-      const moved = readdress(deps.paths.inbox, record.sessionId, mapped.sessionId);
-      updateDeliverySession(deps.paths, mapped, moved, mapped.sessionId);
+      try {
+        const moved = readdress(deps.paths.inbox, record.sessionId, mapped.sessionId);
+        const previous = listInbox(deps.paths.inbox, mapped.sessionId)
+          .filter((message) => message.closedTo === record.sessionId)
+          .map((message) => message.messageId);
+        updateDeliverySession(deps.paths, mapped, [...new Set([...moved, ...previous])], mapped.sessionId);
+      } catch (error) {
+        deferOnBusy(error, record.taskId, "readdress", log);
+        continue;
+      }
     }
-    const saved = writeTask(deps.paths, resolveDelivery(deps.paths, { ...mapped, state: next }), now);
+    let resolved: TaskRecord;
+    try {
+      resolved = resolveDelivery(deps.paths, { ...mapped, state: next });
+    } catch (error) {
+      deferOnBusy(error, record.taskId, "delivery identity", log);
+      continue;
+    }
+    const saved = writeTask(deps.paths, resolved, now);
     if (reported) queueReport(deps.paths, { taskId: saved.taskId, state: next, ...(saved.sessionId ? { sessionId: saved.sessionId } : {}) });
   }
   // Adopted copies (issue #111): the sessions their records held before are stopped once idle.

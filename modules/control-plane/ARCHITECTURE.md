@@ -148,6 +148,17 @@ names or pids. `kherep-node doctor` reports `intakeLatency` for the messages sto
 last two hours; it sees only messages that reached the inbox, so it is no proof
 that the control-plane queue for this node drains.
 
+Each executing Codex intake-window frame or coalesced tick starts its own
+250 ms record-lock wait allowance, shared across awaits (issue #634,
+`runRecordLockRound` in `node/inbox-record-lock.mts`). A busy Claude intercom
+handover, or a busy record in a task's `deliveryPending`, logs the task and
+message and leaves its task mapping for the next watch without blocking later
+tasks. Retrying updates delivery
+identities for newly moved messages and messages already at the copy whose
+`closedTo` is the previous session; fresh moves retain older provenance.
+Other handover errors still propagate, and the task mapping is saved only
+after readdress and identity updates succeed.
+
 The exchange round itself (`node/daemon-round.mts`) reads the inbox through the
 daemon's in-process index (`node/inbox-index.mts`, issue #487). The round's
 synchronous start, the delivery-progress observers and the status reports, shares
