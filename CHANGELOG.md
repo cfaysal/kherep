@@ -384,6 +384,18 @@ increments the minor version; every other release increments the patch version.
   already; a test pins it.
   The test fixture gains the fault `marker-slow` (an append on `*.failed`
   that settles after 700 ms), which is red against the previous adapter.
+- Codex shell dispatcher: after its checks, flush stdout and stderr before
+  exiting with code 0, so a stuck denied-call marker handle cannot retain a
+  completed deny until the native timeout (issue #621). Journal and marker
+  writes share at most 2 seconds, shortened by the remaining hook budget;
+  the lib keeps its 600 ms cap. With the full capture window and prompt
+  scheduling, a marker delayed by 700 ms still persists.
+  Writes pending at that cap can lose evidence. Imported `shellChecks()`
+  does not exit its caller, and uncapped attribution still prevents an
+  unconditional 40-second answer guarantee. Isolated child-process tests
+  cover the stuck marker, broken-adapter fallback, the deadline clip and
+  both stream callbacks; installed Desktop behavior remains UNKNOWN until
+  measured.
 - The header of `modules/control-plane/node/wake-hook.mts` no longer quotes
   "There is no deduplication" from the Claude Code hooks page, which no
   longer carries that sentence (issue #613). It cites the current

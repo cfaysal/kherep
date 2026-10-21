@@ -11,11 +11,12 @@
 //   marker-slow      appendFile on a *.jsonl fails ENOSPC; appendFile on a *.failed settles after 700 ms, then
 //                    appends (a slow filesystem; issues #612 and #614: the marker must still be on disk when
 //                    the hook process has exited)
+//   marker-stuck     appendFile on a *.failed never settles, with a real referenced 60 s handle
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export type DenialFault = "journal-hang" | "journal-enospc" | "enospc-all" | "all-fail" | "all-hang" | "marker-slow";
+export type DenialFault = "journal-hang" | "journal-enospc" | "enospc-all" | "all-fail" | "all-hang" | "marker-slow" | "marker-stuck";
 export const MARKER_SLOW_MS = 700;
 const SELF_URL = pathToFileURL(import.meta.filename).href;
 
@@ -37,6 +38,10 @@ if (fault && process.argv[1] && path.basename(process.argv[1]) === process.env.K
   const later = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, MARKER_SLOW_MS));
   promises.appendFile = function (file: unknown, ...rest: unknown[]) {
     if (fault === "all-hang" || (fault === "journal-hang" && journal(file))) return never();
+    if (fault === "marker-stuck" && marker(file)) {
+      setTimeout(() => {}, 60_000); // A pending Promise alone does not hold the event loop open.
+      return never();
+    }
     if (fault === "marker-slow" && marker(file)) return later().then(() => append.call(fs.promises, file, ...rest));
     if (fault === "enospc-all" || fault === "all-fail" || ((fault === "journal-enospc" || fault === "marker-slow") && journal(file))) {
       return Promise.reject(errno("ENOSPC"));
