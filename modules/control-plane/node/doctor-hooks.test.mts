@@ -45,7 +45,7 @@ test("an unquoted hook and one with an inline VAR=value prefix count for this ch
     `KHEREP_SYNTHETIC=secret-value node ${path.join(f.hooks, "wake-hook.mts")} --timeout 86400`]));
   const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
   assert.equal(check.ok, true, JSON.stringify(check));
-  assert.deepEqual(check.claude, { present: true, deliver: 1, wake: 1, foreign: [] });
+  assert.deepEqual(check.claude, { present: true, deliver: 1, wake: 1, foreign: [], pointer: "missing", stable: 0, legacy: 2 });
   assert.equal(JSON.stringify(check).includes("secret-value"), false);
 
   const other = path.join(path.dirname(f.repo), "old", "modules", "control-plane", "node", "deliver-hook.mts");
@@ -68,7 +68,7 @@ test("strings outside hook commands are ignored in Claude settings and Codex con
     "[profiles.synthetic]", `command = ${JSON.stringify(`node ${other}`)}`, ""].join("\n"));
   const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
   assert.equal(check.ok, true, JSON.stringify(check));
-  assert.deepEqual(check.claude, { present: true, deliver: 1, wake: 0, foreign: [] });
+  assert.deepEqual(check.claude, { present: true, deliver: 1, wake: 0, foreign: [], pointer: "missing", stable: 0, legacy: 1 });
   assert.deepEqual(check.codex, { present: true, deliver: 2, wake: 0, foreign: [], pointer: "missing", stable: 0, legacy: 2 });
 });
 
@@ -229,10 +229,10 @@ test("a Claude hook in a checkout of the pinned commit counts when doctor runs f
   const f = pinnedRepo(t);
   const check = checkHooks({ claude: f.claude, codex: f.codex }, f.pin);
   assert.equal(check.ok, true, JSON.stringify(check));
-  assert.deepEqual(check.claude, { present: true, deliver: 1, wake: 1, foreign: [], checkouts: [f.deliver, f.wake] });
+  assert.deepEqual(check.claude, { present: true, deliver: 1, wake: 1, foreign: [], checkouts: [f.deliver, f.wake], pointer: "missing", stable: 0, legacy: 2 });
   assert.deepEqual(check.codex, { present: false, deliver: 0, wake: 0, foreign: [] });
   assert.equal(check.checkout, f.pin);
-  assert.equal(check.detail, undefined);
+  assert.equal(check.detail, "Claude hook commands still name a source path; run bootstrap/install.sh to migrate them");
 });
 
 test("the live shape: Codex hooks name the pin, Claude hooks name the checkout, both count", (t) => {
@@ -256,7 +256,7 @@ test("a checkout at another commit stays foreign and the detail names the commit
   git(f.repo, "update-ref", "HEAD", next);
   const check = checkHooks({ claude: f.claude, codex: f.codex }, f.pin);
   assert.equal(check.ok, false);
-  assert.deepEqual(check.claude, { present: true, deliver: 0, wake: 0, foreign: [f.deliver, f.wake] });
+  assert.deepEqual(check.claude, { present: true, deliver: 0, wake: 0, foreign: [f.deliver, f.wake], pointer: "missing", stable: 0, legacy: 2 });
   assert.equal(check.detail, detailOf("commit differs"));
 });
 
@@ -266,7 +266,7 @@ test("a checkout with tracked changes stays foreign until the change is reverted
   fs.writeFileSync(f.wake, "uncommitted");
   const dirty = checkHooks({ claude: f.claude, codex: f.codex }, f.pin);
   assert.equal(dirty.ok, false);
-  assert.deepEqual(dirty.claude, { present: true, deliver: 0, wake: 0, foreign: [f.deliver, f.wake] });
+  assert.deepEqual(dirty.claude, { present: true, deliver: 0, wake: 0, foreign: [f.deliver, f.wake], pointer: "missing", stable: 0, legacy: 2 });
   assert.equal(dirty.detail, detailOf("the hook's source has tracked changes"));
   git(f.repo, "checkout", "--", ".");
   const clean = checkHooks({ claude: f.claude, codex: f.codex }, f.pin);
@@ -297,7 +297,7 @@ test("a path that is not a hook of the checkout, a missing hook and a directory 
     fs.writeFileSync(f.claude, settings([`node "${hook}"`]));
     const check = checkHooks({ claude: f.claude, codex: f.codex }, f.pin);
     assert.equal(check.ok, false, hook);
-    assert.deepEqual(check.claude, { present: true, deliver: 0, wake: 0, foreign: [hook] });
+    assert.deepEqual(check.claude, { present: true, deliver: 0, wake: 0, foreign: [hook], pointer: "missing", stable: 0, legacy: hook === directory ? 1 : 0 });
     assert.equal(check.detail, detailOf("no verified source identity"));
   }
 });
@@ -329,7 +329,7 @@ test("a delivery hook on PostToolUse counts like those on the turn-boundary even
   ] } }));
   const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
   assert.equal(check.ok, true, JSON.stringify(check));
-  assert.deepEqual(check.claude, { present: true, deliver: 4, wake: 0, foreign: [] });
+  assert.deepEqual(check.claude, { present: true, deliver: 4, wake: 0, foreign: [], pointer: "missing", stable: 0, legacy: 4 });
 });
 
 // Issue #408 (Fable review of PR 1, point 1b): Stop is idle evidence only on a

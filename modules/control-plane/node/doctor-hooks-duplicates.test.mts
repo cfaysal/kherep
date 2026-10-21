@@ -35,7 +35,7 @@ test("a control-plane script wired twice on one event fails the hooks check and 
   assert.equal(check.ok, false, JSON.stringify(check));
   assert.equal(check.detail, "a control-plane script is wired more than once on one event; run bootstrap/install.sh again");
   assert.deepEqual(check.claude, { present: true, deliver: 3, wake: 1, foreign: [],
-    duplicates: [{ event: "Stop", script: "modules/control-plane/node/deliver-hook", count: 2 }] });
+    duplicates: [{ event: "Stop", script: "modules/control-plane/node/deliver-hook", count: 2 }], pointer: "missing", stable: 0, legacy: 4 });
   assert.equal(JSON.stringify(check).includes("/opt/own"), false);
 
   fs.writeFileSync(f.claude, JSON.stringify({ hooks: {
@@ -43,7 +43,7 @@ test("a control-plane script wired twice on one event fails the hooks check and 
   } }));
   const clean = checkHooks({ claude: f.claude, codex: f.codex }, f.repo);
   assert.equal(clean.ok, true, JSON.stringify(clean));
-  assert.deepEqual(clean.claude, { present: true, deliver: 2, wake: 1, foreign: [] });
+  assert.deepEqual(clean.claude, { present: true, deliver: 2, wake: 1, foreign: [], pointer: "missing", stable: 0, legacy: 3 });
 });
 
 test("a foreign hook keeps its detail; the duplicates are still in the scan", (t) => {
@@ -54,4 +54,25 @@ test("a foreign hook keeps its detail; the duplicates are still in the scan", (t
   assert.equal(check.ok, false);
   assert.match(String(check.detail), /^a hook command names another checkout/);
   assert.deepEqual((check.claude as { duplicates?: unknown[] }).duplicates, [{ event: "Stop", script: "modules/control-plane/node/deliver-hook", count: 2 }]);
+});
+
+// Issue #592. The duplicate scan reads the installer template of the running
+// source; when that read fails, the duplicates are unknown, not clean (Golden
+// Rule 12): the scan says so in its own field, never as a value of `duplicates`,
+// and the check fails with a fixed detail.
+test("an unreadable template leaves the duplicates unknown and fails the check", (t) => {
+  const f = files(t);
+  const deliver = command(`node "${path.join(f.hooks, "deliver-hook.mts")}"`);
+  fs.writeFileSync(f.claude, JSON.stringify({ hooks: { Stop: [{ hooks: [deliver, deliver] }] } }));
+  const enoent = Object.assign(new Error("no template"), { code: "ENOENT" });
+  const check = checkHooks({ claude: f.claude, codex: f.codex }, f.repo, { duplicatesOf: () => { throw enoent; } });
+  assert.equal(check.ok, false, JSON.stringify(check));
+  assert.equal(check.detail, "the control-plane template of this source is unreadable; duplicates unknown");
+  assert.deepEqual(check.claude, { present: true, deliver: 2, wake: 0, foreign: [], duplicatesUnknown: true, pointer: "missing", stable: 0, legacy: 2 });
+  assert.equal((check.claude as { duplicates?: unknown }).duplicates, undefined, "no string stands in for the duplicate list");
+  // An absent settings file is still absent, not unknown (#592 comment).
+  fs.rmSync(f.claude);
+  const absent = checkHooks({ claude: f.claude, codex: f.codex }, f.repo, { duplicatesOf: () => { throw enoent; } });
+  assert.deepEqual(absent.claude, { present: false, deliver: 0, wake: 0, foreign: [] });
+  assert.equal(absent.detail, "no delivery or wake hook is installed");
 });
