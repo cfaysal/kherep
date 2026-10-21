@@ -153,3 +153,22 @@ test("the last modules/control-plane/node/ segment counts, and other scripts are
     `node "~/.claude/kherep/hook-runtime/entry.mts" reader "~/.claude/hooks/o.mts"`,
   ]) assert.equal(controlPlaneHookKey(command, "darwin"), undefined, command);
 });
+
+// Review of #590, P3-1: on win32 the directory segment is found in any case.
+test("on win32 a hand-written segment in another case is the same control-plane script", () => {
+  const command = String.raw`node "C:\Users\U\Kherep\Modules\Control-Plane\Node\Deliver-Hook.mts"`;
+  assert.equal(controlPlaneHookKey(command, "win32"), `${CP}/deliver-hook`);
+  assert.equal(controlPlaneHookKey(command, "darwin"), undefined);
+});
+
+// Review of #590, P3-2: as for managedHookKey(), a shell control operator,
+// substitution or redirection outside double quotes makes the command
+// operator-shaped: it is not keyed, so the merge keeps it.
+test("a control-plane command that runs more than the script is not keyed; a quoted & in the root is", () => {
+  for (const command of [
+    `node "/r/${CP}/deliver-hook.mts" && echo done`, `node /r/${CP}/deliver-hook.mts;echo done`,
+    `node "/r/${CP}/deliver-hook.mts" | tee /tmp/x`, `node "/r/${CP}/deliver-hook.mts" > /tmp/x`,
+    `node "/r/${CP}/wake-hook.mts" --timeout $(cat /tmp/t)`, `node "/r/${CP}/deliver-hook.mts" \`id\``,
+  ]) assert.equal(controlPlaneHookKey(command, "darwin"), undefined, command);
+  assert.equal(controlPlaneHookKey(`node "/Users/x/R&D/kherep/${CP}/deliver-hook.mts" --timeout 1`, "darwin"), `${CP}/deliver-hook`);
+});

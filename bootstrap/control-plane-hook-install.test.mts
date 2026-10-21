@@ -178,49 +178,45 @@ test("an upgrade replaces the wake entries of an older install with a changed ti
   assert.deepEqual(settings.hooks.Stop.at(-1).hooks.filter((hook: { command: string }) => hook.command.includes("/opt/own/")), [own]);
 });
 
-// Issue #590. An earlier install from another root (a service source pin, a
-// worktree) left its control-plane entries; this install from the checkout
-// must replace them, not add a second set, and the file with both sets must
-// fail drift-check with a line that names the duplicated script and event.
-test("an install replaces the control-plane entries of an install from another root; a file with both sets fails drift-check", (t) => {
+// Issue #590. Installs from two roots (the checkout and a service source pin)
+// left every control-plane entry once per root, the state a node measured. One
+// install from the checkout must leave a single set, and the file with both
+// sets must fail drift-check with a line that names the script and event.
+test("an install collapses the control-plane entries of two roots to one set; a file with both sets fails drift-check", (t) => {
   const f = fixture(t);
   const settingsFile = path.join(f.claude, "settings.json");
   const other = slash(path.join(f.root, "control-plane", "service", "source-pins", "0123456789abcdef0123456789abcdef01234567"));
+  const repo = forward(KHEREP_REPO);
   const own = { type: "command", command: 'node "/opt/own/stop-note.mts"' };
-  const deliver = (repo: string) => ({ type: "command", command: hookCommand(repo) });
-  const fromRoot = (repo: string) => ({
-    UserPromptSubmit: [{ matcher: "", hooks: [deliver(repo), wakeHook(repo, 86400)] }],
-    Stop: [{ matcher: "", hooks: [own, deliver(repo), wakeHook(repo, 86400)] }],
-    StopFailure: [{ matcher: "", hooks: [deliver(repo)] }],
-    PostToolUse: [{ matcher: "", hooks: [deliver(repo)] }, { matcher: "Bash|PowerShell", hooks: [{ type: "command", command: hookCommand(repo, ATTRIBUTION) }] }],
-    SessionStart: [{ matcher: "", hooks: [wakeHook(repo, 86400)] }],
+  const deliver = (root: string) => ({ type: "command", command: hookCommand(root) });
+  const fromRoot = (root: string): Record<string, { matcher: string; hooks: { type: string; command: string }[] }[]> => ({
+    UserPromptSubmit: [{ matcher: "", hooks: [deliver(root), wakeHook(root, 86400)] }],
+    Stop: [{ matcher: "", hooks: [own, deliver(root), wakeHook(root, 86400)] }],
+    StopFailure: [{ matcher: "", hooks: [deliver(root)] }],
+    PostToolUse: [{ matcher: "", hooks: [deliver(root)] }, { matcher: "Bash|PowerShell", hooks: [{ type: "command", command: hookCommand(root, ATTRIBUTION) }] }],
+    SessionStart: [{ matcher: "", hooks: [wakeHook(root, 86400)] }],
   });
-  fs.writeFileSync(settingsFile, `${JSON.stringify({ hooks: fromRoot(other) }, null, 2)}\n`);
+  const pinned = fromRoot(other);
+  const bothRoots = `${JSON.stringify({ hooks: Object.fromEntries(Object.entries(fromRoot(repo)).map(([event, groups]) => [event,
+    groups.map((group, i) => ({ ...group, hooks: [...group.hooks, ...pinned[event][i].hooks.filter((hook) => hook !== own)] }))])) }, null, 2)}\n`;
+  fs.writeFileSync(settingsFile, bothRoots);
   const install = bash([slash(path.join(HERE, "install.sh"))], f);
   assert.equal(install.status, 0, `${install.stdout}\n${install.stderr}`);
   const text = fs.readFileSync(settingsFile, "utf8");
   assert.ok(!text.includes(other), "an entry of the other root survived the install");
   const settings = JSON.parse(text);
-  const repo = forward(KHEREP_REPO);
   for (const event of EVENTS) {
     const commands: string[] = settings.hooks[event].flatMap((group: { hooks: { command: string }[] }) => group.hooks.map((h) => h.command));
     assert.deepEqual(commands.filter((command) => command.includes("deliver-hook")), [hookCommand(repo)], event);
   }
   for (const event of WAKE_EVENTS) assert.deepEqual(wakeEntries(settings, event), [wakeHook(repo, 86400)], event);
   assert.deepEqual(attributionGroup(settings)?.hooks, [{ type: "command", command: hookCommand(repo, ATTRIBUTION) }]);
-  assert.deepEqual(settings.hooks.Stop.at(-1).hooks.filter((hook: { command: string }) => hook.command.includes("/opt/own/")), [own]);
+  assert.deepEqual(settings.hooks.Stop.flatMap((group: { hooks: { command: string }[] }) => group.hooks)
+    .filter((hook: { command: string }) => hook.command.includes("/opt/own/")), [own]);
   const clean = bash([slash(path.join(HERE, "drift-check.sh"))], f);
   assert.equal(clean.status, 0, `${clean.stdout}\n${clean.stderr}`);
 
-  // The state the node measured: every control-plane entry once per root.
-  const duplicated = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
-  for (const [event, groups] of Object.entries(fromRoot(other))) {
-    for (const group of groups) {
-      const target = duplicated.hooks[event].find((g: { matcher?: string }) => (g.matcher ?? "") === group.matcher);
-      target.hooks.push(...group.hooks.filter((hook) => hook !== own));
-    }
-  }
-  fs.writeFileSync(settingsFile, `${JSON.stringify(duplicated, null, 2)}\n`);
+  fs.writeFileSync(settingsFile, bothRoots);
   const red = bash([slash(path.join(HERE, "drift-check.sh"))], f);
   assert.equal(red.status, 1, `${red.stdout}\n${red.stderr}`);
   for (const line of ["DUPLICATE-HOOK Stop modules/control-plane/node/deliver-hook x2", "DUPLICATE-HOOK Stop modules/control-plane/node/wake-hook x2",
