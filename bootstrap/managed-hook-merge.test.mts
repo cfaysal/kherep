@@ -152,3 +152,39 @@ for (const home of HOMES) {
     }
   });
 }
+
+// Issue #590. The template of an install from a service source pin, merged into
+// settings written by an install from the checkout: one entry per control-plane
+// script and event, whatever root the existing entry names. The replace is the
+// #31 rule, so nothing is reported, and operator hooks stay as they are.
+const PIN = "/Users/x/Library/Application Support/kherep/control-plane/service/source-pins/0123abcd";
+const CHECKOUT = "/Users/x/CFcon-DEV/kherep";
+const cp = (root: string, script: string, args = ""): HookCommand =>
+  ({ type: "command", command: `node "${root}/modules/control-plane/node/${script}"${args}` });
+const cpWake = (root: string, t: number): HookCommand => ({ ...cp(root, "wake-hook.mts", ` --timeout ${t}`), asyncRewake: true, timeout: t });
+
+test("a pin-root template replaces checkout-root entries of the same control-plane script and event; operator hooks stay", () => {
+  const own = { type: "command", command: 'node "/opt/own/stop-note.mts"' };
+  const ownGroup = { matcher: "Bash", hooks: [{ type: "command", command: "node /opt/own/bash-note.mts" }] };
+  const source = {
+    Stop: [{ matcher: "", hooks: [cp(PIN, "deliver-hook.mts"), cpWake(PIN, 86400)] }],
+    PostToolUse: [{ matcher: "", hooks: [cp(PIN, "deliver-hook.mts")] }, { matcher: "Bash|PowerShell", hooks: [cp(PIN, "attribution-hook.mts")] }],
+  };
+  const existing = {
+    Stop: [{ matcher: "", hooks: [own, cp(CHECKOUT, "deliver-hook.mts"), cpWake(CHECKOUT, 43200)] }, ownGroup],
+    PostToolUse: [{ matcher: "", hooks: [cp(CHECKOUT, "deliver-hook.mts")] }, { matcher: "Bash|PowerShell", hooks: [cp(CHECKOUT, "attribution-hook.mts")] }],
+  };
+  const r = merge(source, existing);
+  assert.deepEqual(r.merged.Stop, [{ matcher: "", hooks: [cp(PIN, "deliver-hook.mts"), cpWake(PIN, 86400), own] }, ownGroup]);
+  assert.deepEqual(r.merged.PostToolUse, source.PostToolUse);
+  assert.deepEqual(r.replaced, []);
+});
+
+test("settings that already hold both roots collapse to one set, also with backslashes and another drive case", () => {
+  const both = { Stop: [{ matcher: "", hooks: [cp(CHECKOUT, "deliver-hook.mts"), cpWake(CHECKOUT, 86400), cp(PIN, "deliver-hook.mts"), cpWake(PIN, 86400)] }] };
+  const r = merge({ Stop: [{ matcher: "", hooks: [cp(PIN, "deliver-hook.mts"), cpWake(PIN, 86400)] }] }, both);
+  assert.deepEqual(r.merged.Stop, [{ matcher: "", hooks: [cp(PIN, "deliver-hook.mts"), cpWake(PIN, 86400)] }]);
+  const win = merge({ Stop: [{ matcher: "", hooks: [cp("D:/Tools/Kherep", "deliver-hook.mts")] }] },
+    { Stop: [{ matcher: "", hooks: [{ type: "command", command: String.raw`node "d:\Work\kherep\modules\control-plane\node\deliver-hook.mts"` }] }] });
+  assert.deepEqual(win.merged.Stop, [{ matcher: "", hooks: [cp("D:/Tools/Kherep", "deliver-hook.mts")] }]);
+});

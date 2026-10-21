@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { managedHookKey } from "./managed-hook-key.mts";
+import { controlPlaneHookKey, managedHookKey } from "./managed-hook-key.mts";
 
 const entry = (home: string, mode: string, main: string, ext = "mts") =>
   `node "${home}/kherep/hook-runtime/entry.${ext}" ${mode} "${home}/hooks/${main}"`;
@@ -117,4 +117,39 @@ test("on win32 the key is lower-cased before the extension is folded", () => {
 
 test("on a case-sensitive host another case is another file", () => {
   assert.equal(managedHookKey(entry("/h/.claude", "reader", "X.MTS"), "darwin")?.key, "/h/.claude/hooks/X.MTS");
+});
+
+// Issue #590. The key of a control-plane hook is the script from
+// modules/control-plane/node/ on: one key for every root, spelling and extension.
+const CP = "modules/control-plane/node";
+
+test("a control-plane script has one key whatever root it runs from, with or without quotes and arguments", () => {
+  const keys = [
+    `node "/Users/x/CFcon-DEV/kherep/${CP}/deliver-hook.mts"`,
+    `node "/Users/x/Library/Application Support/kherep/control-plane/service/source-pins/0123abcd/${CP}/deliver-hook.mts"`,
+    `node /opt/kherep/${CP}/deliver-hook.mts`,
+    `node "/Users/x/CFcon-DEV/kherep/.claude/worktrees/agent-b/${CP}/deliver-hook.js" --timeout 86400`,
+  ].map((command) => controlPlaneHookKey(command, "darwin"));
+  assert.deepEqual(new Set(keys), new Set([`${CP}/deliver-hook`]));
+  assert.equal(controlPlaneHookKey(`node "/r/${CP}/wake-hook.mts" --timeout 86400`, "darwin"), `${CP}/wake-hook`);
+  assert.equal(controlPlaneHookKey(`node "/r/${CP}/attribution-hook.mts"`, "darwin"), `${CP}/attribution-hook`);
+});
+
+test("a Windows path with backslashes, another drive letter case or the Git Bash form is the same script", () => {
+  const keys = [
+    `node "D:/Tools/Kherep/${CP}/deliver-hook.mts"`,
+    String.raw`node "d:\Work\kherep\modules\control-plane\node\deliver-hook.mts"`,
+    `node "/d/Work/kherep/${CP}/Deliver-Hook.mts"`,
+  ].map((command) => controlPlaneHookKey(command, "win32"));
+  assert.deepEqual(new Set(keys), new Set([`${CP}/deliver-hook`]));
+  assert.equal(controlPlaneHookKey(`node "/r/${CP}/Deliver-Hook.mts"`, "darwin"), `${CP}/Deliver-Hook`);
+});
+
+test("the last modules/control-plane/node/ segment counts, and other scripts are not control-plane hooks", () => {
+  assert.equal(controlPlaneHookKey(`node "/r/${CP}/x/${CP}/deliver-hook.mts"`, "darwin"), `${CP}/deliver-hook`);
+  for (const command of [
+    `node "~/.claude/hooks/deliver-hook.mts"`, `node "/r/modules/control-plane/deliver-hook.mts"`, `node "/r/${CP}/"`,
+    `echo /r/${CP}/deliver-hook.mts`, `node --no-warnings "/r/${CP}/deliver-hook.mts"`, `& node "/r/${CP}/deliver-hook.mts"`,
+    `node "~/.claude/kherep/hook-runtime/entry.mts" reader "~/.claude/hooks/o.mts"`,
+  ]) assert.equal(controlPlaneHookKey(command, "darwin"), undefined, command);
 });
