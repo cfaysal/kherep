@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { makeEnvelope, type Envelope, type MessageType } from "../../protocol.mts";
 import {
   MESSAGE_STATUS_ACK, MESSAGING_ACK_CAPABILITY, MESSAGING_CAPABILITY, OPERATOR_NODE_ID, type FinalMessageState, type MessageStatusBody,
+  type NodeReportedState,
 } from "../../protocol-messages.mts";
 import { FALLBACK_DELETE_MS, RETENTION_BATCH, TOMBSTONE_TTL_MS } from "../src/message-retention.mts";
 import { MessageStore } from "../src/message-store.mts";
@@ -41,6 +42,9 @@ const settles = (id: string) => query((sql) => sql.exec("SELECT actor, detail FR
 // answer frame, so sync() cannot see it land (issue #557): its effect is awaited
 // on the Registry's state (deletedByAck, settledByAck), and an ack without an
 // effect goes through the Registry's RPC (acked), whose answer is the completion.
+// A target's report is answered by a receipt event, sent after the Registry's
+// RPC returned, so the receipt is its completion (receipt, issue #569); a report
+// of another node has no receipt and goes through the RPC (reported).
 async function sync(socket: TestSocket): Promise<Envelope[]> {
   frame(socket, "directory.get", {});
   const frames: Envelope[] = [];
@@ -48,13 +52,32 @@ async function sync(socket: TestSocket): Promise<Envelope[]> {
   return frames;
 }
 
+// The receipt that answers a report of the target node (message-store.mts
+// report, node-session.mts message.status): sent after the Registry's RPC
+// returned, so the stored state it carries is committed. Consuming it keeps the
+// frame from a later sync() or until() on the same socket.
+async function receipt(socket: TestSocket, messageId: string, requestedState: string, storedState: string,
+  more: Record<string, unknown> = {}): Promise<void> {
+  const frames = await until(socket, "event", { name: "message.receipt", messageId, requestedState });
+  expect(frames.map((e) => e.body)).toEqual([{ name: "message.receipt", messageId, requestedState, storedState, ...more }]);
+}
+
+// A report of another node than the target gets no receipt and changes nothing
+// (message-store.mts report, message-retention.mts lateReceipt): nothing to wait
+// for, so it goes through the Registry's RPC, whose answer is the completion;
+// the null receipt is what node-session.mts tests before it sends one.
+async function reported(nodeId: string, messageId: string, state: NodeReportedState): Promise<void> {
+  expect((await registry().reportMessageStatus(nodeId, { messageId, state })).receipt).toBeNull();
+}
+
 // A message from `a` to `b`, reported delivered by b; returns its id.
 async function deliveredMessage(a: TestSocket, b: TestSocket, bNode: string, messageId = crypto.randomUUID()): Promise<string> {
   frame(a, "message.send", { messageId, fromSession: "s-a", to: { nodeId: bNode, session: "s-b" }, text: "synthetic text" });
   await nextMessageStatus(a, { messageId, state: "queued" });
+  await until(b, "message.deliver", { messageId }); // consumed: sync() used to swallow it unseen
   frame(b, "message.status", { messageId, state: "delivered" });
   await nextMessageStatus(a, { messageId, state: "delivered" });
-  await sync(b);
+  await receipt(b, messageId, "delivered", "delivered");
   return messageId;
 }
 
@@ -78,10 +101,12 @@ type Tx = { messageTx: (path: string, run: () => unknown) => Promise<unknown> };
 // directory() call meanwhile. Forces the order the stub docs allow (no ordering
 // between different stubs): "after" the commit delays the frame that reports
 // the result (issue #529, a resend's status), "before" delays the transaction
-// itself (issue #557, an ack whose only trace is the Registry's state).
+// itself (issue #557, an ack whose only trace is the Registry's state; issue
+// #569, a report whose receipt follows the RPC's answer).
 // restore() puts the method back: whether a patched instance outlives the test
 // is unknown, so it is not left to chance.
-async function holdNext(path: "sendMessage" | "ackMessageStatus", at: "before" | "after"): Promise<{ release: () => void; restore: () => Promise<void> }> {
+async function holdNext(path: "sendMessage" | "ackMessageStatus" | "reportMessageStatus", at: "before" | "after"):
+Promise<{ release: () => void; restore: () => Promise<void> }> {
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
   const original = await runInDurableObject(registry(), (instance) => {
@@ -152,8 +177,9 @@ describe("deletion after the sender's acknowledgement", () => {
     frame(sender, "message.send", { messageId: id, fromSession: "s-a", to: { nodeId: b.nodeId, session: "s-b" }, text: "synthetic" });
     await nextMessageStatus(sender, { messageId: id, state: "queued" });
     sender.ws.close(1000, "offline");
+    await until(target, "message.deliver", { messageId: id });
     frame(target, "message.status", { messageId: id, state: "delivered" });
-    await sync(target);
+    await receipt(target, id, "delivered", "delivered");
     expect(await row(id)).toMatchObject({ state: "delivered", delete_after: null });
     const back = await authenticate(a.nodeId, a.key);
     expect(await nextMessageStatus(back, { messageId: id, state: "delivered" })).toEqual({ messageId: id, state: "delivered" });
@@ -180,14 +206,11 @@ describe("deletion after the sender's acknowledgement", () => {
     expect(refused[0]).toMatchObject({ type: "error", body: { error: "duplicate messageId", messageId: id } });
 
     frame(target, "message.status", { messageId: id, state: "delivered" });
-    frame(foreign, "message.status", { messageId: id, state: "delivered" });
-    expect((await until(target, "event", { name: "message.receipt", messageId: id, requestedState: "delivered" })).map((e) => e.body))
-      .toEqual([{ name: "message.receipt", messageId: id, requestedState: "delivered", storedState: "delivered" }]);
-    expect(await sync(foreign)).toEqual([]);
+    await receipt(target, id, "delivered", "delivered");
+    await reported(other.nodeId, id, "delivered"); // a tombstone of another target: no receipt (lateReceipt)
     await query((sql) => sql.exec("DELETE FROM message_tombstones WHERE id = ?", id));
     frame(target, "message.status", { messageId: id, state: "accepted" });
-    expect((await until(target, "event", { name: "message.receipt", messageId: id, requestedState: "accepted" })).map((e) => e.body))
-      .toEqual([{ name: "message.receipt", messageId: id, requestedState: "accepted", storedState: "expired" }]);
+    await receipt(target, id, "accepted", "expired");
   });
 
   // Issue #529: the status of a resend reaches the socket after the answer to a
@@ -231,6 +254,31 @@ describe("deletion after the sender's acknowledgement", () => {
     }
   });
 
+  // Issue #569: a target's report is answered by a receipt, sent after the
+  // Registry's RPC returned, and the directory answer may be handled before
+  // both. The hold forces that order; sync() alone proves nothing and leaves
+  // the receipt in the socket's queue.
+  it("stores a target's report that a directory answer overtakes", async () => {
+    const { sender, target, b } = await pair();
+    const id = crypto.randomUUID();
+    frame(sender, "message.send", { messageId: id, fromSession: "s-a", to: { nodeId: b.nodeId, session: "s-b" }, text: "synthetic" });
+    await nextMessageStatus(sender, { messageId: id, state: "queued" });
+    await until(target, "message.deliver", { messageId: id });
+    const hold = await holdNext("reportMessageStatus", "before");
+    try {
+      frame(target, "message.status", { messageId: id, state: "delivered" });
+      expect(await sync(target)).toEqual([]);
+      expect(await row(id)).toMatchObject({ state: "queued" }); // after sync(): the report has not run, the old barrier passed falsely
+      hold.release();
+      await receipt(target, id, "delivered", "delivered");
+      expect(await row(id)).toMatchObject({ state: "delivered", deletable: 1 });
+      expect(await nextMessageStatus(sender, { messageId: id, state: "delivered" })).toEqual({ messageId: id, state: "delivered" });
+    } finally {
+      hold.release();
+      await hold.restore();
+    }
+  });
+
   it("until() names the frames seen when the awaited frame never comes", async () => {
     const { sender, target, b } = await pair();
     const id = await deliveredMessage(sender, target, b.nodeId);
@@ -250,6 +298,7 @@ describe("fallback deletion, prune and revoke", () => {
       expect((await registry().sendMessage({ messageId, from: { nodeId: from, session: "s-a" },
         to: { nodeId: b.nodeId, session: "s-b" }, text: "synthetic" }, "test")).ok).toBe(true);
       frame(target, "message.status", { messageId, state: "delivered" });
+      await receipt(target, messageId, "delivered", "delivered");
       return messageId;
     };
     const capable = await node("retention-capable");
@@ -257,16 +306,11 @@ describe("fallback deletion, prune and revoke", () => {
     // runner's speed, and before the row was read (issue #565).
     const before = Date.now();
     const [operator, legacyNode, acking] = [await send(OPERATOR_NODE_ID), await send(plain.nodeId), await send(capable.nodeId)];
-    await sync(target);
     for (const id of [operator, legacyNode]) {
-      // sync() is no barrier for a status frame, which reaches the Registry on its own stub (issue #529): the stamp
-      // is awaited on the row, as for an ack (issue #557), and `after` is taken once it was read (issue #565).
-      const deadline = await vi.waitFor(async () => {
-        const value = (await row(id))?.delete_after;
-        expect(value).toBeTypeOf("number");
-        return value as number;
-      }, WAIT);
+      // The report's receipt proves the stamp is stored (issue #569); `after` is taken once it was read (issue #565).
+      const deadline = (await row(id))?.delete_after;
       const after = Date.now();
+      expect(deadline).toBeTypeOf("number");
       expect(deadline).toBeGreaterThanOrEqual(before + FALLBACK_DELETE_MS);
       expect(deadline).toBeLessThanOrEqual(after + FALLBACK_DELETE_MS);
     }
@@ -353,8 +397,13 @@ const settledByAck = (id: string, state: string) => vi.waitFor(async () => expec
 // The [settled bucket, count] groups of one sender's legacy rows in one state.
 const legacyGroups = async (nodeId: string, state: string) => (await registry().messageSummary(nodeId, Date.now())).groups
   .filter((g) => g.state === state && g.deletable === "null").map((g) => [g.settled, g.count]);
-const replyTo = (socket: TestSocket, original: string, to: { nodeId: string; session: string }) => frame(socket, "message.send",
-  { messageId: crypto.randomUUID(), fromSession: "s-b", to, text: "synthetic reply", inReplyTo: original });
+// A reply from `socket`: its queued status answers the send once the Registry
+// committed it, markReplied included (message-store.mts send), so it is awaited.
+async function replyTo(socket: TestSocket, original: string, to: { nodeId: string; session: string }): Promise<void> {
+  const messageId = crypto.randomUUID();
+  frame(socket, "message.send", { messageId, fromSession: "s-b", to, text: "synthetic reply", inReplyTo: original });
+  await until(socket, "message.status", { messageId, state: "queued" });
+}
 
 // Issue #493: a row stored before PR 4 is never deleted. An acknowledgement of
 // its current final state by its sender settles it instead: it stays, and the
@@ -418,7 +467,7 @@ describe("rows stored before this version", () => {
     const id = await legacyRow(a.nodeId, b.nodeId, "accepted");
     frame(target, "message.status", { messageId: id, state: "delivered" });
     expect(await statusOf(sender, id)).toEqual({ messageId: id, state: "delivered" });
-    await sync(target);
+    await receipt(target, id, "delivered", "delivered");
     expect(await row(id)).toMatchObject({ state: "delivered", deletable: null, settled_state: null });
     const back = await reconnect(a);
     expect(back.statuses.filter((s) => s.messageId === id)).toEqual([{ messageId: id, state: "delivered" }]);
@@ -432,7 +481,7 @@ describe("rows stored before this version", () => {
     const old = await legacyRow(a.nodeId, b.nodeId);
     ack(sender, old, "delivered");
     await settledByAck(old, "delivered");
-    replyTo(target, old, { nodeId: a.nodeId, session: "s-a" });
+    await replyTo(target, old, { nodeId: a.nodeId, session: "s-a" });
     expect(await statusOf(sender, old)).toEqual({ messageId: old, state: "replied" });
     expect(await row(old)).toMatchObject({ state: "replied", settled_state: "delivered" });
     let back = await reconnect(a);
@@ -453,8 +502,7 @@ describe("rows stored before this version", () => {
     const { a, sender, target, b } = await pair();
     const old = await legacyRow(a.nodeId, b.nodeId);
     sender.ws.close(1000, "offline");
-    replyTo(target, old, { nodeId: a.nodeId, session: "s-a" });
-    await sync(target);
+    await replyTo(target, old, { nodeId: a.nodeId, session: "s-a" });
     expect(await row(old)).toMatchObject({ state: "replied", settled_state: null });
     const back = await reconnect(a);
     expect(back.statuses.filter((s) => s.messageId === old)).toEqual([{ messageId: old, state: "replied" }]);
@@ -497,19 +545,18 @@ describe("rows stored before this version", () => {
   it("stay settled on a duplicate, regressive or foreign report, a reply to another session and a resend", async () => {
     const { a, sender, target, b } = await pair();
     const third = await node("retention-third");
-    const foreign = await authenticate(third.nodeId, third.key);
     const old = await legacyRow(a.nodeId, b.nodeId);
     ack(sender, old, "delivered");
     await settledByAck(old, "delivered");
     frame(target, "message.status", { messageId: old, state: "delivered" });
+    await receipt(target, old, "delivered", "delivered");
     frame(target, "message.status", { messageId: old, state: "accepted" });
+    await receipt(target, old, "accepted", "delivered"); // regressive: the receipt carries the state that stayed
     // markReplied: a reply that does not go to the original's sending session marks nothing.
-    replyTo(target, old, { nodeId: a.nodeId, session: "s-x" });
-    await sync(target);
-    frame(foreign, "message.status", { messageId: old, state: "delivered" });
-    await sync(foreign);
+    await replyTo(target, old, { nodeId: a.nodeId, session: "s-x" });
+    await reported(third.nodeId, old, "delivered"); // another node than the target: no receipt, nothing changed
     frame(sender, "message.send", { messageId: old, fromSession: "s-a", to: { nodeId: b.nodeId, session: "s-b" }, text: "synthetic" });
-    await sync(sender);
+    await until(sender, "message.status", { messageId: old, state: "delivered" }); // the resend is answered from the row
     expect(await row(old)).toMatchObject({ state: "delivered", settled_state: "delivered" });
     expect(await settles(old)).toHaveLength(1);
     expect((await reconnect(a)).replayed).not.toContain(old);
@@ -521,8 +568,9 @@ describe("rows stored before this version", () => {
     const newer = { phase: "waiting", code: "target-busy", observedAt: new Date().toISOString() };
     const older = { ...newer, observedAt: new Date(Date.now() - 60_000).toISOString() };
     frame(target, "message.status", { messageId: id, state: "accepted", progress: newer });
+    await receipt(target, id, "accepted", "accepted", { storedProgressAt: newer.observedAt });
     frame(target, "message.status", { messageId: id, state: "accepted", progress: older });
-    await sync(target);
+    await receipt(target, id, "accepted", "accepted", { storedProgressAt: newer.observedAt }); // older progress: nothing stored
     expect(await row(id)).toMatchObject({ state: "accepted", progress_observed_at: newer.observedAt, settled_state: null });
     const back = await reconnect(a);
     expect(back.statuses.filter((s) => s.messageId === id)).toEqual([{ messageId: id, state: "accepted", progress: newer }]);
