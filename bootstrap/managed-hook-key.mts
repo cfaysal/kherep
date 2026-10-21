@@ -50,17 +50,20 @@ export function managedHookKey(command: string, platform: string = process.platf
 // replaced the entries of an install from another root; a node measured 16
 // control-plane entries instead of 8 after `service upgrade` and an install from
 // the pin. Arguments are not part of the key (#31: the wake timeout). Only the
-// bare `node <script>` form is recognised; any other hook is undefined.
+// bare `node <script>` form is recognised, and, as for managedHookKey(), a
+// command with a shell control operator, substitution or redirection outside
+// double quotes is operator-shaped; any other hook is undefined. On win32 the
+// script is lower-cased before the segment is searched, so `\Modules\...` counts.
 const CONTROL_PLANE_SCRIPT = /^node\s+(?:"([^"]+)"|(\S+))/;
 const CONTROL_PLANE_DIR = "/modules/control-plane/node/";
 
 export function controlPlaneHookKey(command: string, platform: string = process.platform): string | undefined {
   const match = CONTROL_PLANE_SCRIPT.exec(command);
-  if (!match) return undefined;
-  const script = (match[1] ?? match[2]).replace(/\\/g, "/");
+  if (!match || CONTROL_OPERATOR.test(outsideQuotes(command))) return undefined;
+  const written = (match[1] ?? match[2]).replace(/\\/g, "/");
+  const script = platform === "win32" ? written.toLowerCase() : written;
   const at = script.lastIndexOf(CONTROL_PLANE_DIR);
   if (at < 0) return undefined;
   const key = script.slice(at + 1).replace(/\.(?:js|mjs|cjs|mts)$/, "");
-  if (key === CONTROL_PLANE_DIR.slice(1)) return undefined;
-  return platform === "win32" ? key.toLowerCase() : key;
+  return key === CONTROL_PLANE_DIR.slice(1) ? undefined : key;
 }
