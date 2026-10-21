@@ -43,7 +43,8 @@ export const settles = (id: string) => query((sql) => sql.exec("SELECT actor, de
 // effect goes through the Registry's RPC (acked), whose answer is the completion.
 // A target's report is answered by a receipt event, sent after the Registry's
 // RPC returned, so the receipt is its completion (receipt, issue #569); a report
-// of another node has no receipt and goes through the RPC (reported).
+// of another node on a stored message has no receipt and goes through the RPC
+// (reported).
 export async function sync(socket: TestSocket): Promise<Envelope[]> {
   frame(socket, "directory.get", {});
   const frames: Envelope[] = [];
@@ -61,8 +62,9 @@ export async function receipt(socket: TestSocket, messageId: string, requestedSt
   expect(frames.map((e) => e.body)).toEqual([{ name: "message.receipt", messageId, requestedState, storedState, ...more }]);
 }
 
-// A report of another node than the target gets no receipt and changes nothing
-// (message-store.mts report, message-retention.mts lateReceipt): nothing to wait
+// A report of another node than the target on a stored message gets no receipt
+// and changes nothing (message-store.mts report; an unknown id without a tombstone
+// gets an `expired` receipt from any node, message-retention.mts lateReceipt): nothing to wait
 // for, so it goes through the Registry's RPC, whose answer is the completion;
 // the null receipt is what node-session.mts tests before it sends one.
 export async function reported(nodeId: string, messageId: string, state: NodeReportedState): Promise<void> {
@@ -73,7 +75,7 @@ export async function reported(nodeId: string, messageId: string, state: NodeRep
 export async function deliveredMessage(a: TestSocket, b: TestSocket, bNode: string, messageId = crypto.randomUUID()): Promise<string> {
   frame(a, "message.send", { messageId, fromSession: "s-a", to: { nodeId: bNode, session: "s-b" }, text: "synthetic text" });
   await nextMessageStatus(a, { messageId, state: "queued" });
-  await until(b, "message.deliver", { messageId }); // consumed: sync() used to swallow it unseen
+  await until(b, "message.deliver", { messageId }); // consumed: receipt() is strict, so an unconsumed frame before it fails the test
   frame(b, "message.status", { messageId, state: "delivered" });
   await nextMessageStatus(a, { messageId, state: "delivered" });
   await receipt(b, messageId, "delivered", "delivered");
