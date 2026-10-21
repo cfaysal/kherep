@@ -35,7 +35,7 @@ test("legacy adoption accepts authenticated native provenance when daemon source
   assert.equal(saved.priorSource, undefined);
   assert.equal(saved.priorSourceStatus, "unknown");
   assert.equal(readServiceReceipt(h.paths)?.binding.source.commit, h.candidate.source.commit);
-  assert.equal(readServiceReceipt(h.paths)?.binding.logFile, h.old.logFile);
+  assert.equal(readServiceReceipt(h.paths)?.binding.logFile, h.adapter.adoptedLogFile);
 });
 
 test("legacy adoption refuses an unverifiable native source root before mutation", async (t) => {
@@ -135,7 +135,7 @@ test("rollback passes the current daemon context to the selected service stop", 
   await activateManagedService({ mode: "install", binding: h.candidate, adopt: true, explicitServiceName: true }, h.deps);
   const currentGeneration = readServiceReceipt(h.paths)!.binding.supervisorGeneration;
   h.adapter.stopCalls.length = 0;
-  await rollbackManagedService({ binding: h.candidate }, h.deps);
+  await rollbackManagedService({ binding: readServiceReceipt(h.paths)!.binding }, h.deps); // #582: after an adoption the CLI passes the receipt's binding
   assert.equal(h.adapter.stopCalls[0].binding.source.root, h.candidate.source.root);
   assert.equal(h.adapter.stopCalls[0].binding.supervisorGeneration, currentGeneration,
     "rollback provenance uses the generation attested by the current receipt");
@@ -175,12 +175,22 @@ test("stopped prior recovery stays unknown when candidate absence cannot be prov
   h.adapter.failCandidateHealth = true;
   h.adapter.failCandidateRecoveryStop = true;
   await assert.rejects(activateManagedService({ mode: "install", binding: h.candidate, adopt: true, explicitServiceName: true }, h.deps),
-    (error: Error & { recovery?: string }) => error.recovery === "unknown");
-  assert.equal(h.adapter.snapshot?.definition.toString(), "RAW_OLD_XML", "raw prior bytes are still restored");
+    (error: Error & { recovery?: string; blocker?: string }) => error.recovery === "unknown" && error.blocker === "RECOVERY_CANDIDATE_LOADED");
+  // #582: the loaded candidate keeps its own file; writing the prior bytes under it would leave launchd and the file apart.
+  assert.equal(h.adapter.snapshot?.definition.toString(), "RAW_NEW_XML", "the loaded candidate is not overwritten");
   assert.equal(h.adapter.snapshot?.security.toString(), "RAW_OLD_SDDL");
+  assert.equal(h.adapter.snapshot?.running, true);
   assert.equal(h.adapter.events.includes("start:RAW_OLD_XML"), false);
   assert.equal(fs.existsSync(path.join(h.paths.dir, "service", "drain")), true,
     "unknown candidate absence keeps admissions drained even when the prior service was stopped");
+  const record = JSON.parse(fs.readFileSync(path.join(h.paths.dir, "service", "candidate.json"), "utf8"));
+  assert.deepEqual(fs.readdirSync(path.join(h.paths.dir, "service", "backups")), [record.backupId]);
+  assert.equal(fs.readFileSync(path.join(h.paths.dir, "service", "backups", record.backupId, "definition.bin"), "utf8"), "RAW_OLD_XML");
+  assert.equal(record.command, "install");
+  assert.equal(record.stopCode, "STOP_FAILED_OTHER");
+  assert.equal(record.binding.nodeExecutable, h.adapter.adoptNodeExecutable, "the record carries the adopted node path");
+  assert.notEqual(record.binding.nodeExecutable, h.candidate.nodeExecutable);
+  assert.equal(record.binding.logFile, h.adapter.adoptedLogFile);
 });
 
 test("fresh cleanup refuses to remove a Ready task while an exact detached supervisor remains", async (t) => {
@@ -359,7 +369,7 @@ test("rollback refuses a drifted mutable legacy source and a held transaction lo
   const h = setup(t);
   const activated = await activateManagedService({ mode: "install", binding: h.candidate, adopt: true, explicitServiceName: true }, h.deps);
   h.setSourceValid(false);
-  await assert.rejects(rollbackManagedService({ binding: h.candidate }, h.deps), /previous source.*cannot be verified/);
+  await assert.rejects(rollbackManagedService({ binding: readServiceReceipt(h.paths)!.binding }, h.deps), /previous source.*cannot be verified/);
   const lock = path.join(h.paths.dir, "service", "transaction.lock");
   fs.writeFileSync(lock, "held");
   await assert.rejects(activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps), /transaction is already active/);
