@@ -60,16 +60,16 @@ function validBinding(value: ServiceBinding | undefined): value is ServiceBindin
     && value.serviceName.length > 0 && absolute(value.workspace) && absolute(value.configRoot)
     && absolute(value.nodeExecutable) && validSource(value.source, true)
     && (value.logFile === undefined || (value.platform === "win32" && absolute(value.logFile)))
-    && (value.platform !== "win32" || (typeof value.supervisorGeneration === "string"
-      && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.supervisorGeneration)))
+    && (value.platform !== "win32"
+      || matches(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i, value.supervisorGeneration))
     && (value.taskPath === undefined || (value.platform === "win32" && typeof value.taskPath === "string")));
 }
 
 function validReceipt(value: ServiceReceipt | undefined): value is ServiceReceipt {
   return Boolean(value && value.version === 1 && validBinding(value.binding)
-    && /^[0-9a-f]{64}$/.test(value.definitionDigest) && /^[0-9a-f]{64}$/.test(value.securityDigest)
+    && matches(/^[0-9a-f]{64}$/, value.definitionDigest) && matches(/^[0-9a-f]{64}$/, value.securityDigest)
     && Number.isFinite(Date.parse(value.activatedAt))
-    && (value.previousBackup === undefined || /^[0-9]{8,14}-[0-9a-f-]{36}$/.test(value.previousBackup)));
+    && (value.previousBackup === undefined || matches(/^[0-9]{8,14}-[0-9a-f-]{36}$/, value.previousBackup)));
 }
 
 export function readServiceReceipt(paths: NodePaths): ServiceReceipt | null {
