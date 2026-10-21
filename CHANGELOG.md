@@ -209,8 +209,11 @@ increments the minor version; every other release increments the patch version.
   `workerd@1.20261006.1`; `bootstrap/allow-scripts-lock.test.mts` fails when
   a pinned `allowScripts` entry in any tracked `package.json` names a
   version its sibling `package-lock.json` does not resolve. `core-js-pure`
-  and `fsevents` also carry install scripts and were never allowed; they
-  stay uncovered.
+  (a postinstall banner) and `fsevents` (an implicit node-gyp rebuild; the
+  package ships its prebuilt binary, macOS only) are denied by name, so
+  `npm ci` in the Worker prints no install-scripts notice. Under npm 11 an
+  uncovered install script still runs with a notice and a denied one is
+  skipped, so the workerd postinstall ran before this change too.
 - Hook runtime error paths under injected faults (issue #521). A
   coordination database the hook process can read but not write
   (`run.sqlite` mode 0444, a read-only mount, another owner) is opened
