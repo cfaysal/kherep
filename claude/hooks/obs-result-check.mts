@@ -42,7 +42,8 @@
  * <agent_id>.stop, the fixed-key trace of the host measurement, after the
  * decision. Known limits: when the recorder lands after this hook's transcript
  * branch, the operator can see the same notice twice; a resumed subagent whose
- * transcript shows no handback accepts an old record.
+ * transcript shows no handback accepts an old record, and one whose last visible
+ * handback is the previous run's, matching the old record, stays silent for the new run.
  *
  * PRIVACY. The block reason is a constant, and every systemMessage is built
  * from constants and the policy's fixed problem texts. Nothing from the
@@ -53,7 +54,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
-  clearDelivered, type DeliveredRead, FAILED_MESSAGE, homeOf, PREFIX, prune, readDelivered,
+  clearDelivered, type Delivered, type DeliveredRead, FAILED_MESSAGE, homeOf, PREFIX, prune, readDelivered,
   stillMalformed, type StopTrace, validId, writeStopTrace,
 } from "./lib/obs-handback-state.mts";
 import { checkObsResult } from "./lib/obs-result-policy.mts";
@@ -90,7 +91,7 @@ const NOT_CONFIRMED = `${PREFIX} the claude-obs handback was seen but its delive
 const ERROR_MESSAGE = `${PREFIX} the hook failed; the claude-obs result was not checked.`;
 const UNCONFIRMED = " (delivery not confirmed)";
 
-const isRecord = (state: DeliveredRead): boolean => state !== null && state !== "unreadable";
+const isRecord = (state: DeliveredRead): state is Delivered => state !== null && state !== "unreadable";
 const TRANSCRIPT: Record<Handback["result"], StopTrace["transcript"]> = { ok: "delivered", error: "refused", unknown: "unknown" };
 
 function finalMessage(payload: SubagentStopPayload, entries: TranscriptEntry[]): HookOutput | null {
@@ -137,8 +138,8 @@ export async function decide(value: unknown, { home, waitMs = WAIT_MS }: DecideO
 
   let state: DeliveredRead = id ? readDelivered(home, id) : null;
   let first: StopTrace["state"] = state === null ? "absent" : state === "unreadable" ? "unreadable" : "present";
-  if (id && state && state !== "unreadable" && handback?.id && state.toolUseId !== "-" && state.toolUseId !== handback.id) {
-    clearDelivered(home, id);
+  if (isRecord(state) && handback?.id && state.toolUseId !== "-" && state.toolUseId !== handback.id) {
+    clearDelivered(home, id!); // a record is read only with an id
     state = null;
     first = "stale";
   }

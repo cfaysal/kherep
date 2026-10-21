@@ -96,12 +96,14 @@ test("a handback without a visible message is a notice and records nothing", () 
 });
 
 test("without a valid agent_id the notice stays and nothing is written", () => {
-  for (const agent_id of [undefined, "../escape", "a b"]) {
+  for (const agent_id of [undefined, 42, "../escape", "a b", "x".repeat(65)]) {
     const result = run("OBS-RESULT: failed missing broker", { agent_id });
     assert.match(notice(result), /OBS-RESULT: failed/);
   }
-  assert.equal(fs.existsSync(path.join(ROOT, "escape.delivered")), false);
-  assert.equal(fs.existsSync(path.join(STATE, "undefined.delivered")), false);
+  // Every file under <root>/.cache is a record of a valid rec-<n> id, wherever an invalid id would have landed.
+  const cache = path.join(ROOT, ".cache");
+  const written = fs.existsSync(cache) ? fs.readdirSync(cache, { recursive: true }).map((name) => String(name).replace(/\\/g, "/")) : [];
+  for (const name of written) assert.match(name, /^obs-result-check(\/rec-\d+\.delivered)?$/, name);
 });
 
 test("any hook error is one systemMessage and exit 0", () => {

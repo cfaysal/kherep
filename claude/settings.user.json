@@ -231,8 +231,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/obs-result-check.mts\"",
-            "timeout": 30
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/obs-result-check.mts\""
           }
         ]
       }

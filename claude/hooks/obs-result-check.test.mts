@@ -32,17 +32,15 @@ test.after(() => fs.rmSync(TMP, { recursive: true, force: true }));
 interface Run { stdout: string; status: number | null; output: { decision?: unknown; reason?: unknown; systemMessage?: unknown } | null }
 
 const toRun = (stdout: string, status: number | null): Run => ({ stdout, status, output: stdout ? JSON.parse(stdout) : null });
-
 function runRaw(stdin: string, hook = HOOK): Run {
-  const result = spawnSync(process.execPath, [hook], { input: stdin, encoding: "utf8" });
-  return toRun(result.stdout, result.status);
+  const { stdout, status } = spawnSync(process.execPath, [hook], { input: stdin, encoding: "utf8" });
+  return toRun(stdout, status);
 }
 
 const payload = (extra: Record<string, unknown>) => JSON.stringify({ session_id: "00000000-0000-4000-8000-000000000000",
   hook_event_name: "SubagentStop", agent_id: "agent-1", agent_type: "claude-obs", stop_hook_active: false, ...extra });
 
 const run = (extra: Record<string, unknown>, hook = HOOK): Run => runRaw(payload(extra), hook);
-
 // Asynchronous, so the cases that wait for the recorder run side by side.
 function runAsync(extra: Record<string, unknown>, during?: () => void): Promise<Run> {
   return new Promise((resolve) => {
@@ -75,9 +73,8 @@ function handbackTranscript(id: string, message: string, ok?: boolean): string {
     { type: "user", isSidechain: true, message: { role: "user", content: "brief" } },
     { type: "assistant", isSidechain: true, message: { role: "assistant", content: [{ type: "tool_use", id, name: "SubagentHandback", input: { message } }] } },
   ];
-  if (ok !== undefined) {
-    entries.push({ type: "user", isSidechain: true, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "delivered", is_error: !ok }] } });
-  }
+  const result = { type: "tool_result", tool_use_id: id, content: "delivered", is_error: !ok };
+  if (ok !== undefined) entries.push({ type: "user", isSidechain: true, message: { role: "user", content: [result] } });
   return writeTranscript(entries);
 }
 
@@ -88,9 +85,7 @@ function plantDelivered(id: string, line: string): void {
 }
 const trace = (id: string) => fs.readFileSync(stateFile(id, "stop"), "utf8");
 
-function silent(result: Run): void {
-  assert.deepEqual([result.status, result.stdout], [0, ""]);
-}
+const silent = (result: Run) => assert.deepEqual([result.status, result.stdout], [0, ""]);
 
 function message(result: Run): string {
   assert.equal(result.status, 0);
@@ -230,6 +225,12 @@ describe("handback evidence never blocks", { concurrency: true }, () => {
     const match = /^mode=auto state=absent waited=(\d+) after=present transcript=none branch=state\n$/.exec(trace("hb-h"));
     assert.ok(match, trace("hb-h"));
     assert.ok(Number(match[1]) < 2000, `waited ${match[1]} ms`);
+  });
+
+  test("(k) an unreadable record is no delivery: the hook waits, then decides without it", async () => {
+    plantDelivered("hb-k", "no tab in this line\n");
+    assert.match(message(await runAsync({ ...closing, agent_id: "hb-k", permission_mode: "auto" })), /not visible/);
+    assert.match(trace("hb-k"), /^mode=auto state=unreadable waited=\d+ after=absent transcript=none branch=auto\n$/);
   });
 });
 
