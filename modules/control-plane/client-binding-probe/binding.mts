@@ -131,20 +131,31 @@ function prune(stateDir: string, now: number): void {
   }
 }
 
+// Issue #600: on Windows the lock file of a holder that is releasing it is
+// delete-pending for a moment, and an exclusive create on it fails with
+// ERROR_ACCESS_DENIED, which libuv reports as EPERM (EBUSY and EACCES are the
+// neighbouring sharing codes). Those mean "still held", like EEXIST, and wait
+// out the same bound (50 x 4 ms); every other code is thrown at once.
+export const LOCK_HELD_CODES: ReadonlySet<string> = new Set(["EEXIST", "EPERM", "EACCES", "EBUSY"]);
+export const LOCK_ATTEMPTS = 50;
+const LOCK_PAUSE_MS = 4;
+
 function withLock<T>(stateDir: string, requestId: string, action: () => T): T {
   ensureDir(locksDir(stateDir));
   const file = path.join(locksDir(stateDir), `${requestId}.lock`);
   let handle: number | undefined;
-  for (let attempt = 0; attempt < 50; attempt++) {
+  let held: unknown;
+  for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt++) {
     try {
       handle = fs.openSync(file, "wx", 0o600);
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4);
+      if (!LOCK_HELD_CODES.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      held = error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_PAUSE_MS);
     }
   }
-  if (handle === undefined) throw new Error("storage_error");
+  if (handle === undefined) throw new Error("storage_error", { cause: held });
   try {
     return action();
   } finally {
