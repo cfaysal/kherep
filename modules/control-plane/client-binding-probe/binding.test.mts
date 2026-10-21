@@ -111,7 +111,9 @@ test("concurrent first use waits for atomic key publication", async (t) => {
   // Issue #600: the helper's exit is awaited on every path before the test
   // ends, so no activity of this test outlives it and its exit code is
   // asserted, never left as an unhandled rejection.
-  const exited = new Promise<number | null>((resolve) => { helper.once("exit", (code) => resolve(code)); });
+  let stderr = "";
+  helper.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+  const exited = new Promise<number | null>((resolve) => { helper.once("close", (code) => resolve(code)); });
   t.after(async () => {
     if (helper.exitCode === null && helper.signalCode === null) helper.kill();
     await exited;
@@ -127,7 +129,9 @@ test("concurrent first use waits for atomic key publication", async (t) => {
   } catch (error) {
     outcome = error as Error;
   }
-  assert.equal(await exited, 0, "helper exited cleanly");
+  const code = await exited;
+  const created = outcome instanceof Error ? `threw ${outcome.stack ?? outcome.message}` : "returned an intent";
+  assert.equal(code, 0, `helper exited cleanly; createIntent ${created}; helper stderr: ${stderr || "(none)"}`);
   if (outcome instanceof Error) throw outcome;
   assert.match(outcome.requestId, /^[0-9a-f-]{36}$/);
 });
