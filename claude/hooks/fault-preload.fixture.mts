@@ -11,6 +11,7 @@
 //                           missing executable instead (a real ENOENT, no child)
 //   fs-eacces-coordination  every fs call on a path inside .kherep-integrity fails EACCES
 //   fs-enospc               every fs.writeSync of bytes writes at most 8 and fails ENOSPC
+//   stdin-error             once the main has set up its stdin, the stream fails EIO (issue #564)
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import module from "node:module";
@@ -18,7 +19,8 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export type Fault = "execpath-missing" | "execpath-empty" | "spawn-writer-missing" | "fs-eacces-coordination" | "fs-enospc";
+export type Fault = "execpath-missing" | "execpath-empty" | "spawn-writer-missing" | "fs-eacces-coordination" | "fs-enospc"
+  | "stdin-error";
 const SELF_URL = pathToFileURL(import.meta.filename).href;
 
 // The environment of one spawn: base plus the fault, NODE_OPTIONS appended, never replaced.
@@ -79,6 +81,15 @@ if (fault && mark && process.argv[1] && path.basename(process.argv[1]) === proce
         throw errno("ENOSPC");
       };
       break;
+    case "stdin-error": {
+      // setEncoding comes right before the main attaches its listeners, in the same tick.
+      const stdin = process.stdin, real = stdin.setEncoding.bind(stdin);
+      stdin.setEncoding = (encoding?: BufferEncoding) => {
+        setImmediate(() => { record(); stdin.destroy(errno("EIO")); });
+        return real(encoding);
+      };
+      break;
+    }
     default:
       throw new Error("unknown fault");
   }

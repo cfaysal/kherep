@@ -7,7 +7,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 
 import {
-  callLine, journalPaths, journalVerdict, markCaptureFailed, PRIVATE_MARKER_PATTERN, redactReason, targetOf, guardOf, WITHHELD,
+  ABSOLUTE_PATH, callLine, journalPaths, journalVerdict, markCaptureFailed, PRIVATE_MARKER_PATTERN, redactReason, targetOf, guardOf, WITHHELD,
   type Fsp,
 } from "./denial-journal.mts";
 
@@ -106,6 +106,18 @@ test("reasons: absolute paths of every form reduced to their basename", () => {
   assert.equal(redactReason("drive C:\\Users\\u\\y.json and D:/a/z.txt;"), "drive y.json and z.txt;");
   assert.equal(redactReason("home ~/.claude/hooks/g.mts, done"), "home g.mts, done");
   assert.equal(redactReason("relative a/b and 1/2 stay"), "relative a/b and 1/2 stay");
+});
+
+// Issue #564: the no-path assertions of the hook suites use this pattern; non-global, so .test() keeps no state.
+test("ABSOLUTE_PATH: POSIX, drive, UNC and home-relative paths match, hooks-relative labels do not", () => {
+  assert.equal(ABSOLUTE_PATH.global, false);
+  for (const text of ["/tmp/x", "C:\\Users\\x", "D:/a", "\\\\srv\\s", "~/.claude", "(/private/var/x.mts)"]) {
+    assert.match(text, ABSOLUTE_PATH, text);
+    assert.match(text, ABSOLUTE_PATH, `${text} again`);
+  }
+  for (const text of ["sub/x.mts", "kherep-maestro/x.mts", "lib/guard-recheck.mts", "exit code 1", "timed out after 0.3 s", "1 MiB"]) {
+    assert.doesNotMatch(text, ABSOLUTE_PATH, text);
+  }
 });
 
 test("reasons: a marker-matching line is <withheld>, control characters go, 240 characters at most", () => {

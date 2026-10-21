@@ -17,6 +17,7 @@ import { after, test } from "node:test";
 
 import { initialize, openDatabase } from "../kherep/hook-runtime/coordinator-db.mts";
 import { coordinated, entryFor, HOOK, installIntegrity } from "./integrity-sandbox.mts";
+import { ABSOLUTE_PATH } from "./lib/denial-journal.mts";
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "live-hook-trigger-")));
 after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ } });
@@ -134,6 +135,24 @@ test("no wired file: no lock, no heartbeat, no cache directory", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^heartbeat not written \(no hook file is wired under /);
   assert.equal(fs.existsSync(path.join(box.claude, ".cache")), false);
+});
+
+// Issue #564: the trigger output reaches the dispatcher's notice; no line names a path or carries Node's message.
+test("a deleted own lib and unreadable settings: lines with codes and no path", () => {
+  const box = sandbox();
+  // The versioned copy is there: a source that is not names its checkout path, which issue #576 tracks.
+  fs.mkdirSync(path.join(box.repoHooks, "lib"));
+  fs.renameSync(path.join(box.hooks, "lib", "hook-syntax.mts"), path.join(box.repoHooks, "lib", "hook-syntax.mts"));
+  const deleted = lines(run(box));
+  assert.match(String(deleted[0]), /^own import lib\/hook-syntax\.mts cannot be loaded \(ERR_MODULE_NOT_FOUND\); nothing was verified this session -> RESTORED /);
+  const bare = sandbox();
+  fs.rmSync(path.join(bare.claude, "settings.user.json"));
+  const unread = lines(run(bare));
+  assert.ok(unread.includes("no live settings could be read in this home, so WHICH hooks are wired is UNKNOWN here"), unread.join("\n"));
+  for (const line of [...deleted, ...unread]) {
+    assert.doesNotMatch(line, ABSOLUTE_PATH, line);
+    assert.ok(!line.includes(TMP), line);
+  }
 });
 
 test("while another writer holds the hooks directory: not admitted, nothing checked or written", async () => {
