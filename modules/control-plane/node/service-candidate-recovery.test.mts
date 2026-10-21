@@ -8,7 +8,7 @@ import test from "node:test";
 
 import { nodePaths } from "./config.mts";
 import {
-  candidateFile, caught, drainFile, failedAdoptInstall, failedFreshInstall, failedUpgrade, readRecord, secondCall, staleDrain, why, world,
+  candidateFile, caught, drainFile, failedAdoptInstall, failedFreshInstall, failedUpgrade, readRecord, secondCall, staleDrain, status, why, world,
 } from "./service-candidate-fixture.mts";
 import { removeFresh, restorePrior, type LifecycleDependencies } from "./service-lifecycle.mts";
 import { serviceRoot, snapshotDigests } from "./service-records.mts";
@@ -36,6 +36,26 @@ test("T0b: a fresh install keeps its loaded candidate and a repeated install com
   assert.equal(h.adapter.stopCalls.at(-1)?.expected?.pid, 42);
   assert.equal(readServiceReceipt(h.paths)?.previousBackup, undefined);
   assert.equal(fs.existsSync(candidateFile(h)), false);
+});
+
+// PR #599 P3-1, pins docs/INSTALLATION.md: without a receipt a running-unknown install candidate is refused by the
+// repeated install while status still prints the install text; after a manual unload the repeated install completes.
+test("P3-1: a running-unknown install candidate needs a manual unload before the repeated install", async (t) => {
+  const { h } = await failedFreshInstall(t);
+  h.adapter.snapshot!.running = "unknown";
+  const s = await status(h);
+  assert.deepEqual([s.exit, s.report.running], [1, "unknown"]);
+  assert.match(String(s.report.recovery), /^a recorded install candidate is loaded without a receipt; repeat kherep-node service install/);
+  let deps = secondCall(h);
+  const repeat = () => activateManagedService({ mode: "install", binding: h.candidate, explicitServiceName: true }, deps);
+  const before = world(h);
+  assert.equal(await why(repeat()), "selected service running state is unknown");
+  assert.equal(world(h), before);
+  h.adapter.snapshot!.running = false; // the operator unloaded it by hand: no process, nothing loaded under the label
+  deps = { ...h.deps, pidAlive: (pid: unknown) => pid === 43 && h.adapter.candidatePidAlive };
+  assert.equal(await why(repeat()), "resolved");
+  assert.equal(fs.existsSync(candidateFile(h)), false);
+  assert.ok(readServiceReceipt(h.paths));
 });
 
 test("B-1: an adopt install record completes through a repeated install without --adopt", async (t) => {

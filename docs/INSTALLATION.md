@@ -401,14 +401,21 @@ rollback` restores the receipt's definition from the recorded prior backup and
 waits up to 180 seconds for its health; after a failed `service install` (no
 receipt) repeat `kherep-node service install` with the same `--workspace` and
 `--service-name`, without `--adopt`. `--adopt` over a recorded candidate is
-refused. A second failed upgrade over the record can take up to 30 seconds of
-health wait plus 180 seconds of restore before it reports.
+refused. A second failed upgrade over the record can take several minutes
+before it reports: each stop proof waits up to 75 seconds (for the recorded
+candidate, and again for the new candidate during recovery), the health wait
+up to 30 seconds and a restore up to 180 seconds.
 
 A recorded candidate loaded without a process (`running: unknown`, for example
 a crash loop under `KeepAlive`) is refused by both verbs; `service status` says
 so. Unload it by hand, `launchctl bootout gui/<uid>/<label>` (the plist in place
 is the recorded candidate, which `status` verified), then run `kherep-node
-service rollback`. On Windows stop the task by hand, then roll back.
+service rollback`. On Windows stop the task by hand, then roll back. Without a
+receipt (a failed install), `service status` shows `running: unknown` with the
+repeat-install recovery, but the repeated install refuses while the state is
+unknown: unload or stop the candidate by hand the same way first, then repeat
+`kherep-node service install` with the same `--workspace` and `--service-name`,
+without `--adopt`.
 
 A node where launchd and the plist already disagree reports `definition:
 unattested` with `configured: receipt | candidate | unknown`. Reload launchd
