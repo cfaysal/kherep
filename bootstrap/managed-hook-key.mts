@@ -6,15 +6,16 @@
 // and the user home are already folded. Mode and later arguments are not part
 // of the key. Not recognised, and so kept as operator hooks: `& node`,
 // `node <flags>`, single quotes, mixed quoting, the Git Bash `/c/...` form of
-// a drive path, `.`/`..` segments in the main path, and a shell control
-// operator after the main.
+// a drive path, `.`/`..` segments in the main path, a line break between the
+// parts, and a shell control operator, substitution or redirection after the
+// main outside double quotes.
 
 const ENTRY = String.raw`\/kherep\/hook-runtime\/entry\.(?:js|mjs|cjs|mts)`;
-const MODE = String.raw`\s+(?:pretool|reader|writer)\s+`;
+const MODE = String.raw`[ \t]+(?:pretool|reader|writer)[ \t]+`;
 // Two whole alternatives, quoted and bare, each with its own back-reference: a
 // back-reference to a group that did not take part matches the empty string.
 const MANAGED_ENTRY = new RegExp(
-  `^node\\s+(?:"(?<qh>[^"]+?)${ENTRY}"${MODE}"\\k<qh>\\/hooks\\/(?<qm>[^"]+)"`
+  `^node[ \\t]+(?:"(?<qh>[^"]+?)${ENTRY}"${MODE}"\\k<qh>\\/hooks\\/(?<qm>[^"]+)"`
   + `|(?<uh>\\S+?)${ENTRY}${MODE}\\k<uh>\\/hooks\\/(?<um>[^"\\s]+))(?=$|\\s)`,
 );
 
@@ -25,14 +26,16 @@ export interface ManagedHookKey {
   main: string;
 }
 
-// A shell control operator after the main runs more than the hook: the command
-// is operator-shaped and kept, never replaced.
-const CONTROL_OPERATOR = /[;&|\r\n]/;
+// A shell control operator, command substitution or redirection after the main
+// runs more than the hook: the command is operator-shaped and kept, never
+// replaced. Double-quoted text is a path (a home such as R&D) and is skipped.
+const CONTROL_OPERATOR = /[;&|<>\r\n`]|\$\(/;
+const outsideQuotes = (text: string): string => text.replace(/"[^"]*"/g, "");
 
 export function managedHookKey(command: string, platform: string = process.platform): ManagedHookKey | undefined {
   const match = MANAGED_ENTRY.exec(command);
   const groups = match?.groups;
-  if (!groups || CONTROL_OPERATOR.test(command.slice(match[0].length))) return undefined;
+  if (!groups || CONTROL_OPERATOR.test(outsideQuotes(command.slice(match[0].length)))) return undefined;
   const home = groups.qh ?? groups.uh!;
   const main = groups.qm ?? groups.um!;
   const path = `${home}/hooks/${main}`;
