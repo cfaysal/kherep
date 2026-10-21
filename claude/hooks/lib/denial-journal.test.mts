@@ -81,6 +81,13 @@ test("apply_patch, agent and MCP targets", () => {
   assert.equal(targetOf({ tool_name: "WebFetch", tool_input: { url: "https://example.com" } }), "-");
 });
 
+test("an agent_type matching the private marker pattern is <withheld>", () => {
+  const named = PRIVATE_MARKER_PATTERN.source.split("|")[0]!;
+  assert.match(named, PRIVATE_MARKER_PATTERN);
+  assert.equal(JSON.parse(callLine(bash("ls", { agent_type: named }), [])).agent_type, WITHHELD);
+  assert.equal(JSON.parse(callLine(bash("ls", { agent_type: "kherep-builder" }), [])).agent_type, "kherep-builder");
+});
+
 test("privacy denials and marker-matching targets are <withheld>", () => {
   const read = { agent_id: "a1", tool_name: "Read", tool_input: { file_path: `/w/${MARK}/notes.txt` }, cwd: "/w" };
   assert.equal(targetOf(read), WITHHELD);
@@ -113,6 +120,7 @@ test("guard tags: bracket tag, else the word before blocked, else guard", () => 
   assert.equal(guardOf("main-checkout-guard blocked this command:\n - git"), "main-checkout-guard");
   assert.equal(guardOf("/h/hooks/deploy-guard.mts blocked this tool call without giving a reason"), "deploy-guard.mts");
   assert.equal(guardOf("no tag at all"), "guard");
+  assert.equal(guardOf("commit-guard.mts failed; this tool call is blocked."), "guard", "only a leading word before blocked");
   assert.equal(guardOf(`[${MARK}] x`), "guard");
 });
 

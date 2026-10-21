@@ -105,6 +105,9 @@ function unjournalled(payload: HookPayload): Promise<unknown> {
     .catch(() => fs.promises.rename(`${base}.jsonl`, `${base}.failed`));
 }
 
+// The journalled form of the dispatcher's own deny: its guard as the bracket tag (issue #504); the decision keeps the plain text.
+const tagged = (guard: string, why: string): string => `[${guard.replace(/\.mts$/, "")}] ${why}`;
+
 // deadline: an absolute end (ms since the epoch), a test seam; raw: the payload as read, for the re-check.
 export interface ShellOptions { deadline?: number; raw?: string }
 
@@ -136,8 +139,9 @@ export async function shellChecks(payload: HookPayload, attributionHook?: string
       broken ||= result.broken === true;
       if (result.stderr) process.stderr.write(result.stderr);
       if (result.status !== 0) {
-        decision ||= deny(`${guard} failed; this tool call is blocked.`);
-        denials.push({ decision: "deny", reason: `${guard} failed; this tool call is blocked.` });
+        const why = `${guard} failed; this tool call is blocked.`;
+        decision ||= deny(why);
+        denials.push({ decision: "deny", reason: tagged(guard, why) });
       }
       else if (result.stdout.trim()) {
         // These three guards allow silently; their only supported stdout is
@@ -151,8 +155,9 @@ export async function shellChecks(payload: HookPayload, attributionHook?: string
       }
     } catch {
       broken ||= fault;
-      decision ||= deny(`${guard} could not complete; this tool call is blocked.`);
-      denials.push({ decision: "deny", reason: `${guard} could not complete; this tool call is blocked.`, broken: fault });
+      const why = `${guard} could not complete; this tool call is blocked.`;
+      decision ||= deny(why);
+      denials.push({ decision: "deny", reason: tagged(guard, why), broken: fault });
     }
   }
   // Issue #504: after the guards, before the re-check; never a decision, at most 1 s.
