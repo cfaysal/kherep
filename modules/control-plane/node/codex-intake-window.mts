@@ -4,6 +4,7 @@ import { isMcpIntentReceiptBody } from "../protocol-mcp.mts";
 import type { NodeClient } from "./client.mts";
 import { CODEX_ACTIVE_MS, readCodexSession } from "./codex-sessions.mts";
 import type { NodePaths } from "./config.mts";
+import { DAEMON_RECORD_LOCK_WAIT_MS, runRecordLockRound } from "./inbox-record-lock.mts";
 import { readPolicy, type NodePolicy } from "./policy.mts";
 
 interface Options {
@@ -61,7 +62,7 @@ export function codexIntakeWindow(options: Options): CodexIntakeWindow {
     catch { return false; }
   }
   function enqueue(run: () => Promise<void>): void {
-    pending = pending.then(run).catch((error: unknown) => {
+    pending = pending.then(() => runRecordLockRound(DAEMON_RECORD_LOCK_WAIT_MS, run)).catch((error: unknown) => {
       closed = true;
       options.log(`kherep-node: Codex intake peer progress failed: ${String(error)}`);
     });
