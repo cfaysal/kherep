@@ -4,7 +4,9 @@
 // JSON-or-nothing on stdout, always exit 0. stderr is never asserted: Node 24.1
 // prints an ExperimentalWarning there for .mts files. The hook and its libs are
 // copied into a temporary <root>/hooks/ (issue #555), so the handback state
-// under <root>/.cache/ never lands in the checkout.
+// under <root>/.cache/ never lands in the checkout. Case (h), the wait for a
+// late recorder, calls decide() in this process instead (issue #611): only
+// there can the test plant the record after the hook's first read for certain.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -12,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { describe } from "node:test";
 
-import { OBS_RESULT_REASON } from "./obs-result-check.mts";
+import { decide, OBS_RESULT_REASON } from "./obs-result-check.mts";
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "obs-result-check-test-")));
 const SECRET = "Example Corp host.example.com";
@@ -37,20 +39,19 @@ function runRaw(stdin: string, hook = HOOK): Run {
   return toRun(stdout, status);
 }
 
-const payload = (extra: Record<string, unknown>) => JSON.stringify({ session_id: "00000000-0000-4000-8000-000000000000",
+const fields = (extra: Record<string, unknown>) => ({ session_id: "00000000-0000-4000-8000-000000000000",
   hook_event_name: "SubagentStop", agent_id: "agent-1", agent_type: "claude-obs", stop_hook_active: false, ...extra });
+const payload = (extra: Record<string, unknown>) => JSON.stringify(fields(extra));
 
 const run = (extra: Record<string, unknown>, hook = HOOK): Run => runRaw(payload(extra), hook);
 // Asynchronous, so the cases that wait for the recorder run side by side.
-function runAsync(extra: Record<string, unknown>, during?: () => void): Promise<Run> {
+function runAsync(extra: Record<string, unknown>): Promise<Run> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [HOOK], { stdio: ["pipe", "pipe", "ignore"] });
     let stdout = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.on("close", (status) => resolve(toRun(stdout, status)));
     child.stdin.end(payload(extra));
-    // 800 ms: well after Node has started the hook and read the state once, well inside its 2 s wait.
-    if (during) setTimeout(during, 800);
   });
 }
 
@@ -219,9 +220,16 @@ describe("handback evidence never blocks", { concurrency: true }, () => {
     assert.match(trace("hb-g"), /state=stale .*transcript=unknown branch=transcript-unknown\n$/);
   });
 
+  // Issue #611. In this process, not spawned: decide() runs synchronously up to
+  // its first await, the first poll of its wait loop, so the record planted
+  // right after the call lands after the hook read the state as absent and
+  // before it polls again. A record planted beside a spawn races Node's start:
+  // on a slow runner it lands first and the trace reads state=present waited=0.
   test("(h) the hook waits for a recorder that lands after the stop", async () => {
-    const result = await runAsync({ ...closing, agent_id: "hb-h", permission_mode: "auto" }, () => plantDelivered("hb-h", "wrote\ttoolu_h\n"));
-    silent(result);
+    const pending = decide(fields({ ...closing, agent_id: "hb-h", permission_mode: "auto" }), { home: ROOT });
+    plantDelivered("hb-h", "wrote\ttoolu_h\n");
+    assert.equal(await pending, null, "silent");
+    assert.equal(fs.existsSync(stateFile("hb-h", "delivered")), false);
     const match = /^mode=auto state=absent waited=(\d+) after=present transcript=none branch=state\n$/.exec(trace("hb-h"));
     assert.ok(match, trace("hb-h"));
     assert.ok(Number(match[1]) < 2000, `waited ${match[1]} ms`);
