@@ -29,7 +29,9 @@
   },
   "license": "Apache-2.0",
   "allowScripts": {
+    "core-js-pure": false,
     "esbuild@0.28.1": true,
+    "fsevents": false,
     "workerd@1.20261006.1": true
   }
 }
