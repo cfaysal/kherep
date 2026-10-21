@@ -891,6 +891,13 @@ increments the minor version; every other release increments the patch version.
   three test groups into `message-retention-ack.test.mts`,
   `message-retention-sweep.test.mts` and `message-retention-legacy.test.mts`
   over a shared `message-retention-fixture.mts`. The Worker is unchanged.
+- Timing-dependent test on the macOS unit job (issue #611). Case (h) of
+  `claude/hooks/obs-result-check.test.mts` planted the recorder's state 800 ms
+  after spawning the hook; on a slow runner the hook's first read came later
+  and saw the record already (`state=present waited=0`). The case now calls
+  `decide()` in the test process and plants the record after the call returns
+  its promise, which is after the hook's first read and before its first poll,
+  so the order no longer depends on how fast Node starts. Test code only.
 
 ## [0.4.0] - 2026-10-18
 
