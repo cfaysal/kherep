@@ -172,3 +172,35 @@ test("a control-plane command that runs more than the script is not keyed; a quo
   ]) assert.equal(controlPlaneHookKey(command, "darwin"), undefined, command);
   assert.equal(controlPlaneHookKey(`node "/Users/x/R&D/kherep/${CP}/deliver-hook.mts" --timeout 1`, "darwin"), `${CP}/deliver-hook`);
 });
+
+// Issue #592. The stable form names the entry under the Claude home and the
+// script by its first argument; it has the key of the path form of that script,
+// so the merge replaces path-form entries and the duplicate scan counts both.
+const STABLE = "/h/.claude/kherep/control-plane/claude-control-plane-hook.mts";
+
+test("the stable entry form has the key of the script its name selects", () => {
+  assert.equal(controlPlaneHookKey(`node "${STABLE}" deliver`, "darwin"), `${CP}/deliver-hook`);
+  assert.equal(controlPlaneHookKey(`node "${STABLE}" wake --timeout 86400`, "darwin"), `${CP}/wake-hook`);
+  assert.equal(controlPlaneHookKey(`node "${STABLE}" attribution`, "darwin"), `${CP}/attribution-hook`);
+  assert.equal(controlPlaneHookKey(`node ${STABLE} deliver`, "darwin"), `${CP}/deliver-hook`);
+});
+
+test("on win32 a stable entry with backslashes and another case is keyed", () => {
+  const command = String.raw`node "C:\Users\U\.Claude\Kherep\Control-Plane\Claude-Control-Plane-Hook.mts" wake --timeout 86400`;
+  assert.equal(controlPlaneHookKey(command, "win32"), `${CP}/wake-hook`);
+});
+
+// Review of #592, P3-1: the suffix decides, not the home (root neutrality as #595).
+test("a stable entry under another home is keyed", () => {
+  assert.equal(controlPlaneHookKey("node /other/home/kherep/control-plane/claude-control-plane-hook.mts deliver", "darwin"),
+    `${CP}/deliver-hook`);
+});
+
+test("a stable entry without an admitted name, or in a shape the template never renders, is not keyed", () => {
+  for (const command of [
+    `node "${STABLE}" other`, `node "${STABLE}"`, `node "${STABLE}" deliver && echo done`,
+    `node --disable-warning=ExperimentalWarning "${STABLE}" deliver`,
+    // Documented limit (P3-1): the shell would unquote the name, the key does not.
+    `node "${STABLE}" "deliver"`,
+  ]) assert.equal(controlPlaneHookKey(command, "darwin"), undefined, command);
+});
