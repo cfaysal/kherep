@@ -201,6 +201,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- The Control Plane Worker's `allowScripts` pin names the workerd version
+  its lockfile resolves (issue #559). The pin still named
+  `workerd@1.20260923.1` while `package-lock.json` resolves
+  `1.20261006.1`, so the pin matched nothing and `npm ci` listed workerd
+  under "install scripts not yet covered by allowScripts". The pin is now
+  `workerd@1.20261006.1`; `bootstrap/allow-scripts-lock.test.mts` fails when
+  a pinned `allowScripts` entry in any tracked `package.json` names a
+  version its sibling `package-lock.json` does not resolve. `core-js-pure`
+  and `fsevents` also carry install scripts and were never allowed; they
+  stay uncovered.
 - Hook runtime error paths under injected faults (issue #521). A
   coordination database the hook process can read but not write
   (`run.sqlite` mode 0444, a read-only mount, another owner) is opened
