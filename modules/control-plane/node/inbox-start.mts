@@ -26,11 +26,13 @@ export interface MaintenanceOptions {
   signal?: AbortSignal;
   now?: number;
   fallbackMs?: number; // read by the daemon
-  // Tests only: the slice length, the pause before each slice, and the clock
-  // the slicer reads (a fake one makes the steps per slice host-independent).
+  // Tests only: the slice length, the pause before each slice, the clock
+  // the slicer reads (a fake one makes the steps per slice host-independent),
+  // and the margin (0 lets a test see when the pass read its start).
   sliceMs?: number;
   yield?: () => Promise<void>;
   clock?: () => number;
+  touchedMarginMs?: number;
 }
 
 // touchedSince: the purge skips inbox files written at or after it (inbox-purge.mts).
@@ -64,10 +66,11 @@ const nextTurn = (): Promise<void> => new Promise((resolve) => setImmediate(reso
 // Other writers run between slices, so the purge leaves files written since
 // the pass began to the next start (inbox-purge.mts).
 export async function runInboxMaintenance(paths: NodePaths, log: (line: string) => void, options: MaintenanceOptions = {}): Promise<void> {
-  const { signal, now = Date.now(), sliceMs = MAINTENANCE_SLICE_MS, yield: pause = nextTurn, clock = () => performance.now() } = options;
+  const { signal, now = Date.now(), sliceMs = MAINTENANCE_SLICE_MS, yield: pause = nextTurn, clock = () => performance.now(),
+    touchedMarginMs = TOUCHED_MARGIN_MS } = options;
   const started = performance.now();
   const seconds = (): string => ((performance.now() - started) / 1000).toFixed(1);
-  const steps = inboxMaintenanceSteps(paths, log, now, Date.now() - TOUCHED_MARGIN_MS);
+  const steps = inboxMaintenanceSteps(paths, log, now, Date.now() - touchedMarginMs);
   for (;;) {
     await pause();
     if (signal?.aborted) {
