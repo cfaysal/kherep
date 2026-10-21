@@ -26,7 +26,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
-import { errorMessage } from "../../bootstrap/shape.mts";
+import { errorCode, errorMessage } from "../../bootstrap/shape.mts";
 import { compareSkips, formatSkips, observedSkips, parseTap } from "./codex-run-tap.mts";
 import type { ParsedTap, SkipEntry } from "./codex-run-tap.mts";
 
@@ -64,7 +64,7 @@ export function selectedFiles(repo: string, pattern: string): string[] {
       .filter((entry) => entry.isFile() && entry.name.endsWith(".test.mts"))
       .map((entry) => entry.name);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if (errorCode(error) === "ENOENT") return [];
     throw error;
   }
 }
@@ -92,27 +92,31 @@ export function loadExpected(text: string): Expected {
 }
 
 export interface Evaluation { parsed: ParsedTap; expected: Expected; platform: string; selection: [string, number][] }
+// The failure lines of one run, empty on a pass; skipDrift when a skip check
+// (C3, C4, C7) is among them, the one case the expected file can resolve.
+export interface Verdict { failures: string[]; skipDrift: boolean }
 
-// The failure lines of one run; empty means pass.
-export function evaluate({ parsed, expected, platform, selection }: Evaluation): string[] {
+export function evaluate({ parsed, expected, platform, selection }: Evaluation): Verdict {
   const { summary, records } = parsed;
-  const failures: string[] = [];
-  for (const [pattern, count] of selection) if (count === 0) failures.push(`C1 pattern ${pattern} selects no file`);
-  if (summary.tests < expected.minTests) failures.push(`C2 tests ${summary.tests} below floor ${expected.minTests}`);
+  const verdict: Verdict = { failures: [], skipDrift: false };
+  const fail = (line: string) => verdict.failures.push(line);
+  const drift = (line: string) => { verdict.skipDrift = true; fail(line); };
+  for (const [pattern, count] of selection) if (count === 0) fail(`C1 pattern ${pattern} selects no file`);
+  if (summary.tests < expected.minTests) fail(`C2 tests ${summary.tests} below floor ${expected.minTests}`);
   const observed = observedSkips(parsed);
   const { missing, extra } = compareSkips(expected.skips[platform], observed);
-  for (const entry of missing) failures.push(`C3 missing skip ${JSON.stringify(entry)}`);
-  for (const entry of extra) failures.push(`C3 extra skip ${JSON.stringify(entry)}`);
-  if (observed.length !== summary.skipped) failures.push(`C4 ${observed.length} skip records but # skipped ${summary.skipped}`);
+  for (const entry of missing) drift(`C3 missing skip ${JSON.stringify(entry)}`);
+  for (const entry of extra) drift(`C3 extra skip ${JSON.stringify(entry)}`);
+  if (observed.length !== summary.skipped) drift(`C4 ${observed.length} skip records but # skipped ${summary.skipped}`);
   const todos = records.filter((record) => record.directive === "TODO").map((record) => record.name);
-  if (summary.todo || todos.length) failures.push(`C5 todo ${summary.todo}, TODO records: ${todos.join("; ") || "none"}`);
-  if (summary.fail) failures.push(`C6 fail ${summary.fail}`);
-  if (summary.cancelled) failures.push(`C6 cancelled ${summary.cancelled}`);
+  if (summary.todo || todos.length) fail(`C5 todo ${summary.todo}, TODO records: ${todos.join("; ") || "none"}`);
+  if (summary.fail) fail(`C6 fail ${summary.fail}`);
+  if (summary.cancelled) fail(`C6 cancelled ${summary.cancelled}`);
   for (const record of records) {
     if (record.directive !== "SKIP" || record.type === "test") continue;
-    failures.push(record.type === "suite" ? `C7 suite-level skip hides its tests: ${record.name}` : `C7 skip record of type ${record.type}: ${record.name}`);
+    drift(record.type === "suite" ? `C7 suite-level skip hides its tests: ${record.name}` : `C7 skip record of type ${record.type}: ${record.name}`);
   }
-  return failures;
+  return verdict;
 }
 
 function readText(file: string, what: string): string {
@@ -120,48 +124,49 @@ function readText(file: string, what: string): string {
   catch (error) { throw new Error(`cannot read ${what} ${file}: ${errorMessage(error)}`); }
 }
 
-function expectationFor(expectedPath: string, platform: string): Expected {
+// What `check` needs besides the TAP file, read once; an unknown platform or a
+// changed test:codex script is refused here, before `run` starts any test.
+interface Inputs { platform: string; expected: Expected; repo: string; patterns: string[] }
+
+function inputs(platform: string, repo: string, expectedPath: string): Inputs {
   const expected = loadExpected(readText(expectedPath, "expected file"));
   if (!Object.hasOwn(expected.skips, platform)) throw new Error(`no expectation for platform ${platform} in ${expectedPath}`);
-  return expected;
+  const patterns = testCodexPatterns(readText(path.join(repo, "package.json"), "package.json"));
+  return { platform, expected, repo, patterns };
 }
 
-function check(tap: string, platform: string, repo: string, expectedPath: string): number {
-  const expected = expectationFor(expectedPath, platform);
+function check(tap: string, { platform, expected, repo, patterns }: Inputs): number {
   const parsed = parseTap(readText(tap, "TAP file"));
-  const patterns = testCodexPatterns(readText(path.join(repo, "package.json"), "package.json"));
   const selection = patterns.map((pattern): [string, number] => [pattern, selectedFiles(repo, pattern).length]);
-  const failures = evaluate({ parsed, expected, platform, selection });
+  const { failures, skipDrift } = evaluate({ parsed, expected, platform, selection });
   const { tests, skipped, todo } = parsed.summary;
   if (!failures.length) {
     console.log(`codex-run-guard: ${platform} tests=${tests} skipped=${skipped} todo=${todo} ok`);
     return 0;
   }
   for (const failure of failures) console.log(`codex-run-guard: ${failure}`);
-  if (failures.some((failure) => /^C[347] /.test(failure))) {
+  if (skipDrift) {
     console.log(`codex-run-guard: observed skips (${platform}) begin`);
     console.log(formatSkips(observedSkips(parsed)));
     console.log(`codex-run-guard: observed skips (${platform}) end`);
+    console.log(`codex-run-guard: a legitimate change updates codex/scripts/codex-run-expected.json "${platform}" in the same pull request:`);
+    console.log("codex-run-guard:   from the CI log: gh run view --job <job-id> --log | cut -f3- | sed -E 's/^[^ ]+ //', copy the block between the observed skips markers");
+    console.log(`codex-run-guard:   only on a host that matches the ${platform} CI image (another host yields its own list): ${SELF} run --platform ${platform} --tap <dir>/codex-run.tap, then ${SELF} print <dir>/codex-run.tap`);
   }
-  console.log(`codex-run-guard: a legitimate change updates codex/scripts/codex-run-expected.json "${platform}" in the same pull request:`);
-  console.log(`codex-run-guard:   on a ${platform} host: ${SELF} run --platform ${platform} --tap <dir>/codex-run.tap, then ${SELF} print <dir>/codex-run.tap`);
-  console.log("codex-run-guard:   from CI: gh run view --job <job-id> --log | cut -f3- | sed -E 's/^[^ ]+ //', copy the block between the observed skips markers");
   return 1;
 }
 
-function run(platform: string, tap: string, repo: string, expectedPath: string): number {
-  expectationFor(expectedPath, platform);
-  const patterns = testCodexPatterns(readText(path.join(repo, "package.json"), "package.json"));
+function run(tap: string, ready: Inputs): number {
   fs.rmSync(tap, { force: true });
   // A `node --test` child that inherits NODE_TEST_CONTEXT=child-v8 runs as a test
   // child: status 0, no reporter output, no TAP file (measured, Node 26.10.0).
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
   const reporters = ["--test-reporter=spec", "--test-reporter-destination=stdout", "--test-reporter=tap", `--test-reporter-destination=${tap}`];
-  const child = spawnSync(process.execPath, ["--test", ...reporters, ...patterns], { cwd: repo, stdio: "inherit", env });
+  const child = spawnSync(process.execPath, ["--test", ...reporters, ...ready.patterns], { cwd: ready.repo, stdio: "inherit", env });
   if (child.error) throw child.error;
   if (child.status !== 0) return child.status ?? 1;
-  return check(tap, platform, repo, expectedPath);
+  return check(tap, ready);
 }
 
 function main(args: string[]): number {
@@ -176,9 +181,10 @@ function main(args: string[]): number {
     console.log(formatSkips(observedSkips(parseTap(readText(file, "TAP file")))));
     return 0;
   }
-  if (command === "check" && file && !rest.length && values.platform) return check(file, values.platform, repo, expected);
+  if (command === "check" && file && !rest.length && values.platform) return check(file, inputs(values.platform, repo, expected));
   if (command === "run" && !file && values.platform) {
-    return run(values.platform, path.resolve(values.tap ?? path.join(os.tmpdir(), "kherep-codex-run.tap")), repo, expected);
+    const tap = path.resolve(values.tap ?? path.join(os.tmpdir(), `kherep-codex-run-${process.pid}.tap`));
+    return run(tap, inputs(values.platform, repo, expected));
   }
   console.error("usage: codex-run-guard.mts run --platform <p> [--tap <file>] | check <tap-file> --platform <p> | print <tap-file>  [--repo <dir>] [--expected <json>]");
   return 2;
