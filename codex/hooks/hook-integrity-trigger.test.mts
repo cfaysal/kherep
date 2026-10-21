@@ -96,7 +96,9 @@ test("T2.2a a parent that cannot be restored: the old heartbeat is removed first
   const then = new Date(Date.now() - 31 * 60_000);
   fs.utimesSync(beatFile(ctx), then, then);
   const run = integrity(ctx);
-  assert.ok(run.lines.some((line) => /^kherep-maestro\/fixture-hook\.mts: .*NOT restored \(versioned source .* unreadable \(ENOENT\)\)/.test(line)), run.lines.join("\n"));
+  const line = run.lines.find((l) => l.startsWith("kherep-maestro/fixture-hook.mts: ")) ?? "";
+  assert.match(line, /NOT restored \(versioned source claude\/hooks\/fixture-hook\.mts unreadable \(ENOENT\)\)/, run.lines.join("\n"));
+  assert.ok(!ABSOLUTE_PATH.test(line) && !line.includes(REPO), line); // issue #576: not the checkout the installer named
   assert.equal(run.lines.at(-1), "heartbeat not written (kherep-maestro/fixture-hook.mts is not restored)");
   assert.equal(fs.existsSync(beatFile(ctx)), false);
 });

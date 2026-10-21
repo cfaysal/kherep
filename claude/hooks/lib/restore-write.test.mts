@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 
+import { ABSOLUTE_PATH } from "./denial-journal.mts";
 import { writeExact } from "./restore-write.mts";
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "restore-write-"));
@@ -93,7 +94,10 @@ test("a linked subdirectory such as hooks/lib -> elsewhere is refused", (t) => {
   const b = box();
   fs.rmdirSync(b.lib);
   if (!tryLink(t, () => fs.symlinkSync(b.outsideDir, b.lib, "junction"), "directory link")) return;
-  assert.match(writeExact(path.join(b.lib, "dep.mts"), WANTED, b.hooks), /resolves outside/);
+  const refusal = writeExact(path.join(b.lib, "dep.mts"), WANTED, b.hooks);
+  // Issue #576: the runtime's own sentence, no path of the hooks directory.
+  assert.equal(refusal, "hooks directory or its subdirectory resolves outside the hooks root");
+  assert.doesNotMatch(refusal, ABSOLUTE_PATH);
   assert.deepEqual(fs.readdirSync(b.outsideDir), ["victim.mts"]);
   assert.equal(fs.readFileSync(b.outside, "utf8"), OUTSIDE);
 });

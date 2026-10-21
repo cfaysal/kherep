@@ -93,6 +93,7 @@ hooks/lib/integrity-verdict.mts
 hooks/lib/integrity-verdict.test.mts
 hooks/lib/integrity-heartbeat.mts
 hooks/lib/integrity-heartbeat.test.mts
+hooks/lib/integrity-heartbeat-codes.test.mts
 hooks/lib/guard-recheck.mts
 hooks/lib/guard-recheck.test.mts
 hooks/lib/denial-journal.mts

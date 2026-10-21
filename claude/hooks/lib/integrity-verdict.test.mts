@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
+import { ABSOLUTE_PATH } from "./denial-journal.mts";
 import { syntaxVerdict } from "./hook-syntax.mts";
 import { classify, journal, type Repairer, restore } from "./integrity-verdict.mts";
 import { writeExact } from "./restore-write.mts";
@@ -89,6 +90,22 @@ test("restore: unproven without the runtime, without a checkout or with a 0-byte
   assert.equal(result.proven, false);
   assert.match(String(result.why), /is itself 0 bytes/);
   assert.equal(fs.readFileSync(`${hooks}/guard.mts`, "utf8"), "");
+});
+
+// Issue #576: the versioned source is named by its path inside the checkout, never by the checkout's path.
+test("restore: the reason names the versioned source relative to the checkout", async () => {
+  const { hooks, repo } = box();
+  fs.writeFileSync(`${hooks}/guard.mts`, "");
+  fs.writeFileSync(`${repo}/claude/hooks/guard.mts`, "");
+  const empty = String((await restore(LIB, direct(hooks), `${hooks}/guard.mts`, "guard.mts", repo)).why);
+  fs.rmSync(`${repo}/claude/hooks/guard.mts`);
+  const absent = String((await restore(LIB, direct(hooks), `${hooks}/guard.mts`, "guard.mts", repo)).why);
+  assert.equal(empty, "versioned source claude/hooks/guard.mts is itself 0 bytes");
+  assert.equal(absent, "versioned source claude/hooks/guard.mts unreadable (ENOENT)");
+  for (const why of [empty, absent]) {
+    assert.doesNotMatch(why, ABSOLUTE_PATH, why);
+    assert.ok(!why.includes(repo) && !why.includes(TMP), why);
+  }
 });
 
 test("restore: unproven when the target does not match after the write", async () => {

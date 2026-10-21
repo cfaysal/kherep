@@ -15,6 +15,8 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
+import { ABSOLUTE_PATH } from "./lib/denial-journal.mts";
+
 const HOOK = path.join(import.meta.dirname, "critical-file-integrity.mts");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "critical-file-integrity-"));
 after(() => {
@@ -134,6 +136,22 @@ test("without a checkout the hook says enforcement is off and claims no repair",
   assert.match(context, /IS OFF/);
   assert.doesNotMatch(context, /RESTORED/);
   assert.equal(fs.readFileSync(box.live, "utf8"), "");
+});
+
+// Issue #576: the notice names the source inside the checkout; the journal keeps which checkout.
+test("an unreadable or empty versioned source is named relative to the checkout, never by its path", () => {
+  for (const [source, why] of [[null, "unreadable (ENOENT)"], ["", "is itself 0 bytes"]] as const) {
+    const box = sandbox("");
+    const versioned = path.join(box.workspace, "kherep", "claude", "kherep", "githooks", "commit-msg");
+    if (source === null) fs.rmSync(versioned);
+    else fs.writeFileSync(versioned, source);
+    const { status, context } = session(box);
+    assert.equal(status, 0);
+    assert.ok(context.includes(`NOT restored (versioned source claude/kherep/githooks/commit-msg ${why})`), context);
+    assert.doesNotMatch(context, ABSOLUTE_PATH, context);
+    assert.ok(!context.includes(TMP), context);
+    assert.equal(journal(box)[0]?.checkout, `${box.workspace.replace(/\\/g, "/")}/kherep`);
+  }
 });
 
 test("a 0-byte or absent post-checkout is reported and restored", () => {

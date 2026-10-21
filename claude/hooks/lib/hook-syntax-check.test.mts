@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
+import { ABSOLUTE_PATH } from "./denial-journal.mts";
 import { checkFailureVerdict, syntaxVerdict, type SyntaxVerdict } from "./hook-syntax.mts";
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "hook syntax-"));
@@ -207,4 +208,42 @@ test("a malformed package.json next to the file is Node's own failure: UNGEPRUEF
   fs.writeFileSync(file, "if (process.env.NEVER) return;\nmodule.exports = 1;\n");
   const v = await syntaxVerdict(file, fs.readFileSync(file, "utf8"));
   assert.equal(v.state, "UNGEPRUEFT", detailOf(v));
+});
+
+// ---- issue #576: a detail names no absolute path and no user name ----
+const UNCONFIRMED = "vm.Script rejected it and node --check could not confirm", CHECKED = path.join(TMP, "broken.js");
+test("the first stderr line of a non-zero node --check keeps only the file name", () => {
+  const cases: [string, number, string][] = [
+    ["C:\\Users\\Jane Doe\\.claude\\hooks\\g.js:1\nsomething odd\n", 1, "exit 1: g.js:1"], ["/Users/jane/My Hooks/g.js:1\n", 1, "exit 1: g.js:1"],
+    ["\\\\srv\\share\\hooks\\g.js:1\n", 1, "exit 1: g.js:1"], ["\n\n/Users/jane/My Hooks/g.js:12\n", 1, "exit 1: g.js:12"],
+    ["/usr/local/bin/node: bad option: --frozen\n", 9, "exit 9: node: bad option: --frozen"], ["", 1, "exit 1: no stderr"],
+    ["node:internal/modules/cjs/loader:1\n", 1, "exit 1: node:internal/modules/cjs/loader:1"],
+  ];
+  for (const [stderr, status, why] of cases) {
+    const detail = detailOf(checkFailureVerdict(failure(stderr, status), CHECKED));
+    assert.equal(detail, `${UNCONFIRMED} (${why})`, JSON.stringify(stderr));
+    assert.doesNotMatch(detail, ABSOLUTE_PATH, detail);
+    for (const name of ["Jane", "Doe", "My Hooks"]) assert.ok(!detail.includes(name), detail);
+  }
+  // The named limit: a path with a space inside a message (no location line) keeps its tail.
+  const program = detailOf(checkFailureVerdict(failure("C:\\Program Files\\nodejs\\node.exe: bad option: --frozen\n", 9), CHECKED));
+  assert.ok(program.startsWith(`${UNCONFIRMED} (exit 9: `) && !program.includes("C:\\") && !ABSOLUTE_PATH.test(program), program);
+  // Node naming another file under a path with a space: only its file name.
+  for (const where of ["/private/var/real dir/other.js", "C:\\Users\\Jane Doe\\x\\other.js", "\\\\srv\\my share\\Jane Doe\\other.js"]) {
+    assert.equal(detailOf(checkFailureVerdict(failure(`hi\n${block(where)}`), CHECKED)), "rejected by node --check: SyntaxError: Unexpected token ';' (Node named it other.js)", where);
+  }
+});
+
+test("a node --check that could not run reads a code or a class name, never the message", () => {
+  const cases: [unknown, string][] = [
+    [new Error("/Users/x/secret"), "unknown"], [new TypeError("/Users/x/secret"), "TypeError"],
+    [Object.assign(new RangeError("/Users/x/secret"), { code: "bad-code" }), "RangeError"],
+    [Object.assign(new Error("spawn /Users/x/secret ENOENT"), { code: "ENOENT" }), "ENOENT"],
+    [{ name: "Custom", message: "/Users/x/secret" }, "unknown"], ["/Users/x/secret", "unknown"],
+  ];
+  for (const [error, why] of cases) {
+    const detail = detailOf(checkFailureVerdict(error, CHECKED));
+    assert.equal(detail, `${UNCONFIRMED} (${why})`, why);
+    assert.ok(!detail.includes("secret"), detail);
+  }
 });
