@@ -8,11 +8,14 @@
 //   enospc-all       every appendFile fails ENOSPC; rename works (the journal becomes the marker)
 //   all-fail         every appendFile fails ENOSPC and every rename EPERM: no evidence survives
 //   all-hang         appendFile, mkdir and rename never settle
+//   marker-slow      appendFile on a *.failed settles after 700 ms, then appends (a slow filesystem;
+//                    issue #612: the marker must still be on disk when the hook process has exited)
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export type DenialFault = "journal-hang" | "journal-enospc" | "enospc-all" | "all-fail" | "all-hang";
+export type DenialFault = "journal-hang" | "journal-enospc" | "enospc-all" | "all-fail" | "all-hang" | "marker-slow";
+export const MARKER_SLOW_MS = 700;
 const SELF_URL = pathToFileURL(import.meta.filename).href;
 
 // The environment of one spawn: base plus the fault, NODE_OPTIONS appended, never replaced.
@@ -29,8 +32,11 @@ if (fault && process.argv[1] && path.basename(process.argv[1]) === process.env.K
   const promises = fs.promises as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
   const append = promises.appendFile!, rename = promises.rename!, mkdir = promises.mkdir!;
   const journal = (file: unknown): boolean => String(file).endsWith(".jsonl");
+  const marker = (file: unknown): boolean => String(file).endsWith(".failed");
+  const later = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, MARKER_SLOW_MS));
   promises.appendFile = function (file: unknown, ...rest: unknown[]) {
     if (fault === "all-hang" || (fault === "journal-hang" && journal(file))) return never();
+    if (fault === "marker-slow" && marker(file)) return later().then(() => append.call(fs.promises, file, ...rest));
     if (fault === "enospc-all" || fault === "all-fail" || (fault === "journal-enospc" && journal(file))) return Promise.reject(errno("ENOSPC"));
     return append.call(fs.promises, file, ...rest);
   };

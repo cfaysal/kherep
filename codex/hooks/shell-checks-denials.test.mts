@@ -56,6 +56,17 @@ test("a writer that never settles: the decision within the journal cap", async (
   assert.ok(result.ms < reference.ms + 1_000 + 2_000, `${result.ms} ms against ${reference.ms} ms`);
 });
 
+// Issue #612. The dispatcher exits when its loop drains, never through process.exit, so a marker
+// write that outlives journalCall's 1 s still lands before the exit; the test pins that.
+test("a marker append that settles late: the dispatcher exits after it, the marker is on disk", async () => {
+  const referenceHome = codexHome(GUARDS);
+  const reference = await shell(referenceHome, shellPayload());
+  const home = codexHome(GUARDS, "hanging");
+  const result = await shell(home, shellPayload(), denialFaultEnv("marker-slow", "codex-shell-checks.mts"));
+  assertSameAnswer(result, home, reference, referenceHome);
+  assert.equal(fs.readFileSync(journalPaths(home.root, "agent-c1").marker, "utf8"), "lib-timeout\n");
+});
+
 test("an adapter that does not load: the deny stands and the call leaves the marker", async () => {
   const home = codexHome(GUARDS);
   fs.writeFileSync(path.join(home.hookDir, "hook-adapter.mts"), "");

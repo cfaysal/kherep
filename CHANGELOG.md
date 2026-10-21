@@ -343,6 +343,21 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Codex hook adapter: the capture-failed marker of the denied-call journal
+  (`<CODEX_HOME>/.cache/denied-calls/<agent_id>.failed`) is on disk when the
+  adapter process has exited (issue #612). `journalCall` gave the marker the
+  last 400 ms of its 1 s window and `emit()` then exited through
+  `process.exit(0)`, which abandons a pending `fs.promises` write; a slow
+  write left no marker, and a later `render` could read a count or `none`
+  for a worker whose line was lost. The marker write is now awaited until
+  the hook deadline less 250 ms (about 8.25 s after the hook process
+  starts); the journal lib keeps its 600 ms. A write that never settles
+  still holds the deny until that deadline instead of 1 s, and still
+  leaves no marker. The shell
+  dispatcher is unchanged: it exits when its event loop drains, so its
+  marker landed already; a test pins it.
+  The test fixture gains the fault `marker-slow` (an append on `*.failed`
+  that settles after 700 ms), which is red against the previous adapter.
 - Client binding probe: on Windows the lock that serialises intent creation
   and verification (`locks/create.lock`, `locks/<requestId>.lock`) is no
   longer abandoned when another process is releasing it. An exclusive

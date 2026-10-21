@@ -9,7 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { after, test } from "node:test";
 
-import { denialFaultEnv } from "../../claude/hooks/denial-fault.fixture.mts";
+import { denialFaultEnv, MARKER_SLOW_MS } from "../../claude/hooks/denial-fault.fixture.mts";
 import { journalPaths } from "../../claude/hooks/lib/denial-journal.mts";
 import { readJournal, renderReport } from "../../claude/hooks/lib/denial-report.mts";
 import { assertSameAnswer, cleanupHomes, codexHome, exit2, run, shellPayload, type CodexHome } from "./denials-fixture.mts";
@@ -53,14 +53,34 @@ for (const lib of ["missing", "empty", "throwing", "hanging"] as const) {
   });
 }
 
-test("a journal write that never settles: the same deny within 1 s of the reference, journal and marker together", async () => {
+// Issue #612. The marker is on disk when the process has exited, however slow the filesystem: the
+// adapter exits through process.exit(0), which abandons a pending fs.promises write, so the marker
+// write is awaited (up to the hook deadline) before emit(). Red against an adapter that gives the
+// marker a fixed slice and exits: with the append settling after 700 ms the read saw ENOENT.
+test("a marker append that settles late: the marker is on disk when the adapter has exited", async () => {
+  const referenceHome = codexHome(GUARDS);
+  const reference = await adapt(referenceHome, "codex-guard.mts", shellPayload());
+  const home = codexHome(GUARDS, "hanging");
+  const result = await run([path.join(home.hookDir, "codex-hook-adapter.mts"), path.join(home.hookDir, "codex-guard.mts"), "pre"],
+    shellPayload(), denialFaultEnv("marker-slow", "codex-hook-adapter.mts"));
+  assert.equal(result.status, 0);
+  assertSameAnswer(result, home, reference, referenceHome);
+  assert.equal(fs.readFileSync(journalPaths(home.root, "agent-c1").marker, "utf8"), "lib-timeout\n");
+  assert.ok(result.ms >= MARKER_SLOW_MS, `${result.ms} ms: the adapter waited for the append`);
+  assert.ok(result.ms < 8_500, `${result.ms} ms`);
+});
+
+// The lib's write ends within 1 s; a marker write that never settles is given up at the hook
+// deadline less 250 ms (issue #612), so this deny arrives late but before the deadline.
+test("a journal write that never settles: the same deny before the hook deadline, the marker given up there", async () => {
   const referenceHome = codexHome(GUARDS), home = codexHome(GUARDS);
   const reference = await adapt(referenceHome, "codex-guard.mts", shellPayload());
   const result = await run([path.join(home.hookDir, "codex-hook-adapter.mts"), path.join(home.hookDir, "codex-guard.mts"), "pre"],
     shellPayload(), denialFaultEnv("all-hang", "codex-hook-adapter.mts"));
   assert.equal(result.status, 0);
   assertSameAnswer(result, home, reference, referenceHome);
-  assert.ok(result.ms < reference.ms + 1_000 + 700, `${result.ms} ms against ${reference.ms} ms`);
+  assert.equal(fs.existsSync(journalPaths(home.root, "agent-c1").marker), false, "nothing settled, so no marker: the named residual");
+  assert.ok(result.ms >= 8_000 && result.ms < 8_250 + Math.max(1_250, reference.ms), `${result.ms} ms against ${reference.ms} ms`);
 });
 
 test("runAdaptedHook, the in-process path, writes nothing", async () => {
