@@ -10,7 +10,7 @@ import { after, test } from "node:test";
 import { denialFaultEnv } from "../../claude/hooks/denial-fault.fixture.mts";
 import { journalPaths } from "../../claude/hooks/lib/denial-journal.mts";
 import { readJournal, renderReport } from "../../claude/hooks/lib/denial-report.mts";
-import { cleanupHomes, codexHome, exit2, run, scrub, shellPayload, type CodexHome } from "./denials-fixture.mts";
+import { assertSameAnswer, cleanupHomes, codexHome, exit2, run, shellPayload, type CodexHome } from "./denials-fixture.mts";
 
 after(cleanupHomes);
 const GUARDS = { "commit-guard.mts": exit2("commit-guard"), "deploy-guard.mts": "process.exit(0);\n", "main-checkout-guard.mts": exit2("main-checkout") };
@@ -44,7 +44,7 @@ test("a journal lib that throws: the same decision and a marker", async () => {
   const reference = await shell(referenceHome, shellPayload());
   const home = codexHome(GUARDS, "throwing");
   const result = await shell(home, shellPayload());
-  assert.equal(scrub(result.stdout, home), scrub(reference.stdout, referenceHome));
+  assertSameAnswer(result, home, reference, referenceHome);
   assert.equal(first(home), "DENIED-CALLS: unknown (capture-failed)");
 });
 
@@ -52,7 +52,7 @@ test("a writer that never settles: the decision within the journal cap", async (
   const referenceHome = codexHome(GUARDS), home = codexHome(GUARDS);
   const reference = await shell(referenceHome, shellPayload());
   const result = await shell(home, shellPayload(), denialFaultEnv("all-hang", "codex-shell-checks.mts"));
-  assert.equal(scrub(result.stdout, home), scrub(reference.stdout, referenceHome));
+  assertSameAnswer(result, home, reference, referenceHome);
   assert.ok(result.ms < reference.ms + 1_000 + 2_000, `${result.ms} ms against ${reference.ms} ms`);
 });
 
