@@ -201,6 +201,26 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Upgrade of a changed managed Claude hook (issue #568). The settings merge
+  kept an existing entry next to the managed one whenever anything besides a
+  spelling of the same paths differed, so after a template change both ran
+  in parallel: a changed `timeout`, a changed mode, and a guard added to or
+  removed from a dispatcher group, which ran every guard of that group
+  twice. A managed hook that runs through the hook runtime now replaces
+  every existing entry of the same event and matcher group that runs the
+  same main under `<CLAUDE_HOME>/hooks/`, an operator's edit of it and an
+  extra `guard-dispatch.mts` entry with other guards included. Each
+  replaced entry that differed prints
+  `hooks: replace <event> [<matcher>] hooks/<main>`; an unchanged upgrade
+  prints nothing, and a file that already carries the duplicate heals to
+  one entry. Entries for another hook file, at another matcher or under
+  another home, and forms the template never renders (`& node`,
+  `node <flags>`, single quotes, mixed quoting, `/c/...`, `.` or `..` in the
+  main path) stay. A template change to a managed group's matcher is not
+  covered. The recogniser is the new leaf module
+  `bootstrap/managed-hook-key.mts`. Codex needed no change: its installer
+  replaces the managed hook block as a unit and refuses an unrecognised or
+  edited previous block instead of keeping both.
 - The Control Plane Worker's `allowScripts` pin names the workerd version
   its lockfile resolves (issue #559). The pin still named
   `workerd@1.20260923.1` while `package-lock.json` resolves
