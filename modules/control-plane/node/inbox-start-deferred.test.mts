@@ -53,18 +53,20 @@ test("T1: the start maintenance runs after the first authenticated connection, s
   await handle.done;
 });
 
-// Acceptance 2: the real healthy() with a short deadline against the real
-// daemon.json. In an upgrade the health stage is another process; here it
-// shares the daemon's thread, so what neither grows with the queue nor delays
-// connectedAt is held off its path. The client's auth handling is stubbed
-// (daemon-state.test.mts): runtime discovery probes loopback ports. The
-// session listing never answers: the initial snapshot's refusal check reads
-// the whole inbox on the daemon's thread after connectedAt was recorded.
-// DEADLINE_MS leaves room for the source identity the daemon captures before
-// connect, whose cost depends on the source tree, not on the queue.
-test("T2: the health stage sees the connection within its deadline while a large queue is maintained", async (t) => {
-  const DEADLINE_MS = 1500;
-  const node = fixture(t, { inbox: 6000, sent: 3000 });
+// Acceptance 2: the real healthy() against the real daemon.json, in the
+// daemon's own process. What it asserts is an order, not a duration: the state
+// the health stage accepts is the one the daemon records at connectedAt, and at
+// that moment the start maintenance has not begun. The poll sleeps one turn of
+// the event loop instead of 100 ms, so its accepting check is the immediate
+// queued before the maintenance's first slice (both are immediates, in order),
+// on any host speed and for any queue. On the old code the maintenance ran on
+// the start path, before connectedAt, so the accepted state already shows its
+// work. The client's auth handling is stubbed (daemon-state.test.mts): runtime
+// discovery probes loopback ports. The session listing never answers: the
+// initial snapshot's refusal check reads the whole inbox on the daemon's
+// thread and is not under test here (issue #487 family).
+test("T2: the health stage accepts the connection before the start maintenance has begun, and the maintenance then runs in slices", async (t) => {
+  const node = fixture(t, { inbox: 3000, sent: 1500 });
   const socket = fakeSocket(t);
   const original = { frame: NodeClient.prototype.onFrame, refresh: NodeClient.prototype.refreshPolicy };
   t.after(() => { NodeClient.prototype.onFrame = original.frame; NodeClient.prototype.refreshPolicy = original.refresh; });
@@ -76,30 +78,39 @@ test("T2: the health stage sees the connection within its deadline while a large
   const source = { ...captureRuntimeSourceIdentity(), verified: true };
   const same = (state: DaemonState | null): boolean =>
     state?.source?.root === source.root && state.source.commit === source.commit && state.source.digest === source.digest;
+  const logs: string[] = [];
+  const maintenanceLines = (): string[] => logs.filter((line) => /before the inbox purge|older than 7 days|start maintenance/.test(line));
+  let slices = 0; // slices begun
+  // What the health stage's check sees the first time connectedAt is recorded.
+  let accepted: { slices: number; sent?: string; reply: boolean; lines: string[] } | null = null;
   const readState = (paths: NodePaths): DaemonState | null => {
     const state = readDaemonState(paths);
+    if (state?.connectedAt && !accepted) accepted = { slices, sent: getSent(node.paths, node.answered)?.state,
+      reply: getMessage(node.paths.inbox, node.oldReply) !== null, lines: maintenanceLines() };
     return state && same(state) ? { ...state, source } : state;
   };
   const binding: ServiceBinding = { serviceName: "org.example.kherep-node", platform: "darwin", workspace: node.root,
     configRoot: node.root, nodeExecutable: process.execPath, source };
   const adapter = { processOwned: async (pid: number) => pid === process.pid } as unknown as ServiceAdapter;
-  const logs: string[] = [];
+  const turn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
-  const health = healthy(binding, undefined, { paths: node.paths, adapter, readDaemonState: readState, timeoutMs: DEADLINE_MS });
+  const health = healthy(binding, undefined, { paths: node.paths, adapter, readDaemonState: readState, sleep: turn });
   const handle = startDaemon(node.config, node.paths, (line) => logs.push(line), () => new Promise<never>(() => {}), undefined,
-    { name: binding.serviceName, platform: "darwin" });
+    { name: binding.serviceName, platform: "darwin" }, {}, { yield: async () => { await turn(); slices++; } });
   t.after(() => handle.stop());
   socket.open();
   socket.feed("event", { name: "auth.ok" }, 0);
   const state = await health;
   assert.equal(state.pid, process.pid);
   assert.ok(same(readDaemonState(node.paths)), "the daemon recorded the identity the binding carries");
+  assert.deepEqual(accepted, { slices: 0, sent: "delivered", reply: true, lines: [] },
+    "the health stage accepted a connection the start maintenance had run before");
 
   await until(() => seconds(logs) !== null, logs);
-  const took = seconds(logs)!;
-  // Precondition against a vacuous pass, after the health stage: on the old code this work ran before connect.
-  assert.ok(took * 1000 > DEADLINE_MS, `fixture too small for this host: the start maintenance took ${took} s, `
-    + `not more than the ${DEADLINE_MS} ms deadline`);
+  assert.equal(getSent(node.paths, node.answered)?.state, "replied");
+  assert.equal(getMessage(node.paths.inbox, node.oldReply), null, "the old reply was purged");
+  assert.ok(slices >= 2, `the maintenance ran in ${slices} slice(s), done in ${seconds(logs)} s; log:\n${maintenanceLines().join("\n")}`);
+  t.diagnostic(`T2: ${slices} slices, done in ${seconds(logs)} s`);
   handle.stop();
   await handle.done;
 });
