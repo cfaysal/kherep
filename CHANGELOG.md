@@ -650,6 +650,24 @@ increments the minor version; every other release increments the patch version.
   record whose reply an earlier restart had already purged can still surface
   once, for a session that had no hook event since; nothing on the node
   distinguishes it from a receipt never shown.
+- Control-plane e2e tests under host load, and a Worker comment (issue
+  #607). `exchange-recovery-e2e.test.mts` and
+  `cross-runtime-reply-e2e.test.mts` polled inbox, sent and directory files
+  every 50 ms with a 5 s bound inside Vitest's default 5 s test bound, and
+  slept a fixed 150 ms after every exchange round; under load the test bound
+  fired first. The harnesses now log every frame the node client handled,
+  dropped or sent (`test/frame-log.mts`) and wait on the frame that writes
+  the record under test: `auth.ok`, `message.deliver`, `message.status` with
+  the expected state, and `directory`; a resend that must not go out is
+  checked on the outgoing log instead of a sleep, and the repeated-send case
+  waits for the Worker's answer to every send instead of a 300 ms quiet
+  period. A missing event fails after 10 s naming the frames seen; the two
+  suites' test bound is 90 s. The Worker test config sets `testTimeout` to
+  30 s for the other node harness tests, whose 5 s waits shared the same
+  bound. The comment on `MessageStore.report` now states the receipt rule
+  the code applies: a report for a row or tombstone of another target node
+  gets no receipt, one for an id without a row settles from its tombstone or
+  as `expired`. No behaviour changes.
 - A Codex task past its max runtime whose recorded pid now belongs to another
   process (after a reboot, or daemon downtime past the deadline) is no longer
   stopped again every watch round for ever (issue #544). The watch now measures

@@ -25,5 +25,10 @@ export default defineConfig({
   test: {
     include: ["test/**/*.test.mts"],
     setupFiles: ["./test/quiet-sql-log.mts"],
+    // Issue #607: the node harness tests wait up to 5 s per event (WAIT in
+    // task-helpers.mts and mcp-two-chat-fixture.mts, the inline bound at
+    // interop.test.mts:48, and task-refusal-e2e.test.mts); the default 5 s
+    // test bound left them no headroom. A passing test's duration is unchanged.
+    testTimeout: 30_000,
   },
 });

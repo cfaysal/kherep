@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 // Issue #72, acceptance: a benign cross-runtime reply, end to end through the
 // real node modules and the real NodeSession and Registry. A Claude Code
@@ -11,7 +11,8 @@ import { describe, expect, it, vi } from "vitest";
 // `msg send --from <thread id> --reply-to <id>`, which only writes B's outbox
 // (the one directory the Codex installer makes writable in the sandbox); and
 // the reply reaches "accepted" on both sides without any approval step.
-import type { SessionInfo } from "../../protocol.mts";
+// Issue #607: every wait is on the frame that writes the record under test.
+import { parseEnvelope, type SessionInfo } from "../../protocol.mts";
 import { NodeClient } from "../../node/client.mts";
 import { listCodexSessions, recordCodexSession } from "../../node/codex-sessions.mts";
 import { nodePaths, writeConfig, type NodePaths } from "../../node/config.mts";
@@ -21,12 +22,10 @@ import { generateIdentity } from "../../node/identity.mts";
 import { getMessage, storeMessage } from "../../node/inbox.mts";
 import { runMsgArgs } from "../../node/msg-cli.mts";
 import { DEFAULT_POLICY, type NodePolicy } from "../../node/policy.mts";
+import { answered, E2E_TIMEOUT_MS, FrameLog } from "./frame-log.mts";
 import { enroll, FACTS, workerFetch } from "./helpers.mts";
 
-const WAIT = { timeout: 5_000, interval: 50 };
 const THREAD = "019a2b3c-4d5e-7f60-8123-456789abcdef";
-
-const settle = (ms = 150): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function startNode(name: string, paths: NodePaths, list: () => Promise<SessionInfo[]>, policy: NodePolicy) {
   const identity = generateIdentity();
@@ -45,19 +44,39 @@ async function startNode(name: string, paths: NodePaths, list: () => Promise<Ses
   });
   const response = await workerFetch(`/node/connect?nodeId=${nodeId}`, { headers: { upgrade: "websocket" } });
   const ws = response.webSocket!;
+  // handled logs a frame once the client handled it and its answers went out;
+  // outgoing what reached the socket. stop closes once every answer arrived.
+  const handled = new FrameLog();
+  const outgoing = new FrameLog();
   let chain = Promise.resolve();
-  const send = (frame: string): boolean => { ws.send(frame); return true; };
+  const send = (frame: string): boolean => {
+    ws.send(frame);
+    const parsed = parseEnvelope(frame);
+    if (parsed.ok) outgoing.add(parsed.envelope);
+    return true;
+  };
   ws.addEventListener("message", (event) => {
-    chain = chain.then(async () => { for (const frame of await client.onFrame(event.data as string)) send(frame); });
+    const parsed = parseEnvelope(event.data as string);
+    if (!parsed.ok) return;
+    chain = chain.then(async () => {
+      for (const frame of await client.onFrame(event.data as string)) send(frame);
+      handled.add(parsed.envelope);
+    });
   });
   ws.accept();
-  await vi.waitFor(() => expect(client.authenticated).toBe(true), WAIT);
+  // Authenticated, and the Worker's auth-time frames are in: the directory
+  // answers the directory.get sent on auth.ok, normally after the replayed
+  // deliveries and statuses.
+  await handled.seen("event", { name: "auth.ok" });
+  await handled.seen("directory");
   const inflight = new Map<string, number>();
-  const exchange = async () => { chain = chain.then(() => pollExchange(client, paths, inflight, send)); await settle(); };
-  return { nodeId, ws, exchange, idle: () => chain };
+  // One exchange round, complete when its frames went out; the caller waits for their answers.
+  const exchange = async () => { chain = chain.then(() => pollExchange(client, paths, inflight, send)); await chain; };
+  const stop = async () => { await chain; await answered(outgoing, handled); await chain; ws.close(1000, "done"); };
+  return { nodeId, ws, handled, exchange, stop, idle: () => chain };
 }
 
-describe("cross-runtime reply", () => {
+describe("cross-runtime reply", { timeout: E2E_TIMEOUT_MS }, () => {
   it("a Codex session answers a Claude Code session with msg send --reply-to and the reply is accepted", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-e2e-reply-"));
     const pathsA = nodePaths(path.join(root, "a"));
@@ -74,8 +93,9 @@ describe("cross-runtime reply", () => {
     const codexHook = (event: string) => deliverForCodex({ session_id: THREAD, cwd: root, hook_event_name: event },
       { paths: pathsB, replyCommand: "kherep-node" });
     expect(codexHook("SessionStart")).toContain(`msg send --from ${THREAD}`);
-    await vi.waitFor(() => expect(readDirectory(pathsA)?.sessions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ nodeId: b.nodeId, sessionId: THREAD, runtime: "codex" })])), WAIT);
+    // A's directory (answered at its start) lists B's session: B's snapshot went out before A enrolled.
+    expect(readDirectory(pathsA)?.sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ nodeId: b.nodeId, sessionId: THREAD, runtime: "codex" })]));
 
     // A (Claude Code) asks B's Codex session for a benign answer.
     const out: string[] = [];
@@ -84,10 +104,10 @@ describe("cross-runtime reply", () => {
     expect(asked).toBe(0);
     const question = out[0];
     await a.exchange();
-    await vi.waitFor(() => {
-      expect(getMessage(pathsB.inbox, question)).toMatchObject({ toSession: THREAD, state: "accepted" });
-      expect(getSent(pathsA, question)?.state).toBe("accepted");
-    }, WAIT);
+    await b.handled.seen("message.deliver", { messageId: question });
+    expect(getMessage(pathsB.inbox, question)).toMatchObject({ toSession: THREAD, state: "accepted" });
+    await a.handled.seen("message.status", { messageId: question, state: "accepted" });
+    expect(getSent(pathsA, question)?.state).toBe("accepted");
 
     // B's Codex hook offers it with the ready reply command, then Stop confirms it.
     const context = JSON.parse(codexHook("UserPromptSubmit")).hookSpecificOutput.additionalContext as string;
@@ -114,15 +134,18 @@ describe("cross-runtime reply", () => {
 
     // B's daemon sends it; the Worker hands it to A, whose policy accepts it.
     await b.exchange();
-    await vi.waitFor(() => expect(getSent(pathsB, reply))
-      .toMatchObject({ state: "accepted", inReplyTo: question, to: { nodeId: a.nodeId, session: "planner" } }), WAIT);
-    await vi.waitFor(() => expect(getMessage(pathsA.inbox, reply)).toMatchObject({
+    await b.handled.seen("message.status", { messageId: reply, state: "accepted" });
+    expect(getSent(pathsB, reply)).toMatchObject({ state: "accepted", inReplyTo: question, to: { nodeId: a.nodeId, session: "planner" } });
+    await a.handled.seen("message.deliver", { messageId: reply });
+    expect(getMessage(pathsA.inbox, reply)).toMatchObject({
       from: { nodeId: b.nodeId, session: THREAD }, toSession: "planner", text: "main", inReplyTo: question, state: "accepted",
-    }), WAIT);
+    });
+    // The reply marks the question replied at the Worker (final, so B's
+    // delivered report in the same round cannot move it); A sees that state.
+    await a.handled.seen("message.status", { messageId: question, state: "replied" });
+    expect(getSent(pathsA, question)?.state).toBe("replied");
 
-    await Promise.all([a.idle(), b.idle()]);
-    a.ws.close(1000, "done");
-    b.ws.close(1000, "done");
+    await Promise.all([a.stop(), b.stop()]);
     fs.rmSync(root, { recursive: true, force: true });
   });
 });
