@@ -16,13 +16,13 @@ export const budgetFor = (capEnd: number, hardEnd: number, now: number): number 
 
 // Every item of a PreToolUse phase within one budget; the first deny ends the loop.
 export function preToolUse(target: string, phase: string, payload: HookPayload, timeoutMs: number | undefined,
-  options: AdaptedOptions): { verdict?: Verdict; stderr: string; broken: boolean } {
+  options: AdaptedOptions): { verdict?: Verdict; stderr: string; broken: boolean; verdicts: Verdict[] } {
   const fail = failureFor(phase);
   const intent = phase === INTENT_PHASE;
   const why = unrunnable(target);
   if (why) {
     const verdict = fail(target, why);
-    return { verdict, stderr: "", broken: verdict.broken === true };
+    return { verdict, stderr: "", broken: verdict.broken === true, verdicts: [verdict] };
   }
   const begin = Date.now();
   const capEnd = timeoutMs === undefined ? Infinity : begin + timeoutMs;
@@ -53,7 +53,7 @@ export function preToolUse(target: string, phase: string, payload: HookPayload, 
     verdicts.push(verdict);
     if (verdict.decision === "deny") break;
   }
-  return { verdict: combine(verdicts), stderr, broken: verdicts.some((verdict) => verdict.broken) };
+  return { verdict: combine(verdicts), stderr, broken: verdicts.some((verdict) => verdict.broken), verdicts };
 }
 
 // The PostToolUse loop as before #507 part 3: no kill signal, no guard arguments, status passed through.

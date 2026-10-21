@@ -4,7 +4,7 @@
 //   node "<CLAUDE_HOME>/hooks/denied-calls.mts" render <agent_id>
 //   node "<CLAUDE_HOME>/hooks/denied-calls.mts" list [--minutes <n>]
 //   node "<CLAUDE_HOME>/hooks/denied-calls.mts" prune
-// Codex installs it as <CODEX_HOME>/hooks/kherep-maestro/codex-denied-calls.mts. The home is
+// Codex installs it as <CODEX_HOME>/hooks/kherep-maestro/denied-calls.mts. The home is
 // derived from where it is installed; --home <dir> names another one. render exits 3 on
 // `unknown`, so a caller sees UNKNOWN without parsing; list is a diagnostic, never evidence.
 import fs from "node:fs";

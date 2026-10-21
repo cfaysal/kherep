@@ -95,6 +95,16 @@ async function recheck(payload: string, broken: boolean, remaining: () => number
   return [...peers, notice].filter(Boolean).join("\n") || undefined;
 }
 
+// Issue #504. Without the adapter there is no journal either: a delegated call (valid agent_id) of the
+// installed copy leaves the capture-failed marker, else the journal renamed to it.
+function unjournalled(payload: HookPayload): Promise<unknown> {
+  const dir = import.meta.dirname, id = payload.agent_id;
+  if (path.basename(dir) !== "kherep-maestro" || typeof id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return Promise.resolve();
+  const journal = path.join(path.dirname(path.dirname(dir)), ".cache", "denied-calls"), base = path.join(journal, id);
+  return fs.promises.mkdir(journal, { recursive: true, mode: 0o700 }).then(() => fs.promises.appendFile(`${base}.failed`, "lib-load\n", { mode: 0o600 }))
+    .catch(() => fs.promises.rename(`${base}.jsonl`, `${base}.failed`));
+}
+
 // deadline: an absolute end (ms since the epoch), a test seam; raw: the payload as read, for the re-check.
 export interface ShellOptions { deadline?: number; raw?: string }
 
@@ -106,9 +116,11 @@ export async function shellChecks(payload: HookPayload, attributionHook?: string
   const remaining = (): number => Math.max(0, deadline - Date.now());
   let decision = "";
   let broken = false;
+  const denials: { decision: string; reason: string; broken?: boolean }[] = []; // issue #504: every denying guard
   let runAdaptedHook: typeof import("./hook-adapter.mts").runAdaptedHook | undefined;
+  let journalCall: typeof import("./hook-adapter.mts").journalCall | undefined;
   // An adapter that does not load is a deny and a guard failure: this call's re-check restores it.
-  try { ({ runAdaptedHook } = await import("./hook-adapter.mts")); } catch { /* reported below */ }
+  try { ({ runAdaptedHook, journalCall } = await import("./hook-adapter.mts")); } catch { /* reported below */ }
   if (typeof runAdaptedHook !== "function") {
     runAdaptedHook = undefined; // an empty file loads as a module without it
     decision = deny("Shell guard adapter could not load; this tool call is blocked.");
@@ -123,20 +135,30 @@ export async function shellChecks(payload: HookPayload, attributionHook?: string
       const result = runAdaptedHook!(target, phase, payload, 10_000, { deadline });
       broken ||= result.broken === true;
       if (result.stderr) process.stderr.write(result.stderr);
-      if (result.status !== 0) decision ||= deny(`${guard} failed; this tool call is blocked.`);
+      if (result.status !== 0) {
+        decision ||= deny(`${guard} failed; this tool call is blocked.`);
+        denials.push({ decision: "deny", reason: `${guard} failed; this tool call is blocked.` });
+      }
       else if (result.stdout.trim()) {
         // These three guards allow silently; their only supported stdout is
         // the adapter's native deny. Unexpected output must not allow a call.
-        const output = JSON.parse(result.stdout) as { hookSpecificOutput?: { hookEventName?: string; permissionDecision?: string } };
+        const output = JSON.parse(result.stdout) as { hookSpecificOutput?: { hookEventName?: string; permissionDecision?: string;
+          permissionDecisionReason?: string } };
         if (output.hookSpecificOutput?.hookEventName !== "PreToolUse"
           || output.hookSpecificOutput.permissionDecision !== "deny") throw new Error("unsupported guard output");
         decision ||= result.stdout;
+        denials.push({ decision: "deny", reason: output.hookSpecificOutput.permissionDecisionReason ?? "", broken: result.broken === true });
       }
     } catch {
       broken ||= fault;
       decision ||= deny(`${guard} could not complete; this tool call is blocked.`);
+      denials.push({ decision: "deny", reason: `${guard} could not complete; this tool call is blocked.`, broken: fault });
     }
   }
+  // Issue #504: after the guards, before the re-check; never a decision, at most 1 s.
+  const journalEnd = Date.now() + Math.max(0, Math.min(1_000, remaining() - 250));
+  if (journalCall) await journalCall(payload, denials, journalEnd).catch(() => {});
+  else await within(unjournalled(payload), journalEnd - Date.now(), () => {}).catch(() => {});
   const notice = await within(recheck(options.raw ?? JSON.stringify(payload), broken, remaining), remaining(),
     () => "hook integrity re-check unavailable (no result before the hook deadline)");
   // After every guard and the re-check, in-process with the payload already read:
