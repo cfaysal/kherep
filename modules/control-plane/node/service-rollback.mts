@@ -1,34 +1,42 @@
 import type { DaemonState } from "./daemon-state.mts";
 import {
-  acquireServiceLock, readServiceBackup, readServiceReceipt, removeServiceReceipt, saveServiceBackup, snapshotDigests, writeServiceReceipt,
+  acquireServiceLock, readServiceBackup, readServiceCandidate, readServiceReceipt, removeServiceCandidate, removeServiceReceipt, saveServiceBackup,
+  snapshotDigests, writeServiceCandidate, writeServiceReceipt,
 } from "./service-records.mts";
 import { beginServiceDrain } from "./service-drain.mts";
 import { issueServiceLaunchPermit } from "./service-launch-permit.mts";
 import {
-  healthy, lifecycleDefaults, prepareStop, proveStopped, restorePrior, verifyExact, verifyStopOwnership, type LifecycleDependencies,
+  healthy, lifecycleDefaults, prepareStop, proveStopped, restorePrior, verifyExact, verifyStopOwnership,
+  type CandidateLoadedError, type LifecycleDependencies,
 } from "./service-lifecycle.mts";
 import {
-  assertSettled, failedWriteSnapshot, recoveryBlocker, sameBinding, serviceFailure, stopNotIssued, type ServiceStage, type ServiceTransactionResult,
+  assertSettled, candidateInPlace, failedWriteSnapshot, recordedPriorBackup, recoveryBlocker, sameBinding, serviceFailure, stopNotIssued,
+  type ServiceStage, type ServiceTransactionResult,
 } from "./service-transaction-support.mts";
 import type { NativeServiceSnapshot, ServiceBinding } from "./service-types.mts";
 
-// `service rollback` restores the definition the receipt's previous backup holds. Moved from service-transaction.mts
-// for the 250-line budget (#582); service-transaction.mts re-exports it, so the import sites keep their name.
+// #582: `service rollback` restores the receipt's definition, also over a recorded failed candidate (its bound prior
+// backup replaces receipt.previousBackup). Moved from service-transaction.mts for the 250-line budget; re-exported there.
 export async function rollbackManagedService(options: { binding: ServiceBinding }, input: LifecycleDependencies): Promise<ServiceTransactionResult> {
   const release = acquireServiceLock(input.paths);
   try {
     const deps = lifecycleDefaults(input);
     const receipt = readServiceReceipt(input.paths);
-    if (!receipt || !receipt.previousBackup || !sameBinding(receipt.binding, options.binding)) throw new Error("rollback backup is unavailable for this service");
-    const currentBinding = receipt.binding;
-    const current = await input.adapter.read(currentBinding);
+    if (!receipt || !sameBinding(receipt.binding, options.binding)) throw new Error("rollback backup is unavailable for this service");
+    const current = await input.adapter.read(receipt.binding);
     if (!current || current.running === "unknown") throw new Error("current managed service state cannot be verified");
     const currentDigests = snapshotDigests(current);
-    if (currentDigests.definitionDigest !== receipt.definitionDigest || currentDigests.securityDigest !== receipt.securityDigest) {
-      throw new Error("current managed service drifted from its receipt");
-    }
-    await input.adapter.validateManaged(current, receipt.binding);
-    const { backup, snapshot: previous } = readServiceBackup(input.paths, receipt.previousBackup);
+    const receiptMatch = currentDigests.definitionDigest === receipt.definitionDigest && currentDigests.securityDigest === receipt.securityDigest;
+    // #582: the record is consulted only while the receipt does not match (A2 P2-A); an invalid record then throws before any mutation.
+    const pending = receiptMatch ? null : readServiceCandidate(input.paths);
+    const pendingMatch = !receiptMatch && candidateInPlace(pending, current, receipt.binding);
+    if (!receiptMatch && !pendingMatch) throw new Error("current managed service drifted from its receipt");
+    const currentBinding = pendingMatch ? pending.binding : receipt.binding;
+    await input.adapter.validateManaged(current, currentBinding);
+    const priorFound = pendingMatch ? recordedPriorBackup(input.paths, pending, receipt)
+      : receipt.previousBackup ? readServiceBackup(input.paths, receipt.previousBackup) : null;
+    if (!priorFound) throw new Error("rollback backup is unavailable for this service");
+    const { backup, snapshot: previous } = priorFound;
     if (!backup.priorSource || !deps.verifySource(backup.priorSource)) throw new Error("previous source cannot be verified; rollback refused");
     const priorBinding = backup.priorReceipt?.binding
       ?? { ...options.binding, source: backup.priorSource, supervisorGeneration: undefined };
@@ -36,7 +44,7 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
     if (current.running === false && state && deps.alive(state.pid)) throw new Error("a live daemon remains outside the stopped selected service");
     if (current.running === true && (!state || !deps.alive(state.pid)
       || !await input.adapter.processOwned(state.pid, currentBinding, state.startedAt))) throw new Error("current daemon ownership cannot be verified");
-    const safety = saveServiceBackup(input.paths, current, { receipt, priorSource: receipt.binding.source, now: deps.now() });
+    const safety = saveServiceBackup(input.paths, current, { receipt, priorSource: currentBinding.source, now: deps.now() });
     let endDrain = () => {};
     let clearLaunchPermit = () => {};
     let drainSafeToRelease = true;
@@ -76,6 +84,7 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
       await assertSettled(input, currentBinding, previous, healthyState, shouldRun);
       stage = "receipt";
       if (backup.priorReceipt) writeServiceReceipt(input.paths, backup.priorReceipt); else removeServiceReceipt(input.paths);
+      removeServiceCandidate(input.paths);
       return { serviceName: priorBinding.serviceName, ...(priorBinding.taskPath ? { taskPath: priorBinding.taskPath } : {}),
         platform: priorBinding.platform, source: priorBinding.source, backupId: backup.id };
     } catch (cause) {
@@ -87,9 +96,19 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
         await restorePrior({ binding: priorBinding, previous: current, previousBinding: currentBinding,
           previousPid: state?.pid, deps: input, candidate: previousSnapshot, priorStopIssued: stopIssued });
         recovery = "restored";
-      } catch (error) { blocker = recoveryBlocker(error); }
+      } catch (error) {
+        blocker = recoveryBlocker(error);
+        if (blocker === "RECOVERY_CANDIDATE_LOADED" && previousSnapshot) {
+          const d = snapshotDigests(previousSnapshot);
+          if (!(d.definitionDigest === receipt.definitionDigest && d.securityDigest === receipt.securityDigest)) {
+            try {
+              writeServiceCandidate(input.paths, { version: 1, binding: priorBinding, ...d, backupId: safety.id, command: "rollback", stage,
+                blocker, stopCode: (error as Partial<CandidateLoadedError>).stopCode ?? "STOP_FAILED_OTHER", failedAt: deps.now() });
+            } catch { /* review P3 */ }
+          }
+        }
+      }
       if (recovery === "unknown" && (writeAttempted || (stopIssued && deps.alive(state?.pid)))) drainSafeToRelease = false;
-      void safety;
       throw serviceFailure("SERVICE_ROLLBACK_FAILED", cause, recovery, stage, blocker);
     } finally { clearLaunchPermit(); if (drainSafeToRelease) endDrain(); }
   } finally { release(); }
