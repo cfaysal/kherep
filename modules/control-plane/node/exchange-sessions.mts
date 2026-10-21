@@ -1,6 +1,6 @@
 import type { SessionInfo } from "../protocol.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
-import { readJson, refuseUndeliverable, UNDELIVERABLE_AFTER_MS, writeJsonAtomic } from "./inbox.mts";
+import { readJson, refuseUndeliverable, UNDELIVERABLE_AFTER_MS, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
 import { rememberSessions, unlistedRuntimes } from "./known-sessions.mts";
 
 // sessions.json, the node's sessions from the last successful listing, and the
@@ -37,8 +37,11 @@ export function localSessionName(paths: NodePaths, sessionId: string): string | 
 // sessions.json; the delivery hook reads names from there instead of running
 // claude on every prompt. The same successful listing refuses inbox messages
 // whose session has ended (refuseUndeliverable); a failed one decides nothing.
+// records: the daemon's inbox index (issue #589), one stat per record instead of a
+// read; each refusal is still judged on the file it rewrites. Without it the files are read.
 export function recordingSessions(paths: NodePaths, list: (signal?: AbortSignal) => Promise<SessionInfo[]>, log: (line: string) => void,
-  now: () => number = Date.now, undeliverableAfterMs: number = UNDELIVERABLE_AFTER_MS): (signal?: AbortSignal) => Promise<SessionInfo[]> {
+  now: () => number = Date.now, undeliverableAfterMs: number = UNDELIVERABLE_AFTER_MS,
+  records?: () => InboxRecord[]): (signal?: AbortSignal) => Promise<SessionInfo[]> {
   return async (signal) => {
     const sessions = await list(signal);
     signal?.throwIfAborted();
@@ -54,7 +57,7 @@ export function recordingSessions(paths: NodePaths, list: (signal?: AbortSignal)
       log(`kherep-node: could not write known-sessions.json: ${String(error)}`);
     }
     try {
-      const refused = refuseUndeliverable(paths.inbox, sessions, observedAt, undeliverableAfterMs);
+      const refused = refuseUndeliverable(paths.inbox, sessions, observedAt, undeliverableAfterMs, records?.());
       if (refused.length > 0) log(`kherep-node: refused ${refused.length} message(s) for sessions that are not running`);
     } catch (error) {
       log(`kherep-node: could not check the inbox for ended sessions: ${String(error)}`);
