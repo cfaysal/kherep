@@ -5,7 +5,7 @@
 
 import os from "node:os";
 
-import { managedHookKey, type ManagedHookKey } from "./managed-hook-key.mts";
+import { controlPlaneHookKey, managedHookKey, type ManagedHookKey } from "./managed-hook-key.mts";
 import { isMacIncompatiblePermission, isMacPosixDirectory } from "./render-profile-paths.mts";
 
 export interface HookCommand {
@@ -135,17 +135,15 @@ export function hookKey(item: HookEntry | undefined): string {
   return String((item && item.matcher) || "");
 }
 
-// The script a control-plane hook runs, without its arguments; undefined for
-// any other hook. Issue #31: the managed wake entry carries its timeout both as
-// field and as --timeout argument, so an upgrade that changes the number
-// yields another identity. A managed control-plane script therefore replaces
-// every existing entry of the same event that runs that script; other hooks
-// keep the identity comparison above.
+// The script a control-plane hook runs, as controlPlaneHookKey() names it:
+// without its arguments (#31: the managed wake entry carries its timeout both as
+// field and as --timeout argument) and without its root (#590: an install from
+// a service source pin must replace the entries of an install from the
+// checkout). A managed control-plane script therefore replaces every existing
+// entry of the same event that runs that script; other hooks keep the identity
+// comparison above.
 function controlPlaneScript(hook: HookCommand): string | undefined {
-  if (typeof hook.command !== "string") return undefined;
-  const match = /^node\s+(?:"([^"]+)"|(\S+))/.exec(normalizeHookCommand(hook.command));
-  const script = match?.[1] ?? match?.[2];
-  return script?.includes("/modules/control-plane/node/") ? script : undefined;
+  return typeof hook.command === "string" ? controlPlaneHookKey(hook.command) : undefined;
 }
 
 function withoutReplacedScripts(entry: HookEntry, scripts: ReadonlySet<string>): HookEntry {
