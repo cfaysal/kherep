@@ -183,11 +183,10 @@ export function takeRunLock(home: string, seams: LockSeams = {}): RunLock | stri
   let conn: DatabaseSync;
   try { conn = new sqlite.DatabaseSync(file); } catch (error) { return refusal(error); }
   // A failed attempt leaves no transaction, so the same connection tries again (issue #620).
-  let why = "";
-  for (let attempt = 0; ; attempt++) {
-    why = beginExclusive(conn, seams);
-    if (why !== BUSY || attempt === BUSY_RETRIES) break;
+  let why = beginExclusive(conn, seams);
+  for (let retry = 0; why === BUSY && retry < BUSY_RETRIES; retry++) {
     (seams.pause ?? pause)(BUSY_PAUSE_MIN_MS + Math.floor(Math.random() * BUSY_PAUSE_SPREAD_MS));
+    why = beginExclusive(conn, seams);
   }
   if (why) {
     try { conn.close(); } catch { /* already closed */ }

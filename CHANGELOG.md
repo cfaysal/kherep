@@ -697,8 +697,8 @@ increments the minor version; every other release increments the patch version.
   this path is UNVERIFIED. A second busy path, not staged: B is refused
   RESERVED by A's RESERVED while B's SHARED blocks A's EXCLUSIVE. Every
   attempt keeps `busy_timeout 0`, so a contender against a run that is
-  working is still answered within about 40 ms (T4.1 now bounds that at
-  250 ms). T3.5 keeps each run's
+  working is still answered within about 40 ms (measured on macOS;
+  Windows UNKNOWN; T4.1 now bounds that at 250 ms). T3.5 keeps each run's
   stdout and names the path each run took when it fails; a busy pair is
   not accepted. Limits: the retries lower the chance of a repeat collision,
   they do not exclude it, and a pair that still collides is repaired by the
