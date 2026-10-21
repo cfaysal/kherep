@@ -302,6 +302,14 @@ check_hook_commands() {
 }
 check_hook_commands "$CLAUDE_HOME/settings.json"
 check_hook_commands "$WS/.claude/settings.local.json"
+# Issue #592. The control-plane commands name the stable entry point, compared
+# above as a manifest file; this is the source it runs, by identity, not by root.
+node "$HERE/control-plane-pointer.mts" check "$CLAUDE_HOME" "$HERE/.."; rc=$?
+case "$rc" in
+  0) ;;
+  3) drift=1 ;;
+  *) echo "HOOK-CHECK-FAIL kherep/control-plane/source.json"; drift=1 ;;
+esac
 
 # #33. A path in retired.txt is one the installer parks. If it is still live,
 # the retirement never ran on this host, the file came back, or the installer

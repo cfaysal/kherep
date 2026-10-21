@@ -96,7 +96,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [hooks, control-plane, install-preview-safety, project-rules-install, commit-policy-install, drift-check-optional-tools, control-plane-hook-install, bootstrap-rest, codex]
+        suite: [hooks, control-plane, install-preview-safety, project-rules-install, commit-policy-install, drift-check-optional-tools, control-plane-hook-install, control-plane-stable-install, bootstrap-rest, codex]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
