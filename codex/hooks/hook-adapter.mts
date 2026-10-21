@@ -121,16 +121,19 @@ const installedHome = (): string | undefined => path.basename(INVOKED_DIR) === "
   && path.basename(path.dirname(INVOKED_DIR)) === "hooks" ? path.dirname(path.dirname(INVOKED_DIR)) : undefined;
 
 // Issue #504. A delegated run's call line in <home>/.cache/denied-calls through the installed
-// lib/denial-journal.mts beside this copy, else a capture-failed marker; never a decision. Write and
-// marker together end within min(1 s, end - now), the marker keeping the last 400 ms. Inert until a
-// Codex child payload carries agent_id (#537). Hook integrity inventories the lib (hook-integrity-sources.mts).
+// lib/denial-journal.mts beside this copy, else a capture-failed marker; never a decision. The lib
+// has min(1 s, end - now) less 400 ms; the marker write is then awaited until end (issue #612):
+// main() exits through process.exit(0) in emit(), which abandons a pending fs.promises write, so a
+// marker given a fixed slice was missing after a slow write (measured: ENOENT on windows-latest).
+// Inert until a Codex child payload carries agent_id (#537). Hook integrity inventories the lib
+// (hook-integrity-sources.mts).
 export async function journalCall(payload: HookPayload, verdicts: Verdicts, end = DEADLINE - 250): Promise<void> {
   const home = installedHome(), id = payload.agent_id;
   if (!home || typeof id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(id) || payload.tool_name === "SubagentHandback") return;
-  const stop = Date.now() + Math.max(0, Math.min(1_000, end - Date.now())), cap = Math.max(0, stop - 400 - Date.now());
+  const cap = Math.max(0, Math.min(1_000, end - Date.now()) - 400);
   const fail = await within((import(pathToFileURL(path.join(INVOKED_DIR, "lib", "denial-journal.mts")).href) as Promise<JournalLib>)
     .then((lib) => lib.journalVerdict(home, payload, verdicts, Date.now() + cap - 50)), cap, () => "lib-timeout").catch(() => "lib-load");
-  if (fail) await within(markUnjournalled(home, id, fail), Math.max(0, stop - Date.now()), () => {}).catch(() => {});
+  if (fail) await within(markUnjournalled(home, id, fail), Math.max(0, end - Date.now()), () => {}).catch(() => {});
 }
 
 // The marker without the lib: one line, else the journal renamed to it.
