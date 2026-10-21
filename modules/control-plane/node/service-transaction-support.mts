@@ -1,7 +1,8 @@
 import type { DaemonState } from "./daemon-state.mts";
 import type { SourceIdentity } from "./daemon-source.mts";
 import { lifecycleDefaults, type LifecycleDependencies } from "./service-lifecycle.mts";
-import { snapshotDigests, type ServiceBackup, type ServiceReceipt } from "./service-records.mts";
+import type { NodePaths } from "./config.mts";
+import { readServiceBackup, snapshotDigests, type ServiceBackup, type ServiceCandidate, type ServiceReceipt } from "./service-records.mts";
 import {
   FAILED_WRITE_SNAPSHOT, STOP_NOT_ISSUED, type FailedServiceWrite, type NativeServiceSnapshot, type ServiceBinding,
 } from "./service-types.mts";
@@ -9,9 +10,12 @@ import {
 export const SERVICE_STAGES = ["stop", "prove-stopped", "write", "verify", "start", "health", "settle", "receipt"] as const;
 export type ServiceStage = typeof SERVICE_STAGES[number];
 
-export const sameBinding = (left: ServiceBinding, right: ServiceBinding): boolean => left.serviceName === right.serviceName
+// #582 (A2 P1-A): the selector names the service; the binding adds the node executable and log path an adoption rewrites.
+export const sameSelector = (left: ServiceBinding, right: ServiceBinding): boolean => left.serviceName === right.serviceName
   && left.taskPath === right.taskPath && left.platform === right.platform && left.workspace === right.workspace
-  && left.configRoot === right.configRoot && left.nodeExecutable === right.nodeExecutable && left.logFile === right.logFile;
+  && left.configRoot === right.configRoot;
+export const sameBinding = (left: ServiceBinding, right: ServiceBinding): boolean => sameSelector(left, right)
+  && left.nodeExecutable === right.nodeExecutable && left.logFile === right.logFile;
 export const exact = (left: Buffer, right: Buffer): boolean => left.equals(right);
 
 export function failedWriteSnapshot(cause: unknown): NativeServiceSnapshot | undefined {
@@ -65,4 +69,30 @@ export function serviceFailure<C extends string>(code: C, cause: unknown, recove
   error.stage = stage;
   if (blocker) error.blocker = blocker;
   return error;
+}
+
+// #582: a candidate record is used only while the definition in place is exactly the recorded one, under the same binding.
+export function candidateInPlace(pending: ServiceCandidate | null, existing: NativeServiceSnapshot | null, binding: ServiceBinding): pending is ServiceCandidate {
+  if (!pending || !existing || !sameBinding(pending.binding, binding)) return false;
+  const digests = snapshotDigests(existing);
+  return digests.definitionDigest === pending.definitionDigest && digests.securityDigest === pending.securityDigest;
+}
+
+// Key-order independent JSON: a receipt written by another writer must still compare equal to its parsed round trip.
+const canonical = (value: unknown): string => JSON.stringify(value, (_key, item: unknown) =>
+  item && typeof item === "object" && !Array.isArray(item)
+    ? Object.fromEntries(Object.keys(item as Record<string, unknown>).sort().map(key => [key, (item as Record<string, unknown>)[key]])) : item);
+
+// #582 (review P2-5): the recorded prior is trusted only when it is the receipt's own definition and names this receipt.
+// A missing or corrupt backup is "unbound" (A2 P2-B): the callers refuse with their fixed texts, the read error is never printed.
+export function recordedPriorBackup(paths: NodePaths, pending: ServiceCandidate, receipt: ServiceReceipt | null)
+  : { backup: ServiceBackup; snapshot: NativeServiceSnapshot } | null {
+  if (!pending.backupId) return null;
+  let prior: { backup: ServiceBackup; snapshot: NativeServiceSnapshot };
+  try { prior = readServiceBackup(paths, pending.backupId); } catch { return null; }
+  const bound = receipt
+    ? prior.backup.definitionDigest === receipt.definitionDigest && prior.backup.securityDigest === receipt.securityDigest
+      && canonical(prior.backup.priorReceipt) === canonical(receipt)
+    : prior.backup.priorReceipt === undefined;
+  return bound ? prior : null;
 }
