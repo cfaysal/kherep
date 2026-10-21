@@ -169,6 +169,30 @@ async function repairAttempt(input: Buffer): Promise<string> {
   return `hook integrity re-check (hook entry):\n${[...lines, ...(status ? [status] : [])].map((line) => `  - ${line}`).join("\n")}`;
 }
 
+// `work` settled within ms: true when it resolved, false when it failed or the time ran out.
+function settled(work: () => Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), Math.max(0, ms)); });
+  return Promise.race([Promise.resolve().then(work).then(() => true, () => false), late]).finally(() => clearTimeout(timer));
+}
+
+// Issue #504: a deny of a delegated run's call (valid agent_id, not the handback) goes to the
+// denied-call journal of this home with the fixed reason only, else a marker, before OUTER_DEADLINE - 200.
+async function journalDeny(input: Buffer, reason: string): Promise<void> {
+  if (input.length > 1_048_576) return; // no unbounded parse on the deny path
+  let payload: Record<string, unknown>;
+  try { payload = JSON.parse(input.toString("utf8")); } catch { return; }
+  const id = payload?.agent_id, tool = payload?.tool_name, end = OUTER_DEADLINE - 200;
+  if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(id) || tool === "SubagentHandback") return;
+  const dir = path.join(path.dirname(HOOKS_ROOT), ".cache", "denied-calls"), base = path.join(dir, id);
+  const line = JSON.stringify({ v: 1, kind: "entry-deny", at: new Date().toISOString(),
+    id: typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 128) : null, tool: typeof tool === "string" ? tool.slice(0, 80) : null, reason });
+  if (await settled(() => fs.promises.mkdir(dir, { recursive: true, mode: 0o700 })
+    .then(() => fs.promises.appendFile(`${base}.jsonl`, `${line}\n`, { mode: 0o600 })), Math.min(500, end - Date.now()))) return;
+  await settled(() => fs.promises.appendFile(`${base}.failed`, "append\n", { mode: 0o600 })
+    .catch(() => fs.promises.rename(`${base}.jsonl`, `${base}.failed`)), Math.min(400, end - Date.now()));
+}
+
 async function main(): Promise<void> {
   const [modeArg, targetArg, ...rest] = process.argv.slice(2);
   const mode = MODES.find((candidate) => candidate === modeArg) as Mode | undefined;
@@ -194,6 +218,7 @@ async function main(): Promise<void> {
   const shape = failure.why || !result.stdout.trim() ? "" : preToolShape(result.stdout);
   if (!failure.why && !shape) return finish(result.stdout, result.stderr, 0);
   const context = failure.mainFailed ? await repairAttempt(input) : "";
+  await journalDeny(input, blocked(failure.why || shape));
   finish(deny(blocked(failure.why || shape), context), result.ready ? result.stderr : "", 0);
 }
 
