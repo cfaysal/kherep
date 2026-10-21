@@ -11,6 +11,8 @@ hooks/guard-dispatch.test.mts
 hooks/guard-dispatch-fixture.mts
 hooks/guard-dispatch-recheck.test.mts
 hooks/guard-dispatch-deadline.test.mts
+hooks/denied-calls.mts
+hooks/denied-calls.test.mts
 hooks/hook-runtime-fixture.mts
 hooks/acl-fixture.mts
 hooks/hook-runtime-child.mts
@@ -90,6 +92,8 @@ hooks/lib/guard-recheck.mts
 hooks/lib/guard-recheck.test.mts
 hooks/lib/denial-journal.mts
 hooks/lib/denial-journal.test.mts
+hooks/lib/denial-report.mts
+hooks/lib/denial-report.test.mts
 hooks/lib/integrity-proof.mts
 hooks/lib/integrity-proof.test.mts
 hooks/lib/integrity-run.mts
