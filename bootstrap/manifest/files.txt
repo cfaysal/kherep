@@ -173,6 +173,7 @@ kherep/githooks/commit-msg
 kherep/githooks/post-checkout
 kherep/githooks/pre-push
 kherep/githooks/attribution-record.mts
+kherep/control-plane/claude-control-plane-hook.mts
 kherep/hook-runtime/entry.mts
 kherep/hook-runtime/coordinator.mts
 kherep/hook-runtime/coordinator-db.mts
