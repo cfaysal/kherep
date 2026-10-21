@@ -175,7 +175,8 @@ test("T7(g): the configured digest reads only a regular file and never throws", 
   fs.rmdirSync(file);
   fs.writeFileSync(file, "GOOD");
   const good = snapshotDigests({ definition: Buffer.from("GOOD"), security: Buffer.alloc(0), running: false }).definitionDigest;
-  assert.equal(configuredDefinitionDigest(binding, home), good, "regular file");
+  // Without O_NOFOLLOW (Windows) an open follows a symlink, so the helper reads nothing at all (PR #599 P1-1).
+  assert.equal(configuredDefinitionDigest(binding, home), fs.constants.O_NOFOLLOW === undefined ? null : good, "regular file");
   assert.equal(configuredDefinitionDigest({ ...binding, serviceName: "../x" }, home), null, "invalid name");
   assert.equal(configuredDefinitionDigest({ ...binding, platform: "win32" }, home), null, "win32");
   const escape = await run(t, darwinReceipt(root, "../escape"), {});
