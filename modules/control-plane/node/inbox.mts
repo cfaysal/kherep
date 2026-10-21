@@ -280,9 +280,9 @@ export function readdress(dir: string, from: string, to: string): string[] {
 }
 
 // Refuses a message that still waits for its session; true when it did.
-export function markRefused(dir: string, messageId: string, reason: string): boolean {
-  const record = getMessage(dir, messageId);
-  if (record?.state !== "accepted" && record?.state !== "offered") return false;
+export function markRefused(dir: string, messageId: string, reason: string, still = (r: InboxRecord): boolean => r.state === "accepted" || r.state === "offered"): boolean {
+  const record = getMessage(dir, messageId); // still: judged on the file, not on a caller's copy (#589)
+  if (!record || !still(record)) return false;
   writeJsonAtomic(fileOf(dir, messageId), { ...record, state: "refused", reason });
   return true;
 }
@@ -341,8 +341,7 @@ export function refuseUndeliverable(dir: string, sessions: SessionInfo[], now: n
   afterMs: number = UNDELIVERABLE_AFTER_MS): string[] {
   const live = new Set(sessions.flatMap((s) => s.name ? [s.sessionId, s.name] : [s.sessionId]));
   const since = (r: InboxRecord): number => Date.parse((r.closedTo && r.closedAttempt) || r.receivedAt);
-  return listInbox(dir)
-    .filter((r) => (r.state === "accepted" || r.state === "offered") && !live.has(r.toSession) && now - since(r) > afterMs)
-    .filter((r) => markRefused(dir, r.messageId, "target session not running"))
+  const refusable = (r: InboxRecord): boolean => (r.state === "accepted" || r.state === "offered") && !live.has(r.toSession) && now - since(r) > afterMs;
+  return listInbox(dir).filter(refusable).filter((r) => markRefused(dir, r.messageId, "target session not running", refusable))
     .map((r) => r.messageId);
 }
