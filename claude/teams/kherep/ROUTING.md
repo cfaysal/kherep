@@ -66,8 +66,10 @@ An empty result is a valid result. A turn that produced nothing new is written a
 `OBS-RESULT: empty <reason>` or `OBS-RESULT: failed <reason>`. The Maestro treats `OBS-RESULT: failed`,
 and a result without that line, as a failure it reports to the user in the same turn; it is never
 read as a valid empty result. On Claude the check point is the SubagentStop hook
-`obs-result-check`: it sends a malformed line back to `claude-obs` once with a fixed instruction,
-warns the operator when the line is still malformed or reads `failed`, and quotes nothing.
+`obs-result-check` together with the PostToolUse hook `obs-handback-record`: a report handed back
+through SubagentHandback is checked there and a malformed line is reported to the operator; a final
+message without a handback is sent back to `claude-obs` once with a fixed instruction; both warn the
+operator when the line is still malformed or reads `failed`, and quote nothing.
 
 Observations are stored in the Confluence knowledge space configured for this host, read from
 `<runtime-home>/kherep/confluence.json` and resolved at install time. A host without that file, or
