@@ -71,6 +71,38 @@ test("a shell control operator after the main makes the command operator-shaped,
   }
 });
 
+test("operator characters inside double quotes are part of a path, not an operator", () => {
+  const home = "/Volumes/R&D;x|y/.claude";
+  const dispatcher = `${entry(home, "pretool", "guard-dispatch.mts")} "${home}/hooks/commit-guard.mts" "${home}/hooks/a;b&c|d.mts"`;
+  assert.equal(managedHookKey(dispatcher, "darwin")?.key, `${home}/hooks/guard-dispatch`);
+  assert.equal(managedHookKey(`${dispatcher} ; other`, "darwin"), undefined);
+});
+
+test("command substitution after the main keeps the command: $(", () => {
+  assert.equal(managedHookKey(`${entry("~/.claude", "reader", "x.mts")} $(other)`, "darwin"), undefined);
+});
+
+test("command substitution after the main keeps the command: backtick", () => {
+  assert.equal(managedHookKey(`${entry("~/.claude", "reader", "x.mts")} \`other\``, "darwin"), undefined);
+});
+
+test("a redirection after the main keeps the command: >", () => {
+  assert.equal(managedHookKey(`${entry("~/.claude", "reader", "x.mts")} > /tmp/out`, "darwin"), undefined);
+});
+
+test("a redirection after the main keeps the command: <", () => {
+  assert.equal(managedHookKey(`${entry("~/.claude", "reader", "x.mts")} < /tmp/in`, "darwin"), undefined);
+});
+
+test("a line break between node, entry, mode and main is not the entry shape", () => {
+  const quoted = ['node\n"~/.claude/kherep/hook-runtime/entry.mts" reader "~/.claude/hooks/x.mts"',
+    'node "~/.claude/kherep/hook-runtime/entry.mts"\nreader "~/.claude/hooks/x.mts"',
+    'node "~/.claude/kherep/hook-runtime/entry.mts" reader\n"~/.claude/hooks/x.mts"',
+    "node ~/.claude/kherep/hook-runtime/entry.mts\treader\r\n~/.claude/hooks/x.mts"];
+  for (const command of quoted) assert.equal(managedHookKey(command, "darwin"), undefined, JSON.stringify(command));
+  assert.ok(managedHookKey('node\t"~/.claude/kherep/hook-runtime/entry.mts"\treader \t"~/.claude/hooks/x.mts"', "darwin"));
+});
+
 test("a main path with . or .. segments, and the Git Bash drive form, keep a key of their own", () => {
   assert.notEqual(managedHookKey(entry("~/.claude", "reader", "sub/../x.mts"), "darwin")?.key, "~/.claude/hooks/x");
   assert.notEqual(managedHookKey(entry("/c/Users/x/.claude", "reader", "x.mts"), "win32")?.key,
