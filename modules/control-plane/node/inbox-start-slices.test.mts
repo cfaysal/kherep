@@ -71,6 +71,8 @@ test("T3: replies that arrive during the settle are kept and settled once each, 
 
 // Review P2-1 (#195): the daemon's own session snapshot refuses a waiting record of a session that is gone while the pass
 // runs. The purge must not remove that record, older than twice the retention, before the refusal is reported.
+// Review of #606 P3-1: with the 2 s margin a pass start read late (at the purge) would still keep the record, so T6 runs
+// without the margin, and the listing waits 100 ms, so the refusal lands beyond a coarse file tick after the pass start.
 test("T6: a record refused during the pass is kept for the next start, not removed before its refusal is reported", async (t) => {
   const node = fixture(t, { inbox: 20, sent: SENT });
   const socket = fakeSocket(t);
@@ -82,7 +84,9 @@ test("T6: a record refused during the pass is kept for the next start, not remov
     JSON.stringify({ reportedAt: at, reportedState: "accepted", workerState: "accepted" }));
   const logs: string[] = [];
   let first = true;
-  const handle = startDaemon(node.config, node.paths, (line) => logs.push(line), async () => [], undefined, undefined, {}, {
+  const listing = async (): Promise<never[]> => { await new Promise((resolve) => setTimeout(resolve, 100)); return []; };
+  const handle = startDaemon(node.config, node.paths, (line) => logs.push(line), listing, undefined, undefined, {}, {
+    touchedMarginMs: 0,
     // The first slice waits until the initial session snapshot refused the record.
     yield: async () => {
       if (first) await until(() => getMessage(node.paths.inbox, waiting)?.state === "refused", logs);
