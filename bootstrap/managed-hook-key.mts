@@ -41,3 +41,25 @@ export function managedHookKey(command: string, platform: string = process.platf
   const path = `${home}/hooks/${main}`;
   return { key: (platform === "win32" ? path.toLowerCase() : path).replace(/\.(?:js|mjs|cjs|mts)$/, ""), main };
 }
+
+// Issues #31 and #590. The key of a control-plane hook, `node "<root>/modules/
+// control-plane/node/<script>" ...`: the script's path from `modules/control-plane/
+// node/` on, without the extension and lower-cased on win32, so the same script
+// has one key whatever root it runs from (the checkout, a worktree, a service
+// source pin, with `/` or `\`). An installer that keyed on the full path never
+// replaced the entries of an install from another root; a node measured 16
+// control-plane entries instead of 8 after `service upgrade` and an install from
+// the pin. Arguments are not part of the key (#31: the wake timeout). Only the
+// bare `node <script>` form is recognised; any other hook is undefined.
+const CONTROL_PLANE_SCRIPT = /^node\s+(?:"([^"]+)"|(\S+))/;
+const CONTROL_PLANE_DIR = "/modules/control-plane/node/";
+
+export function controlPlaneHookKey(command: string, platform: string = process.platform): string | undefined {
+  const match = CONTROL_PLANE_SCRIPT.exec(command);
+  const script = (match?.[1] ?? match?.[2])?.replace(/\\/g, "/");
+  const at = script?.lastIndexOf(CONTROL_PLANE_DIR) ?? -1;
+  if (script === undefined || at < 0) return undefined;
+  const key = script.slice(at + 1).replace(/\.(?:js|mjs|cjs|mts)$/, "");
+  if (key === CONTROL_PLANE_DIR.slice(1)) return undefined;
+  return platform === "win32" ? key.toLowerCase() : key;
+}

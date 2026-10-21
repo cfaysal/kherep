@@ -291,6 +291,14 @@ check_hook_commands() {
     3) drift=1 ;;
     *) printf 'HOOK-CHECK-FAIL %q\n' "$file"; drift=1 ;;
   esac
+  # Issue #590. A control-plane script wired more than once on one event runs
+  # twice; the comparison above missed it while the merge kept both sets.
+  node "$HERE/duplicate-hooks.mts" "$file"; rc=$?
+  case "$rc" in
+    0) ;;
+    3) drift=1 ;;
+    *) printf 'HOOK-CHECK-FAIL %q\n' "$file"; drift=1 ;;
+  esac
 }
 check_hook_commands "$CLAUDE_HOME/settings.json"
 check_hook_commands "$WS/.claude/settings.local.json"
