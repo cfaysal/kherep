@@ -150,6 +150,7 @@ test("2e. a 0-byte lib/guard-recheck.mts is named as imported by both dispatcher
   const result = run(ctx);
   const importers = /lib\/guard-recheck\.mts \(imported by ([^)]*)\)/.exec(String(result.context))?.[1] ?? "";
   assert.match(importers, /kherep-maestro\/codex-hook-adapter\.mts/, String(result.context));
+  assert.match(importers, /kherep-maestro\/codex-shell-checks\.mts/, String(result.context));
   assert.match(importers, /kherep-maestro\/hook-adapter\.mts/, String(result.context));
   assertRestored(ctx, result, "lib/guard-recheck.mts", "claude/hooks/lib/guard-recheck.mts");
 });
