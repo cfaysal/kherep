@@ -5,6 +5,7 @@
 
 import os from "node:os";
 
+import { managedHookKey, type ManagedHookKey } from "./managed-hook-key.mts";
 import { isMacIncompatiblePermission, isMacPosixDirectory } from "./render-profile-paths.mts";
 
 export interface HookCommand {
@@ -153,13 +154,30 @@ function withoutReplacedScripts(entry: HookEntry, scripts: ReadonlySet<string>):
   return { ...entry, hooks: hooks.filter((hook) => !scripts.has(controlPlaneScript(hook) ?? "")) };
 }
 
-export function mergeHooks(source: Record<string, HookEntry[]> = {}, existing: Record<string, HookEntry[]> = {}): Record<string, HookEntry[]> {
+// Issue #568. A managed hook that runs through the hook runtime replaces every
+// existing entry of the same event and matcher group that runs the same main,
+// whatever else differs: a field, the mode, the dispatcher's guard arguments or
+// an operator's edit. The keys come from the template group, never from the
+// merged one. onReplace hears each dropped entry whose identity differed.
+export type OnReplace = (event: string, matcher: string, main: string) => void;
+
+function managedEntry(hook: HookCommand): ManagedHookKey | undefined {
+  return typeof hook?.command === "string" ? managedHookKey(normalizeHookCommand(hook.command)) : undefined;
+}
+
+export function mergeHooks(
+  source: Record<string, HookEntry[]> = {}, existing: Record<string, HookEntry[]> = {}, onReplace: OnReplace = () => {},
+): Record<string, HookEntry[]> {
   const result: Record<string, HookEntry[]> = {};
   for (const event of new Set([...Object.keys(existing), ...Object.keys(source)])) {
     const managed: HookEntry[] = (Array.isArray(source[event]) ? source[event] : [])
       .map((entry) => ({ ...entry, hooks: uniqueHooks([...(entry.hooks || [])]) }));
     const replaced = new Set(managed.flatMap((entry) => (entry.hooks || []).map(controlPlaneScript))
       .filter((script): script is string => script !== undefined));
+    const owned = managed.map((entry) => new Map((entry.hooks || []).flatMap((hook) => {
+      const found = managedEntry(hook);
+      return found ? [[found.key, { hook, main: found.main }] as const] : [];
+    })));
     for (const existingEntry of (Array.isArray(existing[event]) ? existing[event] : [])) {
       const oldEntry = withoutReplacedScripts(existingEntry, replaced);
       // A group that held nothing but replaced entries goes with them.
@@ -167,18 +185,24 @@ export function mergeHooks(source: Record<string, HookEntry[]> = {}, existing: R
       const index = managed.findIndex((entry) => hookKey(entry) === hookKey(oldEntry));
       if (index < 0) {
         if (!emptied) managed.push(oldEntry);
-      } else managed[index] = {
-        ...oldEntry,
-        ...managed[index],
-        hooks: uniqueHooks([...(managed[index].hooks || []), ...(oldEntry.hooks || [])]),
-      };
+        continue;
+      }
+      // A group pushed from the existing file owns nothing.
+      const byMain = owned[index];
+      const kept = (oldEntry.hooks || []).filter((hook) => {
+        const own = byMain?.get(managedEntry(hook)?.key ?? "");
+        if (own === undefined) return true;
+        if (hookIdentity(own.hook) !== hookIdentity(hook)) onReplace(event, hookKey(managed[index]), own.main);
+        return false;
+      });
+      managed[index] = { ...oldEntry, ...managed[index], hooks: uniqueHooks([...(managed[index].hooks || []), ...kept]) };
     }
     result[event] = managed;
   }
   return result;
 }
 
-export function mergeSettings(source: Settings, existing: Settings): Settings {
+export function mergeSettings(source: Settings, existing: Settings, onReplace?: OnReplace): Settings {
   const result: Settings = { ...existing, ...source };
   result.env = { ...(existing.env || {}), ...(source.env || {}) };
   if (source.permissions || existing.permissions) {
@@ -196,7 +220,7 @@ export function mergeSettings(source: Settings, existing: Settings): Settings {
       ]);
     }
   }
-  result.hooks = mergeHooks(source.hooks, existing.hooks);
+  result.hooks = mergeHooks(source.hooks, existing.hooks, onReplace);
   if (source.enabledPlugins || existing.enabledPlugins) {
     result.enabledPlugins = { ...(existing.enabledPlugins || {}), ...(source.enabledPlugins || {}) };
   }

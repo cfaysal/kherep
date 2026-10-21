@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url";
 import { retireCentralBrainHooks } from "./central-brain-retirement.mts";
 import { captureIntercom, intercomValues, renderIntercom } from "./render-intercom.mts";
 import { substituteTemplatePaths, toBashPath, workspaceEnvPath } from "./render-profile-paths.mts";
-import { filterMacPermissions, filterManagedDisallowedPermissions, mergeSettings, unique, type Settings } from "./render-profile-settings.mts";
+import { filterMacPermissions, filterManagedDisallowedPermissions, mergeSettings, unique, type OnReplace, type Settings } from "./render-profile-settings.mts";
 import { readRetiredHomeEntries, retireHookCommands, unwireMovedHooks, userHomeNow } from "./retired-hooks.mts";
 import { errorMessage } from "./shape.mts";
 import { keptHookLines } from "./uncoordinated-hooks.mts";
@@ -79,8 +79,10 @@ export function renderSettings(args: string[], platform: string = process.platfo
   };
   const existingUser = unwire(retired.settings, sourceUser);
   const existingProject = unwire(readJson<Settings>(existingProjectFile, true), sourceProject);
-  const user = mergeSettings(sourceUser, existingUser);
-  const project = mergeSettings(sourceProject, existingProject);
+  // Issue #568. Event, matcher and main come from the template group; nothing operator-written is printed.
+  const replace: OnReplace = (event, matcher, main) => console.log(`hooks: replace ${event}${matcher ? ` [${matcher}]` : ""} hooks/${main}`);
+  const user = mergeSettings(sourceUser, existingUser, replace);
+  const project = mergeSettings(sourceProject, existingProject, replace);
   filterManagedDisallowedPermissions(user);
   filterManagedDisallowedPermissions(project);
   if (profile === "mac") {
