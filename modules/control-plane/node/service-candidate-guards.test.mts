@@ -108,9 +108,12 @@ test("T4(e)/B-7: a stop error that carries a home path reaches no record, CLI fa
     };
   });
   assert.equal(readRecord(h)?.stopCode, "STOP_FAILED_OTHER");
-  for (const text of [fs.readFileSync(candidateFile(h), "utf8"), JSON.stringify(safeServiceFailure(failure)), (await status(h)).text]) {
-    assert.equal(text.includes("x582leak"), false);
-    assert.equal(text.includes("/Users"), false);
+  const recordText = fs.readFileSync(candidateFile(h), "utf8");
+  // The record's binding carries the host's own paths (under /Users on a macOS runner); everything else carries none.
+  const { binding: _binding, ...unbound } = readRecord(h)!;
+  for (const text of [recordText, JSON.stringify(safeServiceFailure(failure)), (await status(h)).text]) assert.equal(text.includes("x582leak"), false);
+  for (const text of [JSON.stringify(unbound), JSON.stringify(safeServiceFailure(failure)), (await status(h)).text]) {
+    assert.equal(text.includes("/Users"), false, text);
   }
 });
 
