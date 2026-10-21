@@ -343,6 +343,27 @@ increments the minor version; every other release increments the patch version.
   outlives it. POSIX behaviour is unchanged except that a genuine
   permission error on the lock file is reported after the same wait of at
   least 200 ms (issue #600).
+- Follow-ups of the start maintenance (issue #589, after issue #581). The
+  sliced inbox purge leaves records whose file was touched within two
+  seconds before the pass began as well as during it: filesystems stamp a
+  write at a coarse tick (Linux one timer tick, NTFS the system time, an
+  ext4 inode without the extra field whole seconds), so a record written
+  just after the pass began could carry a stamp below the pass start and
+  escape the skip; the direction was safe before and the margin only
+  delays retention of such a record to the next start. The daemon's
+  refusal check for sessions that are not running (the first session
+  snapshot after connect, every snapshot and every `session.list`) reads
+  the daemon's inbox index instead of every inbox file, so the inbox is
+  read once after a start instead of twice and later checks stat the
+  records; each refusal is still judged on the record's file, read just
+  before it is rewritten, so a stale copy can delay a refusal but never
+  refuse a record readdressed to a running session. Hooks and the CLI
+  still read the files. The `recorded <n> sent message(s) replied` line
+  counts the records the pass wrote, not those a reply arriving meanwhile
+  had already settled. The offline fallback timer of the maintenance is
+  cleared once the maintenance started. The ordering test's slice count no
+  longer depends on host speed (a fake clock drives the slicer in the
+  test).
 - Control Plane Worker: `agents` moves from 0.24.0 to 0.28.1, and with it
   `@modelcontextprotocol/server` and `@modelcontextprotocol/client` from
   2.0.0 to 2.3.1 and the peer-installed `@modelcontextprotocol/sdk` from

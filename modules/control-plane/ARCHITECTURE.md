@@ -151,9 +151,12 @@ read again only when it is new or its file changed. What runs after an await (th
 window's exchanges, `pollCodexInbound`, `pollCodexQueue`) validates the index
 again. `pollCodexInbound` reads it once for the routing and every ended task, and
 again only after a task that acted; each waiting message it acts on is read from
-its file first. Hooks, the CLI, `refuseUndeliverable` and closed-session delivery
-keep reading the files directly. A failed directory listing throws, as
-`listInbox` does; it is never an empty inbox.
+its file first. In the daemon, the refusal check of each successful session
+listing (`refuseUndeliverable`, issue #589) reads the index too and refuses
+only a record whose file, read just before the write, still waits for an
+ended session. Hooks, the CLI and closed-session delivery keep reading the
+files directly. A failed directory listing throws, as `listInbox` does; it is
+never an empty inbox.
 
 The window pins the socket and the policy actually applied by the last client
 refresh, including a refresh inside MCP polling. Its CP admission runner copy uses that
@@ -699,9 +702,11 @@ the background in slices of about 50 ms (one file operation can overrun a
 slice), off the frame lanes, always settling before it purges. So the
 service health stage, which waits for that connection, never waits for the
 queue. A reply arriving meanwhile is settled on arrival; the sliced purge
-leaves inbox files written since the pass began, such as a record the
-daemon's session snapshot refused meanwhile, to the next start, so a refusal
-is reported before its record goes (issue #195).
+leaves inbox files written since the pass began, or within the two seconds
+before it (file clocks can stamp a write below the pass start,
+`TOUCHED_MARGIN_MS`, issue #589), such as a record the daemon's session
+snapshot refused meanwhile, to the next start, so a refusal is reported
+before its record goes (issue #195).
 Each settle is fail-soft: a failed read or write of `sent/<id>.json` leaves the
 record as it was and is retried at the next read. `deliveryContext` in
 `node/deliver-core.mts` frames both after the intro and marks each shown record
