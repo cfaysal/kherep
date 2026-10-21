@@ -350,6 +350,7 @@ test("installs the post-edit dispatcher and safely upgrades its exact four-hook 
     ["hook-adapter-verdict.mts", path.join(here, "hooks", "hook-adapter-verdict.mts")],
     ["hook-adapter-run.mts", path.join(here, "hooks", "hook-adapter-run.mts")],
     ["research-exec-parser.mts", path.join(here, "hooks", "research-exec-parser.mts")],
+    ["denied-calls.mts", path.join(here, "..", "claude", "hooks", "denied-calls.mts")], // issue #504
     ...["manifest-watch", "loc-watch", "umlaut-translit-watch", "simplify-nudge"]
       .map((name) => [`${name}.mts`, path.join(here, "..", "claude", "hooks", `${name}.mts`)] as const),
   ]);
