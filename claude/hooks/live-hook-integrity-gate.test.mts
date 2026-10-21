@@ -11,6 +11,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 
 import { coordinated, installIntegrity, runIntegrity, runUncoordinated } from "./integrity-sandbox.mts";
+import { ABSOLUTE_PATH } from "./lib/denial-journal.mts";
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "live-hook-gate-")));
 after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ } });
@@ -80,7 +81,9 @@ test("admitted on another hooks directory: nothing is repaired in this home", ()
   const other = path.join(TMP, `other-${++seq}`, "hooks");
   installIntegrity(other);
   const result = runIntegrity(other, box.input, box.env, ["--trigger", "test"]);
-  assert.match(result.stdout, /NOT restored \(the coordinated hooks directory is not /);
+  const line = result.stdout.split(/\r?\n/).find((text) => text.includes("NOT restored (")) ?? "";
+  assert.match(line, /NOT restored \(the coordinated hooks directory is not this installation's hooks\/\)/);
+  assert.doesNotMatch(line, ABSOLUTE_PATH, "issue #564: no home spelled out");
   assert.equal(guard(box), "");
 });
 

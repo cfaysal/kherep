@@ -99,7 +99,7 @@ test("a hanging re-check is killed at its budget and says so", async () => {
 test("a re-check that exits 1 keeps its lines and names the exit code", async () => {
   const script = path.join(TMP, "exit1.mts");
   const text = await runRecheck({ ...base, script });
-  assert.equal(text, `hook integrity re-check (stale heartbeat, last OK none):\n  - one finding\n  - ${script} exited with code 1`);
+  assert.equal(text, `hook integrity re-check (stale heartbeat, last OK none):\n  - one finding\n  - exit1.mts exited with code 1`);
 });
 
 // Issue #564: a caller's label (the Codex adapters pass kherep-maestro/codex-hook-integrity.mts) names the script.

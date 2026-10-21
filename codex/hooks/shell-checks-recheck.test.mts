@@ -172,7 +172,7 @@ test("T7e the command copy of the adapter syntax-broken after a proven run: guar
   const first = call(b);
   assert.equal(first.doc?.hookSpecificOutput?.permissionDecision, undefined, first.stdout);
   assert.ok(String(first.doc?.hookSpecificOutput?.additionalContext)
-    .startsWith(`${adapter} cannot be trusted (size changed since the last proven check)\nhook integrity re-check (guard failure, last OK `),
+    .startsWith("kherep-maestro/codex-hook-adapter.mts cannot be trusted (size changed since the last proven check)\nhook integrity re-check (guard failure, last OK "),
   first.doc?.hookSpecificOutput?.additionalContext);
   assert.ok(pristine(b, "codex-hook-adapter.mts"));
   assert.equal(call(b).stdout, "");

@@ -187,7 +187,7 @@ test("denies a PreToolUse guard's other non-zero exit and leaves every PostToolU
   const failed = runAdapter(failing.guard, "pre", SHELL);
   assert.equal(failed.status, 0);
   assert.equal(denyReason(failed.stdout),
-    `[hook-adapter] ${failing.guard} cannot run (exit code 1); the tool call is blocked until hook integrity restores it`);
+    `[hook-adapter] ${path.basename(failing.guard)} cannot run (exit code 1); the tool call is blocked until hook integrity restores it`);
   assert.equal(withoutTypeStrippingWarning(failed.stderr), "fixture-guard crashed\n");
   const blocking = syntheticGuard(t, "process.stderr.write('fixture-guard post\\n'); process.exit(2);");
   const post = runAdapter(blocking.guard, "post", SHELL);

@@ -133,7 +133,8 @@ test("an unrunnable live-hook-integrity.mts is named and spawns nothing", () => 
   const run = dispatch(b, "json-deny.mts");
   assert.equal(run.output?.permissionDecision, "deny");
   assert.equal(run.output?.permissionDecisionReason, "json says no");
-  assert.ok(String(run.output?.additionalContext).includes(`${path.join(b.hooks, "live-hook-integrity.mts")} cannot run (empty, 0 bytes)`));
+  assert.ok(String(run.output?.additionalContext).includes("\n  - live-hook-integrity.mts cannot run (empty, 0 bytes)"), run.stdout);
+  assert.ok(!String(run.output?.additionalContext).includes(b.hooks), "named inside hooks/, not by its path (issue #564)");
   assert.deepEqual(traced(b), []);
 });
 
@@ -143,7 +144,8 @@ test("an empty lib/guard-recheck.mts is one unavailable line; the verdict is unc
   const run = dispatch(b, "json-deny.mts");
   assert.equal(run.output?.permissionDecision, "deny");
   assert.equal(run.output?.permissionDecisionReason, "json says no");
-  assert.match(String(run.output?.additionalContext), /^hook integrity re-check unavailable \(lib\/guard-recheck\.mts cannot be loaded: /);
+  // An empty lib loads as an empty module; calling its missing recheckAfter is a TypeError (issue #564: no message).
+  assert.match(String(run.output?.additionalContext), /^hook integrity re-check unavailable \(lib\/guard-recheck\.mts cannot be loaded \(TypeError\)\)$/);
   assert.deepEqual(traced(b), []);
 });
 

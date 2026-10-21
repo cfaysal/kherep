@@ -133,7 +133,7 @@ test("no wired file: no lock, no heartbeat, no cache directory", () => {
   fs.writeFileSync(path.join(box.claude, "settings.user.json"), JSON.stringify({ hooks: {} }));
   const result = run(box);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /^heartbeat not written \(no hook file is wired under /);
+  assert.match(result.stdout, /^heartbeat not written \(no hook file is wired\)$/m);
   assert.equal(fs.existsSync(path.join(box.claude, ".cache")), false);
 });
 
