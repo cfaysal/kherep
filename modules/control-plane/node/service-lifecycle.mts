@@ -23,6 +23,8 @@ export const STOP_TIMEOUT_MS = 75_000;
 // The default poll deadline, also of the admission wait: the health stage waits this long for the new daemon's
 // authenticated connection, which no longer waits for the start maintenance (#581).
 export const HEALTH_TIMEOUT_MS = 30_000;
+// The health wait of restorePrior: the prior source may predate #581 and run its start maintenance before connect.
+export const ROLLBACK_HEALTH_TIMEOUT_MS = 180_000;
 const exact = (left: Buffer, right: Buffer): boolean => left.equals(right);
 const recoveryError = (code: string, message: string): Error & { code: string } => Object.assign(new Error(message), { code });
 const wait = (milliseconds: number): Promise<void> => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -194,7 +196,8 @@ export async function restorePrior(input: RecoveryInput): Promise<void> {
       ? issueServiceLaunchPermit(input.deps.paths, input.previousBinding) : () => {};
     try {
       await input.deps.adapter.start(input.previousBinding);
-      await healthy(input.previousBinding, undefined, input.deps, true);
+      await healthy(input.previousBinding, undefined,
+        { ...input.deps, timeoutMs: input.deps.timeoutMs ?? ROLLBACK_HEALTH_TIMEOUT_MS }, true);
     } finally { clearPermit(); }
   }
 }
