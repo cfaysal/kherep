@@ -687,11 +687,21 @@ receipt. A reply that reaches this node by the Worker's replied rule
 (`repliesTo`, also used by `msg status`) records the sent message `replied`
 (issue #520): the daemon on arrival (`settleReplied`), the delivery hook at its
 next read (`unnoticedNotices`, which therefore writes), and every daemon start
-before its inbox purge (`settleAnsweredAtStart` in `startInboxMaintenance`,
+before its inbox purge (`settleAnsweredSteps` in `inboxMaintenanceSteps`,
 `node/inbox-start.mts`). The Worker cannot do it: it deletes the row on the
 sender's ack of `delivered`, so a later reply finds no row to mark. The purge
-at daemon start is the only inbox purge and runs at every service restart or
-upgrade; with the settle before it, the inbox's 7-day retention plays no part.
+at daemon start (`purgeInboxSteps`, `node/inbox-purge.mts`) is the only inbox
+purge and runs at every service restart or upgrade; with the settle before it,
+the inbox's 7-day retention plays no part. Since issue #581 this start
+maintenance runs once per daemon process after its first authenticated
+connection, or 60 s after its start without one (`runInboxMaintenance`), in
+the background in slices of about 50 ms (one file operation can overrun a
+slice), off the frame lanes, always settling before it purges. So the
+service health stage, which waits for that connection, never waits for the
+queue. A reply arriving meanwhile is settled on arrival; the sliced purge
+leaves inbox files written since the pass began, such as a record the
+daemon's session snapshot refused meanwhile, to the next start, so a refusal
+is reported before its record goes (issue #195).
 Each settle is fail-soft: a failed read or write of `sent/<id>.json` leaves the
 record as it was and is retried at the next read. `deliveryContext` in
 `node/deliver-core.mts` frames both after the intro and marks each shown record
