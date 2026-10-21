@@ -1,0 +1,142 @@
+// Issue #568. mergeHooks replaces an existing entry-form hook that runs the
+// same managed main in the same event and matcher group, whatever else
+// differs, and reports each replaced entry whose identity differed. The
+// template invariants the rule relies on, and its parity with the gate's
+// coordinated() shape, are checked here too.
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { after, test } from "node:test";
+
+import { wiredFiles } from "../claude/hooks/lib/hook-inventory.mts";
+import { normalizePathLike } from "../claude/hooks/lib/workspace-scope.mts";
+import { managedHookKey } from "./managed-hook-key.mts";
+import { substituteTemplatePaths } from "./render-profile-paths.mts";
+import { mergeHooks, normalizeHookCommand, type HookCommand, type HookEntry } from "./render-profile-settings.mts";
+
+// A synthetic user home: os.homedir() reads HOME, on Windows USERPROFILE. No live file is read.
+const FAKE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "managed-hook-home-"));
+const SAVED_HOME = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+process.env.HOME = FAKE_HOME;
+process.env.USERPROFILE = FAKE_HOME;
+after(() => {
+  for (const [name, value] of Object.entries(SAVED_HOME)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  fs.rmSync(FAKE_HOME, { recursive: true, force: true });
+});
+
+const ENTRY = 'node "~/.claude/kherep/hook-runtime/entry.mts"';
+const hook = (mode: string, main: string, extra: Record<string, unknown> = {}): HookCommand =>
+  ({ type: "command", command: `${ENTRY} ${mode} "~/.claude/hooks/${main}"`, ...extra });
+
+function merge(source: Record<string, HookEntry[]>, existing: Record<string, HookEntry[]>) {
+  const replaced: string[] = [];
+  const merged = mergeHooks(source, existing, (event, matcher, main) => replaced.push(`${event}|${matcher}|${main}`));
+  return { merged, replaced, commands: (event: string) => merged[event]!.map((group) => (group.hooks || []).map((h) => `${h.command}${h.timeout === undefined ? "" : ` t=${h.timeout}`}`)) };
+}
+
+test("same main, another timeout: one entry with the template's fields, reported once", () => {
+  const r = merge({ SubagentStop: [{ matcher: "claude-obs", hooks: [hook("reader", "o.mts", { timeout: 30 })] }] },
+    { SubagentStop: [{ matcher: "claude-obs", hooks: [hook("reader", "o.mts")] }] });
+  assert.deepEqual(r.commands("SubagentStop"), [[`${ENTRY} reader "~/.claude/hooks/o.mts" t=30`]]);
+  assert.deepEqual(r.replaced, ["SubagentStop|claude-obs|o.mts"]);
+});
+
+test("same main, another mode or other arguments: one entry; an identical copy goes silently", () => {
+  const r = merge({ PreToolUse: [{ matcher: "Bash", hooks: [hook("pretool", 'd.mts" "~/.claude/hooks/g1.mts')] }] },
+    { PreToolUse: [{ matcher: "Bash", hooks: [hook("reader", "d.mts"), hook("pretool", 'd.mts" "~/.claude/hooks/g1.mts'),
+      hook("pretool", 'd.mts" "~/.claude/hooks/g0.mts')] }] });
+  assert.deepEqual(r.commands("PreToolUse"), [[`${ENTRY} pretool "~/.claude/hooks/d.mts" "~/.claude/hooks/g1.mts"`]]);
+  assert.deepEqual(r.replaced, ["PreToolUse|Bash|d.mts", "PreToolUse|Bash|d.mts"]);
+});
+
+test("a .js entry and main from before the rename are the managed .mts entry", () => {
+  const r = merge({ Stop: [{ matcher: "", hooks: [hook("reader", "o.mts")] }] },
+    { Stop: [{ matcher: "", hooks: [{ type: "command", command: 'node "~/.claude/kherep/hook-runtime/entry.js" reader "~/.claude/hooks/o.js"', timeout: 5 }] }] });
+  assert.deepEqual(r.commands("Stop"), [[`${ENTRY} reader "~/.claude/hooks/o.mts"`]]);
+  assert.deepEqual(r.replaced, ["Stop||o.mts"]);
+});
+
+test("another main in the group, the same main at another matcher, and other forms stay", () => {
+  const other = { type: "command", command: 'node "/other/.claude/kherep/hook-runtime/entry.mts" reader "/other/.claude/hooks/o.mts"' };
+  const r = merge({ SubagentStop: [{ matcher: "claude-obs", hooks: [hook("reader", "o.mts")] }] },
+    { SubagentStop: [{ matcher: "claude-obs", hooks: [hook("reader", "mine.mts"), other, { type: "command", command: "claude-baton x" }] },
+      { matcher: "my-agent", hooks: [hook("reader", "o.mts", { timeout: 5 })] }] });
+  assert.equal(r.merged.SubagentStop!.length, 2);
+  assert.equal(r.merged.SubagentStop![0]!.hooks!.length, 4);
+  assert.deepEqual(r.commands("SubagentStop")[1], [`${ENTRY} reader "~/.claude/hooks/o.mts" t=5`]);
+  assert.deepEqual(r.replaced, []);
+});
+
+test("two existing groups with the template's matcher keep the operator's main in both (map from the template group)", () => {
+  const r = merge({ SubagentStop: [{ matcher: "claude-obs", hooks: [hook("reader", "o.mts")] }] },
+    { SubagentStop: [{ matcher: "claude-obs", hooks: [hook("reader", "mine.mts", { timeout: 1 })] },
+      { matcher: "claude-obs", hooks: [hook("reader", "mine.mts", { timeout: 2 })] }] });
+  assert.equal(r.commands("SubagentStop")[0]!.filter((c) => c.includes("mine.mts")).length, 2);
+  assert.deepEqual(r.replaced, []);
+});
+
+test("a backslash and %USERPROFILE% spelling of the rendered home is the managed entry", () => {
+  const home = os.homedir();
+  const rendered = `node "${home}/.claude/kherep/hook-runtime/entry.mts" reader "${home}/.claude/hooks/o.mts"`;
+  const r = merge({ Stop: [{ matcher: "", hooks: [{ type: "command", command: rendered }] }] },
+    { Stop: [{ matcher: "", hooks: [{ type: "command", command: 'node "%USERPROFILE%\\.claude\\kherep\\hook-runtime\\entry.mts" reader "%USERPROFILE%\\.claude\\hooks\\o.mts"', timeout: 4 }] }] });
+  assert.deepEqual(r.commands("Stop"), [[rendered]]);
+  assert.deepEqual(r.replaced, ["Stop||o.mts"]);
+});
+
+test("control-plane scripts stay with the #31 rule; without a callback nothing is reported", () => {
+  const wake = (t: number) => ({ type: "command", command: `node "/repo/modules/control-plane/node/wake-hook.mts" --timeout ${t}`, timeout: t });
+  assert.equal(managedHookKey(normalizeHookCommand(wake(1).command)), undefined);
+  const merged = mergeHooks({ Stop: [{ matcher: "", hooks: [wake(2)] }] }, { Stop: [{ matcher: "", hooks: [wake(1), hook("reader", "o.mts")] }] });
+  assert.deepEqual(merged.Stop!.map((g) => (g.hooks || []).map((h) => h.timeout ?? "-")), [[2, "-"]]);
+});
+
+// T6. The rule keys on (event, matcher, main) and finds the template group by
+// matcher, so the template must hold each key once and each matcher once per
+// event; and it must recognise exactly what live-hook-integrity calls coordinated.
+const SOURCE = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "claude", "settings.user.json"), "utf8"));
+const HOMES = process.platform === "win32"
+  ? ["C:\\Users\\x\\.claude", "D:\\Claude Home\\.claude", path.join(os.homedir(), ".claude")]
+  : ["/example/.claude", path.join(os.homedir(), ".claude"), "/Volumes/My Disk/.claude"];
+const PROFILE = process.platform === "win32" ? "win" : "mac";
+
+for (const home of HOMES) {
+  const rendered = substituteTemplatePaths(SOURCE, PROFILE, "/example/Kherep", "/example/credentials", home) as { hooks: Record<string, HookEntry[]> };
+  const label = home === path.join(os.homedir(), ".claude") ? "<HOME>/.claude" : home;
+
+  test(`T6 template invariants hold for ${label}`, () => {
+    const keys = new Set<string>();
+    let entries = 0;
+    for (const [event, groups] of Object.entries(rendered.hooks)) {
+      const matchers = groups.map((group) => group.matcher ?? "");
+      assert.equal(new Set(matchers).size, matchers.length, `${event}: two groups share a matcher`);
+      for (const group of groups) for (const h of group.hooks || []) {
+        const found = managedHookKey(normalizeHookCommand(h.command!));
+        if (/[\\/]kherep[\\/]hook-runtime[\\/]entry\.mts"/.test(h.command!)) {
+          entries++;
+          assert.ok(found, `${event}: entry-form command not recognised`);
+        } else assert.equal(found, undefined, `${event}: non-entry command recognised`);
+        if (!found) continue;
+        const key = `${event}|${group.matcher ?? ""}|${found.key}`;
+        assert.ok(!keys.has(key), `duplicate managed key ${key}`);
+        keys.add(key);
+      }
+    }
+    assert.ok(entries > 0, "the template rendered no entry-form command");
+    assert.equal(keys.size, entries);
+  });
+
+  test(`coordinated() parity for ${label}`, () => {
+    const gateHome = normalizePathLike(home);
+    const enoent = Object.assign(new Error("absent"), { code: "ENOENT" });
+    for (const [event, groups] of Object.entries(rendered.hooks)) for (const group of groups) for (const h of group.hooks || []) {
+      const { files, uncoordinated } = wiredFiles(gateHome, (name) => {
+        if (name === "settings.json") return JSON.stringify({ hooks: { [event]: [{ hooks: [h] }] } });
+        throw enoent;
+      });
+      const coordinated = files.length > 0 && uncoordinated.length === 0;
+      assert.equal(managedHookKey(normalizeHookCommand(h.command!)) !== undefined, coordinated, `${event} [${group.matcher}]`);
+    }
+  });
+}
