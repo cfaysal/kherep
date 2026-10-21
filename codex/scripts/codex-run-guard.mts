@@ -6,8 +6,8 @@
 // - skip drift: the skipped tests differ from the accepted list for the
 //   platform in codex-run-expected.json (a runner image that loses pwsh or
 //   symlink rights turns tests into skips and stays green otherwise).
-// Also todo, fail and cancelled must be zero, the skip records must match
-// `# skipped`, and a skipped suite, which hides its tests, is refused.
+// Also todo, fail and cancelled must be zero, every summary counter must agree
+// with the records (C4, C8), and a skipped suite, which hides its tests, is refused.
 //
 //   node codex/scripts/codex-run-guard.mts run --platform <p> [--tap <file>] [--repo <dir>] [--expected <json>]
 //   node codex/scripts/codex-run-guard.mts check <tap-file> --platform <p> [--repo <dir>] [--expected <json>]
@@ -27,8 +27,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 import { errorCode, errorMessage } from "../../bootstrap/shape.mts";
-import { compareSkips, formatSkips, observedSkips, parseTap } from "./codex-run-tap.mts";
-import type { ParsedTap, SkipEntry } from "./codex-run-tap.mts";
+import { compareSkips, formatSkips, observedSkips, parseTap, reconcile, type ParsedTap, type SkipEntry } from "./codex-run-tap.mts";
 
 const REPO = path.resolve(import.meta.dirname, "../..");
 const EXPECTED = path.join(import.meta.dirname, "codex-run-expected.json");
@@ -108,6 +107,7 @@ export function evaluate({ parsed, expected, platform, selection }: Evaluation):
   for (const entry of missing) drift(`C3 missing skip ${JSON.stringify(entry)}`);
   for (const entry of extra) drift(`C3 extra skip ${JSON.stringify(entry)}`);
   if (observed.length !== summary.skipped) drift(`C4 ${observed.length} skip records but # skipped ${summary.skipped}`);
+  for (const line of reconcile(parsed)) fail(`C8 ${line}`);
   const todos = records.filter((record) => record.directive === "TODO").map((record) => record.name);
   if (summary.todo || todos.length) fail(`C5 todo ${summary.todo}, TODO records: ${todos.join("; ") || "none"}`);
   if (summary.fail) fail(`C6 fail ${summary.fail}`);

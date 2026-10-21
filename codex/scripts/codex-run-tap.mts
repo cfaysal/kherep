@@ -15,6 +15,7 @@
 
 export interface TapRecord {
   name: string;
+  ok: boolean;
   depth: number;
   directive: "SKIP" | "TODO" | null;
   reason: string | null;
@@ -23,12 +24,12 @@ export interface TapRecord {
 export interface TapSummary {
   tests: number; suites: number; pass: number; fail: number; cancelled: number; skipped: number; todo: number;
 }
-export interface ParsedTap { summary: TapSummary; records: TapRecord[] }
+export interface ParsedTap { summary: TapSummary; plan: number; records: TapRecord[] } // plan: the final `1..N`
 export interface SkipEntry { name: string; reason: string | null }
 
 const SUMMARY_KEYS = ["tests", "suites", "pass", "fail", "cancelled", "skipped", "todo"] as const;
 const SUMMARY_LINES = SUMMARY_KEYS.length + 2; // plan line, the keys, duration_ms
-const RECORD = /^((?: {4})*)(?:ok|not ok) \d+(?: - (.*))?$/;
+const RECORD = /^((?: {4})*)(ok|not ok) \d+(?: - (.*))?$/;
 const DIRECTIVE = /^(.*?) # (SKIP|TODO)(?: (.*))?$/;
 
 function malformed(detail: string): Error {
@@ -40,9 +41,9 @@ export function unescapeTap(text: string): string {
 }
 
 // The summary block and the lines before it.
-function readSummary(lines: string[]): { summary: TapSummary; body: string[] } {
+function readSummary(lines: string[]): { summary: TapSummary; plan: number; body: string[] } {
   const block = lines.slice(-SUMMARY_LINES);
-  const plan = /^1\.\.\d+$/.test(block[0] ?? "");
+  const plan = /^1\.\.(\d+)$/.exec(block[0] ?? "");
   const duration = /^# duration_ms \d+(?:\.\d+)?$/.test(block[block.length - 1] ?? "");
   if (block.length !== SUMMARY_LINES || !plan || !duration) throw malformed("no summary block at end of file");
   const summary = {} as TapSummary;
@@ -51,7 +52,7 @@ function readSummary(lines: string[]): { summary: TapSummary; body: string[] } {
     if (!match) throw malformed("no summary block at end of file");
     summary[key] = Number(match[1]);
   });
-  return { summary, body: lines.slice(0, -SUMMARY_LINES) };
+  return { summary, plan: Number(plan[1]), body: lines.slice(0, -SUMMARY_LINES) };
 }
 
 // The YAML block that must directly follow the record at `index`: its `type:`
@@ -71,18 +72,19 @@ function yamlBlock(lines: string[], index: number, indent: string): { type: stri
 export function parseTap(text: string): ParsedTap {
   const lines = text.split(/\r?\n/);
   while (lines.length && lines[lines.length - 1] === "") lines.pop();
-  const { summary, body } = readSummary(lines);
+  const { summary, plan, body } = readSummary(lines);
   const records: TapRecord[] = [];
   for (let index = 0; index < body.length; index++) {
     const match = RECORD.exec(body[index]);
     if (!match) continue;
-    const [, indent, rest = ""] = match;
+    const [, indent, status, rest = ""] = match;
     const directive = DIRECTIVE.exec(rest);
     const name = unescapeTap(directive ? directive[1] : rest);
     const yaml = yamlBlock(body, index, indent);
     if (yaml === null) throw malformed(`record without type: ${name}`);
     records.push({
       name,
+      ok: status === "ok",
       depth: indent.length / 4,
       directive: directive ? (directive[2] as "SKIP" | "TODO") : null,
       reason: directive && directive[3] !== undefined ? unescapeTap(directive[3]) : null,
@@ -90,7 +92,7 @@ export function parseTap(text: string): ParsedTap {
     });
     index = yaml.end; // a YAML block (an error message, a stack) never yields a record
   }
-  return { summary, records };
+  return { summary, plan, records };
 }
 
 // The skipped tests in TAP order, in the entry shape of codex-run-expected.json.
@@ -119,4 +121,26 @@ function minus(a: SkipEntry[], b: SkipEntry[]): SkipEntry[] {
 
 export function compareSkips(expected: SkipEntry[], observed: SkipEntry[]): { missing: SkipEntry[]; extra: SkipEntry[] } {
   return { missing: minus(expected, observed), extra: minus(observed, expected) };
+}
+
+// Node counts (countCompletedTest, the same in 22.18.0, 24.1.0, 24.22.0 and 26.10.0): the plan
+// `1..N` counts the depth-0 records of either type; a suite record goes to `suites` only; a test
+// record goes to `tests` and to exactly one of skipped (SKIP directive), todo (TODO directive),
+// or, without a directive, cancelled or fail (both `not ok`, told apart only by the YAML
+// failureType) or pass. `# EXPECTED FAILURE` (24.22+) is deliberately not a directive here: Node
+// counts such a record in pass or fail by its ok status, as these rows do. The skipped equation
+// is C4; the rows here are the rest, in C4's wording (issue #578).
+export function reconcile({ summary, plan, records }: ParsedTap): string[] {
+  const tests = records.filter((record) => record.type === "test");
+  const count = (pick: (record: TapRecord) => boolean) => tests.filter(pick).length;
+  const { fail, cancelled } = summary;
+  const rows: [number, string, number, string][] = [
+    [tests.length, "test records", summary.tests, `# tests ${summary.tests}`],
+    [records.filter((record) => record.type === "suite").length, "suite records", summary.suites, `# suites ${summary.suites}`],
+    [count((record) => record.ok && !record.directive), "passing records", summary.pass, `# pass ${summary.pass}`],
+    [count((record) => !record.ok && !record.directive), "failing records", fail + cancelled, `# fail ${fail} + # cancelled ${cancelled}`],
+    [count((record) => record.directive === "TODO"), "TODO records", summary.todo, `# todo ${summary.todo}`],
+    [records.filter((record) => record.depth === 0).length, "top-level records", plan, `1..${plan}`],
+  ];
+  return rows.filter(([observed, , counted]) => observed !== counted).map(([observed, what, , shown]) => `${observed} ${what} but ${shown}`);
 }
