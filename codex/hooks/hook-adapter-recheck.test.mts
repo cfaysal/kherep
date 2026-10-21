@@ -131,7 +131,7 @@ test("no heartbeat: re-checked with last OK none", (t) => {
   assert.equal(traced(b).length, 1);
   // No heartbeat is no peers record either (issue #507, part 4): the peer line comes first.
   assert.match(String(run.output?.additionalContext),
-    /^\S+codex-shell-checks\.mts cannot be trusted \(no proven record\)\nhook integrity re-check \(no heartbeat, last OK none\):\n {2}- all 2 files OK/);
+    /^kherep-maestro\/codex-shell-checks\.mts cannot be trusted \(no proven record\)\nhook integrity re-check \(no heartbeat, last OK none\):\n {2}- all 2 files OK/);
 });
 
 test("a stale heartbeat next to a policy deny: the deny and its reason stay, systemMessage and stderr carry the block", (t) => {
@@ -165,7 +165,7 @@ test("an unrunnable codex-hook-integrity.mts is named and spawns nothing", (t) =
   fs.writeFileSync(script, "");
   const run = call(b, "json-deny.mts");
   assert.equal(run.output?.permissionDecisionReason, "json says no");
-  assert.ok(run.stderr.includes(`${script} cannot run (empty, 0 bytes)`), run.stderr);
+  assert.ok(run.stderr.includes("kherep-maestro/codex-hook-integrity.mts cannot run (empty, 0 bytes)"), run.stderr);
   assert.deepEqual(traced(b), []);
 });
 
@@ -174,7 +174,7 @@ test("an empty lib/guard-recheck.mts is one unavailable line; the verdict is unc
   fs.writeFileSync(path.join(b.dir, "lib", "guard-recheck.mts"), "");
   const run = call(b, "json-deny.mts");
   assert.equal(run.output?.permissionDecisionReason, "json says no");
-  assert.match(run.stderr, /hook integrity re-check unavailable \(lib\/guard-recheck\.mts cannot be loaded: /);
+  assert.match(run.stderr, /hook integrity re-check unavailable \(lib\/guard-recheck\.mts cannot be loaded \(TypeError\)\)/);
   assert.deepEqual(traced(b), []);
 });
 
@@ -219,7 +219,7 @@ test("T10a a fresh heartbeat, the peer emptied: allow, one run naming it, restor
   fs.writeFileSync(b.peer, "");
   const run = call(b, "allow.mts");
   assert.equal(run.output?.permissionDecision, undefined, run.stdout);
-  assert.equal(firstLine(run), `${b.peer} cannot be trusted (empty, 0 bytes)`);
+  assert.equal(firstLine(run), "kherep-maestro/codex-shell-checks.mts cannot be trusted (empty, 0 bytes)");
   assert.ok(restoredPeer(b));
   assert.equal(call(b, "allow.mts").stdout, "");
   assert.equal(runs(b), 1);
@@ -232,7 +232,7 @@ for (const sameSize of [true, false]) {
     fs.writeFileSync(b.peer, sameSize ? `${BROKEN}//${"x".repeat(size - BROKEN.length - 2)}` : BROKEN);
     assert.equal(fs.statSync(b.peer).size === size, sameSize);
     const run = call(b, "allow.mts");
-    assert.equal(firstLine(run), `${b.peer} cannot be trusted (${sameSize ? "mtime" : "size"} changed since the last proven check)`);
+    assert.equal(firstLine(run), `kherep-maestro/codex-shell-checks.mts cannot be trusted (${sameSize ? "mtime" : "size"} changed since the last proven check)`);
     assert.ok(restoredPeer(b));
     assert.equal(call(b, "allow.mts").stdout, "");
     assert.equal(runs(b), 1);
@@ -268,7 +268,7 @@ for (const swap of ["hard link", "symlink"] as const) {
     }
     assert.ok(fs.statSync(b.peer).mtimeMs < fs.statSync(b.beat).mtimeMs, "older than the heartbeat");
     const run = call(b, "allow.mts");
-    assert.equal(firstLine(run), `${b.peer} cannot be trusted (inode changed since the last proven check)`);
+    assert.equal(firstLine(run), "kherep-maestro/codex-shell-checks.mts cannot be trusted (inode changed since the last proven check)");
     assert.equal(runs(b), 1);
   });
 }
@@ -278,7 +278,7 @@ for (const [label, body] of [["no record of this peer", '{"peers":{"hook-adapter
     const b = box(t, null);
     writeBeat(b, 0, body);
     const run = call(b, "allow.mts");
-    assert.equal(firstLine(run), `${b.peer} cannot be trusted (no proven record)`);
+    assert.equal(firstLine(run), "kherep-maestro/codex-shell-checks.mts cannot be trusted (no proven record)");
     assert.equal(runs(b), 1);
     assert.equal(call(b, "allow.mts").stdout, "", "the run recorded the peer");
   });

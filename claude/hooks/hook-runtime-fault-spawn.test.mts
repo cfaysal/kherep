@@ -5,8 +5,7 @@
 // catch), or only the integrity writer's spawn gets a missing executable. The
 // re-check lib is driven in this process with process.execPath swapped. Each
 // case keeps the deny, prints codes and fixed text only, and starts nothing.
-// The dispatcher's reasons still name guards by absolute path; that convention
-// is a separate issue and is not asserted here.
+// The dispatcher names a guard by its path inside hooks/ (issue #564).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -55,7 +54,8 @@ test("P4 dispatcher: a guard that cannot be spawned is a deny with the code only
   assert.equal(run.status, 0);
   const output = JSON.parse(run.stdout).hookSpecificOutput;
   assert.equal(output.permissionDecision, "deny");
-  assert.equal(output.permissionDecisionReason, `[guard-dispatch] ${run.guard} cannot run (spawn failed (ENOENT)); the tool call is blocked until hook integrity restores it`);
+  assert.equal(output.permissionDecisionReason, "[guard-dispatch] allow.mts cannot run (spawn failed (ENOENT)); the tool call is blocked until hook integrity restores it");
+  assert.ok(!run.stdout.includes(path.dirname(run.guard)), run.stdout);
   assert.doesNotMatch(run.stdout + run.stderr, RAW);
 });
 

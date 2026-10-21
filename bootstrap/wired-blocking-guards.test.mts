@@ -250,7 +250,7 @@ test("a 0-byte or missing PreToolUse guard denies every call and names its file"
     for (const breakGuard of [() => fs.writeFileSync(file, ""), () => fs.rmSync(file)]) {
       breakGuard();
       for (const run of [...guard.blocking, guard.benign].map((item) => runCase(wiredCommand(guard.hook), item, home))) {
-        assert.ok(run.status === 0 && run.permission === "deny" && String(run.reason).includes(`${path.resolve(file)} cannot run`),
+        assert.ok(run.status === 0 && run.permission === "deny" && String(run.reason).includes(`[guard-dispatch] ${guard.hook} cannot run`),
           `${guard.hook}: ${JSON.stringify(run)}`);
       }
     }

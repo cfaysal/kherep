@@ -57,7 +57,7 @@ for (const [name, why] of [
     const { output } = dispatch(name);
     assert.equal(output?.permissionDecision, "deny", JSON.stringify(output));
     assert.ok(String(output?.permissionDecisionReason)
-      .includes(`${path.join(HOOKS, name)} cannot run (stdout is not a PreToolUse decision ${why})`), JSON.stringify(output));
+      .includes(`[guard-dispatch] ${name} cannot run (stdout is not a PreToolUse decision ${why})`), JSON.stringify(output));
   });
 }
 

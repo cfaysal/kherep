@@ -87,10 +87,12 @@ function verdict(run: Run): Printed {
   return parsed.hookSpecificOutput;
 }
 
+// Named by its path inside hooks/, here its file name (issue #564), never by the directory it is in.
 function assertFailureDeny(run: Run, file: string): void {
   const result = verdict(run);
   assert.equal(result.permissionDecision, "deny", run.stdout);
-  assert.ok(result.permissionDecisionReason.includes(`[guard-dispatch] ${file} cannot run (`), result.permissionDecisionReason);
+  assert.ok(result.permissionDecisionReason.includes(`[guard-dispatch] ${path.basename(file)} cannot run (`), result.permissionDecisionReason);
+  assert.ok(!result.permissionDecisionReason.includes(path.dirname(file)), result.permissionDecisionReason);
   assert.ok(result.permissionDecisionReason.includes("the tool call is blocked until hook integrity restores it"));
 }
 
@@ -121,14 +123,14 @@ describe("a guard that cannot run denies the tool call and names its file", { co
   test("a guard outside the dispatcher's directory", async () => {
     const run = await dispatch([OUTSIDE]);
     assertFailureDeny(run, OUTSIDE);
-    assert.match(verdict(run).permissionDecisionReason, /outside /);
+    assert.match(verdict(run).permissionDecisionReason, / cannot run \(outside the hooks directory\); /);
   });
 
   test("a guard under hooks/ that is a symlink to a file outside it", async (t) => {
     if (linkError) return t.skip(`cannot create a file symlink: ${linkError}`);
     const run = await dispatch([guard("allow.mts"), LINKED]);
     assertFailureDeny(run, LINKED);
-    assert.match(verdict(run).permissionDecisionReason, /outside /);
+    assert.match(verdict(run).permissionDecisionReason, / cannot run \(outside the hooks directory\); /);
   });
 
   test("malformed stdin", async () => {
@@ -168,7 +170,7 @@ describe("working guards keep their verdicts", () => {
   test("exit 2 without stderr names the file", async () => {
     const result = verdict(await dispatch([guard("exit2-silent.mts")]));
     assert.equal(result.permissionDecisionReason,
-      `${guard("exit2-silent.mts")} blocked this tool call without giving a reason`);
+      "exit2-silent.mts blocked this tool call without giving a reason");
   });
 
   test("a JSON deny passes through", async () => {

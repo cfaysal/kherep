@@ -44,7 +44,7 @@ test("T1.1 a guard that ignores SIGTERM is killed at its cap and denied as timed
   const result = runAdaptedHook(guard, "pre", SHELL, 300, { deadline: Date.now() + 8_500 });
   assert.ok(Date.now() - begin < 1000, `took ${Date.now() - begin} ms`);
   assert.equal(result.status, 0);
-  assert.equal(reasonOf(result.stdout), `[hook-adapter] ${guard} cannot run (timed out after 0.3 s); the tool call is blocked until hook integrity restores it`);
+  assert.equal(reasonOf(result.stdout), "[hook-adapter] fixture-guard.mts cannot run (timed out after 0.3 s); the tool call is blocked until hook integrity restores it");
   assert.equal(result.broken, true);
 });
 
@@ -117,13 +117,14 @@ test("T1.8 a fractional deadline or cap reaches spawnSync as an integer: the hea
   assert.equal(fs.readFileSync(log, "utf8"), "ran\nran\n");
 });
 
-test("T1.9 a spawn that throws synchronously is a deny naming the error, not a broken file", (t) => {
+test("T1.9 a spawn that throws synchronously is a deny naming the error code, not a broken file", (t) => {
   const { guard } = fixture(t, "");
   const result = runAdaptedHook(guard, "pre", SHELL, 5_000, {
     spawn: () => { throw Object.assign(new RangeError("x"), { code: "ERR_OUT_OF_RANGE" }); },
   });
   assert.equal(result.status, 0);
-  assert.match(reasonOf(result.stdout), /fixture-guard\.mts cannot run \(spawn threw \(ERR_OUT_OF_RANGE: x\)\)/);
+  assert.match(reasonOf(result.stdout), /fixture-guard\.mts cannot run \(spawn threw \(ERR_OUT_OF_RANGE\)\)/);
+  assert.doesNotMatch(reasonOf(result.stdout), /: x\)/, "the code only, never the message (issue #564)");
   assert.equal(result.broken, false);
 });
 
@@ -155,7 +156,7 @@ test("a printed ask is a deny: Codex has no ask", (t) => {
   const { guard } = fixture(t, `process.stdout.write(${JSON.stringify(ask)});`);
   const run = runAdapter([guard, "pre"]);
   assert.equal(run.status, 0, run.stderr);
-  assert.equal(reasonOf(run.stdout), `${guard} asked for confirmation; Codex has no ask, so the call is denied`);
+  assert.equal(reasonOf(run.stdout), "fixture-guard.mts asked for confirmation; Codex has no ask, so the call is denied");
 });
 
 test("a guard that is missing, empty, no regular file, exits 1, prints no decision, is killed or floods stdout is a deny", (t) => {
@@ -179,7 +180,8 @@ test("a guard that is missing, empty, no regular file, exits 1, prints no decisi
   for (const [file, why] of [[path.join(dir, "missing.mts"), "missing"], [empty, "empty, 0 bytes"], [dir, "not a regular file"]]) {
     const run = runAdapter([file, "pre-privacy"]);
     assert.equal(run.status, 0, run.stderr);
-    assert.equal(reasonOf(run.stdout), `[hook-adapter] ${file} cannot run (${why}); the tool call is blocked until hook integrity restores it`);
+    assert.equal(reasonOf(run.stdout), `[hook-adapter] ${path.basename(file)} cannot run (${why}); the tool call is blocked until hook integrity restores it`);
+    assert.ok(!reasonOf(run.stdout).includes(os.tmpdir()), "named by its file name, not its path (issue #564)");
   }
 });
 

@@ -100,7 +100,7 @@ test("T15a end state of the ABA: the record holds B, the path holds a defective 
   fs.writeFileSync(aside, BROKEN);
   fs.renameSync(aside, shell(ctx)); // A, by rename, after B was recorded
   const notice = String(adapter(ctx).additionalContext);
-  assert.ok(notice.startsWith(`${shell(ctx)} cannot be trusted (inode changed since the last proven check)\n`), notice);
+  assert.ok(notice.startsWith("kherep-maestro/codex-shell-checks.mts cannot be trusted (inode changed since the last proven check)\n"), notice);
   assert.ok(restored(ctx), "the re-check restored A from the checkout");
   assert.deepEqual(peers(ctx)["codex-shell-checks.mts"], tupleOf(shell(ctx)), "and recorded the restored bytes");
 });
@@ -115,6 +115,6 @@ test("T15b end state with no tuple for the peer: the next call treats it as brok
   fs.utimesSync(ctx.beat, when, when);
   fs.writeFileSync(shell(ctx), BROKEN);
   const notice = String(adapter(ctx).additionalContext);
-  assert.ok(notice.startsWith(`${shell(ctx)} cannot be trusted (no proven record)\n`), notice);
+  assert.ok(notice.startsWith("kherep-maestro/codex-shell-checks.mts cannot be trusted (no proven record)\n"), notice);
   assert.ok(restored(ctx));
 });

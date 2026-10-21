@@ -198,7 +198,7 @@ test("I6 a hook that ignores SIGTERM is killed at the 12 s cap; the adapter ends
 test("I7 outside pre-intent updatedInput stays an unsupported field", (t) => {
   const guard = fixture(t, REWRITE);
   const run = runAdapter([guard, "pre", "--config-root", "/x"]);
-  assert.equal(reasonOf(run.stdout), `[hook-adapter] ${guard} cannot run (stdout is not a PreToolUse decision (unsupported field updatedInput)); `
+  assert.equal(reasonOf(run.stdout), `[hook-adapter] ${path.basename(guard)} cannot run (stdout is not a PreToolUse decision (unsupported field updatedInput)); `
     + "the tool call is blocked until hook integrity restores it");
 });
 
