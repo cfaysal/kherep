@@ -1,7 +1,7 @@
 import { pidAlive, readDaemonState, type DaemonState } from "./daemon-state.mts";
 import { compareSourceIdentity } from "./daemon-source.mts";
 import { describeServiceDrain, type ServiceOwnerProbe } from "./service-drain.mts";
-import type { nodePaths } from "./config.mts";
+import type { NodePaths } from "./config.mts";
 import { servicePlatform } from "./service-platform.mts";
 import { readServiceCandidate, serviceRoot, snapshotDigests, type ServiceCandidate, type ServiceReceipt } from "./service-records.mts";
 import { candidateInPlace, recordedPriorBackup, sameBinding, SERVICE_STAGES } from "./service-transaction-support.mts";
@@ -9,7 +9,7 @@ import { configuredDefinitionDigest } from "./service-configured-digest.mts";
 import type { NativeServiceSnapshot, ServiceBinding } from "./service-types.mts";
 
 // `service status`, managed and unmanaged. Moved from service-cli.mts for the 250-line budget (#582).
-type Paths = ReturnType<typeof nodePaths>;
+type Paths = NodePaths;
 export interface StatusDependencies {
   adapterFor?: typeof servicePlatform;
   readState?: (paths: Paths) => DaemonState | null;
