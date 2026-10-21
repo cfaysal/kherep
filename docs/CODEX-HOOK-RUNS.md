@@ -157,3 +157,25 @@ and one original-owner Desktop turn:
 
 Stop after this sequence. A long session or a new global counter total is
 outside this bounded acceptance and cannot attribute the original 846 runs.
+
+### Denied calls of delegated workers (issue #504)
+
+Bounded, one disposable workspace per host, results recorded on #504 and
+#537, never with real private data:
+
+1. Claude in auto mode (macOS, Windows): one `general-purpose` worker whose
+   brief asks it to `Read` a synthetic path carrying a private marker term,
+   which the privacy guard denies, and to hand back. Record that the journal
+   has the `call` line with `<withheld>`, that the `delivered` line exists
+   after the handback, that the completion notification carried the agent
+   ID, that this ID is the hook payloads' `agent_id`, and that `render`
+   prints `DENIED-CALLS: 1` with `status: delivered`. Then one worker with
+   no denial, which must read `none`, and one whose journal directory is
+   made read-only before the deny, which must read `unknown
+   (capture-failed)` or `unknown (journal-missing)`, never `none`.
+2. Codex Desktop: one `spawn_agent` worker with the same synthetic deny.
+   Record whether the child `PreToolUse` payload carries `agent_id`, and as
+   the candidate capture key the rollout thread of the child `PreToolUse`
+   `transcript_path` against the `SubagentStop` `agent_transcript_path`.
+3. Record pass, fail or untestable per item. Codex stays `unknown
+   (journal-missing)` until item 2 yields a key.
