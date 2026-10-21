@@ -253,11 +253,16 @@ describe("fallback deletion, prune and revoke", () => {
       return messageId;
     };
     const capable = await node("retention-capable");
+    // The Registry stamps now + 24 h when it stores the final state: after `before`, whatever the
+    // runner's speed, and before the row was read (issue #565).
+    const before = Date.now();
     const [operator, legacyNode, acking] = [await send(OPERATOR_NODE_ID), await send(plain.nodeId), await send(capable.nodeId)];
     await sync(target);
-    const before = Date.now();
     for (const id of [operator, legacyNode]) {
-      expect(Number((await row(id))?.delete_after)).toBeGreaterThanOrEqual(before - 1_000 + FALLBACK_DELETE_MS);
+      const deadline = Number((await row(id))?.delete_after);
+      const after = Date.now();
+      expect(deadline).toBeGreaterThanOrEqual(before + FALLBACK_DELETE_MS);
+      expect(deadline).toBeLessThanOrEqual(after + FALLBACK_DELETE_MS);
     }
     expect(await row(acking)).toMatchObject({ delete_after: null });
     expect(await runInDurableObject(registry(), (_i, state) => state.storage.getAlarm())).not.toBeNull();

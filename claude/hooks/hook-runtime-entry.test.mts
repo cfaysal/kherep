@@ -82,12 +82,15 @@ test("R2: killing the entry does not end the child's lock; the child's own end d
   const lateRan = path.join(home.root, "late.txt");
   fs.writeFileSync(path.join(home.hooks, "lib", "late.mts"),
     "import fs from \"node:fs\";\nfs.writeFileSync(new URL(\"../../late.txt\", import.meta.url), \"\");\nexport const late = 1;\n");
-  const { main } = sentinelMain(home.hooks, "fs.writeFileSync(new URL(\"../child.pid\", import.meta.url), String(process.pid));\n"
+  // The pid arrives by rename: a poller never sees child.pid created but not yet written (issue #565).
+  const { main } = sentinelMain(home.hooks, "fs.writeFileSync(new URL(\"../child.pid.tmp\", import.meta.url), String(process.pid));\n"
+    + "fs.renameSync(new URL(\"../child.pid.tmp\", import.meta.url), new URL(\"../child.pid\", import.meta.url));\n"
     + "while (!fs.existsSync(new URL(\"../go\", import.meta.url))) await new Promise((r) => setTimeout(r, 20));\n"
     + "await import(\"./lib/\" + \"late.mts\");\n");
   const running = entryAsync("reader", main);
   assert.ok(await until(() => fs.existsSync(pidFile)));
   const child = Number(fs.readFileSync(pidFile, "utf8"));
+  assert.ok(Number.isInteger(child) && child > 0, `child.pid holds no process id: ${JSON.stringify(fs.readFileSync(pidFile, "utf8"))}`);
   process.kill(running.pid!, "SIGKILL");
   await running;
   if (process.platform === "win32") {
