@@ -311,14 +311,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
-- Control Plane Worker: `agents` moves from 0.24.0 to 0.29.0, and with it
+- Control Plane Worker: `agents` moves from 0.24.0 to 0.28.1, and with it
   `@modelcontextprotocol/server` and `@modelcontextprotocol/client` from
   2.0.0 to 2.3.1 and the peer-installed `@modelcontextprotocol/sdk` from
-  1.30.0 to 1.32.1 (issue #591). `agents` pins its MCP peers to exact
+  1.30.0 to 1.32.1, plus the sdk's own express and hono dependencies such
+  as express 5.3.0 (issue #591). `agents` pins its MCP peers to exact
   versions, so the four can only move together; the separate Dependabot
   bumps #542, #551 and #553 each failed `npm ci` with `ERESOLVE`. The move
-  clears the high-severity advisories `npm audit --omit=dev` reported
-  against the MCP packages, among them GHSA-jm63-cq47-j5jp,
+  clears the advisories `npm audit --omit=dev` reported against the MCP
+  packages: the high-severity GHSA-jm63-cq47-j5jp, GHSA-46jr-4wx8-v453,
+  GHSA-6qxp-vccf-f47h and GHSA-22jm-h49p-29qw, and the moderate
   GHSA-rvq5-wwqv-78pq and GHSA-6prh-2h8m-c8cw. The Worker code needs no
   change: it builds a new `McpServer` per request for `createMcpHandler`,
   which the server's one-connection-per-instance rule of 2.3.0 requires.
