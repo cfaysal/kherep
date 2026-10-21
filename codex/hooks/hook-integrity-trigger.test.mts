@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 
+import { ABSOLUTE_PATH } from "../../claude/hooks/lib/denial-journal.mts";
 import { holdLock as hold, killHolders, tryLock } from "../../claude/hooks/lib/lock-holder.fixture.mts";
 import { install } from "../install.mts";
 import { fixtureModelOptions } from "../lib/model-policy.fixture.mts";
@@ -171,6 +172,24 @@ test("T3.2 the same without a foreign lock: restored with proof and journalled a
   assert.deepEqual(journal(ctx).map((e) => [e.kind, e.trigger, e.restoreProven]), [["self", "hook-adapter", true]]);
   assert.equal(fs.existsSync(beatFile(ctx)), false);
   assert.equal(tryLock(ctx.codexHome).result, "owner", "the lock was released");
+});
+
+// Issue #564: the trigger output reaches the adapters' notices; no line names a path or carries Node's message.
+test("T3.2b a deleted own lib, an unreadable config.toml, nothing wired: lines with codes and no path", (t) => {
+  const deleted = fixture(t);
+  fs.rmSync(path.join(deleted.hookDir, "lib", "integrity-verdict.mts"));
+  const unreadable = fixture(t);
+  fs.rmSync(unreadable.config);
+  fs.mkdirSync(unreadable.config);
+  const unwired = fixture(t);
+  fs.writeFileSync(unwired.config, "");
+  const [a, b, c] = [integrity(deleted).lines, integrity(unreadable).lines, integrity(unwired).lines];
+  assert.match(String(a[0]), /^own import lib\/integrity-verdict\.mts cannot be loaded \(ERR_MODULE_NOT_FOUND\); nothing was verified this session -> RESTORED /);
+  assert.match(String(b[0]), /^config\.toml unreadable \([A-Z]+\), so WHICH hooks are wired is UNKNOWN here$/);
+  assert.equal(c[0], "no hook file under hooks/ is wired in config.toml, so WHICH hooks run is UNKNOWN here");
+  for (const [ctx, lines] of [[deleted, a], [unreadable, b], [unwired, c]] as const) {
+    for (const line of lines) assert.ok(!ABSOLUTE_PATH.test(line) && !line.includes(ctx.root), line);
+  }
 });
 
 test("T3.3 a broken lib/integrity-heartbeat.mts is reported, not repaired; nothing is written", (t) => {

@@ -102,6 +102,13 @@ test("a re-check that exits 1 keeps its lines and names the exit code", async ()
   assert.equal(text, `hook integrity re-check (stale heartbeat, last OK none):\n  - one finding\n  - ${script} exited with code 1`);
 });
 
+// Issue #564: a caller's label (the Codex adapters pass kherep-maestro/codex-hook-integrity.mts) names the script.
+test("a re-check with a label names the script by it, never by its path", async () => {
+  const script = path.join(TMP, "exit1.mts");
+  const text = await runRecheck({ ...base, script, label: "kherep-maestro/exit1.mts" });
+  assert.equal(text, "hook integrity re-check (stale heartbeat, last OK none):\n  - one finding\n  - kherep-maestro/exit1.mts exited with code 1");
+});
+
 test("a missing script is a line, not a throw", async () => {
   const script = path.join(TMP, "missing.mts");
   const text = await runRecheck({ ...base, script });
