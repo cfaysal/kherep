@@ -2,7 +2,6 @@ import { isMessageId, type DirectoryBody, type MessageDeliverBody } from "../pro
 import type { NodePaths } from "./config.mts";
 import { getSent, recordSent, type SentRecord } from "./exchange.mts";
 import { getMessage, listInbox, messageIds, type InboxRecord } from "./inbox.mts";
-import { drain } from "./inbox-purge.mts";
 import { nodeLabel } from "./msg-resolve.mts";
 
 // What the delivery hook tells a session about messages it sent: those that
@@ -85,14 +84,20 @@ export function* settleAnsweredSteps(paths: NodePaths, now: number, onError?: (e
   let settled = 0;
   for (const r of delivered) {
     if (repliesTo(byReply.get(r.messageId) ?? [], r).length === 0) continue;
-    if (settleAnswered(paths, r, now, onError)) settled++;
+    // Issue #589: a record the arrival path settled meanwhile is found replied, not recorded again; the count is of writes.
+    const fresh = read(paths, r.messageId);
+    if ((fresh === null || fresh.state === "delivered") && settleAnswered(paths, r, now, onError)) settled++;
     yield;
   }
   return settled;
 }
 
 export function settleAnsweredAtStart(paths: NodePaths, now: number, onError?: (error: unknown) => void): number {
-  return drain(settleAnsweredSteps(paths, now, onError));
+  const steps = settleAnsweredSteps(paths, now, onError);
+  for (;;) {
+    const step = steps.next();
+    if (step.done) return step.value;
+  }
 }
 
 // One read of sent/ for the session's references (id, name), oldest first:
