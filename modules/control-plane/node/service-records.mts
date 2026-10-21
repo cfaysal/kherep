@@ -6,7 +6,7 @@ import type { NodePaths } from "./config.mts";
 import type { SourceIdentity } from "./daemon-source.mts";
 import { writeJsonAtomic } from "./inbox.mts";
 import { acquireServiceOwnerFile, type ServiceOwnerProbe } from "./service-drain.mts";
-import type { NativeServiceSnapshot, ServiceBinding } from "./service-types.mts";
+import { STOP_CODES, type NativeServiceSnapshot, type ServiceBinding, type StopCode } from "./service-types.mts";
 
 export interface ServiceReceipt {
   version: 1;
@@ -79,6 +79,52 @@ export function readServiceReceipt(paths: NodePaths): ServiceReceipt | null {
 
 export function writeServiceReceipt(paths: NodePaths, receipt: ServiceReceipt): void { writeJson(receiptFile(paths), receipt); }
 export function removeServiceReceipt(paths: NodePaths): void { fs.rmSync(receiptFile(paths), { force: true }); }
+
+export const CANDIDATE_COMMANDS = ["install", "upgrade", "rollback"] as const;
+export interface ServiceCandidate {
+  version: 1;
+  binding: ServiceBinding;
+  definitionDigest: string;
+  securityDigest: string;
+  backupId?: string;
+  command: typeof CANDIDATE_COMMANDS[number];
+  stage: string;
+  blocker: string;
+  stopCode: StopCode;
+  failedAt: string;
+}
+const candidateFile = (paths: NodePaths): string => path.join(serviceRoot(paths), "candidate.json");
+const BACKUP_ID = /^[0-9]{8,14}-[0-9a-f-]{36}$/;
+function validCandidate(value: ServiceCandidate | undefined): value is ServiceCandidate {
+  return Boolean(value && value.version === 1 && validBinding(value.binding)
+    && /^[0-9a-f]{64}$/.test(value.definitionDigest) && /^[0-9a-f]{64}$/.test(value.securityDigest)
+    && (value.backupId === undefined ? value.command === "install" : BACKUP_ID.test(value.backupId))
+    && (CANDIDATE_COMMANDS as readonly string[]).includes(value.command)
+    && typeof value.stage === "string" && /^[a-z-]{1,16}$/.test(value.stage)
+    && typeof value.blocker === "string" && /^RECOVERY_[A-Z_]{1,40}$/.test(value.blocker)
+    && (STOP_CODES as readonly string[]).includes(value.stopCode)
+    && ISO_INSTANT.test(value.failedAt) && Number.isFinite(Date.parse(value.failedAt)));
+}
+// #582: failedAt is printed by status, so only the shape toISOString() writes is accepted (no embedded text).
+const ISO_INSTANT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,3})?Z$/;
+// #582: ENOENT -> null; every other failure, a parse error included, is the fixed message (A2 P2-A). The record is
+// self-written, so its content is never quoted back.
+export function readServiceCandidate(paths: NodePaths): ServiceCandidate | null {
+  let text: string;
+  try { text = fs.readFileSync(candidateFile(paths), "utf8"); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new Error("managed service candidate record is invalid");
+  }
+  let candidate: ServiceCandidate | undefined;
+  try { candidate = JSON.parse(text) as ServiceCandidate; } catch { candidate = undefined; }
+  if (!validCandidate(candidate)) throw new Error("managed service candidate record is invalid");
+  return candidate;
+}
+export function writeServiceCandidate(paths: NodePaths, candidate: ServiceCandidate): void {
+  if (!validCandidate(candidate)) throw new Error("managed service candidate record is invalid");
+  writeJson(candidateFile(paths), candidate);
+}
+export function removeServiceCandidate(paths: NodePaths): void { fs.rmSync(candidateFile(paths), { force: true }); }
 
 export function saveServiceBackup(paths: NodePaths, snapshot: NativeServiceSnapshot, options: {
   receipt: ServiceReceipt | null; priorSource?: SourceIdentity; now: string;
