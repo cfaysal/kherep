@@ -36,8 +36,10 @@ increments the minor version; every other release increments the patch version.
   key is measured (#537) and every Codex worker reads `unknown
   (journal-missing)`; no Codex hook group is added and the renderer is
   installed as `hooks/kherep-maestro/denied-calls.mts`. Limits: append
-  and rename both failing loses the line; the three stderr guards record
-  their first line only; Explore and Plan workers return no agent ID and
+  and rename both failing loses the line; a call the hook entry denies
+  whose payload is over 1 MiB leaves no line and no marker; an absolute
+  path with a space keeps the part after the space; the three stderr
+  guards record their first line only; Explore and Plan workers return no agent ID and
   read `unknown (no-agent-id)`; that the returned agent ID equals the
   hooks' `agent_id` is UNVERIFIED until the host measurement in
   `docs/CODEX-HOOK-RUNS.md`. `hooks/lib/denial-journal.mts` holds a fourth
