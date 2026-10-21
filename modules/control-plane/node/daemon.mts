@@ -112,9 +112,12 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   }, { signal: halt.signal });
   // Issue #581: the start maintenance (inbox-start.mts) runs once, after the first authenticated connection or the fallback.
   let maintaining: Promise<void> | null = null; // the run-once guard
-  const maintain = (): void => { maintaining ??= runInboxMaintenance(paths, log, { ...maintenance, signal: halt.signal })
-    .catch((error: unknown) => log(`kherep-node: start maintenance failed: ${String(error)}`)); };
-  const fallback = setTimeout(maintain, maintenance.fallbackMs ?? MAINTENANCE_FALLBACK_MS).unref();
+  const fallback = setTimeout(() => maintain(), maintenance.fallbackMs ?? MAINTENANCE_FALLBACK_MS).unref();
+  const maintain = (): void => {
+    clearTimeout(fallback); // issue #589: no pending fallback once it ran
+    maintaining ??= runInboxMaintenance(paths, log, { ...maintenance, signal: halt.signal })
+      .catch((error: unknown) => log(`kherep-node: start maintenance failed: ${String(error)}`));
+  };
   // Issue #487: one in-process inbox index for the daemon's readers (inbox-index.mts); issue #589: the
   // session listing's refusal check reads it too, so a snapshot costs one stat per record, not a read.
   const inbox = inboxIndex(paths.inbox);
