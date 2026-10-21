@@ -9,7 +9,7 @@ import type { LifecycleDependencies } from "./service-lifecycle.mts";
 import { servicePlatform, serviceSelector, supportedServicePlatform } from "./service-platform.mts";
 import { readServiceReceipt, serviceRoot, type ServiceReceipt } from "./service-records.mts";
 import { activateManagedService, rollbackManagedService } from "./service-transaction.mts";
-import { reportServiceStatus, type StatusDependencies } from "./service-status.mts";
+import { reportServiceStatus, reportUnmanagedStatus, type StatusDependencies } from "./service-status.mts";
 import { SERVICE_STAGES, type ServiceStage } from "./service-transaction-support.mts";
 import type { ServiceBinding } from "./service-types.mts";
 
@@ -124,8 +124,7 @@ export async function runService(argv: string[], dependencies: ServiceCliDepende
     return 0;
   };
   if (command.action === "status") {
-    if (!receipt) { console.log(JSON.stringify({ ok: true, managed: false }, null, 2)); return 0; }
-    return reportServiceStatus(paths, receipt, dependencies);
+    return receipt ? reportServiceStatus(paths, receipt, dependencies) : reportUnmanagedStatus(paths, dependencies);
   }
   if (!readConfig(paths.config)) throw new Error("managed daemon service requires an enrolled node");
   if (command.action === "install") {
