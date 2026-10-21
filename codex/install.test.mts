@@ -432,7 +432,7 @@ test("installs the Codex hook-integrity hook last in its SessionStart group with
   const maestro = renderedHookGroup(config, "SessionStart");
   assert.equal(occurrences(config.replace(/^commandWindows = .*\n/gm, ""), "codex-hook-integrity.mts"), 1);
   assert.match(maestro.split("[[hooks.SessionStart.hooks]]").at(-1)!, /codex-hook-integrity\.mts[\s\S]*timeout = 30/);
-  const { sourceOf } = await import("./hooks/hook-integrity.mts");
+  const { sourceOf } = await import("./hooks/hook-integrity-sources.mts");
   const installed = [
     "kherep-maestro-context.mts",
     ...fs.readdirSync(hookDir, { recursive: true, encoding: "utf8" })

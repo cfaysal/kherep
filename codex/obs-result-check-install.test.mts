@@ -9,7 +9,7 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 
 import { install } from "./install.mts";
-import { sourceOf } from "./hooks/hook-integrity.mts";
+import { sourceOf } from "./hooks/hook-integrity-sources.mts";
 import { fixtureModelOptions } from "./lib/model-policy.fixture.mts";
 
 const REPO = path.resolve(import.meta.dirname, "..");
