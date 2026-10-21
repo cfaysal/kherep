@@ -153,6 +153,26 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- Codex hook adapter and hook-integrity hook split into modules below the
+  250-line budget (issue #533). `codex/hooks/hook-adapter.mts` keeps the
+  clock, the re-check and the process I/O and imports
+  `hook-adapter-payload.mts`, `hook-adapter-verdict.mts` and
+  `hook-adapter-run.mts`; its re-exports keep every importer's path.
+  `codex/hooks/hook-integrity.mts` keeps the run under `run.lock` and loads
+  `hook-integrity-repair.mts` and then `hook-integrity-sources.mts` as own
+  steps after the four restore libs, into a namespace of their own; a
+  broken sources module is restored as kind `self`, a broken repair module
+  is reported and needs a reinstall, like the four restore libs. That
+  widens the reinstall-only set by one file whose code moved out of the
+  already reinstall-only `hook-integrity.mts`. The installer copies the
+  five modules under their own names into `hooks/kherep-maestro`; every
+  command definition, deny and notice text, timeout, exit code and the lock
+  sequence is unchanged, and no trust hash moves. A broken adapter module
+  is caught by the shell dispatcher's import and restored by its re-check;
+  for the adapter's own groups it fails open until then, as a broken
+  `codex-hook-adapter.mts` does today. Both adapter copies share the
+  modules, so a broken module disables both at once.
+
 - Codex messaging intent hook fails closed (issue #538). The optional
   `PreToolUse` messaging intent entry runs through `codex-hook-adapter.mts`
   in a new `pre-intent` phase: a missing, empty, broken, silent or late
