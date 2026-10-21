@@ -100,7 +100,7 @@ async function takeWithin(h: string, ms: number): Promise<RunLock | string> {
 
 const pidOfBeat = (h: string): number => (JSON.parse(fs.readFileSync(heartbeatFile(h), "utf8")) as { pid: number }).pid;
 
-test("T4.1 one holder: two other processes are busy at once, holder UNKNOWN; only the database and its journal exist", { timeout: 30_000 }, async () => {
+test("T4.1 one holder: two other processes are busy within 250 ms, holder UNKNOWN; only the database and its journal exist", { timeout: 30_000 }, async () => {
   const h = home();
   const a = await hold(h);
   try {
@@ -109,9 +109,10 @@ test("T4.1 one holder: two other processes are busy at once, holder UNKNOWN; onl
     const bMs = Date.now() - begin;
     const c = tryOnce(h);
     assert.equal(b, BUSY);
-    assert.ok(bMs < 100, `B took ${bMs} ms`);
+    // A busy answer carries three short retries (issue #620, about 40 ms), never a wait for the holder.
+    assert.ok(bMs < 250, `B took ${bMs} ms`);
     assert.equal(c.result, BUSY);
-    assert.ok(c.ms < 100, `C took ${c.ms} ms`);
+    assert.ok(c.ms < 250, `C took ${c.ms} ms`);
     assert.equal(runLockFile(h), path.join(cacheDir(h), "run.lock.sqlite"));
     assert.deepEqual(fs.readdirSync(cacheDir(h)).sort(), ["run.lock.sqlite", "run.lock.sqlite-journal"]);
   } finally {

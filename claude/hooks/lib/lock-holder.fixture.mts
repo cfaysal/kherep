@@ -5,7 +5,7 @@
 // As a process:
 //   hold <home> [beat]  takes the lock (with "beat" also writes its heartbeat), prints
 //                       "held <pid>", releases on the first stdin data, dies on a signal
-//   try <home>          one attempt, released at once; prints {"result","ms"} as JSON
+//   try <home>          one takeRunLock call (with its busy retries), released at once; prints {"result","ms"} as JSON
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,7 +41,7 @@ export async function killHolders(): Promise<void> {
   for (const holder of [...holders]) await holder.kill();
 }
 
-// One attempt in another process, released at once.
+// One takeRunLock call (with its busy retries) in another process, released at once.
 export function tryLock(home: string): { result: string; ms: number } {
   const run = spawnSync(process.execPath, [...ARGS, "try", home], { encoding: "utf8", windowsHide: true, timeout: 10_000 });
   if (run.status !== 0) throw new Error(`the lock attempt failed (${run.status}): ${run.stderr}`);

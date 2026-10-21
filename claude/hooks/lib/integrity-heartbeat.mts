@@ -14,9 +14,10 @@
 // takeRunLock. Codex has no hook runtime (issue #507, part 3), so its integrity
 // hook takes run.lock: an EXCLUSIVE transaction on its own SQLite database,
 // <home>/.cache/hook-integrity/run.lock.sqlite (rollback journal DELETE, busy
-// timeout 0). The operating system keeps that lock for the holding process and
-// releases it when the process ends, so it is never taken over, moved or deleted
-// by another run; a second run is told "busy, holder UNKNOWN" at once. Nothing is
+// timeout 0: every attempt is answered at once). The operating system keeps that
+// lock for the holding process and releases it when the process ends, so it is
+// never taken over, moved or deleted by another run. A second run is told "busy,
+// holder UNKNOWN" after BUSY_RETRIES short retries (issue #620, below). Nothing is
 // written into the database: the transaction is the lock and is never committed,
 // and the file is permanent. `PRAGMA user_version = 0` inside it proves the file
 // writable: a read-only file, whose BEGIN EXCLUSIVE would exclude nothing, is
@@ -113,9 +114,9 @@ export function invalidateHeartbeat(home: string): string {
 }
 
 export interface RunLock { holding(): boolean; release(): string }
-// Test seams only: a replacement for node:sqlite (undefined means "not available"),
-// and a call right before BEGIN EXCLUSIVE. Production passes none.
-export interface LockSeams { sqlite?: () => typeof import("node:sqlite") | undefined; beforeBegin?: () => void }
+// Test seams only: a replacement for node:sqlite (undefined means "not available"), a
+// call right before each BEGIN EXCLUSIVE, and the pause between busy retries. Production passes none.
+export interface LockSeams { sqlite?: () => typeof import("node:sqlite") | undefined; beforeBegin?: () => void; pause?: (ms: number) => void }
 
 export const runLockFile = (home: string): string => path.join(dirOf(home), "run.lock.sqlite");
 const BUSY = "another integrity run holds run.lock (busy, holder UNKNOWN)";
@@ -127,6 +128,37 @@ function refusal(error: unknown): string {
   if (typeof errcode === "number" && ((errcode & 0xff) === 5 || (errcode & 0xff) === 6)) return BUSY;
   if (journalMode !== undefined) return `run.lock database is not usable (journal_mode ${journalMode})`;
   return `run.lock unavailable (${errorText(error)})`;
+}
+
+// Two runs that start together can each see the other's transient lock, both back off and
+// nobody holds run.lock (issue #620). Two paths: one holds SHARED for its schema read while
+// the other, already at PENDING, is refused EXCLUSIVE, and that PENDING then refuses the
+// first one's SHARED (measured with a staged interleaving); or one is refused RESERVED by the
+// other's RESERVED while its own SHARED still blocks the other's EXCLUSIVE. On Windows SQLite
+// before 3.50.0 takes SHARED through an exclusive lock on the PENDING byte, from 3.50.0 a
+// shared one; the CI runner's SQLite version is UNKNOWN. So a busy answer is retried
+// BUSY_RETRIES times, a random pause apart so the two do not collide again; synchronous
+// (Atomics.wait), as the lock is. A lock still busy then is held by a run that is working.
+// Worst case about 40 ms, measured on macOS; Windows UNKNOWN, T4.11 bounds it at 250 ms.
+const BUSY_RETRIES = 3;
+const BUSY_PAUSE_MIN_MS = 2;
+const BUSY_PAUSE_SPREAD_MS = 10;
+const pause = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+
+// One attempt at the transaction that is the lock, on an open connection: "" when it is held.
+// One catch over every statement: a contender is already busy at the journal mode (amendment A1).
+function beginExclusive(conn: DatabaseSync, seams: LockSeams): string {
+  try {
+    conn.exec("PRAGMA busy_timeout = 0");
+    const mode = (conn.prepare("PRAGMA journal_mode").get() as { journal_mode?: unknown } | undefined)?.journal_mode;
+    if (mode !== "delete") throw { journalMode: String(mode) };
+    seams.beforeBegin?.();
+    conn.exec("BEGIN EXCLUSIVE");
+    conn.exec("PRAGMA user_version = 0");
+    return "";
+  } catch (error) {
+    return refusal(error);
+  }
 }
 
 // The lock, or why this run does not hold it (it then mutates nothing).
@@ -150,17 +182,16 @@ export function takeRunLock(home: string, seams: LockSeams = {}): RunLock | stri
   }
   let conn: DatabaseSync;
   try { conn = new sqlite.DatabaseSync(file); } catch (error) { return refusal(error); }
-  // One catch over every statement: a contender is already busy at the journal mode (amendment A1).
-  try {
-    conn.exec("PRAGMA busy_timeout = 0");
-    const mode = (conn.prepare("PRAGMA journal_mode").get() as { journal_mode?: unknown } | undefined)?.journal_mode;
-    if (mode !== "delete") throw { journalMode: String(mode) };
-    seams.beforeBegin?.();
-    conn.exec("BEGIN EXCLUSIVE");
-    conn.exec("PRAGMA user_version = 0");
-  } catch (error) {
+  // A failed attempt leaves no transaction, so the same connection tries again (issue #620).
+  let why = "";
+  for (let attempt = 0; ; attempt++) {
+    why = beginExclusive(conn, seams);
+    if (why !== BUSY || attempt === BUSY_RETRIES) break;
+    (seams.pause ?? pause)(BUSY_PAUSE_MIN_MS + Math.floor(Math.random() * BUSY_PAUSE_SPREAD_MS));
+  }
+  if (why) {
     try { conn.close(); } catch { /* already closed */ }
-    return refusal(error);
+    return why;
   }
   let held = true;
   return {
