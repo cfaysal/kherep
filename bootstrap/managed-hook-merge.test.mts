@@ -68,6 +68,14 @@ test("another main in the group, the same main at another matcher, and other for
   assert.deepEqual(r.replaced, []);
 });
 
+test("an entry command followed by a shell control operator stays next to the template entry", () => {
+  const chained = { type: "command", command: `${ENTRY} reader "~/.claude/hooks/o.mts" ; other` };
+  const r = merge({ SubagentStop: [{ matcher: "claude-obs", hooks: [hook("reader", "o.mts")] }] },
+    { SubagentStop: [{ matcher: "claude-obs", hooks: [chained] }] });
+  assert.deepEqual(r.commands("SubagentStop"), [[`${ENTRY} reader "~/.claude/hooks/o.mts"`, chained.command]]);
+  assert.deepEqual(r.replaced, []);
+});
+
 test("two existing groups with the template's matcher keep the operator's main in both (map from the template group)", () => {
   const r = merge({ SubagentStop: [{ matcher: "claude-obs", hooks: [hook("reader", "o.mts")] }] },
     { SubagentStop: [{ matcher: "claude-obs", hooks: [hook("reader", "mine.mts", { timeout: 1 })] },
@@ -94,7 +102,8 @@ test("control-plane scripts stay with the #31 rule; without a callback nothing i
 
 // T6. The rule keys on (event, matcher, main) and finds the template group by
 // matcher, so the template must hold each key once and each matcher once per
-// event; and it must recognise exactly what live-hook-integrity calls coordinated.
+// event, and render no shell control operator; and it must recognise exactly
+// what live-hook-integrity calls coordinated.
 const SOURCE = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "claude", "settings.user.json"), "utf8"));
 const HOMES = process.platform === "win32"
   ? ["C:\\Users\\x\\.claude", "D:\\Claude Home\\.claude", path.join(os.homedir(), ".claude")]
@@ -113,6 +122,7 @@ for (const home of HOMES) {
       assert.equal(new Set(matchers).size, matchers.length, `${event}: two groups share a matcher`);
       for (const group of groups) for (const h of group.hooks || []) {
         const found = managedHookKey(normalizeHookCommand(h.command!));
+        assert.doesNotMatch(h.command!, /[;&|\r\n]/, `${event}: the template renders a shell control operator`);
         if (/[\\/]kherep[\\/]hook-runtime[\\/]entry\.mts"/.test(h.command!)) {
           entries++;
           assert.ok(found, `${event}: entry-form command not recognised`);

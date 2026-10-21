@@ -63,6 +63,14 @@ test("forms the template never renders stay unrecognised (documented limits)", (
   ]) assert.equal(managedHookKey(command, "darwin"), undefined, command);
 });
 
+test("a shell control operator after the main makes the command operator-shaped, never managed", () => {
+  const managed = entry("~/.claude", "pretool", "guard-dispatch.mts");
+  for (const tail of [" ; other", " && other", " || other", " | other", " & other", "\nother", "\r\nother",
+    ' "~/.claude/hooks/g.mts" ; other', ' "~/.claude/hooks/g.mts"&other']) {
+    assert.equal(managedHookKey(`${managed}${tail}`, "darwin"), undefined, JSON.stringify(tail));
+  }
+});
+
 test("a main path with . or .. segments, and the Git Bash drive form, keep a key of their own", () => {
   assert.notEqual(managedHookKey(entry("~/.claude", "reader", "sub/../x.mts"), "darwin")?.key, "~/.claude/hooks/x");
   assert.notEqual(managedHookKey(entry("/c/Users/x/.claude", "reader", "x.mts"), "win32")?.key,
