@@ -146,6 +146,7 @@ transaction_validate_path_under_root "local-inference config" "$CLAUDE_HOME/kher
 transaction_validate_path_under_root "TWG runtime" "$CLAUDE_HOME/kherep/twg" "$CLAUDE_HOME" 0 || exit $?
 transaction_validate_path_under_root "commit policy" "$CLAUDE_HOME/kherep/githooks/commit-policy" "$CLAUDE_HOME" 0 || exit $?
 transaction_validate_path_under_root "Confluence configuration" "$CLAUDE_HOME/kherep/confluence.json" "$CLAUDE_HOME" 0 || exit $?
+transaction_validate_path_under_root "control-plane pointer" "$CLAUDE_HOME/kherep/control-plane/source.json" "$CLAUDE_HOME" 0 || exit $?
 if [ "$SKIP_SECRETS" = "0" ]; then
   for target in \
     "$CLAUDE_HOME/.mcp.json"; do
@@ -194,6 +195,10 @@ done
 # stable launcher under the Control Plane config directory (render-intercom.mts).
 # Rendered here so a config root no shell can quote stops the run before the
 # first live mutation.
+# Issue #592. The control-plane hook commands name the stable entry point under
+# CLAUDE_HOME (a manifest file); this record names the source it runs, this
+# installer's root, and goes live in the same transaction as settings.json.
+node "$REPO_ROOT/bootstrap/control-plane-pointer.mts" render "$REPO_ROOT" "$PREFLIGHT_DIR/control-plane-source.json"
 node "$REPO_ROOT/bootstrap/render-profile.mts" intercom "$CLAUDE_SRC/CLAUDE.user.md" "$PREFLIGHT_DIR/CLAUDE.md"
 node "$REPO_ROOT/bootstrap/render-profile.mts" intercom \
   "$CLAUDE_SRC/teams/kherep/ROUTING.md" "$PREFLIGHT_DIR/teams/kherep/ROUTING.md"
@@ -227,6 +232,9 @@ echo "install: commit policy -> $(grep '^work_item_required=' "$PREFLIGHT_DIR/co
 install_path "kherep/confluence.json" "$PREFLIGHT_DIR/confluence.json" \
   "$CLAUDE_HOME/kherep/confluence.json" "$INSTALL_BACKUP/kherep/confluence.json"
 echo "install: Confluence broker command -> $CLAUDE_HOME/kherep/confluence.json"
+install_path "kherep/control-plane/source.json" "$PREFLIGHT_DIR/control-plane-source.json" \
+  "$CLAUDE_HOME/kherep/control-plane/source.json" "$INSTALL_BACKUP/kherep/control-plane/source.json"
+echo "install: control-plane hooks run from -> $REPO_ROOT ($CLAUDE_HOME/kherep/control-plane/source.json)"
 install_path "CLAUDE.md" "$PREFLIGHT_DIR/CLAUDE.md" "$CLAUDE_HOME/CLAUDE.md" "$INSTALL_BACKUP/CLAUDE.md"
 install_path "project/CLAUDE.md" "$PREFLIGHT_DIR/project-CLAUDE.md" "$WS/CLAUDE.md" "$INSTALL_BACKUP/project/CLAUDE.md"
 # AGENTS.md is what binds the Codex runtime. It existed live since months with no

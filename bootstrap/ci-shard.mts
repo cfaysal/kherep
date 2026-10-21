@@ -37,6 +37,7 @@ export const NAMED: Record<string, string[]> = {
   "commit-policy-install": ["commit-policy-install.test.mts"],
   "drift-check-optional-tools": ["drift-check-optional-tools.test.mts"],
   "control-plane-hook-install": ["control-plane-hook-install.test.mts"],
+  "control-plane-stable-install": ["control-plane-stable-install.test.mts"],
 };
 
 export const SHARDS: string[] = [...Object.keys(NAMED), REST];

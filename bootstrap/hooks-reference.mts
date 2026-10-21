@@ -41,6 +41,10 @@ export function singleCommand(command: string): boolean {
 export type Classified = { stems: string[]; controlPlane: boolean } | { error: string };
 const TOKENS = /"([^"]*)"|'([^']*)'|(\S+)/g; // the quoting regex of hook-inventory.mts:136
 const CONTROL_PLANE = /^\/synthetic\/repo\/modules\/control-plane\/node\/([\w-]+)\.mts$/;
+// Issue #592. The stable entry point under the Claude home and the hook its first
+// argument selects: both are wired by such a command, so both need a row.
+const STABLE_ENTRY = /^\/synthetic\/claude\/kherep\/control-plane\/(claude-control-plane-hook)\.mts$/;
+const STABLE_NAMES: Readonly<Record<string, string>> = { deliver: "deliver-hook", wake: "wake-hook", attribution: "attribution-hook" };
 const enoent = Object.assign(new Error("absent"), { code: "ENOENT" });
 export function wiredAlone(event: string, command: string) {
   return wiredFiles(HOME, (name) => {
@@ -64,6 +68,9 @@ export function classify(event: string, command: string): Classified {
   };
   const stem = word(0) === "node" ? CONTROL_PLANE.exec(word(1) ?? "")?.[1] : undefined;
   if (stem && singleCommand(command)) return { stems: [stem], controlPlane: true };
+  const entry = word(0) === "node" ? STABLE_ENTRY.exec(word(1) ?? "")?.[1] : undefined;
+  const selected = entry ? STABLE_NAMES[word(2) ?? ""] : undefined;
+  if (entry && selected && singleCommand(command)) return { stems: [entry, selected], controlPlane: true };
   return { error: `unclassified wired command under ${event}: ${command}${stem ? " (runs more than one shell command)" : ""}` };
 }
 
