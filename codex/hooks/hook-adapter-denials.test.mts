@@ -9,6 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { after, test } from "node:test";
 
+import { denialFaultEnv } from "../../claude/hooks/denial-fault.fixture.mts";
 import { journalPaths } from "../../claude/hooks/lib/denial-journal.mts";
 import { readJournal, renderReport } from "../../claude/hooks/lib/denial-report.mts";
 import { cleanupHomes, codexHome, exit2, run, scrub, shellPayload, type CodexHome } from "./denials-fixture.mts";
@@ -51,6 +52,16 @@ for (const lib of ["missing", "empty", "throwing", "hanging"] as const) {
     assert.ok(result.ms < 8_500, `${result.ms} ms`);
   });
 }
+
+test("a journal write that never settles: the same deny within 1 s of the reference, journal and marker together", async () => {
+  const referenceHome = codexHome(GUARDS), home = codexHome(GUARDS);
+  const reference = await adapt(referenceHome, "codex-guard.mts", shellPayload());
+  const result = await run([path.join(home.hookDir, "codex-hook-adapter.mts"), path.join(home.hookDir, "codex-guard.mts"), "pre"],
+    shellPayload(), denialFaultEnv("all-hang", "codex-hook-adapter.mts"));
+  assert.equal(result.status, 0);
+  assert.equal(scrub(result.stdout, home), scrub(reference.stdout, referenceHome));
+  assert.ok(result.ms < reference.ms + 1_000 + 700, `${result.ms} ms against ${reference.ms} ms`);
+});
 
 test("runAdaptedHook, the in-process path, writes nothing", async () => {
   const home = codexHome(GUARDS);
