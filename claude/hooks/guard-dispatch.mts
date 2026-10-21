@@ -27,7 +27,7 @@ const GUARD_TIMEOUT_MS = 10_000;
 // A re-check gets <= RECHECK_MAX_MS of what is left, none below RECHECK_MIN_MS; its lib loads within RECHECK_LOAD_MS.
 const RECHECK_MAX_MS = 20_000, RECHECK_MIN_MS = 2_000, RECHECK_LOAD_MS = 2_000;
 const HEARTBEAT_WINDOW_MS = 1_800_000; // = lib/integrity-heartbeat.mts; each side has a boundary test
-const JOURNAL_CAP_MS = 1_500, AGENT_KEY = /^[A-Za-z0-9_-]{1,64}$/; // issue #504; the marker is awaited to DEADLINE (issue #614)
+const JOURNAL_CAP_MS = 1_500, AGENT_KEY = /^[A-Za-z0-9_-]{1,64}$/; // issue #504
 const SELF = fileURLToPath(import.meta.url), DIR = path.dirname(SELF), SELF_LABEL = path.basename(SELF);
 const INVOKED_DIR = path.dirname(path.resolve(process.argv[1] ?? SELF));
 const HOME = path.dirname(INVOKED_DIR);

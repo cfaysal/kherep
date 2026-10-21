@@ -410,8 +410,8 @@ increments the minor version; every other release increments the patch version.
   through `process.exit`, which abandons a pending `fs.promises` write; a
   slow write left no marker, and a later `render` could read a count or
   `none` for a worker whose line was lost. The marker write is now awaited
-  until each writer's own deadline: the dispatcher's, 25 s after its start;
-  the entry's `OUTER_DEADLINE - 2_000`, 26 s after its start; and in the
+  until each writer's own deadline: the dispatcher's, at most 25 s after
+  its start; the entry's `OUTER_DEADLINE - 2_000`, 26 s after its start; and in the
   delivery recorder a new deadline 5.5 s after its process start (its entry
   has `timeout` 10, and the entry's Node start precedes its clock). The
   journal writes keep their caps (1.5 s, 0.5 s in the entry). The
