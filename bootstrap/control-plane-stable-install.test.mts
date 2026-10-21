@@ -70,6 +70,10 @@ test("installs from two roots leave the same settings.json; the pointer follows 
     .find((command) => command.includes("claude-control-plane-hook.mts\" deliver"));
   assert.ok(deliver, "no stable deliver command on Stop");
   const stop = JSON.stringify({ session_id: "s", hook_event_name: "Stop" });
+  // The entry runs the hook in its own process as the main module: the hook's own argument check answers.
+  const bogus = bash(["-c", `${deliver} --runtime bogus`], stop);
+  assert.equal(bogus.status, 0, bogus.stderr);
+  assert.match(quiet(bogus.stderr), /^kherep deliver-hook: unknown --runtime/m);
 
   // The root the pointer no longer names is free to go.
   fs.rmSync(checkout, { recursive: true, force: true });

@@ -126,9 +126,7 @@ test("install wires the hooks through the stable entry, points it at the checkou
     assert.equal(stableArgs(command, f.claude), "wake --timeout 86400", event);
     assert.deepEqual(fields, { type: "command", asyncRewake: true, timeout: 86400 }, event);
   }
-  const attribution = attributionGroup(settings)!.hooks;
-  assert.equal(attribution.length, 1);
-  assert.equal(stableArgs(attribution[0].command, f.claude), "attribution");
+  assert.deepEqual(attributionGroup(settings)!.hooks.map((hook) => stableArgs(hook.command, f.claude)), ["attribution"]);
   const all = Object.keys(settings.hooks).flatMap((event) => commandsOf(settings, event)).filter(controlPlane);
   assert.equal(all.length, 8, all.join("\n"));
   assert.ok(all.every((command) => stableArgs(command, f.claude) !== undefined), all.join("\n"));
@@ -148,6 +146,8 @@ test("install wires the hooks through the stable entry, points it at the checkou
       assert.deepEqual([run.status, run.stdout, withoutTypeStrippingWarning(run.stderr)], [0, "", ""], `${event} ${command}: ${run.stderr}`);
     }
   }
+  // The entry runs the hook in its own process as the main module: the hook's own argument check answers.
+  assert.match(bash(["-c", `${deliverCommand(settings, "Stop")} --runtime bogus`], f, payload("Stop")).stderr, /kherep deliver-hook: unknown --runtime/);
 
   const drift = bash([slash(path.join(HERE, "drift-check.sh"))], f);
   assert.equal(drift.status, 0, `${drift.stdout}\n${drift.stderr}`);

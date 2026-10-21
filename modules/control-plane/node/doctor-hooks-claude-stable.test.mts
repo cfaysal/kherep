@@ -160,6 +160,21 @@ test("an entry point of another Claude home never resolves through this home's p
   assert.equal(check.detail, "a hook command names another checkout: the entry point belongs to another Claude home");
 });
 
+test("an operator hook that takes a stable hook name as its argument is not a stable command", (t) => {
+  if (!hasGit()) return t.skip("git is not available");
+  const f = fixture(t);
+  const settings = f.settings();
+  settings.hooks.Stop.push({ hooks: [f.command('node "/opt/own/notify.mts" deliver'), f.command("node /opt/own/listen.mts wake --timeout 60")] });
+  f.write(settings);
+  f.pointer({ version: 1, root: f.pin, commit: f.first, kind: "pin", verified: true });
+
+  const check = checkHooks(f.files, f.repo);
+
+  assert.equal(check.ok, true, JSON.stringify(check));
+  assert.deepEqual(check.claude, { present: true, deliver: 4, wake: 3, foreign: [], pinned: [f.pinHook("wake"), f.pinHook("deliver")],
+    pointer: "valid", stable: 8, legacy: 0, entry: "valid" });
+});
+
 test("commands still in the path form are counted as legacy and keep counting", (t) => {
   if (!hasGit()) return t.skip("git is not available");
   const f = fixture(t);
