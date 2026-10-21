@@ -240,6 +240,15 @@ increments the minor version; every other release increments the patch version.
   observed skips are still printed after any skip check failure (C3, C4,
   C7). A local `run` without `--tap` writes a per-process TAP file, and the
   expected file is read once, before the tests run (issue #570).
+- Codex run guard: `check` reconciles the TAP summary with the records it
+  parsed, under Node's counting: test records at any depth count in
+  `# tests`, suite records only in `# suites`, a SKIP or TODO directive
+  decides the bucket even on a `not ok` record, and the plan `1..N` counts
+  the top-level records. It fails closed with a `C8` line, without the
+  observed skips or the regeneration hint, when `# tests`, `# suites`,
+  `# pass`, `# fail + # cancelled`, `# todo` or the plan disagrees;
+  `# skipped` stays C4. Two hand-written fixtures were made self-consistent
+  (issue #578).
 - Guard and hook-file names in deny reasons and hook-integrity notices
   (issue #564). Every reason or notice line that the Claude guard
   dispatcher, the Codex hook adapter, the Codex shell dispatcher, the
