@@ -259,7 +259,13 @@ describe("fallback deletion, prune and revoke", () => {
     const [operator, legacyNode, acking] = [await send(OPERATOR_NODE_ID), await send(plain.nodeId), await send(capable.nodeId)];
     await sync(target);
     for (const id of [operator, legacyNode]) {
-      const deadline = Number((await row(id))?.delete_after);
+      // sync() is no barrier for a status frame, which reaches the Registry on its own stub (issue #529): the stamp
+      // is awaited on the row, as for an ack (issue #557), and `after` is taken once it was read (issue #565).
+      const deadline = await vi.waitFor(async () => {
+        const value = (await row(id))?.delete_after;
+        expect(value).toBeTypeOf("number");
+        return value as number;
+      }, WAIT);
       const after = Date.now();
       expect(deadline).toBeGreaterThanOrEqual(before + FALLBACK_DELETE_MS);
       expect(deadline).toBeLessThanOrEqual(after + FALLBACK_DELETE_MS);
