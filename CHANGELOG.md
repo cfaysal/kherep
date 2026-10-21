@@ -668,6 +668,20 @@ increments the minor version; every other release increments the patch version.
   barrier, because the error is sent before the ack reaches any stub. A
   regression holds the ack's transaction with a non-storage hold until the
   directory answer has passed. The Worker is unchanged.
+- Timing-dependent tests on the macOS unit job (issue #565). Hook runtime R2
+  read `child.pid` while `writeFileSync` had created it but not yet written
+  it: `Number("")` is 0, and `alive(0)` signals the own process group, so the
+  child never counted as ended. The child now publishes its pid by rename,
+  the test refuses a value that is no process id, `alive()` throws for a pid
+  of 0 or less, and a failed assertion releases the child and kills the entry
+  so the file still exits. The nested guard of the hooks-root test publishes
+  its pids by rename for the same window. The fake Codex app-server ended its
+  child two event-loop turns after stdin ended, racing the client's 30 ms
+  grace timer, so one stalled turn under load turned a clean close into a
+  SIGKILL; it now ends on `process.nextTick`. The 24 h retention deadline is
+  bounded by the time before the first send and after the row was read,
+  without the 1 s slack, and awaited on the row, since `directory.get` is no
+  barrier for the `delivered` status frames. Test and fixture code only.
 
 ## [0.4.0] - 2026-10-18
 
