@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -45,14 +46,16 @@ export class RecordLockBusy extends Error {
 
 let waitMs = RECORD_LOCK_WAIT_MS;
 let budgetEnd: number | null = null;
-let roundLeft: number | null = null;
+const rounds = new AsyncLocalStorage<{ left: number }>();
 
 export function setRecordLockWait(ms: number): void { waitMs = ms; }
 
 // The daemon's rounds (frame-lanes.mts lockRounds): the waits of one lane item
 // together stay within ms, across the awaits between them; a record still held
-// once it is spent is tried once and left to the next round. null: no round.
-export function startRecordLockRound(ms: number | null): void { roundLeft = ms; }
+// once it is spent is tried once and left to the next round. Each call has an
+// allowance of its own, so lane items running concurrently never share one;
+// outside a round each acquisition waits waitMs.
+export function runRecordLockRound<T>(ms: number, fn: () => T): T { return rounds.run({ left: ms }, fn); }
 
 // One wait shared by every lock taken inside body (synchronous code only): a
 // hook call waits at most ms for all its records together (deliver-core.mts
@@ -82,10 +85,11 @@ export function withRecordLock<T>(dir: string, messageId: string, body: () => T,
   const { now = Date.now, sleep = pause } = deps;
   const file = recordLockFile(dir, messageId);
   const started = now();
-  const deadline = Math.min(started + Math.min(waitMs, roundLeft ?? Infinity), budgetEnd ?? Infinity);
+  const round = rounds.getStore();
+  const deadline = Math.min(started + Math.min(waitMs, round?.left ?? Infinity), budgetEnd ?? Infinity);
   const spend = (): number => {
     const waited = now() - started;
-    if (roundLeft !== null) roundLeft = Math.max(0, roundLeft - waited);
+    if (round) round.left = Math.max(0, round.left - waited);
     return waited;
   };
   for (;;) {
@@ -120,8 +124,9 @@ export function withRecordLock<T>(dir: string, messageId: string, body: () => T,
 }
 
 // The time the lock was taken: its content, or its file time while the holder
-// has not written the content yet. null when the lock is gone, or going (a
-// Windows code of a lock in the delete-pending state).
+// has not written the content yet. null when the lock is gone, or its stat
+// answers a held code. Whether Windows refuses this while a reader holds the
+// lock is UNKNOWN; the caller tries its exclusive create again.
 function heldAt(file: string, bytes: string): number | null {
   try {
     const at = Date.parse((JSON.parse(bytes) as { at?: string }).at ?? "");
@@ -174,6 +179,8 @@ function breakStale(file: string, now: number): boolean {
   } catch (error) {
     // EEXIST: a newer lock is there already. Otherwise (no hard links on this
     // file system, the copy gone) a rename puts it back, or the copy stays.
+    // Whether Windows refuses this while a reader holds the lock is UNKNOWN;
+    // a held code leaves it to the stale rule.
     if (code(error) !== "EEXIST") {
       try { fs.renameSync(aside, file); } catch { /* left to the purge of leftover files */ }
       return false;
@@ -184,9 +191,9 @@ function breakStale(file: string, now: number): boolean {
 }
 
 // Removes the lock only while it still holds this holder's bytes: a lock broken
-// as stale and taken by another writer is left to that writer. A removal
-// refused on Windows while another process reads the lock leaves it to the
-// stale rule, at most RECORD_LOCK_STALE_MS later.
+// as stale and taken by another writer is left to that writer. Whether Windows
+// refuses this while a reader holds the lock is UNKNOWN; a held code leaves it
+// to the stale rule, at most RECORD_LOCK_STALE_MS later.
 function release(file: string, mine: string): void {
   try {
     if (fs.readFileSync(file, "utf8") !== mine) return;

@@ -20,7 +20,7 @@ import { readPrivateKey } from "./identity.mts";
 import { installPaused, markedProbe, noticeInterruptedProbe } from "./install-pause.mts";
 import { storeMessage } from "./inbox.mts";
 import { inboxIndex } from "./inbox-index.mts";
-import { DAEMON_RECORD_LOCK_WAIT_MS, setRecordLockWait } from "./inbox-record-lock.mts";
+import { DAEMON_RECORD_LOCK_WAIT_MS, runRecordLockRound, setRecordLockWait } from "./inbox-record-lock.mts";
 import { MAINTENANCE_FALLBACK_MS, runInboxMaintenance, type MaintenanceOptions } from "./inbox-start.mts";
 import { scheduleListenerSweep } from "./listener-sweep.mts";
 import { loadPolicy, type NodePolicy } from "./policy.mts";
@@ -120,7 +120,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   const fallback = setTimeout(() => maintain(), maintenance.fallbackMs ?? MAINTENANCE_FALLBACK_MS).unref();
   const maintain = (): void => {
     clearTimeout(fallback); // issue #589: no pending fallback once it ran
-    maintaining ??= runInboxMaintenance(paths, log, { ...maintenance, signal: halt.signal })
+    // Issue #627: a round of its own, not the rest of the lane item that connected.
+    maintaining ??= runRecordLockRound(DAEMON_RECORD_LOCK_WAIT_MS, () => runInboxMaintenance(paths, log, { ...maintenance, signal: halt.signal }))
       .catch((error: unknown) => log(`kherep-node: start maintenance failed: ${String(error)}`));
   };
   // Issue #487: one in-process inbox index for the daemon's readers (inbox-index.mts); issue #589: the

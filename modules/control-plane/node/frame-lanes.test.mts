@@ -6,7 +6,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { laneTimer, lockRounds } from "./frame-lanes.mts";
-import { RECORD_LOCK_POLL_MS, startRecordLockRound, withRecordLock } from "./inbox-record-lock.mts";
+import {
+  RECORD_LOCK_POLL_MS, RECORD_LOCK_WAIT_MS, withRecordLock, type RecordLockBusy,
+} from "./inbox-record-lock.mts";
 
 // Issue #487 (D1): a lane item records how long it waited behind the lane, not
 // only how long it ran, so a stall names its own cause. Fake clock, no timers.
@@ -66,7 +68,7 @@ test("a failing item still logs its wait and rethrows", async () => {
 // waits; a record held for the whole allowance is left to the next item.
 test("each lane item has the round's record lock allowance again", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-lane-lock-"));
-  t.after(() => { startRecordLockRound(null); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const id = "00000000-0000-4000-8000-0000000000a1";
   fs.writeFileSync(path.join(dir, `.${id}.json.lock`), `${JSON.stringify({ pid: 1, at: new Date(0).toISOString() })}\n`);
   let at = 0;
@@ -77,4 +79,32 @@ test("each lane item has the round's record lock allowance again", async (t) => 
   assert.equal(sleeps.length, 100 / RECORD_LOCK_POLL_MS, "the second lock of the item did not wait");
   await timed("intake", "intake:deliver", held);
   assert.equal(sleeps.length, 2 * 100 / RECORD_LOCK_POLL_MS);
+});
+
+// The chain and intake lanes run their items concurrently: each item has an
+// allowance of its own, and code outside any lane item has none left over
+// from one (it waits the per-acquisition wait).
+test("concurrent lane items each have their own allowance; none is left outside a lane item", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-lane-lock-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const id = "00000000-0000-4000-8000-0000000000a2";
+  fs.writeFileSync(path.join(dir, `.${id}.json.lock`), `${JSON.stringify({ pid: 1, at: new Date(0).toISOString() })}\n`);
+  let at = 0;
+  const waited: number[] = [];
+  const held = (): void => {
+    try {
+      withRecordLock(dir, id, () => {}, { now: () => at, sleep: (ms) => { at += ms; } });
+    } catch (error) {
+      waited.push((error as RecordLockBusy).waitedMs);
+    }
+  };
+  const timed = lockRounds(laneTimer(() => {}, 5_000, () => 0), 100);
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => { open = resolve; });
+  const chain = timed("chain", "exchange-round", async () => { await gate; held(); });
+  const intake = timed("intake", "intake:deliver", () => { held(); open(); });
+  await Promise.all([chain, intake]);
+  assert.deepEqual(waited, [100, 100], "the intake item did not spend the chain item's allowance");
+  held();
+  assert.equal(waited.at(-1), RECORD_LOCK_WAIT_MS);
 });

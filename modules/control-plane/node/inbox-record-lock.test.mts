@@ -6,7 +6,7 @@ import test, { type TestContext } from "node:test";
 
 import {
   LOCK_HELD_CODES, RECORD_LOCK_POLL_MS, RECORD_LOCK_STALE_MS, RECORD_LOCK_WAIT_MS, RecordLockBusy,
-  recordLockFile, startRecordLockRound, withRecordLock, withRecordLockBudget,
+  recordLockFile, runRecordLockRound, withRecordLock, withRecordLockBudget,
 } from "./inbox-record-lock.mts";
 
 // Issue #627: the record lock, driven with a fake clock and a fake sleep, so
@@ -167,17 +167,19 @@ test("a lock that stays fresh is busy after the wait, typed, without running the
 test("a round's allowance bounds the waits of all its locks together; the next round has it again", (t) => {
   const f = fixture(t, (fx) => fs.writeFileSync(fx.lock, foreign(fx.clock.t)));
   fs.writeFileSync(f.lock, foreign(NOW));
-  t.after(() => startRecordLockRound(null));
-  startRecordLockRound(100);
-  assert.throws(() => withRecordLock(f.dir, ID, () => {}, f.deps), busy);
-  assert.deepEqual(f.sleeps, polls(100), "the first lock spent the round's allowance");
-  assert.throws(() => withRecordLock(f.dir, ID, () => {}, f.deps), (error) => busy(error) && (error as RecordLockBusy).waitedMs === 0);
-  let ran = false;
-  withRecordLock(f.dir, "00000000-0000-4000-8000-0000000000b2", () => { ran = true; }, f.deps);
-  assert.ok(ran, "a record nobody holds is still taken at once");
-  startRecordLockRound(100);
-  assert.throws(() => withRecordLock(f.dir, ID, () => {}, f.deps), busy);
-  assert.deepEqual(f.sleeps, [...polls(100), ...polls(100)], "the next round waits again");
+  runRecordLockRound(100, () => {
+    assert.throws(() => withRecordLock(f.dir, ID, () => {}, f.deps), busy);
+    assert.deepEqual(f.sleeps, polls(100), "the first lock spent the round's allowance");
+    assert.throws(() => withRecordLock(f.dir, ID, () => {}, f.deps), (error) => busy(error) && (error as RecordLockBusy).waitedMs === 0);
+    let ran = false;
+    withRecordLock(f.dir, "00000000-0000-4000-8000-0000000000b2", () => { ran = true; }, f.deps);
+    assert.ok(ran, "a record nobody holds is still taken at once");
+    // The daemon's start maintenance, begun inside a lane item, has a round of its own.
+    runRecordLockRound(60, () => assert.throws(() => withRecordLock(f.dir, ID, () => {}, f.deps), busy));
+    assert.deepEqual(f.sleeps, [...polls(100), ...polls(60)], "a nested round does not inherit the spent allowance");
+  });
+  runRecordLockRound(100, () => assert.throws(() => withRecordLock(f.dir, ID, () => {}, f.deps), busy));
+  assert.deepEqual(f.sleeps, [...polls(100), ...polls(60), ...polls(100)], "the next round waits again");
 });
 
 test("a budget bounds the waits of every lock taken inside it together; the shorter nested one wins", (t) => {
