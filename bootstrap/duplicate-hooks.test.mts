@@ -57,6 +57,18 @@ test("the same script in two groups of one event, or spelled with backslashes, i
   assert.deepEqual(duplicateControlPlaneHooks(two, "win32").map((item) => `${item.event} x${item.count}`), ["Stop x2", "UserPromptSubmit x2"]);
 });
 
+// Review of #590, P3-3: only what an install replaces is a finding, so the
+// advice to install again holds. The installer template wires deliver-hook on
+// UserPromptSubmit, Stop, StopFailure and PostToolUse, wake-hook on
+// SessionStart, UserPromptSubmit and Stop, attribution-hook on PostToolUse.
+test("a control-plane script twice on an event the template does not wire it for, or an unmanaged script, is no finding", () => {
+  const twice = (script: string) => [{ matcher: "", hooks: [cp(CHECKOUT, script), cp(PIN, script)] }];
+  assert.deepEqual(duplicateControlPlaneHooks({ hooks: {
+    PreToolUse: twice("deliver-hook.mts"), StopFailure: twice("wake-hook.mts"), SessionStart: twice("attribution-hook.mts"),
+    Stop: twice("own-note.mts"), Notification: twice("deliver-hook.mts"),
+  } }, "darwin"), []);
+});
+
 test("the command prints one DUPLICATE-HOOK line per finding and exits 3; a clean or absent file exits 0", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-duplicate-hooks-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

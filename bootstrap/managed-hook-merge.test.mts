@@ -188,3 +188,11 @@ test("settings that already hold both roots collapse to one set, also with backs
     { Stop: [{ matcher: "", hooks: [{ type: "command", command: String.raw`node "d:\Work\kherep\modules\control-plane\node\deliver-hook.mts"` }] }] });
   assert.deepEqual(win.merged.Stop, [{ matcher: "", hooks: [cp("D:/Tools/Kherep", "deliver-hook.mts")] }]);
 });
+
+// Review of #590, P3-2: an operator command that runs a control-plane script
+// and more is not the managed hook, whatever root it names; it stays.
+test("an operator command that chains a control-plane script stays next to the managed entry", () => {
+  const chained = cp(CHECKOUT, "deliver-hook.mts", " && echo delivered >> /tmp/own.log");
+  const r = merge({ Stop: [{ matcher: "", hooks: [cp(PIN, "deliver-hook.mts")] }] }, { Stop: [{ matcher: "", hooks: [chained] }] });
+  assert.deepEqual(r.merged.Stop, [{ matcher: "", hooks: [cp(PIN, "deliver-hook.mts"), chained] }]);
+});
