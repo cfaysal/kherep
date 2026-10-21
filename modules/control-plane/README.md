@@ -54,7 +54,7 @@ gates. See [busy-turn admission](ARCHITECTURE.md#codex-busy-turn-hint-admission)
 | `Registry` | `worker/src/registry.mts` | SQLite tables `nodes`, `runtimes`, `sessions`, `enrollments`, `audit`; one-time codes; key binding; revocation |
 | Message queue | `worker/src/message-store.mts`, `worker/src/message-routing.mts` | The Registry's `messages` table, state changes and expiry; pushing the resulting frames to connected nodes |
 | Node | `node/cli.mts` | `kherep-node node onboard|status|unenroll`, `kherep-node daemon`, `kherep-node doctor` and `kherep-node msg ...` |
-| Daemon service | `node/service-cli.mts`, `node/service-transaction.mts`, `node/service-platform-*.mts` | Per-user login service install, verified immutable-source upgrade, status and measured rollback |
+| Daemon service | `node/service-cli.mts`, `node/service-transaction.mts`, `node/service-rollback.mts`, `node/service-status.mts`, `node/service-platform-*.mts` | Per-user login service install, verified immutable-source upgrade, status and measured rollback |
 | Doctor | `node/doctor.mts`, `node/doctor-local.mts`, `node/doctor-host.mts`, `node/doctor-hooks.mts`, `node/doctor-intercom.mts`, `node/doctor-drain.mts`, `node/intercom-instructions.mts`, `node/daemon-state.mts` | `kherep-node doctor`: whether this host can take part, see [Doctor](#doctor) |
 | Node sessions | `node/sessions.mts` | Claude Code session discovery for `session.list` and `sessions.snapshot` |
 | Node inbox | `node/inbox.mts`, `node/policy.mts` | Messaging policy, the inbox of accepted messages and its retention |
@@ -805,8 +805,11 @@ holds a lease, and rechecks ownership immediately before the selected service
 stop. Admission leases carry PID, start-time and owner provenance;
 positively stale leases are recovered and uncertain owners fail closed. Status
 succeeds only for a running, authenticated daemon with the exact managed
-process, source, config and service binding. It does not modify Claude Code or
-Codex hooks.
+process, source, config and service binding. A failed activation never leaves
+a definition on disk that differs from the loaded job: a candidate that recovery
+cannot stop stays loaded and is recorded in `service/candidate.json`, and the
+next upgrade, rollback or repeated install stops it through the proven path
+(issue #582). It does not modify Claude Code or Codex hooks.
 
 `service install`, `upgrade` and `rollback` also write the stable command to
 `bin/` under the config directory (issue #436): `kherep-node.mjs`, a POSIX shim
@@ -862,7 +865,7 @@ The config directory is `KHEREP_CONFIG_DIR` when set, otherwise `%APPDATA%\khere
 | `node.json` | Non-secret config: control URL, `nodeId`, name, public key, key and policy paths |
 | `node-ed25519.pem` | The private key, mode `0600` |
 | `daemon.json` | The daemon's `pid`, `startedAt`, immutable startup `source`, optional managed `service`, the time of its last authenticated connection `connectedAt` and, while that connection is lost, `disconnectedAt`, and per runtime the last readiness probe as `readiness.<runtime>` with `ready`, the fixed `cause` code when not ready and `probedAt`, never the probe's output. `interruptedProbe` (`runtime`, the previous daemon's `pid`, the probe start `at`, `noticedAt`) records a Claude probe that the previous daemon's stop interrupted, until the next ready Claude verdict (issue #420). Written by the daemon for [Doctor](#doctor); on Windows a replace of the file is retried up to 8 times, with at most 1.27 s of pauses between attempts, while another process holds it open, after which the write fails, is logged and the daemon runs on (issue #540) |
-| `service/` | Managed service receipt, retained raw native backups, verified source pins, transaction lock and short-lived admission drain state; mode `0700`, records mode `0600` |
+| `service/` | Managed service receipt, the `candidate.json` record of a failed candidate recovery could not stop, retained raw native backups, verified source pins, transaction lock and short-lived admission drain state; mode `0700`, records mode `0600` |
 | `policy.json` | Local command allowlist and messaging policy, see below |
 | `inbox/` | Accepted messages, one `<messageId>.json` per message; daemon progress sidecars under `progress/` and persistence receipts under `receipts/`; directory mode `0700`, files `0600` |
 | `outbox/` | Messages written by `msg send`, one `<messageId>.json` each, until the daemon has an answer from the Worker. Created by `node onboard` and at daemon start, because a sandboxed session may write into it but not create it |
