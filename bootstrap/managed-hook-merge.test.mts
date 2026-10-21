@@ -196,3 +196,22 @@ test("an operator command that chains a control-plane script stays next to the m
   const r = merge({ Stop: [{ matcher: "", hooks: [cp(PIN, "deliver-hook.mts")] }] }, { Stop: [{ matcher: "", hooks: [chained] }] });
   assert.deepEqual(r.merged.Stop, [{ matcher: "", hooks: [cp(PIN, "deliver-hook.mts"), chained] }]);
 });
+
+// Issue #592. The stable template names the entry under the Claude home and the
+// script by name; it replaces the path-form entries of every root, in every
+// group of the event, because both forms have the key of the same script.
+const STABLE = 'node "/Users/x/.claude/kherep/control-plane/claude-control-plane-hook.mts"';
+const stable = (name: string, args = ""): HookCommand => ({ type: "command", command: `${STABLE} ${name}${args}` });
+const stableWake = (): HookCommand => ({ ...stable("wake", " --timeout 86400"), asyncRewake: true, timeout: 86400 });
+
+test("a stable-form template replaces path-form entries of two roots in every group of the event; operator hooks stay", () => {
+  const own = { type: "command", command: 'node "/opt/own/stop-note.mts"' };
+  const source = { Stop: [{ matcher: "", hooks: [stable("deliver"), stableWake()] }] };
+  const existing = { Stop: [
+    { matcher: "", hooks: [own, cp(CHECKOUT, "deliver-hook.mts"), cpWake(CHECKOUT, 86400)] },
+    { matcher: "", hooks: [cp(PIN, "deliver-hook.mts"), cpWake(PIN, 86400)] },
+  ] };
+  const r = merge(source, existing);
+  assert.deepEqual(r.merged.Stop, [{ matcher: "", hooks: [stable("deliver"), stableWake(), own] }]);
+  assert.deepEqual(r.replaced, []);
+});
