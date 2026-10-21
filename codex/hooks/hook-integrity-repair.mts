@@ -1,7 +1,8 @@
 /**
  * hook-integrity-repair.mts  -  the repair of one inventoried file for the Codex
  * hook-integrity hook (hook-integrity.mts): which checkout it restores from, the
- * restore measured at the target, and the incident journal. Issue #533: the libs and
+ * restore, counted only when MEASURED at the target (size > 0, SHA-256 equal to the
+ * checkout bytes), and the incident journal. Issue #533: the libs and
  * the run state arrive as parameters, so this file imports only node:* modules; the
  * hook loads it as an own step after the four libs a restore needs.
  */
