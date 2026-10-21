@@ -12,7 +12,7 @@ import { after, test } from "node:test";
 import { denialFaultEnv } from "../../claude/hooks/denial-fault.fixture.mts";
 import { journalPaths } from "../../claude/hooks/lib/denial-journal.mts";
 import { readJournal, renderReport } from "../../claude/hooks/lib/denial-report.mts";
-import { cleanupHomes, codexHome, exit2, run, scrub, shellPayload, type CodexHome } from "./denials-fixture.mts";
+import { assertSameAnswer, cleanupHomes, codexHome, exit2, run, shellPayload, type CodexHome } from "./denials-fixture.mts";
 
 after(cleanupHomes);
 const GUARDS = { "codex-guard.mts": exit2("codex-guard"), "allow.mts": "process.exit(0);\n" };
@@ -47,7 +47,7 @@ for (const lib of ["missing", "empty", "throwing", "hanging"] as const) {
     const home = codexHome(GUARDS, lib);
     const result = await adapt(home, "codex-guard.mts", shellPayload());
     assert.equal(result.status, 0);
-    assert.equal(scrub(result.stdout, home), scrub(reference.stdout, referenceHome));
+    assertSameAnswer(result, home, reference, referenceHome);
     assert.equal(fs.readFileSync(journalPaths(home.root, "agent-c1").marker, "utf8"), lib === "hanging" ? "lib-timeout\n" : "lib-load\n");
     assert.ok(result.ms < 8_500, `${result.ms} ms`);
   });
@@ -59,7 +59,7 @@ test("a journal write that never settles: the same deny within 1 s of the refere
   const result = await run([path.join(home.hookDir, "codex-hook-adapter.mts"), path.join(home.hookDir, "codex-guard.mts"), "pre"],
     shellPayload(), denialFaultEnv("all-hang", "codex-hook-adapter.mts"));
   assert.equal(result.status, 0);
-  assert.equal(scrub(result.stdout, home), scrub(reference.stdout, referenceHome));
+  assertSameAnswer(result, home, reference, referenceHome);
   assert.ok(result.ms < reference.ms + 1_000 + 700, `${result.ms} ms against ${reference.ms} ms`);
 });
 
