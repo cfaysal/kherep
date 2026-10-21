@@ -33,7 +33,9 @@ export const HEARTBEAT_WINDOW_MS = 1_800_000;
 export interface WriteProbe { beforeRename?: (tmp: string) => void }
 
 const dirOf = (home: string): string => path.join(home, ".cache", "hook-integrity");
-const errorText = (error: unknown): string => (error as NodeJS.ErrnoException)?.code || String(error);
+// A Node error code, else the error's class name, else "unknown"; never a message (the #564 vocabulary, issue #576).
+const errorText = (error: unknown): string => { const { code, name } = (error ?? {}) as { code?: unknown; name?: unknown };
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,40}$/.test(code) ? code : typeof name === "string" && /^[A-Za-z]{1,40}Error$/.test(name) ? name : "unknown"; };
 const nonce = (): string => crypto.randomBytes(8).toString("hex");
 
 export const heartbeatFile = (home: string): string => path.join(dirOf(home), "heartbeat.json");

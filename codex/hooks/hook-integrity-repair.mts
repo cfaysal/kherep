@@ -65,8 +65,8 @@ export function restore(lib: Libs, file: string, from: string, repoRoot: string,
   if (!repoRoot) return { proven: false, why: "no checkout resolved via the control-plane pointer, the deliver-hook command, workspace, KHEREP_WORKSPACE or install note" };
   const source = lib.joinPathLike(repoRoot, from);
   const wanted = read(source);
-  if (typeof wanted === "string") return { proven: false, why: `versioned source ${source} unreadable (${wanted})` };
-  if (!wanted.length) return { proven: false, why: `versioned source ${source} is itself 0 bytes` };
+  if (typeof wanted === "string") return { proven: false, why: `versioned source ${from} unreadable (${wanted})` };
+  if (!wanted.length) return { proven: false, why: `versioned source ${from} is itself 0 bytes` };
   const refusal = lib.writeExact(file, wanted, hooksDir);
   if (refusal) return { proven: false, why: refusal };
   // Measured at the target. The write call reporting success is not a measurement.
@@ -115,7 +115,7 @@ export function entryChecker(lib: Libs, { home, hooksDir, repoRoot, lock, trigge
     const entry: Record<string, unknown> = {
       ts: new Date().toISOString(), trigger: TRIGGER, file: rel, path: file, state: verdict, reason, kind: isWired ? "wired" : "import", importedBy,
       sizeBefore: before.size ?? null, mtimeBefore: before.mtime || null, inoBefore: before.ino ?? null,
-      sha256After: null, restoreProven: false,
+      sha256After: null, restoreProven: false, checkout: repoRoot,
     };
     const source = sourceOf(rel);
     if (verdict === "UNGEPRUEFT") {
