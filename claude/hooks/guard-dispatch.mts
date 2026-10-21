@@ -1,19 +1,10 @@
 #!/usr/bin/env node
-// Issue #507, parts 1 and 2. Runs the PreToolUse guards of one matcher group:
-//   node "<home>/hooks/guard-dispatch.mts" "<home>/hooks/<guard-a>.mts" ...
-// A guard that cannot run (missing, empty, no regular file, outside this directory,
-// not spawnable, killed, past its cap, exit other than 0 or 2, stdout other than
-// hookSpecificOutput with hookEventName plus a decision, reason or additionalContext)
-// is a deny naming the file; so is stdin that is no JSON object or stays open. A
-// working guard keeps its verdict (exit 2 = deny, stderr the reason); all run in
-// parallel to the end, decisions combine deny > ask > allow, notices join.
-// Part 2: started by kherep/hook-runtime/entry.mts, it holds a read admission and
-// each guard child holds its own. After the guards, a heartbeat (<home>/.cache/
-// hook-integrity/heartbeat.json, <home> = parent of this file's directory as
-// invoked) older than 30 minutes or missing, or a guard that could not run, ends
-// that admission and starts live-hook-integrity.mts as the admitted writer; its
-// lines are a notice, never a decision. One deadline before the 30 s timeout
-// bounds stdin, guards and the re-check; the process exits after its write.
+// Issue #507, parts 1 and 2: node "<home>/hooks/guard-dispatch.mts" "<home>/hooks/<guard>.mts" ... runs one matcher group's guards in
+// parallel to the end (exit 2 = deny, stderr the reason); deny > ask > allow, notices join. A guard that cannot run (missing, empty,
+// outside this directory, killed, past its cap, exit other than 0 or 2, stdout that is no accepted decision) is a deny naming it, as is
+// stdin that is no JSON object or stays open. Started by kherep/hook-runtime/entry.mts; a heartbeat (<home>/.cache/hook-integrity/
+// heartbeat.json) older than 30 minutes or missing, or a guard that could not run, starts live-hook-integrity.mts: a notice, never a
+// decision. Issue #504: a delegated run's call is journalled. One deadline before the 30 s timeout bounds it all; exit after the write.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -36,6 +27,7 @@ const GUARD_TIMEOUT_MS = 10_000;
 // A re-check gets <= RECHECK_MAX_MS of what is left, none below RECHECK_MIN_MS; its lib loads within RECHECK_LOAD_MS.
 const RECHECK_MAX_MS = 20_000, RECHECK_MIN_MS = 2_000, RECHECK_LOAD_MS = 2_000;
 const HEARTBEAT_WINDOW_MS = 1_800_000; // = lib/integrity-heartbeat.mts; each side has a boundary test
+const JOURNAL_CAP_MS = 1_500, MARK_GRACE_MS = 400, AGENT_KEY = /^[A-Za-z0-9_-]{1,64}$/; // issue #504
 const SELF = fileURLToPath(import.meta.url), DIR = path.dirname(SELF);
 const INVOKED_DIR = path.dirname(path.resolve(process.argv[1] ?? SELF));
 const HOME = path.dirname(INVOKED_DIR);
@@ -97,8 +89,7 @@ const isObject = (value: unknown): value is Record<string, unknown> => !!value &
 const NOT_DECISION = "stdout is not a PreToolUse decision";
 const FIELDS = ["hookEventName", "permissionDecision", "permissionDecisionReason", "additionalContext"];
 
-// The verdict a guard printed on exit 0, or why stdout is not the accepted shape. A field
-// the dispatcher would drop changes the guard's intent, so an unknown field fails.
+// The verdict a guard printed on exit 0, or why stdout is not the accepted shape; a field the dispatcher would drop fails.
 function printed(stdout: string): Verdict | string {
   let parsed: unknown;
   try { parsed = JSON.parse(stdout); } catch { return NOT_DECISION; }
@@ -138,8 +129,7 @@ function judge(file: string, code: number | null, signal: string | null, stdout:
   return typeof result === "string" ? failure(file, result) : result;
 }
 
-// Node versions that strip types with a warning print this one for a .mts guard, also after its
-// unterminated output. No diagnostic of the guard: only it is dropped, every other one stays.
+// The type-stripping warning of a .mts guard, also after its unterminated output: only it is dropped, every diagnostic stays.
 const TYPE_STRIPPING_WARNING = new RegExp("\\(node:\\d+\\) ExperimentalWarning: Type Stripping is an experimental "
   + "feature and might change at any time\\r?\\n(?:\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning "
   + "was created\\)\\r?\\n)?", "g");
@@ -177,8 +167,7 @@ function runGuard(file: string, payload: string): Promise<Outcome> {
   });
 }
 
-// The strongest decision with its reasons, plus every notice in argument order.
-// A printed allow passes through: it lets Claude Code skip its permission prompt.
+// The strongest decision with its reasons, every notice in argument order; a printed allow passes (no permission prompt).
 function combine(verdicts: Verdict[]): Verdict | undefined {
   const decision = DECISIONS.find((candidate) => verdicts.some((verdict) => verdict.decision === candidate));
   const reason = verdicts.filter((verdict) => decision && verdict.decision === decision)
@@ -197,8 +186,7 @@ function within<T, L>(work: Promise<T>, ms: number, late: () => L): Promise<T | 
   return Promise.race([work, expired]).finally(() => clearTimeout(timer));
 }
 
-// The re-check notice (lib/guard-recheck.mts), or undefined. Never a verdict. A broken lib
-// throws here or, empty (an empty namespace), at its first call; a hanging one is not waited for.
+// The re-check notice (lib/guard-recheck.mts) or undefined, never a verdict. A broken or empty lib throws; a hanging one is not waited for.
 async function recheck(payload: string, guards: Promise<Outcome[]>, ownDir: string): Promise<string | undefined> {
   const loadMs = Math.min(RECHECK_LOAD_MS, remaining());
   const lib = await within(import("./lib/guard-recheck.mts"), loadMs, () => undefined);
@@ -206,6 +194,17 @@ async function recheck(payload: string, guards: Promise<Outcome[]>, ownDir: stri
   return lib.recheckAfter({ home: HOME, script: path.join(INVOKED_DIR, "live-hook-integrity.mts"), payload, guards,
     unrunnable: (file) => unrunnable(file, ownDir), remaining, windowMs: HEARTBEAT_WINDOW_MS,
     maxMs: RECHECK_MAX_MS, minMs: RECHECK_MIN_MS, runtime: CAP });
+}
+
+// Issue #504: a delegated run's call line (lib/denial-journal.mts), else a marker; never a verdict, never past its caps.
+async function journal(payload: Record<string, unknown>, verdicts: Verdict[]): Promise<void> {
+  const id = payload.agent_id, cap = Math.min(JOURNAL_CAP_MS, remaining()), base = path.join(HOME, ".cache", "denied-calls", String(id));
+  if (typeof id !== "string" || !AGENT_KEY.test(id) || payload.tool_name === "SubagentHandback") return;
+  const fail = await within(import("./lib/denial-journal.mts").then((lib) => lib.journalVerdict(HOME, payload, verdicts, Date.now() + cap - 50)),
+    cap, () => "lib-timeout").catch(() => "lib-load"); // a lib that is missing, empty, throws or hangs
+  if (fail) await within(fs.promises.mkdir(path.dirname(base), { recursive: true, mode: 0o700 }).then(() => fs.promises.appendFile(`${base}.failed`,
+    `${fail}\n`, { mode: 0o600 })).catch(() => fs.promises.rename(`${base}.jsonl`, `${base}.failed`)), Math.min(MARK_GRACE_MS, remaining()), () => {})
+    .catch(() => {});
 }
 
 async function dispatch(guards: string[]): Promise<{ verdict?: Verdict; stderr: string[] }> {
@@ -227,6 +226,7 @@ async function dispatch(guards: string[]): Promise<{ verdict?: Verdict; stderr: 
   const [outcomes, notice] = await Promise.all([running, checking]);
   const verdicts = outcomes.map((outcome) => outcome.verdict);
   const stderr = outcomes.map((outcome) => outcome.stderr);
+  await journal(payload, verdicts);
   if (notice) { verdicts.push({ reason: "", notice }); stderr.push(notice); }
   return { verdict: combine(verdicts), stderr };
 }
