@@ -387,15 +387,60 @@ so its recovery is never reported `restored` without proof. An `unknown`
 recovery keeps the drain marker once a definition write was attempted or while
 the daemon told to stop is still alive, and releases it otherwise.
 
+The CLI never writes a service definition that differs from a loaded job
+(issue #582). When a failed activation cannot stop its candidate, recovery
+fails closed: the candidate stays loaded and configured (consistent), the
+failure reports blocker `RECOVERY_CANDIDATE_LOADED` with a fixed `stopCode`,
+and `service/candidate.json` records the candidate. `service status` then
+shows `candidate` with the candidate's commit, the failed stage, the blocker
+and the stop code, never a path or pid.
+
+`kherep-node service upgrade --source <clean checkout>` activates over the
+recorded candidate and stops it through the proven path; `kherep-node service
+rollback` restores the receipt's definition from the recorded prior backup and
+waits up to 180 seconds for its health; after a failed `service install` (no
+receipt) repeat `kherep-node service install` with the same `--workspace` and
+`--service-name`, without `--adopt`. `--adopt` over a recorded candidate is
+refused. A second failed upgrade over the record can take up to 30 seconds of
+health wait plus 180 seconds of restore before it reports.
+
+A recorded candidate loaded without a process (`running: unknown`, for example
+a crash loop under `KeepAlive`) is refused by both verbs; `service status` says
+so. Unload it by hand, `launchctl bootout gui/<uid>/<label>` (the plist in place
+is the recorded candidate, which `status` verified), then run `kherep-node
+service rollback`. On Windows stop the task by hand, then roll back.
+
+A node where launchd and the plist already disagree reports `definition:
+unattested` with `configured: receipt | candidate | unknown`. Reload launchd
+only when `configured` is `receipt` or `candidate`, and only after this check:
+`shasum -a 256 ~/Library/LaunchAgents/<label>.plist` must equal
+`definitionDigest` in `<config>/control-plane/service/receipt.json` (or in
+`candidate.json`), the file must be a regular file owned by you with mode 0600
+or 0644 and no symlink in its path. Then `launchctl bootout gui/<uid>/<label>`
+and `launchctl bootstrap gui/<uid> ~/Library/LaunchAgents/<label>.plist`. For
+`configured: unknown` do not reload: inspect and restore the file from
+`service/backups/` first. On Windows inspect the task before re-registering it.
+
+`candidate: invalid` means `service/candidate.json` is unreadable or does not
+validate. While the receipt matches the loaded definition the next successful
+upgrade removes it; otherwise remove the file by hand and run `service status`
+again.
+
+On Windows a stop refused by the native script is reported as
+`STOP_NATIVE_REFUSED`; `STOP_BLOCKED_NATIVE_DESCENDANTS` is reported for the
+read-only descendant wait and on macOS.
+
 `service status` also reports `drain`: `none`, `active`, `stale` or `unknown`.
 A stale or unverifiable drain, left by a controller that exited during a
 transaction, blocks new session admissions, and status then fails. For a stale
 drain it names the recovery `kherep-node service upgrade --source <clean
-checkout at <commit>>` with the receipt's commit, which reclaims the drain. For
-an `unknown` drain, whose owner cannot be verified, it asks to inspect the
-`service/drain` owner file instead, since an upgrade refuses that drain too. A
-stopped service whose recorded daemon is dead gets the upgrade recovery: upgrade
-accepts a stale daemon record while the service is stopped, and still refuses a
+checkout> reclaims the stale drain (installed source <commit>)` with the
+receipt's commit; the upgrade reclaims the drain. For an `unknown` drain, whose
+owner cannot be verified, it asks to inspect the `service/drain` owner file
+instead, since an upgrade refuses that drain too. A stopped service whose
+recorded daemon is dead gets the recovery `kherep-node service upgrade --source
+<clean checkout> (installed source <commit>)`: upgrade accepts a stale daemon
+record while the service is stopped, and still refuses a
 live daemon outside it or a running service whose daemon does not match the
 receipt. Status prints the commit, never a local path or pid.
 These service commands do not edit runtime hook configuration; run `kherep-node

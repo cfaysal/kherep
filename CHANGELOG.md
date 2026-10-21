@@ -213,6 +213,22 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- `service status` drain hints no longer embed the commit in the source
+  placeholder (issue #582): a stale drain reads `kherep-node service upgrade
+  --source <clean checkout> reclaims the stale drain (installed source
+  <commit>)`, a stopped service `kherep-node service upgrade --source <clean
+  checkout> (installed source <commit>)`. `service rollback` now waits up to
+  180 seconds (`ROLLBACK_HEALTH_TIMEOUT_MS`) for the prior daemon's health,
+  as `restorePrior` already did, because the prior source may predate #581
+  (issue #589 item 4, the rollback half; the forward upgrade, also one that
+  reclaims a stale drain, keeps 30 seconds). On Windows a stop refused by the
+  native script is reported as `STOP_NATIVE_REFUSED`;
+  `STOP_BLOCKED_NATIVE_DESCENDANTS` is reported for the read-only descendant
+  wait and on macOS. `rollbackManagedService` moves to
+  `node/service-rollback.mts` and the status report to
+  `node/service-status.mts` for the 250-line budget; `service-transaction.mts`
+  re-exports `rollbackManagedService`.
+
 - Codex hook adapter and hook-integrity hook split into modules below the
   250-line budget (issue #533). `codex/hooks/hook-adapter.mts` keeps the
   clock, the re-check and the process I/O and imports
@@ -326,6 +342,37 @@ increments the minor version; every other release increments the patch version.
   code or Codex trust hash changes.
 
 ### Fixed
+
+- A failed macOS upgrade recovery no longer leaves the new daemon loaded
+  under the prior plist, after which every service command refused (issue
+  #582). `restorePrior` wrote the prior definition after the candidate stop
+  had failed; a plist write changes only the file, never the loaded job, so
+  launchd kept the candidate while the file held the prior and every read
+  attested the mismatch. The stop failure was swallowed. Recovery now fails
+  closed: the prior bytes are written only over nothing, over themselves or
+  over a candidate proven absent; a candidate that still reads as loaded
+  stays in place, consistent, and the failure reports blocker
+  `RECOVERY_CANDIDATE_LOADED` with one of seven fixed stop codes
+  (`stopCode`), never the stop message. `removeFresh` does the same for a
+  fresh install. `service/candidate.json` records the candidate (binding,
+  digests, the bound prior backup, command, stage, blocker, stop code,
+  `failedAt`), and three verbs finish through the proven stop path: `service
+  upgrade` activates over it, `service rollback` restores the receipt's
+  definition from the recorded prior backup, and after a failed install a
+  repeated `service install` without `--adopt` completes it (`--adopt` over
+  a recorded candidate is refused). The record is used only while its
+  digests are exactly in place under the receipt's binding and its prior
+  backup is bound to the receipt; anything else refuses with a fixed text
+  before any mutation. `service status` reports the record as `candidate`
+  (commit, command, stage, blocker, stop code, `failedAt`, whether the prior
+  is bound), `stale` or `invalid`; when the native read fails it reports
+  `definition: "unattested"` and `running: "unknown"` with exit 1 instead of
+  throwing, on macOS with the configured plist classified by digest as
+  `receipt`, `candidate` or `unknown` and a reload hint only for the first
+  two. Without a receipt it reports a recorded install candidate, and
+  otherwise stays `{ ok: true, managed: false }` without reading the
+  service. A node that is already wedged still needs the manual reload in
+  `docs/INSTALLATION.md`.
 
 - Control Plane Worker: `agents` moves from 0.24.0 to 0.28.1, and with it
   `@modelcontextprotocol/server` and `@modelcontextprotocol/client` from

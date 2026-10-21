@@ -36,8 +36,10 @@ every child start, appends both output streams to the retained service log and
 restarts an exited daemon after 30 seconds. It accepts no arbitrary command,
 arguments, environment or shell setting.
 
-`node/service-transaction.mts` serializes activation with one local lock. It
-preflights configured definition drift and the exact owned daemon, saves the
+`node/service-transaction.mts` serializes activation with one local lock;
+`node/service-rollback.mts` runs `service rollback` under the same lock, and
+`node/service-status.mts` with `node/service-configured-digest.mts` reports
+`service status`. The transaction preflights configured definition drift and the exact owned daemon, saves the
 exported task state or configured plist bytes and security metadata, drains new
 task admissions and waits for existing admission leases. The
 platform adapter then verifies no daemon descendants. Windows read-only probes
@@ -62,7 +64,10 @@ after native readback, a fresh pid, authenticated
 connection, matching service binding and matching startup source. Recovery and
 rollback independently read back restored bytes and restart only a verified
 prior source. An uncertain absence or historical mutable-source drift stays
-unknown and does not authorize another process stop.
+unknown and does not authorize another process stop. Recovery never writes a
+definition over a loaded candidate; a candidate it cannot stop stays in place,
+consistent, recorded, and the next upgrade, rollback or repeated install stops it
+through the proven path (issue #582).
 
 Windows owner probes preserve a valid process creation time even when the SID
 cannot be read. A start-time difference greater than the existing two-second
