@@ -199,10 +199,12 @@ increments the minor version; every other release increments the patch version.
   stays outside `hooks/` and is not restored by hook integrity. Host
   behaviour (#537) and Windows (#534) remain UNKNOWN.
 - Codex run guard: the regeneration hint for
-  `codex/scripts/codex-run-expected.json` is printed only when a skip check
-  failed, names the CI-log route first and states that a local run matches
-  CI only on a host that matches the CI image; a local `run` without `--tap`
-  writes a per-process TAP file (issue #570).
+  `codex/scripts/codex-run-expected.json` is printed only when the skipped
+  tests differ from the list (C3), names the CI-log route first and states
+  that a local run matches CI only on a host that matches the CI image. The
+  observed skips are still printed after any skip check failure (C3, C4,
+  C7). A local `run` without `--tap` writes a per-process TAP file, and the
+  expected file is read once, before the tests run (issue #570).
 
 ### Fixed
 
