@@ -9,8 +9,11 @@ import process from "node:process";
 
 import { agentKey, appendLine, deliveredLine, markCaptureFailed } from "./lib/denial-journal.mts";
 
-const CAP_MS = 1_500, GRACE_MS = 400;
+// Its PostToolUse entry in claude/settings.user.json has "timeout": 10. The deadline counts from this process's
+// time origin; outside this clock: the entry's Node start (<= 2 s) and exit.
+const HOOK_TIMEOUT_MS = 10_000, SAFETY_MARGIN_MS = 4_500, CAP_MS = 1_500;
 const START = Date.now();
+const DEADLINE = Math.floor(performance.timeOrigin) + HOOK_TIMEOUT_MS - SAFETY_MARGIN_MS;
 // <home> is the parent of the hooks directory this file was started from.
 const HOME = path.dirname(path.dirname(path.resolve(process.argv[1] ?? "")));
 
@@ -33,7 +36,8 @@ async function main(): Promise<void> {
   const id = agentKey(record);
   if (!id || record.tool_name !== "SubagentHandback") return;
   const fail = await appendLine(HOME, id, deliveredLine(record), START + CAP_MS);
-  if (fail) await markCaptureFailed(HOME, id, fail, Date.now() + GRACE_MS);
+  // Awaited until DEADLINE, not a fixed 400 ms slice (issue #614): the exit below is process.exit, which abandons a pending write.
+  if (fail) await markCaptureFailed(HOME, id, fail, DEADLINE);
 }
 
 main().catch(() => {}).finally(() => process.exit(0));
