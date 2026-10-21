@@ -91,7 +91,7 @@
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/deliver-hook.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/control-plane/claude-control-plane-hook.mts\" deliver"
           }
         ]
       },
@@ -100,7 +100,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/attribution-hook.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/control-plane/claude-control-plane-hook.mts\" attribution"
           }
         ]
       },
@@ -154,7 +154,7 @@
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/wake-hook.mts\" --timeout 86400",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/control-plane/claude-control-plane-hook.mts\" wake --timeout 86400",
             "asyncRewake": true,
             "timeout": 86400
           }
@@ -175,11 +175,11 @@
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/deliver-hook.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/control-plane/claude-control-plane-hook.mts\" deliver"
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/wake-hook.mts\" --timeout 86400",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/control-plane/claude-control-plane-hook.mts\" wake --timeout 86400",
             "asyncRewake": true,
             "timeout": 86400
           }
@@ -208,11 +208,11 @@
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/deliver-hook.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/control-plane/claude-control-plane-hook.mts\" deliver"
           },
           {
             "type": "command",
-            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/wake-hook.mts\" --timeout 86400",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/control-plane/claude-control-plane-hook.mts\" wake --timeout 86400",
             "asyncRewake": true,
             "timeout": 86400
           }
@@ -225,7 +225,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_REPO__/modules/control-plane/node/deliver-hook.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/control-plane/claude-control-plane-hook.mts\" deliver"
           }
         ]
       }
