@@ -240,6 +240,44 @@ increments the minor version; every other release increments the patch version.
   observed skips are still printed after any skip check failure (C3, C4,
   C7). A local `run` without `--tap` writes a per-process TAP file, and the
   expected file is read once, before the tests run (issue #570).
+- Guard and hook-file names in deny reasons and hook-integrity notices
+  (issue #564). Every reason or notice line that the Claude guard
+  dispatcher, the Codex hook adapter, the Codex shell dispatcher, the
+  re-check lib `hooks/lib/guard-recheck.mts` and the two hook-integrity
+  scripts build themselves now names a file by its path inside the hooks
+  directory, as the hook runtime entry does since #521:
+  `[guard-dispatch] commit-guard.mts cannot run (…)`,
+  `[hook-adapter] kherep-maestro/commit-guard.mts cannot run (…)`,
+  `kherep-maestro/codex-shell-checks.mts cannot be trusted (…)`,
+  `live-hook-integrity.mts exited with code 1`, and the dispatcher's and
+  adapter's own failures as `guard-dispatch.mts` and
+  `kherep-maestro/codex-hook-adapter.mts`. A file outside that directory is
+  named by its file name. The hooks directory itself and the home are no
+  longer spelled out (`the coordinated hooks directory is not this
+  installation's hooks/`, `no hook file under hooks/ is wired in
+  config.toml`, `config.toml unreadable (<code>)`). Raw error text left
+  those lines: `spawn threw (<code>)`, `spawn failed (<code>)`,
+  `stat failed: <code>`, `lib/guard-recheck.mts cannot be loaded (<code>)`,
+  `stdin read failed (<code>)`, `own import lib/<name>.mts cannot be loaded
+  (<code>)` (also the `reason` of its journal entry) and `the integrity
+  check itself failed (<code>)`, and the adapter's last-resort deny is the
+  fixed `internal error`; `<code>` is a Node error code, else the error's
+  class name, else `unknown`. In the Claude dispatcher a guard outside the
+  hooks directory reads `outside the hooks directory`. Text a guard writes
+  itself passes through unchanged: its exit-2 stderr, its own
+  `permissionDecisionReason`, and the field name in `unsupported field
+  <key>` outside pre-intent. The pre-intent texts of issue #538 change only
+  where an error had no code: it now reads its class name instead of
+  `unknown`. Tests assert that no POSIX, drive, UNC or home-relative path,
+  and no `..` escape, appears in the lines those components build. Not
+  covered, tracked in #576: the restore lines `versioned source <checkout
+  path> …` (`lib/integrity-verdict.mts`, `hook-integrity-repair.mts`), the
+  restore refusal in `lib/restore-write.mts` that names the hooks
+  directory, Node's parser messages in `rejected by Node's parser: …`
+  (`lib/hook-syntax.mts`), and the error text of
+  `lib/integrity-heartbeat.mts` (`run.lock unavailable (…)` for a code-less
+  error). No command definition, timeout, exit code or Codex trust hash
+  changes.
 
 ### Fixed
 
