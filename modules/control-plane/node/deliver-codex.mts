@@ -3,7 +3,10 @@ import fs from "node:fs";
 import { mayContinue } from "./autonomy.mts";
 import { CODEX_FORK_ENV, consumeBusyHint } from "./codex-busy-consume.mts";
 import { codexSessionRefs, isCodexSessionId, markStopEnded, recordCodexSession } from "./codex-sessions.mts";
-import { confirmOffered, contextOutput, deliveryContext, sessionInbox, type HookDeps } from "./deliver-core.mts";
+import {
+  confirmOffered, contextOutput, deliveryContext, RECORD_LOCK_BUDGET_MS, sessionInbox, type HookDeps,
+} from "./deliver-core.mts";
+import { withRecordLockBudget } from "./inbox-record-lock.mts";
 import { nodeWakeBudget } from "./policy.mts";
 import { hookCommand } from "./session-command.mts";
 
@@ -73,7 +76,7 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
     return contextOutput(event, context ? `${context}\n${receiveRecipe}` : receiveRecipe);
   }
   const mine = sessionInbox(deps.paths, refs);
-  confirmOffered(deps.paths, mine);
+  withRecordLockBudget(RECORD_LOCK_BUDGET_MS, () => confirmOffered(deps.paths, mine));
   const arrived = mine.filter((r) => r.state === "accepted").map((r) => r.messageId);
   if (continued === true || arrived.length === 0) return stopEnded(deps, sessionId);
   // A continuation is an autonomous turn: the same budget and bypass check as

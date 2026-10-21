@@ -9,7 +9,9 @@ import { advanceForkAttempt, claimForkAttempt, readForkAttempt } from "./codex-f
 import { nodePaths, type NodeConfig } from "./config.mts";
 import { startDaemon } from "./daemon.mts";
 import { generateIdentity, writePrivateKey } from "./identity.mts";
-import { DAEMON_RECORD_LOCK_WAIT_MS, RECORD_LOCK_WAIT_MS, recordLockWait, setRecordLockWait } from "./inbox-record-lock.mts";
+import {
+  DAEMON_RECORD_LOCK_WAIT_MS, RECORD_LOCK_POLL_MS, RECORD_LOCK_WAIT_MS, setRecordLockWait, withRecordLock,
+} from "./inbox-record-lock.mts";
 import type { ProbeResult } from "./runtime-probe.mts";
 
 // Issue #408, PR 3: the daemon recovers Codex fork attempts at start. A
@@ -74,10 +76,14 @@ test("without a fork attempt store the start writes no store and logs nothing ab
 });
 
 // Issue #627: the daemon waits for a held inbox record only briefly; the wait
-// is synchronous. Set at start, before any round.
+// is synchronous. Set at start, before any round (fake clock, no real wait).
 test("the start sets the daemon's record lock wait", (t) => {
   t.after(() => setRecordLockWait(RECORD_LOCK_WAIT_MS));
-  setRecordLockWait(RECORD_LOCK_WAIT_MS);
-  start(t, () => {});
-  assert.equal(recordLockWait(), DAEMON_RECORD_LOCK_WAIT_MS);
+  const { paths } = start(t, () => {});
+  fs.mkdirSync(paths.inbox, { recursive: true });
+  fs.writeFileSync(path.join(paths.inbox, `.${MESSAGE}.json.lock`), `${JSON.stringify({ pid: 1, at: new Date(0).toISOString() })}\n`);
+  let at = 0;
+  const sleeps: number[] = [];
+  assert.throws(() => withRecordLock(paths.inbox, MESSAGE, () => {}, { now: () => at, sleep: (ms) => { sleeps.push(ms); at += ms; } }));
+  assert.equal(sleeps.length, Math.ceil(DAEMON_RECORD_LOCK_WAIT_MS / RECORD_LOCK_POLL_MS));
 });

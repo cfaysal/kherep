@@ -9,6 +9,7 @@ import { deliveryContext, frameRecords, sessionInbox } from "./deliver-core.mts"
 import { attachDelivery, updateDeliverySession } from "./delivery-identity.mts";
 import { addLocalSession, readDirectory } from "./exchange.mts";
 import { getMessage, markClosedAttempt, markOffered, markRetry, readdress, setMessageProgress, type InboxRecord } from "./inbox.mts";
+import { RecordLockBusy } from "./inbox-record-lock.mts";
 import { withServiceAdmission, type ServiceAdmission } from "./service-drain.mts";
 import { taskCommand } from "./session-command.mts";
 import { agentRows, BACKGROUNDED, mapIds, runClaude, startTask, type RunnerDeps } from "./session-runner.mts";
@@ -179,7 +180,7 @@ export async function startIntercom(deps: RunnerDeps, target: ClosedTarget, reco
   if (!["started", "running"].includes(result.state) || !["started", "running"].includes(started.state)) {
     return started.reason ?? "the local delivery task did not start";
   }
-  const linked = attachDelivery(deps.paths, started, carried.map((record) => record.messageId));
+  const linked = attachDelivery(deps.paths, started, carried.map((record) => record.messageId), skipBusy(deps));
   for (const record of carried) setMessageProgress(deps.paths.inbox, record.messageId, "fallback", "fallback-running", deps.now?.());
   const offered = handOver(deps, args.name, carried);
   const tracked = target.runtime === "codex" ? linked : { ...linked, carried: offered };
@@ -201,9 +202,21 @@ function handOver(deps: RunnerDeps, name: string, carried: InboxRecord[]): strin
   for (const { messageId } of carried) {
     const state = getMessage(deps.paths.inbox, messageId)?.state;
     if (state !== "accepted" && state !== "offered") continue;
-    if (state === "accepted") markOffered(deps.paths.inbox, messageId, now, "intercom");
-    markClosedAttempt(deps.paths.inbox, messageId, now, name);
+    try {
+      if (state === "accepted") markOffered(deps.paths.inbox, messageId, now, "intercom");
+      markClosedAttempt(deps.paths.inbox, messageId, now, name);
+    } catch (error) {
+      if (!(error instanceof RecordLockBusy)) throw error;
+      skipBusy(deps)(error);
+      continue;
+    }
     ids.push(messageId);
   }
   return ids;
 }
+
+// Issue #627: after the session started or resumed, a record whose lock stays
+// held is logged and left as it is; failing the round would start it again.
+export const skipBusy = (deps: RunnerDeps) => (error: RecordLockBusy): void => {
+  deps.log?.(`kherep-node: ${error.message}; left out of the hand-over`);
+};
