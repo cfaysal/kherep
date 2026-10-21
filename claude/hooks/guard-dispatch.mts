@@ -28,7 +28,7 @@ const GUARD_TIMEOUT_MS = 10_000;
 const RECHECK_MAX_MS = 20_000, RECHECK_MIN_MS = 2_000, RECHECK_LOAD_MS = 2_000;
 const HEARTBEAT_WINDOW_MS = 1_800_000; // = lib/integrity-heartbeat.mts; each side has a boundary test
 const JOURNAL_CAP_MS = 1_500, MARK_GRACE_MS = 400, AGENT_KEY = /^[A-Za-z0-9_-]{1,64}$/; // issue #504
-const SELF = fileURLToPath(import.meta.url), DIR = path.dirname(SELF);
+const SELF = fileURLToPath(import.meta.url), DIR = path.dirname(SELF), SELF_LABEL = path.basename(SELF);
 const INVOKED_DIR = path.dirname(path.resolve(process.argv[1] ?? SELF));
 const HOME = path.dirname(INVOKED_DIR);
 
@@ -55,29 +55,25 @@ function readStdin(): Promise<string> {
 }
 
 // Real directory: a symlinked Claude home (macOS /var -> /private/var) keeps its guards inside.
-function realDir(dir: string): string {
-  try { return fs.realpathSync(dir); } catch { return path.resolve(dir); }
-}
-
-function isInside(file: string, dir: string): boolean {
-  const rel = path.relative(dir, file);
-  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
-}
-
+const realDir = (dir: string): string => { try { return fs.realpathSync(dir); } catch { return path.resolve(dir); } };
+const isInside = (file: string, dir: string): boolean => { const rel = path.relative(dir, file); return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel); };
 // A symlinked guard counts where it points; a missing one keeps its name and fails at stat.
-function realFile(file: string): string {
-  try { return fs.realpathSync(file); } catch { return path.join(realDir(path.dirname(file)), path.basename(file)); }
-}
+const realFile = (file: string): string => { try { return fs.realpathSync(file); } catch { return path.join(realDir(path.dirname(file)), path.basename(file)); } };
+// Issue #564, as kherep/hook-runtime/entry.mts names a main: its path inside hooks/ (as given), else its file name.
+const labelOf = (file: string): string => isInside(file, INVOKED_DIR) ? path.relative(INVOKED_DIR, file).split(path.sep).join("/") : path.basename(file);
+// A Node error code, else the error's class name, else "unknown"; never a message.
+const codeOf = (error: unknown): string => { const { code, name } = (error ?? {}) as { code?: unknown; name?: unknown };
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,40}$/.test(code) ? code : typeof name === "string" && /^[A-Za-z]{1,40}Error$/.test(name) ? name : "unknown"; };
 
 // Why the file cannot be run, or undefined when it can.
 function unrunnable(file: string, ownDir: string): string | undefined {
   const real = realFile(file);
-  if (!isInside(real, ownDir)) return `outside ${DIR}`;
+  if (!isInside(real, ownDir)) return "outside the hooks directory";
   if (path.relative(real, path.join(ownDir, path.basename(SELF))) === "") return "it is the dispatcher itself";
   let stat: fs.Stats;
   try { stat = fs.statSync(file); } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    return code === "ENOENT" ? "missing" : `stat failed: ${code ?? String(error)}`;
+    return code === "ENOENT" ? "missing" : `stat failed: ${codeOf(error)}`;
   }
   if (!stat.isFile()) return "not a regular file";
   if (stat.size === 0) return "empty, 0 bytes";
@@ -118,15 +114,15 @@ function printed(stdout: string): Verdict | string {
   };
 }
 
-function judge(file: string, code: number | null, signal: string | null, stdout: string, stderr: string): Verdict {
-  if (signal) return failure(file, `killed by ${signal}`);
+function judge(label: string, code: number | null, signal: string | null, stdout: string, stderr: string): Verdict {
+  if (signal) return failure(label, `killed by ${signal}`);
   if (code === 2) {
-    return { decision: "deny", reason: stderr.trim() || `${file} blocked this tool call without giving a reason` };
+    return { decision: "deny", reason: stderr.trim() || `${label} blocked this tool call without giving a reason` };
   }
-  if (code !== 0) return failure(file, `exit code ${code}`);
+  if (code !== 0) return failure(label, `exit code ${code}`);
   if (!stdout.trim()) return { reason: "" };
   const result = printed(stdout);
-  return typeof result === "string" ? failure(file, result) : result;
+  return typeof result === "string" ? failure(label, result) : result;
 }
 
 // The type-stripping warning of a .mts guard, also after its unterminated output: only it is dropped, every diagnostic stays.
@@ -134,7 +130,7 @@ const TYPE_STRIPPING_WARNING = new RegExp("\\(node:\\d+\\) ExperimentalWarning: 
   + "feature and might change at any time\\r?\\n(?:\\(Use `node --trace-warnings \\.\\.\\.` to show where the warning "
   + "was created\\)\\r?\\n)?", "g");
 
-function runGuard(file: string, payload: string): Promise<Outcome> {
+function runGuard(file: string, label: string, payload: string): Promise<Outcome> {
   return new Promise((resolve) => {
     let stdout = "", stderr = "", settled = false;
     const filtered = (): string => stderr.replace(TYPE_STRIPPING_WARNING, "");
@@ -151,16 +147,16 @@ function runGuard(file: string, payload: string): Promise<Outcome> {
     child.on("message", (m: { kherep?: unknown; v?: unknown; pid?: unknown }) => { ready ||= m?.kherep === "ready" && m.v === 1 && m.pid === child.pid; });
     const cap = Math.min(GUARD_TIMEOUT_MS, remaining());
     const timer = setTimeout(() => {
-      settle(failure(file, `timed out after ${Number((cap / 1000).toFixed(1))} s`));
+      settle(failure(label, `timed out after ${Number((cap / 1000).toFixed(1))} s`));
       child.kill("SIGKILL");
       child.unref();
       for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
     }, cap);
     child.stdout!.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
     child.stderr!.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
-    child.on("error", (error) => settle(failure(file, `spawn failed (${(error as NodeJS.ErrnoException).code ?? "unknown"})`)));
-    child.on("close", (code, signal) => settle(ready ? judge(file, code, signal, stdout, filtered())
-      : failure(file, `not admitted: ${NOT_ADMITTED.exec(stderr)?.[1] ?? "it ended before admission"}`)));
+    child.on("error", (error) => settle(failure(label, `spawn failed (${codeOf(error)})`)));
+    child.on("close", (code, signal) => settle(ready ? judge(label, code, signal, stdout, filtered())
+      : failure(label, `not admitted: ${NOT_ADMITTED.exec(stderr)?.[1] ?? "it ended before admission"}`)));
     // A guard may exit without reading its payload; the broken pipe is no verdict.
     child.stdin!.on("error", () => {});
     child.stdin!.end(payload);
@@ -176,8 +172,6 @@ function combine(verdicts: Verdict[]): Verdict | undefined {
   if (!decision && !notice) return undefined;
   return { decision, reason, ...(notice ? { notice } : {}) };
 }
-
-const firstLine = (error: unknown): string => String((error as Error)?.message || error).split(/\r?\n/)[0];
 
 // `work`, or `late()` after ms; the timer keeps the process alive meanwhile (not unref'd).
 function within<T, L>(work: Promise<T>, ms: number, late: () => L): Promise<T | L> {
@@ -209,19 +203,21 @@ async function journal(payload: Record<string, unknown>, verdicts: Verdict[]): P
 
 async function dispatch(guards: string[]): Promise<{ verdict?: Verdict; stderr: string[] }> {
   let raw: string;
-  try { raw = await readStdin(); } catch (error) { return { verdict: failure(SELF, firstLine(error)), stderr: [] }; }
+  try { raw = await readStdin(); } catch (error) { // readStdin's own timeout text, else the stream error's code
+    const own = /^stdin not closed within \d+ ms$/.exec(String((error as Error)?.message))?.[0];
+    return { verdict: failure(SELF_LABEL, own ?? `stdin read failed (${codeOf(error)})`), stderr: [] };
+  }
   let payload: unknown;
   try { payload = JSON.parse(raw); } catch { /* not JSON */ }
-  if (!isObject(payload)) return { verdict: failure(SELF, "stdin is not a JSON object"), stderr: [] };
-  if (!guards.length) return { verdict: failure(SELF, "no guard given"), stderr: [] };
+  if (!isObject(payload)) return { verdict: failure(SELF_LABEL, "stdin is not a JSON object"), stderr: [] };
+  if (!guards.length) return { verdict: failure(SELF_LABEL, "no guard given"), stderr: [] };
   const ownDir = realDir(DIR);
   const running = Promise.all(guards.map((arg) => {
-    const file = path.resolve(arg);
-    const why = unrunnable(file, ownDir);
-    return why ? { verdict: failure(file, why), stderr: "" } : runGuard(file, raw);
+    const file = path.resolve(arg), label = labelOf(file), why = unrunnable(file, ownDir);
+    return why ? { verdict: failure(label, why), stderr: "" } : runGuard(file, label, raw);
   }));
   const checking = within(recheck(raw, running, ownDir)
-    .catch((error) => `hook integrity re-check unavailable (lib/guard-recheck.mts cannot be loaded: ${firstLine(error)})`),
+    .catch((error) => `hook integrity re-check unavailable (lib/guard-recheck.mts cannot be loaded (${codeOf(error)}))`),
   remaining(), () => "hook integrity re-check unavailable (no result before the hook deadline)");
   const [outcomes, notice] = await Promise.all([running, checking]);
   const verdicts = outcomes.map((outcome) => outcome.verdict);
@@ -246,5 +242,5 @@ function emit(verdict: Verdict | undefined, stderr: string[]): void {
 
 dispatch(process.argv.slice(2)).then(
   ({ verdict, stderr }) => emit(verdict, stderr),
-  () => emit(failure("guard-dispatch.mts", "internal error"), []), // fixed text: no raw error, no path
+  () => emit(failure(SELF_LABEL, "internal error"), []), // fixed text: no raw error, no path
 );

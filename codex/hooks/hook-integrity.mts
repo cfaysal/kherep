@@ -38,7 +38,9 @@ type Own = typeof import("./hook-integrity-repair.mts") & typeof import("./hook-
 type LoadFailure = { rel: string; why: string; loaded: number; file: string; from: string };
 
 const SELF = "kherep-maestro/codex-hook-integrity.mts";
-const errorCode = (error: unknown): string => (error as NodeJS.ErrnoException | null)?.code || "unknown";
+// A Node error code, else the error's class name, else "unknown"; never a message, which names paths (issue #564).
+const errorCode = (error: unknown): string => { const { code, name } = (error ?? {}) as { code?: unknown; name?: unknown };
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,40}$/.test(code) ? code : typeof name === "string" && /^[A-Za-z]{1,40}Error$/.test(name) ? name : "unknown"; };
 // The bytes, or the error code that stopped the read.
 function read(file: string | number): Buffer | string {
   try { return fs.readFileSync(file); } catch (error) { return errorCode(error); }
@@ -75,7 +77,7 @@ export async function loadLibs(): Promise<LoadFailure | null> {
   for (const [index, { rel, used, file, from, into, load }] of all.entries()) {
     let mod: Record<string, unknown>;
     try { mod = (await load()) as Record<string, unknown>; } catch (error) {
-      return { rel, file, from, why: String((error as Error)?.message || error).split(/\r?\n/)[0], loaded: index };
+      return { rel, file, from, why: errorCode(error), loaded: index };
     }
     const missing = used.filter((fn) => typeof mod[fn] !== "function");
     if (missing.length) return { rel, file, from, why: `no function ${missing.join(", ")}`, loaded: index };
@@ -179,7 +181,7 @@ async function check(lock: RunLock, payload: ScopePayload | null, home: string, 
   const realHooks = realOrNull(hooksDir) ?? hooksDir;
   const repoRoot = checkoutOf(parts, payload, process.env, home);
   const wired = wiredHookFiles(parts, hooksDir);
-  const lines = wired.length ? [] : [`no hook file under ${hooksDir} is wired in config.toml, so WHICH hooks run is UNKNOWN here`];
+  const lines = wired.length ? [] : ["no hook file under hooks/ is wired in config.toml, so WHICH hooks run is UNKNOWN here"];
   let unproven = wired.length ? "" : "no wired file";
   const ctx = { home, hooksDir, repoRoot, lock, trigger: TRIGGER, lines, lost: LOST, sourceOf: own.sourceOf, COMPUTED: own.COMPUTED,
     computedImports: own.computedImports, outcome, realOrNull };
@@ -218,7 +220,7 @@ async function main(): Promise<void> {
     if (failed) lines = ownImportFailed(failed, payload, home, parts, lock);
     else if (typeof lock === "string" || !lock) lines = [`${lock}; nothing checked, heartbeat not written`];
     else if (typeof config === "string") {
-      lines = [`config.toml under ${home} unreadable (${config}), so WHICH hooks are wired is UNKNOWN here`,
+      lines = [`config.toml unreadable (${config}), so WHICH hooks are wired is UNKNOWN here`,
         ...(PLAIN ? ["heartbeat not written (config.toml unreadable)"] : [])];
     } else lines = await check(lock, payload, home, parts);
   } finally {
@@ -237,6 +239,6 @@ function isMainModule(): boolean {
 
 if (isMainModule()) {
   main().catch((error: unknown) => {
-    try { emit([`the integrity check itself failed (${(error as Error)?.message || "unknown"}); nothing was verified`]); } catch { /* never break session start */ }
+    try { emit([`the integrity check itself failed (${errorCode(error)}); nothing was verified`]); } catch { /* never break session start */ }
   }).finally(() => process.exit(0));
 }

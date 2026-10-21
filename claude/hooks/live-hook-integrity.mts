@@ -50,6 +50,9 @@ const PLAIN = TRIGGER_AT >= 0;
 const TRIGGER = PLAIN ? process.argv[TRIGGER_AT + 1] || "unnamed" : "session-start";
 const runtime = (globalThis as Record<symbol, unknown>)[Symbol.for("kherep.hook-runtime")] as (WriterHold & { mode?: string }) | undefined;
 const HOLD: WriterHold | null = runtime?.mode === "writer" ? runtime : null;
+// A Node error code, else the error's class name, else "unknown"; never a message, which names paths (issue #564).
+const codeOf = (error: unknown): string => { const { code, name } = (error ?? {}) as { code?: unknown; name?: unknown };
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,40}$/.test(code) ? code : typeof name === "string" && /^[A-Za-z]{1,40}Error$/.test(name) ? name : "unknown"; };
 
 // Dependency order, so a broken lib is named before the libs importing it.
 // String literals on purpose: lib/hook-inventory.mts and the install manifest
@@ -71,7 +74,7 @@ async function loadLibs(): Promise<LoadFailure | null> {
     try {
       mod = (await load()) as Record<string, unknown>;
     } catch (error) {
-      return { rel, why: String((error as Error)?.message || error).split(/\r?\n/)[0], loaded: index };
+      return { rel, why: codeOf(error), loaded: index };
     }
     const missing = used.filter((fn) => typeof mod[fn] !== "function");
     if (missing.length) return { rel, why: `no function ${missing.join(", ")}`, loaded: index };
@@ -102,7 +105,7 @@ const realOrEmpty = (dir: string): string => {
 // cannot be ruled out.
 function gateOf(home: string, wiring: { uncoordinated: string[]; notes: string[]; readAny: boolean }): string {
   if (!HOLD) return "this run is not coordinated: start it through kherep/hook-runtime/entry.mts";
-  if (realOrEmpty(`${home}/hooks`) !== HOLD.root) return `the coordinated hooks directory is not ${home}/hooks`;
+  if (realOrEmpty(`${home}/hooks`) !== HOLD.root) return "the coordinated hooks directory is not this installation's hooks/";
   if (wiring.notes.length) return "the live settings were not read completely, so the wiring is UNKNOWN";
   if (!wiring.readAny) return "no live settings could be read, so the wiring is UNKNOWN";
   const { uncoordinated } = wiring;
@@ -160,10 +163,10 @@ async function main(): Promise<void> {
   const { files, notes, readAny, uncoordinated } = lib.wiredFiles(home);
   const lines = notes.slice();
   if (!readAny && !files.length) {
-    lines.push(`no live settings could be read under ${home}, so WHICH hooks are wired is UNKNOWN here`);
+    lines.push("no live settings could be read in this home, so WHICH hooks are wired is UNKNOWN here");
   }
   if (!files.length) {
-    if (PLAIN) lines.push(`heartbeat not written (no hook file is wired under ${home})`);
+    if (PLAIN) lines.push("heartbeat not written (no hook file is wired)");
     return emit(lines);
   }
   await lib.runIntegrity({ lib, hold: HOLD, gate: gateOf(home, { uncoordinated, notes, readAny }), files, notes, lines, payload, home, trigger: TRIGGER, plain: PLAIN });
@@ -173,7 +176,7 @@ async function main(): Promise<void> {
 main()
   .catch((error: unknown) => {
     try {
-      emit([`the integrity check itself failed (${(error && (error as Error).message) || "unknown"}); nothing was verified`]);
+      emit([`the integrity check itself failed (${codeOf(error)}); nothing was verified`]);
     } catch {
       /* never break session start */
     }

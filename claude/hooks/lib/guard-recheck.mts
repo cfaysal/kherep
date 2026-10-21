@@ -27,10 +27,11 @@ export function heartbeatState(home: string, windowMs: number, now: number = Dat
 // args: the node arguments when the hook runtime admits the writer (its
 // preload, the script, the trigger); then the child must report "ready".
 // trigger and env: the Codex adapter's own (issue #507, part 3); by default
-// guard-dispatch and CLAUDE_HOME = home.
+// guard-dispatch and CLAUDE_HOME = home. label: the script as notices name it, by default
+// its file name, never its path (issue #564).
 export interface Recheck {
   script: string; home: string; payload: string; budgetMs: number; why: string; lastOk?: string; args?: string[];
-  trigger?: string; env?: NodeJS.ProcessEnv;
+  trigger?: string; env?: NodeJS.ProcessEnv; label?: string;
 }
 
 // What a dispatcher admitted by the hook runtime holds (kherep/hook-runtime/coordinator.mts).
@@ -52,7 +53,7 @@ export async function recheckAfter(plan: Plan): Promise<string | undefined> {
   plan.runtime?.release();
   const context = { why: !stale ? "guard failure" : lastOk ? "stale heartbeat" : "no heartbeat", lastOk };
   const why = plan.unrunnable(plan.script);
-  if (why) return recheckNotice(context, [`${plan.script} cannot run (${why})`]);
+  if (why) return recheckNotice(context, [`${path.basename(plan.script)} cannot run (${why})`]);
   const budgetMs = Math.max(0, Math.min(plan.maxMs, plan.remaining() - 250)); // ends before the dispatcher's backstop
   if (budgetMs < plan.minMs) return recheckNotice(context, [`skipped, ${budgetMs} ms left of the hook budget; the next matching call re-checks`]);
   const args = plan.runtime && [...plan.runtime.writerArgs(plan.script), "--trigger", "guard-dispatch"];
@@ -65,6 +66,7 @@ export const recheckNotice = ({ why, lastOk }: { why: string; lastOk?: string },
 // The re-check's lines as one notice block. Resolves at the latest when the
 // budget ends: a child still running then is killed and not waited for.
 export function runRecheck(recheck: Recheck): Promise<string> {
+  const name = recheck.label ?? path.basename(recheck.script);
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
@@ -94,7 +96,7 @@ export function runRecheck(recheck: Recheck): Promise<string> {
       if (child.connected) child.disconnect();
     }, recheck.budgetMs);
     child.stdout!.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
-    child.on("error", (error) => settle([`could not start ${path.basename(recheck.script)} (${(error as NodeJS.ErrnoException).code ?? "unknown"})`]));
+    child.on("error", (error) => settle([`could not start ${name} (${(error as NodeJS.ErrnoException).code ?? "unknown"})`]));
     child.on("close", (code, signal) => {
       if (!ready) {
         const kind = /\[hook-runtime\] not admitted \(([a-z -]+)\)/.exec(stderr)?.[1] ?? "it ended before admission";
@@ -103,9 +105,9 @@ export function runRecheck(recheck: Recheck): Promise<string> {
           : `re-check not admitted (${kind})`]);
       }
       const lines = stdout.split(/\r?\n/).filter((line) => line.trim());
-      if (signal) return settle([...lines, `${recheck.script} was killed by ${signal}`]);
-      if (code !== 0) return settle([...lines, `${recheck.script} exited with code ${code}`]);
-      settle(lines.length ? lines : [`${recheck.script} printed nothing`]);
+      if (signal) return settle([...lines, `${name} was killed by ${signal}`]);
+      if (code !== 0) return settle([...lines, `${name} exited with code ${code}`]);
+      settle(lines.length ? lines : [`${name} printed nothing`]);
     });
     // A re-check may exit without reading its payload; the broken pipe is no result.
     child.stdin!.on("error", () => {});
