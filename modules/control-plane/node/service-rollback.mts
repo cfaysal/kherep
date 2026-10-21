@@ -6,7 +6,7 @@ import {
 import { beginServiceDrain } from "./service-drain.mts";
 import { issueServiceLaunchPermit } from "./service-launch-permit.mts";
 import {
-  healthy, lifecycleDefaults, prepareStop, proveStopped, restorePrior, verifyExact, verifyStopOwnership,
+  healthy, lifecycleDefaults, prepareStop, proveStopped, restorePrior, ROLLBACK_HEALTH_TIMEOUT_MS, verifyExact, verifyStopOwnership,
   type CandidateLoadedError, type LifecycleDependencies,
 } from "./service-lifecycle.mts";
 import {
@@ -78,7 +78,9 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
         }
         await input.adapter.start(priorBinding);
         stage = "health";
-        healthyState = await healthy(priorBinding, state?.pid, input, !backup.priorReceipt);
+        // #582 decision 5: the prior source may predate #581 and maintain its queue before it connects, as in restorePrior.
+        healthyState = await healthy(priorBinding, state?.pid, { ...input, timeoutMs: input.timeoutMs ?? ROLLBACK_HEALTH_TIMEOUT_MS },
+          !backup.priorReceipt);
       }
       stage = "settle";
       await assertSettled(input, currentBinding, previous, healthyState, shouldRun);
