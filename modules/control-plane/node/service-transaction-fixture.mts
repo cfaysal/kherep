@@ -45,16 +45,22 @@ export class FakeAdapter implements ServiceAdapter {
   adoptionRootAvailable = true;
   descendants = 0;
   mutateDuringPreflight = false;
+  // #582 (A2 P1-A): a real legacy adoption yields a node path and a log path that differ from the installer's defaults;
+  // the fixture defaults model that, so an install record is exercised with binding fields the repeated install does not know.
   adoptNodeExecutable: string;
+  adoptedLogFile: string | undefined;
   state: DaemonState | null;
   oldPidAlive = true;
   candidatePidAlive = true;
+  candidatePid = 42; // #582: a second candidate start in one test sets another pid, so healthy() sees a fresh daemon
+  candidateDefinition = "RAW_NEW_XML"; // #582 (B-6b): a second upgrade retargets to distinct bytes, as a new pin does on a host
   readonly old: ServiceBinding;
   readonly candidate: ServiceBinding;
   constructor(old: ServiceBinding, candidate: ServiceBinding) {
     this.old = old;
     this.candidate = candidate;
-    this.adoptNodeExecutable = candidate.nodeExecutable;
+    this.adoptNodeExecutable = path.join(candidate.configRoot, "legacy-runtime", "node");
+    this.adoptedLogFile = old.logFile === undefined ? undefined : path.join(candidate.configRoot, "legacy-task.log");
     this.snapshot = { definition: Buffer.from("RAW_OLD_XML"), security: Buffer.from("RAW_OLD_SDDL"), running: true, pid: 41 };
     this.state = { pid: 41, startedAt: "2026-10-14T10:00:00.000Z", connectedAt: "2026-10-14T10:00:01.000Z", source: old.source };
   }
@@ -62,24 +68,25 @@ export class FakeAdapter implements ServiceAdapter {
   async read() { return this.snapshot && { ...this.snapshot, definition: Buffer.from(this.snapshot.definition), security: Buffer.from(this.snapshot.security) }; }
   async fresh() { this.events.push("fresh"); return Buffer.from("RAW_NEW_XML"); }
   async adopted() { this.events.push("adopt"); return Buffer.from("RAW_NEW_XML"); }
-  async retargeted() { this.events.push("retarget"); return Buffer.from("RAW_NEW_XML"); }
+  async retargeted() { this.events.push("retarget"); return Buffer.from(this.candidateDefinition); }
   async adoptionNode() { return this.adoptNodeExecutable; }
   async adoptionSourceRoot() {
     if (!this.adoptionRootAvailable) throw new Error("legacy source root is unavailable");
     return this.old.source.root;
   }
-  async adoptionLogFile() { return this.old.logFile; }
+  async adoptionLogFile() { return this.adoptedLogFile; }
   async freshSecurity() { return Buffer.alloc(0); }
   async validateManaged(snapshot: NativeServiceSnapshot, binding: ServiceBinding) {
     if (this.rejectExistingValidation && binding.source.commit === this.old.source.commit) throw new Error("service must have exactly one logon trigger and no other triggers");
     if (this.rejectCandidateValidation && binding.source.commit === this.candidate.source.commit) throw new Error("rejected candidate");
-    if (binding.source.commit === this.candidate.source.commit && !["RAW_NEW_XML", "NATIVE_NEW_XML"].includes(snapshot.definition.toString())) {
+    if (binding.source.commit === this.candidate.source.commit
+      && !["RAW_NEW_XML", "NATIVE_NEW_XML", this.candidateDefinition].includes(snapshot.definition.toString())) {
       throw new Error("wrong candidate");
     }
   }
   async processOwned(pid: number, binding: ServiceBinding, _startedAt: string, sourceRoot?: string) {
     this.events.push(`owned:${pid}${sourceRoot ? `:${sourceRoot}` : ""}`);
-    if (this.disconnectAfterHealth && pid === 42 && this.state?.pid === 42) {
+    if (this.disconnectAfterHealth && pid === this.candidatePid && this.state?.pid === this.candidatePid) {
       this.state = { ...this.state, disconnectedAt: "2026-10-14T11:00:02.000Z" };
     }
     if (this.failCandidateHealth && binding.source.commit === this.candidate.source.commit
@@ -125,7 +132,7 @@ export class FakeAdapter implements ServiceAdapter {
     if (this.failStopBeforeEffect) throw Object.assign(new Error("synthetic stop failure before effect"), { code: STOP_NOT_ISSUED });
     if (this.stopThrowsAfterEffect) throw new Error("synthetic stop failure after the native stop took effect");
     if (this.stopKeepsPidAlive) return;
-    if (this.failCandidateRecoveryStop && binding.source.commit === this.candidate.source.commit && expected?.pid === 42) {
+    if (this.failCandidateRecoveryStop && binding.source.commit === this.candidate.source.commit && expected?.pid === this.candidatePid) {
       throw new Error("synthetic candidate stop failure");
     }
     if (this.strictStopGeneration && this.snapshot?.definition.toString() === "MANAGED_OLD_XML"
@@ -133,7 +140,7 @@ export class FakeAdapter implements ServiceAdapter {
       throw new Error("candidate supervisor generation differs");
     }
     if (this.snapshot) { this.snapshot.running = false; delete this.snapshot.pid; }
-    if (expected?.pid === 42) this.candidatePidAlive = false;
+    if (expected?.pid === this.candidatePid) this.candidatePidAlive = false;
     else this.oldPidAlive = false;
   }
   async start(binding: ServiceBinding) {
@@ -143,22 +150,22 @@ export class FakeAdapter implements ServiceAdapter {
     }
     const definition = this.snapshot?.definition.toString();
     this.events.push(`start:${definition}`);
-    if ((definition === "RAW_NEW_XML" || definition === "NATIVE_NEW_XML") && this.failCandidateStart) {
+    if ((definition === "RAW_NEW_XML" || definition === "NATIVE_NEW_XML" || definition === this.candidateDefinition) && this.failCandidateStart) {
       if (this.snapshot && this.candidateRunningUnknown) this.snapshot.running = "unknown";
       if (this.failCandidateAfterState) {
         if (this.snapshot) this.snapshot.running = true;
         this.oldPidAlive = false;
         this.candidatePidAlive = true;
-        this.state = { pid: 42, startedAt: "2026-10-14T11:00:00.000Z", connectedAt: "2026-10-14T11:00:01.000Z",
+        this.state = { pid: this.candidatePid, startedAt: "2026-10-14T11:00:00.000Z", connectedAt: "2026-10-14T11:00:01.000Z",
           source: this.candidate.source, service: { name: this.candidate.serviceName, platform: "win32", taskPath: this.candidate.taskPath } };
       }
       throw new Error("synthetic start failure");
     }
-    const candidate = definition === "RAW_NEW_XML" || definition === "NATIVE_NEW_XML";
+    const candidate = definition === "RAW_NEW_XML" || definition === "NATIVE_NEW_XML" || definition === this.candidateDefinition;
     this.oldPidAlive = !candidate;
     this.candidatePidAlive = candidate;
     this.state = candidate
-      ? { pid: 42, startedAt: "2026-10-14T11:00:00.000Z", connectedAt: "2026-10-14T11:00:01.000Z", source: this.candidate.source,
+      ? { pid: this.candidatePid, startedAt: "2026-10-14T11:00:00.000Z", connectedAt: "2026-10-14T11:00:01.000Z", source: this.candidate.source,
         service: { name: this.candidate.serviceName, platform: "win32", taskPath: this.candidate.taskPath } }
       : { pid: 41, startedAt: "2026-10-14T10:00:00.000Z", connectedAt: "2026-10-14T10:00:01.000Z", source: this.old.source,
         ...(definition === "MANAGED_OLD_XML" ? { service: { name: this.old.serviceName, platform: "win32" as const, taskPath: this.old.taskPath } } : {}) };
@@ -190,7 +197,7 @@ export function setup(t: test.TestContext) {
   const adapter = new FakeAdapter(old, candidate);
   let sourceValid = true;
   const deps = { paths, adapter, readDaemonState: () => adapter.state,
-    pidAlive: (pid: unknown) => (pid === 42 && adapter.candidatePidAlive) || (pid === 41 && adapter.oldPidAlive),
+    pidAlive: (pid: unknown) => (pid === adapter.candidatePid && adapter.candidatePidAlive) || (pid === 41 && adapter.oldPidAlive),
     sleep: async () => {}, timeoutMs: 50,
     verifySource: () => sourceValid };
   return { paths, old, candidate, adapter, deps, setSourceValid: (value: boolean) => { sourceValid = value; } };

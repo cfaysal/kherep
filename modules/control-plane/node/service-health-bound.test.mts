@@ -7,6 +7,8 @@ import test from "node:test";
 import { nodePaths } from "./config.mts";
 import { healthy, HEALTH_TIMEOUT_MS, restorePrior, ROLLBACK_HEALTH_TIMEOUT_MS, type LifecycleDependencies } from "./service-lifecycle.mts";
 import type { NativeServiceSnapshot, ServiceAdapter, ServiceBinding } from "./service-types.mts";
+import { activateManagedService, rollbackManagedService } from "./service-transaction.mts";
+import { seedManaged, setup } from "./service-transaction-fixture.mts";
 
 // Issue #581 (review P2-2): a forward start waits HEALTH_TIMEOUT_MS for the new
 // daemon's authenticated connection; restorePrior waits ROLLBACK_HEALTH_TIMEOUT_MS,
@@ -55,4 +57,25 @@ test("deps.timeoutMs still bounds the restore health check", async (t) => {
   const previous: NativeServiceSnapshot = { definition: Buffer.from("PRIOR"), security: Buffer.from("ACL"), running: true };
   await assert.rejects(restorePrior({ binding, previous, previousBinding: binding, deps: { ...deps, timeoutMs: 5_000 } }));
   assert.equal(waited(), 6_000);
+});
+
+// #582 decision 5 (#589 item 4, rollback half): `service rollback` starts a prior source that may predate #581,
+// so its own health wait is ROLLBACK_HEALTH_TIMEOUT_MS as well, not the forward HEALTH_TIMEOUT_MS.
+test("T8: service rollback waits ROLLBACK_HEALTH_TIMEOUT_MS for the prior daemon", async (t) => {
+  const h = setup(t);
+  seedManaged(h);
+  await activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps);
+  h.adapter.failPriorHealth = true;
+  let clock = 0;
+  let gaveUpAt: number | undefined;
+  t.mock.method(Date, "now", () => clock);
+  const original = h.adapter.stop.bind(h.adapter);
+  h.adapter.stop = async (stopped, expected) => { // the restore's stop follows the failed health wait
+    if (h.adapter.events.includes("start:MANAGED_OLD_XML")) gaveUpAt ??= clock;
+    return original(stopped, expected);
+  };
+  const failure = await rollbackManagedService({ binding: h.candidate }, { ...h.deps, timeoutMs: undefined, sleep: async () => { clock += 1000; } })
+    .then(() => undefined, (error: Error & { stage?: string }) => error);
+  assert.equal(failure?.stage, "health");
+  assert.equal(gaveUpAt, ROLLBACK_HEALTH_TIMEOUT_MS + 1000);
 });
