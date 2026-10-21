@@ -625,6 +625,43 @@ increments the minor version; every other release increments the patch version.
   recovery `restored` when a reader briefly holds `daemon.json` open while the
   new daemon records its state; a hold longer than the budget still fails the
   write as before. POSIX is unchanged (issue #540).
+- A daemon refusal no longer loses a delivery written meanwhile (issue #627).
+  `markRefused` read an inbox record and rewrote it; a delivery hook in
+  another process that offered or delivered the same record between that
+  read and that write lost its update, and the record ended `refused`
+  although the session had received it. Every rewrite of a record body
+  (`setDeliveryTask`, `markDelivered`, `markAnswered`, `markOffered`,
+  `markRetry`, `markClosedAttempt`, `readdress`, `markRefused`) now reads,
+  judges and writes under the record's lock, an exclusive create of
+  `.<messageId>.json.lock` next to the record
+  (`node/inbox-record-lock.mts`, the lock pattern of the client binding
+  probe): `EEXIST`, and on Windows `EPERM`, `EACCES` and `EBUSY` for a lock in
+  the delete-pending state, mean held and are polled every 20 ms; a lock
+  older than 5 s, either way of the clock, was left by a holder that died and
+  is moved aside, compared and removed, never a fresh one. A hook, the msg
+  CLI and the MCP client wait 1 s for a held record, the daemon 250 ms, and
+  the record locks of one delivery hook call share one 1 s budget, so a
+  PostToolUse delivery ends well inside its session lock's 5 s stale bound. A
+  record still held after that is reported, typed `RecordLockBusy`, and
+  handled per writer: an offer, delivery confirmation, retry flag, answer or
+  refusal is "not written" and repeated by the next event, round or read (a
+  repeated offer at worst, never a lost one); a delivery identity, closed
+  attempt or readdress fails its daemon round, which runs again. The delivery
+  hook marks a record offered before it shows it and shows exactly what it
+  marked; a record it could not mark waits for the next turn. The purge
+  judges a record's state and receipt on the record under its lock, where it
+  also removes it, instead of on the listed copy: a record delivered after
+  the listing stays until a receipt confirms that state (#195). The write
+  itself is still `writeJsonAtomic` with the Windows rename retry of issue
+  #540. `readdress` judges each record again under its lock and returns only
+  the ids it moved. The purge removes leftover lock files of retention age
+  like leftover temps. The staged messaging client graph of both runtimes
+  gains the new module. Limits: a holder slower than 5 s is treated as dead
+  and its write can then be lost as before; a Windows reader that keeps a
+  lock open while its holder releases leaves the lock to that 5 s rule; a
+  Windows rename retry (1.27 s per write) inside a PostToolUse call is not
+  covered by the budget, as before. Two deterministic tests hold the lock from
+  another process and are red on the previous code, as is the purge test.
 - A Claude task past its max runtime whose `claude stop` cannot be confirmed
   is no longer stopped again every watch round for ever (issue #541). After a
   failed stop the watch measures the run as owner status does

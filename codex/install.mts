@@ -564,7 +564,7 @@ export function install(options: InstallOptions = {}) {
     if (messagingClient.enabled) {
       for (const relative of [
         "protocol.mts", "protocol-mcp.mts", "protocol-messages.mts", "protocol-task-control.mts", "protocol-tasks.mts",
-        path.join("node", "config.mts"), path.join("node", "inbox.mts"), path.join("node", "mcp-local.mts"),
+        path.join("node", "config.mts"), path.join("node", "inbox.mts"), path.join("node", "inbox-record-lock.mts"), path.join("node", "mcp-local.mts"),
         path.join("node", "mcp-credential-file.mts"),
         path.join("node", "session-publication.mts"),
         path.join("node", "policy.mts"), path.join("node", "session-policy.mts"),

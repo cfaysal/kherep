@@ -20,6 +20,7 @@ import { readPrivateKey } from "./identity.mts";
 import { installPaused, markedProbe, noticeInterruptedProbe } from "./install-pause.mts";
 import { storeMessage } from "./inbox.mts";
 import { inboxIndex } from "./inbox-index.mts";
+import { DAEMON_RECORD_LOCK_WAIT_MS, setRecordLockWait } from "./inbox-record-lock.mts";
 import { MAINTENANCE_FALLBACK_MS, runInboxMaintenance, type MaintenanceOptions } from "./inbox-start.mts";
 import { scheduleListenerSweep } from "./listener-sweep.mts";
 import { loadPolicy, type NodePolicy } from "./policy.mts";
@@ -86,6 +87,9 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   const identity = readPrivateKey(config.privateKeyFile);
   if (identity.publicKey !== config.publicKey) throw new Error("private key does not match the enrolled public key");
   const policy = loadPolicy(config.policyFile);
+  // Issue #627: a record another process holds is left to the next round
+  // after this wait; the wait is synchronous and would block the frame lanes.
+  setRecordLockWait(DAEMON_RECORD_LOCK_WAIT_MS);
   // Issue #72. For nodes enrolled before onboard created it: a sandboxed
   // `msg send` can write into the outbox but not create it.
   ensureDir(paths.outbox);
