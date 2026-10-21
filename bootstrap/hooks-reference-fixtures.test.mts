@@ -23,7 +23,12 @@ test("the classifier accepts the coordinated wrapper and a direct Control Plane 
   assert.deepEqual(stemsOf(classify("PreToolUse", `${WRAPPER} pretool ${guards.map((g) => `"${HOME}/hooks/${g}.mts"`).join(" ")}`)), guards);
   assert.deepEqual(stemsOf(classify("SessionStart", `${WRAPPER} writer "${HOME}/hooks/live-hook-integrity.mts"`)), ["live-hook-integrity"]);
   assert.deepEqual(classify("Stop", `node "${CP}/wake-hook.mts" --timeout 86400`), { stems: ["wake-hook"], controlPlane: true });
-  for (const { event, command } of templateCommands("claude/settings.user.json").filter(({ command }) => command.includes("/modules/control-plane/node/"))) {
+  // Issue #592. The stable entry under the Claude home, named with the hook it runs.
+  assert.deepEqual(classify("Stop", 'node "/synthetic/claude/kherep/control-plane/claude-control-plane-hook.mts" wake --timeout 86400'),
+    { stems: ["claude-control-plane-hook", "wake-hook"], controlPlane: true });
+  const stable = templateCommands("claude/settings.user.json").filter(({ command }) => command.includes("/kherep/control-plane/claude-control-plane-hook.mts"));
+  assert.equal(stable.length, 8, "the template wires the stable entry eight times");
+  for (const { event, command } of stable) {
     assert.equal((classify(event, command) as { controlPlane?: boolean }).controlPlane, true, command);
   }
 });
@@ -44,6 +49,8 @@ test("the classifier rejects commands that are neither form", () => {
     `${WRAPPER} reader`, `${WRAPPER} reader "${HOME}/kherep/x.mts"`, `node "${REPO}/modules/other/x.mts"`, WRAPPER,
     `node ${REPO}/modules/other/new-hook.mts ${CP}/wake-hook.mts`, `"${CP}/wake-hook.mts"`,
     `node "${CP}/wake-hook.mts".js`, `node "${CP}/wake-hook.mts"x --timeout 86400`, `node"" "${CP}/wake-hook.mts"`,
+    `node "${HOME}/kherep/control-plane/claude-control-plane-hook.mts"`, `node "${HOME}/kherep/control-plane/claude-control-plane-hook.mts" other`,
+    `node "${HOME}/kherep/control-plane/claude-control-plane-hook.mts" deliver && echo x`,
   ]) assert.equal(errorOf(classify("Stop", command)), `unclassified wired command under Stop: ${command}`);
   for (const command of [`node "${CP}/wake-hook.mts" --timeout 86400 && node x.mts`, `node "${CP}/deliver-hook.mts"; rm -rf /`]) {
     assert.equal(errorOf(classify("Stop", command)), `unclassified wired command under Stop: ${command} (runs more than one shell command)`);
