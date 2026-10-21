@@ -802,6 +802,23 @@ increments the minor version; every other release increments the patch version.
   bounded by the time before the first send and after the row was read,
   without the 1 s slack, and awaited on the row, since `directory.get` is no
   barrier for the `delivered` status frames. Test and fixture code only.
+- Message-retention Worker test reports (issue #569): after a `message.status`
+  report, the tests took the answer to a later `directory.get` as proof that
+  the report had run; there is no ordering between different stubs, so it may
+  not have. The issue took these reports for receipt-less: the Worker answers
+  every report of the target node with a `message.receipt` event, sent after
+  the Registry's RPC returned, and only a report of another node gets none.
+  The six report sites answered by a receipt now wait for that receipt, by
+  message id and requested state, and assert the stored state it carries; the
+  two reports of another node go through the Registry's RPC, whose null
+  receipt is the completion; the reply and the resend in the same tests wait
+  for the `message.status` that answers a send. The target's `message.deliver`
+  frame, which the barrier used to swallow unseen, is consumed where a row is
+  delivered. A regression holds the report's transaction with a non-storage
+  hold until the directory answer has passed. The file is split along its
+  three test groups into `message-retention-ack.test.mts`,
+  `message-retention-sweep.test.mts` and `message-retention-legacy.test.mts`
+  over a shared `message-retention-fixture.mts`. The Worker is unchanged.
 
 ## [0.4.0] - 2026-10-18
 
