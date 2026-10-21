@@ -324,7 +324,16 @@ while the drain exists. During legacy adoption, the immediate descendant and
 ownership recheck narrows but cannot eliminate a process-start race, so any
 uncertain observation aborts and the operator should retry. The
 transaction then requires a fresh pid, authenticated connection and matching
-startup source. It never stops Claude Code or Codex session processes by pid.
+startup source. The health stage waits up to 30 seconds for the new daemon's
+authenticated connection. The daemon's inbox maintenance (settle, then purge)
+runs after that connection and cannot delay it, so the deadline bounds process
+start, the source identity of the pin, which grows with the source tree, and
+the connection itself, not the size of the local queue (issue #581). The
+daemon logs the seconds since its start and the process uptime on its
+`connected as` line. When a failed health check makes the transaction restore
+the prior service, that restore waits up to 180 seconds for its health, since
+a prior source may still maintain its queue before it connects.
+It never stops Claude Code or Codex session processes by pid.
 Admission leases record PID, process start and owner provenance. A crashed
 lease is removed only when that owner is positively stale; an uncertain owner
 aborts the transaction. `service status` succeeds only when the native service

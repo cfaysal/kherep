@@ -290,6 +290,30 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- A service upgrade, rollback or stale-drain recovery to this version no
+  longer fails its 30 s health check on a node with a large local queue
+  (issue #581). The daemon start's inbox maintenance (issue #520: settle
+  answered sent records, then purge records older than 7 days) read every
+  `sent/` and `inbox/` file before the daemon connected: 58 s on a node with
+  4688 inbox and 2528 sent files, and 106 s for the old daemon during the
+  rollback (cause UNVERIFIED). It now runs once per daemon process after the
+  first authenticated connection, or 60 s after the start when no connection
+  comes, in the background in slices of about 50 ms off the frame lanes,
+  settle still before purge, with the same rules and log lines. A reply that
+  arrives meanwhile is settled on arrival as before. The sliced purge leaves
+  inbox files written since the pass began to the next start, so a record
+  the daemon refuses meanwhile is reported refused before it is removed
+  (issue #195). The connect path still captures the source identity of the
+  pin, which grows with the source tree, not with the queue. The
+  `connected as` line carries the seconds since the daemon start and the
+  process uptime, and one line reports the maintenance's duration
+  (`start maintenance done in <s> s`, or `stopped after`). The join of sent
+  records with their replies is linear instead of quadratic, and a purge
+  skips an entry another purge removed after its listing instead of
+  aborting. When a failed health check restores the prior service, that
+  restore now waits up to 180 s for its health, because a prior source may
+  still maintain its queue before it connects; the forward health check
+  keeps 30 s.
 - Upgrade of a changed managed Claude hook (issue #568). The settings merge
   kept an existing entry next to the managed one whenever anything besides a
   spelling of the same paths differed, so after a template change both ran
