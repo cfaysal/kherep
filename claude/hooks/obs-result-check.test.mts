@@ -2,61 +2,94 @@
 // Contract test for obs-result-check.mts. Drives the hook the way Claude Code
 // does at SubagentStop: JSON on stdin, an optional subagent transcript on disk,
 // JSON-or-nothing on stdout, always exit 0. stderr is never asserted: Node 24.1
-// prints an ExperimentalWarning there for .mts files.
+// prints an ExperimentalWarning there for .mts files. The hook and its libs are
+// copied into a temporary <root>/hooks/ (issue #555), so the handback state
+// under <root>/.cache/ never lands in the checkout.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
-import { fileURLToPath } from "node:url";
+import test, { describe } from "node:test";
 
 import { OBS_RESULT_REASON } from "./obs-result-check.mts";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const HOOK = path.join(HERE, "obs-result-check.mts");
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "obs-result-check-test-"));
+const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "obs-result-check-test-")));
 const SECRET = "Example Corp host.example.com";
+
+function fixture(name: string): { root: string; hook: string } {
+  const root = path.join(TMP, name);
+  fs.mkdirSync(path.join(root, "hooks"), { recursive: true });
+  fs.copyFileSync(path.join(import.meta.dirname, "obs-result-check.mts"), path.join(root, "hooks", "obs-result-check.mts"));
+  fs.cpSync(path.join(import.meta.dirname, "lib"), path.join(root, "hooks", "lib"), { recursive: true });
+  return { root, hook: path.join(root, "hooks", "obs-result-check.mts") };
+}
+const { root: ROOT, hook: HOOK } = fixture("home");
+const STATE = path.join(ROOT, ".cache", "obs-result-check");
 
 test.after(() => fs.rmSync(TMP, { recursive: true, force: true }));
 
-interface Run {
-  stdout: string;
-  status: number | null;
-  output: { decision?: unknown; reason?: unknown; systemMessage?: unknown } | null;
+interface Run { stdout: string; status: number | null; output: { decision?: unknown; reason?: unknown; systemMessage?: unknown } | null }
+
+const toRun = (stdout: string, status: number | null): Run => ({ stdout, status, output: stdout ? JSON.parse(stdout) : null });
+
+function runRaw(stdin: string, hook = HOOK): Run {
+  const result = spawnSync(process.execPath, [hook], { input: stdin, encoding: "utf8" });
+  return toRun(result.stdout, result.status);
 }
 
-function runRaw(stdin: string): Run {
-  const result = spawnSync(process.execPath, [HOOK], { input: stdin, encoding: "utf8" });
-  return { stdout: result.stdout, status: result.status, output: result.stdout ? JSON.parse(result.stdout) : null };
-}
+const payload = (extra: Record<string, unknown>) => JSON.stringify({ session_id: "00000000-0000-4000-8000-000000000000",
+  hook_event_name: "SubagentStop", agent_id: "agent-1", agent_type: "claude-obs", stop_hook_active: false, ...extra });
 
-function run(extra: Record<string, unknown>): Run {
-  return runRaw(JSON.stringify({
-    session_id: "00000000-0000-4000-8000-000000000000",
-    hook_event_name: "SubagentStop",
-    agent_id: "agent-1",
-    agent_type: "claude-obs",
-    stop_hook_active: false,
-    ...extra,
-  }));
+const run = (extra: Record<string, unknown>, hook = HOOK): Run => runRaw(payload(extra), hook);
+
+// Asynchronous, so the cases that wait for the recorder run side by side.
+function runAsync(extra: Record<string, unknown>, during?: () => void): Promise<Run> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [HOOK], { stdio: ["pipe", "pipe", "ignore"] });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.on("close", (status) => resolve(toRun(stdout, status)));
+    child.stdin.end(payload(extra));
+    // 800 ms: well after Node has started the hook and read the state once, well inside its 2 s wait.
+    if (during) setTimeout(during, 800);
+  });
 }
 
 let seq = 0;
-function transcript(finalText: string): string {
+function writeTranscript(entries: unknown[]): string {
   const file = path.join(TMP, `agent-${++seq}.jsonl`);
-  const entries = [
-    { type: "user", isSidechain: true, message: { role: "user", content: "brief" } },
-    { type: "assistant", isSidechain: true, message: { role: "assistant", content: [{ type: "text", text: finalText }] } },
-    { type: "assistant", isSidechain: true, message: { role: "assistant", content: [{ type: "tool_use", id: "t", name: "Bash", input: {} }] } },
-  ];
   fs.writeFileSync(file, `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`, "utf8");
   return file;
 }
+function transcript(finalText: string): string {
+  return writeTranscript([
+    { type: "user", isSidechain: true, message: { role: "user", content: "brief" } },
+    { type: "assistant", isSidechain: true, message: { role: "assistant", content: [{ type: "text", text: finalText }] } },
+    { type: "assistant", isSidechain: true, message: { role: "assistant", content: [{ type: "tool_use", id: "t", name: "Bash", input: {} }] } },
+  ]);
+}
+// A subagent transcript whose last call is SubagentHandback; result: true, false (is_error) or absent.
+function handbackTranscript(id: string, message: string, ok?: boolean): string {
+  const entries: unknown[] = [
+    { type: "user", isSidechain: true, message: { role: "user", content: "brief" } },
+    { type: "assistant", isSidechain: true, message: { role: "assistant", content: [{ type: "tool_use", id, name: "SubagentHandback", input: { message } }] } },
+  ];
+  if (ok !== undefined) {
+    entries.push({ type: "user", isSidechain: true, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "delivered", is_error: !ok }] } });
+  }
+  return writeTranscript(entries);
+}
+
+const stateFile = (id: string, kind: "delivered" | "stop") => path.join(STATE, `${id}.${kind}`);
+function plantDelivered(id: string, line: string): void {
+  fs.mkdirSync(STATE, { recursive: true });
+  fs.writeFileSync(stateFile(id, "delivered"), line);
+}
+const trace = (id: string) => fs.readFileSync(stateFile(id, "stop"), "utf8");
 
 function silent(result: Run): void {
-  assert.equal(result.status, 0);
-  assert.equal(result.stdout, "");
+  assert.deepEqual([result.status, result.stdout], [0, ""]);
 }
 
 function message(result: Run): string {
@@ -140,4 +173,77 @@ test("nothing from the message, the transcript or the payload reaches stdout", (
       assert.ok(!result.stdout.includes(fragment), `${fragment} leaked: ${result.stdout}`);
     }
   }
+});
+
+// Issue #555: in auto mode the report arrives through SubagentHandback, and
+// last_assistant_message is only the closing text ("Report delivered.").
+describe("handback evidence never blocks", { concurrency: true }, () => {
+  const closing = { last_assistant_message: "Report delivered." };
+
+  test("(a) a recorded delivery is silent and cleared", async () => {
+    plantDelivered("hb-a", "wrote\ttoolu_a\n");
+    silent(await runAsync({ ...closing, agent_id: "hb-a" }));
+    assert.equal(fs.existsSync(stateFile("hb-a", "delivered")), false);
+    assert.match(trace("hb-a"), /^mode=- state=present waited=0 after=- transcript=none branch=state\n$/);
+  });
+
+  test("(b) auto mode without any evidence is a notice, never a block", async () => {
+    assert.match(message(await runAsync({ ...closing, agent_id: "hb-b", permission_mode: "auto" })), /not visible/);
+    assert.match(trace("hb-b"), /^mode=auto state=absent waited=\d+ after=absent transcript=none branch=auto\n$/);
+  });
+
+  test("(c) a delivered valid handback in the transcript is silent", async () => {
+    silent(await runAsync({ agent_id: "hb-c", agent_transcript_path: handbackTranscript("t1", "OBS-RESULT: empty none", true) }));
+  });
+
+  test("(d) a delivered malformed handback is reported, not blocked", async () => {
+    const file = handbackTranscript("t1", `OBS-RESULT: wrote 2 5\n5 ${SECRET}`, true);
+    const text = message(await runAsync({ ...closing, agent_id: "hb-d", agent_transcript_path: file }));
+    assert.match(text, /still malformed \(wrote count differs from the number of ids\)/);
+    assert.doesNotMatch(text, /Example Corp|not confirmed/);
+  });
+
+  test("(e) a refused handback is a notice, not a block", async () => {
+    const text = message(await runAsync({ ...closing, agent_id: "hb-e", agent_transcript_path: handbackTranscript("t1", "OBS-RESULT: empty none", false) }));
+    assert.match(text, /handback did not execute/);
+    assert.match(trace("hb-e"), /transcript=refused branch=transcript-error\n$/);
+  });
+
+  test("(f) a handback without a visible result is checked and marked unconfirmed", async () => {
+    assert.match(message(await runAsync({ ...closing, agent_id: "hb-f", agent_transcript_path: handbackTranscript("t1", "OBS-RESULT: empty none") })),
+      /delivery was not confirmed/);
+    assert.match(message(await runAsync({ ...closing, agent_id: "hb-f2", agent_transcript_path: handbackTranscript("t1", "OBS-RESULT: empty") })),
+      /still malformed \(empty needs a reason\).* \(delivery not confirmed\)$/);
+  });
+
+  test("(g) a stale delivery of an earlier handback is cleared, then the transcript decides", async () => {
+    plantDelivered("hb-g", "wrote\tt1\n");
+    const result = await runAsync({ ...closing, agent_id: "hb-g", agent_transcript_path: handbackTranscript("t2", "OBS-RESULT: empty none") });
+    assert.match(message(result), /delivery was not confirmed/);
+    assert.equal(fs.existsSync(stateFile("hb-g", "delivered")), false);
+    assert.match(trace("hb-g"), /state=stale .*transcript=unknown branch=transcript-unknown\n$/);
+  });
+
+  test("(h) the hook waits for a recorder that lands after the stop", async () => {
+    const result = await runAsync({ ...closing, agent_id: "hb-h", permission_mode: "auto" }, () => plantDelivered("hb-h", "wrote\ttoolu_h\n"));
+    silent(result);
+    const match = /^mode=auto state=absent waited=(\d+) after=present transcript=none branch=state\n$/.exec(trace("hb-h"));
+    assert.ok(match, trace("hb-h"));
+    assert.ok(Number(match[1]) < 2000, `waited ${match[1]} ms`);
+  });
+});
+
+test("(j) the trace holds the fixed keys only, and nothing reaches stdout", () => {
+  const result = run({ agent_id: "hb-j", permission_mode: SECRET, last_assistant_message: `OBS-RESULT: failed ${SECRET}` });
+  assert.match(message(result), /OBS-RESULT: failed/);
+  assert.equal(trace("hb-j"), "mode=other state=absent waited=0 after=- transcript=none branch=final-message\n");
+});
+
+test("without a valid agent_id there is no state, no wait and no .cache under the home", () => {
+  const bare = fixture("bare");
+  for (const agent_id of [undefined, "../x"]) {
+    const result = run({ agent_id, permission_mode: "auto", last_assistant_message: "Report delivered." }, bare.hook);
+    assert.match(message(result), /not visible/);
+  }
+  assert.equal(fs.existsSync(path.join(bare.root, ".cache")), false);
 });

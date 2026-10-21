@@ -15,7 +15,7 @@ back.
 
 ## Result
 
-The first line of your final message is exactly one status line, and there is exactly one:
+The first line of your final message, or of the message you hand back through SubagentHandback when you report through that tool, is exactly one status line, and there is exactly one:
 
 - `OBS-RESULT: wrote <n> <page ids>` - every admissible finding was filed; `<n>` is the number
   of pages you created and `<page ids>` are their ids, comma-separated.
@@ -26,7 +26,7 @@ The first line of your final message is exactly one status line, and there is ex
   A finding you could not file is `failed` too. If pages were already created before the failure,
   the reason names their ids.
 
-After it: one line per written page (id, title), nothing else. The SubagentStop hook `obs-result-check` checks it.
+After it: one line per written page (id, title), nothing else. The SubagentStop hook `obs-result-check` checks it, and the PostToolUse hook `obs-handback-record` checks the message you hand back.
 
 ## What an observation is
 

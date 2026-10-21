@@ -9,34 +9,60 @@
  * neither. This hook checks the line with lib/obs-result-policy.mts before the
  * result reaches the Maestro. Pure-regex, NO model call.
  *
+ * Issue #555. On Claude Code v2.1.271 or later a subagent with the
+ * SubagentHandback tool delivers its report through that tool, and
+ * last_assistant_message holds only its closing text (claude-hooks.md,
+ * SubagentStop). The tool is provided only in auto mode (claude-tools-reference.md).
+ * The PostToolUse hook obs-handback-record.mts checks the delivered report and
+ * records its verdict (lib/obs-handback-state.mts). In order:
+ *
  *   - agent_type is not claude-obs: silent. The matcher already filters on it.
- *   - a valid wrote or empty line: silent.
- *   - a valid failed line: a systemMessage to the operator, no block.
- *   - a malformed line, stop_hook_active exactly false: one decision "block".
- *     Claude Code delivers the reason to the subagent as its next instruction,
- *     so the worker restates its line, and that corrected message is what the
- *     Maestro receives.
- *   - a malformed line on the continuation (stop_hook_active not exactly
- *     false): a systemMessage only, so the hook never loops.
- *   - no visible result: a systemMessage.
+ *   - a recorded delivery for this agent_id: silent; the recorder has judged it.
+ *     A record whose tool_use_id differs from the last handback visible in the
+ *     transcript is stale (a resumed subagent keeps its id) and is dropped.
+ *   - the order of the recorder and this hook is not documented, so without a
+ *     record the hook waits up to 2 s for one, only when one can still come:
+ *     permission_mode is "auto" or the transcript shows a handback call.
+ *   - a SubagentHandback call in the subagent transcript: its message is judged
+ *     with a notice and never a block; a call whose tool_result is an error, or
+ *     that has none yet, is reported as such.
+ *   - permission_mode "auto" without any evidence: a notice, never a block,
+ *     because the closing text is then never the report.
+ *   - otherwise the final message, as before: a valid wrote or empty line is
+ *     silent, a valid failed line a systemMessage, a malformed line with
+ *     stop_hook_active exactly false one decision "block" (Claude Code delivers
+ *     the reason to the subagent as its next instruction), a malformed line on
+ *     the continuation a systemMessage only, no visible result a systemMessage.
+ *     The message comes from last_assistant_message, else from the last
+ *     assistant text of agent_transcript_path.
  *   - any error: a one-line systemMessage, exit 0.
  *
- * The message comes from last_assistant_message, else from the last assistant
- * text of agent_transcript_path.
+ * Without a valid agent_id there is no record, no wait and no state write.
+ * With one, the hook clears the record, prunes state older than 24 h and writes
+ * <agent_id>.stop, the fixed-key trace of the host measurement, after the
+ * decision. Known limits: when the recorder lands after this hook's transcript
+ * branch, the operator can see the same notice twice; a resumed subagent whose
+ * transcript shows no handback accepts an old record.
  *
  * PRIVACY. The block reason is a constant, and every systemMessage is built
  * from constants and the policy's fixed problem texts. Nothing from the
- * message, the transcript or the payload reaches stdout.
+ * message, the transcript or the payload reaches stdout or the state files.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  clearDelivered, type DeliveredRead, FAILED_MESSAGE, homeOf, PREFIX, prune, readDelivered,
+  stillMalformed, type StopTrace, validId, writeStopTrace,
+} from "./lib/obs-handback-state.mts";
 import { checkObsResult } from "./lib/obs-result-policy.mts";
-import { lastAssistantText, readTranscript } from "./lib/turn-substance.mts";
+import { type Handback, lastAssistantText, lastHandback, readTranscript, type TranscriptEntry } from "./lib/turn-substance.mts";
 
 export interface SubagentStopPayload {
   agent_type?: unknown;
+  agent_id?: unknown;
+  permission_mode?: unknown;
   stop_hook_active?: unknown;
   last_assistant_message?: unknown;
   agent_transcript_path?: unknown;
@@ -44,9 +70,11 @@ export interface SubagentStopPayload {
 }
 
 export type HookOutput = { decision: "block"; reason: string } | { systemMessage: string };
+export interface DecideOptions { home: string; waitMs?: number }
 
 const OBSERVATION_AGENT = "claude-obs";
-const PREFIX = "Kherep obs-result-check:";
+const WAIT_MS = 2_000;
+const POLL_MS = 100;
 
 export const OBS_RESULT_REASON = [
   "OBS-RESULT check (ROUTING.md, Session observations): your final message does not start with one valid status line.",
@@ -56,34 +84,90 @@ export const OBS_RESULT_REASON = [
   "Create no further pages.",
 ].join(" ");
 
-const FAILED_MESSAGE = `${PREFIX} claude-obs reported OBS-RESULT: failed. The Maestro reports it as a failure in this turn, never as an empty result.`;
 const NOT_VISIBLE = `${PREFIX} the claude-obs result was not visible to the hook; check its OBS-RESULT line by hand.`;
+const NOT_DELIVERED = `${PREFIX} the claude-obs handback did not execute; the Maestro treats the run as a failure and checks the result by hand.`;
+const NOT_CONFIRMED = `${PREFIX} the claude-obs handback was seen but its delivery was not confirmed; check the result by hand.`;
 const ERROR_MESSAGE = `${PREFIX} the hook failed; the claude-obs result was not checked.`;
+const UNCONFIRMED = " (delivery not confirmed)";
 
-function resultText(payload: SubagentStopPayload): string {
+const isRecord = (state: DeliveredRead): boolean => state !== null && state !== "unreadable";
+const TRANSCRIPT: Record<Handback["result"], StopTrace["transcript"]> = { ok: "delivered", error: "refused", unknown: "unknown" };
+
+function finalMessage(payload: SubagentStopPayload, entries: TranscriptEntry[]): HookOutput | null {
   const message = payload.last_assistant_message;
-  if (typeof message === "string" && message.trim()) return message;
-  const file = payload.agent_transcript_path;
-  if (typeof file !== "string" || !file) return "";
-  return lastAssistantText(readTranscript(file) ?? []);
-}
-
-export function decide(value: unknown): HookOutput | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("payload is no object");
-  const payload = value as SubagentStopPayload;
-  if (payload.agent_type !== OBSERVATION_AGENT) return null;
-  const text = resultText(payload);
+  const text = typeof message === "string" && message.trim() ? message : lastAssistantText(entries);
   if (!text.trim()) return { systemMessage: NOT_VISIBLE };
   const check = checkObsResult(text);
   if ("status" in check) return check.status === "failed" ? { systemMessage: FAILED_MESSAGE } : null;
   if (payload.stop_hook_active === false) return { decision: "block", reason: OBS_RESULT_REASON };
-  return { systemMessage: `${PREFIX} the claude-obs result is still malformed (${check.problem}); the Maestro treats it as a failure.` };
+  return { systemMessage: stillMalformed(check.problem) };
 }
 
-function main(): void {
+// The handback's own message, judged without a block.
+function handbackMessage(handback: Handback): HookOutput | null {
+  if (handback.result === "error") return { systemMessage: NOT_DELIVERED };
+  const suffix = handback.result === "unknown" ? UNCONFIRMED : "";
+  if (!handback.message || !handback.message.trim()) return { systemMessage: NOT_VISIBLE };
+  const check = checkObsResult(handback.message);
+  if ("problem" in check) return { systemMessage: stillMalformed(check.problem) + suffix };
+  if (check.status === "failed") return { systemMessage: FAILED_MESSAGE + suffix };
+  return suffix ? { systemMessage: NOT_CONFIRMED } : null;
+}
+
+async function waitForRecord(home: string, id: string, waitMs: number): Promise<{ state: DeliveredRead; waited: number }> {
+  const start = Date.now();
+  let state: DeliveredRead = null;
+  while (Date.now() - start < waitMs) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    state = readDelivered(home, id);
+    if (isRecord(state)) break;
+  }
+  return { state, waited: Date.now() - start };
+}
+
+export async function decide(value: unknown, { home, waitMs = WAIT_MS }: DecideOptions): Promise<HookOutput | null> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("payload is no object");
+  const payload = value as SubagentStopPayload;
+  if (payload.agent_type !== OBSERVATION_AGENT) return null;
+  const id = validId(payload.agent_id);
+  const auto = payload.permission_mode === "auto";
+  const file = payload.agent_transcript_path;
+  const entries = (typeof file === "string" && file ? readTranscript(file) : null) ?? [];
+  const handback = lastHandback(entries);
+
+  let state: DeliveredRead = id ? readDelivered(home, id) : null;
+  let first: StopTrace["state"] = state === null ? "absent" : state === "unreadable" ? "unreadable" : "present";
+  if (id && state && state !== "unreadable" && handback?.id && state.toolUseId !== "-" && state.toolUseId !== handback.id) {
+    clearDelivered(home, id);
+    state = null;
+    first = "stale";
+  }
+  let waited = 0;
+  let after: StopTrace["after"] = "-";
+  if (id && !isRecord(state) && (auto || handback)) {
+    ({ state, waited } = await waitForRecord(home, id, waitMs));
+    after = isRecord(state) ? "present" : "absent";
+  }
+
+  let branch: string;
+  let output: HookOutput | null;
+  if (isRecord(state)) [branch, output] = ["state", null];
+  else if (handback) [branch, output] = [`transcript-${handback.result}`, handbackMessage(handback)];
+  else if (auto) [branch, output] = ["auto", { systemMessage: NOT_VISIBLE }];
+  else [branch, output] = ["final-message", finalMessage(payload, entries)];
+
+  if (id) {
+    clearDelivered(home, id);
+    prune(home);
+    writeStopTrace(home, id, { mode: payload.permission_mode, state: first, waited, after, transcript: handback ? TRANSCRIPT[handback.result] : "none", branch });
+  }
+  return output;
+}
+
+async function main(): Promise<void> {
   let output: HookOutput | null;
   try {
-    output = decide(JSON.parse(fs.readFileSync(0, "utf8")));
+    output = await decide(JSON.parse(fs.readFileSync(0, "utf8")), { home: homeOf(process.argv[1] || "") });
   } catch {
     output = { systemMessage: ERROR_MESSAGE };
   }
@@ -104,4 +188,4 @@ function isMainModule(): boolean {
   }
 }
 
-if (isMainModule()) main();
+if (isMainModule()) void main();
