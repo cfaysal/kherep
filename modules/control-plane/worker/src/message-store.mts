@@ -201,9 +201,11 @@ export class MessageStore {
     return { ok: true, status: statusBody(message.messageId, state, reason), effects };
   }
 
-  // A status reported by the target node. Wrong-node and unknown reports get
-  // no receipt. Valid duplicates get the canonical state again so a lost
-  // receipt heals on the node's next retry.
+  // A status reported by the target node. A row or tombstone of another target
+  // node gets no receipt. An id without a row settles from its tombstone, or as
+  // expired when none is left (lateReceipt), so the node stops re-reporting it.
+  // Valid duplicates get the canonical state again so a lost receipt heals on
+  // the node's next retry.
   report(nodeId: string, status: MessageStatusBody & { state: NodeReportedState }, now: number): MessageReportResult {
     const effects = this.expireDue(now);
     let record = this.get(status.messageId);
