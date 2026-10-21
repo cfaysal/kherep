@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { after, test } from "node:test";
 
-import { denialFaultEnv, type DenialFault } from "./denial-fault.fixture.mts";
+import { denialFaultEnv, MARKER_SLOW_MS, type DenialFault } from "./denial-fault.fixture.mts";
 import { dispatcherFixture, type DispatcherFixture } from "./guard-dispatch-fixture.mts";
 import { journalPaths } from "./lib/denial-journal.mts";
 import { readJournal, renderReport } from "./lib/denial-report.mts";
@@ -146,10 +146,29 @@ test("append and rename both fail: the decision still stands; the lost line is t
   assert.equal(lines(fx).length, 1, "only the earlier call; docs name this residual");
 });
 
-for (const fault of ["journal-hang", "all-hang"] as const) {
-  test(`a writer that never settles (${fault}): the decision within cap and grace, no broken guard, no re-check`, async () => {
-    const { run, reference } = await faulted(fault);
-    assert.ok(run.ms < reference.ms + 1_900 + 1_500, `${run.ms} ms against ${reference.ms} ms`);
-    assert.doesNotMatch(run.stdout, /additionalContext|cannot run/);
-  });
-}
+// Issue #614. The marker is on disk when the dispatcher has exited, however slow the filesystem: emit()
+// exits through process.exit(0), which abandons a pending fs.promises write, so the marker write is
+// awaited until the dispatcher's deadline. Red against a dispatcher that gave it a fixed 400 ms slice:
+// with the append settling after 700 ms the read saw ENOENT.
+test("a marker append that settles late: the marker is on disk when the dispatcher has exited", async () => {
+  const { fx, run } = await faulted("marker-slow");
+  assert.equal(fs.readFileSync(journalPaths(fx.root, "agent-t1").marker, "utf8"), "append\n");
+  assert.equal(firstLine(fx), "DENIED-CALLS: unknown (capture-failed)");
+  assert.ok(run.ms >= MARKER_SLOW_MS, `${run.ms} ms: the dispatcher waited for the append`);
+});
+
+test("a journal append that never settles (journal-hang): the decision within the cap, a marker, no broken guard, no re-check", async () => {
+  const { fx, run, reference } = await faulted("journal-hang");
+  assert.equal(fs.readFileSync(journalPaths(fx.root, "agent-t1").marker, "utf8"), "append-timeout\n");
+  assert.ok(run.ms < reference.ms + 1_900 + 1_500, `${run.ms} ms against ${reference.ms} ms`);
+  assert.doesNotMatch(run.stdout, /additionalContext|cannot run/);
+});
+
+// The lib's write ends within its 1.5 s cap; a marker write that never settles is given up at the dispatcher's
+// deadline, 25 s after its start (issue #614), so this decision arrives late but before the 30 s hook timeout.
+test("a writer that never settles (all-hang): the decision before the dispatcher deadline, the marker given up there", async () => {
+  const { fx, run, reference } = await faulted("all-hang");
+  assert.equal(fs.existsSync(journalPaths(fx.root, "agent-t1").marker), false, "nothing settled, so no marker: the named residual");
+  assert.ok(run.ms >= 24_500 && run.ms < 25_000 + Math.max(1_500, reference.ms), `${run.ms} ms against ${reference.ms} ms`);
+  assert.doesNotMatch(run.stdout, /additionalContext|cannot run/);
+});

@@ -8,7 +8,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 import { pathToFileURL } from "node:url";
 
-import { denialFaultEnv, type DenialFault } from "./denial-fault.fixture.mts";
+import { denialFaultEnv, MARKER_SLOW_MS, type DenialFault } from "./denial-fault.fixture.mts";
 import { cleanup, entry, runtimeHome, type Home } from "./hook-runtime-fixture.mts";
 import { journalPaths } from "./lib/denial-journal.mts";
 import { readJournal, renderReport } from "./lib/denial-report.mts";
@@ -58,22 +58,39 @@ test("ENOSPC on the journal: a marker, the renderer reads unknown (capture-faile
   assert.equal(renderReport(readJournal(home.root, "agent-e1")).text.split("\n")[0], "DENIED-CALLS: unknown (capture-failed)");
 });
 
-for (const fault of ["journal-hang", "all-hang"] as const) {
-  test(`a writer that never settles (${fault}): the deny within 500 + 400 ms of the reference`, () => {
-    const { ms, reference } = faulted(fault);
-    assert.ok(ms < reference + 900 + 1_500, `${ms} ms against ${reference} ms`);
-  });
-}
+// Issue #614. finish() exits through process.exit, which abandons a pending fs.promises write, so the marker
+// write is awaited until OUTER_DEADLINE - 2_000 instead of a fixed 400 ms slice. Red against the previous entry:
+// with the append settling after 700 ms the read saw ENOENT.
+test("a marker append that settles late: the marker is on disk when the entry has exited", () => {
+  const { home, ms } = faulted("marker-slow");
+  assert.equal(fs.readFileSync(journalPaths(home.root, "agent-e1").marker, "utf8"), "append\n");
+  assert.equal(renderReport(readJournal(home.root, "agent-e1")).text.split("\n")[0], "DENIED-CALLS: unknown (capture-failed)");
+  assert.ok(ms >= MARKER_SLOW_MS, `${ms} ms: the entry waited for the append`);
+});
 
-// Review P3-10: both caps of journalDeny go through capBefore(<limit>, end) with end = OUTER_DEADLINE - 200,
-// so a deny reached late never writes past that bound: the arithmetic, plus a pin of its use.
-test("the entry's journal caps end at OUTER_DEADLINE - 200 ms", async () => {
+test("a journal append that never settles (journal-hang): the deny within 500 ms of the reference, a marker", () => {
+  const { home, ms, reference } = faulted("journal-hang");
+  assert.equal(fs.readFileSync(journalPaths(home.root, "agent-e1").marker, "utf8"), "append\n");
+  assert.ok(ms < reference + 900 + 1_500, `${ms} ms against ${reference} ms`);
+});
+
+// The journal write ends within its 500 ms cap; a marker write that never settles is given up at
+// OUTER_DEADLINE - 2_000, 26 s after the entry's start (issue #614): the deny arrives late but before the 30 s cancel.
+test("a writer that never settles (all-hang): the deny after OUTER_DEADLINE - 2_000, the marker given up there", () => {
+  const { home, ms, reference } = faulted("all-hang");
+  assert.equal(fs.existsSync(journalPaths(home.root, "agent-e1").marker), false, "nothing settled, so no marker: the named residual");
+  assert.ok(ms >= 25_700 && ms < 26_000 + Math.max(1_500, reference), `${ms} ms against ${reference} ms`);
+});
+
+// Review P3-10 and issue #614: the journal cap of journalDeny is capBefore(500, end) with end = OUTER_DEADLINE - 200
+// and the marker write is awaited until OUTER_DEADLINE - 2_000, so a deny reached late never writes past either bound.
+test("the entry's journal cap ends at OUTER_DEADLINE - 200 ms, its marker wait at OUTER_DEADLINE - 2_000 ms", async () => {
   const file = path.join(import.meta.dirname, "..", "kherep", "hook-runtime", "entry.mts");
   const { capBefore } = await import(pathToFileURL(file).href) as { capBefore: (limit: number, end: number, now?: number) => number };
   assert.deepEqual([capBefore(500, 10_000, 9_000), capBefore(500, 10_000, 9_700), capBefore(400, 10_000, 10_050)], [500, 300, 0]);
   const body = /async function journalDeny[\s\S]*?\n}\n/.exec(fs.readFileSync(file, "utf8"))?.[0] ?? "";
   assert.match(body, /end = OUTER_DEADLINE - 200\b/);
-  const calls = body.match(/\bsettled\(/g)?.length ?? 0;
-  assert.equal(calls, 2);
-  assert.equal(body.match(/, capBefore\((?:500|400), end\)\)/g)?.length ?? 0, calls, "every settled() cap is capBefore(<limit>, end)");
+  assert.equal(body.match(/\bsettled\(/g)?.length ?? 0, 2);
+  assert.equal(body.match(/, capBefore\(500, end\)\)/g)?.length ?? 0, 1, "the journal write is capped at 500 ms before end");
+  assert.equal(body.match(/, OUTER_DEADLINE - 2_000 - Date\.now\(\)\)/g)?.length ?? 0, 1, "the marker write is awaited until OUTER_DEADLINE - 2_000 (issue #614)");
 });

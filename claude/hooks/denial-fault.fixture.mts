@@ -8,8 +8,9 @@
 //   enospc-all       every appendFile fails ENOSPC; rename works (the journal becomes the marker)
 //   all-fail         every appendFile fails ENOSPC and every rename EPERM: no evidence survives
 //   all-hang         appendFile, mkdir and rename never settle
-//   marker-slow      appendFile on a *.failed settles after 700 ms, then appends (a slow filesystem;
-//                    issue #612: the marker must still be on disk when the hook process has exited)
+//   marker-slow      appendFile on a *.jsonl fails ENOSPC; appendFile on a *.failed settles after 700 ms, then
+//                    appends (a slow filesystem; issues #612 and #614: the marker must still be on disk when
+//                    the hook process has exited)
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -37,7 +38,9 @@ if (fault && process.argv[1] && path.basename(process.argv[1]) === process.env.K
   promises.appendFile = function (file: unknown, ...rest: unknown[]) {
     if (fault === "all-hang" || (fault === "journal-hang" && journal(file))) return never();
     if (fault === "marker-slow" && marker(file)) return later().then(() => append.call(fs.promises, file, ...rest));
-    if (fault === "enospc-all" || fault === "all-fail" || (fault === "journal-enospc" && journal(file))) return Promise.reject(errno("ENOSPC"));
+    if (fault === "enospc-all" || fault === "all-fail" || ((fault === "journal-enospc" || fault === "marker-slow") && journal(file))) {
+      return Promise.reject(errno("ENOSPC"));
+    }
     return append.call(fs.promises, file, ...rest);
   };
   promises.rename = function (...args: unknown[]) {

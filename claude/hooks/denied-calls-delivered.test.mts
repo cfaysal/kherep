@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { after, test } from "node:test";
 
-import { denialFaultEnv } from "./denial-fault.fixture.mts";
+import { denialFaultEnv, MARKER_SLOW_MS } from "./denial-fault.fixture.mts";
 import { cleanup, entry, runtimeHome, type Home } from "./hook-runtime-fixture.mts";
 import { journalPaths } from "./lib/denial-journal.mts";
 import { readJournal, renderReport } from "./lib/denial-report.mts";
@@ -46,12 +46,31 @@ test("nothing without a valid agent_id, for another tool, or for input that is n
   assert.equal(fs.existsSync(journalPaths(h.root, "x").dir), false);
 });
 
-test("a write that fails leaves the marker; one that never settles ends within its cap, exit 0", () => {
+test("a write that fails leaves the marker, exit 0", () => {
   const failed = home();
   assert.equal(record(failed, payload(), denialFaultEnv("journal-enospc", RECORDER)).status, 0);
   assert.equal(fs.readFileSync(journalPaths(failed.root, "agent-d1").marker, "utf8"), "append\n");
+});
+
+// Issue #614. The recorder exits through process.exit(0), which abandons a pending fs.promises write, so the
+// marker write is awaited until the recorder's deadline (5.5 s after its start, under the entry's timeout 10)
+// instead of a fixed 400 ms slice. Red against the previous recorder: with the append settling after 700 ms
+// the read saw ENOENT.
+test("a marker append that settles late: the marker is on disk when the recorder has exited", () => {
+  const slow = home();
+  const run = record(slow, payload(), denialFaultEnv("marker-slow", RECORDER));
+  assert.deepEqual([run.status, run.stdout], [0, ""]);
+  assert.equal(fs.readFileSync(journalPaths(slow.root, "agent-d1").marker, "utf8"), "append\n");
+  assert.ok(run.ms >= MARKER_SLOW_MS, `${run.ms} ms: the recorder waited for the append`);
+});
+
+// The journal write ends within its 1.5 s cap; a marker write that never settles is given up at the
+// recorder's deadline, 5.5 s after its start (issue #614), before the entry's hook timeout of 10 s.
+test("a write that never settles: exit 0 before the recorder deadline, the marker given up there", () => {
+  const reference = record(home(), payload());
   const stalled = home();
   const run = record(stalled, payload(), denialFaultEnv("all-hang", RECORDER));
   assert.deepEqual([run.status, run.stdout], [0, ""]);
-  assert.ok(run.ms < 1_500 + 400 + 3_000, `${run.ms} ms`);
+  assert.equal(fs.existsSync(journalPaths(stalled.root, "agent-d1").marker), false, "nothing settled, so no marker: the named residual");
+  assert.ok(run.ms >= 5_000 && run.ms < 5_500 + Math.max(1_500, reference.ms), `${run.ms} ms against ${reference.ms} ms`);
 });

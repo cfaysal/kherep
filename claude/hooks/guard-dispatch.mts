@@ -27,7 +27,7 @@ const GUARD_TIMEOUT_MS = 10_000;
 // A re-check gets <= RECHECK_MAX_MS of what is left, none below RECHECK_MIN_MS; its lib loads within RECHECK_LOAD_MS.
 const RECHECK_MAX_MS = 20_000, RECHECK_MIN_MS = 2_000, RECHECK_LOAD_MS = 2_000;
 const HEARTBEAT_WINDOW_MS = 1_800_000; // = lib/integrity-heartbeat.mts; each side has a boundary test
-const JOURNAL_CAP_MS = 1_500, MARK_GRACE_MS = 400, AGENT_KEY = /^[A-Za-z0-9_-]{1,64}$/; // issue #504
+const JOURNAL_CAP_MS = 1_500, AGENT_KEY = /^[A-Za-z0-9_-]{1,64}$/; // issue #504; the marker is awaited to DEADLINE (issue #614)
 const SELF = fileURLToPath(import.meta.url), DIR = path.dirname(SELF), SELF_LABEL = path.basename(SELF);
 const INVOKED_DIR = path.dirname(path.resolve(process.argv[1] ?? SELF));
 const HOME = path.dirname(INVOKED_DIR);
@@ -190,15 +190,16 @@ async function recheck(payload: string, guards: Promise<Outcome[]>, ownDir: stri
     maxMs: RECHECK_MAX_MS, minMs: RECHECK_MIN_MS, runtime: CAP });
 }
 
-// Issue #504: a delegated run's call line (lib/denial-journal.mts), else a marker; never a verdict, never past its caps.
+// Issue #504: a delegated run's call line (lib/denial-journal.mts), else a marker; never a verdict, never past its caps. The lib has
+// JOURNAL_CAP_MS; the marker write is then awaited until DEADLINE (issue #614): emit() exits through process.exit(0), which abandons a
+// pending fs.promises write, so a marker given a fixed 400 ms slice was missing after a slow write (ENOENT in the Codex twin, #612).
 async function journal(payload: Record<string, unknown>, verdicts: Verdict[]): Promise<void> {
   const id = payload.agent_id, cap = Math.min(JOURNAL_CAP_MS, remaining()); // a lib that is missing, empty, throws or hangs is caught
   if (typeof id !== "string" || !AGENT_KEY.test(id) || payload.tool_name === "SubagentHandback") return;
   const fail = await within(import("./lib/denial-journal.mts").then((lib) => lib.journalVerdict(HOME, payload, verdicts, Date.now() + cap - 50)),
     cap, () => "lib-timeout").catch(() => "lib-load"), base = path.join(HOME, ".cache", "denied-calls", id);
   if (fail) await within(fs.promises.mkdir(path.dirname(base), { recursive: true, mode: 0o700 }).then(() => fs.promises.appendFile(`${base}.failed`,
-    `${fail}\n`, { mode: 0o600 })).catch(() => fs.promises.rename(`${base}.jsonl`, `${base}.failed`)), Math.min(MARK_GRACE_MS, remaining()), () => {})
-    .catch(() => {});
+    `${fail}\n`, { mode: 0o600 })).catch(() => fs.promises.rename(`${base}.jsonl`, `${base}.failed`)), remaining(), () => {}).catch(() => {});
 }
 
 async function dispatch(guards: string[]): Promise<{ verdict?: Verdict; stderr: string[] }> {

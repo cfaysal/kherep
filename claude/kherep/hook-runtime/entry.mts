@@ -181,6 +181,9 @@ function settled(work: () => Promise<unknown>, ms: number): Promise<boolean> {
 
 // Issue #504: a deny of a delegated run's call (valid agent_id, not the handback) goes to the
 // denied-call journal of this home with the fixed reason only, else a marker, before OUTER_DEADLINE - 200.
+// The marker write is awaited until OUTER_DEADLINE - 2_000, not a fixed 400 ms slice (issue #614): finish()
+// exits through process.exit, which abandons a pending fs.promises write, so a slow write left no marker.
+// The 2 s before OUTER_DEADLINE widen the deny's margin before the 30 s cancel: losing a deny is worse.
 async function journalDeny(input: Buffer, reason: string): Promise<void> {
   if (input.length > 1_048_576) return; // no unbounded parse on the deny path
   let payload: Record<string, unknown>;
@@ -193,7 +196,7 @@ async function journalDeny(input: Buffer, reason: string): Promise<void> {
   if (await settled(() => fs.promises.mkdir(dir, { recursive: true, mode: 0o700 })
     .then(() => fs.promises.appendFile(`${base}.jsonl`, `${line}\n`, { mode: 0o600 })), capBefore(500, end))) return;
   await settled(() => fs.promises.appendFile(`${base}.failed`, "append\n", { mode: 0o600 })
-    .catch(() => fs.promises.rename(`${base}.jsonl`, `${base}.failed`)), capBefore(400, end));
+    .catch(() => fs.promises.rename(`${base}.jsonl`, `${base}.failed`)), OUTER_DEADLINE - 2_000 - Date.now());
 }
 
 async function main(): Promise<void> {
