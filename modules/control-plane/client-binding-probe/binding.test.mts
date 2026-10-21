@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createIntent, verifyIntent } from "./binding.mts";
+import { createIntent, LOCK_ATTEMPTS, verifyIntent } from "./binding.mts";
 
 const T0 = Date.parse("2026-09-29T10:00:00.000Z");
 const NONCE = "synthetic_nonce_0123456789";
@@ -108,18 +108,72 @@ test("concurrent first use waits for atomic key publication", async (t) => {
       fs.unlinkSync(lock);
     }, 80);
   `, dir], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-  t.after(() => { if (!helper.killed) helper.kill(); });
-  const closed = new Promise<void>((resolve, reject) => {
-    helper.once("close", (code) => code === 0 ? resolve() : reject(new Error("helper_failed")));
-    helper.once("error", reject);
+  // Issue #600: the helper's exit is awaited on every path before the test
+  // ends, so no activity of this test outlives it and its exit code is
+  // asserted, never left as an unhandled rejection.
+  const exited = new Promise<number | null>((resolve) => { helper.once("exit", (code) => resolve(code)); });
+  t.after(async () => {
+    if (helper.exitCode === null && helper.signalCode === null) helper.kill();
+    await exited;
   });
   await new Promise<void>((resolve, reject) => {
     helper.stdout.once("data", () => resolve());
     helper.once("error", reject);
+    void exited.then((code) => reject(new Error(`helper_exited_${code}`)));
   });
-  const intent = createIntent(dir, { sessionId: SESSION, callId: CALL, syntheticNonce: NONCE }, T0);
-  assert.match(intent.requestId, /^[0-9a-f-]{36}$/);
-  await closed;
+  let outcome: { requestId: string } | Error;
+  try {
+    outcome = createIntent(dir, { sessionId: SESSION, callId: CALL, syntheticNonce: NONCE }, T0);
+  } catch (error) {
+    outcome = error as Error;
+  }
+  assert.equal(await exited, 0, "helper exited cleanly");
+  if (outcome instanceof Error) throw outcome;
+  assert.match(outcome.requestId, /^[0-9a-f-]{36}$/);
+});
+
+// Issue #600: Windows reports the lock file of a releasing holder as EPERM
+// (delete pending), not EEXIST. Opens of the create lock fail with `codes` in
+// turn, later ones open for real; returns the codes seen, "open" for a real one.
+function lockOpens(t: test.TestContext, codes: readonly string[]): string[] {
+  const real = fs.openSync;
+  const seen: string[] = [];
+  t.mock.method(fs, "openSync", (file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode | null) => {
+    if (!String(file).endsWith("create.lock")) return real(file, flags, mode);
+    const code = codes[seen.length];
+    seen.push(code ?? "open");
+    if (code) throw Object.assign(new Error(`synthetic ${code}`), { code, syscall: "open" });
+    return real(file, flags, mode);
+  });
+  return seen;
+}
+
+for (const codes of [["EPERM"], ["EPERM", "EPERM"], ["EBUSY", "EACCES"]]) {
+  test(`a lock open failing ${codes.join(" then ")} is retried like a held lock`, (t) => {
+    const dir = state(t);
+    const seen = lockOpens(t, codes);
+    const intent = createIntent(dir, { sessionId: SESSION, callId: CALL, syntheticNonce: NONCE }, T0);
+    assert.match(intent.requestId, /^[0-9a-f-]{36}$/);
+    assert.deepEqual(seen, [...codes, "open"]);
+    assert.deepEqual(fs.readdirSync(path.join(dir, "locks")), []);
+  });
+}
+
+test("a lock reported held past the bound fails closed with the fixed code", (t) => {
+  const dir = state(t);
+  const seen = lockOpens(t, Array<string>(LOCK_ATTEMPTS).fill("EPERM"));
+  assert.throws(() => createIntent(dir, { sessionId: SESSION, callId: CALL, syntheticNonce: NONCE }, T0),
+    (error: unknown) => error instanceof Error && error.message === "storage_error"
+      && (error.cause as NodeJS.ErrnoException).code === "EPERM");
+  assert.equal(seen.length, LOCK_ATTEMPTS);
+});
+
+test("a lock open failing with any other code is thrown unchanged at once", (t) => {
+  const dir = state(t);
+  const seen = lockOpens(t, ["ENOSPC"]);
+  assert.throws(() => createIntent(dir, { sessionId: SESSION, callId: CALL, syntheticNonce: NONCE }, T0),
+    { code: "ENOSPC" });
+  assert.deepEqual(seen, ["ENOSPC"]);
 });
 test("malformed stored intents block creation and remain available for diagnosis", (t) => {
   const dir = state(t);
