@@ -115,10 +115,13 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   const maintain = (): void => { maintaining ??= runInboxMaintenance(paths, log, { ...maintenance, signal: halt.signal })
     .catch((error: unknown) => log(`kherep-node: start maintenance failed: ${String(error)}`)); };
   const fallback = setTimeout(maintain, maintenance.fallbackMs ?? MAINTENANCE_FALLBACK_MS).unref();
+  // Issue #487: one in-process inbox index for the daemon's readers (inbox-index.mts); issue #589: the
+  // session listing's refusal check reads it too, so a snapshot costs one stat per record, not a read.
+  const inbox = inboxIndex(paths.inbox);
   const sessions = recordingSessions(paths, (signal) => {
     backgroundDiscovery?.controller.abort();
     return source(signal);
-  }, log);
+  }, log, undefined, undefined, () => inbox.records());
   // Issue #197: one readiness probe per enabled runtime at the start, then only
   // when a run needs a runtime whose verdict aged out (runtime-readiness.mts).
   // Issue #420: none at the start for a runtime with a carried-over verdict.
@@ -140,8 +143,6 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // the first check runs the Windows identity lookup before connect().
   for (const runtime of enabledRuntimes(policy)) void readiness.check(runtime);
   // Issue #408, PR 4: the capability proven on the current connection, read lazily from the client below.
-  // Issue #487: one in-process inbox index for the daemon's readers (inbox-index.mts).
-  const inbox = inboxIndex(paths.inbox);
   const runner: RunnerDeps = { paths, policy, log, readiness, workerCapabilities: () => client.workerCapabilities, inbox: () => inbox.records() };
   const live = (): RunnerDeps => ({ ...runner, policy: loadPolicy(config.policyFile) });
   recoverOperations(paths);
@@ -251,7 +252,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
         }).then((listed) => {
           chain = chain.then(enqueued(timed, "chain", "snapshot", async () => {
             if (socket !== ws || ws.readyState !== WebSocket.OPEN) return;
-            if (listed && !controller.signal.aborted) await recordAndPublishSessions(client, paths, listed, send, log, controller.signal);
+            if (listed && !controller.signal.aborted) await recordAndPublishSessions(client, paths, listed, send, log, controller.signal, () => inbox.records());
             await watchTasks(runner, log);
             await deliverToClosed(live(), log);
           })).catch((error: unknown) => log(`kherep-node: session snapshot failed: ${String(error)}`));
@@ -326,7 +327,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
             void source(controller.signal).then((listed) => {
               chain = chain.then(enqueued(timed, "chain", "snapshot", async () => {
                 if (socket !== ws || ws.readyState !== WebSocket.OPEN || controller.signal.aborted) return;
-                await recordAndPublishSessions(client, paths, listed, send, log, controller.signal);
+                await recordAndPublishSessions(client, paths, listed, send, log, controller.signal, () => inbox.records());
               }));
               return chain;
             }).catch((error: unknown) => {
