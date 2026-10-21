@@ -198,6 +198,11 @@ increments the minor version; every other release increments the patch version.
   because the Worker rejects a call without the hook's `requestId`. The file
   stays outside `hooks/` and is not restored by hook integrity. Host
   behaviour (#537) and Windows (#534) remain UNKNOWN.
+- Codex run guard: the regeneration hint for
+  `codex/scripts/codex-run-expected.json` is printed only when a skip check
+  failed, names the CI-log route first and states that a local run matches
+  CI only on a host that matches the CI image; a local `run` without `--tap`
+  writes a per-process TAP file (issue #570).
 
 ### Fixed
 
