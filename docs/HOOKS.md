@@ -15,7 +15,7 @@ Every hook Kherep wires, one row each. A hook is wired when one of these sources
 - `watcher (warns)`: reports a finding without blocking; the integrity hooks also repair what they find.
 - `recorder`: writes a record and never blocks.
 - `context`: adds text to the session's context, or wakes it.
-- `gate`: sends a turn or a subagent result back once when a required element is missing.
+- `gate`: stops a turn, or sends a turn or a subagent result back, when a required element is missing; each row says whether it does so only once.
 
 The scripts `claude/hooks/cbm-*` have no row: the Claude template does not wire them. Codex runs its own reminder, `codex-cbm-reminder`.
 
@@ -37,7 +37,7 @@ The scripts `claude/hooks/cbm-*` have no row: the Claude template does not wire 
 | `drift-managed-path-watch` | Claude | PostToolUse, all tools | watcher (warns) | Says right after a write that the file is one the drift check manages, and names its versioned source in the repository. |
 | `obs-handback-record` | Claude | PostToolUse SubagentHandback | recorder | Checks a `claude-obs` report where SubagentHandback delivers it and records the verdict for `obs-result-check`, with an operator notice for a failed or malformed report. |
 | `denied-calls-delivered` | Claude | PostToolUse SubagentHandback | recorder | Marks a delegated worker's denied-call journal as delivered after its handback ran, which `hooks/denied-calls.mts render <agent_id>` reads. |
-| `live-hook-integrity` | Claude | SessionStart, all sources; re-check started by `guard-dispatch` | watcher (warns) | Proves that every wired hook file and its imports can load, restores a missing, empty or unloadable one from the versioned source, and writes the heartbeat only after a fully proven run. |
+| `live-hook-integrity` | Claude | SessionStart, all sources; re-check started by `guard-dispatch` | watcher (warns) | Proves that the `.js` and `.mts` files the live settings wire under the Claude home's `hooks/` directory, and the files they import there, can load, restores a missing, empty or unloadable one from the versioned source, and writes the heartbeat only after a fully proven run; the Control Plane scripts run from the checkout are outside its scope. |
 | `orchestra-default` | Claude | SessionStart, all sources | context | Puts a session in the Kherep workspace into Maestro mode and adds the compact Maestro contract once. |
 | `runtime-capability-snapshot` | Claude | SessionStart, all sources | context | Adds a secret-free list of the installed and enabled plugins and the configured MCP server names, so the session does not state tool versions from memory. |
 | `drift-check-nudge` | Claude | SessionStart, all sources | watcher (warns) | Reports a missing or stale drift-check report or one that shows drift, and starts a new check in the background when the report is missing or stale. |
@@ -50,7 +50,7 @@ The scripts `claude/hooks/cbm-*` have no row: the Claude template does not wire 
 | `clq-accept-gate` | Claude | Stop | gate | Sends a delegated turn back once when its last message carries a `Dispatched:` receipt without a real `Evidence:` line, or a receipt naming a build agent without an `Accept: C1` verdict; a turn without a dispatch receipt is never stopped. |
 | `observation-stop` | Claude | Stop | gate | Sends a substantial turn in the workspace back once when it neither dispatched `claude-obs` nor opted out with `[obs: none – <reason>]`. |
 | `research-stop` | Claude | Stop | gate | Sends a substantial turn in the workspace back once when its transcript shows neither a knowledge-space lookup, plus a code-graph query when it changed files in a repository, nor the opt-out `[research: none - <reason>]`. |
-| `obs-result-check` | Claude | SubagentStop claude-obs | gate | Checks the `OBS-RESULT` line of a `claude-obs` result before it reaches the Maestro and sends a malformed final message back once; a report already judged by `obs-handback-record` passes. |
+| `obs-result-check` | Claude | SubagentStop claude-obs | gate | Checks the `OBS-RESULT` line of a `claude-obs` result when the subagent stops: a report delivered through SubagentHandback and recorded by `obs-handback-record` passes, even a malformed one, which the recorder already reported; a handback seen only in the transcript gets an operator notice; and a malformed final message is sent back once for correction. |
 | `deliver-hook` | Claude, Control Plane | PostToolUse, all tools; UserPromptSubmit; Stop; StopFailure | context | Hands accepted peer messages from the node's inbox to the session, at the prompt and after a tool call inside a running turn, and confirms the delivery at Stop. |
 | `attribution-hook` | Claude, Control Plane | PostToolUse Bash\|PowerShell | recorder | Records which session opened which pull request with `gh pr create` in the host-local attribution log, never the command text or its output. |
 | `wake-hook` | Claude, Control Plane | SessionStart, UserPromptSubmit and Stop, asyncRewake with timeout 86400 | context | Listens in the background while the session is idle and wakes it when a peer message arrives. |
@@ -68,7 +68,7 @@ The scripts `claude/hooks/cbm-*` have no row: the Claude template does not wire 
 | `codex-hook-integrity` | Codex | SessionStart startup\|resume\|clear\|compact; re-check started by the adapter and the shell dispatcher | watcher (warns) | Codex counterpart of `live-hook-integrity`: restores a missing, empty or unloadable hook file under a run lock and writes the heartbeat only after a fully proven run. |
 | `codex-precompact-checkpoint` | Codex | PreCompact manual\|auto | recorder | Writes a small local checkpoint, with working directory, session id, time and transcript path, before Codex compacts the context. |
 | `codex-research-stop` | Codex | Stop | gate | Codex counterpart of `research-stop`: sends a substantial turn in the workspace back once when it shows neither the required research nor the opt-out `[research: none - <reason>]`. |
-| `codex-acceptance-gate` | Codex | Stop | gate | Stops a final message in the workspace that claims completion without the C1 to C4 acceptance receipt. |
+| `codex-acceptance-gate` | Codex | Stop | gate | Stops a turn in the workspace whose final message claims completion without the C1 to C4 acceptance receipt, every time; it has no one-shot guard. |
 | `codex-obs-result-check` | Codex | SubagentStop codex-obs | gate | Codex counterpart of `obs-result-check`: sends a malformed `codex-obs` candidate back once before it reaches the Maestro. |
 | `commit-msg` | Git | commit-msg | blocking guard | Applies the host's commit policy to every commit in a workspace repository, including optional work-item keys, and rejects AI attribution trailers, whichever runtime or person commits. |
 | `post-checkout` | Git | post-checkout | watcher (warns) | Warns when a branch checkout leaves the main checkout of a workspace repository off its default branch; it runs after the checkout and cannot undo it. |
