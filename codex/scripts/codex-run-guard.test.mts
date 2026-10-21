@@ -73,14 +73,17 @@ test("skip drift is red with a +/- diff, the observed block and the regeneration
   assert.equal(hint, lines.indexOf(END) + 1, extra.stdout);
   assert.ok(lines[hint + 1].startsWith("codex-run-guard:   from the CI log: gh run view --job <job-id> --log | cut -f3- | sed -E 's/^[^ ]+ //',"), lines[hint + 1]);
   assert.match(lines[hint + 2], /^codex-run-guard: {3}only on a host that matches the win32 CI image \(.*\): node codex\/scripts\/codex-run-guard\.mts run --platform win32 --tap .*, then node codex\/scripts\/codex-run-guard\.mts print /);
-  assert.deepEqual(verdicts(check("missing-skip.tap").stdout), [`C3 missing skip ${skip("alpha posix only", null)}`]);
+  const missing = check("missing-skip.tap");
+  assert.deepEqual(verdicts(missing.stdout), [`C3 missing skip ${skip("alpha posix only", null)}`]);
+  assert.ok(observedBlock(missing.stdout));
+  assert.ok(missing.stdout.includes(HINT), missing.stdout);
   assert.deepEqual(verdicts(check("reason-renamed.tap").stdout), [
     `C3 missing skip ${skip("beta needs pwsh", "pwsh is not on PATH")}`,
     `C3 extra skip ${skip("beta needs pwsh", "pwsh is not installed")}`,
   ]);
 });
 
-test("zero selection, count mismatch, todo, fail and suite skip each fail with their own line", () => {
+test("zero selection, count mismatch, todo, fail and suite skip each fail with their own line", (t) => {
   assert.deepEqual(verdicts(check("tests-0.tap").stdout), [
     "C2 tests 0 below floor 5",
     `C3 missing skip ${skip("alpha posix only", null)}`,
@@ -90,12 +93,15 @@ test("zero selection, count mismatch, todo, fail and suite skip each fail with t
   const count = check("count-mismatch.tap");
   assert.deepEqual(verdicts(count.stdout), ["C4 3 skip records but # skipped 2"]);
   assert.ok(observedBlock(count.stdout));
-  assert.ok(count.stdout.includes(HINT), count.stdout);
   const todo = check("todo.tap");
   assert.deepEqual(verdicts(todo.stdout), ["C5 todo 1, TODO records: parked for later"]);
   const failed = check("fail-cancelled.tap");
   assert.deepEqual(verdicts(failed.stdout), ["C6 fail 1", "C6 cancelled 1"]);
-  for (const result of [todo, failed]) {
+  const floor = path.join(tempRepo(t, "node --test"), "floor.json");
+  fs.writeFileSync(floor, JSON.stringify({ ...JSON.parse(fs.readFileSync(fixtureExpected, "utf8")), minTests: 99 }));
+  const below = cli(["check", path.join(fixtures, "baseline.tap"), "--platform", "win32", "--expected", floor]);
+  assert.deepEqual(verdicts(below.stdout), ["C2 tests 5 below floor 99"]);
+  for (const result of [below, todo, failed]) {
     assert.equal(result.status, 1);
     assert.ok(!result.stdout.includes(BEGIN), "no observed block when the skip set is as expected");
     assert.ok(!result.stdout.includes("codex-run-expected.json"), "no regeneration hint without a skip check failure");
@@ -104,7 +110,7 @@ test("zero selection, count mismatch, todo, fail and suite skip each fail with t
   assert.equal(suite.status, 1);
   assert.deepEqual(verdicts(suite.stdout), ["C7 suite-level skip hides its tests: posix suite"]);
   assert.ok(observedBlock(suite.stdout));
-  assert.ok(suite.stdout.includes(HINT), suite.stdout);
+  for (const result of [count, suite]) assert.ok(!result.stdout.includes("codex-run-expected.json"), "no regeneration hint without a C3 line");
 });
 
 test("missing, empty or malformed TAP exits 2 and prints no observed block", (t) => {
