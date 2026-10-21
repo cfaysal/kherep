@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { after, test } from "node:test";
+import { pathToFileURL } from "node:url";
 
 import { denialFaultEnv, type DenialFault } from "./denial-fault.fixture.mts";
 import { cleanup, entry, runtimeHome, type Home } from "./hook-runtime-fixture.mts";
@@ -63,3 +64,16 @@ for (const fault of ["journal-hang", "all-hang"] as const) {
     assert.ok(ms < reference + 900 + 1_500, `${ms} ms against ${reference} ms`);
   });
 }
+
+// Review P3-10: both caps of journalDeny go through capBefore(<limit>, end) with end = OUTER_DEADLINE - 200,
+// so a deny reached late never writes past that bound: the arithmetic, plus a pin of its use.
+test("the entry's journal caps end at OUTER_DEADLINE - 200 ms", async () => {
+  const file = path.join(import.meta.dirname, "..", "kherep", "hook-runtime", "entry.mts");
+  const { capBefore } = await import(pathToFileURL(file).href) as { capBefore: (limit: number, end: number, now?: number) => number };
+  assert.deepEqual([capBefore(500, 10_000, 9_000), capBefore(500, 10_000, 9_700), capBefore(400, 10_000, 10_050)], [500, 300, 0]);
+  const body = /async function journalDeny[\s\S]*?\n}\n/.exec(fs.readFileSync(file, "utf8"))?.[0] ?? "";
+  assert.match(body, /end = OUTER_DEADLINE - 200\b/);
+  const calls = body.match(/\bsettled\(/g)?.length ?? 0;
+  assert.equal(calls, 2);
+  assert.equal(body.match(/, capBefore\((?:500|400), end\)\)/g)?.length ?? 0, calls, "every settled() cap is capBefore(<limit>, end)");
+});
