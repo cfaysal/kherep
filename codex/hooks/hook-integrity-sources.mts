@@ -16,9 +16,9 @@ export const COMPUTED: Record<string, string[]> = {
   "kherep-maestro/codex-shell-checks.mts": ["guard-recheck"],
   "kherep-maestro/codex-privacy-boundary-guard.mts": ["workspace-scope", "private-path-policy", "private-path-rules", "real-path-policy"],
   "kherep-maestro/codex-dispatch-contract-guard.mts": ["obs-brief-policy"],
-  // The adapter loads its re-check lib by a computed path (issue #507, part 3).
-  "kherep-maestro/codex-hook-adapter.mts": ["guard-recheck"],
-  "kherep-maestro/hook-adapter.mts": ["guard-recheck"],
+  // The adapter loads its re-check lib (issue #507, part 3) and the denied-call journal lib (issue #504) by a computed path.
+  "kherep-maestro/codex-hook-adapter.mts": ["guard-recheck", "denial-journal"],
+  "kherep-maestro/hook-adapter.mts": ["guard-recheck", "denial-journal"],
 };
 export const ALWAYS_CHECK = Object.values(COMPUTED).flat().map((name) => `./lib/${name}.mts`);
 export const computedImports = (rel: string): string => (COMPUTED[rel] || []).map((name) => `\nimport "./lib/${name}.mts";`).join("")
