@@ -30,8 +30,8 @@ const recoveryError = (code: string, message: string): Error & { code: string } 
 // #582: the candidate is still loaded under the label; writing other bytes now would leave launchd and the file apart.
 export type CandidateLoadedError = Error & { code: "RECOVERY_CANDIDATE_LOADED"; stopCode: StopCode };
 const candidateLoaded = (stopFailure: Error | undefined): CandidateLoadedError => Object.assign(
-  recoveryError("RECOVERY_CANDIDATE_LOADED", `candidate service is still loaded; its stop ${stopFailure ? `failed: ${stopFailure.message}` : "reported success"}`),
-  { code: "RECOVERY_CANDIDATE_LOADED" as const, stopCode: stopFailure ? stopCode(stopFailure) : "STOP_FAILED_OTHER" as const });
+  new Error(`candidate service is still loaded; its stop ${stopFailure ? `failed: ${stopFailure.message}` : "reported success"}`),
+  { code: "RECOVERY_CANDIDATE_LOADED" as const, stopCode: stopCode(stopFailure) });
 const wait = (milliseconds: number): Promise<void> => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 export function sourceMatches(expected: SourceIdentity, actual: SourceIdentity | undefined): boolean {
@@ -200,7 +200,7 @@ export async function restorePrior(input: RecoveryInput): Promise<void> {
     }
   }
   // #582: the prior bytes are written only over nothing, over themselves, or over a candidate proven absent.
-  if (native && overwritesLoaded && !absenceProven) {
+  if (overwritesLoaded && !absenceProven) {
     const remaining = await input.deps.adapter.read(input.binding);
     if (remaining && remaining.running !== false) throw candidateLoaded(stopFailure);
   }

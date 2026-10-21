@@ -75,7 +75,7 @@ export async function activateManagedService(options: ActivateOptions, input: De
       throw new Error("an existing service requires explicit --service-name and --adopt");
     }
     if (receipt || pendingMatch) await input.adapter.validateManaged(existing!, pendingMatch ? pending.binding : receipt!.binding);
-    const prior = pendingMatch && pending.backupId ? recordedPriorBackup(input.paths, pending, receipt) : null;
+    const prior = pendingMatch ? recordedPriorBackup(input.paths, pending, receipt) : null;
     if (pendingMatch && pending.backupId && !prior) throw new Error("managed service candidate record does not bind to the receipt");
 
     let oldState: DaemonState | null = null;

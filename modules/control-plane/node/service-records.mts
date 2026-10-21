@@ -95,6 +95,8 @@ export interface ServiceCandidate {
 }
 const candidateFile = (paths: NodePaths): string => path.join(serviceRoot(paths), "candidate.json");
 const BACKUP_ID = /^[0-9]{8,14}-[0-9a-f-]{36}$/;
+// #582: failedAt is printed by status, so only the shape toISOString() writes is accepted (no embedded text).
+const ISO_INSTANT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,3})?Z$/;
 function validCandidate(value: ServiceCandidate | undefined): value is ServiceCandidate {
   return Boolean(value && value.version === 1 && validBinding(value.binding)
     && /^[0-9a-f]{64}$/.test(value.definitionDigest) && /^[0-9a-f]{64}$/.test(value.securityDigest)
@@ -105,8 +107,6 @@ function validCandidate(value: ServiceCandidate | undefined): value is ServiceCa
     && (STOP_CODES as readonly string[]).includes(value.stopCode)
     && ISO_INSTANT.test(value.failedAt) && Number.isFinite(Date.parse(value.failedAt)));
 }
-// #582: failedAt is printed by status, so only the shape toISOString() writes is accepted (no embedded text).
-const ISO_INSTANT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,3})?Z$/;
 // #582: ENOENT -> null; every other failure, a parse error included, is the fixed message (A2 P2-A). The record is
 // self-written, so its content is never quoted back.
 export function readServiceCandidate(paths: NodePaths): ServiceCandidate | null {
