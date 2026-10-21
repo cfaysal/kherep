@@ -27,8 +27,9 @@ const PEER_FIELDS = [["ino", "inode"], ["dev", "device"], ["size", "size"], ["mt
 
 type RecheckLib = typeof import("../../claude/hooks/lib/guard-recheck.mts");
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
-const firstLine = (error: unknown): string => String((error as Error)?.message || error).split(/\r?\n/)[0];
-const errorCode = (error: unknown): string => (error as NodeJS.ErrnoException)?.code ?? String(error);
+// A Node error code, else the error's class name, else "unknown"; never a message (hook-adapter-verdict.mts codeOf).
+const errorCode = (error: unknown): string => { const { code, name } = (error ?? {}) as { code?: unknown; name?: unknown };
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,40}$/.test(code) ? code : typeof name === "string" && /^[A-Za-z]{1,40}Error$/.test(name) ? name : "unknown"; };
 
 // Why the file cannot be run, or undefined (hook-adapter.mts unrunnable, for an absolute path).
 function unrunnable(file: string): string | undefined {
@@ -71,10 +72,11 @@ async function recheck(payload: string, broken: boolean, remaining: () => number
   const dir = import.meta.dirname;
   if (path.basename(dir) !== "kherep-maestro" || path.basename(path.dirname(dir)) !== "hooks") return undefined;
   const home = path.dirname(path.dirname(dir));
+  const label = (file: string): string => path.relative(path.dirname(dir), file).split(path.sep).join("/"); // kherep-maestro/<name>, issue #564
   const recorded = recordedPeers(home);
   const peers = PEERS.map((name) => path.join(dir, name)).flatMap((peer) => {
     const why = unrunnable(peer) ?? peerDrift(peer, recorded);
-    return why ? [`${peer} cannot be trusted (${why})`] : [];
+    return why ? [`${label(peer)} cannot be trusted (${why})`] : [];
   });
   const run = async (): Promise<string | undefined> => {
     const loadMs = Math.min(RECHECK_LOAD_MS, remaining());
@@ -86,12 +88,12 @@ async function recheck(payload: string, broken: boolean, remaining: () => number
     const context = { why: !stale ? "guard failure" : lastOk ? "stale heartbeat" : "no heartbeat", lastOk };
     const script = path.join(dir, "codex-hook-integrity.mts");
     const why = unrunnable(script);
-    if (why) return lib.recheckNotice(context, [`${script} cannot run (${why})`]);
+    if (why) return lib.recheckNotice(context, [`${label(script)} cannot run (${why})`]);
     const budgetMs = Math.max(0, Math.min(RECHECK_MAX_MS, remaining() - 250));
     if (budgetMs < RECHECK_MIN_MS) return lib.recheckNotice(context, [`skipped, ${budgetMs} ms left of the hook budget; the next matching call re-checks`]);
-    return lib.runRecheck({ script, home, payload, budgetMs, ...context, trigger: "codex-shell-checks", env: { CODEX_HOME: home } });
+    return lib.runRecheck({ script, home, payload, budgetMs, ...context, trigger: "codex-shell-checks", env: { CODEX_HOME: home }, label: label(script) });
   };
-  const notice = await run().catch((error) => `hook integrity re-check unavailable (lib/guard-recheck.mts cannot be loaded: ${firstLine(error)})`);
+  const notice = await run().catch((error) => `hook integrity re-check unavailable (lib/guard-recheck.mts cannot be loaded (${errorCode(error)}))`);
   return [...peers, notice].filter(Boolean).join("\n") || undefined;
 }
 

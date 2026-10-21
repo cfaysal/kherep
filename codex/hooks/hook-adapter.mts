@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 
 import type { HookPayload } from "./hook-adapter-payload.mts";
 import { preToolUse, runAdaptedHook } from "./hook-adapter-run.mts";
-import { adapterFailure, combine, firstLine, INTENT_PHASE, isObject, PRE_TOOL_USE_PHASES, render, SELF, unrunnable, type Verdict }
+import { adapterFailure, codeOf, combine, INTENT_PHASE, isObject, labelOf, PRE_TOOL_USE_PHASES, render, SELF, unrunnable, type Verdict }
   from "./hook-adapter-verdict.mts";
 
 // Issue #533. Payload normalization, decisions and guard loops live in the three modules above;
@@ -77,7 +77,7 @@ function peerDrift(file: string, peers: Record<string, unknown> | undefined): st
   const record = peers?.[path.basename(file)];
   if (!isObject(record)) return "no proven record";
   let stat: fs.BigIntStats;
-  try { stat = fs.statSync(file, { bigint: true }); } catch (error) { return `stat failed: ${(error as NodeJS.ErrnoException).code ?? String(error)}`; }
+  try { stat = fs.statSync(file, { bigint: true }); } catch (error) { return `stat failed: ${codeOf(error)}`; }
   const changed = PEER_FIELDS.find(([key]) => record[key] !== String(stat[key]));
   return changed && `${changed[1]} changed since the last proven check`;
 }
@@ -93,8 +93,8 @@ async function recheck(payload: string, broken: boolean): Promise<string | undef
   const peer = path.join(INVOKED_DIR, "codex-shell-checks.mts");
   const drift = unrunnable(peer) ?? peerDrift(peer, recordedPeers(home));
   const notice = await recheckRun(home, payload, broken || drift !== undefined)
-    .catch((error) => `hook integrity re-check unavailable (lib/guard-recheck.mts cannot be loaded: ${firstLine(error)})`);
-  return drift ? `${peer} cannot be trusted (${drift})\n${notice}` : notice;
+    .catch((error) => `hook integrity re-check unavailable (lib/guard-recheck.mts cannot be loaded (${codeOf(error)}))`);
+  return drift ? `${labelOf(peer)} cannot be trusted (${drift})\n${notice}` : notice;
 }
 
 // A broken lib throws here or at its first call.
@@ -108,10 +108,10 @@ async function recheckRun(home: string, payload: string, broken: boolean): Promi
   const context = { why: !stale ? "guard failure" : lastOk ? "stale heartbeat" : "no heartbeat", lastOk };
   const script = path.join(INVOKED_DIR, "codex-hook-integrity.mts");
   const why = unrunnable(script);
-  if (why) return lib.recheckNotice(context, [`${script} cannot run (${why})`]);
+  if (why) return lib.recheckNotice(context, [`${labelOf(script)} cannot run (${why})`]);
   const budgetMs = Math.max(0, Math.min(RECHECK_MAX_MS, remaining() - 250));
   if (budgetMs < RECHECK_MIN_MS) return lib.recheckNotice(context, [`skipped, ${budgetMs} ms left of the hook budget; the next matching call re-checks`]);
-  return lib.runRecheck({ script, home, payload, budgetMs, ...context, trigger: "hook-adapter", env: { CODEX_HOME: home } });
+  return lib.runRecheck({ script, home, payload, budgetMs, ...context, trigger: "hook-adapter", env: { CODEX_HOME: home }, label: labelOf(script) });
 }
 
 type JournalLib = typeof import("../../claude/hooks/lib/denial-journal.mts");
@@ -176,11 +176,10 @@ function postMain(target: string | undefined, phase: string): void {
   process.exitCode = result.status;
 }
 
-// pre-intent keeps readStdin's own timeout text and names a stream error by its code only.
-function stdinWhy(error: unknown, phase: string): string {
-  const text = firstLine(error);
-  return phase !== INTENT_PHASE || /^stdin not closed within \d+ ms$/.test(text) ? text
-    : `stdin read failed (${(error as NodeJS.ErrnoException)?.code ?? "unknown"})`;
+// readStdin's own timeout text as is; a stream error by its code only (issue #538, every phase since #564).
+function stdinWhy(error: unknown): string {
+  const own = /^stdin not closed within \d+ ms$/.exec(String((error as Error)?.message))?.[0];
+  return own ?? `stdin read failed (${codeOf(error)})`;
 }
 
 async function main(target: string | undefined, phase: string): Promise<void> {
@@ -188,7 +187,7 @@ async function main(target: string | undefined, phase: string): Promise<void> {
   if (!target) return fail("no guard given");
   if (!path.isAbsolute(target)) return fail("guard path is not absolute");
   let raw: string;
-  try { raw = await readStdin(); } catch (error) { return fail(stdinWhy(error, phase)); }
+  try { raw = await readStdin(); } catch (error) { return fail(stdinWhy(error)); }
   let payload: unknown;
   try { payload = JSON.parse(raw); } catch { /* not JSON */ }
   if (!isObject(payload)) return fail("stdin is not a JSON object");
@@ -218,6 +217,5 @@ if (isMainModule()) {
   const target = process.argv[2];
   const phase = process.argv[3] || "pre";
   if (!PRE_TOOL_USE_PHASES.has(phase)) postMain(target, phase);
-  else main(target, phase).catch((error: unknown) => emit(adapterFailure(phase,
-    phase === INTENT_PHASE ? "internal error" : `internal error: ${firstLine(error)}`), "", undefined, phase));
+  else main(target, phase).catch(() => emit(adapterFailure(phase, "internal error"), "", undefined, phase)); // fixed text: no raw error
 }

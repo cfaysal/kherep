@@ -97,7 +97,9 @@ export function targetOf(payload: Payload): string {
 
 // Absolute paths in a reason: UNC, drive, home-relative and POSIX forms, also inside quotes,
 // backticks or parentheses. A POSIX path starts at a slash no word character comes before.
-const ABSOLUTE_PATH = /\\\\[^\s"'`()<>|]+|[A-Za-z]:[\\/][^\s"'`()<>|]*|~[\\/][^\s"'`()<>|]*|(?<![\w.~-])\/[^\s"'`()<>|]+/g;
+// Exported without `g` for .test() (issue #564); replace() takes the global copy.
+export const ABSOLUTE_PATH = /\\\\[^\s"'`()<>|]+|[A-Za-z]:[\\/][^\s"'`()<>|]*|~[\\/][^\s"'`()<>|]*|(?<![\w.~-])\/[^\s"'`()<>|]+/;
+const ABSOLUTE_PATHS = new RegExp(ABSOLUTE_PATH.source, "g");
 
 function basenameOf(match: string): string {
   const trail = /[.,;:]+$/.exec(match)?.[0] ?? "";
@@ -109,14 +111,14 @@ function basenameOf(match: string): string {
 // dropped, `<withheld>` when the line matches the private marker pattern, cut at 240 characters.
 export function redactReason(reason: unknown): string {
   const first = String(reason ?? "").split(/\r?\n/)[0]!.replace(/[\x00-\x1f\x7f]/g, "");
-  const reduced = first.replace(ABSOLUTE_PATH, basenameOf).trim();
+  const reduced = first.replace(ABSOLUTE_PATHS, basenameOf).trim();
   return PRIVATE_MARKER_PATTERN.test(reduced) ? WITHHELD : reduced.slice(0, REASON_MAX);
 }
 
 // The bracket tag a reason starts with, else its leading word when ` blocked` follows it (absolute
 // paths reduced first), else `guard`: "x.mts failed; this tool call is blocked." has no tag.
 export function guardOf(reason: unknown): string {
-  const first = String(reason ?? "").split(/\r?\n/)[0]!.replace(ABSOLUTE_PATH, basenameOf).trim();
+  const first = String(reason ?? "").split(/\r?\n/)[0]!.replace(ABSOLUTE_PATHS, basenameOf).trim();
   const tag = /^\[([A-Za-z0-9._-]{1,40})\]/.exec(first)?.[1] ?? /^([A-Za-z0-9._-]{1,40}) blocked\b/.exec(first)?.[1];
   return tag && !PRIVATE_MARKER_PATTERN.test(tag) ? tag : "guard";
 }

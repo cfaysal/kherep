@@ -3,7 +3,7 @@
 import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from "node:child_process";
 
 import { normalizeDeployApproval, normalizePayloads, type HookPayload } from "./hook-adapter-payload.mts";
-import { combine, failureFor, firstLine, INTENT_PHASE, judge, MIN_SPAWN_MS, PRE_TOOL_USE_PHASES, render, unrunnable, type Verdict }
+import { codeOf, combine, failureFor, INTENT_PHASE, judge, labelOf, MIN_SPAWN_MS, PRE_TOOL_USE_PHASES, render, unrunnable, type Verdict }
   from "./hook-adapter-verdict.mts";
 
 type Spawn = (command: string, args: string[], options: SpawnSyncOptionsWithStringEncoding) => SpawnSyncReturns<string>;
@@ -19,9 +19,9 @@ export function preToolUse(target: string, phase: string, payload: HookPayload, 
   options: AdaptedOptions): { verdict?: Verdict; stderr: string; broken: boolean; verdicts: Verdict[] } {
   const fail = failureFor(phase);
   const intent = phase === INTENT_PHASE;
-  const why = unrunnable(target);
+  const why = unrunnable(target), label = labelOf(target); // reasons name the label, the spawn takes the target
   if (why) {
-    const verdict = fail(target, why);
+    const verdict = fail(label, why);
     return { verdict, stderr: "", broken: verdict.broken === true, verdicts: [verdict] };
   }
   const begin = Date.now();
@@ -36,18 +36,17 @@ export function preToolUse(target: string, phase: string, payload: HookPayload, 
     const budget = budgetFor(capEnd, hardEnd, Date.now());
     let verdict: Verdict;
     if (budget < MIN_SPAWN_MS) {
-      verdict = fail(target, `budget exhausted before item ${index + 1} of ${items.length} (${Date.now() - begin} ms used)`, false);
+      verdict = fail(label, `budget exhausted before item ${index + 1} of ${items.length} (${Date.now() - begin} ms used)`, false);
     } else {
       try {
         // Node 22/24 print a type-stripping ExperimentalWarning for an .mts guard on stderr.
         const result = (options.spawn ?? spawnSync)(process.execPath, ["--disable-warning=ExperimentalWarning", target, ...(options.guardArgs ?? [])],
           { encoding: "utf8", input: JSON.stringify(normalized), windowsHide: true, timeout: budget, killSignal: "SIGKILL" });
         if (!intent) stderr += result.stderr ?? ""; // pre-intent forwards no raw error text (issue #538)
-        verdict = judge(target, result, budget, phase, normalized.tool_input);
+        verdict = judge(label, result, budget, phase, normalized.tool_input);
       } catch (error) {
         // Option validation or anything else Node throws before the child exists: no file fault.
-        const code = (error as NodeJS.ErrnoException)?.code ?? "unknown";
-        verdict = fail(target, intent ? `spawn threw (${code})` : `spawn threw (${code}: ${firstLine(error)})`, false);
+        verdict = fail(label, `spawn threw (${codeOf(error)})`, false);
       }
     }
     verdicts.push(verdict);
