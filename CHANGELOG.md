@@ -397,6 +397,11 @@ increments the minor version; every other release increments the patch version.
   true` and the check fails with `the control-plane template of this source
   is unreadable; duplicates unknown` instead of reading as clean or absent.
   An absent `settings.json` is still reported as absent.
+- `capture.sh` on Windows (issue #592): `portable_paths` folded the Claude
+  home in the forms of `CLAUDE_HOME` as given, while the renderer writes it as
+  `path.resolve` gives it, on Windows with backslashes, so every
+  captured command under the Claude home kept the machine path instead of
+  `~/.claude`. Both forms are folded now.
 - Client binding probe: on Windows the lock that serialises intent creation
   and verification (`locks/create.lock`, `locks/<requestId>.lock`) is no
   longer abandoned when another process is releasing it. An exclusive

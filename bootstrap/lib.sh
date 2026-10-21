@@ -18,9 +18,12 @@ portable_paths() {
     const fs=require("fs");
     const [source,target,home,repo]=process.argv.slice(1);
     let text=fs.readFileSync(source,"utf8");
-    const variants=(value)=>new Set([value,value.replace(/\\/g,"/"),JSON.stringify(value).slice(1,-1)]);
-    for(const value of variants(repo))if(value)text=text.split(value).join("__KHEREP_REPO__");
-    for(const value of variants(home))if(value)text=text.split(value).join("~/.claude");
+    const variants=(value)=>[value,value.replace(/\\/g,"/"),JSON.stringify(value).slice(1,-1)];
+    for(const value of new Set(variants(repo)))if(value)text=text.split(value).join("__KHEREP_REPO__");
+    // The renderer writes the Claude home as path.resolve gives it (render-profile-paths.mts),
+    // on Windows with backslashes, so that form is folded too, and first.
+    const homes=home?[...variants(require("path").resolve(home)),...variants(home)]:[];
+    for(const value of new Set(homes))if(value)text=text.split(value).join("~/.claude");
     fs.writeFileSync(target,text);
   ' "$f" "$tmp" "$CLAUDE_HOME" "$REPO_ROOT" && mv "$tmp" "$f"
 }
