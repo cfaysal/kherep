@@ -1,0 +1,68 @@
+TAP version 13
+# Subtest: one passes
+ok 1 - one passes
+  ---
+  duration_ms: 1.648917
+  type: 'test'
+  ...
+# Subtest: group suite
+    # Subtest: first in suite
+    ok 1 - first in suite
+      ---
+      duration_ms: 0.310334
+      type: 'test'
+      ...
+    # Subtest: inner suite
+        # Subtest: deep in inner suite
+        ok 1 - deep in inner suite
+          ---
+          duration_ms: 0.169166
+          type: 'test'
+          ...
+        1..1
+    ok 2 - inner suite
+      ---
+      duration_ms: 0.883542
+      type: 'suite'
+      ...
+    # Subtest: second in suite
+        # Subtest: subtest of a suite test
+        ok 1 - subtest of a suite test
+          ---
+          duration_ms: 0.079291
+          type: 'test'
+          ...
+        1..1
+    ok 3 - second in suite
+      ---
+      duration_ms: 0.267083
+      type: 'test'
+      ...
+    1..3
+ok 2 - group suite
+  ---
+  duration_ms: 2.325458
+  type: 'suite'
+  ...
+# Subtest: parent test
+    # Subtest: nested test
+    ok 1 - nested test
+      ---
+      duration_ms: 0.066958
+      type: 'test'
+      ...
+    1..1
+ok 3 - parent test
+  ---
+  duration_ms: 0.20975
+  type: 'test'
+  ...
+1..3
+# tests 6
+# suites 2
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 233.823291

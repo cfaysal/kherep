@@ -219,3 +219,22 @@ test("the real expectation has exactly the win32 and linux lists in the entry sh
     for (const entry of entries) assert.deepEqual(Object.keys(entry), ["name", "reason"]);
   }
 });
+
+test("a summary that contradicts its records is red at C8, with no observed block and no hint (issue #578)", () => {
+  const cases: [string, string, string[]][] = [
+    ["pass-inflated.tap", "win32", ["C8 2 passing records but # pass 999"]],
+    ["tests-deflated.tap", "linux", ["C8 7 test records but # tests 6"]],
+    ["suites-miscounted.tap", "win32", ["C8 0 suite records but # suites 1"]],
+    ["not-ok-hidden.tap", "win32", ["C8 1 passing records but # pass 2", "C8 1 failing records but # fail 0 + # cancelled 0"]],
+    ["plan-miscounted.tap", "win32", ["C8 4 top-level records but 1..5"]],
+  ];
+  for (const [name, platform, lines] of cases) {
+    const result = check(name, platform);
+    assert.equal(result.status, 1, name);
+    assert.deepEqual(verdicts(result.stdout), lines, name);
+    assert.ok(!result.stdout.includes("observed skips") && !result.stdout.includes("codex-run-expected.json"), result.stdout);
+  }
+  const nested = check("nested-suite.tap", "linux");
+  assert.equal(nested.status, 0, nested.stdout + nested.stderr);
+  assert.equal(nested.stdout, "codex-run-guard: linux tests=7 skipped=0 todo=0 ok\n");
+});

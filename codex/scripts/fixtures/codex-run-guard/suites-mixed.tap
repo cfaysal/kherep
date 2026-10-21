@@ -1,0 +1,91 @@
+TAP version 13
+# Subtest: S1
+    # Subtest: a
+    ok 1 - a
+      ---
+      duration_ms: 0.403625
+      type: 'test'
+      ...
+    # Subtest: b skip
+    ok 2 - b skip # SKIP why
+      ---
+      duration_ms: 0.051625
+      type: 'test'
+      ...
+    # Subtest: c todo
+    ok 3 - c todo # TODO
+      ---
+      duration_ms: 0.051042
+      type: 'test'
+      ...
+    # Subtest: S1.inner
+        # Subtest: d
+        ok 1 - d
+          ---
+          duration_ms: 0.064167
+          type: 'test'
+          ...
+        1..1
+    ok 4 - S1.inner
+      ---
+      duration_ms: 0.149958
+      type: 'suite'
+      ...
+    1..4
+ok 1 - S1
+  ---
+  duration_ms: 1.255041
+  type: 'suite'
+  ...
+# Subtest: S2 skipped suite
+ok 2 - S2 skipped suite # SKIP
+  ---
+  duration_ms: 0.041792
+  type: 'suite'
+  ...
+# Subtest: S3 todo suite
+    # Subtest: g
+    ok 1 - g # TODO
+      ---
+      duration_ms: 0.05975
+      type: 'test'
+      ...
+    1..1
+ok 3 - S3 todo suite # TODO
+  ---
+  duration_ms: 0.135084
+  type: 'suite'
+  ...
+# Subtest: S4 empty
+ok 4 - S4 empty
+  ---
+  duration_ms: 0.043083
+  type: 'suite'
+  ...
+# Subtest: top skip
+ok 5 - top skip # SKIP
+  ---
+  duration_ms: 0.482042
+  type: 'test'
+  ...
+# Subtest: top todo
+ok 6 - top todo # TODO later
+  ---
+  duration_ms: 0.06325
+  type: 'test'
+  ...
+# Subtest: top ok
+ok 7 - top ok
+  ---
+  duration_ms: 0.041625
+  type: 'test'
+  ...
+1..7
+# tests 8
+# suites 5
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 2
+# todo 3
+# duration_ms 110.825542

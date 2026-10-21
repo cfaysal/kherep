@@ -1,0 +1,59 @@
+TAP version 13
+# Subtest: skip and todo both
+ok 1 - skip and todo both # SKIP
+  ---
+  duration_ms: 0.467875
+  type: 'test'
+  ...
+# Subtest: skip then throw
+not ok 2 - skip then throw # SKIP late
+  ---
+  duration_ms: 0.114959
+  type: 'test'
+  failureType: 'testCodeFailure'
+  error: 'after skip'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: todo then throw
+not ok 3 - todo then throw # TODO late
+  ---
+  duration_ms: 0.056
+  type: 'test'
+  failureType: 'testCodeFailure'
+  error: 'after todo'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: skipped parent never runs subtest
+ok 4 - skipped parent never runs subtest # SKIP
+  ---
+  duration_ms: 0.073042
+  type: 'test'
+  ...
+# Subtest: suite with skipped child only
+    # Subtest: only child skipped
+    ok 1 - only child skipped # SKIP
+      ---
+      duration_ms: 0.055333
+      type: 'test'
+      ...
+    1..1
+ok 5 - suite with skipped child only
+  ---
+  duration_ms: 0.180958
+  type: 'suite'
+  ...
+# Subtest: skipped suite with nested suite
+ok 6 - skipped suite with nested suite # SKIP
+  ---
+  duration_ms: 0.03175
+  type: 'suite'
+  ...
+1..6
+# tests 5
+# suites 2
+# pass 0
+# fail 0
+# cancelled 0
+# skipped 4
+# todo 1
+# duration_ms 723.509333

@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 
-import { formatSkips, observedSkips, parseTap, unescapeTap } from "./codex-run-tap.mts";
+import { formatSkips, observedSkips, parseTap, reconcile, unescapeTap } from "./codex-run-tap.mts";
 
 const fixtures = path.join(import.meta.dirname, "fixtures", "codex-run-guard");
 const read = (name: string) => fs.readFileSync(path.join(fixtures, name), "utf8");
@@ -76,4 +76,34 @@ test("todo records carry the TODO directive", () => {
 test("formatSkips round-trips to the fixture expectation", () => {
   const expected = JSON.parse(read("expected.json")) as { skips: { win32: unknown[] } };
   assert.deepEqual(JSON.parse(formatSkips(observedSkips(parse("baseline.tap")))), expected.skips.win32);
+});
+
+// The fixtures whose summary contradicts their records on purpose, with the lines
+// reconcile owes them, and the ones that do not parse at all.
+const CONTRADICTED: Record<string, string[]> = {
+  "pass-inflated.tap": ["2 passing records but # pass 999"],
+  "tests-deflated.tap": ["7 test records but # tests 6"],
+  "suites-miscounted.tap": ["0 suite records but # suites 1"],
+  "not-ok-hidden.tap": ["1 passing records but # pass 2", "1 failing records but # fail 0 + # cancelled 0"],
+  "plan-miscounted.tap": ["4 top-level records but 1..5"],
+};
+const MALFORMED = ["summary-missing-key.tap", "truncated.tap", "type-missing.tap"];
+
+test("every fixture summary reconciles with its records unless it contradicts them on purpose (issue #578)", () => {
+  const names = fs.readdirSync(fixtures).filter((name) => name.endsWith(".tap"));
+  for (const name of [...Object.keys(CONTRADICTED), ...MALFORMED]) assert.ok(names.includes(name), name);
+  for (const name of names) {
+    if (MALFORMED.includes(name)) assert.throws(() => parse(name), /^Error: malformed TAP: /, name);
+    else assert.deepEqual(reconcile(parse(name)), CONTRADICTED[name] ?? [], name);
+  }
+});
+
+test("Node counts suites only as suites, and the directive decides the bucket even on not ok (issue #578)", () => {
+  // Real `node --test --test-reporter=tap` output (26.10.0), location and stack lines removed.
+  const mixed = parse("suites-mixed.tap");
+  assert.deepEqual([mixed.plan, mixed.summary], [7, { tests: 8, suites: 5, pass: 3, fail: 0, cancelled: 0, skipped: 2, todo: 3 }]);
+  const edges = parse("directive-edges.tap");
+  assert.deepEqual([edges.plan, edges.summary], [6, { tests: 5, suites: 2, pass: 0, fail: 0, cancelled: 0, skipped: 4, todo: 1 }]);
+  assert.deepEqual(edges.records.filter((record) => !record.ok).map((record) => [record.name, record.directive]),
+    [["skip then throw", "SKIP"], ["todo then throw", "TODO"]]);
 });
