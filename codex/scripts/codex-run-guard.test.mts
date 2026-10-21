@@ -19,6 +19,7 @@ const fixtures = path.join(import.meta.dirname, "fixtures", "codex-run-guard");
 const fixtureExpected = path.join(fixtures, "expected.json");
 const BEGIN = "codex-run-guard: observed skips (win32) begin";
 const END = "codex-run-guard: observed skips (win32) end";
+const HINT = 'codex-run-guard: a legitimate change updates codex/scripts/codex-run-expected.json "win32" in the same pull request:';
 
 function cli(args: string[], env: NodeJS.ProcessEnv = process.env) {
   return spawnSync(process.execPath, [guard, ...args], { encoding: "utf8", env });
@@ -67,8 +68,11 @@ test("skip drift is red with a +/- diff, the observed block and the regeneration
   assert.equal(extra.status, 1);
   assert.deepEqual(verdicts(extra.stdout), [`C3 extra skip ${skip("the Windows form of the intent entry parses and runs the adapter in pwsh", "pwsh is not on PATH")}`]);
   assert.deepEqual(observedBlock(extra.stdout), JSON.parse(cli(["print", path.join(fixtures, "extra-skip.tap")]).stdout));
-  assert.match(extra.stdout, /codex-run-guard\.mts run --platform win32 --tap /);
-  assert.match(extra.stdout, /codex-run-guard\.mts print /);
+  const lines = extra.stdout.split(/\r?\n/);
+  const hint = lines.indexOf(HINT);
+  assert.equal(hint, lines.indexOf(END) + 1, extra.stdout);
+  assert.ok(lines[hint + 1].startsWith("codex-run-guard:   from the CI log: gh run view --job <job-id> --log | cut -f3- | sed -E 's/^[^ ]+ //',"), lines[hint + 1]);
+  assert.match(lines[hint + 2], /^codex-run-guard: {3}only on a host that matches the win32 CI image \(.*\): node codex\/scripts\/codex-run-guard\.mts run --platform win32 --tap .*, then node codex\/scripts\/codex-run-guard\.mts print /);
   assert.deepEqual(verdicts(check("missing-skip.tap").stdout), [`C3 missing skip ${skip("alpha posix only", null)}`]);
   assert.deepEqual(verdicts(check("reason-renamed.tap").stdout), [
     `C3 missing skip ${skip("beta needs pwsh", "pwsh is not on PATH")}`,
@@ -86,14 +90,21 @@ test("zero selection, count mismatch, todo, fail and suite skip each fail with t
   const count = check("count-mismatch.tap");
   assert.deepEqual(verdicts(count.stdout), ["C4 3 skip records but # skipped 2"]);
   assert.ok(observedBlock(count.stdout));
-  assert.deepEqual(verdicts(check("todo.tap").stdout), ["C5 todo 1, TODO records: parked for later"]);
+  assert.ok(count.stdout.includes(HINT), count.stdout);
+  const todo = check("todo.tap");
+  assert.deepEqual(verdicts(todo.stdout), ["C5 todo 1, TODO records: parked for later"]);
   const failed = check("fail-cancelled.tap");
   assert.deepEqual(verdicts(failed.stdout), ["C6 fail 1", "C6 cancelled 1"]);
-  assert.ok(!failed.stdout.includes(BEGIN), "no observed block when the skip set is as expected");
+  for (const result of [todo, failed]) {
+    assert.equal(result.status, 1);
+    assert.ok(!result.stdout.includes(BEGIN), "no observed block when the skip set is as expected");
+    assert.ok(!result.stdout.includes("codex-run-expected.json"), "no regeneration hint without a skip check failure");
+  }
   const suite = check("suite-skip.tap");
   assert.equal(suite.status, 1);
   assert.deepEqual(verdicts(suite.stdout), ["C7 suite-level skip hides its tests: posix suite"]);
   assert.ok(observedBlock(suite.stdout));
+  assert.ok(suite.stdout.includes(HINT), suite.stdout);
 });
 
 test("missing, empty or malformed TAP exits 2 and prints no observed block", (t) => {
@@ -166,6 +177,13 @@ test("run starts its test child without an inherited NODE_TEST_CONTEXT", (t) => 
   const result = cli(args, { ...process.env, NODE_TEST_CONTEXT: "child-v8" });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.ok(fs.readFileSync(tap, "utf8").startsWith("TAP version 13"));
+});
+
+test("run without --tap writes its TAP under a per-process name in the temp directory", (t) => {
+  const { args, dir } = passingRepo(t);
+  const result = cli(args.filter((arg, index) => arg !== "--tap" && args[index - 1] !== "--tap"), { ...process.env, TMPDIR: dir, TEMP: dir, TMP: dir });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(fs.readFileSync(path.join(dir, `kherep-codex-run-${result.pid}.tap`), "utf8").startsWith("TAP version 13"));
 });
 
 test("run passes a failing test status through and gives no verdict", (t) => {
