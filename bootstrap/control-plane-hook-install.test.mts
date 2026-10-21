@@ -1,7 +1,11 @@
-// Issue #31, step 3b. The installer wires the control-plane delivery hook into
-// the user settings. The hook imports sibling modules, so it runs from the
-// Kherep checkout (__KHEREP_REPO__) instead of a copy in CLAUDE_HOME. These
-// tests render, install, drift-check and capture against throwaway homes only.
+// Issue #31, step 3b, and issue #592. The installer wires the control-plane
+// hooks into the user settings. Every command names the stable entry point
+// <CLAUDE_HOME>/kherep/control-plane/claude-control-plane-hook.mts and the hook
+// by name; the pointer beside it, source.json, names the checkout the installer
+// ran from, and the entry runs that checkout's hook. No command names the
+// checkout, so a move or an install from another root leaves settings.json as
+// it is. These tests render, install, drift-check and capture against
+// throwaway homes only.
 //
 // Every run builds its environment without the host's KHEREP_* variables and
 // points GIT_CONFIG_SYSTEM and GIT_CONFIG_GLOBAL at fixture files.
@@ -18,6 +22,7 @@ const HERE = import.meta.dirname;
 const HOOK = "modules/control-plane/node/deliver-hook.mts";
 const WAKE = "modules/control-plane/node/wake-hook.mts";
 const ATTRIBUTION = "modules/control-plane/node/attribution-hook.mts";
+const ENTRY = "kherep/control-plane/claude-control-plane-hook.mts";
 // PostToolUse (issue #388) delivers inside a running turn, from the all-tools group.
 const EVENTS = ["UserPromptSubmit", "Stop", "StopFailure", "PostToolUse"];
 // The events the wake listener is armed at, after the delivery hook where the
@@ -27,24 +32,20 @@ const forward = (value: string): string => value.replace(/\\/g, "/");
 // Git Bash wants /c/... on Windows; install.sh refuses a drive-letter path.
 const slash = (value: string): string =>
   forward(value).replace(/^([A-Za-z]):\//, (_match, drive: string) => `/${drive.toLowerCase()}/`);
+// The path form of an install before #592.
 const hookCommand = (repo: string, hook = HOOK): string => `node "${repo}/${hook}"`;
-type HookGroups = { hooks: Record<string, { matcher?: string; hooks: { command: string; [field: string]: unknown }[] }[]> };
+type Hook = { command: string; [field: string]: unknown };
+type HookGroups = { hooks: Record<string, { matcher?: string; hooks: Hook[] }[]> };
+const commandsOf = (value: HookGroups, event: string): string[] => value.hooks[event].flatMap((group) => group.hooks.map((h) => h.command));
 // The delivery hook ends each event's last group, except where the wake
 // listener follows it; on PostToolUse it ends the all-tools group.
 const deliverGroup = (value: HookGroups, event: string) =>
   event === "PostToolUse" ? value.hooks[event].find((group) => !group.matcher) : value.hooks[event].at(-1);
 const deliverCommand = (value: HookGroups, event: string) =>
   deliverGroup(value, event)?.hooks.at(WAKE_EVENTS.includes(event) ? -2 : -1)?.command;
-const wakeEntries = (value: HookGroups, event: string) =>
-  value.hooks[event].flatMap((group) => group.hooks).filter((hook) => hook.command.includes("wake-hook"));
 const wakeEntry = (value: HookGroups, event: string) => value.hooks[event].at(-1)?.hooks.at(-1);
 // Issue #325. The PostToolUse group that records gh pr create.
-const attributionGroup = (value: HookGroups) => (value.hooks.PostToolUse as { matcher?: string; hooks: { command: string }[] }[])
-  .find((group) => group.matcher === "Bash|PowerShell");
-// The installed entry: the timeout Claude Code enforces and the one the
-// listener derives its re-arm deadline from are one number.
-const wakeHook = (repo: string, seconds: number) =>
-  ({ type: "command", command: `${hookCommand(repo, WAKE)} --timeout ${seconds}`, asyncRewake: true, timeout: seconds });
+const attributionGroup = (value: HookGroups) => value.hooks.PostToolUse.find((group) => group.matcher === "Bash|PowerShell");
 // Some Node releases the engines range admits, 24.1.0 among them, print this
 // warning when a child loads a .mts file. Only this exact pair of lines is
 // dropped; any other stderr still fails the assertion.
@@ -53,6 +54,17 @@ const TYPE_STRIPPING_WARNING = new RegExp("^\\(node:\\d+\\) ExperimentalWarning:
   + "created\\)\\r?\\n", "gm");
 const withoutTypeStrippingWarning = (stderr: string | Buffer): string =>
   String(stderr).replace(TYPE_STRIPPING_WARNING, "");
+
+// The arguments of a stable command whose entry is the one under `home`, else undefined.
+const STABLE = /^node "(?<home>[^"]+)\/kherep\/control-plane\/claude-control-plane-hook\.mts" (?<args>[^"]+)$/;
+function stableArgs(command: string | undefined, home: string): string | undefined {
+  const match = STABLE.exec(command ?? "");
+  return match && fs.realpathSync(match.groups!.home) === fs.realpathSync(home) ? match.groups!.args : undefined;
+}
+const controlPlane = (command: string): boolean => command.includes("claude-control-plane-hook") || command.includes("/modules/control-plane/node/")
+  || command.includes("\\modules\\control-plane\\node\\");
+const wakeHook = (repo: string, seconds: number) =>
+  ({ type: "command", command: `${hookCommand(repo, WAKE)} --timeout ${seconds}`, asyncRewake: true, timeout: seconds });
 
 function hostEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KHEREP_")));
@@ -95,60 +107,70 @@ function bash(args: string[], f: Fixture, input?: string) {
   return spawnSync("bash", args, { encoding: "utf8", env, input, timeout: 240_000 });
 }
 
-test("install wires the delivery and wake hooks from the checkout, drift-check is clean and capture restores the placeholder", (t) => {
+test("install wires the hooks through the stable entry, points it at the checkout, drift-check is clean and capture folds the home", (t) => {
   const f = fixture(t);
   const install = bash([slash(path.join(HERE, "install.sh"))], f);
   assert.equal(install.status, 0, `${install.stdout}\n${install.stderr}`);
 
   const text = fs.readFileSync(path.join(f.claude, "settings.json"), "utf8");
   assert.ok(!text.includes("__KHEREP_REPO__"), "unresolved __KHEREP_REPO__ in the rendered settings");
-  const settings = JSON.parse(text);
-  const expected = hookCommand(forward(KHEREP_REPO));
+  assert.ok(!text.includes(forward(KHEREP_REPO)) && !text.includes(JSON.stringify(KHEREP_REPO).slice(1, -1)), "settings.json names the checkout");
+  const settings = JSON.parse(text) as HookGroups;
   for (const event of EVENTS) {
-    const commands: string[] = settings.hooks[event].flatMap((group: { hooks: { command: string }[] }) => group.hooks.map((h) => h.command));
-    assert.equal(commands.filter((command) => command.includes("deliver-hook")).length, 1, `${event}: ${commands.join(" | ")}`);
-    assert.equal(commands.filter((command) => command.includes("wake-hook")).length, WAKE_EVENTS.includes(event) ? 1 : 0, event);
-    assert.equal(deliverCommand(settings, event), expected, `${event} does not end with the delivery hook`);
-    // Run as stored, through bash like Claude Code: inert without an enrolled node.
-    const run = bash(["-c", expected], f, JSON.stringify({ session_id: "s", hook_event_name: event }));
-    assert.deepEqual([run.status, run.stdout, withoutTypeStrippingWarning(run.stderr)], [0, "", ""], `${event}: ${run.stderr}`);
+    const commands = commandsOf(settings, event).filter(controlPlane);
+    assert.equal(commands.filter((command) => stableArgs(command, f.claude) === "deliver").length, 1, `${event}: ${commands.join(" | ")}`);
+    assert.equal(commands.filter((command) => stableArgs(command, f.claude) === "wake --timeout 86400").length, WAKE_EVENTS.includes(event) ? 1 : 0, event);
+    assert.equal(stableArgs(deliverCommand(settings, event), f.claude), "deliver", `${event} does not end with the delivery hook`);
   }
-  // The wake listener keeps its background fields through the render.
   for (const event of WAKE_EVENTS) {
-    const wake = wakeHook(forward(KHEREP_REPO), 86400);
-    assert.deepEqual(wakeEntry(settings, event), wake, event);
-    const listened = bash(["-c", wake.command], f, JSON.stringify({ session_id: "s", hook_event_name: event }));
-    assert.deepEqual([listened.status, listened.stdout, withoutTypeStrippingWarning(listened.stderr)], [0, "", ""], listened.stderr);
+    const { command, ...fields } = wakeEntry(settings, event)!;
+    assert.equal(stableArgs(command, f.claude), "wake --timeout 86400", event);
+    assert.deepEqual(fields, { type: "command", asyncRewake: true, timeout: 86400 }, event);
   }
+  const attribution = attributionGroup(settings)!.hooks;
+  assert.equal(attribution.length, 1);
+  assert.equal(stableArgs(attribution[0].command, f.claude), "attribution");
+  const all = Object.keys(settings.hooks).flatMap((event) => commandsOf(settings, event)).filter(controlPlane);
+  assert.equal(all.length, 8, all.join("\n"));
+  assert.ok(all.every((command) => stableArgs(command, f.claude) !== undefined), all.join("\n"));
 
-  // Issue #325. The attribution hook runs from the checkout in a PostToolUse
-  // group of its own; as stored it is inert outside a git repository.
-  const attribution = attributionGroup(settings);
-  assert.deepEqual(attribution?.hooks, [{ type: "command", command: hookCommand(forward(KHEREP_REPO), ATTRIBUTION) }]);
-  const recorded = bash(["-c", attribution!.hooks[0]!.command], f, JSON.stringify({ session_id: "s",
-    hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "gh pr create --fill" }, cwd: f.ws }));
-  assert.deepEqual([recorded.status, recorded.stdout, withoutTypeStrippingWarning(recorded.stderr)], [0, "", ""], recorded.stderr);
+  // The entry is a manifest file; the pointer names the checkout this installer ran from.
+  assert.ok(fs.readFileSync(path.join(f.claude, ENTRY)).equals(fs.readFileSync(path.join(HERE, "..", "claude", ENTRY))));
+  const pointer = JSON.parse(fs.readFileSync(path.join(f.claude, "kherep", "control-plane", "source.json"), "utf8"));
+  assert.equal(pointer.version, 1);
+  assert.equal(fs.realpathSync(pointer.root), fs.realpathSync(KHEREP_REPO));
+
+  // Run as stored, through bash like Claude Code: inert without an enrolled node.
+  const payload = (event: string) => JSON.stringify({ session_id: "s", hook_event_name: event, tool_name: "Bash",
+    tool_input: { command: "gh pr create --fill" }, cwd: f.ws });
+  for (const event of Object.keys(settings.hooks)) {
+    for (const command of commandsOf(settings, event).filter(controlPlane)) {
+      const run = bash(["-c", command], f, payload(event));
+      assert.deepEqual([run.status, run.stdout, withoutTypeStrippingWarning(run.stderr)], [0, "", ""], `${event} ${command}: ${run.stderr}`);
+    }
+  }
 
   const drift = bash([slash(path.join(HERE, "drift-check.sh"))], f);
   assert.equal(drift.status, 0, `${drift.stdout}\n${drift.stderr}`);
+  assert.match(drift.stdout, /^ok\s+kherep\/control-plane\/source\.json \(checkout (?:[0-9a-f]{7}|unverified)\)$/m, drift.stdout);
 
   // capture.sh writes into the repository's claude/ directory, so its settings
-  // step, portable_paths from lib.sh, runs here on a copy.
+  // step, portable_paths from lib.sh, runs here on a copy. It folds the Claude
+  // home to ~/.claude, as for every other command that names the home.
   const copy = path.join(f.root, "captured.json");
   fs.copyFileSync(path.join(f.claude, "settings.json"), copy);
   const capture = bash(["-c", `. "${slash(path.join(HERE, "lib.sh"))}" && portable_paths "${slash(copy)}"`], f);
   assert.equal(capture.status, 0, capture.stderr);
-  const captured = JSON.parse(fs.readFileSync(copy, "utf8"));
-  const source = JSON.parse(fs.readFileSync(path.join(HERE, "..", "claude", "settings.user.json"), "utf8"));
-  for (const event of EVENTS) assert.equal(deliverCommand(captured, event), deliverCommand(source, event));
-  for (const event of WAKE_EVENTS) assert.deepEqual(wakeEntry(captured, event), wakeEntry(source, event));
-  assert.deepEqual(attributionGroup(captured), attributionGroup(source));
+  const captured = JSON.parse(fs.readFileSync(copy, "utf8")) as HookGroups;
+  const source = JSON.parse(fs.readFileSync(path.join(HERE, "..", "claude", "settings.user.json"), "utf8")) as HookGroups;
+  const folded = (command: string | undefined) => command?.replace("__KHEREP_CLAUDE_HOME__", "~/.claude");
+  for (const event of EVENTS) assert.equal(deliverCommand(captured, event), folded(deliverCommand(source, event)), event);
+  for (const event of WAKE_EVENTS) assert.equal(wakeEntry(captured, event)?.command, folded(wakeEntry(source, event)?.command), event);
   // The listener joins SessionStart last; the hooks before it keep their order.
   const scripts = (value: HookGroups) => value.hooks.SessionStart.flatMap((group) => group.hooks)
-    .map((hook) => /\/([^/"]+)"/.exec(hook.command)?.[1]);
+    .map((hook) => /\/([^/"]+)"( wake)?/.exec(hook.command)?.slice(1).join(""));
   assert.deepEqual(scripts(settings), scripts(source));
-  assert.equal(scripts(settings).at(-1), "wake-hook.mts");
-  assert.ok(!fs.readFileSync(copy, "utf8").includes(forward(KHEREP_REPO)), "capture left the machine path of the checkout");
+  assert.equal(scripts(settings).at(-1), "claude-control-plane-hook.mts wake");
 
   // Removing the entries by hand, as docs/INSTALLATION.md describes, is drift.
   for (const event of EVENTS) deliverGroup(settings, event)!.hooks.pop();
@@ -157,7 +179,7 @@ test("install wires the delivery and wake hooks from the checkout, drift-check i
   assert.equal(removed.status, 1, `${removed.stdout}\n${removed.stderr}`);
 });
 
-test("an upgrade replaces the wake entries of an older install with a changed timeout", (t) => {
+test("an upgrade replaces the path-form wake entries of an older install with a changed timeout by the stable ones", (t) => {
   const f = fixture(t);
   const repo = forward(KHEREP_REPO);
   const settingsFile = path.join(f.claude, "settings.json");
@@ -172,17 +194,20 @@ test("an upgrade replaces the wake entries of an older install with a changed ti
   fs.writeFileSync(settingsFile, `${JSON.stringify(older, null, 2)}\n`);
   const install = bash([slash(path.join(HERE, "install.sh"))], f);
   assert.equal(install.status, 0, `${install.stdout}\n${install.stderr}`);
-  const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
-  for (const event of WAKE_EVENTS) assert.deepEqual(wakeEntries(settings, event), [wakeHook(repo, 86400)], event);
-  assert.deepEqual(settings.hooks.UserPromptSubmit.filter((group: { matcher?: string }) => group.matcher === "Bash"), [ownGroup]);
-  assert.deepEqual(settings.hooks.Stop.at(-1).hooks.filter((hook: { command: string }) => hook.command.includes("/opt/own/")), [own]);
+  const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8")) as HookGroups;
+  for (const event of WAKE_EVENTS) {
+    const wakes = settings.hooks[event].flatMap((group) => group.hooks).filter((hook) => hook.command.includes("wake"));
+    assert.deepEqual(wakes.map((hook) => [stableArgs(hook.command, f.claude), hook.timeout, hook.asyncRewake]), [["wake --timeout 86400", 86400, true]], event);
+  }
+  assert.deepEqual(settings.hooks.UserPromptSubmit.filter((group) => group.matcher === "Bash"), [ownGroup]);
+  assert.deepEqual(settings.hooks.Stop.at(-1)!.hooks.filter((hook) => hook.command.includes("/opt/own/")), [own]);
 });
 
 // Issue #590. Installs from two roots (the checkout and a service source pin)
 // left every control-plane entry once per root, the state a node measured. One
-// install from the checkout must leave a single set, and the file with both
-// sets must fail drift-check with a line that names the script and event.
-test("an install collapses the control-plane entries of two roots to one set; a file with both sets fails drift-check", (t) => {
+// install collapses both path-form sets to the one stable set (#592), and the
+// file with both sets fails drift-check with a line that names the script and event.
+test("an install collapses the path-form entries of two roots to one stable set; a file with both sets fails drift-check", (t) => {
   const f = fixture(t);
   const settingsFile = path.join(f.claude, "settings.json");
   const other = slash(path.join(f.root, "control-plane", "service", "source-pins", "0123456789abcdef0123456789abcdef01234567"));
@@ -203,16 +228,16 @@ test("an install collapses the control-plane entries of two roots to one set; a 
   const install = bash([slash(path.join(HERE, "install.sh"))], f);
   assert.equal(install.status, 0, `${install.stdout}\n${install.stderr}`);
   const text = fs.readFileSync(settingsFile, "utf8");
-  assert.ok(!text.includes(other), "an entry of the other root survived the install");
-  const settings = JSON.parse(text);
-  for (const event of EVENTS) {
-    const commands: string[] = settings.hooks[event].flatMap((group: { hooks: { command: string }[] }) => group.hooks.map((h) => h.command));
-    assert.deepEqual(commands.filter((command) => command.includes("deliver-hook")), [hookCommand(repo)], event);
+  assert.ok(!text.includes(other) && !text.includes(repo), "a path-form entry survived the install");
+  const settings = JSON.parse(text) as HookGroups;
+  const wake = "wake --timeout 86400";
+  const stableSet: Record<string, string[]> = { UserPromptSubmit: ["deliver", wake], Stop: ["deliver", wake], StopFailure: ["deliver"],
+    PostToolUse: ["deliver", "attribution"], SessionStart: [wake] };
+  for (const [event, expected] of Object.entries(stableSet)) {
+    assert.deepEqual(commandsOf(settings, event).filter(controlPlane).map((c) => stableArgs(c, f.claude)), expected, event);
   }
-  for (const event of WAKE_EVENTS) assert.deepEqual(wakeEntries(settings, event), [wakeHook(repo, 86400)], event);
-  assert.deepEqual(attributionGroup(settings)?.hooks, [{ type: "command", command: hookCommand(repo, ATTRIBUTION) }]);
-  assert.deepEqual(settings.hooks.Stop.flatMap((group: { hooks: { command: string }[] }) => group.hooks)
-    .filter((hook: { command: string }) => hook.command.includes("/opt/own/")), [own]);
+  assert.deepEqual(attributionGroup(settings)?.hooks.map((hook) => stableArgs(hook.command, f.claude)), ["attribution"]);
+  assert.deepEqual(settings.hooks.Stop.flatMap((group) => group.hooks).filter((hook) => hook.command.includes("/opt/own/")), [own]);
   const clean = bash([slash(path.join(HERE, "drift-check.sh"))], f);
   assert.equal(clean.status, 0, `${clean.stdout}\n${clean.stderr}`);
 
