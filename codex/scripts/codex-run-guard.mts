@@ -92,19 +92,19 @@ export function loadExpected(text: string): Expected {
 }
 
 export interface Evaluation { parsed: ParsedTap; expected: Expected; platform: string; selection: [string, number][] }
-// The failure lines of one run, empty on a pass; skipDrift when a skip check
-// (C3, C4, C7) is among them, the one case the expected file can resolve.
-export interface Verdict { failures: string[]; skipDrift: boolean }
+// The failure lines of one run, empty on a pass. skipDrift: a skip check (C3, C4, C7) failed, so the
+// observed block is printed; listDrift: C3 failed, the only one an edit of the expected file clears.
+export interface Verdict { failures: string[]; skipDrift: boolean; listDrift: boolean }
 
 export function evaluate({ parsed, expected, platform, selection }: Evaluation): Verdict {
   const { summary, records } = parsed;
-  const verdict: Verdict = { failures: [], skipDrift: false };
+  const observed = observedSkips(parsed);
+  const { missing, extra } = compareSkips(expected.skips[platform], observed);
+  const verdict: Verdict = { failures: [], skipDrift: false, listDrift: missing.length + extra.length > 0 };
   const fail = (line: string) => verdict.failures.push(line);
   const drift = (line: string) => { verdict.skipDrift = true; fail(line); };
   for (const [pattern, count] of selection) if (count === 0) fail(`C1 pattern ${pattern} selects no file`);
   if (summary.tests < expected.minTests) fail(`C2 tests ${summary.tests} below floor ${expected.minTests}`);
-  const observed = observedSkips(parsed);
-  const { missing, extra } = compareSkips(expected.skips[platform], observed);
   for (const entry of missing) drift(`C3 missing skip ${JSON.stringify(entry)}`);
   for (const entry of extra) drift(`C3 extra skip ${JSON.stringify(entry)}`);
   if (observed.length !== summary.skipped) drift(`C4 ${observed.length} skip records but # skipped ${summary.skipped}`);
@@ -138,7 +138,7 @@ function inputs(platform: string, repo: string, expectedPath: string): Inputs {
 function check(tap: string, { platform, expected, repo, patterns }: Inputs): number {
   const parsed = parseTap(readText(tap, "TAP file"));
   const selection = patterns.map((pattern): [string, number] => [pattern, selectedFiles(repo, pattern).length]);
-  const { failures, skipDrift } = evaluate({ parsed, expected, platform, selection });
+  const { failures, skipDrift, listDrift } = evaluate({ parsed, expected, platform, selection });
   const { tests, skipped, todo } = parsed.summary;
   if (!failures.length) {
     console.log(`codex-run-guard: ${platform} tests=${tests} skipped=${skipped} todo=${todo} ok`);
@@ -149,6 +149,8 @@ function check(tap: string, { platform, expected, repo, patterns }: Inputs): num
     console.log(`codex-run-guard: observed skips (${platform}) begin`);
     console.log(formatSkips(observedSkips(parsed)));
     console.log(`codex-run-guard: observed skips (${platform}) end`);
+  }
+  if (listDrift) {
     console.log(`codex-run-guard: a legitimate change updates codex/scripts/codex-run-expected.json "${platform}" in the same pull request:`);
     console.log("codex-run-guard:   from the CI log: gh run view --job <job-id> --log | cut -f3- | sed -E 's/^[^ ]+ //', copy the block between the observed skips markers");
     console.log(`codex-run-guard:   only on a host that matches the ${platform} CI image (another host yields its own list): ${SELF} run --platform ${platform} --tap <dir>/codex-run.tap, then ${SELF} print <dir>/codex-run.tap`);
