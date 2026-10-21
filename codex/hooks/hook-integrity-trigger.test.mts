@@ -217,14 +217,23 @@ test("T3.4 a healthy install while another run holds run.lock: nothing checked, 
 test("T3.5 two runs started together: one repair, one journal entry, both exit 0, one heartbeat", async (t) => {
   const ctx = fixture(t);
   fs.writeFileSync(path.join(ctx.hookDir, "lib", "git-commit-match.mts"), "");
-  const start = (): Promise<number | null> => new Promise((resolve) => {
-    const child = spawn(process.execPath, hookArgs(ctx), { env: ctx.env, stdio: ["pipe", "ignore", "ignore"], windowsHide: true });
-    child.on("exit", (code) => resolve(code));
+  // Each run's stdout is kept, so a failure names the path each run took (issue #620).
+  const start = (): Promise<{ code: number | null; out: string }> => new Promise((resolve) => {
+    const child = spawn(process.execPath, hookArgs(ctx), { env: ctx.env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+    let out = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (out += chunk));
+    child.on("close", (code) => resolve({ code, out: out.trim() }));
     child.stdin.end(INPUT(ctx));
   });
-  assert.deepEqual(await Promise.all([start(), start()]), [0, 0]);
-  assert.equal(journal(ctx).length, 1);
-  assert.ok(fs.existsSync(beatFile(ctx)));
+  const runs = await Promise.all([start(), start()]);
+  const paths = runs.map((run) => `[exit ${run.code}] ${run.out || "(no output)"}`).join("\n---\n");
+  assert.deepEqual(runs.map((run) => run.code), [0, 0], paths);
+  // One run repaired; the other was told busy, or, started after the repair, found everything OK. Never both busy.
+  const lasts = runs.map((run) => run.out.split(/\r?\n/).at(-1) ?? "");
+  assert.ok(lasts.some((line) => /^all \d+ files OK \(1 restored\), heartbeat refreshed$/.test(line)), paths);
+  assert.ok(lasts.some((line) => line === `${BUSY}; nothing checked, heartbeat not written` || /^all \d+ files OK \(0 restored\), heartbeat refreshed$/.test(line)), paths);
+  assert.equal(journal(ctx).length, 1, paths);
+  assert.ok(fs.existsSync(beatFile(ctx)), paths);
 });
 
 test("T4.5 a Node without node:sqlite: report only, nothing restored or written", (t) => {

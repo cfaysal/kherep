@@ -685,6 +685,24 @@ increments the minor version; every other release increments the patch version.
   runs the Codex suites yet. `codex/ARCHITECTURE.md` now describes the part 3
   integrity state (eight libs, run lock, heartbeat, triggers).
   This completes #507.
+- Codex hook-integrity run lock under two runs that start together (issue
+  #620). `takeRunLock` in `hooks/lib/integrity-heartbeat.mts` retries a busy
+  answer three times, 2 to 11 ms apart on the same connection, before it
+  reports `busy, holder UNKNOWN`. Measured with a preload that staged the
+  interleaving: run A, already at SQLite's PENDING lock, was refused
+  EXCLUSIVE because run B held SHARED for its schema read, and B's own
+  BEGIN was then refused by A's PENDING; both backed off, both exited 0,
+  nobody repaired the planted 0-byte lib and no journal line was written:
+  the state T3.5 reported once on windows-latest; whether that run took
+  this path is UNVERIFIED. A second busy path, not staged: B is refused
+  RESERVED by A's RESERVED while B's SHARED blocks A's EXCLUSIVE. Every
+  attempt keeps `busy_timeout 0`, so a contender against a run that is
+  working is still answered within about 40 ms (T4.1 now bounds that at
+  250 ms). T3.5 keeps each run's
+  stdout and names the path each run took when it fails; a busy pair is
+  not accepted. Limits: the retries lower the chance of a repeat collision,
+  they do not exclude it, and a pair that still collides is repaired by the
+  next matching call, as before.
 - Fail-closed Codex hook adapter and Codex hook-integrity re-check (issue #507,
   part 3 of 4). `hooks/kherep-maestro/codex-hook-adapter.mts` now denies a
   `PreToolUse` tool call, with a reason that names the file, when its guard is
