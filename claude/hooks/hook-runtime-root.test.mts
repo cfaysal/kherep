@@ -44,8 +44,10 @@ test("a nested guard under the dispatcher holds the root's database, also when i
   plantHeartbeat(home.root);
   const go = path.join(home.root, "go");
   const pids = path.join(home.root, "pids");
+  // The pids arrive by rename: a poller never sees the file created but not yet written (issue #565).
   fs.writeFileSync(path.join(home.hooks, "sub", "guard.mts"), "import fs from \"node:fs\";\n"
-    + "fs.writeFileSync(new URL(\"../../pids\", import.meta.url), JSON.stringify([process.pid, process.ppid]));\n"
+    + "fs.writeFileSync(new URL(\"../../pids.tmp\", import.meta.url), JSON.stringify([process.pid, process.ppid]));\n"
+    + "fs.renameSync(new URL(\"../../pids.tmp\", import.meta.url), new URL(\"../../pids\", import.meta.url));\n"
     + "while (!fs.existsSync(new URL(\"../../go\", import.meta.url))) await new Promise((r) => setTimeout(r, 20));\n");
   const running = entryAsync("pretool", path.join(home.hooks, "guard-dispatch.mts"), [path.join(home.hooks, "sub", "guard.mts")],
     JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "true" } }));
