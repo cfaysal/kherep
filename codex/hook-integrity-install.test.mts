@@ -150,8 +150,19 @@ test("2e. a 0-byte lib/guard-recheck.mts is named as imported by both dispatcher
   const result = run(ctx);
   const importers = /lib\/guard-recheck\.mts \(imported by ([^)]*)\)/.exec(String(result.context))?.[1] ?? "";
   assert.match(importers, /kherep-maestro\/codex-hook-adapter\.mts/, String(result.context));
-  assert.match(importers, /kherep-maestro\/codex-shell-checks\.mts/, String(result.context));
+  assert.match(importers, /kherep-maestro\/hook-adapter\.mts/, String(result.context));
   assertRestored(ctx, result, "lib/guard-recheck.mts", "claude/hooks/lib/guard-recheck.mts");
+});
+
+// Issue #504: both adapter copies load the denied-call journal lib by a computed path (the shell dispatcher through them).
+test("2f. a 0-byte lib/denial-journal.mts is named as imported by both adapter copies and restored", (t) => {
+  const ctx = fixture(t);
+  fs.writeFileSync(path.join(ctx.hookDir, "lib", "denial-journal.mts"), "");
+  const result = run(ctx);
+  const importers = /lib\/denial-journal\.mts \(imported by ([^)]*)\)/.exec(String(result.context))?.[1] ?? "";
+  assert.match(importers, /kherep-maestro\/codex-hook-adapter\.mts/, String(result.context));
+  assert.match(importers, /kherep-maestro\/hook-adapter\.mts/, String(result.context));
+  assertRestored(ctx, result, "lib/denial-journal.mts", "claude/hooks/lib/denial-journal.mts");
 });
 
 test("3. a missing commit-guard.mts is restored", (t) => {
