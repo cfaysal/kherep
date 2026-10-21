@@ -43,17 +43,22 @@ function writeJson(file: string, value: unknown): void {
   writeJsonAtomic(file, value);
 }
 
+// #582: RegExp.test and path.isAbsolute take any value (a hand-edited ["<valid>"] passes the first, throws in the
+// second), so every pattern and path check accepts a string only and anything else is simply invalid.
+const matches = (pattern: RegExp, value: unknown): boolean => typeof value === "string" && pattern.test(value);
+const absolute = (value: unknown): boolean => typeof value === "string" && path.isAbsolute(value);
+
 function validSource(value: SourceIdentity | undefined, requirePin = false): value is SourceIdentity {
-  return Boolean(value && path.isAbsolute(value.root) && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(value.commit)
-    && /^[0-9a-f]{64}$/.test(value.digest) && value.verified === true
+  return Boolean(value && absolute(value.root) && matches(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/, value.commit)
+    && matches(/^[0-9a-f]{64}$/, value.digest) && value.verified === true
     && (value.kind === "pin" || (!requirePin && value.kind === "checkout")));
 }
 
 function validBinding(value: ServiceBinding | undefined): value is ServiceBinding {
   return Boolean(value && ["darwin", "win32"].includes(value.platform) && typeof value.serviceName === "string"
-    && value.serviceName.length > 0 && path.isAbsolute(value.workspace) && path.isAbsolute(value.configRoot)
-    && path.isAbsolute(value.nodeExecutable) && validSource(value.source, true)
-    && (value.logFile === undefined || (value.platform === "win32" && path.isAbsolute(value.logFile)))
+    && value.serviceName.length > 0 && absolute(value.workspace) && absolute(value.configRoot)
+    && absolute(value.nodeExecutable) && validSource(value.source, true)
+    && (value.logFile === undefined || (value.platform === "win32" && absolute(value.logFile)))
     && (value.platform !== "win32" || (typeof value.supervisorGeneration === "string"
       && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.supervisorGeneration)))
     && (value.taskPath === undefined || (value.platform === "win32" && typeof value.taskPath === "string")));
@@ -99,13 +104,12 @@ const BACKUP_ID = /^[0-9]{8,14}-[0-9a-f-]{36}$/;
 const ISO_INSTANT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,3})?Z$/;
 function validCandidate(value: ServiceCandidate | undefined): value is ServiceCandidate {
   return Boolean(value && value.version === 1 && validBinding(value.binding)
-    && /^[0-9a-f]{64}$/.test(value.definitionDigest) && /^[0-9a-f]{64}$/.test(value.securityDigest)
-    && (value.backupId === undefined ? value.command === "install" : BACKUP_ID.test(value.backupId))
+    && matches(/^[0-9a-f]{64}$/, value.definitionDigest) && matches(/^[0-9a-f]{64}$/, value.securityDigest)
+    && (value.backupId === undefined ? value.command === "install" : matches(BACKUP_ID, value.backupId))
     && (CANDIDATE_COMMANDS as readonly string[]).includes(value.command)
-    && typeof value.stage === "string" && /^[a-z-]{1,16}$/.test(value.stage)
-    && typeof value.blocker === "string" && /^RECOVERY_[A-Z_]{1,40}$/.test(value.blocker)
+    && matches(/^[a-z-]{1,16}$/, value.stage) && matches(/^RECOVERY_[A-Z_]{1,40}$/, value.blocker)
     && (STOP_CODES as readonly string[]).includes(value.stopCode)
-    && ISO_INSTANT.test(value.failedAt) && Number.isFinite(Date.parse(value.failedAt)));
+    && matches(ISO_INSTANT, value.failedAt) && Number.isFinite(Date.parse(value.failedAt)));
 }
 // #582: ENOENT -> null; every other failure, a parse error included, is the fixed message (A2 P2-A). The record is
 // self-written, so its content is never quoted back.

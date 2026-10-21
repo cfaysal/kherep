@@ -185,3 +185,24 @@ test("B-6b: a second failed upgrade over the record rewrites it with the same ba
   assert.ok(Date.parse(second.failedAt) > Date.parse(first.failedAt));
   assert.equal(second.stage, "start");
 });
+
+test("B-15: a record string field that is not a string makes the record invalid", async (t) => {
+  const shapes: Array<[string, (value: unknown) => unknown]> = [["one-element array", value => [value]], ["number", () => 1]];
+  for (const field of ["definitionDigest", "securityDigest", "backupId", "failedAt", "binding.workspace", "binding.source.commit"]) {
+    for (const [shape, wrap] of shapes) {
+      const { h } = await failedUpgrade(t);
+      staleDrain(h);
+      tamper(h, r => { // a dotted field names a nested binding value
+        const keys = field.split(".");
+        const owner = keys.slice(0, -1).reduce((value, key) => value[key] as Record<string, unknown>, r);
+        owner[keys.at(-1)!] = wrap(owner[keys.at(-1)!]);
+      });
+      const name = `${field} as ${shape}`;
+      assert.throws(() => records.readServiceCandidate(h.paths), /^Error: managed service candidate record is invalid$/, name);
+      assert.equal((await status(h)).report.candidate, "invalid", name);
+      const before = world(h);
+      assert.equal(await why(verbs(h).upgrade()), INVALID.upgrade, name);
+      assert.equal(world(h), before, name);
+    }
+  }
+});
