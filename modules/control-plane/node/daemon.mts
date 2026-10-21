@@ -111,7 +111,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     return runtime === "claude" ? markedProbe(paths, run) : run();
   }, { signal: halt.signal });
   // Issue #581: the start maintenance (inbox-start.mts) runs once, after the first authenticated connection or the fallback.
-  let maintaining: Promise<void> | null = null;
+  let maintaining: Promise<void> | null = null; // the run-once guard
   const maintain = (): void => { maintaining ??= runInboxMaintenance(paths, log, { ...maintenance, signal: halt.signal })
     .catch((error: unknown) => log(`kherep-node: start maintenance failed: ${String(error)}`)); };
   const fallback = setTimeout(maintain, maintenance.fallbackMs ?? MAINTENANCE_FALLBACK_MS).unref();
