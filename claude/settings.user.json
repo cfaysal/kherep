@@ -111,6 +111,11 @@
             "type": "command",
             "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/obs-handback-record.mts\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/denied-calls-delivered.mts\"",
+            "timeout": 10
           }
         ]
       }

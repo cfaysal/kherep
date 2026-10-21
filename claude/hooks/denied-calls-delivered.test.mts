@@ -1,0 +1,57 @@
+// Issue #504. The delivery recorder (PostToolUse on SubagentHandback) run the way the settings
+// template wires it, through kherep/hook-runtime/entry.mts reader in a temporary home: a delivered
+// line for a delegated handback, nothing otherwise, never output, always exit 0, within its cap.
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { after, test } from "node:test";
+
+import { denialFaultEnv } from "./denial-fault.fixture.mts";
+import { cleanup, entry, runtimeHome, type Home } from "./hook-runtime-fixture.mts";
+import { journalPaths } from "./lib/denial-journal.mts";
+import { readJournal, renderReport } from "./lib/denial-report.mts";
+
+after(cleanup);
+const RECORDER = "denied-calls-delivered.mts";
+
+function home(): Home {
+  const h = runtimeHome("denied-calls-delivered-");
+  fs.copyFileSync(path.join(import.meta.dirname, RECORDER), path.join(h.hooks, RECORDER));
+  for (const lib of ["denial-journal.mts", "workspace-scope.mts"]) fs.copyFileSync(path.join(import.meta.dirname, "lib", lib), path.join(h.hooks, "lib", lib));
+  return h;
+}
+const payload = (extra: Record<string, unknown> = {}): string => JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "SubagentHandback",
+  tool_input: { message: "the worker's report" }, tool_response: "ok", agent_id: "agent-d1", tool_use_id: "toolu_h", cwd: "/w", ...extra });
+const record = (h: Home, input: string, env: NodeJS.ProcessEnv = process.env) => entry("reader", path.join(h.hooks, RECORDER), [], input, 20_000, env);
+
+test("a delegated handback leaves one delivered line and nothing of the report; no output, exit 0", () => {
+  const h = home();
+  fs.mkdirSync(journalPaths(h.root, "agent-d1").dir, { recursive: true });
+  fs.writeFileSync(journalPaths(h.root, "agent-d1").journal, `${JSON.stringify({ v: 1, kind: "call", at: "2026-10-21T00:00:00.000Z", id: "t", tool: "Read", agent_type: null, decision: "none", denials: [] })}\n`);
+  const run = record(h, payload());
+  assert.deepEqual([run.status, run.stdout, run.stderr], [0, "", ""]);
+  const text = fs.readFileSync(journalPaths(h.root, "agent-d1").journal, "utf8");
+  const last = JSON.parse(text.trim().split("\n").at(-1)!);
+  assert.deepEqual([last.v, last.kind, last.id], [1, "delivered", "toolu_h"]);
+  assert.ok(!text.includes("report"), "nothing of tool_input.message");
+  assert.match(renderReport(readJournal(h.root, "agent-d1")).text, /^DENIED-CALLS: none\nstatus: delivered \d{4}-/);
+});
+
+test("nothing without a valid agent_id, for another tool, or for input that is no JSON object", () => {
+  const h = home();
+  for (const input of [payload({ agent_id: undefined }), payload({ agent_id: "x/y" }), payload({ tool_name: "Read" }), "[]", "nope", ""]) {
+    const run = record(h, input);
+    assert.deepEqual([run.status, run.stdout], [0, ""]);
+  }
+  assert.equal(fs.existsSync(journalPaths(h.root, "x").dir), false);
+});
+
+test("a write that fails leaves the marker; one that never settles ends within its cap, exit 0", () => {
+  const failed = home();
+  assert.equal(record(failed, payload(), denialFaultEnv("journal-enospc", RECORDER)).status, 0);
+  assert.equal(fs.readFileSync(journalPaths(failed.root, "agent-d1").marker, "utf8"), "append\n");
+  const stalled = home();
+  const run = record(stalled, payload(), denialFaultEnv("all-hang", RECORDER));
+  assert.deepEqual([run.status, run.stdout], [0, ""]);
+  assert.ok(run.ms < 1_500 + 400 + 3_000, `${run.ms} ms`);
+});
