@@ -143,7 +143,7 @@ test("CLI completion awaits stdout and stderr callbacks, including a silent allo
           fs.appendFileSync(${JSON.stringify(receipt)}, name + "\\n"); callback();
         }, 50) : callback);
       }`);
-    const result = await run(["--import", preload, main], shellPayload({ agent_id: undefined }));
+    const result = await run(["--import", pathToFileURL(preload).href, main], shellPayload({ agent_id: undefined }));
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.timedOut, false);
     if (denied) assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, "deny");
