@@ -100,7 +100,7 @@ test("a rejection block after other stderr lines is DEFEKT with the real message
   // Windows paths compare case-insensitively there, POSIX paths do not.
   const upper = checkFailureVerdict(failure(`hi\r\n${block(winFile.toUpperCase(), "\r\n")}`), file);
   assert.equal(upper.state, "DEFEKT", detailOf(upper));
-  assert.equal(detailOf(upper).endsWith(`(Node named it ${winFile.toUpperCase()})`), process.platform !== "win32", detailOf(upper));
+  assert.equal(detailOf(upper).endsWith("(Node named it BROKEN.JS)"), process.platform !== "win32", detailOf(upper));
 });
 
 test("no well-formed rejection block, or no own non-zero exit, is UNGEPRUEFT", () => {
@@ -162,10 +162,11 @@ const expectDefekt = async (file: string, named: RegExp | null): Promise<void> =
 test("a block whose location names another file is DEFEKT, and the detail says so", () => {
   const file = path.join(TMP, "broken.js");
   const other = path.join(TMP, "other-broken.js");
-  for (const where of [other, "other.js", "/etc/elsewhere/abs.js", "https://example.org/p/remote.js", "file:///tmp/x.js", "weird:name:9", "legacy.js"]) {
+  for (const [where, name] of [[other, "other-broken.js"], ["other.js", "other.js"], ["/etc/elsewhere/abs.js", "abs.js"], ["https://example.org/p/remote.js", "remote.js"], ["file:///tmp/x.js", "x.js"], ["weird:name:9", "weird:name:9"], ["legacy.js", "legacy.js"]]) {
     const v = checkFailureVerdict(failure(`hi\n${block(where)}`), file);
     assert.equal(v.state, "DEFEKT", `${where}: ${detailOf(v)}`);
-    assert.equal(detailOf(v), `rejected by node --check: SyntaxError: Unexpected token ';' (Node named it ${where})`);
+    assert.equal(detailOf(v), `rejected by node --check: SyntaxError: Unexpected token ';' (Node named it ${name})`);
+    assert.doesNotMatch(detailOf(v), ABSOLUTE_PATH);
   }
   // "Unexpected end of input": empty source and caret lines put the location four lines up.
   const eoi = checkFailureVerdict(failure(`${file}:2\n\n\n\nSyntaxError: Unexpected end of input\n`), file);
