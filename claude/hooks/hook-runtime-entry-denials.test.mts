@@ -68,7 +68,7 @@ test("a marker append that settles late: the marker is on disk when the entry ha
   assert.ok(ms >= MARKER_SLOW_MS, `${ms} ms: the entry waited for the append`);
 });
 
-test("a journal append that never settles (journal-hang): the deny within 500 ms of the reference, a marker", () => {
+test("a journal append that never settles (journal-hang): the deny within the journal cap, a marker", () => {
   const { home, ms, reference } = faulted("journal-hang");
   assert.equal(fs.readFileSync(journalPaths(home.root, "agent-e1").marker, "utf8"), "append\n");
   assert.ok(ms < reference + 900 + 1_500, `${ms} ms against ${reference} ms`);
