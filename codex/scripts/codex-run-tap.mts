@@ -16,7 +16,6 @@
 export interface TapRecord {
   name: string;
   depth: number;
-  ok: boolean;
   directive: "SKIP" | "TODO" | null;
   reason: string | null;
   type: string;
@@ -28,7 +27,8 @@ export interface ParsedTap { summary: TapSummary; records: TapRecord[] }
 export interface SkipEntry { name: string; reason: string | null }
 
 const SUMMARY_KEYS = ["tests", "suites", "pass", "fail", "cancelled", "skipped", "todo"] as const;
-const RECORD = /^((?: {4})*)(ok|not ok) \d+(?: - (.*))?$/;
+const SUMMARY_LINES = SUMMARY_KEYS.length + 2; // plan line, the keys, duration_ms
+const RECORD = /^((?: {4})*)(?:ok|not ok) \d+(?: - (.*))?$/;
 const DIRECTIVE = /^(.*?) # (SKIP|TODO)(?: (.*))?$/;
 
 function malformed(detail: string): Error {
@@ -39,28 +39,30 @@ export function unescapeTap(text: string): string {
   return text.replace(/\\([\\#])/g, "$1");
 }
 
-function readSummary(lines: string[]): TapSummary {
-  const block = lines.slice(-(SUMMARY_KEYS.length + 2));
+// The summary block and the lines before it.
+function readSummary(lines: string[]): { summary: TapSummary; body: string[] } {
+  const block = lines.slice(-SUMMARY_LINES);
   const plan = /^1\.\.\d+$/.test(block[0] ?? "");
   const duration = /^# duration_ms \d+(?:\.\d+)?$/.test(block[block.length - 1] ?? "");
-  if (block.length !== SUMMARY_KEYS.length + 2 || !plan || !duration) throw malformed("no summary block at end of file");
+  if (block.length !== SUMMARY_LINES || !plan || !duration) throw malformed("no summary block at end of file");
   const summary = {} as TapSummary;
   SUMMARY_KEYS.forEach((key, index) => {
     const match = new RegExp(`^# ${key} (\\d+)$`).exec(block[index + 1]);
     if (!match) throw malformed("no summary block at end of file");
     summary[key] = Number(match[1]);
   });
-  return summary;
+  return { summary, body: lines.slice(0, -SUMMARY_LINES) };
 }
 
 // The YAML block that must directly follow the record at `index`: its `type:`
 // and the index of its closing `...` line, or null when either is absent.
 function yamlBlock(lines: string[], index: number, indent: string): { type: string; end: number } | null {
   if (lines[index + 1] !== `${indent}  ---`) return null;
+  const typeLine = new RegExp(`^${indent}  type: '([a-z]+)'$`);
   let type: string | null = null;
   for (let line = index + 2; line < lines.length; line++) {
     if (lines[line] === `${indent}  ...`) return type === null ? null : { type, end: line };
-    const match = new RegExp(`^${indent}  type: '([a-z]+)'$`).exec(lines[line]);
+    const match = typeLine.exec(lines[line]);
     if (match) type = match[1];
   }
   return null;
@@ -69,13 +71,12 @@ function yamlBlock(lines: string[], index: number, indent: string): { type: stri
 export function parseTap(text: string): ParsedTap {
   const lines = text.split(/\r?\n/);
   while (lines.length && lines[lines.length - 1] === "") lines.pop();
-  const summary = readSummary(lines);
-  const body = lines.slice(0, -(SUMMARY_KEYS.length + 2));
+  const { summary, body } = readSummary(lines);
   const records: TapRecord[] = [];
   for (let index = 0; index < body.length; index++) {
     const match = RECORD.exec(body[index]);
     if (!match) continue;
-    const [, indent, status, rest = ""] = match;
+    const [, indent, rest = ""] = match;
     const directive = DIRECTIVE.exec(rest);
     const name = unescapeTap(directive ? directive[1] : rest);
     const yaml = yamlBlock(body, index, indent);
@@ -83,7 +84,6 @@ export function parseTap(text: string): ParsedTap {
     records.push({
       name,
       depth: indent.length / 4,
-      ok: status === "ok",
       directive: directive ? (directive[2] as "SKIP" | "TODO") : null,
       reason: directive && directive[3] !== undefined ? unescapeTap(directive[3]) : null,
       type: yaml.type,
