@@ -42,7 +42,7 @@ test("hook-integrity.mts reads no lib.restore or lib.journal, and its own module
   const main = text("hook-integrity.mts");
   assert.doesNotMatch(main, /\blib\.restore\b/);
   assert.doesNotMatch(main, /\blib\.journal\b/);
-  assert.match(main, /import\("\.\/hook-integrity-repair\.mts"\)[\s\S]*import\("\.\/hook-integrity-sources\.mts"\)/, "repair loads before sources");
+  assert.match(main, /\(\) => import\("\.\/hook-integrity-repair\.mts"\)[\s\S]*\(\) => import\("\.\/hook-integrity-sources\.mts"\)/, "repair loads before sources");
   for (const name of [...INTEGRITY_MODULES, "hook-adapter-payload.mts", "hook-adapter-verdict.mts"]) {
     const imports = [...text(name).matchAll(/^import\b(?!\s+type\b)[^;]*?from\s*"([^"]+)"/gm)].map((match) => match[1]);
     assert.ok(imports.every((specifier) => specifier.startsWith("node:")), `${name}: ${imports.join(", ")}`);

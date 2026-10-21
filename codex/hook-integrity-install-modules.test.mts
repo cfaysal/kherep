@@ -90,7 +90,7 @@ for (const [name, importers] of Object.entries(ADAPTER_IMPORTERS)) {
     for (const [index, broken] of ["", "export const broken = ;\n"].entries()) {
       fs.writeFileSync(file, broken);
       const context = sessionStart(ctx);
-      const label = new RegExp(`kherep-maestro/${name.replace(/\./g, "\\.")} \\(imported by ([^)]*)\\)`).exec(context)?.[1] ?? "";
+      const label = new RegExp(`kherep-maestro/${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(imported by ([^)]*)\\)`).exec(context)?.[1] ?? "";
       for (const importer of importers) assert.ok(label.split(", ").includes(`kherep-maestro/${importer}`), `${importer} in "${label}"`);
       assert.match(context, /RESTORED from the repo, verified at the target/);
       assert.ok(same(ctx, name), `${name} equals codex/hooks/${name}`);
