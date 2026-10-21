@@ -80,7 +80,8 @@ export function renderSettings(args: string[], platform: string = process.platfo
   const existingUser = unwire(retired.settings, sourceUser);
   const existingProject = unwire(readJson<Settings>(existingProjectFile, true), sourceProject);
   // Issue #568. Event, matcher and main come from the template group; nothing operator-written is printed.
-  const replace: OnReplace = (event, matcher, main) => console.log(`hooks: replace ${event}${matcher ? ` [${matcher}]` : ""} hooks/${main}`);
+  const replace: OnReplace = (event, matcher, main) =>
+    console.log(`hooks: replace ${event}${matcher ? ` [${matcher}]` : ""} hooks/${main}`);
   const user = mergeSettings(sourceUser, existingUser, replace);
   const project = mergeSettings(sourceProject, existingProject, replace);
   filterManagedDisallowedPermissions(user);
