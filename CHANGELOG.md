@@ -327,6 +327,33 @@ increments the minor version; every other release increments the patch version.
   The install-script set and the `allowScripts` pins are unchanged. Not
   deployed; the running Worker keeps the old packages until its next
   deploy.
+- The Claude installer no longer duplicates the control-plane hooks when it
+  runs from another root than the install before it (issue #590). The
+  replace rule identified an existing `deliver-hook.mts`, `wake-hook.mts` or
+  `attribution-hook.mts` entry by the full script path, so an install from a
+  service source pin after an install from the checkout added a second set:
+  a macOS node held 16 control-plane entries instead of 8 over
+  `UserPromptSubmit`, `Stop`, `StopFailure`, `PostToolUse` and
+  `SessionStart`, every delivery and wake hook command ran twice per event,
+  and neither `drift-check.sh` (the merge kept both sets, so the expected
+  file equalled the live one) nor `kherep-node doctor` (it counts hooks, not
+  entries per event) reported it. The identity is now the script's path from
+  `modules/control-plane/node/` on, without root or extension and
+  case-folded on Windows (`bootstrap/managed-hook-key.mts`
+  `controlPlaneHookKey`), so an install from any root replaces every entry
+  of the same script on the same event; a command that chains the script
+  with a shell control operator, substitution or redirection stays as an
+  operator hook, other operator hooks are untouched, and the replace stays
+  unreported as before. `drift-check.sh` runs `bootstrap/duplicate-hooks.mts`
+  on both settings files and fails with one
+  `DUPLICATE-HOOK <event> modules/control-plane/node/<script> x<n>` line per
+  script the installer template wires that appears more than once on an
+  event it wires it for; the doctor's `hooks` check reports the same
+  `duplicates` for the Claude file and fails with `a control-plane script is
+  wired more than once on one event; run bootstrap/install.sh again`. Codex
+  is not affected: its commands name the stable entry point and the
+  installer replaces its managed block whole. Installing again from the
+  current root removes the duplicates.
 - A service upgrade, rollback or stale-drain recovery to this version no
   longer fails its 30 s health check on a node with a large local queue
   (issue #581). The daemon start's inbox maintenance (issue #520: settle
