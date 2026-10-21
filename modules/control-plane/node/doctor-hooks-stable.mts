@@ -45,12 +45,14 @@ export const CODEX: StableForm = {
 };
 
 // The rendered Claude command: `node "<home>/kherep/control-plane/claude-control-plane-hook.mts" <name> ...`.
+// Only a command naming the entry point's file is stable; any other script that
+// takes a hook name as its argument is an operator hook.
 export const CLAUDE: StableForm = {
   label: "Claude", installer: "bootstrap/install.sh", entryName: claudeEntry.ENTRY_NAME,
   entryDir: (home: string) => path.join(home, "kherep", "control-plane"),
   pointerFile: claudeEntry.pointerFile, resolveHook: claudeEntry.resolveHook,
   sourceEntry: ["claude", "kherep", "control-plane", "claude-control-plane-hook.mts"],
-  command: /^node\s+(?:"(?<entry>[^"\n]*)"|(?<bare>\S+))\s+(?<name>deliver|wake|attribution)(?:\s|$)/,
+  command: /^node\s+(?:"(?<entry>[^"\n]*[\\/]claude-control-plane-hook\.mts)"|(?<bare>\S*[\\/]claude-control-plane-hook\.mts))\s+(?<name>deliver|wake|attribution)(?:\s|$)/,
   counted: { deliver: "deliver", wake: "wake" },
   legacy: /[\\/]modules[\\/]control-plane[\\/]node[\\/](?:deliver|wake|attribution)-hook\.mts/,
 };

@@ -10,37 +10,40 @@
 // The check compares what the hooks run with what this source would install, by
 // identity, not by root: a pointer to a pin of this commit is in sync with the
 // checkout of the same commit (#595 made the settings merge root-neutral; the
-// pointer follows). A pointer whose hook file is gone is drift: delivery fails
-// closed until install.sh runs again.
+// pointer follows). A pointer whose source lacks the hook of any stable name
+// (deliver, wake, attribution) is drift: that hook fails closed until install.sh
+// runs again.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { pointerFile, resolveHook } from "../claude/kherep/control-plane/claude-control-plane-hook.mts";
+import { pointerFile, readPointer, resolveHook } from "../claude/kherep/control-plane/claude-control-plane-hook.mts";
 import { renderControlPlanePointer } from "../codex/lib/control-plane-pointer.mts";
 import { captureSourceIdentity } from "../modules/control-plane/node/daemon-source.mts";
 import { errorMessage } from "./shape.mts";
-
-export { pointerFile, renderControlPlanePointer };
 
 export type PointerVerdict = { line: string; drift: boolean };
 
 // One report line for drift-check.sh. The root is printed only in the ok line, as information.
 export function checkPointer(claudeHome: string, repoRoot: string): PointerVerdict {
   const rel = "kherep/control-plane/source.json";
-  const resolved = resolveHook("deliver", pointerFile(claudeHome));
-  if ("reason" in resolved) {
-    if (resolved.reason === "missing") return { line: `MISSING-LIVE  ${rel}`, drift: true };
-    if (resolved.reason === "invalid") return { line: `POINTER-INVALID ${rel}`, drift: true };
-    return { line: `POINTER-UNRESOLVED ${rel} (${resolved.reason}: the pointer's source cannot run the hooks)`, drift: true };
+  const file = pointerFile(claudeHome);
+  const read = readPointer(file);
+  if ("reason" in read) return { line: read.reason === "missing" ? `MISSING-LIVE  ${rel}` : `POINTER-INVALID ${rel}`, drift: true };
+  // Every name a stable command runs; the first that does not resolve is reported.
+  for (const name of ["deliver", "wake", "attribution"]) {
+    const resolved = resolveHook(name, file);
+    if ("reason" in resolved) {
+      return { line: `POINTER-UNRESOLVED ${rel} (${resolved.reason}: the pointer's source cannot run the ${name} hook)`, drift: true };
+    }
   }
   let expected: string | undefined;
   try { expected = captureSourceIdentity(repoRoot, false).commit; } catch { /* no identity: compared by presence only */ }
-  const live = resolved.pointer.commit;
+  const { commit: live, kind } = read.pointer;
   if (expected && live && expected !== live) {
     return { line: `POINTER-STALE ${rel} (commit ${live.slice(0, 7)} != ${expected.slice(0, 7)})`, drift: true };
   }
-  const identity = live ? `${resolved.pointer.kind} ${live.slice(0, 7)}` : `${resolved.pointer.kind} unverified`;
+  const identity = live ? `${kind} ${live.slice(0, 7)}` : `${kind} unverified`;
   return { line: `ok            ${rel} (${identity})`, drift: false };
 }
 
