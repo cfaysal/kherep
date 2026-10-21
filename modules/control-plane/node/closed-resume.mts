@@ -92,14 +92,23 @@ async function resumeClaudeAdmitted(deps: RunnerDeps, task: TaskRecord, cwd: str
     await runClaude(deps, ["stop", shortId]).catch(() => undefined);
     return failed("claude continued the session as a copy under a new id it did not list");
   }
-  const saved = writeTask(deps.paths, mapIds({ ...pending, shortId }, row), now);
+  let saved = writeTask(deps.paths, mapIds({ ...pending, shortId }, row), now);
   // A copy under a new id (issue #109) takes over the messages waiting for the original id.
   const adopted = saved.sessionId ?? sessionId;
   if (adopted !== sessionId) {
-    const moved = readdress(deps.paths.inbox, sessionId, adopted);
-    updateDeliverySession(deps.paths, saved, moved, adopted);
+    try {
+      const moved = readdress(deps.paths.inbox, sessionId, adopted);
+      updateDeliverySession(deps.paths, saved, moved, adopted);
+    } catch (error) {
+      // Issue #627: the resume ran and cannot fail any more, or a second
+      // session would start. The record is written without the adopted id,
+      // so the watch round (task-watch.mts) adopts the copy and readdresses.
+      if (!(error instanceof RecordLockBusy)) throw error;
+      skipBusy(deps)(error);
+      saved = writeTask(deps.paths, { ...pending, shortId }, now);
+    }
   }
-  queueReport(deps.paths, { taskId: saved.taskId, state: "started", sessionId: adopted });
+  queueReport(deps.paths, { taskId: saved.taskId, state: "started", sessionId: saved.sessionId ?? sessionId });
   addLocalSession(deps.paths, { sessionId: adopted, name: task.name });
   if (rows) await retireCopies(deps, saved, rows);
   return null;

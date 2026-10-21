@@ -217,9 +217,10 @@ export function listInbox(dir: string, toSession?: string): InboxRecord[] {
 
 // Every rewrite of a record body: read, judge and write under the record's lock
 // (issue #627). change judges the record the file holds now, never a caller's
-// copy; null leaves it as it is. A busy lock throws RecordLockBusy:
-// setDeliveryTask, markClosedAttempt and readdress fail their daemon round,
-// which runs again; the other writers report "not written" (tryUpdate).
+// copy; null leaves it as it is. A busy lock throws RecordLockBusy from
+// setDeliveryTask, markClosedAttempt and readdress; their daemon callers skip
+// that record for the round and take it up again on the next one. The other
+// writers report "not written" (tryUpdate).
 type Update = { record: InboxRecord; written: boolean } | null;
 function updateRecord(dir: string, messageId: string, change: (record: InboxRecord) => InboxRecord | null): Update {
   if (!isMessageId(messageId)) return null;

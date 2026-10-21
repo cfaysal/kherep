@@ -11,6 +11,7 @@ import { attachDelivery } from "./delivery-identity.mts";
 import { progressRecords } from "./delivery-progress.mts";
 import { readLocalSessions } from "./exchange.mts";
 import { listInbox, markClosedAttempt, markRefused, MAX_REPLY_DEPTH, readJson, type InboxRecord } from "./inbox.mts";
+import { RecordLockBusy } from "./inbox-record-lock.mts";
 import { closedSession, findKnown, trackSession } from "./known-sessions.mts";
 import { acceptsMessage, wakeBudget } from "./policy.mts";
 import { notReadyNow } from "./runtime-readiness.mts";
@@ -125,6 +126,11 @@ const delegated = (deps: RunnerDeps, mode: unknown): mode is PermissionMode =>
 const runs = async (deps: RunnerDeps, task: TaskRecord): Promise<boolean> =>
   isActive(task) || stillRuns(deps.codex ?? {}, task.pid, task.pidStart);
 
+function marked(deps: RunnerDeps, record: InboxRecord, now: number, toSession?: string): boolean {
+  try { markClosedAttempt(deps.paths.inbox, record.messageId, now, toSession); return true; }
+  catch (error) { if (!(error instanceof RecordLockBusy)) throw error; skipBusy(deps)(error); return false; }
+}
+
 // True when the burst was handed on or a run was started (or tried) for it.
 async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now: number): Promise<boolean> {
   const { paths, policy } = deps;
@@ -145,7 +151,7 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
   if (accepted.length < all.length) refuse("not accepted by node policy", "wake-not-authorized", all.filter((r) => !accepted.includes(r)));
   const deep = accepted.filter((r) => (r.depth ?? 0) >= MAX_REPLY_DEPTH);
   if (deep.length > 0) refuse("reply depth limit", "reply-limit", deep);
-  const records = accepted.filter((r) => !deep.includes(r));
+  let records = accepted.filter((r) => !deep.includes(r));
   if (records.length === 0) return false;
   if (bypassesPermissions(found.mode)) return refuse("permission mode bypassPermissions", "permission-restricted");
   // An intercom session answers with msg send, which cannot reach the operator API.
@@ -208,8 +214,10 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
     return false;
   }
   if (budget === "exhausted") return refuse("budget of autonomous turns exhausted", "budget-exhausted");
+  // Issue #627: a record whose lock stays busy is left out of this round, unmarked.
+  records = records.filter((r) => marked(deps, r, now, reusable?.sessionId));
+  if (records.length === 0) return false;
   progressRecords(paths, records, "fallback", "fallback-starting", now);
-  for (const r of records) markClosedAttempt(paths.inbox, r.messageId, now, reusable?.sessionId);
   let why = intercom ? "its intercom session cannot be resumed" : undefined;
   if (reusable) {
     const resume = reusable.runtime === "codex" ? resumeCodex : resumeClaude;

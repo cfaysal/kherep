@@ -3,7 +3,7 @@ import { isMessageDeliverBody } from "../protocol-messages.mts";
 import { isTaskControlExecuteBody } from "../protocol-task-control.mts";
 import type { NodeClient } from "./client.mts";
 import { getMessage } from "./inbox.mts";
-import { startRecordLockRound } from "./inbox-record-lock.mts";
+import { runRecordLockRound } from "./inbox-record-lock.mts";
 import { loadPolicy } from "./policy.mts";
 
 // Issue #441: the daemon's frame lane awaits runtime work (CLI calls of up to
@@ -56,9 +56,9 @@ export function laneTimer(log: (line: string) => void, slowMs = SLOW_LANE_MS, no
 }
 
 // Issue #627: each lane item of the daemon is a round of record lock waits
-// that together stay within ms (inbox-record-lock.mts startRecordLockRound).
+// that together stay within ms (inbox-record-lock.mts runRecordLockRound).
 export function lockRounds(timed: LaneTimer, ms: number): LaneTimer {
-  return (lane, kind, run, enqueuedAt) => timed(lane, kind, () => { startRecordLockRound(ms); return run(); }, enqueuedAt);
+  return (lane, kind, run, enqueuedAt) => timed(lane, kind, () => runRecordLockRound(ms, run), enqueuedAt);
 }
 
 // The then-callback of a lane item, stamped with the time it was enqueued.
