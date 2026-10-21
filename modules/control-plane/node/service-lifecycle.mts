@@ -3,7 +3,7 @@ import { pidAlive as defaultPidAlive, readDaemonState as defaultReadDaemonState,
 import { captureSourceIdentity, compareSourceIdentity, type SourceIdentity } from "./daemon-source.mts";
 import { serviceAdmissionsIdle } from "./service-drain.mts";
 import { issueServiceLaunchPermit } from "./service-launch-permit.mts";
-import type { NativeServiceSnapshot, ServiceAdapter, ServiceBinding } from "./service-types.mts";
+import { stopCode, type NativeServiceSnapshot, type ServiceAdapter, type ServiceBinding, type StopCode } from "./service-types.mts";
 
 export interface LifecycleDependencies {
   paths: NodePaths;
@@ -27,6 +27,11 @@ export const HEALTH_TIMEOUT_MS = 30_000;
 export const ROLLBACK_HEALTH_TIMEOUT_MS = 180_000;
 const exact = (left: Buffer, right: Buffer): boolean => left.equals(right);
 const recoveryError = (code: string, message: string): Error & { code: string } => Object.assign(new Error(message), { code });
+// #582: the candidate is still loaded under the label; writing other bytes now would leave launchd and the file apart.
+export type CandidateLoadedError = Error & { code: "RECOVERY_CANDIDATE_LOADED"; stopCode: StopCode };
+const candidateLoaded = (stopFailure: Error | undefined): CandidateLoadedError => Object.assign(
+  recoveryError("RECOVERY_CANDIDATE_LOADED", `candidate service is still loaded; its stop ${stopFailure ? `failed: ${stopFailure.message}` : "reported success"}`),
+  { code: "RECOVERY_CANDIDATE_LOADED" as const, stopCode: stopFailure ? stopCode(stopFailure) : "STOP_FAILED_OTHER" as const });
 const wait = (milliseconds: number): Promise<void> => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 export function sourceMatches(expected: SourceIdentity, actual: SourceIdentity | undefined): boolean {
@@ -100,16 +105,22 @@ export async function removeFresh(binding: ServiceBinding, input: LifecycleDepen
   const deps = lifecycleDefaults(input);
   const candidate = deps.readState(input.paths);
   const native = await input.adapter.read(binding);
-  if (candidate && deps.alive(candidate.pid)) {
-    if (!native || !await input.adapter.processOwned(candidate.pid, binding, candidate.startedAt)) {
-      throw new Error("new service process ownership cannot be verified");
+  try {
+    if (candidate && deps.alive(candidate.pid)) {
+      if (!native || !await input.adapter.processOwned(candidate.pid, binding, candidate.startedAt)) {
+        throw new Error("new service process ownership cannot be verified");
+      }
+      await input.adapter.preflightStop(binding, { pid: candidate.pid, startedAt: candidate.startedAt });
+      await input.adapter.stop(binding, { pid: candidate.pid, startedAt: candidate.startedAt });
+      await proveStopped(candidate.pid, deps);
+    } else if (native) {
+      await input.adapter.preflightStop(binding, undefined);
+      if (native.running !== false) await input.adapter.stop(binding, undefined);
     }
-    await input.adapter.preflightStop(binding, { pid: candidate.pid, startedAt: candidate.startedAt });
-    await input.adapter.stop(binding, { pid: candidate.pid, startedAt: candidate.startedAt });
-    await proveStopped(candidate.pid, deps);
-  } else if (native) {
-    await input.adapter.preflightStop(binding, undefined);
-    if (native.running !== false) await input.adapter.stop(binding, undefined);
+  } catch (error) { // #582: a fresh candidate that stays loaded is reported, not removed from under launchd
+    const remaining = await input.adapter.read(binding);
+    if (remaining && remaining.running !== false) throw candidateLoaded(error as Error);
+    throw error;
   }
   if (!native) return;
   await input.adapter.remove(binding);
@@ -152,12 +163,15 @@ export interface RecoveryInput {
 export async function restorePrior(input: RecoveryInput): Promise<void> {
   const runtime = lifecycleDefaults(input.deps);
   let absenceProven = false;
+  let stopFailure: Error | undefined;
+  let overwritesLoaded = false;
   const candidateState = runtime.readState(input.deps.paths);
   const native = await input.deps.adapter.read(input.binding);
   if (native) {
     const candidateBytes = input.candidate && exact(native.definition, input.candidate.definition)
       && exact(native.security, input.candidate.security);
     const priorBytes = exact(native.definition, input.previous.definition) && exact(native.security, input.previous.security);
+    overwritesLoaded = !priorBytes;
     if (!candidateBytes && !priorBytes) throw recoveryError("RECOVERY_SERVICE_CHANGED", "selected service changed during recovery");
     if (native.running === true && priorBytes && !candidateBytes && !input.priorStopIssued && candidateState
       && candidateState.pid === input.previousPid && runtime.alive(candidateState.pid)
@@ -174,7 +188,7 @@ export async function restorePrior(input: RecoveryInput): Promise<void> {
         await input.deps.adapter.stop(input.binding, context);
         await proveStopped(context?.pid, runtime);
         absenceProven = true;
-      } catch { /* exact raw restoration still proceeds without restarting either daemon */ }
+      } catch (error) { stopFailure = error as Error; }
     } else if (native.running !== true) {
       try {
         await input.deps.adapter.preflightStop(stoppedBinding, undefined);
@@ -182,8 +196,13 @@ export async function restorePrior(input: RecoveryInput): Promise<void> {
         if (!candidateState || candidateState.pid === input.previousPid || !runtime.alive(candidateState.pid)) {
           absenceProven = true;
         }
-      } catch { /* raw restoration continues, but no service may restart */ }
+      } catch (error) { stopFailure = error as Error; }
     }
+  }
+  // #582: the prior bytes are written only over nothing, over themselves, or over a candidate proven absent.
+  if (native && overwritesLoaded && !absenceProven) {
+    const remaining = await input.deps.adapter.read(input.binding);
+    if (remaining && remaining.running !== false) throw candidateLoaded(stopFailure);
   }
   await input.deps.adapter.write(input.binding, input.previous.definition, input.previous.security);
   await verifyExact(input.deps.adapter, input.binding, input.previous);
