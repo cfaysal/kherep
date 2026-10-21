@@ -54,16 +54,30 @@ export function managedHookKey(command: string, platform: string = process.platf
 // command with a shell control operator, substitution or redirection outside
 // double quotes is operator-shaped; any other hook is undefined. On win32 the
 // script is lower-cased before the segment is searched, so `\Modules\...` counts.
-const CONTROL_PLANE_SCRIPT = /^node\s+(?:"([^"]+)"|(\S+))/;
+// Issue #592. The stable form, `node "<home>/kherep/control-plane/
+// claude-control-plane-hook.mts" <deliver|wake|attribution> ...`, has the key of
+// the script the name selects, so the merge replaces a path-form entry of an
+// older install with the stable one and a duplicate scan counts both forms as
+// one script. The name is the first argument; here alone an argument is part of
+// the key. The entry may sit under any home (root neutrality, #595): the suffix
+// decides, not the home. Any other name is not a control-plane hook; a hand-quoted
+// name ("deliver") is not keyed either, although the shell would unquote it.
+const CONTROL_PLANE_SCRIPT = /^node\s+(?:"([^"]+)"|(\S+))(?:\s+(\S+))?/;
 const CONTROL_PLANE_DIR = "/modules/control-plane/node/";
+const STABLE_ENTRY = "/kherep/control-plane/claude-control-plane-hook";
+const STABLE_NAMES: Readonly<Record<string, string>> = Object.freeze({ deliver: "deliver-hook", wake: "wake-hook", attribution: "attribution-hook" });
 
 export function controlPlaneHookKey(command: string, platform: string = process.platform): string | undefined {
   const match = CONTROL_PLANE_SCRIPT.exec(command);
   if (!match || CONTROL_OPERATOR.test(outsideQuotes(command))) return undefined;
   const written = (match[1] ?? match[2]).replace(/\\/g, "/");
-  const script = platform === "win32" ? written.toLowerCase() : written;
+  const script = (platform === "win32" ? written.toLowerCase() : written).replace(/\.(?:js|mjs|cjs|mts)$/, "");
+  if (script.endsWith(STABLE_ENTRY)) {
+    const name = match[3] === undefined ? undefined : STABLE_NAMES[match[3]];
+    return name === undefined ? undefined : `${CONTROL_PLANE_DIR.slice(1)}${name}`;
+  }
   const at = script.lastIndexOf(CONTROL_PLANE_DIR);
   if (at < 0) return undefined;
-  const key = script.slice(at + 1).replace(/\.(?:js|mjs|cjs|mts)$/, "");
+  const key = script.slice(at + 1);
   return key === CONTROL_PLANE_DIR.slice(1) ? undefined : key;
 }
