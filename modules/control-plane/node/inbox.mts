@@ -338,10 +338,10 @@ export function markReported(dir: string, messageId: string, state: ReportedStat
 // session, from the time it was handed over. Call it with a successful
 // listing only: a failed listing is not an empty node. Returns the ids.
 export function refuseUndeliverable(dir: string, sessions: SessionInfo[], now: number = Date.now(),
-  afterMs: number = UNDELIVERABLE_AFTER_MS): string[] {
+  afterMs: number = UNDELIVERABLE_AFTER_MS, records: InboxRecord[] = listInbox(dir)): string[] {
   const live = new Set(sessions.flatMap((s) => s.name ? [s.sessionId, s.name] : [s.sessionId]));
   const since = (r: InboxRecord): number => Date.parse((r.closedTo && r.closedAttempt) || r.receivedAt);
   const refusable = (r: InboxRecord): boolean => (r.state === "accepted" || r.state === "offered") && !live.has(r.toSession) && now - since(r) > afterMs;
-  return listInbox(dir).filter(refusable).filter((r) => markRefused(dir, r.messageId, "target session not running", refusable))
+  return records.filter(refusable).filter((r) => markRefused(dir, r.messageId, "target session not running", refusable))
     .map((r) => r.messageId);
 }
