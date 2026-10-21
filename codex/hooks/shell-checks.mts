@@ -12,8 +12,8 @@ const deny = (reason: string): string => JSON.stringify({ hookSpecificOutput: {
 
 // Issue #507, part 4. One integer clock from this process's start, SAFETY_MARGIN_MS before the
 // `timeout = 40` of the rendered shell entry (codex/lib/parity-config.mts; a test pins it). It bounds
-// stdin, every guard and the re-check. Attribution runs after them, uncapped, so the answer itself
-// has no end-to-end deadline.
+// stdin, every guard, journal capture and the re-check. Order: guards, journal capture, re-check,
+// attribution. Attribution runs last, uncapped, so the answer itself has no end-to-end deadline.
 const HOOK_TIMEOUT_MS = 40_000;
 const SAFETY_MARGIN_MS = 1_500;
 const START = Math.floor(Number.isFinite(performance.timeOrigin) ? performance.timeOrigin : Date.now());
@@ -115,7 +115,7 @@ export interface ShellOptions { deadline?: number; raw?: string }
 
 // Privacy stays in its independent group. All shell guards still run through
 // the shared adapter's phase-specific normalization, even when another denies.
-// Order (issue #507, part 4): the guards, then the re-check, then attribution.
+// Order (issue #507, part 4): guards, journal capture, re-check, attribution.
 export async function shellChecks(payload: HookPayload, attributionHook?: string, options: ShellOptions = {}): Promise<string> {
   const deadline = options.deadline ?? DEADLINE;
   const remaining = (): number => Math.max(0, deadline - Date.now());
@@ -162,8 +162,9 @@ export async function shellChecks(payload: HookPayload, attributionHook?: string
       denials.push({ decision: "deny", reason: tagged(guard, why), broken: fault });
     }
   }
-  // Issue #504: after the guards, before the re-check; never a decision, at most 1 s.
-  const journalEnd = Date.now() + Math.max(0, Math.min(1_000, remaining() - 250));
+  // Issue #621: journal and failure marker share at most 2 s before the re-check.
+  // The lib keeps its 600 ms cap; a marker still pending at the end may be lost.
+  const journalEnd = Date.now() + Math.max(0, Math.min(2_000, remaining() - 250));
   if (journalCall) await journalCall(payload, denials, journalEnd).catch(() => {});
   else await within(unjournalled(payload), journalEnd - Date.now(), () => {}).catch(() => {});
   const notice = await within(recheck(options.raw ?? JSON.stringify(payload), broken, remaining), remaining(),
@@ -217,5 +218,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("invalid input");
     output = await shellChecks(payload as HookPayload, process.argv[2], { raw });
   } catch { output = deny("Shell checks received invalid input; this tool call is blocked."); }
-  if (output) process.stdout.write(output);
+  // CLI only: drain previously issued diagnostics as well as the answer, then release
+  // any lingering journal handles. Always queue both barriers, even on a silent allow.
+  let pending = 2;
+  const flushed = (): void => { if (--pending === 0) process.exit(0); };
+  process.stdout.write(output, flushed);
+  process.stderr.write("", flushed);
 }

@@ -36,17 +36,34 @@ export function cleanupHomes(): void {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 }
 
-export interface Run { status: number | null; stdout: string; stderr: string; ms: number }
+export interface Run { status: number | null; stdout: string; stderr: string; ms: number; signal: NodeJS.Signals | null; timedOut: boolean }
 
-export function run(args: string[], input: string, env: NodeJS.ProcessEnv = process.env): Promise<Run> {
+export function run(args: string[], input: string, env?: NodeJS.ProcessEnv, timeoutMs = 15_000, pauseStdoutMs = 0): Promise<Run> {
   return new Promise((resolve, reject) => {
     const start = Date.now();
-    const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", ...args], { windowsHide: true, env });
-    let stdout = "", stderr = "";
+    const childEnv = { ...(env ?? process.env) };
+    if (!env) { delete childEnv.KHEREP_DENIAL_FAULT; delete childEnv.KHEREP_DENIAL_FAULT_MAIN; }
+    const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", ...args], { windowsHide: true, env: childEnv });
+    let stdout = "", stderr = "", timedOut = false;
+    let stdinError: Error | undefined;
+    let resumeTimer: NodeJS.Timeout | undefined;
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
     child.stdout.on("data", (chunk) => (stdout += chunk));
     child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (status) => resolve({ status, stdout, stderr, ms: Date.now() - start }));
+    if (pauseStdoutMs) {
+      child.stdout.pause();
+      child.stdout.once("readable", () => { resumeTimer = setTimeout(() => child.stdout.resume(), pauseStdoutMs); });
+    }
+    child.on("error", (error) => { clearTimeout(timer); clearTimeout(resumeTimer); reject(error); });
+    child.on("close", (status, signal) => {
+      clearTimeout(timer);
+      clearTimeout(resumeTimer);
+      if (stdinError) reject(stdinError);
+      else resolve({ status, signal, timedOut, stdout, stderr, ms: Date.now() - start });
+    });
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") { stdinError = error; child.kill("SIGKILL"); }
+    });
     child.stdin.end(input);
   });
 }
