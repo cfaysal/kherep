@@ -1,7 +1,8 @@
 import { isMessageId, type DirectoryBody, type MessageDeliverBody } from "../protocol-messages.mts";
 import type { NodePaths } from "./config.mts";
 import { getSent, recordSent, type SentRecord } from "./exchange.mts";
-import { listInbox, messageIds, type InboxRecord } from "./inbox.mts";
+import { getMessage, listInbox, messageIds, type InboxRecord } from "./inbox.mts";
+import { drain } from "./inbox-purge.mts";
 import { nodeLabel } from "./msg-resolve.mts";
 
 // What the delivery hook tells a session about messages it sent: those that
@@ -60,12 +61,38 @@ export function settleReplied(paths: NodePaths, body: Pick<MessageDeliverBody, "
 // Issue #520, the start pass: every delivered record, whatever its session,
 // whose reply sits in the inbox is settled before purgeInbox removes that
 // reply. One read of sent/ and one of the inbox. Returns the number settled.
-export function settleAnsweredAtStart(paths: NodePaths, now: number, onError?: (error: unknown) => void): number {
-  const delivered = messageIds(paths.sent).map((id) => read(paths, id))
-    .filter((r): r is SentRecord => r !== null && r.state === "delivered" && r.fromSession !== undefined && r.proxyOf === undefined);
+// Issue #581: one step per record read and per settle write, for the sliced
+// start maintenance (inbox-start.mts). Only inbox records in reply to
+// something are kept, grouped by inReplyTo, so the join is linear; repliesTo
+// applies the same rule to the records that name the sent message.
+export function* settleAnsweredSteps(paths: NodePaths, now: number, onError?: (error: unknown) => void): Generator<void, number> {
+  const delivered: SentRecord[] = [];
+  for (const id of messageIds(paths.sent)) {
+    const r = read(paths, id);
+    if (r !== null && r.state === "delivered" && r.fromSession !== undefined && r.proxyOf === undefined) delivered.push(r);
+    yield;
+  }
   if (delivered.length === 0) return 0;
-  const inbox = listInbox(paths.inbox);
-  return delivered.filter((r) => repliesTo(inbox, r).length > 0 && settleAnswered(paths, r, now, onError)).length;
+  const byReply = new Map<string, InboxRecord[]>();
+  for (const id of messageIds(paths.inbox)) {
+    const r = getMessage(paths.inbox, id);
+    if (r?.inReplyTo !== undefined) {
+      const replies = byReply.get(r.inReplyTo);
+      if (replies) replies.push(r); else byReply.set(r.inReplyTo, [r]);
+    }
+    yield;
+  }
+  let settled = 0;
+  for (const r of delivered) {
+    if (repliesTo(byReply.get(r.messageId) ?? [], r).length === 0) continue;
+    if (settleAnswered(paths, r, now, onError)) settled++;
+    yield;
+  }
+  return settled;
+}
+
+export function settleAnsweredAtStart(paths: NodePaths, now: number, onError?: (error: unknown) => void): number {
+  return drain(settleAnsweredSteps(paths, now, onError));
 }
 
 // One read of sent/ for the session's references (id, name), oldest first:

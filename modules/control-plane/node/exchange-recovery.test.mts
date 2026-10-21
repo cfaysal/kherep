@@ -10,8 +10,9 @@ import { nodePaths, type NodePaths } from "./config.mts";
 import { exchangeOptions, getOutbox, getSent, pollExchange, SEND_RETRY_MS, writeOutbox } from "./exchange.mts";
 import { generateIdentity } from "./identity.mts";
 import {
-  getMessage, INBOX_RETENTION_MS, markDelivered, markReported, purgeInbox, storeMessage, unreportedStatuses,
+  getMessage, INBOX_RETENTION_MS, markDelivered, markReported, storeMessage, unreportedStatuses,
 } from "./inbox.mts";
+import { purgeInbox } from "./inbox-purge.mts";
 import { DEFAULT_POLICY } from "./policy.mts";
 
 // Issue #195 on the node side: a lost answer on a live connection, a daemon

@@ -1,5 +1,5 @@
 import type { NodePaths } from "./config.mts";
-import { purgeInbox } from "./inbox.mts";
+import { purgeInbox } from "./inbox-purge.mts";
 import { settleAnsweredAtStart } from "./sent-notices.mts";
 
 // What startDaemon does to inbox/ and sent/ before the client connects (issue
