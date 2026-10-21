@@ -63,14 +63,6 @@ type EntryStatus = "valid" | "missing" | "symlink" | "stale" | "unchecked";
 type HookScan = { present: boolean; deliver: number; wake: number; foreign: string[]; pinned?: string[]; checkouts?: string[];
   duplicates?: DuplicateHook[]; pointer?: PointerStatus; stable?: number; legacy?: number; entry?: EntryStatus };
 
-// Issue #590. Claude settings: a control-plane script wired more than once on
-// one event (the entries of two installs from different roots, or a hand copy).
-// Codex commands name the stable entry point, never a root, and the installer
-// replaces its managed block whole, so only the Claude file is counted.
-function claudeDuplicates(text: string): DuplicateHook[] {
-  return duplicateControlPlaneHooks(JSON.parse(text) as { hooks?: unknown });
-}
-
 // Issue #503. A Codex command names the stable entry point and a fixed hook
 // name; the deliver hook it runs is the one the pointer of the config's
 // CODEX_HOME names, and only through that home's own entry point. A command
@@ -103,14 +95,17 @@ function entryStatus(entryFile: string, root: string | undefined): EntryStatus {
 // codex: the Codex config, whose stable commands resolve through its pointer.
 function scanHooks(
   file: string, repoRoot: string, commandsOf: (text: string) => string[], cache: SourceCache, codex = false,
-  duplicatesOf: (text: string) => DuplicateHook[] = () => [],
 ): { scan: HookScan; reason?: string } | null {
   let commands: string[];
   let duplicates: DuplicateHook[];
   try {
     const text = fs.readFileSync(file, "utf8");
     commands = commandsOf(text);
-    duplicates = duplicatesOf(text);
+    // Issue #590. Claude settings: a control-plane script wired more than once
+    // on one event (the entries of two installs from different roots, or a hand
+    // copy). Codex commands name the stable entry point, never a root, and the
+    // installer replaces its managed block whole, so only Claude is counted.
+    duplicates = codex ? [] : duplicateControlPlaneHooks(JSON.parse(text) as { hooks?: unknown });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { scan: { present: false, deliver: 0, wake: 0, foreign: [] } };
     return null;
@@ -204,7 +199,7 @@ export function sourceCache(repoRoot: string): SourceCache {
 // script is wired twice on one event (#590).
 export function checkHooks(files: { claude: string; codex: string }, repoRoot: string): Check {
   const cache = sourceCache(repoRoot);
-  const claude = scanHooks(files.claude, repoRoot, claudeCommands, cache, false, claudeDuplicates);
+  const claude = scanHooks(files.claude, repoRoot, claudeCommands, cache);
   const codex = scanHooks(files.codex, repoRoot, codexCommands, cache, true);
   if (!claude || !codex) return { ok: false, detail: "a runtime configuration file is unreadable" };
   const foreign = claude.scan.foreign.length + codex.scan.foreign.length;
