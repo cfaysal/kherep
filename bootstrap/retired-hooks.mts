@@ -134,8 +134,8 @@ export function retireHookCommands(
 const scriptStem = (rel: string): string => rel.replace(/\.(?:js|mjs|cjs|mts)$/, "");
 
 // Review of #254. The template decides at which events a managed hook runs, but
-// mergeHooks keeps every existing hook, so an entry the installer wrote at an
-// event the template has since dropped would run on. Such an entry (the hook
+// mergeHooks replaces only within a group the template still has (#568), so an
+// entry the installer wrote at an event the template has since dropped would run on. Such an entry (the hook
 // under the absolute Claude home, .js and .mts folded) is removed; a hand-written
 // ~/.claude form stays unless it is a raw command for a main the template runs
 // through kherep/hook-runtime/entry.mts or passes to the dispatcher behind it

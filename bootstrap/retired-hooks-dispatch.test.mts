@@ -1,6 +1,7 @@
 // Issue #507, part 1. The PreToolUse guards move from direct entries into
-// arguments of guard-dispatch.mts. mergeHooks keeps every existing hook it does
-// not recognise, so without unwiring an upgraded host would run each guard
+// arguments of guard-dispatch.mts. mergeHooks replaces an entry only when it
+// runs the template's main in the same group (#568), and an old direct guard
+// entry does not, so without unwiring an upgraded host would run each guard
 // twice: once through the dispatcher, once through its old direct entry.
 import assert from "node:assert/strict";
 import fs from "node:fs";
