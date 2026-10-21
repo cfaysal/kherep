@@ -15,14 +15,22 @@ import { settleAnsweredSteps } from "./sent-notices.mts";
 // the queue, never delays the connection the service health stage waits for.
 export const MAINTENANCE_SLICE_MS = 50;
 export const MAINTENANCE_FALLBACK_MS = 60_000;
+// Issue #589: the sliced purge leaves files touched since the pass began (inbox-purge.mts touchedSince). File clocks
+// can stamp a write below Date.now() read a moment earlier: Linux stamps inodes from the coarse clock (up to one timer
+// tick, 10 ms at HZ=100, behind), NTFS from the system time (1 to 15.6 ms resolution), an ext4 inode without the extra
+// field holds whole seconds. The margin covers all of them; a file touched within it before the pass began waits for
+// the next start, which only delays its retention.
+export const TOUCHED_MARGIN_MS = 2_000;
 
 export interface MaintenanceOptions {
   signal?: AbortSignal;
   now?: number;
   fallbackMs?: number; // read by the daemon
-  // Tests only: the slice length and the pause before each slice.
+  // Tests only: the slice length, the pause before each slice, and the clock
+  // the slicer reads (a fake one makes the steps per slice host-independent).
   sliceMs?: number;
   yield?: () => Promise<void>;
+  clock?: () => number;
 }
 
 // touchedSince: the purge skips inbox files written at or after it (inbox-purge.mts).
@@ -56,19 +64,19 @@ const nextTurn = (): Promise<void> => new Promise((resolve) => setImmediate(reso
 // Other writers run between slices, so the purge leaves files written since
 // the pass began to the next start (inbox-purge.mts).
 export async function runInboxMaintenance(paths: NodePaths, log: (line: string) => void, options: MaintenanceOptions = {}): Promise<void> {
-  const { signal, now = Date.now(), sliceMs = MAINTENANCE_SLICE_MS, yield: pause = nextTurn } = options;
+  const { signal, now = Date.now(), sliceMs = MAINTENANCE_SLICE_MS, yield: pause = nextTurn, clock = () => performance.now() } = options;
   const started = performance.now();
   const seconds = (): string => ((performance.now() - started) / 1000).toFixed(1);
-  const steps = inboxMaintenanceSteps(paths, log, now, Date.now());
+  const steps = inboxMaintenanceSteps(paths, log, now, Date.now() - TOUCHED_MARGIN_MS);
   for (;;) {
     await pause();
     if (signal?.aborted) {
       log(`kherep-node: start maintenance stopped after ${seconds()} s`);
       return;
     }
-    const end = performance.now() + sliceMs;
+    const end = clock() + sliceMs;
     let step = steps.next();
-    while (!step.done && performance.now() < end) step = steps.next();
+    while (!step.done && clock() < end) step = steps.next();
     if (step.done) {
       log(`kherep-node: start maintenance done in ${seconds()} s`);
       return;
