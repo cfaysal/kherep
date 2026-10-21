@@ -30,6 +30,6 @@
   "license": "Apache-2.0",
   "allowScripts": {
     "esbuild@0.28.1": true,
-    "workerd@1.20260923.1": true
+    "workerd@1.20261006.1": true
   }
 }
