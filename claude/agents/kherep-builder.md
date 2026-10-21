@@ -38,3 +38,5 @@ SCOPE: in scope or exact boundary issue
 RISKS: remaining risks or none
 NEXT: required next action or done
 ```
+
+Do not write a `DENIED-CALLS` line: the Maestro reads the calls a guard denied from the denied-call journal.

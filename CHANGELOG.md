@@ -11,6 +11,39 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Denied calls in delegated worker reports (issue #504). The guard
+  dispatcher, and the hook runtime entry for its own denies, journal each
+  guarded call of a delegated Claude worker (a payload with a valid
+  `agent_id`, the handback excluded) to
+  `<CLAUDE_HOME>/.cache/denied-calls/<agent_id>.jsonl`: tool, worker type,
+  a target class and per denying guard its tag and the first line of its
+  reason, absolute paths reduced to their basename, privacy denials and
+  marker matches `<withheld>`. Every write is asynchronous, capped (1.5 s,
+  0.5 s in the entry) and never changes or delays a decision past its cap;
+  a lost write leaves `<agent_id>.failed`, a marker line or the journal
+  renamed to it. A second entry of the `PostToolUse` group on
+  `SubagentHandback` (`hooks/denied-calls-delivered.mts`, `timeout` 10)
+  records the delivery after the handback ran and cannot block it; the
+  group's first entry and every other entry are unchanged.
+  The Maestro reads a worker's list with `hooks/denied-calls.mts render
+  <agent_id>`, which prints `DENIED-CALLS: none | <n> | unknown (<code>)`,
+  `none` only on positive evidence, and exits 3 on `unknown`; both
+  ROUTING.md files carry the reading rule and the `Denied:` receipt line.
+  Acceptance 2 of the issue is met through that read for Claude workers,
+  not inside the worker's own text, and nothing enforces it yet. Codex:
+  the adapter and the shell dispatcher capture too, but Codex documents no
+  `agent_id` on a child's `PreToolUse`, so capture is inert until a child
+  key is measured (#537) and every Codex worker reads `unknown
+  (journal-missing)`; no Codex hook group is added and the renderer is
+  installed as `hooks/kherep-maestro/denied-calls.mts`. Limits: append
+  and rename both failing loses the line; the three stderr guards record
+  their first line only; Explore and Plan workers return no agent ID and
+  read `unknown (no-agent-id)`; that the returned agent ID equals the
+  hooks' `agent_id` is UNVERIFIED until the host measurement in
+  `docs/CODEX-HOOK-RUNS.md`. `hooks/lib/denial-journal.mts` holds a fourth
+  copy of the private marker pattern, held equal to the three guard copies
+  by a bootstrap test.
+
 - Hook integrity heartbeat, re-check and hook runtime (issue #507, part 2 of
   4). Every managed Claude hook command now starts through
   `kherep/hook-runtime/entry.mts`, which admits the hook process to the

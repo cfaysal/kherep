@@ -42,6 +42,8 @@ The Maestro inspects worker changes, verifies the final diff and runs proportion
 
 For behavior-changing work, report C1 requested behavior, C2 tests/build/runtime evidence, C3 security and privacy impact, and C4 scope and diff integrity. Mark checks as passed, failed, skipped or not testable. Final acceptance stays with the Maestro and user.
 
+Denied calls (issue #504): after a delegated worker finished, through its completion notification or `status: delivered`, run `node "<CLAUDE_HOME>/hooks/denied-calls.mts" render <agent_id>` with the agent ID Claude Code returned, and copy its first line into the dispatch receipt as `Denied: none | <n> | unknown (<code>)`. Read the full list, write-tool denials first, not only the first line. Exit code 3 means `unknown`; `unknown` and a missing line are UNKNOWN in acceptance, never `none`. Explore and Plan workers return no agent ID: their line is `Denied: unknown (no-agent-id)`, and `list` is an operator diagnostic, never acceptance evidence. `none` covers Kherep guard denials only: permission rules of the runtime, auto-mode classifier denials and a guard `ask` the operator refused are not listed. That the returned agent ID equals the `agent_id` of the worker's hook payloads is UNVERIFIED until measured; a mismatch reads `unknown (journal-missing)`, never `none`. The list is evidence about the worker; it does not replace measuring the target.
+
 ## Integration state
 
 Discover capabilities from the active runtime and current installed bindings. A configured memory provider, MCP server, code graph or local model is not automatically a working one. Preserve configured memory adapters during upgrades and verify replacement and recovery behavior before retiring a backend.
