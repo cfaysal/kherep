@@ -27,6 +27,9 @@ export interface ContentBlock {
   text?: unknown;
   name?: unknown;
   input?: { command?: unknown; [key: string]: unknown } | null;
+  id?: unknown;
+  tool_use_id?: unknown;
+  is_error?: unknown;
 }
 
 // A turn below this many characters of assistant prose is treated as trivial
@@ -152,4 +155,35 @@ export function lastAssistantText(turn: TranscriptEntry[]): string {
     if (text.trim()) return text;
   }
   return "";
+}
+
+export interface Handback { id: string | null; message: string | null; result: "ok" | "error" | "unknown" }
+
+function toolResult(entries: TranscriptEntry[], id: string): ContentBlock | undefined {
+  for (const entry of entries) {
+    const msg = entry && entry.message;
+    if (!msg || msg.role !== "user") continue;
+    const found = contentBlocks(msg).find((b) => b && b.type === "tool_result" && b.tool_use_id === id);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+// Issue #555. The last SubagentHandback call of a subagent transcript, and
+// whether a tool_result after it shows that it executed: "ok", "error"
+// (is_error true) or "unknown" (no result yet, or a call without an id). The
+// block shapes follow this repository's transcript fixtures; the Claude hooks
+// reference documents no transcript format.
+export function lastHandback(entries: TranscriptEntry[]): Handback | null {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const msg = entries[i] && entries[i]!.message;
+    if (!msg || msg.role !== "assistant") continue;
+    const call = contentBlocks(msg).find((b) => b && b.type === "tool_use" && b.name === "SubagentHandback");
+    if (!call) continue;
+    const id = typeof call.id === "string" ? call.id : null;
+    const message = call.input && typeof call.input.message === "string" ? call.input.message : null;
+    const answer = id === null ? undefined : toolResult(entries.slice(i + 1), id);
+    return { id, message, result: answer ? (answer.is_error === true ? "error" : "ok") : "unknown" };
+  }
+  return null;
 }

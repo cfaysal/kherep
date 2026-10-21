@@ -201,6 +201,25 @@ increments the minor version; every other release increments the patch version.
   suites `claude/hooks/hook-runtime-fault-*.test.mts` inject SQLite
   auto-rollback, ENOSPC, EACCES, spawn failures and the last-resort catches
   through `fault-preload.fixture.mts` and in-process patches.
+- Observation result check at the handback (issue #555). Since Claude Code
+  v2.1.271 an auto-mode subagent delivers its report through
+  `SubagentHandback`, and `last_assistant_message` at `SubagentStop` holds only
+  its closing text, so `obs-result-check.mts` could block a delivered report or
+  pass a wrong one. A new `PostToolUse` hook, `obs-handback-record.mts`, matched
+  on `SubagentHandback`, now checks a `claude-obs` report where it is
+  delivered, records the verdict under
+  `<CLAUDE_HOME>/.cache/obs-result-check/<agent_id>.delivered` and gives the
+  operator the `failed` and still-malformed notices. `obs-result-check.mts`
+  reads that state first, waits up to 2 s for it when a handback is plausible,
+  never blocks when Claude Code reports `permission_mode` `auto` or when the
+  subagent transcript shows a handback, and keeps its `last_assistant_message`
+  path, block included, for subagents without the tool. A malformed handback
+  is reported, not refused: whether a refused handback would be retried is
+  UNKNOWN until measured, and an observation run follows nearly every turn.
+  The stop hook writes a fixed-key trace, `<agent_id>.stop`, for that host
+  measurement and prunes the directory after 24 h. The `SubagentStop` group
+  gets a 30 s timeout. Codex is unchanged: its hooks reference has no
+  `SubagentHandback`.
 - Windows: `writeJsonAtomic` (daemon.json, inbox records, task and session
   records, receipt.json) retries the replace-by-rename on `EPERM`, `EBUSY` and
   `EACCES` up to 8 attempts with 10–640 ms backoff (1.27 s in total) while

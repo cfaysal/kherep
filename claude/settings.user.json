@@ -103,6 +103,16 @@
             "command": "node \"__KHEREP_REPO__/modules/control-plane/node/attribution-hook.mts\""
           }
         ]
+      },
+      {
+        "matcher": "SubagentHandback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/obs-handback-record.mts\"",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -221,7 +231,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/obs-result-check.mts\""
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" reader \"__KHEREP_CLAUDE_HOME__/hooks/obs-result-check.mts\"",
+            "timeout": 30
           }
         ]
       }

@@ -39,6 +39,8 @@ hooks/observation-stop.mts
 hooks/observation-stop.test.mts
 hooks/obs-result-check.mts
 hooks/obs-result-check.test.mts
+hooks/obs-handback-record.mts
+hooks/obs-handback-record.test.mts
 hooks/research-first.mts
 hooks/research-first.test.mts
 hooks/research-stop.mts
@@ -51,6 +53,8 @@ hooks/lib/obs-brief-policy.mts
 hooks/lib/obs-brief-policy.test.mts
 hooks/lib/obs-result-policy.mts
 hooks/lib/obs-result-policy.test.mts
+hooks/lib/obs-handback-state.mts
+hooks/lib/obs-handback-state.test.mts
 hooks/lib/git-commit-match.mts
 hooks/lib/git-push-match.mts
 hooks/lib/git-push-match.test.mts
@@ -64,6 +68,7 @@ hooks/lib/real-path-policy.mts
 hooks/lib/semver-compare.mts
 hooks/lib/semver-compare.test.mts
 hooks/lib/turn-substance.mts
+hooks/lib/turn-substance.test.mts
 hooks/lib/research-evidence.mts
 hooks/lib/workspace-scope.mts
 hooks/lib/workspace-scope.test.mts
