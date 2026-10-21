@@ -20,6 +20,9 @@ export interface LifecycleDependencies {
 
 // launchd ExitTimeOut (60 s) plus a margin: a daemon may wait ~50 s for a probe before it exits (#472).
 export const STOP_TIMEOUT_MS = 75_000;
+// The default poll deadline, also of the admission wait: the health stage waits this long for the new daemon's
+// authenticated connection, which no longer waits for the start maintenance (#581).
+export const HEALTH_TIMEOUT_MS = 30_000;
 const exact = (left: Buffer, right: Buffer): boolean => left.equals(right);
 const recoveryError = (code: string, message: string): Error & { code: string } => Object.assign(new Error(message), { code });
 const wait = (milliseconds: number): Promise<void> => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -30,7 +33,7 @@ export function sourceMatches(expected: SourceIdentity, actual: SourceIdentity |
 
 export function lifecycleDefaults(deps: LifecycleDependencies) {
   return { readState: deps.readDaemonState ?? defaultReadDaemonState, alive: deps.pidAlive ?? defaultPidAlive,
-    sleep: deps.sleep ?? wait, timeout: deps.timeoutMs ?? 30_000,
+    sleep: deps.sleep ?? wait, timeout: deps.timeoutMs ?? HEALTH_TIMEOUT_MS,
     stopTimeout: deps.stopTimeoutMs ?? deps.timeoutMs ?? STOP_TIMEOUT_MS, now: deps.now ?? (() => new Date().toISOString()),
     verifySource: deps.verifySource ?? ((identity: SourceIdentity) => {
       try { return sourceMatches(identity, captureSourceIdentity(identity.root, false)); } catch { return false; }

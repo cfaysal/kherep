@@ -20,7 +20,7 @@ import { readPrivateKey } from "./identity.mts";
 import { installPaused, markedProbe, noticeInterruptedProbe } from "./install-pause.mts";
 import { storeMessage } from "./inbox.mts";
 import { inboxIndex } from "./inbox-index.mts";
-import { startInboxMaintenance } from "./inbox-start.mts";
+import { MAINTENANCE_FALLBACK_MS, runInboxMaintenance, type MaintenanceOptions } from "./inbox-start.mts";
 import { scheduleListenerSweep } from "./listener-sweep.mts";
 import { loadPolicy, type NodePolicy } from "./policy.mts";
 import { routeFrame } from "./readiness-lane.mts";
@@ -77,11 +77,12 @@ export function commandHandlers(config: NodeConfig, startedAt: number,
 
 // probe: the runtime readiness probe (issue #197); tests replace it.
 // lanes: the slow-item and slow-intake log thresholds (issue #441); tests lower them.
+// maintenance: the start maintenance's fallback and slicing (issue #581); tests replace them.
 export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: string) => void = (line) => console.error(line),
   sessionSource?: (signal?: AbortSignal) => Promise<SessionInfo[]>,
   probe: (runtime: TaskRuntime, onUnconfirmedShutdown?: () => void) => Promise<ProbeResult> = (runtime, onUnconfirmedShutdown) =>
     probeRuntime(runtime, { forgetSession: (threadId) => forgetCodexSession(paths, threadId), onUnconfirmedShutdown }),
-  service?: DaemonServiceBinding, lanes: LaneOptions = {}): DaemonHandle {
+  service?: DaemonServiceBinding, lanes: LaneOptions = {}, maintenance: MaintenanceOptions = {}): DaemonHandle {
   const identity = readPrivateKey(config.privateKeyFile);
   if (identity.publicKey !== config.publicKey) throw new Error("private key does not match the enrolled public key");
   const policy = loadPolicy(config.policyFile);
@@ -93,7 +94,6 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   let state: DaemonState = { pid: process.pid, startedAt: new Date().toISOString(), source: captureRuntimeSourceIdentity(),
     ...(service ? { service } : {}), ...carriedOver(previousDaemonState(paths), noticeInterruptedProbe(paths, log), Date.now()) };
   recordDaemonState(paths, state, log);
-  startInboxMaintenance(paths, log);
   // Issue #225: locks of wake listeners whose process is gone, now and hourly.
   const stopSweep = scheduleListenerSweep(paths, log);
   // Successful listings update sessions.json and include hook-recorded Codex sessions.
@@ -110,6 +110,11 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
     const run = () => probe(runtime, () => retainServiceAdmission(admission));
     return runtime === "claude" ? markedProbe(paths, run) : run();
   }, { signal: halt.signal });
+  // Issue #581: the start maintenance (inbox-start.mts) runs once, after the first authenticated connection or the fallback.
+  let maintaining: Promise<void> | null = null;
+  const maintain = (): void => { maintaining ??= runInboxMaintenance(paths, log, { ...maintenance, signal: halt.signal })
+    .catch((error: unknown) => log(`kherep-node: start maintenance failed: ${String(error)}`)); };
+  const fallback = setTimeout(maintain, maintenance.fallbackMs ?? MAINTENANCE_FALLBACK_MS).unref();
   const sessions = recordingSessions(paths, (signal) => {
     backgroundDiscovery?.controller.abort();
     return source(signal);
@@ -127,7 +132,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   // kill that may cut a login renewal short; no new probe starts meanwhile.
   const drainProbes = (): Promise<void> => {
     const drained = readiness.stop();
-    halt.abort();
+    halt.abort(); // also stops the start maintenance (issue #581)
+    clearTimeout(fallback);
     return drained;
   };
   // Issue #427: unless a seeded ready verdict (issue #420), a drain or an install pause defers it,
@@ -308,7 +314,9 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
           attempt = 0;
           state = { ...state, connectedAt: new Date().toISOString(), disconnectedAt: undefined };
           recordDaemonState(paths, state, log);
-          log(`kherep-node: connected as ${config.nodeId}`);
+          const sinceStart = ((Date.now() - Date.parse(state.startedAt)) / 1000).toFixed(1);
+          log(`kherep-node: connected as ${config.nodeId} (${sinceStart} s after start, process up ${process.uptime().toFixed(1)} s)`);
+          maintain();
           // Session discovery may be service-drained. Start it after the
           // authenticated health record, then serialize publication back onto
           // the frame lane without fabricating an empty snapshot.

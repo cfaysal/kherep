@@ -204,6 +204,16 @@ test("F4: startDaemon settles an answered record before its purge, and its clien
   const logs: string[] = [];
   const handle = startDaemon(config, paths, (line) => logs.push(line), async () => []);
   t.after(() => handle.stop());
+  const frame = (type: "event" | "message.deliver", body: unknown, seq: number): void =>
+    listeners.get("message")?.({ data: JSON.stringify(makeEnvelope(type, body, seq, 0)) });
+  const until = async (done: () => boolean): Promise<void> => {
+    const deadline = Date.now() + 5_000;
+    while (!done() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+  // Issue #581: the start maintenance runs after the first authenticated connection.
+  listeners.get("open")?.({});
+  frame("event", { name: "auth.ok" }, 0);
+  await until(() => logs.some((line) => line.startsWith("kherep-node: start maintenance done in ")));
   assert.equal(getSent(paths, message)?.state, "replied", logs.join("\n"));
   assert.equal(getMessage(paths.inbox, id(40)), null, "the reply was purged");
   const settled = logs.indexOf("kherep-node: recorded 1 sent message(s) replied before the inbox purge");
@@ -211,13 +221,8 @@ test("F4: startDaemon settles an answered record before its purge, and its clien
 
   // On arrival (the storeMessage callback in daemon.mts): a reply through the daemon's own socket, with no hook run.
   const answered = sent(paths, 2, Date.now());
-  const frame = (type: "event" | "message.deliver", body: unknown, seq: number): void =>
-    listeners.get("message")?.({ data: JSON.stringify(makeEnvelope(type, body, seq, 0)) });
-  listeners.get("open")?.({});
-  frame("event", { name: "auth.ok" }, 0);
   frame("message.deliver", replyBody(41, answered), 1);
-  const deadline = Date.now() + 5_000;
-  while (!getMessage(paths.inbox, id(41)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  await until(() => getMessage(paths.inbox, id(41)) !== null);
   assert.ok(getMessage(paths.inbox, id(41)), logs.join("\n"));
   assert.equal(getSent(paths, answered)?.state, "replied", logs.join("\n"));
   const accepted = out.map((raw) => parseEnvelope(raw)).some((parsed) => parsed.ok && parsed.envelope.type === "message.status"
