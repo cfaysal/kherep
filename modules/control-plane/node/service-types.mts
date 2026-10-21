@@ -44,6 +44,25 @@ export const FAILED_WRITE_SNAPSHOT = Symbol("failed-service-write-snapshot");
 export type FailedServiceWrite = Error & { [FAILED_WRITE_SNAPSHOT]?: NativeServiceSnapshot };
 // A stop error with this code was raised before the adapter took any native effect (#472).
 export const STOP_NOT_ISSUED = "STOP_NOT_ISSUED";
+// #582: the reason a candidate stop failed travels as one allowlisted code; the raw message is never recorded or printed.
+export const STOP_CODES = ["STOP_BLOCKED_NATIVE_DESCENDANTS", "STOP_UNKNOWN_DESCENDANTS", "STOP_NATIVE_REFUSED",
+  "STOP_UNPROVEN_TIMEOUT", "STOP_PROCESS_UNAVAILABLE", "STOP_IDENTITY_MISMATCH", "STOP_FAILED_OTHER"] as const;
+export type StopCode = typeof STOP_CODES[number];
+const STOP_CODE_OF_MESSAGE: ReadonlyArray<[string, StopCode]> = [
+  ["STOP_BLOCKED_NATIVE_DESCENDANTS", "STOP_BLOCKED_NATIVE_DESCENDANTS"],
+  ["STOP_UNKNOWN_DESCENDANTS", "STOP_UNKNOWN_DESCENDANTS"],
+  ["launchctl could not prove the selected service stopped", "STOP_NATIVE_REFUSED"],
+  ["Scheduled Task operation failed for the selected task", "STOP_NATIVE_REFUSED"],
+  ["managed service verification timed out", "STOP_UNPROVEN_TIMEOUT"],
+  ["selected LaunchAgent process is unavailable", "STOP_PROCESS_UNAVAILABLE"],
+  ["LaunchAgent loaded pid does not match selected process", "STOP_IDENTITY_MISMATCH"],
+  ["LaunchAgent loaded definition does not match selected definition", "STOP_IDENTITY_MISMATCH"],
+  ["LaunchAgent loaded identity changed during stop preflight", "STOP_IDENTITY_MISMATCH"],
+];
+export function stopCode(error: unknown): StopCode {
+  const message = error instanceof Error ? error.message : "";
+  return STOP_CODE_OF_MESSAGE.find(([text]) => text === message)?.[1] ?? "STOP_FAILED_OTHER";
+}
 export interface ServiceStopContext { pid: number; startedAt: string; sourceRoot?: string }
 
 export interface ServiceAdapter {
