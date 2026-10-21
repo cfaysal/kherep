@@ -61,8 +61,7 @@ function stableArgs(command: string | undefined, home: string): string | undefin
   const match = STABLE.exec(command ?? "");
   return match && fs.realpathSync(match.groups!.home) === fs.realpathSync(home) ? match.groups!.args : undefined;
 }
-const controlPlane = (command: string): boolean => command.includes("claude-control-plane-hook") || command.includes("/modules/control-plane/node/")
-  || command.includes("\\modules\\control-plane\\node\\");
+const controlPlane = (command: string): boolean => /claude-control-plane-hook|[\\/]modules[\\/]control-plane[\\/]node[\\/]/.test(command);
 const wakeHook = (repo: string, seconds: number) =>
   ({ type: "command", command: `${hookCommand(repo, WAKE)} --timeout ${seconds}`, asyncRewake: true, timeout: seconds });
 
