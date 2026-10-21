@@ -332,16 +332,17 @@ increments the minor version; every other release increments the patch version.
   longer abandoned when another process is releasing it. An exclusive
   create on a lock file in the delete-pending state fails with
   `ERROR_ACCESS_DENIED`, reported by libuv as `EPERM`; the waiter now
-  treats `EPERM`, `EACCES` and `EBUSY` like `EEXIST` and keeps waiting
-  within the existing bound of 50 attempts x 4 ms (200 ms), then fails
-  closed with the fixed `storage_error` as before. Two concurrent hook runs
+  treats `EPERM` like `EEXIST` (and `EACCES` and `EBUSY` too, included
+  defensively) and keeps waiting within the existing bound of 50 attempts
+  of at least 4 ms each (at least 200 ms), then fails closed with the
+  fixed `storage_error` as before. Two concurrent hook runs
   or two server processes on one Windows host no longer deny a call
   spuriously, and the CI job `client-binding-probe (windows-latest)` no
   longer fails in `concurrent first use waits for atomic key publication`;
   that test now awaits the helper's exit on every path, so no activity
   outlives it. POSIX behaviour is unchanged except that a genuine
-  permission error on the lock file is reported after the same 200 ms wait
-  (issue #600).
+  permission error on the lock file is reported after the same wait of at
+  least 200 ms (issue #600).
 - Control Plane Worker: `agents` moves from 0.24.0 to 0.28.1, and with it
   `@modelcontextprotocol/server` and `@modelcontextprotocol/client` from
   2.0.0 to 2.3.1 and the peer-installed `@modelcontextprotocol/sdk` from

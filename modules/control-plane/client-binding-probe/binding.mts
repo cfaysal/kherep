@@ -133,9 +133,11 @@ function prune(stateDir: string, now: number): void {
 
 // Issue #600: on Windows the lock file of a holder that is releasing it is
 // delete-pending for a moment, and an exclusive create on it fails with
-// ERROR_ACCESS_DENIED, which libuv reports as EPERM (EBUSY and EACCES are the
-// neighbouring sharing codes). Those mean "still held", like EEXIST, and wait
-// out the same bound (50 x 4 ms); every other code is thrown at once.
+// ERROR_ACCESS_DENIED, which libuv reports as EPERM (CREATE_NEW on a file that
+// simply exists gives EEXIST). EBUSY and EACCES are included defensively (issue
+// acceptance, #540 precedent); neither is observed or documented for an
+// exclusive create. These codes mean "still held" and wait out the same bound
+// (50 attempts of at least 4 ms); every other code is thrown at once.
 export const LOCK_HELD_CODES: ReadonlySet<string> = new Set(["EEXIST", "EPERM", "EACCES", "EBUSY"]);
 export const LOCK_ATTEMPTS = 50;
 const LOCK_PAUSE_MS = 4;
