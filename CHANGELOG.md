@@ -351,11 +351,11 @@ increments the minor version; every other release increments the patch version.
   write left no marker, and a later `render` could read a count or `none`
   for a worker whose line was lost. The marker write is now awaited until
   the hook deadline less 250 ms (about 8.25 s after the hook process
-  starts); the journal lib keeps its 600 ms. A write that never settles
-  still holds the deny until that deadline instead of 1 s, and still
-  leaves no marker. The shell
-  dispatcher is unchanged: it exits when its event loop drains, so its
-  marker landed already; a test pins it.
+  starts, 13.25 s in the intent phase); the journal lib keeps its 600 ms.
+  A write that never settles still holds the deny until that deadline
+  instead of 1 s, and still leaves no marker. The shell dispatcher is
+  unchanged: it exits when its event loop drains, so its marker landed
+  already; a test pins it.
   The test fixture gains the fault `marker-slow` (an append on `*.failed`
   that settles after 700 ms), which is red against the previous adapter.
 - Client binding probe: on Windows the lock that serialises intent creation
