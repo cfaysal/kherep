@@ -23,6 +23,8 @@ export interface StableForm {
   // The only admitted entry directory, from the canonical home.
   entryDir: (home: string) => string;
   pointerFile: (home: string) => string;
+  // The resolver of the runtime's own entry point.
+  resolveHook: typeof claudeEntry.resolveHook | typeof codexEntry.resolveHook;
   // The file the installer copies the entry point from, under the pointer's root.
   sourceEntry: string[];
   // Groups: entry (quoted) or bare (unquoted) for the entry path, name for the hook name.
@@ -35,7 +37,7 @@ export interface StableForm {
 export const CODEX: StableForm = {
   label: "Codex", installer: "codex/install.mts", entryName: codexEntry.ENTRY_NAME,
   entryDir: (home: string) => path.join(home, "hooks", "kherep-maestro"),
-  pointerFile: codexEntry.pointerFile,
+  pointerFile: codexEntry.pointerFile, resolveHook: codexEntry.resolveHook,
   sourceEntry: ["codex", "hooks", "control-plane-hook.mts"],
   command: /"(?<entry>[^"\n]*[\\/]codex-control-plane-hook\.mts)"\s+"(?<name>deliver|attribution)"/,
   counted: { deliver: "deliver" },
@@ -46,7 +48,7 @@ export const CODEX: StableForm = {
 export const CLAUDE: StableForm = {
   label: "Claude", installer: "bootstrap/install.sh", entryName: claudeEntry.ENTRY_NAME,
   entryDir: (home: string) => path.join(home, "kherep", "control-plane"),
-  pointerFile: claudeEntry.pointerFile,
+  pointerFile: claudeEntry.pointerFile, resolveHook: claudeEntry.resolveHook,
   sourceEntry: ["claude", "kherep", "control-plane", "claude-control-plane-hook.mts"],
   command: /^node\s+(?:"(?<entry>[^"\n]*)"|(?<bare>\S+))\s+(?<name>deliver|wake|attribution)(?:\s|$)/,
   counted: { deliver: "deliver", wake: "wake" },
@@ -63,7 +65,7 @@ export function stableCommand(form: StableForm, command: string): { entry: strin
 
 // The pointer of a home, read through the same resolver its entry point uses.
 export function pointerRoot(form: StableForm, home: string): { root?: string; status: PointerStatus } {
-  const resolved = (form === CODEX ? codexEntry.resolveHook : claudeEntry.resolveHook)("deliver", form.pointerFile(home));
+  const resolved = form.resolveHook("deliver", form.pointerFile(home));
   if ("hook" in resolved) return { root: resolved.pointer.root, status: "valid" };
   return { status: resolved.reason === "missing" || resolved.reason === "invalid" ? resolved.reason : "unresolved" };
 }
