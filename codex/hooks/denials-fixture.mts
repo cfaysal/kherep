@@ -1,6 +1,7 @@
 // Shared fixture of the Codex denied-call suites (issue #504): a temporary Codex home laid out as an
 // installation, <home>/hooks/kherep-maestro with both adapter copies and their modules (copyAdapter), the shell dispatcher, synthetic
 // guards and the journal lib beside them, as codex/install.mts installs claude/hooks/lib there.
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -55,5 +56,13 @@ export const shellPayload = (extra: Record<string, unknown> = {}): string => JSO
 
 export const exit2 = (tag: string): string => `process.stderr.write("[${tag}] ${tag} says no\\n");\nprocess.exit(2);\n`;
 
-// A run's stdout with its home's path replaced, so runs in two homes compare.
-export const scrub = (stdout: string, home: CodexHome): string => stdout.replaceAll(home.root, "<home>");
+// A run's stdout with its fixture directory's name (codex-denials-<random>) replaced, so runs in
+// two homes compare whatever spelling of the temp root precedes it (on Windows an 8.3 short form).
+export const scrub = (stdout: string, home: CodexHome): string => stdout.replaceAll(path.basename(home.root), "<fixture>");
+
+// Two runs in two homes gave the same answer: the decision part byte for byte, the whole document after scrub.
+export function assertSameAnswer(result: Run, home: CodexHome, reference: Run, referenceHome: CodexHome): void {
+  const decision = (stdout: string): string => JSON.stringify((JSON.parse(stdout) as { hookSpecificOutput?: unknown }).hookSpecificOutput);
+  assert.equal(decision(result.stdout), decision(reference.stdout), "the decision part is byte-equal");
+  assert.equal(scrub(result.stdout, home), scrub(reference.stdout, referenceHome));
+}
