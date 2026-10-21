@@ -102,7 +102,7 @@ test("wake and attribution are the other fixed names; a source pin needs its man
   const refused = f.run(["wake", "--timeout", "86400"]);
   assert.equal(refused.status, 1);
   assert.equal(refused.stdout, "");
-  assert.match(refused.stderr, /^kherep control-plane-hook: the pointer's source pin has no manifest; pointer .+; run bootstrap\/install\.sh\n$/);
+  assert.match(withoutTypeStrippingWarning(refused.stderr, 1), /^kherep control-plane-hook: the pointer's source pin has no manifest; pointer .+; run bootstrap\/install\.sh\n$/);
   assert.equal(f.ran(), undefined);
 
   fs.writeFileSync(path.join(pin, ".kherep-source.json"), "{}");
@@ -162,7 +162,7 @@ test("the entry point fails closed and never falls back to another source", (t) 
     const result = f.run(args, { KHEREP_WORKSPACE: workspace });
     assert.equal(result.status, 1, label);
     assert.equal(result.stdout, "", label);
-    assert.match(result.stderr, FAIL_LINE, label);
+    assert.match(withoutTypeStrippingWarning(result.stderr, 1), FAIL_LINE, label);
     assert.equal(f.ran(), undefined, `${label}: no hook ran`);
   }
 });
@@ -184,6 +184,10 @@ test("a hook that does not load exits 1 with the fail-closed line and the error'
 
 // The entry adds no process and no Node option, so the hook's stderr, warnings
 // of every category included, reaches the caller exactly as from a direct call.
+// The one exception is where the floor Node versions (24.1) put their single
+// type-stripping notice per process: the stable form loads the .mts entry first,
+// so the notice comes before the hook's output, not after it. That notice is
+// dropped once from each side; a second one would still fail.
 test("the stable form's stderr and exit code equal the path form's, warnings included", (t) => {
   const f = fixture(t);
   const r = f.source("R", "R", "deliver-hook.mts", `process.emitWarning("SYNTHETIC_UNRELATED_WARNING", "ExperimentalWarning");
@@ -195,7 +199,7 @@ process.exitCode = 3;
   const options = { input: "{}", encoding: "utf8" as const, cwd: f.cwd, env: { ...f.env, KHEREP_CONFIG_DIR: f.configDir }, timeout: 20_000 };
   const direct = spawnSync(process.execPath, [hook], options);
   const stable = f.run(["deliver"], {}, "{}");
-  const pids = (text: string) => text.replace(/\(node:\d+\)/g, "(node:PID)");
+  const pids = (text: string) => withoutTypeStrippingWarning(text, 1).replace(/\(node:\d+\)/g, "(node:PID)");
 
   assert.equal(stable.status, direct.status);
   assert.equal(stable.status, 3);
