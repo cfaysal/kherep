@@ -21,6 +21,8 @@ const deferred = () => {
   return { promise, resolve };
 };
 const turn = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+// The connected line and the start maintenance's closing line (issue #581) are expected; nothing else is.
+const unexpected = (line: string): boolean => !line.includes("connected as") && !line.startsWith("kherep-node: start maintenance done in ");
 async function until(predicate: () => boolean, label: string): Promise<void> {
   const timeout = AbortSignal.timeout(5_000);
   while (!predicate()) {
@@ -171,7 +173,7 @@ async function characterize(variant: Scenario): Promise<void> {
     storedOnce(); unfinished();
     assert.deepEqual(leases(), [retained, ...discoveryLease].sort(), "both exact admissions survive independent intake");
     assert.equal(serviceAdmissionsIdle(paths, probe), false);
-    assert.deepEqual(logs.filter(line => !line.includes("connected as")), []);
+    assert.deepEqual(logs.filter(unexpected), []);
     if (variant === "proof-before-discovery") {
       proof.resolve();
       await until(() => !fs.existsSync(path.join(admissionDir, retained)), "only retained lease releases");
@@ -198,7 +200,7 @@ async function characterize(variant: Scenario): Promise<void> {
       "discovery-finished", "intent-published", ...(variant === "proof-after-discovery" ? ["retained-released"] : [])];
     assert.deepEqual(events, expected);
     assert.deepEqual(forbidden, [], "no native operation may be swallowed by production error handling");
-    assert.deepEqual(logs.filter(line => !line.includes("connected as")), []);
+    assert.deepEqual(logs.filter(unexpected), []);
     console.log(`INBOUND_DELAY_PASS ${variant} ${JSON.stringify(events)}`);
   } finally {
     armed = false; gate.resolve(); proof.resolve();

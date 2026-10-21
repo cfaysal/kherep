@@ -15,8 +15,12 @@ import {
 // never dropped while its sender could still see it accepted (issue #195): a
 // waiting one is refused first, and a final one stays until a receipt confirms
 // that state, or for one more retention period when no receipt comes. It walks
-// the listing taken when it starts; an entry gone since then is skipped.
-export function* purgeInboxSteps(dir: string, now: number = Date.now(), maxAgeMs: number = INBOX_RETENTION_MS): Generator<void, number> {
+// the listing taken when it starts; an entry gone since then is skipped, and
+// so is one written at or after touchedSince (wall clock): the sliced pass
+// leaves a record another writer changed during the pass, such as a refusal
+// not yet reported (#195), to the next start.
+export function* purgeInboxSteps(dir: string, now: number = Date.now(), maxAgeMs: number = INBOX_RETENTION_MS,
+  touchedSince = Infinity): Generator<void, number> {
   let entries: string[];
   try {
     entries = fs.readdirSync(dir);
@@ -35,6 +39,7 @@ export function* purgeInboxSteps(dir: string, now: number = Date.now(), maxAgeMs
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
     }
+    if (received >= touchedSince) continue;
     let record: InboxRecord | null = null;
     if (name.endsWith(".json")) {
       try {
