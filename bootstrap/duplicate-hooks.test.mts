@@ -61,6 +61,26 @@ test("the same script in two groups of one event, or spelled with backslashes, i
 // advice to install again holds. The installer template wires deliver-hook on
 // UserPromptSubmit, Stop, StopFailure and PostToolUse, wake-hook on
 // SessionStart, UserPromptSubmit and Stop, attribution-hook on PostToolUse.
+// Issue #592. The stable entry form has the key of the script its name selects:
+// the path form and the stable form of one script on one event are one script
+// twice; the stable set alone is clean.
+const STABLE = 'node "/Users/x/.claude/kherep/control-plane/claude-control-plane-hook.mts"';
+const stable = (name: string, args = "") => ({ type: "command", command: `${STABLE} ${name}${args}` });
+
+test("the path form and the stable form of one script on one event are a duplicate; the stable set alone is clean", () => {
+  const mixed = { hooks: { Stop: [{ matcher: "", hooks: [cp(PIN, "deliver-hook.mts"), stable("deliver"), stable("wake", " --timeout 86400")] }] } };
+  assert.deepEqual(duplicateControlPlaneHooks(mixed, "darwin").map((item) => `${item.event} ${item.script} x${item.count}`),
+    ["Stop modules/control-plane/node/deliver-hook x2"]);
+  const installed = { hooks: {
+    SessionStart: [{ matcher: "", hooks: [stable("wake", " --timeout 86400")] }],
+    UserPromptSubmit: [{ matcher: "", hooks: [stable("deliver"), stable("wake", " --timeout 86400")] }],
+    Stop: [{ matcher: "", hooks: [own, stable("deliver"), stable("wake", " --timeout 86400")] }],
+    StopFailure: [{ matcher: "", hooks: [stable("deliver")] }],
+    PostToolUse: [{ matcher: "", hooks: [stable("deliver")] }, { matcher: "Bash|PowerShell", hooks: [stable("attribution")] }],
+  } };
+  assert.deepEqual(duplicateControlPlaneHooks(installed, "darwin"), []);
+});
+
 test("a control-plane script twice on an event the template does not wire it for, or an unmanaged script, is no finding", () => {
   const twice = (script: string) => [{ matcher: "", hooks: [cp(CHECKOUT, script), cp(PIN, script)] }];
   assert.deepEqual(duplicateControlPlaneHooks({ hooks: {
