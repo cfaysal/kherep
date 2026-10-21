@@ -85,7 +85,9 @@ export function fakeAppServer(scenario: ForkScenario) {
         run.endedAt = Date.now();
         child.exitCode = signal ? null : 0;
         child.signalCode = signal ?? null;
-        setImmediate(() => { child.emit("exit", child.exitCode, child.signalCode); child.emit("close", child.exitCode, child.signalCode); });
+        // On the next tick, not a loop turn later: the clean close of codex-app-server-client.mts races its
+        // graceMs timer against this end, and a stalled loop turn under load lost that race (issue #565).
+        process.nextTick(() => { child.emit("exit", child.exitCode, child.signalCode); child.emit("close", child.exitCode, child.signalCode); });
       } });
     children.push(child);
     const owner = scenario.owner ?? FORK_OWNER, fork = scenario.forkId ?? FORK_ID;
@@ -160,7 +162,7 @@ export function fakeAppServer(scenario: ForkScenario) {
     });
     stdin.on("finish", () => {
       for (const note of scenario.onClose?.(fork) ?? []) send(note);
-      if (!scenario.ignoreEnd) setImmediate(() => child.end());
+      if (!scenario.ignoreEnd) child.end();
     });
     return child as never;
   }) as AppServerSpawn;

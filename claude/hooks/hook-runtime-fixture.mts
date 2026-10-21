@@ -122,6 +122,8 @@ export const until = async (check: () => boolean, ms = 10_000): Promise<boolean>
   return check();
 };
 
+// pid 0 would signal this process group and always report alive (issue #565): no process id is an error here.
 export function alive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error(`alive(${pid}): not a process id`);
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
