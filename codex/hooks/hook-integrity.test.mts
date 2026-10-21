@@ -8,7 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { before, test } from "node:test";
 
-import { ALWAYS_CHECK, checkoutOf, hookCommandParts, lib, loadLibs, sourceOf, wiredHookFiles } from "./hook-integrity.mts";
+import { checkoutOf, hookCommandParts, lib, loadLibs, wiredHookFiles } from "./hook-integrity.mts";
+import { ALWAYS_CHECK, sourceOf } from "./hook-integrity-sources.mts";
 
 const REPO = path.resolve(import.meta.dirname, "..", "..").replace(/\\/g, "/");
 

@@ -257,6 +257,8 @@ export function install(options: InstallOptions = {}) {
     privacyHook: path.join(sourceRoot, "hooks", "privacy-boundary-guard.mts"),
     confluenceDeliveryHook: path.join(sourceRoot, "hooks", "confluence-delivery-check.mts"),
     integrityHook: path.join(sourceRoot, "hooks", "hook-integrity.mts"),
+    integrityRepair: path.join(sourceRoot, "hooks", "hook-integrity-repair.mts"),
+    integritySources: path.join(sourceRoot, "hooks", "hook-integrity-sources.mts"),
     controlPlane: path.join(repoRoot, "modules", "control-plane"),
     researchFirstHook: path.join(sourceRoot, "hooks", "research-first.mts"),
     researchStopHook: path.join(sourceRoot, "hooks", "research-stop.mts"),
@@ -555,6 +557,8 @@ export function install(options: InstallOptions = {}) {
     transaction.copyFile(sources.confluenceDeliveryHook, path.join(targets.hookDir, "codex-confluence-delivery-check.mts"));
     // Issue #275. Its libs are the claude/hooks/lib copy installed above.
     transaction.copyFile(sources.integrityHook, path.join(targets.hookDir, "codex-hook-integrity.mts"));
+    transaction.copyFile(sources.integrityRepair, path.join(targets.hookDir, "hook-integrity-repair.mts"));
+    transaction.copyFile(sources.integritySources, path.join(targets.hookDir, "hook-integrity-sources.mts"));
     if (messagingClient.enabled) {
       for (const relative of [
         "protocol.mts", "protocol-mcp.mts", "protocol-messages.mts", "protocol-task-control.mts", "protocol-tasks.mts",
