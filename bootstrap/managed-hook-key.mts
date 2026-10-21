@@ -56,9 +56,10 @@ const CONTROL_PLANE_DIR = "/modules/control-plane/node/";
 
 export function controlPlaneHookKey(command: string, platform: string = process.platform): string | undefined {
   const match = CONTROL_PLANE_SCRIPT.exec(command);
-  const script = (match?.[1] ?? match?.[2])?.replace(/\\/g, "/");
-  const at = script?.lastIndexOf(CONTROL_PLANE_DIR) ?? -1;
-  if (script === undefined || at < 0) return undefined;
+  if (!match) return undefined;
+  const script = (match[1] ?? match[2]).replace(/\\/g, "/");
+  const at = script.lastIndexOf(CONTROL_PLANE_DIR);
+  if (at < 0) return undefined;
   const key = script.slice(at + 1).replace(/\.(?:js|mjs|cjs|mts)$/, "");
   if (key === CONTROL_PLANE_DIR.slice(1)) return undefined;
   return platform === "win32" ? key.toLowerCase() : key;

@@ -28,7 +28,8 @@ export function duplicateControlPlaneHooks(settings: { hooks?: unknown }, platfo
     for (const entry of entries) {
       const list = (entry as { hooks?: unknown } | null)?.hooks;
       for (const hook of (Array.isArray(list) ? list : []) as { command?: unknown }[]) {
-        const script = typeof hook?.command === "string" ? controlPlaneHookKey(hook.command, platform) : undefined;
+        if (typeof hook?.command !== "string") continue;
+        const script = controlPlaneHookKey(hook.command, platform);
         if (script !== undefined) counts.set(script, (counts.get(script) ?? 0) + 1);
       }
     }
