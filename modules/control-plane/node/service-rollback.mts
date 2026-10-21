@@ -102,7 +102,7 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
         blocker = recoveryBlocker(error);
         if (blocker === "RECOVERY_CANDIDATE_LOADED" && previousSnapshot) {
           const d = snapshotDigests(previousSnapshot);
-          if (!(d.definitionDigest === receipt.definitionDigest && d.securityDigest === receipt.securityDigest)) {
+          if (d.definitionDigest !== receipt.definitionDigest || d.securityDigest !== receipt.securityDigest) {
             try {
               writeServiceCandidate(input.paths, { version: 1, binding: priorBinding, ...d, backupId: safety.id, command: "rollback", stage,
                 blocker, stopCode: (error as Partial<CandidateLoadedError>).stopCode ?? "STOP_FAILED_OTHER", failedAt: deps.now() });

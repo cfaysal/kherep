@@ -7,6 +7,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { runService } from "./service-cli.mts";
+import { configuredDefinitionDigest } from "./service-configured-digest.mts";
 import {
   candidateFile, failedAdoptInstall, failedFreshInstall, failedUpgrade, readRecord, status, tamper,
 } from "./service-candidate-fixture.mts";
@@ -158,26 +159,25 @@ test("T7(f): status without a receipt reports a recorded install candidate", asy
 });
 
 test("T7(g): the configured digest reads only a regular file and never throws", async (t) => {
-  const configured = await import("./service-configured-digest.mts");
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "kherep-configured-digest-")));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const binding = darwinReceipt(root).binding;
   const home = path.join(root, "home");
   const file = path.join(home, "Library", "LaunchAgents", `${LABEL}.plist`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  assert.equal(configured.configuredDefinitionDigest(binding, home), null, "absent");
+  assert.equal(configuredDefinitionDigest(binding, home), null, "absent");
   fs.writeFileSync(path.join(root, "evil.plist"), "EVIL");
   let linked = true;
   try { fs.symlinkSync(path.join(root, "evil.plist"), file); } catch { linked = false; } // Windows without the symlink privilege
-  if (linked) { assert.equal(configured.configuredDefinitionDigest(binding, home), null, "symlink"); fs.rmSync(file); }
+  if (linked) { assert.equal(configuredDefinitionDigest(binding, home), null, "symlink"); fs.rmSync(file); }
   fs.mkdirSync(file);
-  assert.equal(configured.configuredDefinitionDigest(binding, home), null, "directory");
+  assert.equal(configuredDefinitionDigest(binding, home), null, "directory");
   fs.rmdirSync(file);
   fs.writeFileSync(file, "GOOD");
   const good = snapshotDigests({ definition: Buffer.from("GOOD"), security: Buffer.alloc(0), running: false }).definitionDigest;
-  assert.equal(configured.configuredDefinitionDigest(binding, home), good, "regular file");
-  assert.equal(configured.configuredDefinitionDigest({ ...binding, serviceName: "../x" }, home), null, "invalid name");
-  assert.equal(configured.configuredDefinitionDigest({ ...binding, platform: "win32" }, home), null, "win32");
+  assert.equal(configuredDefinitionDigest(binding, home), good, "regular file");
+  assert.equal(configuredDefinitionDigest({ ...binding, serviceName: "../x" }, home), null, "invalid name");
+  assert.equal(configuredDefinitionDigest({ ...binding, platform: "win32" }, home), null, "win32");
   const escape = await run(t, darwinReceipt(root, "../escape"), {});
   assert.deepEqual([escape.exit, escape.report.configured], [1, "unknown"]);
   assert.equal(escape.text.includes("x582leak"), false);
