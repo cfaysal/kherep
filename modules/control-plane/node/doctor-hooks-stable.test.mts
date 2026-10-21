@@ -141,7 +141,7 @@ test("a stable command with an unusable pointer turns the check red beside valid
 
     const check = checkHooks(f.files, f.repo);
 
-    assert.deepEqual(check.claude, { present: true, deliver: 1, wake: 0, foreign: [] });
+    assert.deepEqual(check.claude, { present: true, deliver: 1, wake: 0, foreign: [], pointer: "missing", stable: 0, legacy: 1 });
     assert.equal(check.ok, false, JSON.stringify(pointer ?? "missing"));
     assert.match(String(check.detail), /^the Codex control-plane source pointer is (missing|invalid|unresolved); run codex\/install\.mts$/);
     assert.equal(codexPostToolHookInstalled(f.codex, f.repo), false);
