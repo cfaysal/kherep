@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { withoutTypeStrippingWarning } from "../lib/node-warning-fixture.mts";
+import { copyAdapter } from "./hook-adapter.fixture.mts";
 
 const PROCESSES = 4; // the dispatcher and its three guards, each warning at most once
 
@@ -25,7 +26,8 @@ function fixture(t: import("node:test").TestContext) {
   const home = path.join(root, "codex");
   const hookDir = path.join(home, "hooks", "kherep-maestro");
   fs.mkdirSync(hookDir, { recursive: true });
-  for (const name of ["shell-checks", "hook-adapter"]) fs.copyFileSync(path.join(import.meta.dirname, `${name}.mts`), path.join(hookDir, `${name}.mts`));
+  fs.copyFileSync(path.join(import.meta.dirname, "shell-checks.mts"), path.join(hookDir, "shell-checks.mts"));
+  copyAdapter(hookDir);
   const entry = path.join(hookDir, "codex-control-plane-hook.mts");
   fs.copyFileSync(path.join(import.meta.dirname, "control-plane-hook.mts"), entry);
   const trace = path.join(root, "trace.jsonl");
@@ -44,7 +46,7 @@ export function handleAttributionHook(payload,runtime){fs.appendFileSync(${JSON.
   fs.writeFileSync(pointer, JSON.stringify({ version: 1, root: source, kind: "checkout", verified: true }));
   // Issue #507, part 4. This installed layout re-checks hook integrity unless the heartbeat is
   // fresh and records both adapter copies as they are; these cases are about attribution only.
-  fs.copyFileSync(path.join(import.meta.dirname, "hook-adapter.mts"), path.join(hookDir, "codex-hook-adapter.mts"));
+  copyAdapter(hookDir, "codex-hook-adapter.mts");
   fs.mkdirSync(path.join(hookDir, "lib"));
   fs.copyFileSync(path.join(import.meta.dirname, "..", "..", "claude", "hooks", "lib", "guard-recheck.mts"), path.join(hookDir, "lib", "guard-recheck.mts"));
   const peers = Object.fromEntries(["codex-hook-adapter.mts", "hook-adapter.mts"].map((name) => {

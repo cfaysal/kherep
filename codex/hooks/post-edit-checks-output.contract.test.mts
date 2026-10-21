@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
+import { copyAdapter } from "./hook-adapter.fixture.mts";
+
 const HERE = import.meta.dirname;
 const SOURCE = path.join(HERE, "post-edit-checks.mts");
 const SHARED = path.resolve(HERE, "../../claude/hooks");
@@ -21,10 +23,11 @@ function materialize(destination = INSTALLED): string {
   assert.ok(fs.existsSync(SOURCE), "the fixed post-edit dispatcher must exist");
   fs.mkdirSync(path.join(destination, "lib"), { recursive: true });
   for (const dependency of [
-    "post-edit-checks.mts", "post-edit-tool-calls.mts", "hook-adapter.mts", "research-exec-parser.mts",
+    "post-edit-checks.mts", "post-edit-tool-calls.mts", "research-exec-parser.mts",
   ]) {
     fs.copyFileSync(path.join(HERE, dependency), path.join(destination, dependency));
   }
+  copyAdapter(destination);
   for (const watcher of WATCHERS) {
     fs.copyFileSync(path.join(SHARED, `${watcher}.mts`), path.join(destination, `${watcher}.mts`));
   }

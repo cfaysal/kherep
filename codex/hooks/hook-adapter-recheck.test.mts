@@ -13,6 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
+import { copyAdapter } from "./hook-adapter.fixture.mts";
 
 const MIN = 60_000;
 const REPO = path.resolve(import.meta.dirname, "..", "..");
@@ -78,7 +79,7 @@ function box(t: TestContext, heartbeatAgeMs: number | null): Box {
   fs.mkdirSync(path.join(dir, "lib"), { recursive: true });
   fs.mkdirSync(path.join(root, "pristine"));
   const adapter = path.join(dir, "codex-hook-adapter.mts");
-  fs.copyFileSync(path.join(import.meta.dirname, "hook-adapter.mts"), adapter);
+  copyAdapter(dir, "codex-hook-adapter.mts");
   const peer = path.join(dir, "codex-shell-checks.mts");
   fs.copyFileSync(path.join(import.meta.dirname, "shell-checks.mts"), peer);
   fs.copyFileSync(peer, path.join(root, "pristine", "codex-shell-checks.mts"));
