@@ -402,27 +402,6 @@ increments the minor version; every other release increments the patch version.
   `path.resolve` gives it, on Windows with backslashes, so every
   captured command under the Claude home kept the machine path instead of
   `~/.claude`. Both forms are folded now.
-- Claude hook writers: the capture-failed marker of the denied-call journal
-  (`<CLAUDE_HOME>/.cache/denied-calls/<agent_id>.failed`) is on disk when the
-  hook process has exited (issue #614, the Claude side of #612). The guard
-  dispatcher, the hook runtime entry (for its own denies) and the delivery
-  recorder each gave the marker write a fixed 400 ms slice and then exited
-  through `process.exit`, which abandons a pending `fs.promises` write; a
-  slow write left no marker, and a later `render` could read a count or
-  `none` for a worker whose line was lost. The marker write is now awaited
-  until each writer's own deadline: the dispatcher's, at most 25 s after
-  its start; the entry's `OUTER_DEADLINE - 2_000`, 26 s after its start; and in the
-  delivery recorder a new deadline 5.5 s after its process start (its entry
-  has `timeout` 10, and the entry's Node start precedes its clock). The
-  journal writes keep their caps (1.5 s, 0.5 s in the entry). The
-  recorder's rename retry for `EPERM`, `EACCES` and `EBUSY` now runs up to
-  that deadline instead of 0.4 s. A write that never settles still leaves
-  no marker and now holds the decision until that deadline, which ends
-  before Claude Code's hook `timeout` as long as each Node start stays
-  within the assumed 2 s. The fixture fault
-  `marker-slow` now also fails the journal append with `ENOSPC`, so a
-  writer without a journal lib seam reaches its marker path; the three new
-  tests are red against the previous writers.
 - Client binding probe: on Windows the lock that serialises intent creation
   and verification (`locks/create.lock`, `locks/<requestId>.lock`) is no
   longer abandoned when another process is releasing it. An exclusive
@@ -978,6 +957,27 @@ increments the minor version; every other release increments the patch version.
   `decide()` in the test process and plants the record after the call returns
   its promise, which is after the hook's first read and before its first poll,
   so the order no longer depends on how fast Node starts. Test code only.
+- Claude hook writers: the capture-failed marker of the denied-call journal
+  (`<CLAUDE_HOME>/.cache/denied-calls/<agent_id>.failed`) is on disk when the
+  hook process has exited (issue #614, the Claude side of #612). The guard
+  dispatcher, the hook runtime entry (for its own denies) and the delivery
+  recorder each gave the marker write a fixed 400 ms slice and then exited
+  through `process.exit`, which abandons a pending `fs.promises` write; a
+  slow write left no marker, and a later `render` could read a count or
+  `none` for a worker whose line was lost. The marker write is now awaited
+  until each writer's own deadline: the dispatcher's, at most 25 s after
+  its start; the entry's `OUTER_DEADLINE - 2_000`, 26 s after its start; and in the
+  delivery recorder a new deadline 5.5 s after its process start (its entry
+  has `timeout` 10, and the entry's Node start precedes its clock). The
+  journal writes keep their caps (1.5 s, 0.5 s in the entry). The
+  recorder's rename retry for `EPERM`, `EACCES` and `EBUSY` now runs up to
+  that deadline instead of 0.4 s. A write that never settles still leaves
+  no marker and now holds the decision until that deadline, which ends
+  before Claude Code's hook `timeout` as long as each Node start stays
+  within the assumed 2 s. The fixture fault
+  `marker-slow` now also fails the journal append with `ENOSPC`, so a
+  writer without a journal lib seam reaches its marker path; the three new
+  tests are red against the previous writers.
 
 ## [0.4.0] - 2026-10-18
 
