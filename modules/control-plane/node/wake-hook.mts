@@ -24,16 +24,16 @@ import { auditGranted, unlistedGrants } from "./wake-reply.mts";
 // Wakes an idle Claude Code session when a peer message arrives (issue #31).
 // Installed with "asyncRewake": true on SessionStart, UserPromptSubmit and
 // Stop, with the same number as "timeout" and as --timeout. Contract, from
-// https://code.claude.com/docs/en/hooks (fetched 2026-09-25):
+// https://code.claude.com/docs/en/hooks (fetched 2026-10-21):
 // - asyncRewake "runs in the background and wakes Claude on exit code 2. The
 //   hook's stderr, or stdout if stderr is empty, is shown to Claude as a
 //   system reminder" ("Command hook fields").
 // - "an asyncRewake hook that exits with code 2 wakes Claude immediately even
 //   when the session is idle" ("Limitations"), and "Claude Code still enforces
-//   timeout on a hook you run with asyncRewake".
-// - "Each execution creates a separate background process. There is no
-//   deduplication", so each arming takes over a per-session lock and the
-//   listener it replaces, recognising a foreign token, stands down by itself.
+//   timeout on a hook you run with asyncRewake" ("Configure an async hook").
+// - "Each execution creates a separate background process" ("Limitations"),
+//   so each arming takes over a per-session lock and the listener it
+//   replaces, recognising a foreign token, stands down by itself.
 // - UserPromptSubmit hooks default to a 30 s timeout ("UserPromptSubmit"), so
 //   that entry states its timeout explicitly.
 // Measured on Claude Code 2.1.273 (macOS, 2026-09-25): the woken turn fires
