@@ -21,6 +21,7 @@ hooks/hook-runtime-child.mts
 hooks/hook-runtime-db.test.mts
 hooks/hook-runtime-intent.test.mts
 hooks/hook-runtime-entry.test.mts
+hooks/hook-runtime-entry-denials.test.mts
 hooks/hook-runtime-slow.test.mts
 hooks/hook-runtime-wired.test.mts
 hooks/hook-runtime-root.test.mts
