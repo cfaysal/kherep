@@ -1,10 +1,9 @@
 /**
  * hook-integrity-sources.mts  -  what the Codex hook-integrity hook (hook-integrity.mts)
  * checks beyond the import closure of every .mts/.js file a config.toml hook command
- * names under <CODEX_HOME>/hooks, and where each installed file comes from. A broken
- * one is restored from the checkout and counted only when MEASURED (size > 0, SHA-256
- * equal to the checkout bytes). Issue #533: loaded by hook-integrity.mts as an own
- * step, so a broken copy of this file is reported (kind "self") and restored.
+ * names under <CODEX_HOME>/hooks, and where each installed file comes from. Issue
+ * #533: loaded by hook-integrity.mts as an own step, so a broken copy of this file is
+ * reported (kind "self") and restored.
  */
 
 // privacy-boundary-guard.mts requires workspace-scope and private-path-policy by a
