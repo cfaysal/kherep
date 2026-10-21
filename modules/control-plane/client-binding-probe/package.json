@@ -9,6 +9,6 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "engines": { "node": "^22.18.0 || >=23.6.0" },
-  "dependencies": { "@modelcontextprotocol/sdk": "1.31.0", "zod": "4.6.5" },
+  "dependencies": { "@modelcontextprotocol/sdk": "1.32.0", "zod": "4.6.5" },
   "license": "Apache-2.0"
 }
