@@ -6,6 +6,7 @@ import {
   listInbox, markDelivered, markOffered, markRefused, markRetry, MAX_REPLY_DEPTH, type InboxRecord, type OfferedBy,
 } from "./inbox.mts";
 import { proxiedLine, relayStateOf, type RelayState } from "./inbox-proxied.mts";
+import { withRecordLockBudget } from "./inbox-record-lock.mts";
 import { nodeLabel } from "./msg-resolve.mts";
 import { hookCommand } from "./session-command.mts";
 import { failureNotice, noticesIntro, receiptNotice, stillUnnoticed, unnoticedNotices, type SentNotices } from "./sent-notices.mts";
@@ -35,6 +36,9 @@ export const MAX_OFFERS = 3;
 export const REOFFER_AFTER_MS = 10 * 60_000;
 // Kept free for the closing line about messages left for the next turn.
 const FOOTER_BYTES = 160;
+// Issue #627: the record locks of one call share this wait; a record whose lock
+// stays busy waits for the next event. Well below deliver-midturn.mts MIDTURN_LOCK_STALE_MS.
+export const RECORD_LOCK_BUDGET_MS = 1_000;
 
 // replyFrom: the session id the reply command passes as --from, for a runtime
 // whose sessions the msg CLI cannot identify from the environment.
@@ -191,6 +195,10 @@ export function contextOutput(event: string, additionalContext: string): string 
 
 // The context text for one hook call, empty when there is nothing to deliver.
 export function deliveryContext(event: DeliveryEvent, refs: string[], deps: HookDeps): string {
+  return withRecordLockBudget(RECORD_LOCK_BUDGET_MS, () => contextUnderBudget(event, refs, deps));
+}
+
+function contextUnderBudget(event: DeliveryEvent, refs: string[], deps: HookDeps): string {
   const { paths } = deps;
   const now = deps.now?.() ?? Date.now();
   const maxBytes = deps.maxBytes ?? MAX_CONTEXT_BYTES;
@@ -231,11 +239,12 @@ export function deliveryContext(event: DeliveryEvent, refs: string[], deps: Hook
   const parts = received ? [...failed, receipt] : failed;
   const room = maxBytes - bytes(intro) - FOOTER_BYTES - partBytes(parts);
   const blocks = fitBlocks(paths, shown, directory, tag, reply, cli + " msg inbox" + (deps.replyFrom ? " --from " + deps.replyFrom : "") + " --all", room);
-  const offered = waiting.slice(0, blocks.length);
   const offeredBy = deps.offeredBy ?? EVENT_OFFER[event];
-  for (const record of offered) markOffered(paths.inbox, record.messageId, now, offeredBy);
+  // Marked first, shown after (#627): an offer not written (lock busy, record gone) is not shown; it waits for the next event.
+  const shownBlocks = blocks.filter((_, i) => markOffered(paths.inbox, waiting[i].messageId, now, offeredBy) !== null);
+  if (shownBlocks.length === 0 && failures.length === 0 && !received) return "";
   for (const record of received ? [...failures, ...notices.receipts] : failures) markNoticed(paths, record.messageId, now);
-  const left = waiting.length - offered.length;
+  const left = waiting.length - shownBlocks.length;
   const footer = left > 0 ? [`${left} more message(s) wait for the next turn.`] : [];
-  return [intro, ...parts, ...blocks, ...footer].join("\n\n");
+  return [intro, ...parts, ...shownBlocks, ...footer].join("\n\n");
 }

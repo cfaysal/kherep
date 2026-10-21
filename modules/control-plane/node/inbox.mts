@@ -9,6 +9,7 @@ import {
 } from "../protocol-messages.mts";
 export { MAX_REPLY_DEPTH } from "../protocol-messages.mts";
 import { ensureDir } from "./config.mts";
+import { RecordLockBusy, withRecordLock } from "./inbox-record-lock.mts";
 
 // The node inbox (issue #31, step 2): one JSON file per accepted message,
 // <messageId>.json, in a directory only this user can read. Delivery into a
@@ -214,6 +215,38 @@ export function listInbox(dir: string, toSession?: string): InboxRecord[] {
     .sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
 }
 
+// Every rewrite of a record body: read, judge and write under the record's lock
+// (issue #627), so a daemon refusal and a hook's offer or delivery in another
+// process never overwrite each other. change judges the record the file holds
+// now, never a caller's copy, and returns null to leave it as it is. Returns
+// null when the message is not in the inbox. A lock held for the caller's wait
+// (inbox-record-lock.mts) throws RecordLockBusy: setDeliveryTask,
+// markClosedAttempt and readdress let it reach their daemon round, which runs
+// again; the other writers report it as "not written" (tryUpdate).
+type Update = { record: InboxRecord; written: boolean } | null;
+function updateRecord(dir: string, messageId: string, change: (record: InboxRecord) => InboxRecord | null): Update {
+  if (!isMessageId(messageId)) return null;
+  return withRecordLock(dir, messageId, () => {
+    const record = getMessage(dir, messageId);
+    if (!record) return null;
+    const next = change(record);
+    if (next) writeJsonAtomic(fileOf(dir, messageId), next);
+    return { record: next ?? record, written: next !== null };
+  });
+}
+
+// A busy record is "not written", never an error: the next event, round or
+// read offers, confirms, flags or refuses it again (a repeated offer at worst,
+// never a lost one). The caller's own state is unchanged.
+function tryUpdate(dir: string, messageId: string, change: (record: InboxRecord) => InboxRecord | null): Update {
+  try {
+    return updateRecord(dir, messageId, change);
+  } catch (error) {
+    if (error instanceof RecordLockBusy) return null;
+    throw error;
+  }
+}
+
 // Associates a message with the local execution that delivered it. This does
 // not change taskId, which remains the authorization grant from the sender.
 export function setDeliveryTask(dir: string, messageId: string, identity: DeliveryTaskIdentity): boolean {
@@ -221,70 +254,65 @@ export function setDeliveryTask(dir: string, messageId: string, identity: Delive
     || (identity.sessionId !== undefined && !isSessionRef(identity.sessionId))) {
     throw new Error("invalid delivery task identity");
   }
-  const record = getMessage(dir, messageId);
-  if (!record) return false;
-  writeJsonAtomic(fileOf(dir, messageId), { ...record, delivery: identity });
-  return true;
+  return updateRecord(dir, messageId, (record) => ({ ...record, delivery: identity })) !== null;
 }
 // Marks a stored message as delivered into its session and returns the
-// message.status body to send, or null when the message is not in the inbox.
+// message.status body to send, or null when the message is not in the inbox
+// or stayed locked (the next Stop confirms it again).
 export function markDelivered(dir: string, messageId: string): MessageStatusBody | null {
-  const record = getMessage(dir, messageId);
-  if (!record) return null;
-  if (record.state !== "delivered") writeJsonAtomic(fileOf(dir, messageId), { ...record, state: "delivered" });
-  return { messageId, state: "delivered" };
+  const updated = tryUpdate(dir, messageId, (record) => record.state === "delivered" ? null : { ...record, state: "delivered" });
+  return updated ? { messageId, state: "delivered" } : null;
 }
 
 // A reply this node sends to a waiting message (msg send --reply-to) shows it
 // was read, whether or not a turn offered it (issue #111).
 export function markAnswered(dir: string, messageId: string): void {
-  const record = getMessage(dir, messageId);
-  if (record?.state === "accepted" || record?.state === "offered") markDelivered(dir, messageId);
+  tryUpdate(dir, messageId, (record) => record.state === "accepted" || record.state === "offered" ? { ...record, state: "delivered" } : null);
 }
 
 // Records that the hook handed the message to a turn, which confirms it at
-// its Stop. Returns the updated record, or null when it is not in the inbox.
+// its Stop. Returns the updated record, or null when it is not in the inbox or
+// stayed locked: the caller then does not show it (deliver-core.mts).
 export function markOffered(dir: string, messageId: string, now: number = Date.now(), offeredBy?: OfferedBy): InboxRecord | null {
-  const record = getMessage(dir, messageId);
-  if (!record) return null;
-  const { retry: _retry, ...rest } = record;
-  const offered: InboxRecord = { ...rest, state: "offered", offers: (record.offers ?? 0) + 1, offeredAt: new Date(now).toISOString(),
-    ...(offeredBy ? { offeredBy } : {}) };
-  writeJsonAtomic(fileOf(dir, messageId), offered);
-  return offered;
+  return tryUpdate(dir, messageId, (record) => {
+    const { retry: _retry, ...rest } = record;
+    return { ...rest, state: "offered", offers: (record.offers ?? 0) + 1, offeredAt: new Date(now).toISOString(), ...(offeredBy ? { offeredBy } : {}) };
+  })?.record ?? null;
 }
 
-// Flags an offered message for an immediate new offer; false when it is not offered.
+// Flags an offered message for an immediate new offer; false when it is not
+// offered or stayed locked (it is offered again after REOFFER_AFTER_MS instead).
 export function markRetry(dir: string, messageId: string): boolean {
-  const record = getMessage(dir, messageId);
-  if (record?.state !== "offered") return false;
-  writeJsonAtomic(fileOf(dir, messageId), { ...record, retry: true });
-  return true;
+  return tryUpdate(dir, messageId, (record) => record.state === "offered" ? { ...record, retry: true } : null)?.written ?? false;
 }
 
 // toSession hands the message to another session of this node, the intercom
 // session of its sender (issue #105); closedTo keeps the session it was sent to.
 export function markClosedAttempt(dir: string, messageId: string, now: number = Date.now(), toSession?: string): void {
-  const record = getMessage(dir, messageId);
-  if (!record) return;
-  const moved = toSession !== undefined && toSession !== record.toSession ? { toSession, closedTo: record.toSession } : {};
-  writeJsonAtomic(fileOf(dir, messageId), { ...record, ...moved, closedAttempt: new Date(now).toISOString() });
+  updateRecord(dir, messageId, (record) => {
+    const moved = toSession !== undefined && toSession !== record.toSession ? { toSession, closedTo: record.toSession } : {};
+    return { ...record, ...moved, closedAttempt: new Date(now).toISOString() };
+  });
 }
 
 // Moves the waiting messages of a session to the copy Claude Code continued it
 // as under a new id (issue #109); closedTo keeps the session they were sent to.
+// Each record is judged again under its lock: one that another writer settled
+// or moved since the listing stays, and is not among the returned ids.
 export function readdress(dir: string, from: string, to: string): string[] {
-  const moved = listInbox(dir, from).filter((r) => r.state === "accepted" || r.state === "offered");
-  for (const r of moved) writeJsonAtomic(fileOf(dir, r.messageId), { ...r, toSession: to, closedTo: r.closedTo ?? from });
-  return moved.map((r) => r.messageId);
+  const waiting = (r: InboxRecord): boolean => (r.state === "accepted" || r.state === "offered") && r.toSession === from;
+  return listInbox(dir, from).filter(waiting).filter((r) => updateRecord(dir, r.messageId,
+    (record) => waiting(record) ? { ...record, toSession: to, closedTo: record.closedTo ?? from } : null)?.written)
+    .map((r) => r.messageId);
 }
 
-// Refuses a message that still waits for its session; true when it did.
+// Refuses a message that still waits for its session; true when it did, false
+// when it did not wait, is not in the inbox or stayed locked (the next round
+// judges it again). still: judged on the file under its lock, not on a
+// caller's copy (#589, #627); it runs inside the lock and must stay pure: no
+// other record lock, no inbox write.
 export function markRefused(dir: string, messageId: string, reason: string, still = (r: InboxRecord): boolean => r.state === "accepted" || r.state === "offered"): boolean {
-  const record = getMessage(dir, messageId); // still: judged on the file, not on a caller's copy (#589)
-  if (!record || !still(record)) return false;
-  writeJsonAtomic(fileOf(dir, messageId), { ...record, state: "refused", reason });
-  return true;
+  return tryUpdate(dir, messageId, (record) => still(record) ? { ...record, state: "refused", reason } : null)?.written ?? false;
 }
 
 // Local progress that needs a persistence receipt. offered is intentionally

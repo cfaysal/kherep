@@ -14,7 +14,9 @@ import { unnoticedNotices } from "./sent-notices.mts";
 // teammate carries agent_id. The offer is no receipt: the turn's Stop confirms
 // it (issue #308). No turn is started, so no budget is checked or spent.
 
-// A lock older than this belongs to a hook process that died holding it.
+// A lock older than this belongs to a hook process that died holding it. A live
+// call stays well inside it: its record lock waits share deliver-core.mts
+// RECORD_LOCK_BUDGET_MS (issue #627), the rest is file I/O.
 export const MIDTURN_LOCK_STALE_MS = 5_000;
 
 export const midTurnLock = (paths: NodePaths, sessionId: string): string =>
