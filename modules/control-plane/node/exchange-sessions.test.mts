@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import type { SessionInfo } from "../protocol.mts";
 import { nodePaths } from "./config.mts";
-import { startDaemon } from "./daemon.mts";
+import { startDaemon, SESSIONS_INTERVAL_MS } from "./daemon.mts";
 import { recordingSessions } from "./exchange-sessions.mts";
 import { getMessage, readJson, UNDELIVERABLE_AFTER_MS } from "./inbox.mts";
 import { fakeSocket, fixture, id, PEER, seconds, until } from "./inbox-start-fixture.mts";
@@ -78,6 +79,47 @@ test("T8: the daemon's second session listing reads no inbox record file", async
   socket.feed("command", { commandId: "c1", command: "session.list" }, 1);
   await until(() => readJson<{ updatedAt: string }>(node.paths.sessions)?.updatedAt !== first, logs);
   assert.equal(reads, 0, `the second listing's refusal check read ${reads} inbox record file(s)`);
+  handle.stop();
+  await handle.done;
+});
+
+// Review of #606 P3-2: the 60 s snapshot (daemon.mts, the snapshots interval) checks from the index too. The fixture's
+// setInterval does nothing, so this test keeps the callbacks and runs that tick itself. The refusal check is what runs
+// between the rename onto sessions.json and the published snapshot frame; the snapshot's later steps read the inbox.
+test("T9: the daemon's periodic session snapshot reads no inbox record file in its refusal check", async (t) => {
+  const node = fixture(t, { inbox: 20, sent: 10 });
+  const socket = fakeSocket(t);
+  const intervals: { callback: () => void; ms: number }[] = [];
+  globalThis.setInterval = ((callback: () => void, ms: number) => { intervals.push({ callback, ms }); return { interval: ms }; }) as unknown as typeof setInterval;
+  let armed = false;
+  let open = false;
+  let checks = 0;
+  let reads = 0;
+  const [read, rename] = [fs.readFileSync, fs.renameSync];
+  t.mock.method(fs, "readFileSync", (...args: Parameters<typeof read>) => {
+    const file = String(args[0]);
+    if (open && file.startsWith(node.paths.inbox + path.sep) && file.endsWith(".json") && !file.includes(`${path.sep}receipts${path.sep}`)) reads++;
+    return Reflect.apply(read, fs, args);
+  });
+  t.mock.method(fs, "renameSync", (...args: Parameters<typeof rename>) => {
+    if (armed && String(args[1]) === node.paths.sessions) open = true;
+    return Reflect.apply(rename, fs, args);
+  });
+  t.mock.method(globalThis.WebSocket.prototype, "send", () => { if (open) checks++; open = false; });
+  let n = 0; // a new listing every time, so every snapshot publishes a frame
+  const listing = async (): Promise<SessionInfo[]> => [{ sessionId: `s-${n++}`, runtime: "claude", state: "idle" }];
+  const logs: string[] = [];
+  const handle = startDaemon(node.config, node.paths, (line) => logs.push(line), listing);
+  t.after(() => handle.stop());
+  socket.open();
+  socket.feed("event", { name: "auth.ok" }, 0);
+  await until(() => seconds(logs) !== null && readJson<{ updatedAt?: string }>(node.paths.sessions)?.updatedAt !== undefined, logs);
+  // The open handler sets ping, snapshots, exchange, directory, in this order; snapshots is the first at its interval.
+  const snapshot = intervals.find((entry) => entry.ms === SESSIONS_INTERVAL_MS);
+  assert.ok(snapshot, "the snapshot interval was set");
+  armed = true;
+  await until(() => { snapshot.callback(); return checks > 0; }, logs); // a tick returns early while a listing runs
+  assert.equal(reads, 0, `the periodic snapshot's refusal check read ${reads} inbox record file(s)`);
   handle.stop();
   await handle.done;
 });
