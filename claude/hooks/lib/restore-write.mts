@@ -68,7 +68,7 @@ function anchorRefusal(dir: string, hooksDir: string): string {
   } catch (error) {
     return `realpath failed (${errorCode(error)})`;
   }
-  return `hooks directory or its subdirectory resolves outside ${hooksDir}`;
+  return "hooks directory or its subdirectory resolves outside the hooks root";
 }
 
 const lstatOrNull = (file: string): fs.BigIntStats | null => {

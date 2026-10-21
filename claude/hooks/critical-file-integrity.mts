@@ -142,9 +142,9 @@ function restore(file: string, entry: CriticalFile, repoRoot: string): Restored 
   try {
     wanted = fs.readFileSync(source);
   } catch (error) {
-    return { proven: false, why: `versioned source ${source} unreadable (${errorCode(error)})` };
+    return { proven: false, why: `versioned source ${entry.source} unreadable (${errorCode(error)})` };
   }
-  if (!wanted.length) return { proven: false, why: `versioned source ${source} is itself 0 bytes` };
+  if (!wanted.length) return { proven: false, why: `versioned source ${entry.source} is itself 0 bytes` };
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.copyFileSync(source, file);
@@ -214,7 +214,7 @@ function main(): void {
       sizeBefore: before.size === undefined ? null : before.size,
       mtimeBefore: before.mtime || null,
       inoBefore: before.ino === undefined ? null : before.ino,
-      sha256After: null, restoreProven: false, guard: "critical-file-integrity",
+      sha256After: null, restoreProven: false, guard: "critical-file-integrity", checkout: repoRoot,
     };
     if (state === "UNGEPRUEFT") {
       lines.push(`${entry.rel}: UNCHECKED - ${reason}. Neither proven healthy nor proven broken.`);
@@ -240,7 +240,8 @@ try {
   main();
 } catch (error) {
   try {
-    emit([`the critical-file check itself failed (${(error && (error as Error).message) || "unknown"}); nothing was verified`]);
+    const { code, name } = (error ?? {}) as { code?: unknown; name?: unknown }; // a code, else the class name; never a message (issue #576)
+    emit([`the critical-file check itself failed (${typeof code === "string" && /^[A-Z][A-Z0-9_]{0,40}$/.test(code) ? code : typeof name === "string" && /^[A-Za-z]{1,40}Error$/.test(name) ? name : "unknown"}); nothing was verified`]);
   } catch {
     /* never break session start */
   }

@@ -59,13 +59,15 @@ const TS_REJECTED = new Set(["ERR_INVALID_TYPESCRIPT_SYNTAX", "ERR_UNSUPPORTED_T
 const PROBE = 'import "kherep-syntax-probe:never" with { type: "kherep-syntax-probe" };';
 const HOOK_RESOLVED = "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED";
 
-const errorCode = (error: unknown): string | undefined =>
-  error && typeof error === "object" ? (error as NodeJS.ErrnoException).code : undefined;
-const firstLine = (error: unknown): string =>
-  String((error && (error as Error).message) || error).split(/\r?\n/)[0].trim();
+const errorCode = (error: unknown): string | undefined => error && typeof error === "object" ? (error as NodeJS.ErrnoException).code : undefined;
+// A Node error code, else the error's class name, else "unknown"; never a message (the #564 vocabulary, issue #576).
+const codeOf = (e: unknown): string => { const c = errorCode(e), n = (e as Error)?.name; return typeof c === "string" && /^[A-Z][A-Z0-9_]{0,40}$/.test(c) ? c : typeof n === "string" && /^[A-Za-z]{1,40}Error$/.test(n) ? n : "unknown"; };
+const PATHS = /\\\\[^\s"'`()<>|]+|[A-Za-z]:[\\/][^\s"'`()<>|]*|~[\\/][^\s"'`()<>|]*|(?<![\w.~-])\/[^\s"'`()<>|]+/g; // = denial-journal.mts ABSOLUTE_PATH; a test holds them equal (#576)
+const tail = (p: string): string => p.split(/[\\/]/).filter(Boolean).pop() ?? ""; // the last segment of a path
+const scrub = (text: string): string => text.replace(PATHS, tail); // every absolute path in Node's text reduced to its file name (#576)
+const firstLine = (error: unknown): string => scrub(String((error && (error as Error).message) || error).split(/\r?\n/)[0].trim());
 
-// Kept for its callers (live-hook-integrity.mts): since #284 the strip call
-// below quiets its own ExperimentalWarning, so there is nothing to do here.
+// Kept for its callers (live-hook-integrity.mts): since #284 the strip call below quiets its own ExperimentalWarning.
 export function quietStripWarning(): void {}
 
 // The stripper announces itself as experimental once per process, through
@@ -160,19 +162,18 @@ function stripVerdict(source: string): SyntaxVerdict | string {
 const LOCATION = /^(?!node:)\S.*:\d+$/;
 export function checkFailureVerdict(error: unknown, file: string): SyntaxVerdict {
   const e = (error ?? {}) as { code?: string; status?: number | null; signal?: string | null; stderr?: unknown };
-  const lines = String(e.stderr ?? "").split(/\r?\n/).map((l) => l.trim());
+  const lines = String(e.stderr ?? "").split(/\r?\n/).map((l) => l.trim()), first = lines.find((l) => l) || "no stderr";
   const where = (i: number): string | undefined => lines.slice(Math.max(0, i - 4), i).find((a) => LOCATION.test(a));
   const block = lines.findIndex((l, i) => /^SyntaxError\b/.test(l) && lines[i - 1] === "" && where(i) !== undefined);
   if (typeof e.status === "number" && e.status !== 0 && !e.signal && block >= 0) {
     const named = where(block)!.replace(/:\d+$/, "");
     const escaped = path.basename(file).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const ours = new RegExp(`(^|[\\\\/])${escaped}$`, process.platform === "win32" ? "i" : "");
-    return { state: "DEFEKT", detail: `rejected by node --check: ${lines[block]}${ours.test(named) ? "" : ` (Node named it ${named})`}` };
+    return { state: "DEFEKT", detail: `rejected by node --check: ${scrub(lines[block])}${ours.test(named) ? "" : ` (Node named it ${tail(named)})`}` };
   }
-  let why = firstLine(error);
-  if (e.code) why = e.code;
-  else if (e.signal) why = `killed by ${e.signal}`;
-  else if (typeof e.status === "number") why = `exit ${e.status}: ${lines.find((l) => l) || "no stderr"}`;
+  // S5 of #576: a first stderr line that is a location (`<path>:<line>`) is reduced like `named`, keeping its `:N`; the scrub alone stops at a space in the path.
+  const why = e.code ? codeOf(error) : e.signal ? `killed by ${e.signal}` : typeof e.status === "number"
+    ? `exit ${e.status}: ${LOCATION.test(first) ? tail(first) : scrub(first)}` : codeOf(error);
   return { state: "UNGEPRUEFT", detail: `vm.Script rejected it and node --check could not confirm (${why})` };
 }
 
@@ -244,6 +245,6 @@ function isMainModule(): boolean {
 if (isMainModule()) {
   cli(process.argv[2]).then(
     (code) => { process.exitCode = code; },
-    (error: unknown) => { console.log(`UNGEPRUEFT the check itself failed (${firstLine(error)})`); process.exitCode = 2; }
+    (error: unknown) => { console.log(`UNGEPRUEFT the check itself failed (${codeOf(error)})`); process.exitCode = 2; }
   );
 }

@@ -82,7 +82,7 @@ async function checkOne(run: Run, entry: InventoryEntry, repoRoot: string, state
     sizeBefore: before.size === undefined ? null : before.size,
     mtimeBefore: before.mtime || null,
     inoBefore: before.ino === undefined ? null : before.ino,
-    sha256After: null, restoreProven: false,
+    sha256After: null, restoreProven: false, checkout: repoRoot,
   };
   // A journal line is a mutation too: only inside the coordinated hold.
   const journal = (): void => { if (!gate && hold?.holding()) lib.journal(home, record); };

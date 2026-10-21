@@ -59,9 +59,9 @@ export async function restore(
   try {
     wanted = fs.readFileSync(source);
   } catch (error) {
-    return { proven: false, why: `versioned source ${source} unreadable (${errorCode(error) || "unknown"})` };
+    return { proven: false, why: `versioned source claude/hooks/${rel} unreadable (${errorCode(error) || "unknown"})` };
   }
-  if (!wanted.length) return { proven: false, why: `versioned source ${source} is itself 0 bytes` };
+  if (!wanted.length) return { proven: false, why: `versioned source claude/hooks/${rel} is itself 0 bytes` };
   const result = await repairer.repair(rel, wanted);
   if (!result.proven) return result;
   // Measured at the target here as well. The runtime reporting success is not this run's measurement.
