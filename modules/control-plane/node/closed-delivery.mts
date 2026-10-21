@@ -5,7 +5,7 @@ import { DELEGATED_PERMISSION_MODES, type PermissionMode, type TaskRuntime } fro
 import { bypassesPermissions, rememberedMode, takeTurn, wakeAudit } from "./autonomy.mts";
 import { stillRuns } from "./codex-process.mts";
 import { CODEX_RUNTIME, isCodexSessionId, readCodexSession } from "./codex-sessions.mts";
-import { resumeClaude, resumeCodex, startIntercom } from "./closed-resume.mts";
+import { resumeClaude, resumeCodex, skipBusy, startIntercom } from "./closed-resume.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { attachDelivery } from "./delivery-identity.mts";
 import { progressRecords } from "./delivery-progress.mts";
@@ -216,7 +216,7 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
     const failed = await resume(deps, reusable, cwd.cwd, records.length, now);
     if (failed === null) {
       const current = readTask(paths, reusable.taskId) ?? reusable;
-      const linked = attachDelivery(paths, current, records.map((r) => r.messageId));
+      const linked = attachDelivery(paths, current, records.map((r) => r.messageId), skipBusy(deps));
       if (linked !== current) writeTask(paths, linked, now);
       progressRecords(paths, records, "fallback", "fallback-running", deps.now?.() ?? now);
       audit(paths, now, sessionId, records, "reused", "intercom session resumed", reusable.taskId);

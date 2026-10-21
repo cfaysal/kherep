@@ -8,9 +8,12 @@ import { nodePaths, readConfig } from "./config.mts";
 import { isCodexSessionId } from "./codex-sessions.mts";
 import { reconcileNativeQueues } from "./codex-native-reconcile.mts";
 import { CODEX_FORK_ENV, deliverForCodex } from "./deliver-codex.mts";
-import { contextOutput, deliveryContext, retryOffered, sessionInbox, type HookDeps } from "./deliver-core.mts";
+import {
+  contextOutput, deliveryContext, RECORD_LOCK_BUDGET_MS, retryOffered, sessionInbox, type HookDeps,
+} from "./deliver-core.mts";
 import { midTurnOutput } from "./deliver-midturn.mts";
 import { localSessionName } from "./exchange.mts";
+import { withRecordLockBudget } from "./inbox-record-lock.mts";
 import { nodeWakeBudget } from "./policy.mts";
 import { claimWake } from "./wake-pending.mts";
 
@@ -62,7 +65,7 @@ export function deliverForHook(input: unknown, deps: HookDeps): string {
   if (event === "PostToolUse") return midTurnOutput(fields, sessionId, refs, deps);
   const now = deps.now?.() ?? Date.now();
   if (event === "StopFailure") {
-    retryOffered(deps.paths, sessionInbox(deps.paths, refs));
+    withRecordLockBudget(RECORD_LOCK_BUDGET_MS, () => retryOffered(deps.paths, sessionInbox(deps.paths, refs)));
     markListenerIdle(deps.paths, sessionId, now);
     return "";
   }

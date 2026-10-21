@@ -638,15 +638,23 @@ increments the minor version; every other release increments the patch version.
   probe): `EEXIST`, and on Windows `EPERM`, `EACCES` and `EBUSY` for a lock in
   the delete-pending state, mean held and are polled every 20 ms; a lock
   older than 5 s, either way of the clock, was left by a holder that died and
-  is moved aside, compared and removed, never a fresh one. A hook, the msg
-  CLI and the MCP client wait 1 s for a held record, the daemon 250 ms, and
-  the record locks of one delivery hook call share one 1 s budget, so a
-  PostToolUse delivery ends well inside its session lock's 5 s stale bound. A
-  record still held after that is reported, typed `RecordLockBusy`, and
+  is moved aside, compared and removed, never a fresh one; a newer lock that
+  took its place meanwhile is linked back, or renamed back where the file
+  system has no hard links. A hook, the msg CLI and the MCP client wait 1 s
+  for a held record; the record locks of one delivery hook call (the prompt
+  delivery, a Stop confirmation, a StopFailure retry flag) share one 1 s
+  budget, so a PostToolUse delivery ends well inside its session lock's 5 s
+  stale bound. The daemon waits 250 ms for all the record locks of one lane
+  item together; a record held beyond that is left to the next round. A
+  record still held after its wait is reported, typed `RecordLockBusy`, and
   handled per writer: an offer, delivery confirmation, retry flag, answer or
   refusal is "not written" and repeated by the next event, round or read (a
   repeated offer at worst, never a lost one); a delivery identity, closed
-  attempt or readdress fails its daemon round, which runs again. The delivery
+  attempt or readdress fails its daemon round, which runs again, except after
+  an intercom session was started or resumed for the message, where the
+  record is logged and left out of the hand-over so the round does not start
+  a second session. `markOffered` judges the record under its lock too and
+  does not offer one that was delivered or refused meanwhile. The delivery
   hook marks a record offered before it shows it and shows exactly what it
   marked; a record it could not mark waits for the next turn. The purge
   judges a record's state and receipt on the record under its lock, where it
@@ -660,8 +668,9 @@ increments the minor version; every other release increments the patch version.
   and its write can then be lost as before; a Windows reader that keeps a
   lock open while its holder releases leaves the lock to that 5 s rule; a
   Windows rename retry (1.27 s per write) inside a PostToolUse call is not
-  covered by the budget, as before. Two deterministic tests hold the lock from
-  another process and are red on the previous code, as is the purge test.
+  covered by the budget, as before. Thirteen deterministic tests (each writer
+  holding the lock at its rename, two with the lock held from another
+  process, three of the purge) are red on the previous code.
 - A Claude task past its max runtime whose `claude stop` cannot be confirmed
   is no longer stopped again every watch round for ever (issue #541). After a
   failed stop the watch measures the run as owner status does

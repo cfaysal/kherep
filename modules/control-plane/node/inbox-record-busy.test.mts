@@ -116,3 +116,17 @@ test("readdress judges each record again under its lock: one delivered since the
   assert.deepEqual([getMessage(dir, ID_B)?.toSession, getMessage(dir, ID_B)?.closedTo], ["s2", "s1"]);
   assert.deepEqual(fs.readdirSync(dir), [`${ID}.json`, `${ID_B}.json`]);
 });
+
+// markOffered is judged under the lock too: a record settled since the caller
+// listed it is not offered again, and the caller does not show it.
+test("markOffered leaves a record settled since the listing as it is and returns null", (t) => {
+  const { dir } = watched(t);
+  storeMessage(dir, deliver(ID), NOW);
+  markDelivered(dir, ID);
+  assert.equal(markOffered(dir, ID, NOW + 1, "wake"), null);
+  storeMessage(dir, deliver(ID_B), NOW);
+  markRefused(dir, ID_B, "gone");
+  assert.equal(markOffered(dir, ID_B, NOW + 1), null);
+  assert.deepEqual([getMessage(dir, ID)?.state, getMessage(dir, ID)?.offers], ["delivered", undefined]);
+  assert.deepEqual([getMessage(dir, ID_B)?.state, getMessage(dir, ID_B)?.offers], ["refused", undefined]);
+});

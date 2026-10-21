@@ -216,13 +216,10 @@ export function listInbox(dir: string, toSession?: string): InboxRecord[] {
 }
 
 // Every rewrite of a record body: read, judge and write under the record's lock
-// (issue #627), so a daemon refusal and a hook's offer or delivery in another
-// process never overwrite each other. change judges the record the file holds
-// now, never a caller's copy, and returns null to leave it as it is. Returns
-// null when the message is not in the inbox. A lock held for the caller's wait
-// (inbox-record-lock.mts) throws RecordLockBusy: setDeliveryTask,
-// markClosedAttempt and readdress let it reach their daemon round, which runs
-// again; the other writers report it as "not written" (tryUpdate).
+// (issue #627). change judges the record the file holds now, never a caller's
+// copy; null leaves it as it is. A busy lock throws RecordLockBusy:
+// setDeliveryTask, markClosedAttempt and readdress fail their daemon round,
+// which runs again; the other writers report "not written" (tryUpdate).
 type Update = { record: InboxRecord; written: boolean } | null;
 function updateRecord(dir: string, messageId: string, change: (record: InboxRecord) => InboxRecord | null): Update {
   if (!isMessageId(messageId)) return null;
@@ -235,9 +232,8 @@ function updateRecord(dir: string, messageId: string, change: (record: InboxReco
   });
 }
 
-// A busy record is "not written", never an error: the next event, round or
-// read offers, confirms, flags or refuses it again (a repeated offer at worst,
-// never a lost one). The caller's own state is unchanged.
+// A busy record is "not written": the next event, round or read writes it
+// again (a repeated offer at worst, never a lost one).
 function tryUpdate(dir: string, messageId: string, change: (record: InboxRecord) => InboxRecord | null): Update {
   try {
     return updateRecord(dir, messageId, change);
@@ -271,13 +267,15 @@ export function markAnswered(dir: string, messageId: string): void {
 }
 
 // Records that the hook handed the message to a turn, which confirms it at
-// its Stop. Returns the updated record, or null when it is not in the inbox or
-// stayed locked: the caller then does not show it (deliver-core.mts).
+// its Stop. Returns the updated record, or null when it is not in the inbox,
+// no longer waits or stayed locked: the caller then does not show it (deliver-core.mts).
 export function markOffered(dir: string, messageId: string, now: number = Date.now(), offeredBy?: OfferedBy): InboxRecord | null {
-  return tryUpdate(dir, messageId, (record) => {
+  const updated = tryUpdate(dir, messageId, (record) => {
+    if (record.state !== "accepted" && record.state !== "offered") return null;
     const { retry: _retry, ...rest } = record;
     return { ...rest, state: "offered", offers: (record.offers ?? 0) + 1, offeredAt: new Date(now).toISOString(), ...(offeredBy ? { offeredBy } : {}) };
-  })?.record ?? null;
+  });
+  return updated?.written ? updated.record : null;
 }
 
 // Flags an offered message for an immediate new offer; false when it is not

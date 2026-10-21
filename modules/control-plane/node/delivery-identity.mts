@@ -1,18 +1,26 @@
 import type { TaskRuntime } from "../protocol-tasks.mts";
 import type { NodePaths } from "./config.mts";
 import { getMessage, setDeliveryTask } from "./inbox.mts";
+import { RecordLockBusy } from "./inbox-record-lock.mts";
 import type { TaskRecord } from "./task-records.mts";
 
 const runtimeOf = (task: TaskRecord): TaskRuntime => task.runtime ?? "claude";
 
-export function attachDelivery(paths: NodePaths, task: TaskRecord, messageIds: string[]): TaskRecord {
+// busy: a caller past an irreversible start or resume skips a record whose
+// lock stays held (issue #627); without it, RecordLockBusy ends the round.
+export function attachDelivery(paths: NodePaths, task: TaskRecord, messageIds: string[], busy?: (error: RecordLockBusy) => void): TaskRecord {
   const ids = [...new Set(messageIds)];
   for (const messageId of ids) {
-    setDeliveryTask(paths.inbox, messageId, {
-      taskId: task.taskId,
-      runtime: runtimeOf(task),
-      ...(task.sessionId ? { sessionId: task.sessionId } : {}),
-    });
+    try {
+      setDeliveryTask(paths.inbox, messageId, {
+        taskId: task.taskId,
+        runtime: runtimeOf(task),
+        ...(task.sessionId ? { sessionId: task.sessionId } : {}),
+      });
+    } catch (error) {
+      if (!busy || !(error instanceof RecordLockBusy)) throw error;
+      busy(error);
+    }
   }
   if (task.sessionId || ids.length === 0) return task;
   return { ...task, deliveryPending: [...new Set([...(task.deliveryPending ?? []), ...ids])] };

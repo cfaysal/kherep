@@ -3,7 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 import { taskNode } from "./task-fixture.mts";
-import { getMessage, markDelivered, markOffered, readdress, storeMessage } from "./inbox.mts";
+import { getMessage, markDelivered, readdress, storeMessage, writeJsonAtomic } from "./inbox.mts";
 import {
   MAX_QUEUE_BINDINGS, listQueueBindings, queueBindingDir, saveQueueBinding, type QueueBinding,
 } from "./codex-queue-binding.mts";
@@ -23,6 +23,11 @@ const IDENTITY = {
   resolvedCodexHome: "/home/test/.codex", route: "local" as const,
 };
 const PEER = { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "peer" };
+
+// A delivered record offered again (a turn that did not confirm it); markOffered
+// leaves a delivered record as it is (issue #627).
+const offeredAgain = (dir: string, id: string): void =>
+  writeJsonAtomic(`${dir}/${id}.json`, { ...getMessage(dir, id)!, state: "offered" });
 
 function messageId(n: number): string {
   return `9e57${n.toString(16).padStart(4, "0")}-0000-4000-8000-000000000000`;
@@ -150,7 +155,7 @@ test("cleanup revalidates the complete admission immediately before delete", asy
   let deleted = false;
   const api: NativeQueueClient = {
     list: async () => {
-      markOffered(node.paths.inbox, ids[1]!);
+      offeredAgain(node.paths.inbox, ids[1]!);
       return { data: [{ id: QUEUE, input: EXPECTED }], nextCursor: null };
     },
     delete: async () => { deleted = true; return { deleted: true }; },
@@ -167,12 +172,12 @@ test("cleanup keeps partial, offered, missing, readdressed, hint-only, interrupt
     const ids = kind === "partial" ? Array.from({ length: 12 }, (_, index) => messageId(index + 1))
       : [messageId(1), messageId(2)];
     const node = storedDelivered(st, ids);
-    if (kind === "partial" || kind === "interrupted") markOffered(node.paths.inbox, ids.at(-1)!);
-    if (kind === "offered") markOffered(node.paths.inbox, ids[0]!);
+    if (kind === "partial" || kind === "interrupted") offeredAgain(node.paths.inbox, ids.at(-1)!);
+    if (kind === "offered") offeredAgain(node.paths.inbox, ids[0]!);
     if (kind === "missing") fs.rmSync(`${node.paths.inbox}/${ids[1]}.json`);
     if (kind === "readdressed") {
-      markOffered(node.paths.inbox, ids[0]!);
-      markOffered(node.paths.inbox, ids[1]!);
+      offeredAgain(node.paths.inbox, ids[0]!);
+      offeredAgain(node.paths.inbox, ids[1]!);
       readdress(node.paths.inbox, OWNER, OTHER);
     }
     if (kind === "hint-only") {

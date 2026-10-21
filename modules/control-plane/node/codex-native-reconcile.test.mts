@@ -11,6 +11,11 @@ import { retainServiceAdmission, serviceAdmissionsIdle, withServiceAdmission } f
 import { runCodexHook } from "./deliver-hook.mts";
 import { getMessage, markOffered, storeMessage, writeJsonAtomic } from "./inbox.mts";
 
+// A delivered record offered again (a turn that did not confirm it); markOffered
+// leaves a delivered record as it is (issue #627).
+const offeredAgain = (dir: string, messageId: string): void =>
+  writeJsonAtomic(path.join(dir, `${messageId}.json`), { ...getMessage(dir, messageId)!, state: "offered" });
+
 test("normal Stop removes only the exact confirmed native group before returning, retaining every attempt", async (t) => {
   const f = fixture(t, 2);
   const before = f.ids.map((messageId) => fs.readFileSync(f.attempt(messageId), "utf8"));
@@ -33,7 +38,7 @@ test("offered, mixed, missing, readdressed, uncertain and incomplete groups cann
     await t.test(kind, async (t) => {
       const f = fixture(t, 2);
       const record = JSON.parse(fs.readFileSync(f.attempt(id(2)), "utf8"));
-      if (kind === "offered" || kind === "mixed") markOffered(f.paths.inbox, id(2));
+      if (kind === "offered" || kind === "mixed") offeredAgain(f.paths.inbox, id(2));
       if (kind === "missing") fs.unlinkSync(path.join(f.paths.inbox, `${id(2)}.json`));
       if (kind === "readdressed") {
         const file = path.join(f.paths.inbox, `${id(2)}.json`);

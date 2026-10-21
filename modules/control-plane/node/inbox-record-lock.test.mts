@@ -5,8 +5,8 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 
 import {
-  DAEMON_RECORD_LOCK_WAIT_MS, LOCK_HELD_CODES, RECORD_LOCK_POLL_MS, RECORD_LOCK_STALE_MS, RECORD_LOCK_WAIT_MS, RecordLockBusy,
-  recordLockFile, recordLockWait, setRecordLockWait, withRecordLock, withRecordLockBudget,
+  LOCK_HELD_CODES, RECORD_LOCK_POLL_MS, RECORD_LOCK_STALE_MS, RECORD_LOCK_WAIT_MS, RecordLockBusy,
+  recordLockFile, startRecordLockRound, withRecordLock, withRecordLockBudget,
 } from "./inbox-record-lock.mts";
 
 // Issue #627: the record lock, driven with a fake clock and a fake sleep, so
@@ -137,6 +137,22 @@ test("a fresh lock that replaced a stale one while it was moved aside is put bac
   assert.deepEqual(fs.readdirSync(f.dir), [], "no aside copy left");
 });
 
+// A file system without hard links: the fresh lock is put back by a rename, not
+// removed with the aside copy.
+test("a put-back whose link fails for another reason than an existing lock falls back to a rename", (t) => {
+  const f = fixture(t, (fx) => { assert.equal(fs.readFileSync(fx.lock, "utf8"), foreign(NOW - 1)); fs.unlinkSync(fx.lock); });
+  fs.writeFileSync(f.lock, foreign(NOW - RECORD_LOCK_STALE_MS - 1));
+  const real = fs.renameSync;
+  t.mock.method(fs, "renameSync", (from: fs.PathLike, to: fs.PathLike) => {
+    if (from === f.lock) fs.writeFileSync(f.lock, foreign(NOW - 1));
+    return real(from, to);
+  });
+  t.mock.method(fs, "linkSync", () => { throw Object.assign(new Error("operation not supported"), { code: "ENOTSUP" }); });
+  withRecordLock(f.dir, ID, () => {}, f.deps);
+  assert.deepEqual(f.sleeps, [RECORD_LOCK_POLL_MS], "the fresh lock was back and waited for");
+  assert.deepEqual(fs.readdirSync(f.dir), [], "no aside copy left");
+});
+
 test("a lock that stays fresh is busy after the wait, typed, without running the body", (t) => {
   const f = fixture(t, (fx) => fs.writeFileSync(fx.lock, foreign(fx.clock.t)));
   fs.writeFileSync(f.lock, foreign(NOW));
@@ -144,16 +160,24 @@ test("a lock that stays fresh is busy after the wait, typed, without running the
   assert.throws(() => withRecordLock(f.dir, ID, () => { ran = true; }, f.deps), busy);
   assert.equal(ran, false);
   assert.deepEqual(f.sleeps, polls(RECORD_LOCK_WAIT_MS));
-  assert.equal(recordLockWait(), RECORD_LOCK_WAIT_MS);
 });
 
-test("the daemon's shorter wait applies to every lock once set", (t) => {
+// The daemon's rounds: the waits of one round share its allowance, across the
+// awaits between them; a held record beyond it is left to the next round.
+test("a round's allowance bounds the waits of all its locks together; the next round has it again", (t) => {
   const f = fixture(t, (fx) => fs.writeFileSync(fx.lock, foreign(fx.clock.t)));
   fs.writeFileSync(f.lock, foreign(NOW));
-  setRecordLockWait(DAEMON_RECORD_LOCK_WAIT_MS);
-  t.after(() => setRecordLockWait(RECORD_LOCK_WAIT_MS));
+  t.after(() => startRecordLockRound(null));
+  startRecordLockRound(100);
   assert.throws(() => withRecordLock(f.dir, ID, () => {}, f.deps), busy);
-  assert.deepEqual(f.sleeps, polls(DAEMON_RECORD_LOCK_WAIT_MS));
+  assert.deepEqual(f.sleeps, polls(100), "the first lock spent the round's allowance");
+  assert.throws(() => withRecordLock(f.dir, ID, () => {}, f.deps), (error) => busy(error) && (error as RecordLockBusy).waitedMs === 0);
+  let ran = false;
+  withRecordLock(f.dir, "00000000-0000-4000-8000-0000000000b2", () => { ran = true; }, f.deps);
+  assert.ok(ran, "a record nobody holds is still taken at once");
+  startRecordLockRound(100);
+  assert.throws(() => withRecordLock(f.dir, ID, () => {}, f.deps), busy);
+  assert.deepEqual(f.sleeps, [...polls(100), ...polls(100)], "the next round waits again");
 });
 
 test("a budget bounds the waits of every lock taken inside it together; the shorter nested one wins", (t) => {

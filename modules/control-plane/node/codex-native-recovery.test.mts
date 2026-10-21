@@ -8,11 +8,16 @@ import { nativeQueueIdle, scheduleNativeQueue, scheduleNativeReconciliation } fr
 import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { reconcileNativeQueues } from "./codex-native-reconcile.mts";
 import { nativeAttemptsPath, nativeQueueGroups } from "./codex-native-attempts.mts";
-import { getMessage, markDelivered, markOffered } from "./inbox.mts";
+import { getMessage, markDelivered, writeJsonAtomic } from "./inbox.mts";
 import { waitFor } from "./codex-fixture.mts";
 import { beginServiceDrain } from "./service-drain.mts";
 import { serviceAdmissionsIdle } from "./service-drain.mts";
 import { NativeQueueShutdownError } from "./codex-queue-cleanup.mts";
+
+// A delivered record offered again (a turn that did not confirm it); markOffered
+// leaves a delivered record as it is (issue #627).
+const offeredAgain = (dir: string, messageId: string): void =>
+  writeJsonAtomic(path.join(dir, `${messageId}.json`), { ...getMessage(dir, messageId)!, state: "offered" });
 
 test("scheduled reconciliation rechecks admission at lane execution and resumes after drain release", async (t) => {
   const f = fixture(t);
@@ -48,7 +53,7 @@ test("existing poll recovers delivered native cards with the producer off by def
   for (const offered of [false, true]) await t.test(String(offered), async (t) => {
     const f = fixture(t);
     fs.writeFileSync(path.join(f.paths.dir, "wake.disabled"), "synthetic");
-    if (offered) markOffered(f.paths.inbox, id(1));
+    if (offered) offeredAgain(f.paths.inbox, id(1));
     const deps = f.deps();
     deps.codex = { findCodex: () => { assert.fail("must not enqueue"); },
       reconcileQueue: (owner) => reconcileNativeQueues(f.paths, owner, { open: f.open }) };

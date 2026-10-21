@@ -14,9 +14,8 @@ import path from "node:path";
 // moved aside, compared and removed (service-launch-permit.mts, service-drain.mts),
 // never a fresh one. A lock held and refreshed for the caller's wait ends the
 // acquisition with RecordLockBusy; inbox.mts decides per writer whether that
-// is a "not written" result or an error of the caller's round. Nothing imports
-// this module but inbox.mts, inbox-purge.mts, deliver-core.mts and daemon.mts,
-// so the staged messaging client graph gains exactly this file.
+// is a "not written" result or an error of the caller's round. It imports
+// nothing of the node, so the staged messaging client graph gains this file only.
 
 export const RECORD_LOCK_STALE_MS = 5_000;
 export const RECORD_LOCK_POLL_MS = 20;
@@ -46,9 +45,14 @@ export class RecordLockBusy extends Error {
 
 let waitMs = RECORD_LOCK_WAIT_MS;
 let budgetEnd: number | null = null;
+let roundLeft: number | null = null;
 
 export function setRecordLockWait(ms: number): void { waitMs = ms; }
-export function recordLockWait(): number { return waitMs; }
+
+// The daemon's rounds (frame-lanes.mts lockRounds): the waits of one lane item
+// together stay within ms, across the awaits between them; a record still held
+// once it is spent is tried once and left to the next round. null: no round.
+export function startRecordLockRound(ms: number | null): void { roundLeft = ms; }
 
 // One wait shared by every lock taken inside body (synchronous code only): a
 // hook call waits at most ms for all its records together (deliver-core.mts
@@ -78,7 +82,12 @@ export function withRecordLock<T>(dir: string, messageId: string, body: () => T,
   const { now = Date.now, sleep = pause } = deps;
   const file = recordLockFile(dir, messageId);
   const started = now();
-  const deadline = Math.min(started + waitMs, budgetEnd ?? Infinity);
+  const deadline = Math.min(started + Math.min(waitMs, roundLeft ?? Infinity), budgetEnd ?? Infinity);
+  const spend = (): number => {
+    const waited = now() - started;
+    if (roundLeft !== null) roundLeft = Math.max(0, roundLeft - waited);
+    return waited;
+  };
   for (;;) {
     let handle: number;
     try {
@@ -87,10 +96,11 @@ export function withRecordLock<T>(dir: string, messageId: string, body: () => T,
       if (code(error) === "ENOENT") return body();
       if (!LOCK_HELD_CODES.has(code(error))) throw error;
       if (breakStale(file, now())) continue;
-      if (now() >= deadline) throw new RecordLockBusy(messageId, now() - started, { cause: error });
+      if (now() >= deadline) throw new RecordLockBusy(messageId, spend(), { cause: error });
       sleep(RECORD_LOCK_POLL_MS);
       continue;
     }
+    spend();
     const mine = `${JSON.stringify({ pid: process.pid, at: new Date(now()).toISOString() })}\n`;
     try {
       fs.writeFileSync(handle, mine);
@@ -159,7 +169,16 @@ function breakStale(file: string, now: number): boolean {
     fs.rmSync(aside, { force: true });
     return true;
   }
-  try { fs.linkSync(aside, file); } catch { /* a newer lock is there already, or the copy is gone */ }
+  try {
+    fs.linkSync(aside, file);
+  } catch (error) {
+    // EEXIST: a newer lock is there already. Otherwise (no hard links on this
+    // file system, the copy gone) a rename puts it back, or the copy stays.
+    if (code(error) !== "EEXIST") {
+      try { fs.renameSync(aside, file); } catch { /* left to the purge of leftover files */ }
+      return false;
+    }
+  }
   fs.rmSync(aside, { force: true });
   return false;
 }

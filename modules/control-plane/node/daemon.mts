@@ -14,7 +14,7 @@ import {
 import { exchangeRound } from "./daemon-round.mts";
 import { captureRuntimeSourceIdentity } from "./daemon-source.mts";
 import { detectFacts, discoverRuntimes } from "./discovery.mts";
-import { enqueued, frameKind, intakeLane, laneTimer, type IntakeConnection, type LaneOptions } from "./frame-lanes.mts";
+import { enqueued, frameKind, intakeLane, laneTimer, lockRounds, type IntakeConnection, type LaneOptions } from "./frame-lanes.mts";
 import { deliveryDepth, DIRECTORY_INTERVAL_MS, EXCHANGE_INTERVAL_MS, exchangeOptions, recordingSessions } from "./exchange.mts";
 import { readPrivateKey } from "./identity.mts";
 import { installPaused, markedProbe, noticeInterruptedProbe } from "./install-pause.mts";
@@ -88,7 +88,8 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
   if (identity.publicKey !== config.publicKey) throw new Error("private key does not match the enrolled public key");
   const policy = loadPolicy(config.policyFile);
   // Issue #627: a record another process holds is left to the next round
-  // after this wait; the wait is synchronous and would block the frame lanes.
+  // after this wait, shared by every lock of one lane item (lockRounds); the
+  // wait is synchronous and would block the frame lanes.
   setRecordLockWait(DAEMON_RECORD_LOCK_WAIT_MS);
   // Issue #72. For nodes enrolled before onboard created it: a sandboxed
   // `msg send` can write into the outbox but not create it.
@@ -193,7 +194,7 @@ export function startDaemon(config: NodeConfig, paths: NodePaths, log: (line: st
       (execute) => executeTaskControl(execute, { nodeId: config.nodeId, paths, runner })),
     ...exchangeOptions(paths), log,
   });
-  const timed = laneTimer(log, lanes.slowLaneMs);
+  const timed = lockRounds(laneTimer(log, lanes.slowLaneMs), DAEMON_RECORD_LOCK_WAIT_MS);
   const tally = roundTally(); // inbound items since the last round, by kind (issues #487, #493)
   // Issue #441: deliveries on a lane of their own (frame-lanes.mts); spans reconnects like chain.
   const intake = intakeLane({ client, policyFile: config.policyFile, inbox: paths.inbox, log, intakeSlowMs: lanes.intakeSlowMs,
