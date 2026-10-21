@@ -100,6 +100,25 @@ test("a Node without module.stripTypeScriptTypes gives UNGEPRUEFT, never OK", as
   }
 });
 
+// Issue #576: Node's message stays, every absolute path in it is reduced to its file name.
+test("parser messages keep Node's text and name no absolute path", async () => {
+  assert.equal(detailOf(linkFailureVerdict(new SyntaxError("/Users/x/hooks/a.mts: boom"))), "rejected by Node's parser: a.mts: boom");
+  assert.equal(detailOf(linkFailureVerdict(new SyntaxError("Identifier 'a' has already been declared"))), "rejected by Node's parser: Identifier 'a' has already been declared");
+  const unresolved = Object.assign(new Error("Cannot find module '/Users/x/a.mts' imported from \\\\srv\\share\\b.mts"), { code: "ERR_UNKNOWN_BUILTIN_MODULE" });
+  assert.equal(detailOf(linkFailureVerdict(unresolved)), "ERR_UNKNOWN_BUILTIN_MODULE: Cannot find module 'a.mts' imported from b.mts");
+  const holder = module as { stripTypeScriptTypes?: unknown };
+  const original = holder.stripTypeScriptTypes;
+  const thrower = (error: Error) => () => { throw error; };
+  try {
+    holder.stripTypeScriptTypes = thrower(Object.assign(new Error("C:\\Users\\x\\a.mts: bad"), { code: "ERR_INVALID_TYPESCRIPT_SYNTAX" }));
+    assert.equal(detailOf(await syntaxVerdict("hook.mts", "export const x = 1;\n")), "rejected by Node's parser: ERR_INVALID_TYPESCRIPT_SYNTAX: a.mts: bad");
+    holder.stripTypeScriptTypes = thrower(new Error("~/.claude/x.mts: odd"));
+    assert.equal(detailOf(await syntaxVerdict("hook.mts", "export const x = 1;\n")), "type stripping failed (no code: x.mts: odd)");
+  } finally {
+    holder.stripTypeScriptTypes = original;
+  }
+});
+
 test("0 bytes is DEFEKT, other extensions are dispatched or left unchecked", async () => {
   await expectDefekt("hook.mts", "", "0 bytes");
   await expectOk("hook.mjs", "export const x = 1;\n");

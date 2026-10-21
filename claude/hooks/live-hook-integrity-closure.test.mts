@@ -60,11 +60,13 @@ test("a restored guard importing a file absent everywhere: reported, heartbeat n
   assert.equal(result.status, 0, result.stderr);
   const lines = result.stdout.split(/\r?\n/).filter(Boolean);
   assert.ok(lines.some((line) => /^commit-guard\.mts: .* -> RESTORED from the repo/.test(line)), result.stdout);
-  assert.ok(lines.some((line) => line.startsWith("lib/missing.mts (imported by commit-guard.mts): imported but not present "
-    + "on disk -> NOT restored (versioned source ") && line.includes("unreadable (ENOENT))")), result.stdout);
+  // Issue #576: the versioned source is named inside the checkout; the journal records which checkout.
+  assert.ok(lines.includes("lib/missing.mts (imported by commit-guard.mts): imported but not present on disk -> NOT restored "
+    + "(versioned source claude/hooks/lib/missing.mts unreadable (ENOENT)). ENFORCEMENT IS OFF for this hook."), result.stdout);
   assert.equal(lines.at(-1), "heartbeat not written (lib/missing.mts is not restored)");
   assert.equal(read(path.join(box.cache, "heartbeat.json")), null, "removed before the first repair, not written again");
-  assert.equal(journal(box).length, 2);
+  const entries = journal(box).map((line) => JSON.parse(String(line)) as { checkout?: unknown });
+  assert.deepEqual(entries.map((entry) => entry.checkout), Array(2).fill(`${box.cwd.replace(/\\/g, "/")}/kherep`));
 });
 
 test("a restored guard importing a file the repo has: both restored, the guard loads, heartbeat written", () => {

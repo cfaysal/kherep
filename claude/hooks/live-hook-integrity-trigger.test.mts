@@ -140,11 +140,10 @@ test("no wired file: no lock, no heartbeat, no cache directory", () => {
 // Issue #564: the trigger output reaches the dispatcher's notice; no line names a path or carries Node's message.
 test("a deleted own lib and unreadable settings: lines with codes and no path", () => {
   const box = sandbox();
-  // The versioned copy is there: a source that is not names its checkout path, which issue #576 tracks.
-  fs.mkdirSync(path.join(box.repoHooks, "lib"));
-  fs.renameSync(path.join(box.hooks, "lib", "hook-syntax.mts"), path.join(box.repoHooks, "lib", "hook-syntax.mts"));
+  // No versioned copy either: since issue #576 the source is named inside the checkout.
+  fs.rmSync(path.join(box.hooks, "lib", "hook-syntax.mts"));
   const deleted = lines(run(box));
-  assert.match(String(deleted[0]), /^own import lib\/hook-syntax\.mts cannot be loaded \(ERR_MODULE_NOT_FOUND\); nothing was verified this session -> RESTORED /);
+  assert.match(String(deleted[0]), /^own import lib\/hook-syntax\.mts cannot be loaded \(ERR_MODULE_NOT_FOUND\); nothing was verified this session -> NOT restored \(versioned source claude\/hooks\/lib\/hook-syntax\.mts unreadable \(ENOENT\)\)/);
   const bare = sandbox();
   fs.rmSync(path.join(bare.claude, "settings.user.json"));
   const unread = lines(run(bare));

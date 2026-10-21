@@ -111,13 +111,22 @@ test("reasons: absolute paths of every form reduced to their basename", () => {
 // Issue #564: the no-path assertions of the hook suites use this pattern; non-global, so .test() keeps no state.
 test("ABSOLUTE_PATH: POSIX, drive, UNC and home-relative paths match, hooks-relative labels do not", () => {
   assert.equal(ABSOLUTE_PATH.global, false);
-  for (const text of ["/tmp/x", "C:\\Users\\x", "D:/a", "\\\\srv\\s", "~/.claude", "(/private/var/x.mts)"]) {
+  for (const text of ["/tmp/x", "C:\\Users\\x", "D:/a", "\\\\srv\\s", "~/.claude", "(/private/var/x.mts)", "C:/Users/x/kherep/claude/hooks/a.mts", "/private/var/x/.codex/hooks"]) {
     assert.match(text, ABSOLUTE_PATH, text);
     assert.match(text, ABSOLUTE_PATH, `${text} again`);
   }
-  for (const text of ["sub/x.mts", "kherep-maestro/x.mts", "lib/guard-recheck.mts", "exit code 1", "timed out after 0.3 s", "1 MiB"]) {
+  for (const text of ["sub/x.mts", "kherep-maestro/x.mts", "lib/guard-recheck.mts", "exit code 1", "timed out after 0.3 s", "1 MiB",
+    "claude/hooks/lib/a.mts", "codex/hooks/shell-checks.mts", "claude/kherep/githooks/commit-msg", "g.js:1", "node: bad option"]) {
     assert.doesNotMatch(text, ABSOLUTE_PATH, text);
   }
+});
+
+// Issue #576: hook-syntax.mts imports node:* only, so it keeps a private global copy of the pattern.
+test("the path pattern copy in hook-syntax.mts has ABSOLUTE_PATH's source and the g flag", () => {
+  const text = fs.readFileSync(path.join(import.meta.dirname, "hook-syntax.mts"), "utf8");
+  const copy = /^const PATHS = \/(.+)\/([a-z]*);/m.exec(text);
+  assert.ok(copy, "hook-syntax.mts assigns PATHS a regex literal");
+  assert.deepEqual({ source: copy[1], flags: copy[2] }, { source: ABSOLUTE_PATH.source, flags: "g" });
 });
 
 test("reasons: a marker-matching line is <withheld>, control characters go, 240 characters at most", () => {
