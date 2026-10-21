@@ -91,6 +91,19 @@ test("prune removes files older than 24 h and keeps young ones", () => {
   assert.equal(fs.existsSync(file(h, "young.delivered")), true);
 });
 
+test("prune does not follow a state directory that is a link", () => {
+  const h = home();
+  const target = path.join(TMP, `link-target-${seq}`);
+  fs.mkdirSync(target);
+  fs.writeFileSync(path.join(target, "old.delivered"), "wrote\tt1\n");
+  const then = new Date(Date.now() - 25 * 3_600_000);
+  fs.utimesSync(path.join(target, "old.delivered"), then, then);
+  fs.mkdirSync(path.join(h, ".cache"));
+  fs.symlinkSync(target, stateDir(h), process.platform === "win32" ? "junction" : "dir");
+  prune(h);
+  assert.equal(fs.existsSync(path.join(target, "old.delivered")), true);
+});
+
 test("writeStopTrace writes the fixed keys and never a payload value", () => {
   const h = home();
   writeStopTrace(h, "a1", { mode: "auto", state: "absent", waited: 300, after: "present", transcript: "none", branch: "state" });

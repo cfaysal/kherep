@@ -208,9 +208,10 @@ increments the minor version; every other release increments the patch version.
   is reported, not refused: whether a refused handback would be retried is
   UNKNOWN until measured, and an observation run follows nearly every turn.
   The stop hook writes a fixed-key trace, `<agent_id>.stop`, for that host
-  measurement and prunes the directory after 24 h. The `SubagentStop` group
-  gets a 30 s timeout. Codex is unchanged: its hooks reference has no
-  `SubagentHandback`.
+  measurement and prunes the directory after 24 h. The `SubagentStop` entry is
+  unchanged, so the stop uses Claude Code's default hook timeout; an installer
+  upgrade keeps exactly one entry of each hook, which a new bootstrap test
+  renders. Codex is unchanged: its hooks reference has no `SubagentHandback`.
 - Windows: `writeJsonAtomic` (daemon.json, inbox records, task and session
   records, receipt.json) retries the replace-by-rename on `EPERM`, `EBUSY` and
   `EACCES` up to 8 attempts with 10–640 ms backoff (1.27 s in total) while

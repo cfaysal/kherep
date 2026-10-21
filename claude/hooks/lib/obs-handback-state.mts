@@ -89,6 +89,7 @@ export function prune(home: string, maxAgeMs = DAY_MS): void {
   const dir = stateDir(home);
   let names: string[];
   try {
+    if (!fs.lstatSync(dir).isDirectory()) return; // a linked state directory is not followed
     names = fs.readdirSync(dir);
   } catch {
     return;
