@@ -194,6 +194,22 @@ increments the minor version; every other release increments the patch version.
   accepted list for the platform in `codex/scripts/codex-run-expected.json`.
   Before this a run that selected nothing or skipped more than before was
   green. `npm run test:codex` stays the local command.
+- Hook reference (issues #587 and #588). `docs/HOOKS.md` lists every wired
+  hook in one table: runtime, event and matcher, kind and what it does, 52
+  rows for the Claude templates, the Codex render and the Git hooks.
+  `bootstrap/hooks-reference.test.mts` reads those sources in-process and
+  fails when a wired hook has no row or more than one, when a row names a
+  hook nothing wires, when a row breaks the cell vocabulary, or when
+  `README.md` does not link the reference from its Documentation table and
+  its Security model section; it runs in `test:bootstrap` and in the Windows
+  `bootstrap-rest` shard. The README no longer calls the Codex messaging
+  intent hook an exception to the fail-closed adapter (wrong since #538),
+  says that only the hooks under `hooks/` start through the hook runtime
+  entry, describes the Playwright and Atlassian destructive guards, the
+  deploy guard's scope and the research Stop hook, and gains a hook runtime
+  component row.
+  `codex/ARCHITECTURE.md` lists `pre-intent` among the PreToolUse phases.
+  No hook, wiring, settings template or installer changes.
 
 ### Changed
 
