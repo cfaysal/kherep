@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 
+import { isSessionRef } from "../protocol-messages.mts";
 import type { SessionContinueArgs, SessionStartArgs, SessionStopArgs } from "../protocol-tasks.mts";
 import { continueCodex, startCodex, stopCodex } from "./codex-runner.mts";
 import { startTimeOf, type CodexDeps } from "./codex-process.mts";
@@ -157,7 +158,9 @@ async function background(deps: RunnerDeps, launched: TaskRecord, args: string[]
   let mapped: TaskRecord = { ...launch, shortId, state: "started" };
   try {
     const row = findRow(await agentRows(deps), mapped);
-    mapped = await withProcess(deps, mapIds(mapped, row), row);
+    // Issue #639: a malformed nonempty full id maps as a row without one; its short id and pid stay.
+    const malformed = typeof row?.sessionId === "string" && row.sessionId !== "" && !isSessionRef(row.sessionId);
+    mapped = await withProcess(deps, mapIds(mapped, malformed ? { ...row, sessionId: undefined } : row), row);
   } catch {
     // mapped later by the watch round
   }

@@ -107,7 +107,7 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
     }
     if (invalid) {
       // No evidence the session ended: clocks, carried messages and copies wait for a valid listing.
-      log(`kherep-node: task ${record.taskId}: listed session id is not valid; mapping deferred`);
+      log(`kherep-node: task ${record.taskId}: session id is not valid; mapping deferred`);
       continue;
     }
     // Issue #197: no progress of the run's turn within NO_PROGRESS_MS fails it

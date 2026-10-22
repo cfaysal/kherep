@@ -34,7 +34,7 @@ for (const bad of MALFORMED) {
     assert.equal(readTask(node.paths, B)?.state, "running", "the later task progressed in the same round");
     assert.deepEqual(node.reports(), [{ taskId: B, state: "running", sessionId: SB }]);
     assert.deepEqual(node.calls.filter((c) => c.args[0] !== "agents"), [], "no copy retired, no stop");
-    assert.equal(lines.filter((l) => l.includes(A) && l.includes("listed session id is not valid")).length, 1);
+    assert.equal(lines.filter((l) => l === `kherep-node: task ${A}: session id is not valid; mapping deferred`).length, 1);
     assert.ok(!lines.some((l) => l.includes(bad)), "the raw id is never logged");
     assert.ok(!written(node).includes(JSON.stringify(bad).slice(1, -1)), "the raw id is never written");
   });
@@ -90,5 +90,5 @@ test("a stored source id that is malformed defers the task's handover instead of
   await assert.doesNotReject(watchTasks(node.deps(), (line) => lines.push(line)));
   assert.deepEqual(readTask(node.paths, A), before);
   assert.equal(readTask(node.paths, B)?.state, "running");
-  assert.equal(lines.filter((l) => l.includes(A) && l.includes("listed session id is not valid")).length, 1);
+  assert.equal(lines.filter((l) => l === `kherep-node: task ${A}: session id is not valid; mapping deferred`).length, 1);
 });

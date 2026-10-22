@@ -196,6 +196,24 @@ or offered, and an age over the threshold, counted from `closedAttempt` when
 lock. A failed listing, a live target, a terminal state, a younger message or a
 busy record refuses nothing, so neither refusal nor delivery is guaranteed.
 
+The start and continue mapping (`node/session-runner.mts` `background`) applies
+the same classification locally (issue #639): a malformed nonempty listed full
+ID is mapped as if the selected row had none, so the row's short ID, the
+best-effort pid capture and the pending marker stay, and the task, its report
+and `attachDelivery` never see that ID. A new start, the closed-delivery
+fallback included, thus keeps its messages delivery-pending under the task name
+until the watch above maps a valid listing; a continue keeps its previous valid
+full ID. The early `closedAttempt` mark before the start and the shared
+`mapIds` are unchanged. `node/closed-delivery.mts` selects an ended intercom
+task for resume only when its stored full ID passes `isSessionRef`, because
+that ID keys its turn budget file (`node/autonomy.mts` `takeTurn`) before any
+resume; an excluded task takes the guarded new path with the closed target's
+runtime, working directory, limits (no continue exception) and budget. This
+selection precedes the unchanged pre-launch refusal of `resumeClaude` (issue
+#638), which remains for direct callers. Existing records are not migrated,
+and an active or still-running intercom task keeps the earlier reuse branch,
+including its attachment failure for a malformed stored ID.
+
 The exchange round itself (`node/daemon-round.mts`) reads the inbox through the
 daemon's in-process index (`node/inbox-index.mts`, issue #487). The round's
 synchronous start, the delivery-progress observers and the status reports, shares

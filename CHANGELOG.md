@@ -728,6 +728,21 @@ increments the minor version; every other release increments the patch version.
   including admission release failure, no longer authorizes a second session
   start. Empty-ID mapping and the two explicit failed-resume fallback paths
   retain their existing behavior (issue #638).
+- Claude start and continue mapping no longer adopts a listed full session ID
+  that is not a valid session reference (issue #639). A new start, including
+  the closed-session fallback, keeps its short ID, pid and pending marker
+  without a full ID, so its intercom messages stay delivery-pending under the
+  task name until a valid listing maps them; a continue keeps its previous
+  valid full ID while pending. The watch diagnostic for a malformed listed or
+  stored ID now reads `session id is not valid; mapping deferred`. An ended
+  intercom task whose stored full ID is not a valid session reference is no
+  longer selected for resume, so that ID never keys a turn budget file (on
+  Windows a control character made the budget report `locked` every round);
+  its messages take the guarded new-session path on the closed target, with
+  that target's readiness, limits, working directory and budget. The direct
+  resume keeps its unchanged pre-launch refusal of such an ID (issue #638),
+  which this earlier selection now precedes. Existing records are not
+  migrated.
 - Receipts for messages whose reply had already reached this node no longer
   appear after a service restart or upgrade (issue #520). They had never been
   shown: the reply in the inbox kept them quiet, and the daemon start's purge
