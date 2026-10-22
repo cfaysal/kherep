@@ -2,12 +2,12 @@ import type { TaskState } from "../protocol-tasks.mts";
 import { MAX_RUNTIME_REASON } from "./codex-runner.mts";
 import { watchCodexTasks } from "./codex-watch.mts";
 import { retireCopies } from "./copy-retire.mts";
-import { resolveDelivery, updateDeliverySession } from "./delivery-identity.mts";
-import { listInbox, readdress } from "./inbox.mts";
+import { resolveDelivery } from "./delivery-identity.mts";
 import { RecordLockBusy } from "./inbox-record-lock.mts";
 import { claudeProgressed, failStalledClaude, progressOverdue, refuseCarried, settleCarried } from "./run-progress.mts";
 import { agentRows, findRow, mapIds, markClaudeStopped, runClaude, stopTask, type RunnerDeps } from "./session-runner.mts";
 import { measureClaude } from "./task-control-claude.mts";
+import { handoverTaskMessages } from "./task-handover.mts";
 import { isActive, listTasks, mappingPendingAt, queueReport, readTask, writeTask, type TaskRecord } from "./task-records.mts";
 
 // The watch round for started task sessions (issue #31, item 5), run with the
@@ -123,11 +123,8 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
     // An intercom session resumed as a copy under a new id (issue #109) takes over its waiting messages.
     if (record.local === "intercom" && record.sessionId && mapped.sessionId && mapped.sessionId !== record.sessionId) {
       try {
-        const moved = readdress(deps.paths.inbox, record.sessionId, mapped.sessionId);
-        const previous = listInbox(deps.paths.inbox, mapped.sessionId)
-          .filter((message) => message.closedTo === record.sessionId)
-          .map((message) => message.messageId);
-        updateDeliverySession(deps.paths, mapped, [...new Set([...moved, ...previous])], mapped.sessionId);
+        handoverTaskMessages(deps.paths.inbox, record.sessionId, mapped.sessionId,
+          { taskId: record.taskId, runtime: record.runtime ?? "claude" });
       } catch (error) {
         deferOnBusy(error, record.taskId, "readdress", log);
         continue;

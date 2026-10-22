@@ -76,6 +76,9 @@ for (const phase of ["readdress", "identity"] as const) {
     const settled = [readTask(node.paths, A), getMessage(node.paths.inbox, M1), getMessage(node.paths.inbox, M2)];
     await watchTasks(node.deps());
     assert.deepEqual([readTask(node.paths, A), getMessage(node.paths.inbox, M1), getMessage(node.paths.inbox, M2)], settled);
-    for (const control of controls) assert.deepEqual(getMessage(node.paths.inbox, control.messageId), control);
+    for (const control of controls.slice(0, 2)) assert.deepEqual(getMessage(node.paths.inbox, control.messageId), {
+      ...control, toSession: S2, delivery: { ...control.delivery!, sessionId: S2 },
+    });
+    assert.deepEqual(getMessage(node.paths.inbox, controls[2]!.messageId), controls[2]);
   });
 }

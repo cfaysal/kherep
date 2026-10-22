@@ -6,14 +6,15 @@ import { resumeArgs } from "./codex-process.mts";
 import { adoptOffered, spawnRun } from "./codex-runner.mts";
 import { retireCopies } from "./copy-retire.mts";
 import { deliveryContext, frameRecords, sessionInbox } from "./deliver-core.mts";
-import { attachDelivery, updateDeliverySession } from "./delivery-identity.mts";
+import { attachDelivery } from "./delivery-identity.mts";
 import { addLocalSession, readDirectory } from "./exchange.mts";
-import { getMessage, markClosedAttempt, markOffered, markRetry, readdress, setMessageProgress, type InboxRecord } from "./inbox.mts";
+import { getMessage, markClosedAttempt, markOffered, markRetry, setMessageProgress, type InboxRecord } from "./inbox.mts";
 import { RecordLockBusy } from "./inbox-record-lock.mts";
 import { withServiceAdmission, type ServiceAdmission } from "./service-drain.mts";
 import { taskCommand } from "./session-command.mts";
 import { agentRows, BACKGROUNDED, mapIds, runClaude, startTask, type RunnerDeps } from "./session-runner.mts";
 import { CLAUDE_RUNTIME } from "./sessions.mts";
+import { handoverTaskMessages } from "./task-handover.mts";
 import { queueReport, readTask, senderOf, writeTask, type TaskRecord } from "./task-records.mts";
 import { wakeText } from "./wake-hook.mts";
 
@@ -97,8 +98,8 @@ async function resumeClaudeAdmitted(deps: RunnerDeps, task: TaskRecord, cwd: str
   const adopted = saved.sessionId ?? sessionId;
   if (adopted !== sessionId) {
     try {
-      const moved = readdress(deps.paths.inbox, sessionId, adopted);
-      updateDeliverySession(deps.paths, saved, moved, adopted);
+      handoverTaskMessages(deps.paths.inbox, sessionId, adopted,
+        { taskId: saved.taskId, runtime: saved.runtime ?? "claude" });
     } catch (error) {
       // Issue #627: the resume ran and cannot fail any more, or a second
       // session would start. The record is written without the adopted id,
