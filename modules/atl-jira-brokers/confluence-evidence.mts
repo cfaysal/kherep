@@ -62,9 +62,11 @@ export function classifyClaim(snapshot: ClaimSource, bodyApproved: boolean, kind
   const text = plainText(snapshot.body);
   const revisions = parseRevisionLines(text);
   const codeTokens = unique(text.match(/\b[\w./-]+\.(?:mts|ts|tsx|js|py|java|go|rs)\b/g) ?? []);
-  const trackerKeys = unique([...(text.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? []),
-    ...[...text.matchAll(/\bGitHub\s+(?:issue|PR|pull request)\s*#(\d+)\b/gi)].map(m => `#${m[1]}`),
-    ...[...snapshot.body.matchAll(/\/issues\/(\d+)\b/g)].map(m => `#${m[1]}`)]);
+  const githubKeys = [...text.matchAll(/\bGitHub\s+(?:issue|PR|pull request)\s*#(\d+)\b/gi),
+    ...snapshot.body.matchAll(/\/(?:issues|pull)\/(\d+)\b/g)].map(m => `#${m[1]}`);
+  // Once the page names one GitHub key, every #N it states is one ("#10 and #648"); a numeric entity is not.
+  if (githubKeys.length > 0) githubKeys.push(...[...text.replace(/&#\w+;/g, ' ').matchAll(/(?<!\w)#(\d+)\b/g)].map(m => `#${m[1]}`));
+  const trackerKeys = unique([...(text.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? []), ...githubKeys]);
   // Priority order: a bound revision makes code repeatable; nothing repeats a historical claim.
   const has: [Kind, boolean][] = [
     ['code', Object.values(revisions).some(lines => lines.length > 0) || codeTokens.length > 0
