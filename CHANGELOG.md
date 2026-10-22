@@ -22,7 +22,9 @@ increments the minor version; every other release increments the patch version.
   applies the promotion gates: a dated measurement at most two days old with
   command and excerpt, a revision bound on the page and present in the named
   repository, a measurement that touches the claim (every tracker key the
-  page states, matched as a whole key; any one code file name), no forbidden
+  page states, matched as a whole key, a GitHub key `#N` only as that token
+  in the excerpt or as the number `gh issue view` or `gh pr view` reads;
+  any one code file name), no forbidden
   source, and no credential-shaped or control-character content. A `--kind`
   override never makes a historical claim repeatable. It renders the dated
   measurement block before the `Related pages` footer in a form that storage

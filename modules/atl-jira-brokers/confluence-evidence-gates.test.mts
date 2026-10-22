@@ -64,6 +64,22 @@ test('P3-b: a tracker claim needs every tracker key in the excerpt; a code claim
   assert.equal(decide(claim(CODE), M({ command: `git show ${SHA}:src/retry.mts` }), OPT).outcome, 'confirmed');
 });
 
+test('F1: a GitHub key counts only as #N in the excerpt or as the number gh issue/pr view reads', () => {
+  const GH = (command: string, excerpt: string): Measurement => ({ kind: 'tracker', source: 'github', sourceClass: 'tracker',
+    command, excerpt, measuredAt: TODAY, verdict: 'reproduces' });
+  const closed = 'state: CLOSED, closedAt: 2026-10-22T13:00:00Z';
+  const both = claim('<p>GitHub issue #10 and #648 are closed.</p>');
+  assert.equal(both.kind, 'tracker');
+  assert.equal(decide(both, GH('gh issue view 648 --json state,closedAt', closed), OPT).reason, 'measurement-does-not-touch-claim');
+  const one = claim('<p>GitHub issue #648 is closed.</p>');
+  assert.equal(decide(one, GH('gh issue view 648 --json state,closedAt', closed), OPT).outcome, 'confirmed');
+  assert.equal(decide(one, GH('gh pr view 648 --json state', 'state: MERGED'), OPT).outcome, 'confirmed');
+  assert.equal(decide(one, GH('gh api repos/o/r/issues', '#648 state: CLOSED'), OPT).outcome, 'confirmed');
+  assert.equal(decide(one, GH('gh issue view 6480 --json state', closed), OPT).reason, 'measurement-does-not-touch-claim');
+  assert.equal(decide(one, GH('gh api repos/o/r/issues', '#6480 state: CLOSED, 648 open'), OPT).reason, 'measurement-does-not-touch-claim');
+  assert.equal(decide(one, GH('echo 648 #648', closed), OPT).reason, 'measurement-does-not-touch-claim');
+});
+
 test('P3-c: a --kind override never bypasses historical-not-repeatable', () => {
   const hist = claim('<p>Historical measurement from the queue rollout: delivery stalled on port 8443.</p>', 'live');
   assert.deepEqual([hist.kind, hist.classifiedKind], ['live', 'historical']);

@@ -144,13 +144,16 @@ function codeGate(claim: Claim, m: Measurement, options: DecideOptions): string 
   return null;
 }
 const word = (key: string): RegExp => new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+// gh issue view --json state,closedAt prints no number, so the command may name the issue it reads;
+// a bare number anywhere else (a date, a count) never stands for #N.
+const github = (n: string, m: Measurement): boolean =>
+  new RegExp(`(?<!\\w)#${n}\\b`).test(m.excerpt) || new RegExp(`\\bgh\\s+(?:issue|pr)\\s+view\\s+${n}\\b`).test(m.command);
 function touches(claim: Claim, m: Measurement): boolean {
   const hay = `${m.command}\n${m.excerpt}`;
   // Every tracker key the page states (a read of one key must not confirm a page about several), on word
-  // boundaries (KEY-1 is not KEY-12). gh issue view --json state,closedAt prints no number, so a GitHub
-  // issue may be named by the command; any other key must appear in the excerpt. Code needs any one token.
+  // boundaries (KEY-1 is not KEY-12); a non-GitHub key must appear in the excerpt. Code needs any one token.
   if (m.kind === 'tracker') return claim.trackerKeys.length > 0 && claim.trackerKeys.every(key => key.startsWith('#')
-    ? new RegExp(`(?:#|\\b)${key.slice(1)}\\b`).test(hay) : word(key).test(m.excerpt));
+    ? github(key.slice(1), m) : word(key).test(m.excerpt));
   if (m.kind === 'code') return [...claim.codeTokens, ...(m.subject ? [m.subject] : [])].some(token => hay.includes(token));
   return filled(m.subject) && hay.includes(m.subject ?? '');
 }
