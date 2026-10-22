@@ -36,6 +36,7 @@ function harness(pages: Record<string, { body: string; labels: string[]; spaceId
     const dir = args[1] ?? '';
     if (args.includes('cat-file')) return { stdout: 'commit\n', stderr: '' };
     if (dir.startsWith('/x/') || dir.startsWith('/repo')) return { stdout: dir.split('/').slice(0, 3).join('/') + '\n', stderr: '' };
+    if (dir.startsWith('/dubious')) throw new Error(`fatal: detected dubious ownership in repository at '${dir}'`);
     throw new Error('fatal: not a git repository (or any of the parent directories): .git');
   };
   const ctx = { env: {}, credEnv: 'KHEREP_ATL_CRED_FILE_CLAUDE', session: {}, now: () => NOW,
@@ -60,6 +61,15 @@ test('Defect 5: prepare refuses without body approval or with an --out inside a 
   await assert.rejects(() => h.run({ ...prepare, out: '/repo/notes/r.json' }), /out-inside-repository/);
   assert.equal(h.calls.length, 0);
   assert.equal(h.files.size, 0);
+});
+
+test('Defect 5: only git\'s explicit "not a git repository" counts as outside; any other git error refuses', async () => {
+  const h = harness();
+  await assert.rejects(() => h.run({ ...prepare, out: '/dubious/r.json' }), /cannot be shown to lie outside/);
+  const decided = await prepared();
+  await assert.rejects(() => decided.run({ ...decideArgs, 'out-body': '/dubious/b.xml' }), /cannot be shown to lie outside/);
+  assert.deepEqual([h.calls.length, h.files.size, decided.calls.length, decided.files.has('/dubious/b.xml')], [0, 0, 0, false]);
+  assert.equal(await h.run(prepare), 0, 'fatal: not a git repository is the explicit negative');
 });
 
 test('prepare reads with GET only, prints metadata only and writes body and title to the record', async () => {
