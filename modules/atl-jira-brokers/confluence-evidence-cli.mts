@@ -118,13 +118,14 @@ async function decideMode(io: Io): Promise<number> {
   const recordPath = await requireOutside(io, 'record');
   const record = await readRecord(io);
   if (!record.claim || typeof record.body !== 'string') fail('--record holds no prepared page.');
+  if (supersededBy === record.pageId) fail('superseded-same-page: --superseded-by names the page itself.');
   const measurement = await readJson(io, 'measurement');
   const m = measurement && typeof measurement === 'object' ? measurement as Partial<Measurement> : null;
   if (supersededBy !== undefined && m?.supersededBy !== undefined && m.supersededBy !== supersededBy) {
     fail('--superseded-by differs from supersededBy in the measurement.');
   }
   const options: DecideOptions = { now: ctx.now(), maxAgeDays, ...(await repository(io, m)) };
-  if (supersededBy !== undefined && supersededBy !== record.pageId) {
+  if (supersededBy !== undefined) {
     const page = await getPage(io.session(), supersededBy);
     options.superseded = { id: page.id, title: page.title, spaceId: page.spaceId, spaceKey: record.spaceKey ?? '' };
   }
@@ -133,8 +134,11 @@ async function decideMode(io: Io): Promise<number> {
   let body: string | undefined;
   let after = labels;
   if (PROPOSED.includes(decision.outcome)) {
-    after = [...new Set([...labels.filter(l => !decision.labelsRemove.includes(l)), ...decision.labelsAdd])].sort();
-    body = insertBeforeFooter(record.body!, renderMeasurementBlock(decision, m as Measurement, runtimeLabel(ctx.credEnv, ctx.env), options.superseded));
+    const runtime = runtimeLabel(ctx.credEnv, ctx.env);
+    // The labels call adds the broker's runtime label to a page that carries none; verify expects it too.
+    const added = [...decision.labelsAdd, ...(labels.some(l => l.startsWith('runtime-')) ? [] : [runtime])];
+    after = [...new Set([...labels.filter(l => !decision.labelsRemove.includes(l)), ...added])].sort();
+    body = insertBeforeFooter(record.body!, renderMeasurementBlock(decision, m as Measurement, runtime, options.superseded));
     // Defect 1, checked on the result: the next drainage scan must accept the promoted page.
     const scan = drainageRules([{ id: record.pageId, version: record.readVersion ?? 0, title: '', spaceId: record.spaceId ?? '',
       parentId: null, body, labels: after }], false);
@@ -156,15 +160,21 @@ async function decideMode(io: Io): Promise<number> {
 async function verify(io: Io): Promise<number> {
   const record = await readRecord(io);
   const outcome = record.decision?.outcome ?? '';
-  if (!PROPOSED.includes(outcome)) fail('--record holds no proposed change to verify.');
+  const reviewed = record.labelsAfter ?? [];
+  if (!PROPOSED.includes(outcome) || !Array.isArray(record.labelsAfter)) fail('--record holds no proposed change to verify.');
   const file = io.args['body-file'] ?? fail('--body-file is missing.');
   const expected = await io.ctx.readFile(file, 'utf8').catch(() => fail('--body-file is not readable.'));
   const snapshot = await drainageSnapshot(io.session(), record.pageId, record.spaceId ?? '')
     .catch((error: unknown) => fail(`Readback failed: ${readFailure(error).reason}. Result UNVERIFIED.`));
   const evidence = snapshot.labels.filter(l => l.startsWith('evidence-')).sort();
+  // The full set, not only the evidence label: a status-author or any other change since prepare is a mismatch.
+  const diff = [...snapshot.labels.filter(l => !reviewed.includes(l)).sort().map(l => `+${l}`),
+    ...reviewed.filter(l => !snapshot.labels.includes(l)).sort().map(l => `-${l}`)];
   io.ctx.log(`version: ${snapshot.version}`);
   if (snapshot.body !== expected) io.ctx.log('readback: mismatch body');
-  else if (!evidenceLabelsOk(snapshot.labels, outcome)) io.ctx.log(`readback: mismatch labels (${evidence.join(', ') || 'none'})`);
+  else if (diff.length || !evidenceLabelsOk(snapshot.labels, outcome)) {
+    io.ctx.log(`readback: mismatch labels (${diff.join(', ') || evidence.join(', ') || 'none'})`);
+  }
   else { io.ctx.log('readback: match'); return 0; }
   return 2;
 }

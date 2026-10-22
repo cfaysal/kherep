@@ -22,12 +22,13 @@ increments the minor version; every other release increments the patch version.
   applies the promotion gates: a dated measurement at most two days old with
   command and excerpt, a revision bound on the page and present in the named
   repository, a measurement that touches the claim, no forbidden source, and
-  no credential-shaped excerpt. It renders the dated measurement block before
-  the `Related pages` footer, and re-reads the page after the operator's
-  `update --expected-version` and two-step `labels` calls, asserting exactly
-  one evidence label. A format repair still never promotes. Human-assigned
-  status is reported, never relabelled. `status-author-*`, `currency-*` and
-  `origin-wiki` are never changed. Private pages stay excluded or UNKNOWN.
+  no credential-shaped or control-character content. It renders the dated
+  measurement block before the `Related pages` footer, and re-reads the page
+  after the operator's `update --expected-version` and two-step `labels`
+  calls, asserting the reviewed label set with exactly one evidence label. A
+  format repair still never promotes. Human-assigned status is reported,
+  never relabelled. `status-author-*`, `currency-*` and `origin-wiki` are
+  never changed. Private pages stay excluded or UNKNOWN.
 - Denied calls in delegated worker reports (issue #504). The guard
   dispatcher, and the hook runtime entry for its own denies, journal each
   guarded call of a delegated Claude worker (a payload with a valid

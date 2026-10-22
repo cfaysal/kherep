@@ -6,6 +6,7 @@ import { cmdEvidence } from './confluence-evidence-cli.mts';
 import { runCli } from './atl-confluence-ccoder.mts';
 import type { ConfluenceSession, RequestSpec } from './confluence-contract.mts';
 import type { NeighbourCliContext } from './confluence-neighbour-cli.mts';
+import { runtimeLabel } from './confluence-runtime-label.mts';
 
 const SHA = 'a'.repeat(40);
 const NOW = new Date(2026, 9, 22, 12).getTime();
@@ -151,11 +152,47 @@ test('Defect 2: verify matches only the reviewed body with exactly the outcome l
     for (const [k, value] of h.files) v.files.set(k, value);
     return [await v.run(verify), v.out.at(-1)];
   };
-  const after = ['type-observation', 'evidence-confirmed', 'status-author-model'];
-  assert.deepEqual(await run(body, after), [0, 'readback: match']);
-  assert.deepEqual(await run(body, [...after, 'evidence-assumed']), [2, 'readback: mismatch labels (evidence-assumed, evidence-confirmed)']);
-  assert.deepEqual(await run(body, ['type-observation']), [2, 'readback: mismatch labels (none)']);
+  const after: string[] = JSON.parse(h.files.get('/tmp/ev/r.json') ?? '{}').labelsAfter;
+  assert.deepEqual(after, ['evidence-confirmed', 'runtime-claude-code-win', 'status-author-model', 'type-observation']);
+  assert.deepEqual(await run(body, [...after].reverse()), [0, 'readback: match']);
+  assert.deepEqual(await run(body, [...after, 'evidence-assumed']), [2, 'readback: mismatch labels (+evidence-assumed)']);
+  assert.deepEqual(await run(body, ['type-observation']),
+    [2, 'readback: mismatch labels (-evidence-confirmed, -runtime-claude-code-win, -status-author-model)']);
   assert.deepEqual(await run(body.replace('retry', 'retrz'), after), [2, 'readback: mismatch body']);
+  // Any label change between prepare and apply is a mismatch, not only the evidence label.
+  const verified = after.map(l => l === 'status-author-model' ? 'status-author-verified' : l);
+  assert.deepEqual(await run(body, verified), [2, 'readback: mismatch labels (+status-author-verified, -status-author-model)']);
+  assert.deepEqual(await run(body, [...after, 'currency-uncertain']), [2, 'readback: mismatch labels (+currency-uncertain)']);
+});
+
+test('labelsAfter anticipates the runtime label the labels call adds to a page without one', async () => {
+  const h = await prepared(harness({ '1': { body: BODY, labels: LABELS.slice(0, 3) } }));
+  assert.equal(await h.run(decideArgs), 0);
+  const record = JSON.parse(h.files.get('/tmp/ev/r.json') ?? '{}');
+  assert.ok(record.labelsAfter.includes(runtimeLabel('KHEREP_ATL_CRED_FILE_CLAUDE', {})));
+  assert.equal(record.labelsAfter.filter((l: string) => l.startsWith('runtime-')).length, 1);
+});
+
+test('--superseded-by naming the page itself refuses before any read: superseded-same-page', async () => {
+  const h = await prepared(harness(), { ...MEASUREMENT, verdict: 'contradicts' });
+  await assert.rejects(() => h.run({ ...decideArgs, 'superseded-by': '1', 'body-approved': undefined }), /superseded-same-page/);
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.files.has('/tmp/ev/b.xml'), false);
+});
+
+test('a promoted body the drainage scan would flag stays unknown: promoted-body-revision-invalid', async () => {
+  const page = '<p>Host: alpha-node</p><p>The port in src/queue.mts is 8443.</p><h2>Related pages</h2>';
+  const h = harness({ '1': { body: page, labels: LABELS } });
+  assert.equal(await h.run({ ...prepare, kind: 'live' }), 0);
+  assert.ok(h.out.includes('kind: live (override; classified code)'), h.out.join('\n'));
+  h.files.set('/tmp/ev/m.json', JSON.stringify({ kind: 'live', source: 'alpha-node', sourceClass: 'target-host',
+    command: 'ss -ltn | grep -E "8443|8080"', excerpt: 'LISTEN 0 4096 *:8080', measuredAt: TODAY, verdict: 'contradicts',
+    subject: '8443', kindOverride: 'the claim is about the running host' }));
+  assert.equal(await h.run(decideArgs), 2);
+  assert.match(h.out.join('\n'), /reason: promoted-body-revision-invalid/);
+  assert.equal(h.files.has('/tmp/ev/b.xml'), false);
+  const record = JSON.parse(h.files.get('/tmp/ev/r.json') ?? '{}');
+  assert.deepEqual([record.decision.outcome, record.decision.labelsAdd, record.labelsAfter], ['unknown', [], [...LABELS].sort()]);
 });
 
 test('record registers an excluded page without a GET and report renders it', async () => {

@@ -114,7 +114,10 @@ function measurementGate(claim: Claim, m: Record<string, unknown>, options: Deci
     || (claim.classifiedKind !== undefined && !filled(m.kindOverride))) return 'measurement-incomplete';
   if (String(m.excerpt).length > 4000) return 'excerpt-too-long';
   // Every field is rendered into the page or the report, so every field is checked.
-  if (Object.values(m).some(v => typeof v === 'string' && SECRET_MARKERS.some(marker => marker.test(v)))) return 'excerpt-secret-marker';
+  const strings = Object.values(m).filter((v): v is string => typeof v === 'string');
+  // C0 controls other than tab, LF and CR (an ANSI escape, say) could rewrite a terminal or the report.
+  if (strings.some(v => /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(v))) return 'excerpt-control-chars';
+  if (strings.some(v => SECRET_MARKERS.some(marker => marker.test(v)))) return 'excerpt-secret-marker';
   const age = today(options.now) - measured;
   if (age > (options.maxAgeDays ?? 2)) return 'measurement-stale';
   return age < 0 ? 'measurement-in-future' : null;

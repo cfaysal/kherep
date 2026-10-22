@@ -190,3 +190,24 @@ test('renderReport shows a --kind override with its classification and the measu
   assert.ok(!unvalidated.includes('vendor default'), 'an unvalidated measurement prints no reason');
   assert.equal(decide(c, M({ ...m, kindOverride: undefined }), OPT()).reason, 'measurement-incomplete');
 });
+
+test('C0 control characters other than tab, LF and CR refuse the measurement unprinted', () => {
+  const ansi = M({ excerpt: `12: retry(receipt) ${String.fromCharCode(27)}[31mred` });
+  const d = decide(claim(), ansi, OPT());
+  assert.deepEqual([d.outcome, d.reason], ['unknown', 'excerpt-control-chars']);
+  assert.ok(!renderReport([{ pageId: '1', readVersion: 3, claim: claim(), measurement: ansi, decision: d }]).includes(String.fromCharCode(27)));
+  assert.equal(decide(claim(), M({ source: `alpha${String.fromCharCode(0)}` }), OPT()).reason, 'excerpt-control-chars');
+  assert.equal(decide(claim(), M({ excerpt: '12:\tretry(receipt)\r\n13: done' }), OPT()).outcome, 'confirmed');
+});
+
+test('type-knowledge pages are eligible; command and excerpt are escaped in the measurement block', () => {
+  const knowledge = claim(undefined, ['type-knowledge', ...LABELS.slice(1)]);
+  assert.equal(knowledge.typeLabel, 'type-knowledge');
+  const m = M({ command: `git show ${SHA}:src/queue.mts | grep -n "a<b && c"`, excerpt: '12: if (a < b && retry(receipt)) {}' });
+  const d = decide(knowledge, m, OPT());
+  assert.equal(d.outcome, 'confirmed');
+  const block = renderMeasurementBlock(d, m, 'runtime-claude-code-win');
+  assert.ok(block.includes('<code>git show ' + SHA + ':src/queue.mts | grep -n &quot;a&lt;b &amp;&amp; c&quot;</code>'), block);
+  assert.ok(block.includes('<pre>12: if (a &lt; b &amp;&amp; retry(receipt)) {}</pre>'), block);
+  assert.ok(!block.includes('a<b') && !block.includes('a < b'));
+});

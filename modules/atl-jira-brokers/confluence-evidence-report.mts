@@ -10,7 +10,7 @@ export const PROPOSED: readonly string[] = ['confirmed', 'refuted', 'superseded'
 // Reasons decided before the measurement was validated: its fields stay unprinted.
 const UNVALIDATED = ['page-not-eligible', 'page-not-assumed', 'labels-malformed', 'status-author-not-model', 'record-not-body-approved',
   'historical-not-repeatable', 'no-measurement', 'measurement-unknown-field', 'measurement-source-forbidden', 'measurement-incomplete',
-  'excerpt-too-long', 'excerpt-secret-marker', 'measurement-stale', 'measurement-in-future'];
+  'excerpt-too-long', 'excerpt-control-chars', 'excerpt-secret-marker','measurement-stale', 'measurement-in-future'];
 function fenced(text: string): string {
   const fence = '`'.repeat(Math.max(2, ...(text.match(/`+/g) ?? []).map(run => run.length)) + 1);
   return `${fence}text\n${text}\n${fence}`;
