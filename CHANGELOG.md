@@ -32,9 +32,10 @@ increments the minor version; every other release increments the patch version.
   in text), and re-reads the page after the operator's
   `update --expected-version` and two-step `labels` calls, asserting the
   reviewed label set with exactly one evidence label. Record and body files
-  lie outside every git work tree (checked on the resolved directory), are
-  never overwritten by `prepare` or `record`, not even when created while
-  they run, and are replaced atomically by `decide`. A format repair still never promotes. Human-assigned status is
+  lie outside every git work tree (checked on, and written to, the resolved
+  directory), are never overwritten by `prepare` or `record`, not even when
+  created while they run, and are replaced atomically by `decide`. A format
+  repair still never promotes. Human-assigned status is
   reported, never relabelled. `status-author-*`, `currency-*` and
   `origin-wiki` are never changed, and a `runtime-*` label is never removed
   or changed. Private pages stay excluded or UNKNOWN.

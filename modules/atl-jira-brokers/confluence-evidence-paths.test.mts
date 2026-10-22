@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ConfluenceError } from './confluence-contract.mts';
-import { decideArgs, harness, LABELS, prepareArgs, prepared, TODAY } from './evidence-cli.fixture.mts';
+import { decideArgs, harness, LABELS, MEASUREMENT, prepareArgs, prepared, TODAY } from './evidence-cli.fixture.mts';
 
 test('P3-e: prepare and record refuse an existing --out before any request: out-exists', async () => {
   const h = await prepared();
@@ -29,6 +29,17 @@ test('P3-e: the git check runs on the resolved directory, which must exist', asy
   assert.ok(!h.execs.some(c => c.includes('/tmp/link')), 'git never sees the link');
   await assert.rejects(() => h.run({ ...prepareArgs, out: '/tmp/gone/r.json' }), /cannot be shown to lie outside a repository: its directory does not resolve/);
   assert.deepEqual([h.calls.length, h.files.size], [0, 0]);
+});
+
+test('P3: every write goes to the resolved real directory, never through the link', async () => {
+  const h = harness(undefined, { links: { '/tmp/link': '/tmp/real' } });
+  assert.equal(await h.run({ ...prepareArgs, out: '/tmp/link/r.json' }), 0);
+  assert.deepEqual([...h.files.keys()], ['/tmp/real/r.json']);
+  h.files.set('/tmp/link/m.json', JSON.stringify(MEASUREMENT));
+  h.files.set('/tmp/link/r.json', h.files.get('/tmp/real/r.json') ?? '');
+  assert.equal(await h.run({ ...decideArgs, record: '/tmp/link/r.json', measurement: '/tmp/link/m.json', 'out-body': '/tmp/link/b.xml' }), 0);
+  assert.ok(h.files.has('/tmp/real/b.xml') && !h.files.has('/tmp/link/b.xml'), [...h.files.keys()].join(', '));
+  assert.ok(JSON.parse(h.files.get('/tmp/real/r.json') ?? '{}').decision, 'the record is written back to the real directory');
 });
 
 test('P3-f: git that does not run refuses every path: git does not run', async () => {

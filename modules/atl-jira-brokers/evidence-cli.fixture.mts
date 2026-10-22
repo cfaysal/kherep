@@ -44,20 +44,23 @@ export function harness(pages: Pages = { '1': { body: BODY, labels: LABELS } }, 
     throw new Error('fatal: not a git repository (or any of the parent directories): .git');
   };
   const exec: ExecLike = async (file, args, opts) => { execs.push([file, ...args]); return (options.exec ?? git)(file, args, opts); };
+  // The broker joins the resolved directory with the platform separator; the in-memory keys use '/'.
+  const key = (path: string) => path.replace(/\\/g, '/');
   const ctx = { env: {}, credEnv: 'KHEREP_ATL_CRED_FILE_CLAUDE', session: {}, now: () => NOW,
-    readFile: async (path: string) => { const v = files.get(path); if (v === undefined) throw new Error('missing'); return v; },
+    readFile: async (path: string) => { const v = files.get(key(path)); if (v === undefined) throw new Error('missing'); return v; },
     log: (line: string) => out.push(line), logError: (line: string) => out.push(line) } as unknown as NeighbourCliContext;
   const realpath = async (dir: string) => {
     const target = options.links?.[dir];
     if (target === null) throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
     return target ?? dir;
   };
-  const write = async (path: string, data: string) => { files.set(path, data); };
+  const write = async (path: string, data: string) => { files.set(key(path), data); };
   const create = async (path: string, data: string) => {
-    if (files.has(path)) throw new ConfluenceError('out-exists: the file appeared after the check.');
-    files.set(path, data);
+    if (files.has(key(path))) throw new ConfluenceError('out-exists: the file appeared after the check.');
+    files.set(key(path), data);
   };
-  const deps = { session, exec, files: options.files ?? { write, create, exists: async (path: string) => files.has(path), realpath } };
+  const exists = async (path: string) => files.has(key(path));
+  const deps = { session, exec, files: options.files ?? { write, create, exists, realpath } };
   const run = (args: Record<string, string | undefined>) => cmdEvidence(ctx, args, deps);
   return { calls, execs, files, out, run };
 }
