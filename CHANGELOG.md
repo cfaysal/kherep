@@ -32,8 +32,8 @@ increments the minor version; every other release increments the patch version.
   source, and no credential-shaped or control-character content. A `--kind`
   override never makes a historical claim repeatable. It renders the dated
   measurement block before the `Related pages` footer in a form that storage
-  normalisation keeps byte-identical (LF-only, only `&`, `<` and `>` escaped
-  in text), and re-reads the page after the operator's
+  normalisation keeps byte-identical (LF-only; `&`, `<`, `>` and `"` escaped,
+  `"` as `&quot;` because that is the form Confluence returns), and re-reads the page after the operator's
   `update --expected-version` and two-step `labels` calls, asserting the
   reviewed label set with exactly one evidence label. Record and body files
   lie outside every git work tree (checked on, and written to, the resolved
@@ -42,7 +42,10 @@ increments the minor version; every other release increments the patch version.
   repair still never promotes. Human-assigned status is
   reported, never relabelled. `status-author-*`, `currency-*` and
   `origin-wiki` are never changed, and a `runtime-*` label is never removed
-  or changed. Private pages stay excluded or UNKNOWN.
+  or changed. Private pages stay excluded or UNKNOWN. The scanner and the
+  confirm path classify a page on its body without the measurement blocks
+  the broker wrote, so a tool or file name inside a measurement command
+  never makes a tracker page code-bound (issues #650, #662).
 - Denied calls in delegated worker reports (issue #504). The guard
   dispatcher, and the hook runtime entry for its own denies, journal each
   guarded call of a delegated Claude worker (a payload with a valid
