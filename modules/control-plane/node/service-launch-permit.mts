@@ -64,9 +64,11 @@ export function issueServiceLaunchPermit(paths: NodePaths, binding: ServiceBindi
     fs.rmSync(stale);
     handle = open();
   }
-  try { fs.writeFileSync(handle, bytes); fs.fsyncSync(handle); fs.closeSync(handle); }
+  let closing = false;
+  try { fs.writeFileSync(handle, bytes); fs.fsyncSync(handle); closing = true; fs.closeSync(handle); }
   catch (error) {
-    try { fs.closeSync(handle); } catch { /* closed or failed already */ }
+    // A descriptor is closed at most once; the file stays (issue #644).
+    if (!closing) try { fs.closeSync(handle); } catch { /* the write failed already */ }
     throw error;
   }
   return () => {

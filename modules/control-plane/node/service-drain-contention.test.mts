@@ -114,3 +114,42 @@ test("the drain and its reclaim gate share one allowance", (t) => {
   assert.equal(fs.readFileSync(drain, "utf8"), before, "the stale owner stays without a gate");
   assert.equal(fs.existsSync(`${drain}.reclaim`), false);
 });
+
+// Descriptors of the exclusive creates of `file`, and the closes of them. With
+// failClose a close releases the number and then reports EIO, as close(2) on
+// Linux may; the owner file stays in every case (issue #644).
+function ownerFileIo(t: test.TestContext, file: string, failClose: boolean) {
+  const realOpen = fs.openSync, realClose = fs.closeSync;
+  const fds: number[] = [], closes: number[] = [];
+  const failure = Object.assign(new Error("synthetic EIO"), { code: "EIO" });
+  t.mock.method(fs, "openSync", (target: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode | null) => {
+    const fd = realOpen(target, flags, mode);
+    if (String(target) === file && flags === "wx") fds.push(fd);
+    return fd;
+  });
+  t.mock.method(fs, "closeSync", (fd: number) => {
+    if (!fds.includes(fd)) return realClose(fd);
+    closes.push(fd);
+    realClose(fd);
+    if (failClose) throw failure;
+  });
+  return { fds, closes, failure };
+}
+
+test("a failed close after the owner write is not repeated and leaves the file", (t) => {
+  const { paths, drain } = setup(t);
+  const { fds, closes, failure } = ownerFileIo(t, drain, true);
+  assert.throws(() => beginServiceDrain(paths, staleProbe), (error: unknown) => error === failure);
+  assert.deepEqual([fds.length, closes], [1, fds], "one create, closed exactly once");
+  assert.equal(fs.existsSync(drain), true);
+});
+
+test("a failed fsync after the open closes once, rethrows unchanged and leaves the file", (t) => {
+  const { paths, drain } = setup(t);
+  const { fds, closes, failure } = ownerFileIo(t, drain, false);
+  const real = fs.fsyncSync;
+  t.mock.method(fs, "fsyncSync", (fd: number) => { if (fds.includes(fd)) throw failure; return real(fd); });
+  assert.throws(() => beginServiceDrain(paths, staleProbe), (error: unknown) => error === failure);
+  assert.deepEqual([fds.length, closes], [1, fds], "one create, closed exactly once");
+  assert.equal(fs.existsSync(drain), true);
+});

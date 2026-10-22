@@ -123,12 +123,15 @@ function withBudgetLock(file: string, body: () => Budget): Budget {
       }
       continue;
     }
+    let closing = false;
     try {
       fs.writeFileSync(fd, String(process.pid));
+      closing = true;
       fs.closeSync(fd);
     } catch {
-      // Ours by the exclusive create: removed, not left to the stale rule.
-      try { fs.closeSync(fd); } catch { /* closed or failed already */ }
+      // Ours by the exclusive create: removed, not left to the stale rule. A
+      // descriptor is closed at most once.
+      if (!closing) try { fs.closeSync(fd); } catch { /* the write failed already */ }
       try { fs.rmSync(lock, { force: true }); } catch { /* left to the stale rule */ }
       return "locked";
     }
