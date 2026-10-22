@@ -174,3 +174,19 @@ test('renderReport: verbatim proposals, passive labels, no titles or bodies, det
   assert.match(report, /not a Brain-confirmed verdict/);
   assert.ok(report.indexOf('## Page 1') < report.indexOf('## Page 2'));
 });
+
+test('renderReport shows a --kind override with its classification and the measured reason', () => {
+  const c = classifyClaim(snap(LIVE + FOOTER), true, 'doc');
+  const m = M({ kind: 'doc', sourceClass: 'official-doc', command: 'curl -sL https://docs.example.org/queue', excerpt: 'Default port: 8443',
+    subject: '8443', revision: undefined, kindOverride: 'the claim cites the vendor default, not a host' });
+  const d = decide(c, m, OPT());
+  assert.equal(d.outcome, 'confirmed');
+  const report = renderReport([{ pageId: '1', readVersion: 3, claim: c, measurement: m, decision: d }]);
+  assert.ok(report.includes('- kind: doc (override; classified live)\n'), report);
+  assert.ok(report.includes('- kind override reason: the claim cites the vendor default, not a host\n'), report);
+  const stale = M({ ...m, measuredAt: day(-5) });
+  const unvalidated = renderReport([{ pageId: '1', readVersion: 3, claim: c, measurement: stale, decision: decide(c, stale, OPT()) }]);
+  assert.ok(unvalidated.includes('- kind: doc (override; classified live)'));
+  assert.ok(!unvalidated.includes('vendor default'), 'an unvalidated measurement prints no reason');
+  assert.equal(decide(c, M({ ...m, kindOverride: undefined }), OPT()).reason, 'measurement-incomplete');
+});

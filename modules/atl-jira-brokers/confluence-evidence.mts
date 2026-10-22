@@ -37,7 +37,7 @@ export type Outcome = 'confirmed' | 'refuted' | 'superseded' | 'unknown' | 'repo
 export interface ClaimSource { id: string; version: number; spaceId: string; body: string; labels: string[] }
 export interface Claim {
   pageId: string; spaceId: string; readVersion: number; bodySha256: string; bodyApproved: boolean; labels: string[];
-  typeLabel: string | null; evidenceLabel: string; statusAuthor: string; kind: Kind; kindOverride?: Kind;
+  typeLabel: string | null; evidenceLabel: string; statusAuthor: string; kind: Kind; classifiedKind?: Kind;
   signals: Kind[]; revisions: Revisions; codeTokens: string[]; trackerKeys: string[]; passiveLabels: string[];
 }
 export interface Measurement {
@@ -85,7 +85,7 @@ export function classifyClaim(snapshot: ClaimSource, bodyApproved: boolean, kind
     evidenceLabel: evidence.length === 1 && ['confirmed', 'assumed', 'refuted', 'superseded'].includes(evidence[0]) ? evidence[0] : 'malformed',
     statusAuthor: authors.length === 0 ? 'missing'
       : authors.length === 1 && ['model', 'verified', 'operator'].includes(authors[0]) ? authors[0] : 'malformed',
-    kind: kindOverride ?? classified, ...(kindOverride && kindOverride !== classified ? { kindOverride: classified } : {}),
+    kind: kindOverride ?? classified, ...(kindOverride && kindOverride !== classified ? { classifiedKind: classified } : {}),
     signals, revisions, codeTokens, trackerKeys,
     passiveLabels: labels.filter(l => l.startsWith('currency-') || l === 'origin-wiki'),
   };
@@ -111,7 +111,7 @@ function measurementGate(claim: Claim, m: Record<string, unknown>, options: Deci
     || !['source', 'command', 'excerpt'].every(key => filled(m[key]))
     || ['revision', 'subject', 'supersededBy', 'kindOverride'].some(key => m[key] !== undefined && typeof m[key] !== 'string')
     || (m.supersededBy !== undefined && !/^\d+$/.test(String(m.supersededBy)))
-    || (claim.kindOverride !== undefined && !filled(m.kindOverride))) return 'measurement-incomplete';
+    || (claim.classifiedKind !== undefined && !filled(m.kindOverride))) return 'measurement-incomplete';
   if (String(m.excerpt).length > 4000) return 'excerpt-too-long';
   // Every field is rendered into the page or the report, so every field is checked.
   if (Object.values(m).some(v => typeof v === 'string' && SECRET_MARKERS.some(marker => marker.test(v)))) return 'excerpt-secret-marker';
