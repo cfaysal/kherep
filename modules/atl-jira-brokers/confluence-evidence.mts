@@ -215,14 +215,14 @@ const xml = escapeText;
 const FIELD = '[^<]*';
 export const MEASUREMENT_BLOCK = new RegExp(
   `<h2>Measurement (\\d{4}-\\d{2}-\\d{2})</h2>\\s*`
-  + `<p>Outcome: (?:confirmed|refuted|superseded) \\(model-run, status-author-model unchanged\\)</p>\\s*`
+  + `<p>Outcome: (confirmed|refuted|superseded) \\(model-run, status-author-model unchanged\\)</p>\\s*`
   + `(?:<p>Revision: ${FIELD}</p>\\s*)?`
   + `<p>Source: (?:code|tracker|live|doc), ${FIELD}</p>\\s*`
   + `<p>Command: <code>${FIELD}</code></p>\\s*<pre>${FIELD}</pre>\\s*`
   + `<p>Measured via ${FIELD} on \\1\\.</p>`
-  + `(?:\\s*<p>Superseded by: (?:(?!</p>).)*</p>)?`, 'gs');
-// The claim as its author wrote it, without the blocks decide appended; only classification reads this view.
-export const claimBody = (body: string): string => body.replace(MEASUREMENT_BLOCK, '');
+  + `(\\s*<p>Superseded by: <a href="/wiki/spaces/[^"<]*/pages/\\d+">${FIELD}</a></p>)?`, 'gs');
+// The claim without the blocks decide appended (classification only); a Superseded link after a non-superseded block is author text.
+export const claimBody = (body: string): string => body.replace(MEASUREMENT_BLOCK, (_b, _d, outcome: string, tail?: string) => outcome === 'superseded' ? '' : tail ?? '');
 export function renderMeasurementBlock(decision: Decision, raw: Measurement, runtimeLabel: string, superseded?: SupersedingPage): string {
   const m = normaliseMeasurement(raw);
   const parts = [`<h2>Measurement ${xml(m.measuredAt)}</h2>`,

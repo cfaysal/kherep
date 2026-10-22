@@ -243,3 +243,13 @@ test('#650 T8: an original code claim still needs its own bound Revision; a bloc
   assert.equal(flagged(bare, LABELS), 1);
   assert.equal(decide(claim(bare), M(), OPT).reason, 'revision-not-on-page');
 });
+
+test('#665 HOLD: a Superseded paragraph after a confirmed or refuted block stays author text', () => {
+  const { block } = promote(TRK + FOOTER, KEY12());
+  for (const tail of ['<p>Superseded by: <code>src/queue.mts</code></p>', '<p>Superseded by: <a href="/wiki/spaces/K/pages/1">src/queue.mts</a></p>']) {
+    const body = `${TRK}${block}${tail}${FOOTER}`;
+    assert.equal(claimBody(body), `${TRK}${tail}${FOOTER}`, tail);
+    assert.ok(claim(body).codeTokens.includes('src/queue.mts'), tail);
+    assert.equal(flagged(body), 1, tail);
+  }
+});
