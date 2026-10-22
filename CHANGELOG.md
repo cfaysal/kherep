@@ -427,6 +427,28 @@ increments the minor version; every other release increments the patch version.
   A structurally malformed response (no `results` array, or a row that is
   not an object) still aborts with `malformed-response`.
 
+- Staged Claude intent hook test under host load (issue #657).
+  `claude-mcp-client.test.mts` scanned for the hook's published intent 100
+  times, 10 ms apart, while the hook process type-strips its module graph,
+  digests the input and only then renames the intent into place. On a
+  `unit-engines-floor` run no published intent name was observed in those
+  scans, and nothing of the hook's lifecycle or output was captured. The
+  test now waits for the first of a published intent, the hook's close, or
+  a bound, and every later wait is bounded as well. Only the child's
+  `close` counts as closed: an `error` event is recorded, a timeout is
+  reported as a timeout. A failure names the exit and close state, the
+  recorded errors and bounded stdout and stderr. The fixture directory is
+  removed only after the close of every hook started in it was observed;
+  otherwise it is kept and the cleanup fails. The receipt is written
+  atomically, and the delayed case asserts the full rewrite, since a denial
+  also exits 0. Controls with real children: a 2.5 s pause before the
+  intent rename that the hook reports from inside (with it, the old loop
+  failed and the new wait passed in the observed runs; neither is
+  guaranteed under every scheduler), a policy denial, a crash at import, a
+  hang before and a hang after publication, and a hook whose stdio stays
+  open after SIGKILL. The helpers live in `mcp-intent-hook-fixture.mts`.
+  The hook is unchanged; the cause of the CI failure is not established.
+
 - Confluence brokers: `related` and `stitch` build the CQL text search from
   the title's words, not the raw title (issue #651). The value of
   `text ~ "..."` is parsed by Lucene, whose syntax includes `( ) ~ " \ : * ?
