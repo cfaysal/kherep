@@ -74,12 +74,12 @@ test('P3-f: decide end to end for a tracker claim', async () => {
   assert.ok(written.endsWith('<h2>Related pages</h2>'));
 });
 
-test('P3-f: decide end to end for a doc claim, LF-only and without quote entities', async () => {
+test('P3-f: decide end to end for a doc claim, LF-only and with " as &quot;', async () => {
   const url = 'https://developer.atlassian.com/cloud/confluence/rest/v2/intro/';
   const { written, record } = await endToEnd(`<p>Doc: ${url}</p><p>Page lists paginate with a cursor.</p><h2>Related pages</h2>`, 'doc',
     { kind: 'doc', source: url, sourceClass: 'official-doc', command: `curl -sL ${url}`, subject: 'cursor',
       excerpt: 'The "cursor" isn\'t an offset.\r\nNext: a cursor link', measuredAt: TODAY, verdict: 'reproduces' });
-  assert.ok(written.includes('<pre>The "cursor" isn\'t an offset.\nNext: a cursor link</pre>'), written);
-  assert.ok(!/\r|&#39;|&quot;/.test(written), written);
+  assert.ok(written.includes('<pre>The &quot;cursor&quot; isn\'t an offset.\nNext: a cursor link</pre>'), written);
+  assert.ok(!/\r|&#39;/.test(written), written);
   assert.equal(record.measurement.excerpt, 'The "cursor" isn\'t an offset.\nNext: a cursor link');
 });

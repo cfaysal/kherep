@@ -204,10 +204,11 @@ export function decide(claim: Claim, measurement: unknown, options: DecideOption
   return { outcome, reason: 'measured', labelsAdd: [`evidence-${outcome}`], labelsRemove: ['evidence-assumed'],
     ...(m.kind === 'code' ? { measuredRevision: m.revision } : {}), ...(outcome === 'superseded' ? { supersededBy: target } : {}) };
 }
-// Text nodes escape only &, < and >; attribute values add the double quote. Confluence may rewrite other
-// entity forms (&#39;, &quot; in text) on PUT, and the byte-exact update readback would then be UNVERIFIED.
-export const escapeText = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-export const escapeAttr = (value: string): string => escapeText(value).replace(/"/g, '&quot;');
+// Measured on the live site (issue #662, 2026-10-22): Confluence returns " in text nodes as &quot; and keeps
+// ' raw, so a body written in that form survives the byte-exact update readback. &amp;, &lt; and &gt; are
+// the XML forms; whether Confluence returns > as &gt; or raw was not measured separately.
+export const escapeText = (value: string): string =>
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const xml = escapeText;
 export function renderMeasurementBlock(decision: Decision, raw: Measurement, runtimeLabel: string, superseded?: SupersedingPage): string {
   const m = normaliseMeasurement(raw);
@@ -218,7 +219,7 @@ export function renderMeasurementBlock(decision: Decision, raw: Measurement, run
     `<pre>${xml(m.excerpt)}</pre>`, `<p>Measured via ${xml(runtimeLabel)} on ${xml(m.measuredAt)}.</p>`);
   if (superseded && decision.outcome === 'superseded') {
     const href = `/wiki/spaces/${encodeURIComponent(superseded.spaceKey)}/pages/${encodeURIComponent(superseded.id)}`;
-    parts.push(`<p>Superseded by: <a href="${escapeAttr(href)}">${xml(superseded.title)}</a></p>`);
+    parts.push(`<p>Superseded by: <a href="${escapeText(href)}">${xml(superseded.title)}</a></p>`);
   }
   return parts.join('');
 }
