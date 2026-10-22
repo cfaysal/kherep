@@ -112,3 +112,42 @@ test("a permit open failing with another code is thrown unchanged at once", (t) 
   assert.throws(() => issueServiceLaunchPermit(paths, candidate), { code: "ENOSPC" });
   assert.deepEqual(seen, ["ENOSPC"]);
 });
+
+// Descriptors of the permit's exclusive creates, and the closes of them. With
+// failClose a close releases the number and then reports EIO, as close(2) on
+// Linux may; the permit file stays in every case (issue #644).
+function permitIo(t: test.TestContext, permit: string, failClose: boolean) {
+  const realOpen = fs.openSync, realClose = fs.closeSync;
+  const fds: number[] = [], closes: number[] = [];
+  const failure = Object.assign(new Error("synthetic EIO"), { code: "EIO" });
+  t.mock.method(fs, "openSync", (target: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode | null) => {
+    const fd = realOpen(target, flags, mode);
+    if (String(target) === permit && flags === "wx") fds.push(fd);
+    return fd;
+  });
+  t.mock.method(fs, "closeSync", (fd: number) => {
+    if (!fds.includes(fd)) return realClose(fd);
+    closes.push(fd);
+    realClose(fd);
+    if (failClose) throw failure;
+  });
+  return { fds, closes, failure };
+}
+
+test("a failed close after the permit write is not repeated and leaves the file", (t) => {
+  const { paths, permit, candidate } = setup(t);
+  const { fds, closes, failure } = permitIo(t, permit, true);
+  assert.throws(() => issueServiceLaunchPermit(paths, candidate), (error: unknown) => error === failure);
+  assert.deepEqual([fds.length, closes], [1, fds], "one create, closed exactly once");
+  assert.equal(fs.existsSync(permit), true);
+});
+
+test("a failed permit fsync after the open closes once, rethrows unchanged and leaves the file", (t) => {
+  const { paths, permit, candidate } = setup(t);
+  const { fds, closes, failure } = permitIo(t, permit, false);
+  const real = fs.fsyncSync;
+  t.mock.method(fs, "fsyncSync", (fd: number) => { if (fds.includes(fd)) throw failure; return real(fd); });
+  assert.throws(() => issueServiceLaunchPermit(paths, candidate), (error: unknown) => error === failure);
+  assert.deepEqual([fds.length, closes], [1, fds], "one create, closed exactly once");
+  assert.equal(fs.existsSync(permit), true);
+});

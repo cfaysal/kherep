@@ -173,7 +173,9 @@ export function verifyIntent(stateDir: string, args: ProbeArguments, meta: Nativ
       const record = readIntent(stateDir, args.requestId);
       if (!record) return { ok: false, code: "intent_not_found" };
       if (record.expiresAt <= now) {
-        fs.unlinkSync(intentFile(stateDir, args.requestId));
+        // Issue #602: a concurrent prune may have removed it already.
+        try { fs.unlinkSync(intentFile(stateDir, args.requestId)); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
         return { ok: false, code: "intent_expired" };
       }
       const sessionHash = digest(key, "session", meta.sessionId!);

@@ -84,3 +84,20 @@ test("a failed PID write after the open removes the own lock and books nothing",
   assert.equal(fs.existsSync(lock), false, "no lock is left behind");
   assert.equal(fs.existsSync(turns), false, "no turn booked");
 });
+
+test("a failed close after the PID write is not repeated; the own lock is removed", (t) => {
+  const { paths } = setup(t);
+  const { turns, lock } = files(paths);
+  const { fds } = lockOpens(t, lock, []);
+  const real = fs.closeSync, closes: number[] = [];
+  t.mock.method(fs, "closeSync", (fd: number) => {
+    if (!fds.includes(fd)) return real(fd);
+    closes.push(fd);
+    real(fd); // close(2) on Linux releases the number even when it reports an error
+    throw Object.assign(new Error("synthetic EIO"), { code: "EIO" });
+  });
+  assert.equal(takeTurn(paths, SELF, T0), "locked");
+  assert.deepEqual([fds.length, closes], [1, fds], "one create, closed exactly once");
+  assert.equal(fs.existsSync(lock), false, "no lock is left behind");
+  assert.equal(fs.existsSync(turns), false, "no turn booked");
+});

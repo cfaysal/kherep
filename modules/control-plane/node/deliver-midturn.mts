@@ -53,12 +53,16 @@ function withMidTurnLock(paths: NodePaths, sessionId: string, body: () => string
       }
       continue;
     }
+    let closing = false;
     try {
       fs.writeFileSync(fd, String(process.pid));
+      closing = true;
       fs.closeSync(fd);
     } catch {
-      // Ours by the exclusive create: removed, not left to the stale rule.
-      try { fs.closeSync(fd); } catch { /* closed or failed already */ }
+      // Ours by the exclusive create: removed, not left to the stale rule. A
+      // descriptor is closed at most once: after a failed close its number may
+      // already belong to another descriptor.
+      if (!closing) try { fs.closeSync(fd); } catch { /* the write failed already */ }
       try { fs.rmSync(lock, { force: true }); } catch { /* left to the stale rule */ }
       return undefined;
     }

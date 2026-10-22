@@ -88,6 +88,21 @@ test("an invalid entry still blocks creation and is kept", (t) => {
   assert.equal(fs.readFileSync(fileA, "utf8"), "{");
 });
 
+for (const code of ["ENOENT", "EIO"]) {
+  test(`an expired intent whose unlink fails with ${code} is ${code === "ENOENT" ? "expired" : "a storage error"}`, (t) => {
+    const { dir, a, fileA } = intents(t);
+    const real = fs.unlinkSync;
+    t.mock.method(fs, "unlinkSync", (file: fs.PathLike) => {
+      if (String(file) !== fileA) return real(file);
+      if (code === "ENOENT") real(file); // a concurrent prune removed it first
+      throw coded(code);
+    });
+    assert.deepEqual(verifyIntent(dir, { requestId: a, syntheticNonce: INPUT.syntheticNonce }, META, LATER),
+      { ok: false, code: code === "ENOENT" ? "intent_expired" : "storage_error" });
+    assert.equal(fs.existsSync(fileA), code !== "ENOENT");
+  });
+}
+
 test("an unreadable intents directory is not excused", (t) => {
   const { dir } = intents(t);
   const real = fs.readdirSync;

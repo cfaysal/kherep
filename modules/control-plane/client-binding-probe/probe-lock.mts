@@ -59,8 +59,8 @@ function parseOwner(text: string): ProbeOwner | null {
 function readProbeOwner(file: string): OwnerRead {
   let fd: number;
   try {
-    const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.isSymbolicLink()) return { kind: "unknown" };
+    // lstat: a symbolic link is no regular file.
+    if (!fs.lstatSync(file).isFile()) return { kind: "unknown" };
     fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
   } catch (error) {
     return code(error) === "ENOENT" ? { kind: "missing" } : { kind: "unknown" };

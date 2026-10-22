@@ -469,7 +469,10 @@ increments the minor version; every other release increments the patch version.
   and the lock is still removed by path. Intent
   pruning skips an intent that a concurrent verification removed after the
   listing (`ENOENT`) instead of failing the creation; every other per-entry
-  error still fails it (issue #602).
+  error still fails it. A verification whose expired intent was removed by
+  such a pruning reports `intent_expired` instead of `storage_error`. A lock
+  descriptor is closed at most once at every boundary, also when its close
+  fails (issue #602).
 - A failed macOS upgrade recovery no longer leaves the new daemon loaded
   under the prior plist, after which every service command refused (issue
   #582). `restorePrior` wrote the prior definition after the candidate stop
