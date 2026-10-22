@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { scanDrainage } from './confluence-drainage-scan.mts';
+import { drainageRules } from './confluence-drainage-rules.mts';
+import { renderMeasurementBlock } from './confluence-evidence.mts';
 import { updatePage } from './confluence-content.mts';
 import { spaceIndex } from './confluence-related.mts';
 import type { ConfluenceSession, RequestSpec } from './confluence-contract.mts';
@@ -66,6 +68,36 @@ test('only code-bound observations need a valid original revision', async () => 
     page('4', '<p>General historical observation</p>', ['type-observation']), page('5')];
   const r = await scanDrainage(harness(pages).session, opts);
   assert.deepEqual(r.candidates.filter(c => c.problem === 'revision-missing-or-invalid').map(c => c.pageId), ['1','2']);
+});
+// Issue #650: the scanner and the confirm re-check share one classifier, which reads the claim without broker blocks.
+const sha = 'a'.repeat(40);
+const block = (command: string, date = '2026-10-22', measuredRevision?: string) => renderMeasurementBlock(
+  { outcome: 'confirmed', reason: 'measured', labelsAdd: [], labelsRemove: [], ...(measuredRevision ? { measuredRevision } : {}) },
+  { kind: measuredRevision ? 'code' : 'tracker', source: 'KEY-12', sourceClass: 'tracker', command, excerpt: 'key: KEY-12\nstate: Done',
+    measuredAt: date, verdict: 'reproduces' }, 'runtime-claude-code-win');
+const tracker = '<p>Tracker: KEY-12 holds the queue retry fix.</p>';
+const confirmedLabels = ['type-observation','evidence-confirmed'];
+const assumedLabels = ['type-observation','evidence-assumed'];
+async function revisionIds(pages: ReturnType<typeof page>[]) {
+  const scanned = (await scanDrainage(harness(pages).session,opts)).candidates
+    .filter(c => c.problem === 'revision-missing-or-invalid').map(c => c.pageId);
+  const direct = drainageRules(pages.map(p => ({id:p.id,version:3,title:p.title,spaceId:'9',parentId:null,body:p.body.storage.value,labels:p.labels})),false)
+    .filter(c => c.problem === 'revision-missing-or-invalid').map(c => c.pageId);
+  assert.deepEqual(scanned, direct, 'the scanner and the decide re-check run the same classifier');
+  return scanned;
+}
+test('#650 T7: a measurement block never makes a page code-bound; original code still needs its Revision', async () => {
+  assert.deepEqual(await revisionIds([
+    page('1', tracker + block('node tools/atl-jira-ccoder.mts get --key KEY-12') + '<h2>Related pages</h2>', confirmedLabels),
+    page('2', '<h2>Measurement 2026-10-22</h2><p>Code: src/queue.mts</p>' + tracker, assumedLabels),
+    page('3', `<p>Revision: alpha@${sha}</p><p>Code: src/queue.mts</p>` + block(`git show ${sha}:src/retry.mts`, '2026-10-22', `alpha@${sha}`), confirmedLabels),
+  ]), ['2']);
+});
+test('#650: two appended blocks hide nothing between them', async () => {
+  const one = block('node tools/atl-jira-ccoder.mts get --key KEY-12');
+  const two = block('node tools/jira.js get --key KEY-12', '2026-10-21');
+  assert.deepEqual(await revisionIds([page('1', tracker + one + two, confirmedLabels),
+    page('2', tracker + one + '<p>Code: src/queue.mts</p>' + two, confirmedLabels)]), ['2']);
 });
 test('footer boilerplate is not duplicate evidence, substantial shared content is', async () => {
   const footer = '<h2>Related</h2><p>' + body.repeat(5) + '</p>';

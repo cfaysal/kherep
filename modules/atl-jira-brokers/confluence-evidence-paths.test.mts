@@ -49,10 +49,10 @@ test('P3-f: git that does not run refuses every path: git does not run', async (
   assert.deepEqual([h.calls.length, h.files.size], [0, 0]);
 });
 
-async function endToEnd(body: string, kind: string, measurement: object) {
+async function endToEnd(body: string, kind: string, measurement: object, args: Record<string, string | undefined> = decideArgs) {
   const h = await prepared(harness({ '1': { body, labels: LABELS } }), measurement);
   assert.ok(h.out.includes(`kind: ${kind}`), h.out.join('\n'));
-  assert.equal(await h.run(decideArgs), 0, h.out.join('\n'));
+  assert.equal(await h.run(args), 0, h.out.join('\n'));
   assert.equal(h.calls.length, 0, 'decide sends no request');
   const written = h.files.get('/tmp/ev/b.xml') ?? '';
   const record = JSON.parse(h.files.get('/tmp/ev/r.json') ?? '{}');
@@ -82,4 +82,26 @@ test('P3-f: decide end to end for a doc claim, LF-only and with " as &quot;', as
   assert.ok(written.includes('<pre>The &quot;cursor&quot; isn\'t an offset.\nNext: a cursor link</pre>'), written);
   assert.ok(!/\r|&#39;/.test(written), written);
   assert.equal(record.measurement.excerpt, 'The "cursor" isn\'t an offset.\nNext: a cursor link');
+});
+
+// Issue #650: the measurement block is metadata, so a .mts tool in the command never makes a tracker page code-bound.
+const TRACKER_PAGE = '<p>Tracker: KEY-12 holds the queue retry fix.</p><h2>Related pages</h2>';
+const CCODER = { kind: 'tracker', source: 'KEY-12', sourceClass: 'tracker', command: 'node tools/atl-jira-ccoder.mts get --key KEY-12',
+  excerpt: 'key: KEY-12\nstate: Done', measuredAt: TODAY, verdict: 'reproduces' };
+const withoutRepo = Object.fromEntries(Object.entries(decideArgs).filter(([key]) => key !== 'repo-root'));
+
+test('#650 T3: decide end to end confirms a tracker claim measured with atl-jira-ccoder.mts', async () => {
+  const { written, record } = await endToEnd(TRACKER_PAGE, 'tracker', CCODER, withoutRepo);
+  assert.ok(written.startsWith('<p>Tracker: KEY-12 holds the queue retry fix.</p><h2>Measurement 2026-10-22</h2>'), written);
+  assert.ok(record.labelsAfter.includes('evidence-confirmed'), record.labelsAfter.join(', '));
+});
+
+test('#650 T4: an original Measurement heading with code still refuses: promoted-body-revision-invalid', async () => {
+  const body = `<h2>Measurement ${TODAY}</h2><p>Code: src/queue.mts</p>${TRACKER_PAGE}`;
+  const h = await prepared(harness({ '1': { body, labels: LABELS } }), { ...CCODER, kindOverride: 'the claim is the tracker state' },
+    { ...prepareArgs, kind: 'tracker' });
+  assert.ok(h.out.includes('kind: tracker (override; classified code)'), h.out.join('\n'));
+  assert.equal(await h.run(withoutRepo), 2);
+  assert.match(h.out.join('\n'), /reason: promoted-body-revision-invalid/);
+  assert.equal(h.files.has('/tmp/ev/b.xml'), false);
 });

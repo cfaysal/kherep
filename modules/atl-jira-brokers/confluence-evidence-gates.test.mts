@@ -2,7 +2,9 @@
 // tracker key matching and the historical refusal under --kind. Synthetic bodies only.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { classifyClaim, decide, escapeText, renderMeasurementBlock, type Measurement } from './confluence-evidence.mts';
+import { claimBody, classifyClaim, decide, escapeText, insertBeforeFooter, MEASUREMENT_BLOCK, renderMeasurementBlock,
+  type Measurement, type SupersedingPage } from './confluence-evidence.mts';
+import { drainageRules } from './confluence-drainage-rules.mts';
 
 const SHA = 'a'.repeat(40);
 const NOW = new Date(2026, 9, 22, 12).getTime();
@@ -113,7 +115,7 @@ test('F2: once a page names a GitHub key, every #N it states is a key; a read of
   const d = decide(both, m, OPT);
   const promoted = `<p>GitHub issue #10 and #648 are closed.</p>${renderMeasurementBlock(d, m, 'runtime-claude-code-win')}`;
   assert.deepEqual([d.outcome, both.trackerKeys], ['confirmed', ['#10', '#648']]);
-  assert.ok(claim(promoted).trackerKeys.includes('#999'), 'a re-classification would see the block, so none happens after prepare');
+  assert.ok(!claim(promoted).trackerKeys.includes('#999'), 'a re-classification reads the claim without the block (#650)');
 });
 
 test('F3: the command names a key only as one gh issue/pr view of exactly N; #N in the excerpt is a whole token', () => {
@@ -145,4 +147,99 @@ test('P3-c: a --kind override never bypasses historical-not-repeatable', () => {
     excerpt: 'LISTEN *:8443', measuredAt: TODAY, verdict: 'reproduces', subject: '8443', kindOverride: 'the port is still live' };
   const d = decide(hist, m, OPT);
   assert.deepEqual([d.outcome, d.reason, d.labelsAdd], ['unknown', 'historical-not-repeatable', []]);
+});
+
+// Issue #650: the measurement block decide appends is metadata; only the original claim decides code-boundness.
+const RUNTIME = 'runtime-claude-code-win';
+const AFTER = ['evidence-confirmed', RUNTIME, 'status-author-model', 'type-observation'];
+const TRK = '<p>Tracker: KEY-12 holds the queue retry fix.</p>';
+const CCODER = 'node tools/atl-jira-ccoder.mts get --key KEY-12';
+const KEY12 = (command = CCODER, measuredAt = TODAY): Measurement => ({ kind: 'tracker', source: 'KEY-12', sourceClass: 'tracker',
+  command, excerpt: 'key: KEY-12\nstate: Done', measuredAt, verdict: 'reproduces' });
+const promote = (body: string, m: Measurement, page?: SupersedingPage) => {
+  const d = decide(claim(body), m, page ? { ...OPT, superseded: page } : OPT);
+  const block = renderMeasurementBlock(d, m, RUNTIME, page);
+  return { d, block, body: insertBeforeFooter(body, block) };
+};
+const flagged = (body: string, labels = AFTER) => drainageRules([{ id: '1', version: 3, title: 't', spaceId: '9', parentId: null, body, labels }],
+  false).filter(c => c.problem === 'revision-missing-or-invalid').length;
+
+test('#650 T1: renderer and recogniser agree on every rendered variant', () => {
+  const page = { id: '77', title: `Queue "port" & <x> isn't 8443`, spaceId: '9', spaceKey: 'K"Q' };
+  const live: Measurement = { kind: 'live', source: 'alpha-node', sourceClass: 'target-host', command: 'ss -ltn', excerpt: '8443 -> 8080',
+    measuredAt: TODAY, verdict: 'contradicts', subject: '8443', supersededBy: '77' };
+  const blocks = [promote(CODE, M()), promote(TRK + FOOTER, KEY12()),
+    promote(`<p>Host: alpha-node</p><p>The queue listens on 8443.</p>${FOOTER}`, live, page)];
+  assert.deepEqual(blocks.map(b => b.d.outcome), ['confirmed', 'confirmed', 'superseded']);
+  assert.ok(blocks[0].block.includes('<p>Revision: ') && blocks[2].block.includes('<a href='));
+  for (const { block } of blocks) {
+    assert.equal(claimBody(block), '', block);
+    assert.equal(claimBody(TRK + block + FOOTER), TRK + FOOTER, block);
+    assert.equal(block.match(MEASUREMENT_BLOCK)?.[0], block);
+  }
+});
+
+test('#650 T2: a tracker claim measured through a .mts, .js or .py tool confirms and the promoted body is not code-bound', () => {
+  for (const command of [CCODER, 'node tools/jira.js get --key KEY-12', 'python tools/jira.py get --key KEY-12']) {
+    const { d, body } = promote(TRK + FOOTER, KEY12(command));
+    assert.equal(d.outcome, 'confirmed', command);
+    assert.equal(flagged(body), 0, command);
+  }
+});
+
+test('#650 T4: an original Measurement heading with code is page content and keeps its Revision requirement', () => {
+  const a07 = `<h2>Measurement ${TODAY}</h2><p>Code: src/queue.mts</p>${TRK}${FOOTER}`;
+  assert.equal(claimBody(a07), a07);
+  const c = claim(a07, 'tracker');
+  assert.deepEqual([c.classifiedKind, c.codeTokens.includes('src/queue.mts')], ['code', true]);
+  assert.equal(flagged(a07, LABELS), 1);
+  const m = { ...KEY12(), kindOverride: 'the claim is the tracker state' };
+  const d = decide(c, m, OPT);
+  assert.equal(d.outcome, 'confirmed', 'the pure gates pass; the CLI re-check is what refuses');
+  assert.equal(flagged(insertBeforeFooter(a07, renderMeasurementBlock(d, m, RUNTIME))), 1);
+  const human = `<h2>Measurement ${TODAY}</h2><p>Outcome: confirmed</p><p>Code: src/queue.mts</p>`;
+  assert.equal(claimBody(human), human);
+});
+
+test('#650 T5: partial or look-alike blocks stay visible with every code token', () => {
+  const { block } = promote(TRK + FOOTER, KEY12());
+  const variants = [block.replace(/<p>Measured via [^<]*<\/p>/, ''),
+    block.replace('<h2>', '<h3>').replace('</h2>', '</h3>'), block.replace('<h2>', '<h2 class="x">'),
+    block.replace('<h2>', '<H2>').replace('</h2>', '</H2>'), block.replace(`on ${TODAY}.`, 'on 2026-10-21.'),
+    block.replace('Source: tracker, KEY-12', 'Source: tracker, <b>KEY-12</b>'),
+    block.replace(`<h2>Measurement ${TODAY}</h2>`, `<p>&lt;h2&gt;Measurement ${TODAY}&lt;/h2&gt;</p>`)];
+  for (const v of variants) {
+    assert.notEqual(v, block);
+    const body = `${v}<p>Code: src/queue.mts</p>`;
+    assert.equal(claimBody(body), body, v);
+    assert.ok(['src/queue.mts', 'tools/atl-jira-ccoder.mts'].every(t => claim(body).codeTokens.includes(t)), v);
+  }
+});
+
+test('#650 T6: a second measurement reads the original claim; original code between two blocks stays visible', () => {
+  const first = promote(TRK + FOOTER, KEY12());
+  const again = claim(first.body);
+  assert.deepEqual([again.kind, again.trackerKeys], ['tracker', ['KEY-12']]);
+  const m2 = KEY12('node tools/jira.js get --key KEY-12', '2026-10-21');
+  const d2 = decide(again, m2, OPT);
+  assert.equal(d2.outcome, 'confirmed');
+  const block2 = renderMeasurementBlock(d2, m2, RUNTIME);
+  const both = insertBeforeFooter(first.body, block2);
+  assert.equal(claimBody(both), TRK + FOOTER);
+  assert.equal(flagged(both), 0);
+  const a08 = `${TRK}${first.block}<p>Code: src/queue.mts</p>${block2}${FOOTER}`;
+  assert.equal(claimBody(a08), `${TRK}<p>Code: src/queue.mts</p>${FOOTER}`);
+  assert.equal(flagged(a08), 1);
+});
+
+test('#650 T8: an original code claim still needs its own bound Revision; a block never supplies it', () => {
+  const { d, block, body } = promote(CODE, M());
+  assert.equal(d.outcome, 'confirmed');
+  const line = `<p>Revision: alpha@${SHA}</p>`;
+  assert.equal(body.split(line).length - 1, 2);
+  assert.ok(body.indexOf(line) < body.indexOf('<h2>Measurement'));
+  assert.equal(flagged(body), 0);
+  const bare = `<p>Revision: ${SHA}</p><p>Code: src/queue.mts</p>${block}${FOOTER}`;
+  assert.equal(flagged(bare, LABELS), 1);
+  assert.equal(decide(claim(bare), M(), OPT).reason, 'revision-not-on-page');
 });

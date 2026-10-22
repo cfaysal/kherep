@@ -1,5 +1,5 @@
 import { outgoingIds } from './confluence-related.mts';
-import { parseRevisionLines, plainText as plain } from './confluence-evidence.mts';
+import { claimBody, parseRevisionLines, plainText as plain } from './confluence-evidence.mts';
 
 export interface Snapshot {
   id: string; version: number; title: string; spaceId: string; parentId: string | null;
@@ -32,9 +32,11 @@ export function drainageRules(pages: Snapshot[], graphComplete: boolean): Candid
   const out: Candidate[] = [];
   for (const p of pages) {
     const text = plain(p.body);
-    const codeBound = /(?:^|\n)\s*(?:Code|Repository|Repo|Revision|Commit|Code[- ]bound)\s*:/im.test(text)
-      || /\b[\w/-]+\.(?:mts|ts|tsx|js|py|java|go|rs)\b/.test(text);
-    if (p.labels.includes('type-observation') && codeBound && !revisionsValid(text,p.labels)) {
+    // Only the author's claim decides code-boundness; a measurement block decide appended is metadata (#650).
+    const claim = plain(claimBody(p.body));
+    const codeBound = /(?:^|\n)\s*(?:Code|Repository|Repo|Revision|Commit|Code[- ]bound)\s*:/im.test(claim)
+      || /\b[\w/-]+\.(?:mts|ts|tsx|js|py|java|go|rs)\b/.test(claim);
+    if (p.labels.includes('type-observation') && codeBound && !revisionsValid(claim,p.labels)) {
       out.push(candidate(p,'revision-missing-or-invalid','review-format','Code-bound observation lacks valid repository@full-SHA Revision lines or an allowed non-confirmed no-binding declaration; original evidence required.'));
     }
     if (/only because (?:the )?search returned (?:it|this|that|them)/i.test(text)) {
