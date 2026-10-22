@@ -306,6 +306,7 @@ export function install(options: InstallOptions = {}) {
     confluenceDrainageCli: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-drainage-cli.mts"),
     confluenceEvidence: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-evidence.mts"),
     confluenceEvidenceReport: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-evidence-report.mts"),
+    confluenceEvidenceIo: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-evidence-io.mts"),
     confluenceEvidenceCli: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-evidence-cli.mts"),
     codexConfluenceBroker: path.join(repoRoot, "modules", "atl-jira-brokers", "atl-confluence.mts"),
     claudeConfluenceBroker: path.join(repoRoot, "modules", "atl-jira-brokers", "atl-confluence-ccoder.mts"),
@@ -355,6 +356,7 @@ export function install(options: InstallOptions = {}) {
     confluenceDrainageCli: path.join(workspace, "tools", "confluence-drainage-cli.mts"),
     confluenceEvidence: path.join(workspace, "tools", "confluence-evidence.mts"),
     confluenceEvidenceReport: path.join(workspace, "tools", "confluence-evidence-report.mts"),
+    confluenceEvidenceIo: path.join(workspace, "tools", "confluence-evidence-io.mts"),
     confluenceEvidenceCli: path.join(workspace, "tools", "confluence-evidence-cli.mts"),
     codexConfluenceBroker: path.join(workspace, "tools", "atl-confluence.mts"),
     claudeConfluenceBroker: path.join(workspace, "tools", "atl-confluence-ccoder.mts"),
@@ -493,6 +495,7 @@ export function install(options: InstallOptions = {}) {
       [sources.confluenceDrainageCli, targets.confluenceDrainageCli],
       [sources.confluenceEvidence, targets.confluenceEvidence],
       [sources.confluenceEvidenceReport, targets.confluenceEvidenceReport],
+      [sources.confluenceEvidenceIo, targets.confluenceEvidenceIo],
       [sources.confluenceEvidenceCli, targets.confluenceEvidenceCli],
       [sources.codexConfluenceBroker, targets.codexConfluenceBroker],
     ] as const) workspaceTransaction.copyFile(source, target);

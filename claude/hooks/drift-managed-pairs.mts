@@ -184,6 +184,10 @@ export function fixedPairs(home: string, workspace: string): ManagedPair[] {
       source: "modules/atl-jira-brokers/confluence-evidence-report.mts",
     },
     {
+      live: joinPathLike(workspace, "tools/confluence-evidence-io.mts"),
+      source: "modules/atl-jira-brokers/confluence-evidence-io.mts",
+    },
+    {
       live: joinPathLike(workspace, "tools/confluence-evidence-cli.mts"),
       source: "modules/atl-jira-brokers/confluence-evidence-cli.mts",
     },

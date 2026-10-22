@@ -1,18 +1,18 @@
-// The evidence verb (issue #519): the I/O around the pure gates in
-// confluence-evidence.mts. Confluence is read with GET only. The record and
-// body files hold page content, so they must lie outside every git work tree;
-// stdout carries ids, versions, kinds, labels, reasons and counts only.
-import { execFile } from 'node:child_process';
-import { writeFile as nodeWriteFile } from 'node:fs/promises';
-import path from 'node:path';
-import { ConfluenceError, type ConfluenceSession } from './confluence-contract.mts';
+// The evidence verb (issue #519): the modes around the pure gates in
+// confluence-evidence.mts. Confluence is read with GET only; local files and git
+// go through confluence-evidence-io.mts. Stdout carries ids, versions, kinds,
+// labels, reasons and counts only.
+import type { ConfluenceSession } from './confluence-contract.mts';
 import { findSpace, getPage } from './confluence-content.mts';
 import { drainageRules } from './confluence-drainage-rules.mts';
 import { drainageSnapshot } from './confluence-drainage-snapshot.mts';
 import {
-  BOUND_REVISION, classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, KINDS, renderMeasurementBlock,
+  BOUND_REVISION, classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, KINDS, normaliseMeasurement, renderMeasurementBlock,
   type DecideOptions, type Decision, type Measurement, type MeasuredKind,
 } from './confluence-evidence.mts';
+import {
+  execFileAsync, fail, nodeFiles, readJson, readRecord, requireAbsent, requireOutside, TIMEOUT, type FileOps, type Io,
+} from './confluence-evidence-io.mts';
 import { PROPOSED, renderReport, type EvidenceRecord } from './confluence-evidence-report.mts';
 import type { NeighbourArgs, NeighbourCliContext } from './confluence-neighbour-cli.mts';
 import { readFailure } from './confluence-pagination.mts';
@@ -22,52 +22,14 @@ import { createSession } from './confluence-session.mts';
 
 export interface EvidenceDeps {
   exec?: ExecLike;
-  writeFile?: (file: string, data: string) => Promise<void>;
+  files?: FileOps;
   // Injected by tests only; the broker builds the session from its context.
   session?: ConfluenceSession;
 }
-interface Io {
-  ctx: NeighbourCliContext; args: NeighbourArgs; exec: ExecLike;
-  write: (file: string, data: string) => Promise<void>; session: () => ConfluenceSession;
-}
 
-const TIMEOUT = { timeout: 15_000 };
-// LC_ALL=C keeps git's messages untranslated: requireOutside matches one of them.
-const execFileAsync: ExecLike = (file, args, options) => new Promise((resolve, reject) => {
-  execFile(file, args, { timeout: options.timeout, env: { ...process.env, LC_ALL: 'C' } }, (error, stdout, stderr) => {
-    if (error) reject(new Error(String(stderr).slice(0, 200) || error.message));
-    else resolve({ stdout: String(stdout), stderr: String(stderr) });
-  });
-});
-const fail = (message: string): never => { throw new ConfluenceError(message); };
 const approved = (io: Io): boolean => Object.hasOwn(io.args, 'body-approved');
 function numeric(value: string | undefined, flag: string): string {
   return value !== undefined && /^\d+$/.test(value) ? value : fail(`${flag} must be a numeric page id.`);
-}
-
-// Outside means: git runs and says "not a git repository" at the file's directory.
-// Any other git failure (dubious ownership, a missing directory) proves nothing, so it refuses.
-async function requireOutside(io: Io, flag: string): Promise<string> {
-  const file = io.args[flag] ?? fail(`--${flag} is missing.`);
-  const unproven = (why: string) => fail(`--${flag} cannot be shown to lie outside a repository: ${why}.`);
-  await io.exec('git', ['--version'], TIMEOUT).catch(() => unproven('git does not run'));
-  const inside = await io.exec('git', ['-C', path.dirname(file), 'rev-parse', '--show-toplevel'], TIMEOUT)
-    .then(() => true, (error: unknown) => /not a git repository/i.test(String(error)) ? false : unproven('git refused the check'));
-  if (inside) fail(`out-inside-repository: --${flag} must point outside every git work tree because it holds page content.`);
-  return file;
-}
-
-async function readJson(io: Io, flag: string, file = io.args[flag]): Promise<unknown> {
-  if (!file) return fail(`--${flag} is missing.`);
-  const text = await io.ctx.readFile(file, 'utf8').catch(() => fail(`--${flag} is not readable.`));
-  try { return JSON.parse(text); } catch { return fail(`--${flag} is not valid JSON.`); }
-}
-async function readRecord(io: Io, file = io.args.record): Promise<EvidenceRecord> {
-  const record = await readJson(io, 'record', file) as EvidenceRecord | null;
-  if (!record || typeof record.pageId !== 'string' || !/^\d+$/.test(record.pageId) || (!record.claim && !record.excluded)) {
-    return fail('--record is not an evidence record.');
-  }
-  return record;
 }
 
 async function prepare(io: Io): Promise<number> {
@@ -76,6 +38,7 @@ async function prepare(io: Io): Promise<number> {
   const id = numeric(args.id, '--id');
   if (args.kind !== undefined && !KINDS.includes(args.kind)) fail('--kind takes code, tracker, live or doc.');
   const out = await requireOutside(io, 'out');
+  await requireAbsent(io, out, 'out');
   const session = io.session();
   const space = await findSpace(session, args.space ?? '') ?? fail('No space with that key is visible to the service account.');
   const snapshot = await drainageSnapshot(session, id, space.id)
@@ -83,7 +46,7 @@ async function prepare(io: Io): Promise<number> {
   const claim = classifyClaim(snapshot, true, args.kind as MeasuredKind | undefined);
   const record: EvidenceRecord = { pageId: id, readVersion: snapshot.version, spaceId: space.id, spaceKey: space.key,
     parentId: snapshot.parentId, title: snapshot.title, body: snapshot.body, labels: snapshot.labels, claim };
-  await io.write(out, JSON.stringify(record, null, 2));
+  await io.files.write(out, JSON.stringify(record, null, 2));
   const { bound, unbound, malformed } = claim.revisions;
   for (const line of [`id: ${id}`, `version: ${snapshot.version}`,
     `kind: ${claim.kind}${claim.classifiedKind ? ` (override; classified ${claim.classifiedKind})` : ''}`,
@@ -119,7 +82,8 @@ async function decideMode(io: Io): Promise<number> {
   const record = await readRecord(io);
   if (!record.claim || typeof record.body !== 'string') fail('--record holds no prepared page.');
   if (supersededBy === record.pageId) fail('superseded-same-page: --superseded-by names the page itself.');
-  const measurement = await readJson(io, 'measurement');
+  // LF-only from here on: the record, the gates and the rendered body see the same strings.
+  const measurement = normaliseMeasurement(await readJson(io, 'measurement'));
   const m = measurement && typeof measurement === 'object' ? measurement as Partial<Measurement> : null;
   if (supersededBy !== undefined && m?.supersededBy !== undefined && m.supersededBy !== supersededBy) {
     fail('--superseded-by differs from supersededBy in the measurement.');
@@ -149,8 +113,8 @@ async function decideMode(io: Io): Promise<number> {
   }
   const keep = decision.reason !== 'excerpt-secret-marker' && m ? { measurement: m as Measurement } : {};
   const updated: EvidenceRecord = { ...record, ...keep, decision, labelsAfter: after };
-  if (body !== undefined) await io.write(outBody, body);
-  await io.write(recordPath, JSON.stringify(updated, null, 2));
+  if (body !== undefined) await io.files.write(outBody, body);
+  await io.files.write(recordPath, JSON.stringify(updated, null, 2));
   const diff = decision.labelsAdd.length ? `${decision.labelsAdd.map(l => `+${l}`).join(', ')} / ${decision.labelsRemove.map(l => `-${l}`).join(', ')}` : 'none';
   for (const line of [`outcome: ${decision.outcome}`, `reason: ${decision.reason}`, `labels: ${diff}`,
     `body: ${body === undefined ? 'not written' : 'written'}`]) ctx.log(line);
@@ -196,7 +160,8 @@ async function recordMode(io: Io): Promise<number> {
   const reason = io.args.reason ?? '';
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(reason)) fail('--reason must be a short slug such as private-no-local-route.');
   const out = await requireOutside(io, 'out');
-  await io.write(out, JSON.stringify({ pageId: id, excluded, reason }, null, 2));
+  await requireAbsent(io, out, 'out');
+  await io.files.write(out, JSON.stringify({ pageId: id, excluded, reason }, null, 2));
   for (const line of [`id: ${id}`, `excluded: ${excluded}`, `reason: ${reason}`]) io.ctx.log(line);
   return 0;
 }
@@ -209,7 +174,6 @@ export async function cmdEvidence(ctx: NeighbourCliContext, args: NeighbourArgs,
   const run = MODES[args.mode ?? ''];
   if (!Object.hasOwn(MODES, args.mode ?? '')) fail('--mode takes prepare, decide, verify, report or record.');
   let session = deps.session;
-  return run({ ctx, args, exec: deps.exec ?? execFileAsync,
-    write: deps.writeFile ?? ((file, data) => nodeWriteFile(file, data, { encoding: 'utf8', mode: 0o600 })),
+  return run({ ctx, args, exec: deps.exec ?? execFileAsync, files: deps.files ?? nodeFiles,
     session: () => (session ??= createSession(ctx)) });
 }
