@@ -20,6 +20,9 @@ const first = (home: CodexHome): string => renderReport(readJournal(home.root, "
 // Issue #652. The capture interval as the dispatcher saw it: first intercepted write to process exit,
 // both stamped in the child by the fault fixture, so process start-up and guard-child load stay out.
 // The shared window is 2 s absolute; 500 ms covers one timer's lateness and the flush before exit.
+// The child's total wall time is deliberately bounded only by the run() watchdog: start-up and
+// guard children are not what the window controls. The exact mkdir, mkdir sequence mirrors the
+// journal lib's internals; a change there is an expected test update, not a regression.
 const WINDOW_MS = 2_000, LATE_MS = 500, NO_RECEIPT = "no fault receipt: the child was killed or the fault did not engage";
 function captured(receipt: string) {
   const doc = readFaultReceipt(receipt);
