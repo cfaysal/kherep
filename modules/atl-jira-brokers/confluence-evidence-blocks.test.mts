@@ -147,3 +147,59 @@ test('#666 T7 controls: the author\'s own declarations before or after a link-le
     }
   }
 });
+
+// Never more confirmable than base: only a base-form block is hidden from the Revision read, so a block-like span that lost
+// its Measured via line is author text and cannot hide a later disqualifier.
+const BETA = `alpha@${'b'.repeat(40)}`;
+const AFTER_LABELS = ['type-observation', 'evidence-confirmed', 'status-author-model', RUNTIME];
+const missingVia = partial.replace(/<p>Measured via [^<]*<\/p>/, '');
+const DISQUALIFIERS = ['alpha@abc123', SHA, 'none (no exact binding: dirty tree)', `${BETA} (no exact binding: dirty tree)`];
+
+test('#666 T8: a span hidden from binding never hides a later disqualifier', () => {
+  assert.notEqual(missingVia, partial);
+  for (const line of DISQUALIFIERS.filter(l => l !== SHA)) {
+    const body = `<p>Revision: ${BETA}</p>${AUTHOR}${missingVia}<p>Author followup.</p><p>Revision: ${line}</p>${FOOTER}`;
+    assert.equal(decide(claim(body), { ...CODE_M, revision: BETA }, ANY_SHA).reason, 'revision-unbound-on-page', body);
+    assert.equal(flagged(body, AFTER_LABELS), 1, body);
+  }
+});
+
+test('#666 T8 property: no layout is more confirmable than its disqualifier allows', () => {
+  for (const shape of [partial, missingVia, block]) for (const extra of ['', block]) for (const line of DISQUALIFIERS)
+    // <p>x</p> separates the declaration: plainText does not end a line at </pre>, on base either.
+    for (const body of [`<p>Revision: ${line}</p>${AUTHOR}${shape}<p>x</p>${extra}${FOOTER}`, `${AUTHOR}${shape}<p>x</p><p>Revision: ${line}</p>${extra}${FOOTER}`,
+      `<p>Revision: ${BETA}</p>${AUTHOR}${shape}<p>x</p><p>Revision: ${line}</p>${extra}${FOOTER}`, `${AUTHOR}${extra}${FOOTER}${shape}<p>x</p><p>Revision: ${line}</p>`]) {
+      const c = claim(body);
+      assert.ok([...c.revisions.unbound, ...c.revisions.malformed].includes(line), body);
+      assert.notEqual(decide(c, { ...CODE_M, revision: BETA }, ANY_SHA).outcome, 'confirmed', body);
+      assert.equal(flagged(body, AFTER_LABELS), 1, body);
+    }
+});
+
+test('#666 T8 control: a Revision line inside a strict block\'s excerpt is metadata, not a disqualifier', () => {
+  const m = { ...CODE_M, excerpt: 'src/queue.mts changed\nRevision: abc123' };
+  const strict = renderMeasurementBlock({ ...CONFIRMED, measuredRevision: REV }, m, RUNTIME);
+  assert.equal(strict.match(MEASUREMENT_BLOCK)?.[0], strict);
+  const body = `<p>Revision: ${REV}</p>${AUTHOR}${strict}<p>Author followup.</p>${FOOTER}`;
+  assert.deepEqual(claim(body).revisions, { bound: [REV], unbound: [], malformed: [] });
+  assert.equal(decide(claim(body), CODE_M, OPT).outcome, 'confirmed');
+  assert.equal(flagged(body, AFTER_LABELS), 0);
+});
+
+test('#666 T9: a superseded block hides a Revision line in its link title; a tail after another outcome stays author text', () => {
+  const titled = { ...TARGET, title: `Replacement\nRevision: ${REV}` };
+  const d = decide(claim(`<p>Revision: ${REV}</p>${AUTHOR}${FOOTER}`), HISTORICAL, { ...OPT, superseded: titled });
+  const full = renderMeasurementBlock(d, HISTORICAL, RUNTIME, titled);
+  assert.equal(full.match(MEASUREMENT_BLOCK)?.[0], full);
+  for (const body of [`${AUTHOR}${full}${FOOTER}`, `${AUTHOR}${full}<p>Author followup.</p>${FOOTER}`, `${AUTHOR}${FOOTER}${full}`]) {
+    const c = claim(body);
+    assert.deepEqual(c.revisions.bound, [], body);
+    assert.equal(flagged(body, LABELS), 1, body);
+    assert.equal(decide(c, CODE_M, OPT).reason, 'revision-not-on-page', body);
+  }
+  const tail = full.slice(full.indexOf('<p>Superseded by:'));
+  for (const outcome of ['confirmed', 'refuted'] as const) {
+    const core = renderMeasurementBlock({ ...CONFIRMED, outcome, measuredRevision: REV }, CODE_M, RUNTIME);
+    assert.deepEqual(claim(`${AUTHOR}${core}${tail}${FOOTER}`).revisions.bound, [REV], outcome);
+  }
+});

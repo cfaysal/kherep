@@ -47,9 +47,10 @@ increments the minor version; every other release increments the patch version.
   the broker wrote, so a tool or file name inside a measurement command
   never makes a tracker page code-bound (issues #650, #662). Only the run of
   blocks directly before the footer counts; a block-shaped span elsewhere is
-  content (#666). A Revision line inside any measurement-shaped span, even a
-  block that lost its Superseded link, never counts as the page's own
-  Revision.
+  content (#666). A Revision line inside any complete block, even a
+  superseded block that lost its link or a line in that link's title, never
+  counts as the page's own Revision; an incomplete block-like span stays
+  author text.
 - Denied calls in delegated worker reports (issue #504). The guard
   dispatcher, and the hook runtime entry for its own denies, journal each
   guarded call of a delegated Claude worker (a payload with a valid

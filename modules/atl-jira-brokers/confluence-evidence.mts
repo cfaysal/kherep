@@ -215,16 +215,16 @@ const xml = escapeText;
 const FIELD = '[^<]*';
 const REST = ` \\(model-run, status-author-model unchanged\\)</p>\\s*(?:<p>Revision: ${FIELD}</p>\\s*)?`
   + `<p>Source: (?:code|tracker|live|doc), ${FIELD}</p>\\s*<p>Command: <code>${FIELD}</code></p>\\s*<pre>${FIELD}</pre>\\s*<p>Measured via ${FIELD} on \\1\\.</p>`;
-export const MEASUREMENT_BLOCK = new RegExp(`<h2>Measurement (\\d{4}-\\d{2}-\\d{2})</h2>\\s*<p>Outcome: (?:(?:confirmed|refuted)${REST}`
-  + `|superseded${REST}\\s*<p>Superseded by: <a href="/wiki/spaces/[^"<]*/pages/\\d+">${FIELD}</a></p>)`, 'gs');
+const TAIL = `\\s*<p>Superseded by: <a href="/wiki/spaces/[^"<]*/pages/\\d+">${FIELD}</a></p>`;
+export const MEASUREMENT_BLOCK = new RegExp(`<h2>Measurement (\\d{4}-\\d{2}-\\d{2})</h2>\\s*<p>Outcome: (?:(?:confirmed|refuted)${REST}|superseded${REST}${TAIL})`, 'gs');
 const footerCut = (body: string): number => { const at = body.lastIndexOf(RELATED_HEADING); return at >= 0 ? at : body.length; };
-// decide's run (blocks split only by whitespace, ending at the LAST footer cut) hides code tokens; Revisions ignore SHAPED spans (to Measured via, else next h2) (#666).
+// decide's run (blocks split only by whitespace, ending at the LAST footer cut) hides code tokens. Revisions are read as on d5c15f4: base-form blocks removed anywhere, tail optional (#666).
 export function claimSpan(body: string): [number, number] { const cut = footerCut(body); let [start, end] = [cut, -1]; // one forward scan
   for (const m of body.slice(0, cut).matchAll(MEASUREMENT_BLOCK)) [start, end] = [end >= 0 && !body.slice(end, m.index).trim() ? start : m.index, m.index + m[0].length];
   return [end >= 0 && !body.slice(end, cut).trim() ? start : cut, cut]; }
 export const claimBody = (body: string): string => { const [from, to] = claimSpan(body); return body.slice(0, from) + body.slice(to); };
-const SHAPED = new RegExp(`<h2>Measurement \\d{4}-\\d{2}-\\d{2}</h2>\\s*<p>Outcome: (?:confirmed|refuted|superseded) \\(model-run(?:(?!<h2|<p>Measured via )[^])*(?:<p>Measured via ${FIELD}</p>)?`, 'g');
-export const revisionBody = (body: string): string => body.replace(SHAPED, '');
+const REVISION_CORE = new RegExp(`<h2>Measurement (\\d{4}-\\d{2}-\\d{2})</h2>\\s*<p>Outcome: (confirmed|refuted|superseded)${REST}(${TAIL})?`, 'gs');
+export const revisionBody = (body: string): string => body.replace(REVISION_CORE, (_b, _d, outcome: string, tail?: string) => outcome === 'superseded' ? '' : tail ?? '');
 export function renderMeasurementBlock(decision: Decision, raw: Measurement, runtimeLabel: string, superseded?: SupersedingPage): string {
   const m = normaliseMeasurement(raw);
   const parts = [`<h2>Measurement ${xml(m.measuredAt)}</h2>`,
