@@ -406,6 +406,27 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Confluence brokers: a text-search result row without a readable title
+  makes the exact-term half UNKNOWN instead of disappearing (issue #656).
+  A row whose title was missing, not a string, or only whitespace in both
+  documented places (`content.title`, then `title`) was dropped, so
+  `{"results":[{}]}` read like an empty search: `related` printed
+  `count: 0` with exit 0 and `stitch` counted the orphan `isolated`. A
+  whitespace `content.title` also hid a readable flat `title`; it no
+  longer does. Each row is now counted once, after both places, and the
+  readable titles are kept. The exact half then reports
+  `exact-term search: <n> of <m> result row(s) had no readable title.
+  Hits from this half are incomplete and UNKNOWN. cql: <cql>` and never an
+  HTTP status. `related` keeps its exit convention: with hits it prints
+  `The exact-term half was not fully read. The list may be incomplete.`
+  and exits 0; without hits it prints `The exact-term half was not fully
+  read and nothing was found. This result is UNKNOWN, not zero.` and exits
+  1. `stitch` skips that orphan before any assignment, as it does for a
+  refused search: it prints `unsearched <id> <reason>`, counts it as
+  unsearched, writes no link from an incompletely read search, and exits 1.
+  A structurally malformed response (no `results` array, or a row that is
+  not an object) still aborts with `malformed-response`.
+
 - Confluence brokers: `related` and `stitch` build the CQL text search from
   the title's words, not the raw title (issue #651). The value of
   `text ~ "..."` is parsed by Lucene, whose syntax includes `( ) ~ " \ : * ?
