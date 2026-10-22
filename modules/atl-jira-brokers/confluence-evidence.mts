@@ -232,7 +232,7 @@ export function renderMeasurementBlock(decision: Decision, raw: Measurement, run
     `<pre>${xml(m.excerpt)}</pre>`, `<p>Measured via ${xml(runtimeLabel)} on ${xml(m.measuredAt)}.</p>`);
   if (superseded && decision.outcome === 'superseded') {
     const href = `/wiki/spaces/${encodeURIComponent(superseded.spaceKey)}/pages/${encodeURIComponent(superseded.id)}`;
-    parts.push(`<p>Superseded by: <a href="${escapeText(href)}">${xml(superseded.title)}</a></p>`);
+    parts.push(`<p>Superseded by: <a href="${xml(href)}">${xml(superseded.title)}</a></p>`);
   }
   return parts.join('');
 }
