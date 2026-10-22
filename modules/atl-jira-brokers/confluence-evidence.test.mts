@@ -3,9 +3,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, renderMeasurementBlock, renderReport,
+  classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, renderMeasurementBlock,
   type Measurement,
 } from './confluence-evidence.mts';
+import { renderReport } from './confluence-evidence-report.mts';
 import { drainageRules } from './confluence-drainage-rules.mts';
 
 const SHA = 'a'.repeat(40);

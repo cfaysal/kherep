@@ -180,6 +180,10 @@ export function fixedPairs(home: string, workspace: string): ManagedPair[] {
       source: "modules/atl-jira-brokers/confluence-evidence.mts",
     },
     {
+      live: joinPathLike(workspace, "tools/confluence-evidence-report.mts"),
+      source: "modules/atl-jira-brokers/confluence-evidence-report.mts",
+    },
+    {
       live: joinPathLike(workspace, "tools/confluence-evidence-cli.mts"),
       source: "modules/atl-jira-brokers/confluence-evidence-cli.mts",
     },
