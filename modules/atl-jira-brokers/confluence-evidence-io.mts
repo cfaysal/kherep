@@ -3,7 +3,7 @@
 // must lie outside every git work tree and are replaced atomically.
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { lstat, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { link, lstat, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ConfluenceError, type ConfluenceSession } from './confluence-contract.mts';
 import type { EvidenceRecord } from './confluence-evidence-report.mts';
@@ -13,6 +13,8 @@ import type { ExecLike } from './confluence-semantic.mts';
 export interface FileOps {
   // Replaces the file atomically: a failed write leaves the previous file or none, never a partial one.
   write(file: string, data: string): Promise<void>;
+  // Creates the file atomically; refuses with out-exists, leaving it unchanged, if it already exists.
+  create(file: string, data: string): Promise<void>;
   // False only when the file is absent; any other failure rejects.
   exists(file: string): Promise<boolean>;
   realpath(dir: string): Promise<string>;
@@ -34,22 +36,27 @@ export const fail = (message: string): never => { throw new ConfluenceError(mess
 export interface AtomicOps {
   writeFile(file: string, data: string, options: { encoding: 'utf8'; mode: number; flag: string }): Promise<void>;
   rename(from: string, to: string): Promise<void>;
+  link(from: string, to: string): Promise<void>;
   rm(file: string): Promise<void>;
 }
-const NODE_OPS: AtomicOps = { writeFile, rename, rm: file => rm(file, { force: true }) };
-// A temporary file in the same directory, then a rename, so readers never see a partial file.
-export async function atomicWrite(file: string, data: string, ops: AtomicOps = NODE_OPS): Promise<void> {
+const NODE_OPS: AtomicOps = { writeFile, rename, link, rm: file => rm(file, { force: true }) };
+// A temporary file in the same directory, then a rename, so readers never see a partial file. An
+// exclusive write links instead: rename replaces a file created after requireAbsent, link fails with EEXIST.
+export async function atomicWrite(file: string, data: string, ops: AtomicOps = NODE_OPS, exclusive = false): Promise<void> {
   const temp = path.join(path.dirname(file), `.${path.basename(file)}.${randomBytes(6).toString('hex')}.tmp`);
   try {
     await ops.writeFile(temp, data, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    await ops.rename(temp, file);
+    await (exclusive ? ops.link(temp, file) : ops.rename(temp, file));
   } catch (error) {
     await ops.rm(temp).catch(() => undefined);
+    if (exclusive && (error as NodeJS.ErrnoException).code === 'EEXIST') fail('out-exists: the file appeared after the check; it was left unchanged.');
     throw error;
   }
+  if (exclusive) await ops.rm(temp);
 }
 export const nodeFiles: FileOps = {
   write: (file, data) => atomicWrite(file, data),
+  create: (file, data) => atomicWrite(file, data, NODE_OPS, true),
   exists: file => lstat(file).then(() => true, (error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') return false;
     throw error;

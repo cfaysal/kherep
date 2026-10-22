@@ -46,7 +46,7 @@ async function prepare(io: Io): Promise<number> {
   const claim = classifyClaim(snapshot, true, args.kind as MeasuredKind | undefined);
   const record: EvidenceRecord = { pageId: id, readVersion: snapshot.version, spaceId: space.id, spaceKey: space.key,
     parentId: snapshot.parentId, title: snapshot.title, body: snapshot.body, labels: snapshot.labels, claim };
-  await io.files.write(out, JSON.stringify(record, null, 2));
+  await io.files.create(out, JSON.stringify(record, null, 2));
   const { bound, unbound, malformed } = claim.revisions;
   for (const line of [`id: ${id}`, `version: ${snapshot.version}`,
     `kind: ${claim.kind}${claim.classifiedKind ? ` (override; classified ${claim.classifiedKind})` : ''}`,
@@ -161,7 +161,7 @@ async function recordMode(io: Io): Promise<number> {
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(reason)) fail('--reason must be a short slug such as private-no-local-route.');
   const out = await requireOutside(io, 'out');
   await requireAbsent(io, out, 'out');
-  await io.files.write(out, JSON.stringify({ pageId: id, excluded, reason }, null, 2));
+  await io.files.create(out, JSON.stringify({ pageId: id, excluded, reason }, null, 2));
   for (const line of [`id: ${id}`, `excluded: ${excluded}`, `reason: ${reason}`]) io.ctx.log(line);
   return 0;
 }
