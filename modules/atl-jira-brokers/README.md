@@ -82,7 +82,7 @@ The [review rules](../../claude/skills/brain-drainage/references/review-rules.md
 
 ### Confirm path
 
-Step 7 of the skill measures an `evidence-assumed` page against its primary source and proposes `evidence-confirmed`, `evidence-refuted` or `evidence-superseded`. It runs only on operator request, per page. Both brokers expose the same `evidence` verb, implemented in `confluence-evidence.mts` (pure gates, no I/O) and `confluence-evidence-cli.mts`. The verb sends GET requests only; it never writes to Confluence.
+Step 7 of the skill measures an `evidence-assumed` page against its primary source and proposes `evidence-confirmed`, `evidence-refuted` or `evidence-superseded`. It runs only on operator request, per page. Both brokers expose the same `evidence` verb, implemented in `confluence-evidence.mts` (pure gates, no I/O), `confluence-evidence-report.mts` (record type and report, no I/O) and `confluence-evidence-cli.mts`. The verb sends GET requests only; it never writes to Confluence.
 
 ```text
 <configured broker> evidence --mode prepare --id <id> --space <key> --body-approved --out <record.json>
