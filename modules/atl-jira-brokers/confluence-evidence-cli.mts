@@ -32,8 +32,9 @@ interface Io {
 }
 
 const TIMEOUT = { timeout: 15_000 };
+// LC_ALL=C keeps git's messages untranslated: requireOutside matches one of them.
 const execFileAsync: ExecLike = (file, args, options) => new Promise((resolve, reject) => {
-  execFile(file, args, { timeout: options.timeout }, (error, stdout, stderr) => {
+  execFile(file, args, { timeout: options.timeout, env: { ...process.env, LC_ALL: 'C' } }, (error, stdout, stderr) => {
     if (error) reject(new Error(String(stderr).slice(0, 200) || error.message));
     else resolve({ stdout: String(stdout), stderr: String(stderr) });
   });
@@ -44,12 +45,14 @@ function numeric(value: string | undefined, flag: string): string {
   return value !== undefined && /^\d+$/.test(value) ? value : fail(`${flag} must be a numeric page id.`);
 }
 
-// Outside means: git runs, and reports no work tree at the file's directory.
-// A git that cannot run proves nothing, so it refuses rather than passes.
+// Outside means: git runs and says "not a git repository" at the file's directory.
+// Any other git failure (dubious ownership, a missing directory) proves nothing, so it refuses.
 async function requireOutside(io: Io, flag: string): Promise<string> {
   const file = io.args[flag] ?? fail(`--${flag} is missing.`);
-  await io.exec('git', ['--version'], TIMEOUT).catch(() => fail(`--${flag} cannot be shown to lie outside a repository: git does not run.`));
-  const inside = await io.exec('git', ['-C', path.dirname(file), 'rev-parse', '--show-toplevel'], TIMEOUT).then(() => true, () => false);
+  const unproven = (why: string) => fail(`--${flag} cannot be shown to lie outside a repository: ${why}.`);
+  await io.exec('git', ['--version'], TIMEOUT).catch(() => unproven('git does not run'));
+  const inside = await io.exec('git', ['-C', path.dirname(file), 'rev-parse', '--show-toplevel'], TIMEOUT)
+    .then(() => true, (error: unknown) => /not a git repository/i.test(String(error)) ? false : unproven('git refused the check'));
   if (inside) fail(`out-inside-repository: --${flag} must point outside every git work tree because it holds page content.`);
   return file;
 }
