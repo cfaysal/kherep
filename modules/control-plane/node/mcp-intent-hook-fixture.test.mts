@@ -79,7 +79,11 @@ test("a hook that hangs after publishing cannot pass the close bound", async (t)
   } finally { await ensureClosed(run); }
 });
 
-test("a hook whose close is not observed keeps its fixture and reports the cleanup failure", async (t) => {
+// POSIX only: on the Windows CI runner the hook's close was observed after the kill although the grandchild
+// still held the inherited stdio (run 39838031301), so this setup cannot produce an unobserved close there.
+const NO_WINDOWS = { skip: process.platform === "win32" ? "the inherited-stdio grandchild does not hold close open on Windows" : false };
+
+test("a hook whose close is not observed keeps its fixture and reports the cleanup failure", NO_WINDOWS, async (t) => {
   const { owned, outputRoot, clientRoot, configRoot, runs } = hookRoot(t);
   const { run } = startStagedHook({ outputRoot, clientRoot, configRoot, runs, preload: [STDIO_HOLDING_HANG_PRELOAD] });
   let grandchild = 0;
