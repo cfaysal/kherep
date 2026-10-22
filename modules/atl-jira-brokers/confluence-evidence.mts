@@ -100,6 +100,12 @@ function today(now: number): number {
   const d = new Date(now);
   return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / DAY;
 }
+// Confluence may rewrite a lone CR on PUT while update --expected-version compares the readback
+// byte-exactly, so every measurement string is LF-only before the gates and before rendering.
+export function normaliseMeasurement<T>(m: T): T {
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return m;
+  return Object.fromEntries(Object.entries(m).map(([k, v]) => [k, typeof v === 'string' ? v.replace(/\r\n?/g, '\n') : v])) as T;
+}
 function measurementGate(claim: Claim, m: Record<string, unknown>, options: DecideOptions): string | null {
   if (Object.keys(m).some(key => !FIELDS.has(key))) return 'measurement-unknown-field';
   const sourceClass = String(m.sourceClass);
@@ -137,12 +143,14 @@ function codeGate(claim: Claim, m: Measurement, options: DecideOptions): string 
   if (m.verdict === 'reproduces' && claim.revisions.unbound.length + claim.revisions.malformed.length > 0) return 'revision-unbound-on-page';
   return null;
 }
+const word = (key: string): RegExp => new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
 function touches(claim: Claim, m: Measurement): boolean {
   const hay = `${m.command}\n${m.excerpt}`;
-  // gh issue view --json state,closedAt prints no number, so a GitHub issue may be named by the command;
-  // any other tracker key must appear in the excerpt.
-  if (m.kind === 'tracker') return claim.trackerKeys.some(key => key.startsWith('#')
-    ? new RegExp(`(?:#|\\b)${key.slice(1)}\\b`).test(hay) : m.excerpt.includes(key));
+  // Every tracker key the page states (a read of one key must not confirm a page about several), on word
+  // boundaries (KEY-1 is not KEY-12). gh issue view --json state,closedAt prints no number, so a GitHub
+  // issue may be named by the command; any other key must appear in the excerpt. Code needs any one token.
+  if (m.kind === 'tracker') return claim.trackerKeys.length > 0 && claim.trackerKeys.every(key => key.startsWith('#')
+    ? new RegExp(`(?:#|\\b)${key.slice(1)}\\b`).test(hay) : word(key).test(m.excerpt));
   if (m.kind === 'code') return [...claim.codeTokens, ...(m.subject ? [m.subject] : [])].some(token => hay.includes(token));
   return filled(m.subject) && hay.includes(m.subject ?? '');
 }
@@ -161,11 +169,12 @@ export function decide(claim: Claim, measurement: unknown, options: DecideOption
   if (claim.evidenceLabel === 'malformed' || claim.statusAuthor === 'malformed') return refuse('labels-malformed');
   if (claim.statusAuthor !== 'model') return refuse('status-author-not-model', claim.statusAuthor === 'missing' ? 'unknown' : 'reported-only');
   if (!claim.bodyApproved) return refuse('record-not-body-approved');
-  if (claim.kind === 'historical') return refuse('historical-not-repeatable');
+  // A --kind override never makes a historical claim repeatable.
+  if (claim.kind === 'historical' || claim.classifiedKind === 'historical') return refuse('historical-not-repeatable');
   if (measurement === undefined) return refuse('no-measurement');
   if (!measurement || typeof measurement !== 'object' || Array.isArray(measurement)) return refuse('measurement-incomplete');
-  const m = measurement as Measurement;
-  const reason = measurementGate(claim, measurement as Record<string, unknown>, options)
+  const m = normaliseMeasurement(measurement) as Measurement;
+  const reason = measurementGate(claim, m as unknown as Record<string, unknown>, options)
     ?? (claim.kind === 'unclassified' ? 'unclassified-claim' : null)
     ?? (m.kind !== claim.kind ? 'kind-mismatch' : null)
     ?? (m.kind === 'code' ? codeGate(claim, m, options) : null)
@@ -177,9 +186,13 @@ export function decide(claim: Claim, measurement: unknown, options: DecideOption
   return { outcome, reason: 'measured', labelsAdd: [`evidence-${outcome}`], labelsRemove: ['evidence-assumed'],
     ...(m.kind === 'code' ? { measuredRevision: m.revision } : {}), ...(outcome === 'superseded' ? { supersededBy: target } : {}) };
 }
-const xml = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-export function renderMeasurementBlock(decision: Decision, m: Measurement, runtimeLabel: string, superseded?: SupersedingPage): string {
+// Text nodes escape only &, < and >; attribute values add the double quote. Confluence may rewrite other
+// entity forms (&#39;, &quot; in text) on PUT, and the byte-exact update readback would then be UNVERIFIED.
+export const escapeText = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+export const escapeAttr = (value: string): string => escapeText(value).replace(/"/g, '&quot;');
+const xml = escapeText;
+export function renderMeasurementBlock(decision: Decision, raw: Measurement, runtimeLabel: string, superseded?: SupersedingPage): string {
+  const m = normaliseMeasurement(raw);
   const parts = [`<h2>Measurement ${xml(m.measuredAt)}</h2>`,
     `<p>Outcome: ${xml(decision.outcome)} (model-run, status-author-model unchanged)</p>`];
   if (decision.measuredRevision) parts.push(`<p>Revision: ${xml(decision.measuredRevision)}</p>`);
@@ -187,7 +200,7 @@ export function renderMeasurementBlock(decision: Decision, m: Measurement, runti
     `<pre>${xml(m.excerpt)}</pre>`, `<p>Measured via ${xml(runtimeLabel)} on ${xml(m.measuredAt)}.</p>`);
   if (superseded && decision.outcome === 'superseded') {
     const href = `/wiki/spaces/${encodeURIComponent(superseded.spaceKey)}/pages/${encodeURIComponent(superseded.id)}`;
-    parts.push(`<p>Superseded by: <a href="${xml(href)}">${xml(superseded.title)}</a></p>`);
+    parts.push(`<p>Superseded by: <a href="${escapeAttr(href)}">${xml(superseded.title)}</a></p>`);
   }
   return parts.join('');
 }
