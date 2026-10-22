@@ -2,7 +2,7 @@
 // tracker key matching and the historical refusal under --kind. Synthetic bodies only.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { classifyClaim, decide, escapeAttr, escapeText, renderMeasurementBlock, type Measurement } from './confluence-evidence.mts';
+import { classifyClaim, decide, escapeText, renderMeasurementBlock, type Measurement } from './confluence-evidence.mts';
 
 const SHA = 'a'.repeat(40);
 const NOW = new Date(2026, 9, 22, 12).getTime();
@@ -22,25 +22,25 @@ const GH = (command: string, excerpt: string): Measurement => ({ kind: 'tracker'
   command, excerpt, measuredAt: TODAY, verdict: 'reproduces' });
 const closed = 'state: CLOSED, closedAt: 2026-10-22T13:00:00Z';
 
-test('P2: text nodes escape only &, < and >; line endings reach neither the gates nor the body as CR', () => {
+test('P2: text nodes escape &, <, > and " (as &quot;, #662); line endings reach neither the gates nor the body as CR', () => {
   const m = M({ source: `alpha's "main" checkout`, command: `git show ${SHA}:src/queue.mts | grep -n "it's" && echo 'a<b>'`,
     excerpt: `12: retry('receipt')\r\n13: say "done"\r14: end` });
   const d = decide(claim(CODE), m, OPT);
   assert.equal(d.outcome, 'confirmed');
   const block = renderMeasurementBlock(d, m, 'runtime-claude-code-win');
-  assert.ok(!block.includes('&#39;') && !block.includes('&quot;'), block);
+  assert.ok(!block.includes('&#39;') && block.includes('&quot;'), block);
   assert.ok(!block.includes('\r'), 'no CR reaches the body');
-  assert.ok(block.includes(`<p>Source: code, alpha's "main" checkout</p>`), block);
-  assert.ok(block.includes(`grep -n "it's" &amp;&amp; echo 'a&lt;b&gt;'</code>`), block);
-  assert.ok(block.includes(`<pre>12: retry('receipt')\n13: say "done"\n14: end</pre>`), block);
+  assert.ok(block.includes(`<p>Source: code, alpha's &quot;main&quot; checkout</p>`), block);
+  assert.ok(block.includes(`grep -n &quot;it's&quot; &amp;&amp; echo 'a&lt;b&gt;'</code>`), block);
+  assert.ok(block.includes(`<pre>12: retry('receipt')\n13: say &quot;done&quot;\n14: end</pre>`), block);
   // Normalised before the gates: 4500 raw characters are 3000 once CRLF becomes LF.
   assert.equal(decide(claim(CODE), M({ excerpt: 'x\r\n'.repeat(2001) }), OPT).reason, 'excerpt-too-long');
   assert.equal(decide(claim(CODE), M({ excerpt: 'x\r\n'.repeat(1500) }), OPT).outcome, 'confirmed');
 });
 
-test('P2: an attribute value still escapes the double quote; a superseding title is text', () => {
-  assert.equal(escapeAttr(`/wiki/"x"?a=1&b='2'<`), `/wiki/&quot;x&quot;?a=1&amp;b='2'&lt;`);
-  assert.equal(escapeText(`it's "x" & <y>`), `it's "x" &amp; &lt;y&gt;`);
+test('P2: one escaper serves text and attribute values; a superseding title is text', () => {
+  assert.equal(escapeText(`/wiki/"x"?a=1&b='2'<`), `/wiki/&quot;x&quot;?a=1&amp;b='2'&lt;`);
+  assert.equal(escapeText(`it's "x" & <y>`), `it's &quot;x&quot; &amp; &lt;y&gt;`);
   const live = claim(`<p>Host: alpha-node</p><p>The queue listens on 8443.</p>${FOOTER}`);
   const m: Measurement = { kind: 'live', source: 'alpha-node', sourceClass: 'target-host', command: 'ss -ltn', excerpt: '8443 -> 8080',
     measuredAt: TODAY, verdict: 'contradicts', subject: '8443', supersededBy: '77' };
@@ -48,7 +48,22 @@ test('P2: an attribute value still escapes the double quote; a superseding title
   const d = decide(live, m, { ...OPT, superseded: page });
   assert.equal(d.outcome, 'superseded');
   const block = renderMeasurementBlock(d, m, 'runtime-codex-mac', page);
-  assert.ok(block.includes(`<a href="/wiki/spaces/K%22Q/pages/77">Queue "port" isn't 8443</a>`), block);
+  assert.ok(block.includes(`<a href="/wiki/spaces/K%22Q/pages/77">Queue &quot;port&quot; isn't 8443</a>`), block);
+});
+
+test(`#662: the block carries the entity forms Confluence returns: " as &quot;, ' raw, no &#39;, no CR`, () => {
+  const m: Measurement = { kind: 'live', source: `alpha's "main"`, sourceClass: 'target-host',
+    command: 'gh issue view 519 --json state,closedAt | jq .', excerpt: `{\n  "state": "CLOSED",\n  "title": "it's done"\n}`,
+    measuredAt: TODAY, verdict: 'contradicts', subject: 'CLOSED', supersededBy: '77' };
+  const page = { id: '77', title: `Queue "port" isn't 8443`, spaceId: '9', spaceKey: 'K"Q' };
+  const d = decide(claim('<p>Host: alpha-node</p><p>The issue is CLOSED.</p>'), m, { ...OPT, superseded: page });
+  assert.equal(d.outcome, 'superseded');
+  const block = renderMeasurementBlock(d, m, 'runtime-claude-code-win', page);
+  assert.ok(block.includes(`<p>Source: live, alpha's &quot;main&quot;</p>`), block);
+  assert.ok(block.includes(`<pre>{\n  &quot;state&quot;: &quot;CLOSED&quot;,\n  &quot;title&quot;: &quot;it's done&quot;\n}</pre>`), block);
+  assert.ok(block.includes(`<a href="/wiki/spaces/K%22Q/pages/77">Queue &quot;port&quot; isn't 8443</a>`), block);
+  assert.equal(escapeText(`a & b < c > d " e ' f`), `a &amp; b &lt; c &gt; d &quot; e ' f`);
+  assert.ok(!block.includes('&#39;') && !block.includes(String.fromCharCode(13)), block);
 });
 
 test('P3-a: a tracker key matches on word boundaries only', () => {

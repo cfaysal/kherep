@@ -207,7 +207,7 @@ test('type-knowledge pages are eligible; command and excerpt are escaped in the 
   const d = decide(knowledge, m, OPT());
   assert.equal(d.outcome, 'confirmed');
   const block = renderMeasurementBlock(d, m, 'runtime-claude-code-win');
-  assert.ok(block.includes('<code>git show ' + SHA + ':src/queue.mts | grep -n "a&lt;b &amp;&amp; c"</code>'), block);
+  assert.ok(block.includes('<code>git show ' + SHA + ':src/queue.mts | grep -n &quot;a&lt;b &amp;&amp; c&quot;</code>'), block);
   assert.ok(block.includes('<pre>12: if (a &lt; b &amp;&amp; retry(receipt)) {}</pre>'), block);
   assert.ok(!block.includes('a<b') && !block.includes('a < b'));
 });

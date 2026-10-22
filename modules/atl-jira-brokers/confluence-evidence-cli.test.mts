@@ -115,6 +115,21 @@ test('Defect 2: verify matches only the reviewed body with exactly the outcome l
   assert.deepEqual(await run(body, [...after, 'currency-uncertain']), [2, 'readback: mismatch labels (+currency-uncertain)']);
 });
 
+test('#662: verify matches a readback that carries &quot; and refuses the raw-quote form Confluence never returns', async () => {
+  const h = await prepared(harness(), { ...MEASUREMENT, excerpt: '12: retry("receipt")\n13: say "done"' });
+  assert.equal(await h.run(decideArgs), 0);
+  const body = h.files.get('/tmp/ev/b.xml') ?? '';
+  assert.ok(body.includes('<pre>12: retry(&quot;receipt&quot;)\n13: say &quot;done&quot;</pre>'), body);
+  const after: string[] = JSON.parse(h.files.get('/tmp/ev/r.json') ?? '{}').labelsAfter;
+  const run = async (pageBody: string) => {
+    const v = harness({ '1': { body: pageBody, labels: after } });
+    for (const [k, value] of h.files) v.files.set(k, value);
+    return [await v.run({ mode: 'verify', record: '/tmp/ev/r.json', 'body-file': '/tmp/ev/b.xml' }), v.out.at(-1)];
+  };
+  assert.deepEqual(await run(body), [0, 'readback: match']);
+  assert.deepEqual(await run(body.replaceAll('&quot;', '"')), [2, 'readback: mismatch body']);
+});
+
 test('labelsAfter anticipates the runtime label the labels call adds to a page without one', async () => {
   const h = await prepared(harness({ '1': { body: BODY, labels: LABELS.slice(0, 3) } }));
   assert.equal(await h.run(decideArgs), 0);
