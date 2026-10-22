@@ -435,6 +435,41 @@ increments the minor version; every other release increments the patch version.
   outlives it. POSIX behaviour is unchanged except that a genuine
   permission error on the lock file is reported after the same wait of at
   least 200 ms (issue #600).
+- Control-plane locks: the other exclusive lock creates now treat a
+  Windows delete-pending lock (`EPERM`, and `EACCES` and `EBUSY`
+  defensively) as contention instead of a hard failure, through one shared
+  classifier (`node/lock-contention.mts`) that looks only at the create.
+  The mid-turn delivery lock used to skip the delivery at once; it now
+  retries at most 50 times of at least 4 ms before it defers, and these
+  codes never trigger its 5-second stale takeover. The autonomy budget lock
+  used to deny the turn at once; such a create now uses one of its existing
+  50 attempts of 10 ms. The Codex busy-ticket lock used to report `failed`;
+  it now reports `busy` at once, while directory errors and every other
+  create error stay `failed`. The service owner file (drain, transaction
+  lock) used to throw the raw error; it now retries on one allowance of 50
+  per acquisition shared with its reclaim gates, then fails with its
+  "already active" message and the code as `cause`, and `EEXIST` still needs
+  owner proof. The Windows launch permit retries the same codes at both of
+  its creates on one shared allowance; `EEXIST` at the second create stays a
+  conflict. The PID write of the mid-turn and budget locks is split from the
+  create, and a failed write removes the lock it just created instead of
+  leaving it for the stale rule. Client binding probe: a holder now writes a
+  complete owner record (`version`, `pid`, `token`, `at`, and a closing
+  newline) into its lock before it works, and a lock whose record is complete
+  and whose process `process.kill(pid, 0)` reports absent is reclaimed
+  through a `.reclaim` gate that rereads the exact bytes, at most 4 gate
+  levels deep. An empty lock of an older version, an incomplete, malformed,
+  oversized or symlinked lock, and a live or unverifiable owner are never
+  removed automatically, whatever their age; the probe README documents the
+  manual cleanup of a quiescent host. A failed release used to be swallowed;
+  it now reports `storage_error`, keeps the persisted intent or receipt, and
+  that process creates no new probe lock until it has retried that release,
+  after which the exact verification returns the same receipt; a lock
+  descriptor whose close failed is reported once and never closed again,
+  and the lock is still removed by path. Intent
+  pruning skips an intent that a concurrent verification removed after the
+  listing (`ENOENT`) instead of failing the creation; every other per-entry
+  error still fails it (issue #602).
 - A failed macOS upgrade recovery no longer leaves the new daemon loaded
   under the prior plist, after which every service command refused (issue
   #582). `restorePrior` wrote the prior definition after the candidate stop

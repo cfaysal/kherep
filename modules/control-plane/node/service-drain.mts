@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { NodePaths } from "./config.mts";
+import { classifyExclusiveCreate, CONTENTION_ATTEMPTS, CONTENTION_PAUSE_MS, pauseSync } from "./lock-contention.mts";
 import { defaultServiceOwnerProbe, type ServiceFileOwner, type ServiceOwnerProbe } from "./service-owner-probe.mts";
 
 export { defaultServiceOwnerProbe, type ServiceFileOwner, type ServiceOwnerProbe };
@@ -37,20 +38,34 @@ function readOwner(file: string): { owner: ServiceFileOwner; bytes: string } {
   return { owner, bytes };
 }
 
+// An exclusive create failing with EPERM, EACCES or EBUSY (Windows delete
+// pending, issue #602) is retried on one allowance per call, shared by every
+// reclaim gate below it; a spent allowance fails closed with activeMessage.
+// EEXIST still needs owner proof, and a transient code never bypasses it.
 export function acquireServiceOwnerFile(file: string, activeMessage: string, probe: ServiceOwnerProbe = defaultServiceOwnerProbe): () => void {
+  return acquireOwnerFile(file, activeMessage, probe, { left: CONTENTION_ATTEMPTS });
+}
+
+function openOwnerFile(file: string, activeMessage: string, budget: { left: number }): number {
+  for (;;) {
+    try {
+      return fs.openSync(file, "wx", 0o600);
+    } catch (error) {
+      if (classifyExclusiveCreate(error) !== "retry") throw error;
+      if (--budget.left <= 0) throw new Error(`${activeMessage}; its owner file cannot be created`, { cause: error });
+      pauseSync(CONTENTION_PAUSE_MS);
+    }
+  }
+}
+
+function acquireOwnerFile(file: string, activeMessage: string, probe: ServiceOwnerProbe, budget: { left: number }): () => void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const owner = probe.current();
   const bytes = `${JSON.stringify(owner)}\n`;
   for (let attempt = 0; attempt < 2; attempt++) {
+    let handle: number;
     try {
-      const handle = fs.openSync(file, "wx", 0o600);
-      fs.writeFileSync(handle, bytes);
-      fs.fsyncSync(handle);
-      fs.closeSync(handle);
-      return () => {
-        try { if (fs.readFileSync(file, "utf8") === bytes) fs.rmSync(file); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      };
+      handle = openOwnerFile(file, activeMessage, budget);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       let existing: ReturnType<typeof readOwner>;
@@ -58,7 +73,7 @@ export function acquireServiceOwnerFile(file: string, activeMessage: string, pro
       const active = probe.active(existing.owner);
       if (active === true) throw new Error(activeMessage);
       if (active === "unknown") throw new Error(`${activeMessage}; its owner cannot be verified`);
-      const releaseReclaim = acquireServiceOwnerFile(`${file}.reclaim`, `${activeMessage}; stale reclaim is already active`, probe);
+      const releaseReclaim = acquireOwnerFile(`${file}.reclaim`, `${activeMessage}; stale reclaim is already active`, probe, budget);
       try {
         let claimed: ReturnType<typeof readOwner>;
         try { claimed = readOwner(file); }
@@ -72,7 +87,20 @@ export function acquireServiceOwnerFile(file: string, activeMessage: string, pro
         if (claimedActive === "unknown") throw new Error(`${activeMessage}; its owner cannot be verified`);
         fs.rmSync(file);
       } finally { releaseReclaim(); }
+      continue;
     }
+    try {
+      fs.writeFileSync(handle, bytes);
+      fs.fsyncSync(handle);
+      fs.closeSync(handle);
+    } catch (error) {
+      try { fs.closeSync(handle); } catch { /* closed or failed already */ }
+      throw error;
+    }
+    return () => {
+      try { if (fs.readFileSync(file, "utf8") === bytes) fs.rmSync(file); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    };
   }
   throw new Error(activeMessage);
 }

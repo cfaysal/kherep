@@ -4,6 +4,7 @@ import path from "node:path";
 import { bypassesPermissions, isPlainSessionId, listenerDir } from "./autonomy.mts";
 import { ensureDir, type NodePaths } from "./config.mts";
 import { contextOutput, deliveryContext, sessionInbox, type HookDeps } from "./deliver-core.mts";
+import { classifyExclusiveCreate, CONTENTION_ATTEMPTS, CONTENTION_PAUSE_MS, pauseSync } from "./lock-contention.mts";
 import { unnoticedNotices } from "./sent-notices.mts";
 
 // Claude Code PostToolUse delivery inside a running turn (issue #388). From
@@ -23,15 +24,27 @@ export const midTurnLock = (paths: NodePaths, sessionId: string): string =>
   path.join(listenerDir(paths), `${sessionId}.deliver.lock`);
 
 // Runs body under the session's exclusive lock; undefined when another call
-// holds a live lock (it delivers) or the lock cannot be taken.
+// holds a live lock (it delivers) or the lock cannot be taken. A create failing
+// with EPERM, EACCES or EBUSY (Windows delete pending, issue #602) is retried
+// up to CONTENTION_ATTEMPTS times without using one of the two EEXIST attempts
+// and is never taken for a stale lock.
 function withMidTurnLock(paths: NodePaths, sessionId: string, body: () => string): string | undefined {
   const lock = midTurnLock(paths, sessionId);
   ensureDir(listenerDir(paths));
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let transient = 0;
+  for (let attempt = 0; attempt < 2;) {
+    let fd: number;
     try {
-      fs.writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+      fd = fs.openSync(lock, "wx", 0o600);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
+      const outcome = classifyExclusiveCreate(error);
+      if (outcome === "other") return undefined;
+      if (outcome === "retry") {
+        if (++transient >= CONTENTION_ATTEMPTS) return undefined;
+        pauseSync(CONTENTION_PAUSE_MS);
+        continue;
+      }
+      attempt++;
       try {
         if (Date.now() - fs.statSync(lock).mtimeMs <= MIDTURN_LOCK_STALE_MS) return undefined;
         fs.rmSync(lock, { force: true });
@@ -39,6 +52,15 @@ function withMidTurnLock(paths: NodePaths, sessionId: string, body: () => string
         // released meanwhile: try again
       }
       continue;
+    }
+    try {
+      fs.writeFileSync(fd, String(process.pid));
+      fs.closeSync(fd);
+    } catch {
+      // Ours by the exclusive create: removed, not left to the stale rule.
+      try { fs.closeSync(fd); } catch { /* closed or failed already */ }
+      try { fs.rmSync(lock, { force: true }); } catch { /* left to the stale rule */ }
+      return undefined;
     }
     try {
       return body();

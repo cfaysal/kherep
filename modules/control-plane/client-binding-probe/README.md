@@ -19,6 +19,18 @@ npm run typecheck
 
 The tests use temporary synthetic state. `transport.test.mts` starts real SDK stdio client and server processes, verifies missing and foreign identity rejection, and races two server processes against one idempotent intent.
 
+## Lock files, recovery and manual cleanup
+
+Intent creation and each verification run under an exclusive lock file in `<state-dir>/locks/`: `create.lock` for creation, `<requestId>.lock` for the verification of one request. A holder writes an owner record into its lock before it does any work: one line `{"version":1,"pid":…,"token":…,"at":…}` followed by a newline, where `token` is 32 random hex characters and the trailing newline marks the record complete. `at` is diagnostic only.
+
+A create that finds the lock held, or that fails with `EPERM`, `EACCES` or `EBUSY` (on Windows the lock of a holder that is releasing it is delete-pending for a moment, issue #600), waits and tries again: at most 50 attempts of at least 4 ms per call, after which the call fails closed with `storage_error`. A lock is removed automatically only when its owner record is complete and `process.kill(pid, 0)` reports its process absent (`ESRCH`). The removal goes through a sibling `.reclaim` gate, which rereads the exact record under the gate and keeps any replacement; a reclaimer that died holding a gate is recovered one gate level deeper, at most 4 gate levels in all (issue #602). A live owner, an owner whose process cannot be probed, and an empty, incomplete, malformed, oversized or symlinked lock are never removed automatically, whatever their age. An empty lock is what an older version of the probe leaves.
+
+A release that fails reports `storage_error`. What the action already persisted stays: a created intent, or a receipt written by a verification. That process creates no new probe lock until it has retried the same release; the retry runs at the start of its next probe call, and an exact repeated verification then returns the same receipt. The hook runs once per call, so a hook whose release failed exits with the lock still holding its complete record; the next call reclaims it once that process is gone.
+
+A lock descriptor whose close fails is reported as `storage_error` once and never closed again, because its number may already belong to another descriptor of the process; the release still removes the lock by path. On a Windows filesystem without POSIX delete semantics such a leaked descriptor can keep the lock name delete-pending for the life of that server process: other contenders then see `EPERM` until the bound and fail closed. A restart of the MCP server clears it. Which delete semantics the installed Node and libuv use is not established here.
+
+Manual cleanup, for a lock that the probe will not remove on its own: disable the MCP server entry and make sure that no `hook.mts` or `server.mts` process of that state directory runs (a quiescent host, verified by the operator). Then either delete the files under `<state-dir>/locks/` that hold no complete owner record, or discard the whole synthetic state directory and start with a fresh one. Never delete a lock whose record names a running process. No tool automates this.
+
 ## Candidate Codex configuration
 
 Do not add these entries automatically. Before activation, verify the installed client source identity and current config schema, review the concrete diff, and preserve every existing MCP server, hook and approval rule. Codex loads MCP servers from native `mcp_servers` TOML tables and hooks from `[[hooks.PreToolUse]]`. The official configuration reference documents `command`, `args`, `enabled`, and per-tool `approval_mode`; the hooks reference documents inline TOML and `commandWindows`.

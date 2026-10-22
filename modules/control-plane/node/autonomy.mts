@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { ensureDir, type NodePaths } from "./config.mts";
 import { readJson, writeJsonAtomic } from "./inbox.mts";
+import { classifyExclusiveCreate, pauseSync } from "./lock-contention.mts";
 import { DEFAULT_TURN_BUDGET, type TurnBudget } from "./policy.mts";
 
 // Guards for autonomous turns (issue #31): model turns no user prompt started,
@@ -94,26 +95,42 @@ export type Budget = "ok" | "spacing" | "exhausted" | "locked";
 // read-modify-write of the turns file is serialised by a lock file made with
 // exclusive create. A lock older than BUDGET_LOCK_STALE_MS belongs to a process
 // that died holding it and is removed. Two processes can both judge one lock
-// stale; the loser of that rare race is told "locked" at worst.
+// stale; the loser of that rare race is told "locked" at worst. A create failing
+// with EPERM, EACCES or EBUSY (Windows delete pending, issue #602) uses one of
+// the LOCK_ATTEMPTS and is never taken for a stale lock.
 export const BUDGET_LOCK_STALE_MS = 5_000;
 const LOCK_ATTEMPTS = 50;
 const LOCK_RETRY_MS = 10;
-const pause = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
 function withBudgetLock(file: string, body: () => Budget): Budget {
   const lock = `${file}.lock`;
   for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt++) {
+    let fd: number;
     try {
-      fs.writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+      fd = fs.openSync(lock, "wx", 0o600);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return "locked";
+      const outcome = classifyExclusiveCreate(error);
+      if (outcome === "other") return "locked";
+      if (outcome === "retry") {
+        pauseSync(LOCK_RETRY_MS);
+        continue;
+      }
       try {
         if (Date.now() - fs.statSync(lock).mtimeMs > BUDGET_LOCK_STALE_MS) fs.rmSync(lock, { force: true });
-        else pause(LOCK_RETRY_MS);
+        else pauseSync(LOCK_RETRY_MS);
       } catch {
         // released meanwhile: try again
       }
       continue;
+    }
+    try {
+      fs.writeFileSync(fd, String(process.pid));
+      fs.closeSync(fd);
+    } catch {
+      // Ours by the exclusive create: removed, not left to the stale rule.
+      try { fs.closeSync(fd); } catch { /* closed or failed already */ }
+      try { fs.rmSync(lock, { force: true }); } catch { /* left to the stale rule */ }
+      return "locked";
     }
     try {
       return body();
