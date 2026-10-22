@@ -98,19 +98,62 @@ export async function holdExclusive(home: Home): Promise<() => void> {
   return () => { try { opened.conn.exec("ROLLBACK"); } catch { /* ended */ } opened.conn.close(); };
 }
 
-// true when a writer could take the database right now.
-export async function writerFree(home: Home): Promise<boolean> {
-  let opened: Opened;
-  try { opened = await openDatabase(home.hooks); } catch { return false; } // reading the journal mode is busy too
-  try {
-    opened.conn.exec("BEGIN EXCLUSIVE");
-    opened.conn.exec("ROLLBACK");
-    return true;
-  } catch {
-    return false;
-  } finally {
-    opened.conn.close();
+// One writer probe with its phases kept apart (issue #641): open, BEGIN EXCLUSIVE, ROLLBACK and close run
+// in that order, each at most once. Only fixed labels and a bounded error code are kept, never error text.
+export type ProbeKind = "busy" | "unavailable" | "root" | "database" | "other";
+export interface ProbeError { kind: ProbeKind; errcode?: number }
+export interface WriterProbe {
+  ok: boolean; retryable: boolean; phase?: "open" | "begin" | "rollback"; error?: ProbeError;
+  acquired: boolean; rolledBack: boolean; close: "not-returned" | "ok" | "error"; closeError?: ProbeError;
+}
+export type Opener = (dir: string) => Promise<{ conn: { exec(sql: string): void; close(): void } }>;
+
+const KINDS: readonly ProbeKind[] = ["busy", "unavailable", "root", "database"];
+function probeError(error: unknown): ProbeError {
+  const { kherepKind, errcode } = Object(error) as { kherepKind?: unknown; errcode?: unknown };
+  const kind = KINDS.find((known) => known === kherepKind) ?? "other";
+  return typeof errcode === "number" && Number.isInteger(errcode) && errcode >= 0 && errcode <= 0xffff ? { kind, errcode } : { kind };
+}
+// SQLITE_BUSY (5) or SQLITE_LOCKED (6), extended codes included, as coordinator-db.mts classifies them.
+const busyCode = (error?: ProbeError): boolean => error?.errcode !== undefined && [5, 6].includes(error.errcode & 0xff);
+
+// A busy refusal of the open, or a busy BEGIN whose connection closed, is contention; nothing else is.
+export async function probeWriter(home: Home, open: Opener = openDatabase): Promise<WriterProbe> {
+  const probe: WriterProbe = { ok: false, retryable: false, acquired: false, rolledBack: false, close: "not-returned" };
+  const failed = (phase: WriterProbe["phase"], error: unknown): void => { probe.phase = phase; probe.error = probeError(error); };
+  let conn: Awaited<ReturnType<Opener>>["conn"];
+  try { ({ conn } = await open(home.hooks)); } catch (error) {
+    failed("open", error);
+    probe.retryable = probe.error!.kind === "busy";
+    return probe;
   }
+  try { conn.exec("BEGIN EXCLUSIVE"); probe.acquired = true; } catch (error) { failed("begin", error); }
+  if (probe.acquired) try { conn.exec("ROLLBACK"); probe.rolledBack = true; } catch (error) { failed("rollback", error); }
+  try { conn.close(); probe.close = "ok"; } catch (error) { probe.close = "error"; probe.closeError = probeError(error); }
+  probe.ok = probe.rolledBack && probe.close === "ok";
+  probe.retryable = probe.phase === "begin" && probe.close === "ok" && (probe.error!.kind === "busy" || busyCode(probe.error));
+  return probe;
+}
+
+const errorText = (error?: ProbeError): string => (error ? `${error.kind}${error.errcode === undefined ? "" : `/${error.errcode}`}` : "none");
+export const describeProbe = (probe: WriterProbe): string => `phase=${probe.phase ?? "none"} error=${errorText(probe.error)} `
+  + `acquired=${probe.acquired} rolledBack=${probe.rolledBack} close=${probe.close} closeError=${errorText(probe.closeError)}`;
+
+// true when a writer could take the database right now; a failed close still rejects, with fixed text only.
+export async function writerFree(home: Home, open?: Opener): Promise<boolean> {
+  const probe = await probeWriter(home, open);
+  if (probe.close === "error") throw new Error(`writerFree: close failed (${describeProbe(probe)})`);
+  return probe.ok;
+}
+
+// A fixture-only opener: records each step as it runs and throws where `fail` names an error.
+export type Step = "open" | "begin" | "rollback" | "close";
+export function fakeOpener(fail: Partial<Record<Step, unknown>>, events: string[] = []): Opener {
+  const step = (event: string, name: Step): void => { events.push(event); if (name in fail) throw fail[name]; };
+  return async () => {
+    step("open", "open");
+    return { conn: { exec: (sql: string) => step(sql, sql === "ROLLBACK" ? "rollback" : "begin"), close: () => step("close", "close") } };
+  };
 }
 
 export const until = async (check: () => boolean, ms = 10_000): Promise<boolean> => {
