@@ -79,3 +79,22 @@ No findings are automatically applied. The Maestro reviews permitted content and
 Both update CLIs accept `--expected-version`. The shared update function re-reads immediately before PUT, rejects missing/invalid versions or mismatch without writing, and sends the reviewed version plus one. Guarded storage/ADF updates compare the target ID, space, title, status, version and body after PUT. Wiki input cannot provide exact API body readback and is refused for guarded updates. A failed readback may follow an actual write: report UNVERIFIED and investigate before retrying. Legacy calls without the flag retain their previous behavior; the maintenance skill always supplies it. Independently read the target after repair. Body updates preserve labels by leaving them untouched. Labels and multiple pages are separate operations without atomicity.
 
 The [review rules](../../claude/skills/brain-drainage/references/review-rules.md) cover historical evidence, duplicate scope, original revision recovery, provenance links and graph limits. This feature adds no daemon, database, scheduler, scopes or credentials.
+
+### Confirm path
+
+Step 7 of the skill measures an `evidence-assumed` page against its primary source and proposes `evidence-confirmed`, `evidence-refuted` or `evidence-superseded`. It runs only on operator request, per page. Both brokers expose the same `evidence` verb, implemented in `confluence-evidence.mts` (pure gates, no I/O) and `confluence-evidence-cli.mts`. The verb sends GET requests only; it never writes to Confluence.
+
+```text
+<configured broker> evidence --mode prepare --id <id> --space <key> --body-approved --out <record.json>
+<configured broker> evidence --mode decide --record <record.json> --measurement <m.json> --out-body <body.xml> [--repo-root <checkout>] [--superseded-by <id> --body-approved] [--max-age-days <n>]
+<configured broker> evidence --mode report --records <r1.json,r2.json>
+<configured broker> evidence --mode verify --record <record.json> --body-file <body.xml>
+<configured broker> evidence --mode record --id <id> --excluded private|unavailable --reason <slug> --out <record.json>
+```
+
+- `prepare` takes a bracketed snapshot (the scanner's code), classifies the claim (`code`, `tracker`, `live`, `doc`, `historical`, `unclassified`) and writes a record holding the body and title. Record and body files must lie outside every git work tree; the broker refuses a path inside one, and refuses when git cannot run. Stdout carries ids, versions, kind, labels and counts only.
+- `decide` applies the gates offline and names the first failing one: eligible type and `evidence-assumed`, a model-assigned status, a body-approved record, a known measurement schema from an allowed source class, an excerpt of at most 4000 characters without credential-shaped content, a measurement at most 2 days old (`--max-age-days` up to 7), a matching kind, and for code a Revision bound on the page and present in `--repo-root` (`git cat-file`, SHA validated first) whose directory name matches. The measurement must name what the claim is about. Exit 0 writes the reviewed body with a dated measurement block before the `Related pages` footer; exit 2 leaves the page UNKNOWN or reported-only with a reason; exit 1 is malformed input. A promoted body is re-checked with the drainage rules before it is written.
+- `report` prints per page the outcome, reason, label diff, passive labels (`currency-*`, `origin-wiki`) and, for every proposed change, the command, excerpt and verdict verbatim. It prints no titles or bodies.
+- Writes stay with `update --expected-version` and `labels`, in that order: add `evidence-<outcome>`, then remove `evidence-assumed`. `verify` re-reads the page and prints `readback: match` only when the body bytes match and exactly one evidence label equals the outcome.
+
+Human-assigned status is reported, never relabelled. `status-author-*`, `currency-*`, `origin-wiki`, `runtime-*`, `session-*` and `product-*` are never changed. Private pages are registered with `record` without a read and stay UNKNOWN in a cloud session. A format repair still never promotes.
