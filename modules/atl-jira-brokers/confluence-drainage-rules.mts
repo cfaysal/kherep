@@ -1,4 +1,5 @@
 import { outgoingIds } from './confluence-related.mts';
+import { parseRevisionLines, plainText as plain } from './confluence-evidence.mts';
 
 export interface Snapshot {
   id: string; version: number; title: string; spaceId: string; parentId: string | null;
@@ -8,10 +9,6 @@ export interface Candidate {
   pageId: string; readVersion: number; problem: string;
   proposedAction: 'review-format' | 'review-link' | 'review-duplicate' | 'verify-current-status';
   evidence: string; uncertainty: 'UNKNOWN'; relatedPageId?: string;
-}
-function plain(body: string): string {
-  return body.replace(/<\/(?:p|div|h[1-6]|li)>/gi, '\n').replace(/<[^>]*>/g, ' ')
-    .replace(/&(?:nbsp|amp|lt|gt|quot);/g, ' ').replace(/[ \t]+/g, ' ').trim();
 }
 function meaningful(body: string): Set<string> {
   // Related navigation and provenance metadata must not manufacture duplicates.
@@ -23,19 +20,13 @@ function meaningful(body: string): Set<string> {
 function candidate(p: Snapshot, problem: string, proposedAction: Candidate['proposedAction'], evidence: string): Candidate {
   return {pageId:p.id,readVersion:p.version,problem,proposedAction,evidence,uncertainty:'UNKNOWN'};
 }
-// Mirrors the published observation body grammar; flat brokers cannot import runtime hooks.
-const BOUND_REVISION = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*@[0-9a-f]{40}$/;
+// The published observation body grammar lives in confluence-evidence.mts, so the
+// confirm path and this scanner cannot disagree about a page it promoted.
 function revisionsValid(text: string, labels: string[]): boolean {
-  const lines = [...text.matchAll(/(?:^|\n)\s*Revision\s*:\s*([^\n]*)/gmi)].map(m=>m[1].trim());
+  const { bound, unbound, malformed } = parseRevisionLines(text);
   const nonConfirmed = !labels.includes('evidence-confirmed')
     && labels.some(label=>['evidence-assumed','evidence-refuted','evidence-superseded'].includes(label));
-  return lines.length > 0 && lines.every(line => {
-    if (BOUND_REVISION.test(line)) return true;
-    if (!nonConfirmed) return false;
-    if (/^none \(no exact binding: (?:no repository|no full commit SHA|dirty tree|malformed repository or revision)\)$/.test(line)) return true;
-    const dirty = line.match(/^(.*) \(no exact binding: dirty tree\)$/);
-    return !!dirty && BOUND_REVISION.test(dirty[1]);
-  });
+  return bound.length + unbound.length > 0 && !malformed.length && (nonConfirmed || !unbound.length);
 }
 export function drainageRules(pages: Snapshot[], graphComplete: boolean): Candidate[] {
   const out: Candidate[] = [];

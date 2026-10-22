@@ -730,6 +730,8 @@ test("installs the Mac-compatible projection without replacing user state", asyn
     "confluence-drainage-snapshot.mts",
     "confluence-drainage-scan.mts",
     "confluence-drainage-cli.mts",
+    "confluence-evidence.mts",
+    "confluence-evidence-cli.mts",
 
     "confluence-session.mts",
   ]) {
@@ -1088,6 +1090,8 @@ test("default install projects observation delivery without optional Jira toolin
     "confluence-drainage-snapshot.mts",
     "confluence-drainage-scan.mts",
     "confluence-drainage-cli.mts",
+    "confluence-evidence.mts",
+    "confluence-evidence-cli.mts",
 
     "confluence-session.mts",
     "confluence-related.mts",
@@ -1286,6 +1290,8 @@ test("rolls every managed target back when installation fails", (t) => {
     "confluence-drainage-snapshot",
     "confluence-drainage-scan",
     "confluence-drainage-cli",
+    "confluence-evidence",
+    "confluence-evidence-cli",
 
   ];
   for (const name of brokerNames) {

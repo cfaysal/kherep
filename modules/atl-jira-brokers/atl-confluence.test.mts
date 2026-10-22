@@ -24,7 +24,7 @@ const AUTHOR = "service-account-for-tests";
 // Compared whole: a regex with an unescaped "|" matched this line on any one of
 // its words and so asserted nothing.
 const VERBS = ["create", "update", "get", "delete", "purge", "labels", "move", "space", "children", "related",
-  "search", "list", "context", "orphans", "stitch", "drainage", "selftest"];
+  "search", "list", "context", "orphans", "stitch", "drainage", "evidence", "selftest"];
 const USAGE = `Usage: ${VERBS.join(" | ")}. Run help for the flags of each verb.`;
 
 interface Call {
@@ -195,6 +195,7 @@ test(`${BROKER} help lists every verb with its flags and exits 0 in all three sp
     for (const verb of VERBS) assert.ok(out.some((line) => line.startsWith(`  ${verb}`)), `${spelling} lacks ${verb}`);
     assert.ok(out.includes("  get --id <id> [--format <storage|adf>] [--body-only]"), out.join("\n"));
     assert.ok(out.includes("  stitch --space <key> [--id <id>] [--limit <n>] [--per-orphan <n>] [--dry-run]"));
+    assert.ok(out.some((line) => line.startsWith("  evidence --mode <prepare|decide|verify|report|record> [")), out.join("\n"));
   }
 });
 
