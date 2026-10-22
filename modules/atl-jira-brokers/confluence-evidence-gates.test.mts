@@ -18,6 +18,9 @@ const M = (over: Record<string, unknown> = {}): Measurement => ({ kind: 'code', 
 const TRACKER = (excerpt: string): Measurement => ({ kind: 'tracker', source: 'KEY-1', sourceClass: 'tracker',
   command: 'jira get --key KEY-1', excerpt, measuredAt: TODAY, verdict: 'reproduces' });
 const OPT = { now: NOW, repoRoot: '/x/alpha', repoTopLevel: '/x/alpha', revisionExists: (sha: string) => sha === SHA };
+const GH = (command: string, excerpt: string): Measurement => ({ kind: 'tracker', source: 'github', sourceClass: 'tracker',
+  command, excerpt, measuredAt: TODAY, verdict: 'reproduces' });
+const closed = 'state: CLOSED, closedAt: 2026-10-22T13:00:00Z';
 
 test('P2: text nodes escape only &, < and >; line endings reach neither the gates nor the body as CR', () => {
   const m = M({ source: `alpha's "main" checkout`, command: `git show ${SHA}:src/queue.mts | grep -n "it's" && echo 'a<b>'`,
@@ -65,9 +68,6 @@ test('P3-b: a tracker claim needs every tracker key in the excerpt; a code claim
 });
 
 test('F1: a GitHub key counts only as #N in the excerpt or as the number gh issue/pr view reads', () => {
-  const GH = (command: string, excerpt: string): Measurement => ({ kind: 'tracker', source: 'github', sourceClass: 'tracker',
-    command, excerpt, measuredAt: TODAY, verdict: 'reproduces' });
-  const closed = 'state: CLOSED, closedAt: 2026-10-22T13:00:00Z';
   const both = claim('<p>GitHub issue #10 and #648 are closed.</p>');
   assert.equal(both.kind, 'tracker');
   assert.equal(decide(both, GH('gh issue view 648 --json state,closedAt', closed), OPT).reason, 'measurement-does-not-touch-claim');
@@ -78,6 +78,25 @@ test('F1: a GitHub key counts only as #N in the excerpt or as the number gh issu
   assert.equal(decide(one, GH('gh issue view 6480 --json state', closed), OPT).reason, 'measurement-does-not-touch-claim');
   assert.equal(decide(one, GH('gh api repos/o/r/issues', '#6480 state: CLOSED, 648 open'), OPT).reason, 'measurement-does-not-touch-claim');
   assert.equal(decide(one, GH('echo 648 #648', closed), OPT).reason, 'measurement-does-not-touch-claim');
+});
+
+test('F2: once a page names a GitHub key, every #N it states is a key; a read of one never confirms both', () => {
+  const both = claim('<p>GitHub issue #10 and #648 are closed.</p>');
+  assert.deepEqual(both.trackerKeys, ['#10', '#648']);
+  assert.equal(decide(both, GH('gh issue view 10 --json state,closedAt', closed), OPT).reason, 'measurement-does-not-touch-claim');
+  assert.equal(decide(both, GH('gh api repos/o/r/issues', '#10 state: CLOSED\n#648 state: CLOSED'), OPT).outcome, 'confirmed');
+  assert.equal(decide(both, GH('gh issue view 10 --json state; gh issue view 648 --json state', closed), OPT).outcome, 'confirmed');
+  assert.deepEqual(claim('<p>GitHub issue #648 is closed.</p>').trackerKeys, ['#648']);
+  assert.deepEqual(claim('<p>Fixed by <a href="https://github.com/o/r/pull/12">the PR</a>; see #13.</p>').trackerKeys, ['#12', '#13']);
+  // A numeric character reference is not a key; without a GitHub key a #N stays prose and Jira keys are unchanged.
+  assert.deepEqual(claim('<p>GitHub issue #10 isn&#39;t open.</p>').trackerKeys, ['#10']);
+  assert.deepEqual(claim('<p>Tracker: KEY-1 is done, step #2 of the plan.</p>').trackerKeys, ['KEY-1']);
+  // decide judges the claim as read at prepare: a #N in the appended measurement block never becomes a key of it.
+  const m = GH('gh api repos/o/r/issues', '#10 state: CLOSED\n#648 state: CLOSED\nsee #999');
+  const d = decide(both, m, OPT);
+  const promoted = `<p>GitHub issue #10 and #648 are closed.</p>${renderMeasurementBlock(d, m, 'runtime-claude-code-win')}`;
+  assert.deepEqual([d.outcome, both.trackerKeys], ['confirmed', ['#10', '#648']]);
+  assert.ok(claim(promoted).trackerKeys.includes('#999'), 'a re-classification would see the block, so none happens after prepare');
 });
 
 test('P3-c: a --kind override never bypasses historical-not-repeatable', () => {
