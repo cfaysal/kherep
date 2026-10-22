@@ -705,6 +705,16 @@ increments the minor version; every other release increments the patch version.
   round goes on with the other tasks. Codex tasks are not changed here; the Codex deadline stop still
   retries every round when the recorded pid was reused by a live foreign
   process (issue #544).
+- Interrupted Claude intercom copy handover now recovers pending messages
+  associated with the exact delivery task/runtime, including older intermediate
+  addresses, and corrects their destination identity (issue #635). Watcher and
+  immediate resume adoption share the same record-locked operation. All pending
+  messages at the previous address retain legacy movement; foreign identities,
+  provenance and offer/retry evidence are preserved. Busy resume recovery keeps
+  its old mapping and new short ID so watch can finish without another launch.
+  Target-local terminal metadata may correct, while terminal records elsewhere
+  stay unchanged. Existing opt-in fallback limits for unowned intermediates
+  remain; no historical sweep is added.
 - Receipts for messages whose reply had already reached this node no longer
   appear after a service restart or upgrade (issue #520). They had never been
   shown: the reply in the inbox kept them quiet, and the daemon start's purge

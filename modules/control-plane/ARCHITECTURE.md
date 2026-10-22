@@ -153,11 +153,24 @@ Each executing Codex intake-window frame or coalesced tick starts its own
 `runRecordLockRound` in `node/inbox-record-lock.mts`). A busy Claude intercom
 handover, or a busy record in a task's `deliveryPending`, logs the task and
 message and leaves its task mapping for the next watch without blocking later
-tasks. Retrying updates delivery
-identities for newly moved messages and messages already at the copy whose
-`closedTo` is the previous session; fresh moves retain older provenance.
-Other handover errors still propagate, and the task mapping is saved only
-after readdress and identity updates succeed.
+tasks. Shared `node/task-handover.mts` serves both the watch and immediate
+Claude resume-copy adoption (issue #635). In one oldest-first address pass,
+every accepted/offered record at the previous address moves as before, whatever
+its delivery owner. Additional pending records at intermediate addresses move
+only with the exact task/runtime association. Each predicate is checked again
+under the record lock, preserving older `closedTo`, `closedAttempt` and all
+offer/retry evidence. A separate phase corrects only exact-owned delivery
+session metadata at the actual target, including terminal records already there;
+terminal records elsewhere never move. General inbox and identity APIs keep their
+contracts. Other errors still propagate; the watcher saves its mapping after both
+phases and deliveryPending resolution succeed. An immediate resume already ran:
+on typed busy it preserves the pending old-session mapping with the new short ID,
+so the watcher retries without another launch. This is per-record recovery during
+an adoption, not a transaction across task/inbox files or a historical sweep.
+Unowned intermediates retain existing closed-session fallback limits, including
+`messaging.resumeClosed` opt-in, accepted/unattempted state, a known closed target
+and policy/readiness/budget guards. A process crash after immediate resume's early
+task save remains outside this recovery guarantee.
 
 The exchange round itself (`node/daemon-round.mts`) reads the inbox through the
 daemon's in-process index (`node/inbox-index.mts`, issue #487). The round's
