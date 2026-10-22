@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
@@ -11,18 +9,35 @@ import {
   CLAUDE_CLIENT_GRAPH, CLAUDE_TOOL_MATCHER, renderClaudeClient, stageClaudeClient, verifyClaudeClient,
 } from "./claude-mcp-client.mts";
 import { fakePowerShell } from "./mcp-credential-fixture.mts";
+import {
+  answerIntent, awaitClose, awaitPublishedIntent, describe, ensureClosed, type HookRun, intentRenamePreload,
+  ownedRoot, preloadEvents, startStagedHook, text,
+} from "./mcp-intent-hook-fixture.mts";
 
 const NODE_ID = "00000000-0000-4000-8000-0000000000aa";
 const REQUEST_ID = "40000000-0000-4000-8000-000000000001";
 
+// The root is removed only after every hook started under it closed (issue #657).
 function fixture(t: test.TestContext) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-claude-client-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { root, runs } = ownedRoot(t, "kherep-claude-client-");
   const outputRoot = path.join(root, "candidate");
   const clientRoot = path.join(root, "home with space", "kherep", "claude-messaging-client");
   const configRoot = path.join(root, "config with space");
   fs.mkdirSync(configRoot, { recursive: true });
-  return { root, outputRoot, clientRoot, configRoot };
+  return { root, outputRoot, clientRoot, configRoot, runs };
+}
+
+// Answers the published intent and asserts the full Claude rewrite: a denial
+// or an ack timeout also exits 0, so the exit code alone proves nothing.
+async function assertRewrite(run: HookRun, intents: string, receipts: string, name: string): Promise<void> {
+  const intent = JSON.parse(fs.readFileSync(path.join(intents, name), "utf8"));
+  answerIntent(receipts, intent.requestId);
+  const closure = await awaitClose(run);
+  assert.equal(closure.kind, "closed", describe(run, closure));
+  assert.equal(closure.code, 0, describe(run, closure));
+  const output = JSON.parse(text(run.stdout));
+  assert.equal(Object.hasOwn(output.hookSpecificOutput, "permissionDecision"), false, describe(run));
+  assert.deepEqual(output.hookSpecificOutput.updatedInput, { limit: 5, requestId: intent.requestId });
 }
 
 test("renders an exact hook-only plugin and one credential-free MCP server", () => {
@@ -141,37 +156,42 @@ test("staging refuses a source graph reached through a symlink ancestor", (t) =>
 });
 
 test("the staged hook performs a Claude rewrite without automatic approval", async (t) => {
-  const { outputRoot, clientRoot, configRoot } = fixture(t);
-  stageClaudeClient({ outputRoot, clientRoot, configRoot, nodeCommand: process.execPath });
-  const state = path.join(configRoot, "control-plane");
-  fs.mkdirSync(state, { recursive: true });
-  fs.writeFileSync(path.join(state, "policy.json"), JSON.stringify({ version: 1, allowedCommands: [],
-    remoteMcp: { enabled: true, claudeCode: true } }));
-  const child = spawn(process.execPath, [path.join(outputRoot, "control-plane/node/mcp-intent-hook.mts"),
-    "--config-root", configRoot, "--runtime", "claude-code"], { stdio: ["pipe", "pipe", "pipe"] });
-  child.stdin.end(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "mcp__kherep_messaging__sessions",
-    session_id: "actual-session", tool_use_id: "actual-call", tool_input: { limit: 5 } }));
-  const intents = path.join(state, "mcp", "intents");
-  let intentFile = "";
-  for (let count = 0; count < 100 && !intentFile; count += 1) {
-    // Only a published intent; the hook's atomic write first creates a ".<id>.json.<uuid>.tmp" (issue #226).
-    intentFile = fs.existsSync(intents)
-      ? fs.readdirSync(intents).find((name) => !name.startsWith(".") && name.endsWith(".json")) ?? "" : "";
-    if (!intentFile) await new Promise((resolve) => setTimeout(resolve, 10));
+  const { outputRoot, clientRoot, configRoot, runs } = fixture(t);
+  const { run, intents, receipts } = startStagedHook({ outputRoot, clientRoot, configRoot, runs });
+  try {
+    const outcome = await awaitPublishedIntent(run, intents);
+    assert.equal(outcome.kind, "published", describe(run, outcome));
+    await assertRewrite(run, intents, receipts, outcome.name);
+  } finally {
+    // Before fixture()'s t.after removes the root: t.after hooks run after this finally.
+    await ensureClosed(run);
   }
-  assert.ok(intentFile, "hook did not publish its synthetic intent");
-  const intent = JSON.parse(fs.readFileSync(path.join(intents, intentFile), "utf8"));
-  const receipts = path.join(state, "mcp", "receipts");
-  fs.mkdirSync(receipts, { recursive: true });
-  fs.writeFileSync(path.join(receipts, `${intent.requestId}.json`), JSON.stringify({ requestId: intent.requestId,
-    ok: true, expiresAt: Date.now() + 60_000, version: 1 }));
-  const stdout: Buffer[] = [];
-  child.stdout.on("data", (value) => stdout.push(value));
-  const exit = await new Promise<number | null>((resolve) => child.on("close", resolve));
-  assert.equal(exit, 0);
-  const output = JSON.parse(Buffer.concat(stdout).toString("utf8"));
-  assert.equal(Object.hasOwn(output.hookSpecificOutput, "permissionDecision"), false);
-  assert.deepEqual(output.hookSpecificOutput.updatedInput, { limit: 5, requestId: intent.requestId });
+});
+
+test("a delayed publication is awaited and still rewrites (issue #657)", async (t) => {
+  const { outputRoot, clientRoot, configRoot, runs } = fixture(t);
+  const { run, intents, receipts } = startStagedHook({ outputRoot, clientRoot, configRoot, runs,
+    preload: [intentRenamePreload({ beforeMs: 2_500 })] });
+  try {
+    const outcome = await awaitPublishedIntent(run, intents);
+    assert.equal(outcome.kind, "published", describe(run, outcome));
+    await assertRewrite(run, intents, receipts, outcome.name);
+    // Engagement as the hook reports it, not the awaiter's clock.
+    const pause = preloadEvents(run).find((event) => event.phase === "before" && "result" in event);
+    assert.equal(pause?.result, "timed-out", describe(run));
+  } finally { await ensureClosed(run); }
+});
+
+test("a hook that exits without publishing is reported with its output, not as a timeout (issue #657)", async (t) => {
+  const { outputRoot, clientRoot, configRoot, runs } = fixture(t);
+  const { run, intents } = startStagedHook({ outputRoot, clientRoot, configRoot, runs, claudeCode: false });
+  try {
+    const outcome = await awaitPublishedIntent(run, intents);
+    assert.equal(outcome.kind, "exited", describe(run, outcome));
+    assert.equal(outcome.code, 0, describe(run, outcome));
+    assert.match(text(run.stdout), /remote_mcp_disabled/);
+    assert.equal(fs.existsSync(intents), false);
+  } finally { await ensureClosed(run); }
 });
 
 test("the staged bridge forwards actual Claude metadata unchanged", async (t) => {
