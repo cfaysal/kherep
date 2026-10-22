@@ -473,6 +473,16 @@ increments the minor version; every other release increments the patch version.
   such a pruning reports `intent_expired` instead of `storage_error`. A lock
   descriptor is closed at most once at every boundary, also when its close
   fails (issue #602).
+- Service owner file and launch permit: a failed write, fsync or close after
+  the exclusive create no longer leaves the caller's own file behind. Such a
+  partial owner file used to make every later `service upgrade` or `service
+  rollback` refuse with an owner that "cannot be verified", and a partial
+  permit made `claimServiceLaunchPermit` throw, until an operator removed the
+  file by hand. The descriptor is still closed at most once; the file is then
+  removed, also when only the close failed after a complete write, and the
+  original error is rethrown unchanged. If that removal fails too, the
+  original error is still rethrown and the file stays for manual cleanup
+  (issue #644).
 - A failed macOS upgrade recovery no longer leaves the new daemon loaded
   under the prior plist, after which every service command refused (issue
   #582). `restorePrior` wrote the prior definition after the candidate stop

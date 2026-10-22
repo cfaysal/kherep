@@ -96,8 +96,9 @@ function acquireOwnerFile(file: string, activeMessage: string, probe: ServiceOwn
       closing = true;
       fs.closeSync(handle);
     } catch (error) {
-      // A descriptor is closed at most once; the file stays (issue #644).
+      // Closed at most once, then the caller's own file is removed; a failed removal leaves it for manual cleanup.
       if (!closing) try { fs.closeSync(handle); } catch { /* the write failed already */ }
+      try { fs.rmSync(file, { force: true }); } catch { /* the original error is rethrown */ }
       throw error;
     }
     return () => {
