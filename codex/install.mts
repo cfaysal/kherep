@@ -304,6 +304,8 @@ export function install(options: InstallOptions = {}) {
     confluenceDrainageSnapshot: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-drainage-snapshot.mts"),
     confluenceDrainageScan: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-drainage-scan.mts"),
     confluenceDrainageCli: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-drainage-cli.mts"),
+    confluenceEvidence: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-evidence.mts"),
+    confluenceEvidenceCli: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-evidence-cli.mts"),
     codexConfluenceBroker: path.join(repoRoot, "modules", "atl-jira-brokers", "atl-confluence.mts"),
     claudeConfluenceBroker: path.join(repoRoot, "modules", "atl-jira-brokers", "atl-confluence-ccoder.mts"),
   };
@@ -350,6 +352,8 @@ export function install(options: InstallOptions = {}) {
     confluenceDrainageSnapshot: path.join(workspace, "tools", "confluence-drainage-snapshot.mts"),
     confluenceDrainageScan: path.join(workspace, "tools", "confluence-drainage-scan.mts"),
     confluenceDrainageCli: path.join(workspace, "tools", "confluence-drainage-cli.mts"),
+    confluenceEvidence: path.join(workspace, "tools", "confluence-evidence.mts"),
+    confluenceEvidenceCli: path.join(workspace, "tools", "confluence-evidence-cli.mts"),
     codexConfluenceBroker: path.join(workspace, "tools", "atl-confluence.mts"),
     claudeConfluenceBroker: path.join(workspace, "tools", "atl-confluence-ccoder.mts"),
     hook: contextHook,
@@ -485,6 +489,8 @@ export function install(options: InstallOptions = {}) {
       [sources.confluenceDrainageSnapshot, targets.confluenceDrainageSnapshot],
       [sources.confluenceDrainageScan, targets.confluenceDrainageScan],
       [sources.confluenceDrainageCli, targets.confluenceDrainageCli],
+      [sources.confluenceEvidence, targets.confluenceEvidence],
+      [sources.confluenceEvidenceCli, targets.confluenceEvidenceCli],
       [sources.codexConfluenceBroker, targets.codexConfluenceBroker],
     ] as const) workspaceTransaction.copyFile(source, target);
 

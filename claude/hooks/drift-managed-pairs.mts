@@ -175,6 +175,14 @@ export function fixedPairs(home: string, workspace: string): ManagedPair[] {
       live: joinPathLike(workspace, "tools/confluence-drainage-cli.mts"),
       source: "modules/atl-jira-brokers/confluence-drainage-cli.mts",
     },
+    {
+      live: joinPathLike(workspace, "tools/confluence-evidence.mts"),
+      source: "modules/atl-jira-brokers/confluence-evidence.mts",
+    },
+    {
+      live: joinPathLike(workspace, "tools/confluence-evidence-cli.mts"),
+      source: "modules/atl-jira-brokers/confluence-evidence-cli.mts",
+    },
   ]);
 }
 

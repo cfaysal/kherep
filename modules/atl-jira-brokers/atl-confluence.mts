@@ -48,6 +48,7 @@ import {
 
 import { parseExpectedVersion } from './confluence-pagination.mts';
 import { cmdDrainage } from './confluence-drainage-cli.mts';
+import { cmdEvidence } from './confluence-evidence-cli.mts';
 
 const CRED_ENV = "KHEREP_ATL_CRED_FILE_CODEX";
 // An absent value is UNKNOWN and says so. A blank line here would read like an
@@ -103,6 +104,8 @@ export const FLAGS = {
   orphans: { required: { space: "<key>" } },
   stitch: { required: { space: "<key>" }, optional: { id: "<id>", limit: "<n>", "per-orphan": "<n>" }, valueless: ["dry-run"] },
   drainage: { required: { space: "<key>" }, optional: { ids: "<id,id>", "exclude-ids": "<id,id>" }, valueless: ["metadata-approved"] },
+  evidence: { required: { mode: "<prepare|decide|verify|report|record>" }, optional: { id: "<id>", space: "<key>", out: "<path>", record: "<path>", measurement: "<path>", "out-body": "<path>", "body-file": "<path>",
+    records: "<path,path>", "repo-root": "<path>", "superseded-by": "<id>", kind: "<code|tracker|live|doc>", excluded: "<private|unavailable>", reason: "<slug>", "max-age-days": "<n>" }, valueless: ["body-approved"] },
   selftest: {},
 } satisfies VerbTable;
 
@@ -235,6 +238,7 @@ const COMMANDS: Record<Verb, (ctx: CliContext, args: Args) => Promise<number>> =
   orphans: cmdOrphans,
   stitch: cmdStitch,
   drainage: cmdDrainage,
+  evidence: cmdEvidence,
   selftest: cmdSelftest,
 };
 
@@ -260,7 +264,7 @@ export async function runCli(argv: string[], injected: Injected = {}): Promise<n
   try {
     // One line on purpose: the contract test reads this source and requires the
     // verbs of this usage string to be exactly the keys of FLAGS.
-    if (!Object.hasOwn(FLAGS, command)) fail("Usage: create | update | get | delete | purge | labels | move | space | children | related | search | list | context | orphans | stitch | drainage | selftest. Run help for the flags of each verb.");
+    if (!Object.hasOwn(FLAGS, command)) fail("Usage: create | update | get | delete | purge | labels | move | space | children | related | search | list | context | orphans | stitch | drainage | evidence | selftest. Run help for the flags of each verb.");
     const verb = command as Verb;
     return await COMMANDS[verb](ctx, parseVerbArgs(verb, FLAGS[verb], rest, EN));
   } catch (error) {

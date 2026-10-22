@@ -1,0 +1,159 @@
+// The evidence verb's I/O boundary: injected session, git and file writes only.
+// Nothing here reaches a network, a real repository or a Confluence page.
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { cmdEvidence } from './confluence-evidence-cli.mts';
+import { runCli } from './atl-confluence-ccoder.mts';
+import type { ConfluenceSession, RequestSpec } from './confluence-contract.mts';
+import type { NeighbourCliContext } from './confluence-neighbour-cli.mts';
+
+const SHA = 'a'.repeat(40);
+const NOW = new Date(2026, 9, 22, 12).getTime();
+const TODAY = '2026-10-22';
+const BODY = `<p>Revision: alpha@${SHA}</p><p>Code: src/queue.mts</p><p>Queue retries keep receipt identity.</p><h2>Related pages</h2>`;
+const LABELS = ['type-observation', 'evidence-assumed', 'status-author-model', 'runtime-claude-code-win'];
+const MEASUREMENT = { kind: 'code', source: 'alpha (git checkout)', sourceClass: 'repository', command: `git show ${SHA}:src/queue.mts`,
+  excerpt: '12: retry(receipt)', measuredAt: TODAY, verdict: 'reproduces', revision: `alpha@${SHA}` };
+
+function harness(pages: Record<string, { body: string; labels: string[]; spaceId?: string }> = { '1': { body: BODY, labels: LABELS } }) {
+  const calls: RequestSpec[] = [];
+  const execs: string[][] = [];
+  const files = new Map<string, string>();
+  const out: string[] = [];
+  const session: ConfluenceSession = { async request(spec) {
+    assert.equal(spec.method, 'GET', 'the evidence verb never writes to Confluence');
+    calls.push(spec);
+    if (spec.path.includes('/spaces?')) return { status: 200, json: { results: [{ id: '9', key: 'K', name: 'Space' }] } };
+    const id = /\/pages\/(\d+)/.exec(spec.path)?.[1] ?? '';
+    const p = pages[id];
+    if (spec.path.includes('/labels')) return { status: 200, json: { results: p.labels.map(name => ({ name })) } };
+    return { status: 200, json: { id, title: 'Synthetic title', spaceId: p.spaceId ?? '9', status: 'current', parentId: null,
+      version: { number: 3 }, body: { storage: { value: p.body } }, authorId: 'svc', _links: {} } };
+  } };
+  const exec = async (file: string, args: string[]) => {
+    execs.push([file, ...args]);
+    if (args[0] === '--version') return { stdout: 'git version 2.50.0\n', stderr: '' };
+    const dir = args[1] ?? '';
+    if (args.includes('cat-file')) return { stdout: 'commit\n', stderr: '' };
+    if (dir.startsWith('/x/') || dir.startsWith('/repo')) return { stdout: dir.split('/').slice(0, 3).join('/') + '\n', stderr: '' };
+    throw new Error('fatal: not a git repository (or any of the parent directories): .git');
+  };
+  const ctx = { env: {}, credEnv: 'KHEREP_ATL_CRED_FILE_CLAUDE', session: {}, now: () => NOW,
+    readFile: async (path: string) => { const v = files.get(path); if (v === undefined) throw new Error('missing'); return v; },
+    log: (line: string) => out.push(line), logError: (line: string) => out.push(line) } as unknown as NeighbourCliContext;
+  const deps = { session, exec, writeFile: async (path: string, data: string) => { files.set(path, data); } };
+  const run = (args: Record<string, string | undefined>) => cmdEvidence(ctx, args, deps);
+  return { calls, execs, files, out, run };
+}
+const prepare = { mode: 'prepare', id: '1', space: 'K', out: '/tmp/ev/r.json', 'body-approved': undefined };
+const decideArgs = { mode: 'decide', record: '/tmp/ev/r.json', measurement: '/tmp/ev/m.json', 'out-body': '/tmp/ev/b.xml', 'repo-root': '/x/alpha' };
+async function prepared(h = harness(), measurement: object = MEASUREMENT) {
+  assert.equal(await h.run(prepare), 0);
+  h.files.set('/tmp/ev/m.json', JSON.stringify(measurement));
+  h.calls.length = 0;
+  return h;
+}
+
+test('Defect 5: prepare refuses without body approval or with an --out inside a work tree, before any request', async () => {
+  const h = harness();
+  await assert.rejects(() => h.run({ mode: 'prepare', id: '1', space: 'K', out: '/tmp/ev/r.json' }), /body-approved/);
+  await assert.rejects(() => h.run({ ...prepare, out: '/repo/notes/r.json' }), /out-inside-repository/);
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.files.size, 0);
+});
+
+test('prepare reads with GET only, prints metadata only and writes body and title to the record', async () => {
+  const h = harness();
+  assert.equal(await h.run(prepare), 0);
+  assert.ok(h.calls.length > 0);
+  const printed = h.out.join('\n');
+  assert.ok(!printed.includes('Synthetic title') && !printed.includes('receipt identity') && !printed.includes('src/queue.mts'));
+  assert.match(printed, /kind: code/);
+  const record = JSON.parse(h.files.get('/tmp/ev/r.json') ?? '{}');
+  assert.equal(record.title, 'Synthetic title');
+  assert.equal(record.body, BODY);
+  assert.equal(record.claim.bodyApproved, true);
+});
+
+test('decide performs zero requests, writes the body and appends the decision; exit codes 0 and 2', async () => {
+  const h = await prepared();
+  assert.equal(await h.run(decideArgs), 0);
+  assert.equal(h.calls.length, 0);
+  assert.ok(h.files.get('/tmp/ev/b.xml')?.includes('<h2>Measurement 2026-10-22</h2>'));
+  const record = JSON.parse(h.files.get('/tmp/ev/r.json') ?? '{}');
+  assert.equal(record.decision.outcome, 'confirmed');
+  assert.deepEqual(record.labelsAfter, ['evidence-confirmed', 'runtime-claude-code-win', 'status-author-model', 'type-observation']);
+  const stale = await prepared(harness(), { ...MEASUREMENT, measuredAt: '2026-10-10' });
+  assert.equal(await stale.run(decideArgs), 2);
+  assert.equal(stale.files.has('/tmp/ev/b.xml'), false);
+  assert.match(stale.out.join('\n'), /reason: measurement-stale/);
+});
+
+test('Defect 4 and 5: a secret marker writes no body; --out-body inside a work tree exits before reading', async () => {
+  const h = await prepared(harness(), { ...MEASUREMENT, excerpt: 'Bearer ' + 'abc' });
+  assert.equal(await h.run(decideArgs), 2);
+  assert.equal(h.files.has('/tmp/ev/b.xml'), false);
+  assert.ok(!h.out.join('\n').includes('abc'));
+  const inside = await prepared();
+  await assert.rejects(() => inside.run({ ...decideArgs, 'out-body': '/repo/b.xml' }), /out-inside-repository/);
+  assert.equal(inside.files.has('/repo/b.xml'), false);
+});
+
+test('--superseded-by needs body approval, then one GET, and refuses another space', async () => {
+  const contradicts = { ...MEASUREMENT, verdict: 'contradicts' };
+  const h = await prepared(harness({ '1': { body: BODY, labels: LABELS }, '77': { body: '<p>x</p>', labels: [] } }), contradicts);
+  await assert.rejects(() => h.run({ ...decideArgs, 'superseded-by': '77' }), /body-approved/);
+  assert.equal(h.calls.length, 0);
+  assert.equal(await h.run({ ...decideArgs, 'superseded-by': '77', 'body-approved': undefined }), 0);
+  assert.equal(h.calls.length, 1);
+  assert.match(h.files.get('/tmp/ev/b.xml') ?? '', /pages\/77">Synthetic title<\/a>/);
+  const other = await prepared(harness({ '1': { body: BODY, labels: LABELS }, '78': { body: '', labels: [], spaceId: '8' } }), contradicts);
+  assert.equal(await other.run({ ...decideArgs, 'superseded-by': '78', 'body-approved': undefined }), 2);
+  assert.match(other.out.join('\n'), /superseded-other-space/);
+});
+
+test('--max-age-days above 7 exits 1 through the broker', async () => {
+  const errors: string[] = [];
+  const code = await runCli(['evidence', '--mode', 'decide', '--record', 'r.json', '--measurement', 'm.json', '--out-body', 'b.xml',
+    '--max-age-days', '8'], { log: () => {}, logError: line => errors.push(line), readFile: async () => { throw new Error('unread'); } });
+  assert.equal(code, 1);
+  assert.match(errors.join('\n'), /max-age-days-above-cap/);
+});
+
+test('git receives only a validated 40-hex SHA', async () => {
+  const bad = await prepared(harness(), { ...MEASUREMENT, revision: `alpha@${SHA}; touch x` });
+  assert.equal(await bad.run(decideArgs), 2);
+  assert.ok(!bad.execs.some(c => c.includes('cat-file')));
+  const good = await prepared();
+  assert.equal(await good.run(decideArgs), 0);
+  const catFile = good.execs.filter(c => c.includes('cat-file'));
+  assert.equal(catFile.length, 1);
+  assert.ok(catFile.every(c => /^[0-9a-f]{40}$/.test(c.at(-1) ?? '')));
+});
+
+test('Defect 2: verify matches only the reviewed body with exactly the outcome label', async () => {
+  const h = await prepared();
+  assert.equal(await h.run(decideArgs), 0);
+  const body = h.files.get('/tmp/ev/b.xml') ?? '';
+  const verify = { mode: 'verify', record: '/tmp/ev/r.json', 'body-file': '/tmp/ev/b.xml' };
+  const run = async (pageBody: string, labels: string[]) => {
+    const v = harness({ '1': { body: pageBody, labels } });
+    for (const [k, value] of h.files) v.files.set(k, value);
+    return [await v.run(verify), v.out.at(-1)];
+  };
+  const after = ['type-observation', 'evidence-confirmed', 'status-author-model'];
+  assert.deepEqual(await run(body, after), [0, 'readback: match']);
+  assert.deepEqual(await run(body, [...after, 'evidence-assumed']), [2, 'readback: mismatch labels (evidence-assumed, evidence-confirmed)']);
+  assert.deepEqual(await run(body, ['type-observation']), [2, 'readback: mismatch labels (none)']);
+  assert.deepEqual(await run(body.replace('retry', 'retrz'), after), [2, 'readback: mismatch body']);
+});
+
+test('record registers an excluded page without a GET and report renders it', async () => {
+  const h = harness();
+  assert.equal(await h.run({ mode: 'record', id: '5', excluded: 'private', reason: 'private-no-local-route', out: '/tmp/ev/x.json' }), 0);
+  await assert.rejects(() => h.run({ mode: 'record', id: '5', excluded: 'private', reason: 'free text with spaces', out: '/tmp/ev/y.json' }));
+  assert.equal(h.calls.length, 0);
+  assert.equal(await h.run({ mode: 'report', records: '/tmp/ev/x.json' }), 0);
+  assert.match(h.out.join('\n'), /excluded: private[\s\S]*private-no-local-route/);
+  await assert.rejects(() => h.run({ mode: 'unknown' }), /--mode/);
+});

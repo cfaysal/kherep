@@ -240,6 +240,10 @@ cmp_file "project/tools/confluence-drainage-scan.mts" \
   "$HERE/../modules/atl-jira-brokers/confluence-drainage-scan.mts" "$WS/tools/confluence-drainage-scan.mts"
 cmp_file "project/tools/confluence-drainage-cli.mts" \
   "$HERE/../modules/atl-jira-brokers/confluence-drainage-cli.mts" "$WS/tools/confluence-drainage-cli.mts"
+cmp_file "project/tools/confluence-evidence.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-evidence.mts" "$WS/tools/confluence-evidence.mts"
+cmp_file "project/tools/confluence-evidence-cli.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-evidence-cli.mts" "$WS/tools/confluence-evidence-cli.mts"
 # Issue #302. The Jira set is optional, but presence decides: the flag adds it,
 # and a host that has any of its files is compared like a flagged one, so a stale
 # broker cannot hide behind a missing flag. Only these exact names count, never
