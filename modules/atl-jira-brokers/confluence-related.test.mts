@@ -14,7 +14,6 @@ import {
   requireResolvableAnchors,
   selectRelated,
   spaceIndex,
-  textSearch,
   type SpaceIndex,
 } from "./confluence-related.mts";
 import {
@@ -234,17 +233,6 @@ test("spaceIndex refuses a stalled cursor instead of claiming completeness", asy
   ]);
   await assert.rejects(() => spaceIndex(session, "1"), /incomplete/);
   assert.equal(specs.length, 1, "a stalled read fails promptly");
-});
-
-test("textSearch scopes the CQL to the space and reads both result shapes", async () => {
-  const { session, specs } = recorder([
-    { results: [{ content: { title: "Wrapped In Content" } }, { title: "Flat Title" }, { title: "" }] },
-  ]);
-  const titles = await textSearch(session, "KB", 'quotes "inside"', 5);
-  assert.deepEqual(titles, ["Wrapped In Content", "Flat Title"]);
-  const query = decodeURIComponent(specs[0].path.split("cql=")[1].split("&")[0]);
-  assert.equal(query, 'space="KB" and type=page and text ~ "quotes \\"inside\\""');
-  assert.equal(specs[0].scope, SCOPES.get);
 });
 
 test("outgoingIds reads the legacy viewpage href as well as the space-relative one", () => {

@@ -136,6 +136,10 @@ export function fixedPairs(home: string, workspace: string): ManagedPair[] {
       source: "modules/atl-jira-brokers/confluence-related.mts",
     },
     {
+      live: joinPathLike(workspace, "tools/confluence-text-search.mts"),
+      source: "modules/atl-jira-brokers/confluence-text-search.mts",
+    },
+    {
       live: joinPathLike(workspace, "tools/confluence-semantic.mts"),
       source: "modules/atl-jira-brokers/confluence-semantic.mts",
     },

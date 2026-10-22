@@ -9,11 +9,11 @@ import {
   pageStorage,
   selectRelated,
   spaceIndex,
-  textSearch,
   type IndexedPage,
   type SpaceIndex,
 } from "./confluence-related.mts";
 import type { Proposals } from "./confluence-semantic.mts";
+import { textFailureLine, textSearch } from "./confluence-text-search.mts";
 
 export interface NeighbourDeps {
   session: ConfluenceSession;
@@ -55,20 +55,24 @@ export async function reportRelated(deps: NeighbourDeps, request: RelatedRequest
   const related = selectRelated(
     index,
     { title: request.title, id: request.id, parentId: request.parentId ?? null },
-    [...proposed.titles, ...exact],
+    [...proposed.titles, ...exact.titles],
     limit,
   );
 
   printRows(deps, "related", related);
   deps.log(`count: ${related.length}`);
-  if (!proposed.error) return 0;
+  const failed = [proposed.error, exact.failure && textFailureLine(exact)].filter((x): x is string => Boolean(x));
+  if (!failed.length) return 0;
 
-  deps.logError(proposed.error);
+  for (const line of failed) deps.logError(line);
   if (related.length) {
-    deps.logError("These hits come from the exact-term half only. The list may be incomplete.");
+    deps.logError(`These hits come from the ${exact.failure ? "semantic" : "exact-term"} half only. The list may be incomplete.`);
     return 0;
   }
-  deps.logError("Nothing was searched, so nothing was found. This result is UNKNOWN, not zero.");
+  // A semantic failure keeps its pre-existing wording, alone or with the other.
+  deps.logError(proposed.error
+    ? "Nothing was searched, so nothing was found. This result is UNKNOWN, not zero."
+    : "Only one half of the search ran and it found nothing. This result is UNKNOWN, not zero.");
   return 1;
 }
 
@@ -202,12 +206,15 @@ export async function reportStitch(
   for (const orphan of work) {
     if (++scanned % 10 === 0) deps.log(`searched ${scanned}/${work.length}`);
     const proposed = await deps.semantic(orphan.title);
-    if (proposed.error) { unsearched += 1; continue; }
+    if (proposed.error) { deps.logError(`unsearched\t${orphan.id}\t${proposed.error}`); unsearched += 1; continue; }
+    // A half-run search is half evidence: skip the page rather than write a
+    // link nothing distinguishes from a measured one (issue #651).
     const exact = await textSearch(deps.session, deps.spaceKey, orphan.title);
+    if (exact.failure) { deps.logError(`unsearched\t${orphan.id}\t${textFailureLine(exact)}`); unsearched += 1; continue; }
     const neighbours = selectRelated(
       index,
       { title: orphan.title, id: orphan.id, parentId: orphan.parentId },
-      [...proposed.titles, ...exact],
+      [...proposed.titles, ...exact.titles],
       options.perOrphan ?? 2,
     );
     if (!neighbours.length) { isolated += 1; continue; }

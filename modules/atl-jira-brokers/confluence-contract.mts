@@ -78,14 +78,17 @@ export class ConfluenceRequestError extends ConfluenceError {
   method: string;
   path: string;
   scope: string;
+  // Atlassian's own words from the body, without this broker's inference.
+  detail: string;
 
-  constructor(kind: FailureKind, status: number, spec: RequestSpec, message: string) {
+  constructor(kind: FailureKind, status: number, spec: RequestSpec, message: string, detail = "") {
     super(message);
     this.kind = kind;
     this.status = status;
     this.method = spec.method;
     this.path = spec.path;
     this.scope = spec.scope;
+    this.detail = detail;
   }
 }
 
@@ -116,11 +119,11 @@ export function requestError(spec: RequestSpec, status: number, json: unknown): 
   // which is the opposite diagnosis and sends the next reader to the wrong file.
   if (status === 403 || (status === 401 && /scope/i.test(detail))) {
     return new ConfluenceRequestError("forbidden", status, spec,
-      `HTTP ${status} on ${where}: the service account is missing the scope ${spec.scope}${suffix}`);
+      `HTTP ${status} on ${where}: the service account is missing the scope ${spec.scope}${suffix}`, detail);
   }
   if (status === 413) {
     return new ConfluenceRequestError("too-large", status, spec,
-      `HTTP 413 on ${where}: the request body exceeds the 5 MB limit. A size failure, not a permission failure${suffix}`);
+      `HTTP 413 on ${where}: the request body exceeds the 5 MB limit. A size failure, not a permission failure${suffix}`, detail);
   }
-  return new ConfluenceRequestError("http", status, spec, `HTTP ${status} on ${where}${suffix}`);
+  return new ConfluenceRequestError("http", status, spec, `HTTP ${status} on ${where}${suffix}`, detail);
 }
