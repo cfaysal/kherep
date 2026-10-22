@@ -44,8 +44,9 @@ export interface RelatedRequest {
 // question: which existing pages does this one belong next to?
 //
 // An empty answer is a real answer - but only when the search actually ran.
-// With the ranking half dead, "nothing found" is not a measured absence, so it
-// is reported as UNKNOWN and the exit code says so (golden rule 12).
+// With the ranking half dead, or the exact half not fully read, "nothing found"
+// is not a measured absence, so it is reported as UNKNOWN and the exit code
+// says so (golden rule 12).
 export async function reportRelated(deps: NeighbourDeps, request: RelatedRequest): Promise<number> {
   const index = await spaceIndex(deps.session, deps.spaceId);
   const limit = request.limit ?? 3;
@@ -67,14 +68,27 @@ export async function reportRelated(deps: NeighbourDeps, request: RelatedRequest
   if (!failed.length) return 0;
 
   for (const line of failed) deps.logError(line);
+  const partial = exact.failure?.kind === "rows";
   if (related.length) {
-    deps.logError(`These hits come from the ${exact.failure ? "semantic" : "exact-term"} half only. The list may be incomplete.`);
+    // Unread rows may hide further hits; with a rows failure the hits shown may
+    // come from either half, so no half is named (issue #656).
+    if (partial) {
+      deps.logError("The exact-term half was not fully read. The list may be incomplete.");
+    } else {
+      deps.logError(`These hits come from the ${exact.failure ? "semantic" : "exact-term"} half only. The list may be incomplete.`);
+    }
     return 0;
   }
-  // A semantic failure keeps its pre-existing wording, alone or with the other.
-  deps.logError(proposed.error
-    ? "Nothing was searched, so nothing was found. This result is UNKNOWN, not zero."
-    : "Only one half of the search ran and it found nothing. This result is UNKNOWN, not zero.");
+  // A rows failure is a request that ran and came back unreadable: neither
+  // "never searched" nor "one half ran" describes it. The other two keep their
+  // pre-existing wording, alone or together.
+  if (partial) {
+    deps.logError("The exact-term half was not fully read and nothing was found. This result is UNKNOWN, not zero.");
+  } else if (proposed.error) {
+    deps.logError("Nothing was searched, so nothing was found. This result is UNKNOWN, not zero.");
+  } else {
+    deps.logError("Only one half of the search ran and it found nothing. This result is UNKNOWN, not zero.");
+  }
   return 1;
 }
 
@@ -210,7 +224,8 @@ export async function reportStitch(
     const proposed = await deps.semantic(orphan.title);
     if (proposed.error) { deps.logError(`unsearched\t${orphan.id}\t${proposed.error}`); unsearched += 1; continue; }
     // A half-run search is half evidence: skip the page rather than write a
-    // link nothing distinguishes from a measured one (issue #651).
+    // link nothing distinguishes from a measured one (issue #651), also when
+    // the exact half returned rows that could not be read (issue #656).
     const exact = await textSearch(deps.session, deps.spaceKey, orphan.title);
     if (exact.failure) { deps.logError(`unsearched\t${orphan.id}\t${textFailureLine(exact)}`); unsearched += 1; continue; }
     const neighbours = selectRelated(

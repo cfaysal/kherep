@@ -10,6 +10,9 @@
 // ASCII letters and digits, which cannot be syntax. Lowercase also matters for
 // the words AND, OR, NOT: Lucene operators must be ALL CAPS, so a lowercase one
 // is a plain term.
+//
+// A result row without a readable title is counted, never dropped: a dropped
+// row made a response with hits look like one without any (issue #656).
 import { ConfluenceRequestError, SCOPES, v1, type ConfluenceSession } from "./confluence-contract.mts";
 import { strictRows } from "./confluence-pagination.mts";
 import { contentTerms } from "./confluence-related.mts";
@@ -33,12 +36,23 @@ export function textCql(spaceKey: string, terms: string[]): string | null {
   return `space=${JSON.stringify(spaceKey)} and type=page and text ~ "${terms.join(" ")}"`;
 }
 
+// Why the exact half is incomplete. "http": the request was refused or failed
+// (status and Atlassian's words). "rows": the request succeeded, but
+// `unreadable` of `rows` result rows carried no readable title in either of the
+// two documented places (content.title, title). A rows failure has no status
+// and invents none. titles is [] for "http"; for "rows" it holds every title
+// that WAS readable, in response order.
+export type TextFailure =
+  | { kind: "http"; status: number; detail: string }
+  | { kind: "rows"; unreadable: number; rows: number };
+
 export interface TextHits {
   titles: string[];
   // The CQL that was sent; null when the title had no searchable word and no request was made.
   cql: string | null;
-  // Present when the request was refused or failed. titles is then [] and means UNKNOWN, not zero.
-  failure?: { status: number; detail: string };
+  // Present when this half is incomplete. Callers gate on `failure` alone: that
+  // is the one channel, so no caller can honour one kind and miss the other.
+  failure?: TextFailure;
 }
 
 export async function textSearch(
@@ -57,22 +71,39 @@ export async function textSearch(
     // A refused request is one unsearched half, not a reason to end the run.
     // Anything else (network, a broker bug) still aborts.
     if (!(error instanceof ConfluenceRequestError)) throw error;
-    return { titles: [], cql, failure: { status: error.status, detail: error.detail } };
+    return { titles: [], cql, failure: { kind: "http", status: error.status, detail: error.detail } };
   }
-  const titles = strictRows(json)
-    .map((row) => text((row.content as { title?: unknown } | undefined)?.title) || text(row.title))
-    .filter(Boolean);
-  return { titles, cql };
+  const rows = strictRows(json); // structural failures still throw
+  const titles: string[] = [];
+  let unreadable = 0;
+  for (const row of rows) {
+    const title = rowTitle(row);
+    if (title === null) unreadable += 1; else titles.push(title);
+  }
+  return unreadable ? { titles, cql, failure: { kind: "rows", unreadable, rows: rows.length } } : { titles, cql };
 }
 
-function text(value: unknown): string {
-  return typeof value === "string" ? value : "";
+// A title is readable when it is a string with non-whitespace content. Judged
+// on trim(), returned as-is: selectRelated trims for lookup, nothing else needs
+// normalising.
+function readable(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+// One row counts once, after both documented places were tried.
+function rowTitle(row: Record<string, unknown>): string | null {
+  return readable((row.content as { title?: unknown } | undefined)?.title) ?? readable(row.title);
 }
 
 // One line for the operator. It names the status, never a cause the broker did
-// not measure: 400 is the only status whose meaning the endpoint documents.
+// not measure: 400 is the only status whose meaning the endpoint documents. A
+// rows failure names its count instead and never prints an HTTP status.
 export function textFailureLine(hits: TextHits): string {
-  const { status, detail } = hits.failure ?? { status: 0, detail: "" };
+  const f = hits.failure;
+  if (f?.kind === "rows") {
+    return `exact-term search: ${f.unreadable} of ${f.rows} result row(s) had no readable title. Hits from this half are incomplete and UNKNOWN. cql: ${hits.cql}`;
+  }
+  const { status, detail } = f ?? { status: 0, detail: "" };
   const hint = status === 400 ? " (the CQL query cannot be parsed)" : "";
   const said = detail ? ` - ${detail}` : "";
   return `exact-term search: HTTP ${status}${hint}${said}. Hits from this half are UNKNOWN. cql: ${hits.cql}`;
