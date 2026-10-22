@@ -45,7 +45,10 @@ increments the minor version; every other release increments the patch version.
   or changed. Private pages stay excluded or UNKNOWN. The scanner and the
   confirm path classify a page on its body without the measurement blocks
   the broker wrote, so a tool or file name inside a measurement command
-  never makes a tracker page code-bound (issues #650, #662).
+  never makes a tracker page code-bound (issues #650, #662). Only the run of
+  blocks directly before the footer counts; a block-shaped span elsewhere is
+  content (#666). A Revision line inside any block-shaped span never counts
+  as the page's own Revision.
 - Denied calls in delegated worker reports (issue #504). The guard
   dispatcher, and the hook runtime entry for its own denies, journal each
   guarded call of a delegated Claude worker (a payload with a valid

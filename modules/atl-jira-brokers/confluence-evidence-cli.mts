@@ -7,7 +7,7 @@ import { findSpace, getPage } from './confluence-content.mts';
 import { drainageRules } from './confluence-drainage-rules.mts';
 import { drainageSnapshot } from './confluence-drainage-snapshot.mts';
 import {
-  BOUND_REVISION, classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, KINDS, normaliseMeasurement, renderMeasurementBlock,
+  BOUND_REVISION, claimSpan, classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, KINDS, normaliseMeasurement, renderMeasurementBlock,
   type DecideOptions, type Decision, type Measurement, type MeasuredKind,
 } from './confluence-evidence.mts';
 import {
@@ -44,6 +44,8 @@ async function prepare(io: Io): Promise<number> {
   const snapshot = await drainageSnapshot(session, id, space.id)
     .catch((error: unknown) => fail(`Snapshot failed: ${readFailure(error).reason}. Nothing was written.`));
   const claim = classifyClaim(snapshot, true, args.kind as MeasuredKind | undefined);
+  const [from, to] = claimSpan(snapshot.body);
+  const blocks = (snapshot.body.slice(from, to).match(/<h2>Measurement /g) ?? []).length;
   const record: EvidenceRecord = { pageId: id, readVersion: snapshot.version, spaceId: space.id, spaceKey: space.key,
     parentId: snapshot.parentId, title: snapshot.title, body: snapshot.body, labels: snapshot.labels, claim };
   await io.files.create(out, JSON.stringify(record, null, 2));
@@ -52,7 +54,8 @@ async function prepare(io: Io): Promise<number> {
     `kind: ${claim.kind}${claim.classifiedKind ? ` (override; classified ${claim.classifiedKind})` : ''}`,
     `evidence: ${claim.evidenceLabel}`, `status-author: ${claim.statusAuthor}`, `passive labels: ${claim.passiveLabels.join(', ') || 'none'}`,
     `revisions: bound ${bound.length}, unbound ${unbound.length}, malformed ${malformed.length}`,
-    `code tokens: ${claim.codeTokens.length}`, `tracker keys: ${claim.trackerKeys.length}`, 'record: written']) ctx.log(line);
+    `code tokens: ${claim.codeTokens.length}`, `tracker keys: ${claim.trackerKeys.length}`,
+    `measurement blocks: ${blocks}`, 'record: written']) ctx.log(line);
   return 0;
 }
 
