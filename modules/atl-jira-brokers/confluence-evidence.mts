@@ -49,7 +49,7 @@ export interface DecideOptions { now: number; maxAgeDays?: number; repoRoot?: st
   revisionExists?: (sha: string) => boolean; superseded?: SupersedingPage }
 export interface Decision { outcome: Outcome; reason: string; labelsAdd: string[]; labelsRemove: string[]; measuredRevision?: string; supersededBy?: string }
 
-const KINDS: readonly string[] = ['code', 'tracker', 'live', 'doc'];
+export const KINDS: readonly string[] = ['code', 'tracker', 'live', 'doc'];
 const CLASS_OF: Record<string, string> = { code: 'repository', tracker: 'tracker', live: 'target-host', doc: 'official-doc' };
 const FIELDS = new Set(['kind', 'source', 'sourceClass', 'command', 'excerpt', 'measuredAt', 'verdict', 'revision', 'subject', 'supersededBy', 'kindOverride']);
 const DAY = 86_400_000;
@@ -205,7 +205,7 @@ export interface EvidenceRecord {
   pageId: string; readVersion?: number; spaceId?: string; spaceKey?: string; parentId?: string | null; title?: string; body?: string;
   labels?: string[]; claim?: Claim; measurement?: Measurement; decision?: Decision; labelsAfter?: string[]; excluded?: string; reason?: string;
 }
-const PROPOSED = ['confirmed', 'refuted', 'superseded'];
+export const PROPOSED: readonly string[] = ['confirmed', 'refuted', 'superseded'];
 // Reasons decided before the measurement was validated: its fields stay unprinted.
 const UNVALIDATED = ['page-not-eligible', 'page-not-assumed', 'labels-malformed', 'status-author-not-model', 'record-not-body-approved',
   'historical-not-repeatable', 'no-measurement', 'measurement-unknown-field', 'measurement-source-forbidden', 'measurement-incomplete',
