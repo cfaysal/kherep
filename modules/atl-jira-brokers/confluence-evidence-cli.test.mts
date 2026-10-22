@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runCli } from './atl-confluence-ccoder.mts';
-import { BODY, decideArgs, harness, LABELS, MEASUREMENT, prepareArgs as prepare, prepared, SHA, TODAY } from './confluence-evidence-cli.fixture.mts';
+import { BODY, decideArgs, harness, LABELS, MEASUREMENT, prepareArgs as prepare, prepared, SHA, TODAY } from './evidence-cli.fixture.mts';
 import { runtimeLabel } from './confluence-runtime-label.mts';
 
 test('Defect 5: prepare refuses without body approval or with an --out inside a work tree, before any request', async () => {

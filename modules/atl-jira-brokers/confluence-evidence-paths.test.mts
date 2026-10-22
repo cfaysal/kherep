@@ -1,9 +1,9 @@
 // The evidence verb's path and record guards and two end-to-end decide runs (issue #519, second review).
-// Injected session, git and files only; see confluence-evidence-cli.fixture.mts.
+// Injected session, git and files only; see evidence-cli.fixture.mts.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ConfluenceError } from './confluence-contract.mts';
-import { decideArgs, harness, LABELS, prepareArgs, prepared, TODAY } from './confluence-evidence-cli.fixture.mts';
+import { decideArgs, harness, LABELS, prepareArgs, prepared, TODAY } from './evidence-cli.fixture.mts';
 
 test('P3-e: prepare and record refuse an existing --out before any request: out-exists', async () => {
   const h = await prepared();
