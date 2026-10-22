@@ -146,10 +146,22 @@ function codeGate(claim: Claim, m: Measurement, options: DecideOptions): string 
   return null;
 }
 const word = (key: string): RegExp => new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
-// gh issue view --json state,closedAt prints no number, so the command may name the issue it reads;
-// a bare number anywhere else (a date, a count) never stands for #N.
+// gh issue view --json state,closedAt prints no number, so the command may name the issue it reads, but
+// only as ONE invocation: its first segment is exactly gh issue|pr view N (quotes stripped, nothing before,
+// no suffix), and no other gh runs anywhere in it. A bare number elsewhere (a date, a count) never stands for #N.
+const SHELL_WORD = /(?:"[^"]*"|'[^']*'|[^\s"'])+/g;
+function ghViewNumber(command: string): string | null {
+  const [first, ...rest] = command.split(/&&|\|\||;|\||\n/);
+  // An unbalanced quote leaves characters no word consumed; such a segment names nothing.
+  if (first.replace(SHELL_WORD, '').trim() !== '') return null;
+  const words = (first.match(SHELL_WORD) ?? []).map(w => w.replace(/"([^"]*)"|'([^']*)'/g, '$1$2'));
+  const another = /(?<![\w./-])gh(?![\w.-])/;
+  if (words[0] !== 'gh' || !['issue', 'pr'].includes(words[1]) || words[2] !== 'view' || !/^[1-9]\d*$/.test(words[3] ?? '')) return null;
+  return [words.slice(1).join(' '), ...rest].some(part => another.test(part)) ? null : words[3];
+}
+// #N is a whole token: #10. and #10, end a sentence, #10-other and #10.5 are other names.
 const github = (n: string, m: Measurement): boolean =>
-  new RegExp(`(?<!\\w)#${n}\\b`).test(m.excerpt) || new RegExp(`\\bgh\\s+(?:issue|pr)\\s+view\\s+${n}\\b`).test(m.command);
+  new RegExp(`(?<!\\w)#${n}(?!\\w|[-.][A-Za-z0-9])`).test(m.excerpt) || ghViewNumber(m.command) === n;
 function touches(claim: Claim, m: Measurement): boolean {
   const hay = `${m.command}\n${m.excerpt}`;
   // Every tracker key the page states (a read of one key must not confirm a page about several), on word
