@@ -8,7 +8,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 import { pathToFileURL } from "node:url";
 
-import { denialFaultEnv } from "../../claude/hooks/denial-fault.fixture.mts";
+import { denialFaultEnv, readFaultReceipt } from "../../claude/hooks/denial-fault.fixture.mts";
 import { journalPaths } from "../../claude/hooks/lib/denial-journal.mts";
 import { readJournal, renderReport } from "../../claude/hooks/lib/denial-report.mts";
 import { assertSameAnswer, cleanupHomes, codexHome, exit2, run, shellPayload, type CodexHome } from "./denials-fixture.mts";
@@ -17,6 +17,14 @@ after(cleanupHomes);
 const GUARDS = { "commit-guard.mts": exit2("commit-guard"), "deploy-guard.mts": "process.exit(0);\n", "main-checkout-guard.mts": exit2("main-checkout") };
 const shell = (home: CodexHome, input: string, env?: NodeJS.ProcessEnv) => run([path.join(home.hookDir, "codex-shell-checks.mts")], input, env);
 const first = (home: CodexHome): string => renderReport(readJournal(home.root, "agent-c1")).text.split("\n")[0]!;
+// Issue #652. The capture interval as the dispatcher saw it: first intercepted write to process exit,
+// both stamped in the child by the fault fixture, so process start-up and guard-child load stay out.
+// The shared window is 2 s absolute; 500 ms covers one timer's lateness and the flush before exit.
+const WINDOW_MS = 2_000, LATE_MS = 500, NO_RECEIPT = "no fault receipt: the child was killed or the fault did not engage";
+function captured(receipt: string) {
+  const doc = readFaultReceipt(receipt);
+  return { calls: doc?.calls ?? [], captureMs: doc?.calls[0] ? doc.exitAt - doc.calls[0].at : undefined };
+}
 
 test("two denying guards: two denials journalled, the decision as without agent_id", async () => {
   const home = codexHome(GUARDS);
@@ -49,12 +57,20 @@ test("a journal lib that throws: the same decision and a marker", async () => {
   assert.equal(first(home), "DENIED-CALLS: unknown (capture-failed)");
 });
 
-test("a writer that never settles: the decision within the journal cap", async () => {
-  const referenceHome = codexHome(GUARDS), home = codexHome(GUARDS);
+test("a writer that never settles: the decision within the journal cap", async (t) => {
+  const referenceHome = codexHome(GUARDS), home = codexHome(GUARDS), receipt = path.join(home.root, "fault-receipt.json");
   const reference = await shell(referenceHome, shellPayload());
-  const result = await shell(home, shellPayload(), denialFaultEnv("all-hang", "codex-shell-checks.mts"));
+  const result = await shell(home, shellPayload(), denialFaultEnv("all-hang", "codex-shell-checks.mts", process.env, receipt));
+  const { calls, captureMs } = captured(receipt);
+  t.diagnostic(JSON.stringify({ referenceMs: reference.ms, childMs: result.ms, captureMs }));
+  assert.equal(result.timedOut, false, `killed by the watchdog after ${result.ms} ms`);
+  assert.equal(result.status, 0, result.stderr);
   assertSameAnswer(result, home, reference, referenceHome);
-  assert.ok(result.ms < reference.ms + 2_000 + 2_000, `${result.ms} ms against ${reference.ms} ms`);
+  assert.ok(captureMs !== undefined, NO_RECEIPT);
+  // The lib's mkdir, then the marker's: the chain lib -> marker ran and every write hung.
+  assert.deepEqual(calls.map((call) => call.op), ["mkdir", "mkdir"]);
+  assert.ok(captureMs < WINDOW_MS + LATE_MS, `capture held ${captureMs} ms`);
+  assert.ok(captureMs >= 1_000, `capture window abandoned early: ${captureMs} ms`);
 });
 
 // Issues #612 and #621. A 700 ms marker after the lib's 600 ms timeout must
@@ -80,19 +96,22 @@ test("an adapter that does not load: the deny stands and the call leaves the mar
 // keeps the CLI alive. The watchdog owns only this child and waits for its close after killing it.
 for (const brokenAdapter of [false, true]) {
   test(`a stuck marker cannot retain the CLI after its deny (${brokenAdapter ? "broken adapter" : "journal timeout"})`, async (t) => {
-    const referenceHome = codexHome(GUARDS, "hanging"), home = codexHome(GUARDS, "hanging");
+    const referenceHome = codexHome(GUARDS, "hanging"), home = codexHome(GUARDS, "hanging"), receipt = path.join(home.root, "fault-receipt.json");
     if (brokenAdapter) for (const h of [referenceHome, home]) fs.writeFileSync(path.join(h.hookDir, "hook-adapter.mts"), "");
     const reference = await shell(referenceHome, shellPayload());
     const result = await run([path.join(home.hookDir, "codex-shell-checks.mts")], shellPayload(),
-      denialFaultEnv("marker-stuck", "codex-shell-checks.mts"), 8_000);
-    t.diagnostic(JSON.stringify({ brokenAdapter, childMs: result.ms, status: result.status, signal: result.signal, timedOut: result.timedOut }));
+      denialFaultEnv("marker-stuck", "codex-shell-checks.mts", process.env, receipt), 8_000);
+    const { calls, captureMs } = captured(receipt);
+    t.diagnostic(JSON.stringify({ brokenAdapter, childMs: result.ms, captureMs, status: result.status, signal: result.signal, timedOut: result.timedOut }));
     assert.equal(result.timedOut, false, `deny was written but child survived to watchdog (${result.ms} ms, ${result.signal})`);
     assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, "deny", "complete deny before child closes");
     assertSameAnswer(result, home, reference, referenceHome);
     assert.equal(fs.existsSync(journalPaths(home.root, "agent-c1").marker), false, "the stuck write did not persist");
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.signal, null);
-    assert.ok(result.ms < reference.ms + 2_000 + 2_000, `${result.ms} ms against ${reference.ms} ms`);
+    assert.ok(captureMs !== undefined, NO_RECEIPT);
+    assert.ok(calls.some((call) => call.op === "appendFile" && call.tail === ".failed"), JSON.stringify(calls));
+    assert.ok(captureMs < WINDOW_MS + LATE_MS, `capture held ${captureMs} ms`);
     // The hanging lib spends its 600 ms, then the stuck marker is awaited to the end of the 2 s window.
     if (!brokenAdapter) assert.ok(result.ms >= 1_800, `capture window abandoned early: ${result.ms} ms`);
   });

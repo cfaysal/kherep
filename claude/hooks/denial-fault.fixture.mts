@@ -12,6 +12,7 @@
 //                    appends (a slow filesystem; issues #612 and #614: the marker must still be on disk when
 //                    the hook process has exited)
 //   marker-stuck     appendFile on a *.failed never settles, with a real referenced 60 s handle
+// With KHEREP_DENIAL_FAULT_RECEIPT set, the faulted process also records its intercepted calls (issue #652).
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -21,12 +22,24 @@ export const MARKER_SLOW_MS = 700;
 const SELF_URL = pathToFileURL(import.meta.filename).href;
 
 // The environment of one spawn: base plus the fault, NODE_OPTIONS appended, never replaced.
-export function denialFaultEnv(fault: DenialFault, main: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+// receipt (issue #652): a file the faulted process writes at exit, see readFaultReceipt.
+export function denialFaultEnv(fault: DenialFault, main: string, base: NodeJS.ProcessEnv = process.env, receipt?: string): NodeJS.ProcessEnv {
   const options = `${base.NODE_OPTIONS ?? ""} --disable-warning=ExperimentalWarning --import=${SELF_URL}`.trim();
-  return { ...base, NODE_OPTIONS: options, KHEREP_DENIAL_FAULT: fault, KHEREP_DENIAL_FAULT_MAIN: main };
+  const env = { ...base, NODE_OPTIONS: options, KHEREP_DENIAL_FAULT: fault, KHEREP_DENIAL_FAULT_MAIN: main };
+  if (receipt === undefined) return env;
+  if (/\.(jsonl|failed)$/.test(receipt)) throw new Error(`a fault receipt must not look like a journal or marker: ${receipt}`);
+  return { ...env, KHEREP_DENIAL_FAULT_RECEIPT: receipt };
+}
+
+// Every intercepted call, stamped in the faulted process, and the time of its exit event: no
+// receipt when that process was killed. tail is the suffix class of the path, never the path.
+export interface FaultReceipt { calls: { at: number; op: "appendFile" | "mkdir" | "rename"; tail: ".jsonl" | ".failed" | "dir" | "" }[]; exitAt: number }
+export function readFaultReceipt(file: string): FaultReceipt | undefined {
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as FaultReceipt : undefined;
 }
 
 const fault = process.env.KHEREP_DENIAL_FAULT ?? "";
+const receipt = process.env.KHEREP_DENIAL_FAULT_RECEIPT ?? "";
 const errno = (code: string): NodeJS.ErrnoException => Object.assign(new Error(`injected ${code}`), { code });
 const never = (): Promise<never> => new Promise<never>(() => {});
 
@@ -36,7 +49,14 @@ if (fault && process.argv[1] && path.basename(process.argv[1]) === process.env.K
   const journal = (file: unknown): boolean => String(file).endsWith(".jsonl");
   const marker = (file: unknown): boolean => String(file).endsWith(".failed");
   const later = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, MARKER_SLOW_MS));
+  const calls: FaultReceipt["calls"] = [];
+  // A rename is classed by its target. The receipt is written synchronously: only fs.promises is patched.
+  const note = (op: FaultReceipt["calls"][number]["op"], file: unknown): void => {
+    if (receipt) calls.push({ at: Date.now(), op, tail: op === "mkdir" ? "dir" : journal(file) ? ".jsonl" : marker(file) ? ".failed" : "" });
+  };
+  if (receipt) process.on("exit", () => fs.writeFileSync(receipt, JSON.stringify({ calls, exitAt: Date.now() })));
   promises.appendFile = function (file: unknown, ...rest: unknown[]) {
+    note("appendFile", file);
     if (fault === "all-hang" || (fault === "journal-hang" && journal(file))) return never();
     if (fault === "marker-stuck" && marker(file)) {
       setTimeout(() => {}, 60_000); // A pending Promise alone does not hold the event loop open.
@@ -49,11 +69,13 @@ if (fault && process.argv[1] && path.basename(process.argv[1]) === process.env.K
     return append.call(fs.promises, file, ...rest);
   };
   promises.rename = function (...args: unknown[]) {
+    note("rename", args[1]);
     if (fault === "all-hang") return never();
     if (fault === "all-fail") return Promise.reject(errno("EPERM"));
     return rename.call(fs.promises, ...args);
   };
   promises.mkdir = function (...args: unknown[]) {
+    note("mkdir", args[0]);
     return fault === "all-hang" ? never() : mkdir.call(fs.promises, ...args);
   };
 }
