@@ -1,4 +1,4 @@
-import type { DirectoryBody } from "../protocol-messages.mts";
+import { isSessionRef, type DirectoryBody } from "../protocol-messages.mts";
 import {
   intercomLabel, isTaskLabel, MAX_TASK_TEXT, taskSessionName, type PermissionMode, type SessionStartArgs, type TaskRuntime,
 } from "../protocol-tasks.mts";
@@ -21,7 +21,8 @@ import { wakeText } from "./wake-hook.mts";
 // How closed-delivery.mts hands messages for a session that is no longer
 // running (issues #102, #105) to an intercom session of their sender: resume
 // the sender's ended intercom session in the background, or start a new one.
-// Each function returns null on success and otherwise the reason.
+// Each function returns null on success and otherwise the reason; a Claude
+// resume whose run is kept rethrows a later error instead (resumeClaude).
 //
 // Claude Code, from https://code.claude.com/docs/en/agent-view ("From your
 // shell", fetched 2026-09-27): "To continue an existing conversation in the
@@ -56,14 +57,23 @@ function rerunRecord(deps: RunnerDeps, task: TaskRecord, cwd: string, now: numbe
 // task: an ended intercom session with a known session id. The record is
 // written before the run with mappingPendingSince (session-runner.mts
 // background), and restored if the resume fails. Both resumes are admitted
-// with the owner probe of the deps (issue #423).
+// with the owner probe of the deps (issue #423). Issue #638: a failed resume
+// (no short id printed, an unlisted copy stopped) returns its reason, also if
+// its cleanup or release fails; once the run is kept, any later error (a
+// write, the release) propagates, as a reason would start a second session.
 export async function resumeClaude(deps: RunnerDeps, task: TaskRecord, cwd: string, count: number, now: number): Promise<string | null> {
-  try { return await withServiceAdmission(deps.paths, () => resumeClaudeAdmitted(deps, task, cwd, count, now), deps.serviceOwner); }
-  catch (error) { return reasonOf(error); }
+  const kept = { run: false };
+  try { return await withServiceAdmission(deps.paths, () => resumeClaudeAdmitted(deps, task, cwd, count, now, kept), deps.serviceOwner); }
+  catch (error) { if (kept.run) throw error; return reasonOf(error); }
 }
 
-async function resumeClaudeAdmitted(deps: RunnerDeps, task: TaskRecord, cwd: string, count: number, now: number): Promise<string | null> {
+// A nonempty full id that is no session reference is never adopted (issue #638).
+const malformedId = (id: unknown): boolean => typeof id === "string" && id !== "" && !isSessionRef(id);
+
+async function resumeClaudeAdmitted(deps: RunnerDeps, task: TaskRecord, cwd: string, count: number, now: number,
+  kept: { run: boolean }): Promise<string | null> {
   const sessionId = task.sessionId!;
+  if (!isSessionRef(sessionId)) return "the intercom session id is not valid";
   // The session held so far is stopped once a copy is adopted and it is idle (issue #111).
   const retire = [...(task.retire ?? []), ...(task.shortId ? [{ shortId: task.shortId, sessionId }] : [])];
   const pending: TaskRecord = { ...rerunRecord(deps, task, cwd, now), state: "started", mappingPendingSince: new Date(now).toISOString(),
@@ -93,7 +103,11 @@ async function resumeClaudeAdmitted(deps: RunnerDeps, task: TaskRecord, cwd: str
     await runClaude(deps, ["stop", shortId]).catch(() => undefined);
     return failed("claude continued the session as a copy under a new id it did not list");
   }
-  let saved = writeTask(deps.paths, mapIds({ ...pending, shortId }, row), now);
+  kept.run = true;
+  // A malformed listed id keeps the old one, pending, for the watch round to map.
+  const invalid = malformedId(row?.sessionId);
+  if (invalid) deps.log?.(`kherep-node: task ${task.taskId}: listed session id is not valid; mapping deferred`);
+  let saved = writeTask(deps.paths, mapIds({ ...pending, shortId }, invalid ? undefined : row), now);
   // A copy under a new id (issue #109) takes over the messages waiting for the original id.
   const adopted = saved.sessionId ?? sessionId;
   if (adopted !== sessionId) {
@@ -111,7 +125,7 @@ async function resumeClaudeAdmitted(deps: RunnerDeps, task: TaskRecord, cwd: str
   }
   queueReport(deps.paths, { taskId: saved.taskId, state: "started", sessionId: saved.sessionId ?? sessionId });
   addLocalSession(deps.paths, { sessionId: adopted, name: task.name });
-  if (rows) await retireCopies(deps, saved, rows);
+  if (rows && !invalid) await retireCopies(deps, saved, rows);
   return null;
 }
 

@@ -12,7 +12,8 @@ import { FAST } from "./codex-fork-run-fixture.mts";
 import { resetMcpCache } from "./codex-mcp.mts";
 import { codexQueueIdle, pollCodexQueue } from "./codex-queue.mts";
 import { markStopEnded, recordCodexSession } from "./codex-sessions.mts";
-import { markOffered, readdress } from "./inbox.mts";
+import { markOffered } from "./inbox.mts";
+import { readdress } from "./_deprecated/session-handover.mts";
 import { T0 } from "./task-fixture.mts";
 
 const SECOND = "01a0db74-0000-7000-8000-0000000000f4";
@@ -148,7 +149,7 @@ test("the dedup key is owner and message: a readdressed message id is audited fo
   const lines = (): [string, string, string[]][] => forkAudit(f).map((line) => [line.sessionId, line.action, line.messageIds]);
   await poll(f);
   assert.deepEqual(lines(), [[FORK_OWNER, "fork-cwd-refused", [id]]]);
-  // The inbox moves the waiting message to another session under the same id (inbox.mts readdress).
+  // The legacy readdress (node/_deprecated) moves the waiting message to another session under the same id.
   assert.deepEqual(readdress(f.paths.inbox, FORK_OWNER, SECOND), [id]);
   await poll(f);
   assert.deepEqual(lines(), [[FORK_OWNER, "fork-cwd-refused", [id]], [SECOND, "fork-cwd-refused", [id]]], "each owner once");

@@ -38,10 +38,3 @@ export function resolveDelivery(paths: NodePaths, task: TaskRecord): TaskRecord 
   }
   return { ...task, deliveryPending: undefined };
 }
-
-export function updateDeliverySession(paths: NodePaths, task: TaskRecord, messageIds: string[], sessionId: string): void {
-  for (const messageId of messageIds) {
-    if (getMessage(paths.inbox, messageId)?.delivery?.taskId !== task.taskId) continue;
-    setDeliveryTask(paths.inbox, messageId, { taskId: task.taskId, runtime: runtimeOf(task), sessionId });
-  }
-}

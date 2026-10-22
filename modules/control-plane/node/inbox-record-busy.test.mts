@@ -6,14 +6,15 @@ import test, { type TestContext } from "node:test";
 
 import type { MessageDeliverBody } from "../protocol-messages.mts";
 import {
-  getMessage, INBOX_RETENTION_MS, markAnswered, markClosedAttempt, markDelivered, markOffered, markRefused, markReported, markRetry, readdress,
+  getMessage, INBOX_RETENTION_MS, markAnswered, markClosedAttempt, markDelivered, markOffered, markRefused, markReported, markRetry,
   setDeliveryTask, storeMessage,
 } from "./inbox.mts";
+import { readdress } from "./_deprecated/session-handover.mts";
 import { purgeInbox } from "./inbox-purge.mts";
 import { RecordLockBusy, withRecordLockBudget } from "./inbox-record-lock.mts";
 
 // Issue #627: what each writer reports when the record's lock stays held for
-// the whole wait, and that readdress judges a record again under its lock (D6).
+// the whole wait, and that the legacy readdress judges a record again under its lock (D6).
 const ID = "00000000-0000-4000-8000-0000000000a1";
 const ID_B = "00000000-0000-4000-8000-0000000000b2";
 const NOW = Date.UTC(2026, 9, 21);
@@ -66,7 +67,7 @@ test("a busy record is not written by markOffered, markDelivered, markRetry, mar
   assert.ok(fs.existsSync(lockOf(dir, ID)), "the holder's lock is untouched");
 });
 
-test("a busy record is an error for setDeliveryTask, markClosedAttempt and readdress, whose rounds run again", (t) => {
+test("a busy record is an error for setDeliveryTask, markClosedAttempt and the legacy readdress, whose rounds run again", (t) => {
   const { dir } = watched(t);
   storeMessage(dir, deliver(ID), NOW);
   held(dir);

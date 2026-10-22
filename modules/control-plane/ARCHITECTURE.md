@@ -172,6 +172,30 @@ Unowned intermediates retain existing closed-session fallback limits, including
 and policy/readiness/budget guards. A process crash after immediate resume's early
 task save remains outside this recovery guarantee.
 
+A listed full session ID that is a nonempty string failing `isSessionRef` is
+never adopted (issue #638); neither is a handover from a stored malformed ID. The
+watch defers only that task, with a fixed log line, and later tasks of the round
+go on. Its deadline still runs after the launch-in-flight guard, through a usable
+saved or listed short ID: only that short ID is saved, never the malformed full
+ID, and the pending marker stays. While the listing stays malformed, the task's
+no-progress check is paused, not satisfied: the original progress timestamp is
+kept, and a later valid listing can meet an already elapsed window. Its carried
+messages, copy retirement and reports wait as well. Empty and missing IDs keep
+their previous missing-mapping behavior. Immediate Claude resume marks the run
+kept only after both failed-resume branches (no printed short ID, an unlisted
+`note:` copy that is stopped) are excluded; those keep their reason and guarded
+fallback, also when their restore or the admission release fails. After the
+mark, any error, the admission release included, propagates to the per-burst
+catch of the closed delivery, which starts nothing more for that burst. A kept
+run listed under a malformed ID keeps the old full ID, the new short ID and the
+pending marker, and its attempted messages stay at the old ID. No second session
+starts for them; they can still be refused under the existing rules: a
+successful listing that shows neither their target ID nor name, state accepted
+or offered, and an age over the threshold, counted from `closedAttempt` when
+`closedTo` is set and from `receivedAt` otherwise, checked again under the record
+lock. A failed listing, a live target, a terminal state, a younger message or a
+busy record refuses nothing, so neither refusal nor delivery is guaranteed.
+
 The exchange round itself (`node/daemon-round.mts`) reads the inbox through the
 daemon's in-process index (`node/inbox-index.mts`, issue #487). The round's
 synchronous start, the delivery-progress observers and the status reports, shares

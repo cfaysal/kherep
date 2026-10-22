@@ -6,8 +6,9 @@ import test, { type TestContext } from "node:test";
 
 import type { MessageDeliverBody } from "../protocol-messages.mts";
 import {
-  getMessage, markAnswered, markClosedAttempt, markDelivered, markOffered, markRefused, markRetry, readdress, setDeliveryTask, storeMessage,
+  getMessage, markAnswered, markClosedAttempt, markDelivered, markOffered, markRefused, markRetry, setDeliveryTask, storeMessage,
 } from "./inbox.mts";
+import { readdress } from "./_deprecated/session-handover.mts";
 
 // Issue #627: every rewrite of a record body holds the record's lock while it
 // renames the new content into place, and leaves no lock behind. The lock path

@@ -218,8 +218,8 @@ export function listInbox(dir: string, toSession?: string): InboxRecord[] {
 // Every rewrite of a record body: read, judge and write under the record's lock
 // (issue #627). change judges the record the file holds now, never a caller's
 // copy; null leaves it as it is. A busy lock throws RecordLockBusy from
-// setDeliveryTask, markClosedAttempt and readdress; their daemon callers skip
-// that record for the round and take it up again on the next one. The other
+// setDeliveryTask and markClosedAttempt; their daemon callers skip that record
+// or leave it to a later round (closed-delivery.mts, task-watch.mts). The other
 // writers report "not written" (tryUpdate).
 type Update = { record: InboxRecord; written: boolean } | null;
 function updateRecord(dir: string, messageId: string, change: (record: InboxRecord) => InboxRecord | null): Update {
@@ -292,17 +292,6 @@ export function markClosedAttempt(dir: string, messageId: string, now: number = 
     const moved = toSession !== undefined && toSession !== record.toSession ? { toSession, closedTo: record.toSession } : {};
     return { ...record, ...moved, closedAttempt: new Date(now).toISOString() };
   });
-}
-
-// Moves the waiting messages of a session to the copy Claude Code continued it
-// as under a new id (issue #109); closedTo keeps the session they were sent to.
-// Each record is judged again under its lock: one that another writer settled
-// or moved since the listing stays, and is not among the returned ids.
-export function readdress(dir: string, from: string, to: string): string[] {
-  const waiting = (r: InboxRecord): boolean => (r.state === "accepted" || r.state === "offered") && r.toSession === from;
-  return listInbox(dir, from).filter(waiting).filter((r) => updateRecord(dir, r.messageId,
-    (record) => waiting(record) ? { ...record, toSession: to, closedTo: record.closedTo ?? from } : null)?.written)
-    .map((r) => r.messageId);
 }
 
 // Refuses a message that still waits for its session; true when it did, false
