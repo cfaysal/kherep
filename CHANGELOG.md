@@ -248,6 +248,13 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- CI runs its Ubuntu jobs on `ubuntu-26.04` explicitly instead of
+  `ubuntu-latest`, which GitHub moves from 24.04 to 26.04 between
+  2026-10-19 and 2026-11-19 (actions/runner-images#14748). A mixed image
+  pool would add noise to repeat-gate evidence. The matrix keys and check
+  names stay `ubuntu-latest`, because the main ruleset requires them by
+  name (issue #670).
+
 - The Claude control-plane hooks run through a stable entry point (issue
   #592). The eight control-plane commands of `settings.json` now read
   `node "<CLAUDE_HOME>/kherep/control-plane/claude-control-plane-hook.mts"
