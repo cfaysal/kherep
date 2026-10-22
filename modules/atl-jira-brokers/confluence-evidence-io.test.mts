@@ -73,3 +73,19 @@ test('F2: prepare refuses an --out created during its GET: out-exists, the file 
   assert.equal(fs.readFileSync(out, 'utf8'), 'theirs');
   assert.deepEqual(fs.readdirSync(dir), ['r.json']);
 });
+
+test('P3: a directory link retargeted after the check cannot redirect the write', async t => {
+  const dir = scratch(t);
+  const [first, second, linked] = ['first', 'second', 'linked'].map(name => path.join(dir, name));
+  fs.mkdirSync(first);
+  fs.mkdirSync(second);
+  fs.symlinkSync(first, linked, 'junction');
+  const retarget = () => {
+    if (fs.realpathSync(linked) === fs.realpathSync(second)) return;
+    fs.unlinkSync(linked);
+    fs.symlinkSync(second, linked, 'junction');
+  };
+  const h = harness(undefined, { files: nodeFiles, onRequest: retarget });
+  assert.equal(await h.run({ ...prepareArgs, out: path.join(linked, 'r.json') }), 0);
+  assert.deepEqual([fs.readdirSync(first), fs.readdirSync(second)], [['r.json'], []]);
+});

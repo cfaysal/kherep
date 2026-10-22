@@ -66,6 +66,7 @@ export const nodeFiles: FileOps = {
 
 // Outside means: git runs and says "not a git repository" at the file's resolved directory, so a
 // symlinked directory cannot point into a work tree. Any other failure proves nothing and refuses.
+// The returned path lies in that resolved directory, so retargeting a link afterwards cannot redirect a write.
 export async function requireOutside(io: Io, flag: string): Promise<string> {
   const file = io.args[flag] ?? fail(`--${flag} is missing.`);
   const unproven = (why: string) => fail(`--${flag} cannot be shown to lie outside a repository: ${why}.`);
@@ -74,7 +75,7 @@ export async function requireOutside(io: Io, flag: string): Promise<string> {
   const inside = await io.exec('git', ['-C', dir, 'rev-parse', '--show-toplevel'], TIMEOUT)
     .then(() => true, (error: unknown) => /not a git repository/i.test(String(error)) ? false : unproven('git refused the check'));
   if (inside) fail(`out-inside-repository: --${flag} must point outside every git work tree because it holds page content.`);
-  return file;
+  return path.join(dir, path.basename(file));
 }
 // A record or report is never silently replaced by a new one.
 export async function requireAbsent(io: Io, file: string, flag: string): Promise<void> {

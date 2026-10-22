@@ -79,7 +79,7 @@ async function decideMode(io: Io): Promise<number> {
   if (supersededBy !== undefined && !approved(io)) fail('--superseded-by reads another page; approve it first (--body-approved).');
   const outBody = await requireOutside(io, 'out-body');
   const recordPath = await requireOutside(io, 'record');
-  const record = await readRecord(io);
+  const record = await readRecord(io, recordPath);
   if (!record.claim || typeof record.body !== 'string') fail('--record holds no prepared page.');
   if (supersededBy === record.pageId) fail('superseded-same-page: --superseded-by names the page itself.');
   // LF-only from here on: the record, the gates and the rendered body see the same strings.
