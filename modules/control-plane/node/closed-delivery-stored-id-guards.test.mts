@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
@@ -11,7 +12,7 @@ import { getMessage, getMessageProgress, writeJsonAtomic } from "./inbox.mts";
 import { DEFAULT_TURN_BUDGET } from "./policy.mts";
 import type { Readiness, Verdict } from "./runtime-readiness.mts";
 import { CONTROL, storedSource, type StoredSource } from "./session-id-fixture.mts";
-import { listTasks } from "./task-records.mts";
+import { listTasks, readTask, writeTask } from "./task-records.mts";
 
 // Issue #639, R4 guard controls: excluding a malformed stored source from
 // reuse bypasses none of the guards of the guarded new path on the closed
@@ -55,26 +56,41 @@ test("a failing S0 budget lock keeps M waiting; the lock failure is not bypassed
   assertHeld(s, "retry-pending", [SESSION]);
 });
 
-for (const [name, verdict] of [["pending", null], ["sign-in", "sign-in"]] as const) {
-  test(`original-target readiness ${name} is probed for the closed target's runtime and gates the new path`, async (t) => {
-    const probed: TaskRuntime[] = [];
-    const readiness = {
-      peek: (runtime: TaskRuntime): Verdict | null => {
-        probed.push(runtime);
-        return verdict ? { ready: false, at: 0, cause: verdict } : null;
-      },
-    } as unknown as Readiness;
-    const s = await storedSource(t, CONTROL);
-    await deliverToClosed({ ...s.listing.deps, readiness });
-    assert.deepEqual(probed, ["claude"]);
-    assert.deepEqual(s.locks, []);
-    assert.deepEqual(runs(s.node), ["--bg"]);
+// The old ended task is a codex task in another valid cwd; the closed target
+// S0 is claude in workspace/repo. Both runtimes are enabled, so the earlier
+// allowlist passes and only the readiness probe can tell them apart.
+async function codexSource(t: test.TestContext, verdict: Verdict | null) {
+  const probed: TaskRuntime[] = [];
+  const peek = (runtime: TaskRuntime) => (probed.push(runtime), verdict);
+  const readiness = { peek, check: async (runtime: TaskRuntime) => peek(runtime) } as unknown as Readiness;
+  const s = await storedSource(t, CONTROL, { sessions: { runtimes: ["claude", "codex"] } });
+  writeTask(s.node.paths, { ...readTask(s.node.paths, s.task.taskId)!, runtime: "codex", cwd: s.node.workspace });
+  await deliverToClosed({ ...s.listing.deps, readiness });
+  return { s, probed };
+}
+
+for (const [name, cause] of [["pending", null], ["sign-in", "sign-in"]] as const) {
+  test(`original-target readiness ${name} is probed for the target's runtime, not the old codex task's`, async (t) => {
+    const { s, probed } = await codexSource(t, cause ? { ready: false, at: 0, cause } : null);
+    assert.deepEqual(probed, ["claude"], "probed for found.runtime only");
+    assert.deepEqual(s.locks, [], "no budget");
+    assert.deepEqual(runs(s.node), ["--bg"], "no native start");
     const message = getMessage(s.node.paths.inbox, s.id)!;
-    assert.equal(message.closedAttempt, undefined);
-    if (verdict) assert.deepEqual([message.state, audits(s.node).at(-1)?.outcome], ["refused", "refused"]);
+    assert.equal(message.closedAttempt, undefined, "no attempt mark");
+    if (cause) assert.deepEqual([message.state, audits(s.node).at(-1)?.outcome], ["refused", "refused"]);
     else assert.deepEqual([message.state, getMessageProgress(s.node.paths.inbox, s.id)?.code], ["accepted", "retry-pending"]);
   });
 }
+
+test("a ready target starts its own runtime in its own cwd, not the old codex task's", async (t) => {
+  const { s, probed } = await codexSource(t, { ready: true, at: 0 });
+  assert.deepEqual([...new Set(probed)], ["claude"], "the old task's runtime is never probed");
+  assert.deepEqual([s.locks, runs(s.node)], [[SESSION], ["--bg", "--bg"]], "S0 budget, one new start");
+  const fresh = listTasks(s.node.paths).find((r) => r.taskId !== s.task.taskId)!;
+  const repo = fs.realpathSync.native(path.join(s.node.workspace, "repo"));
+  assert.deepEqual([fresh.runtime, fresh.cwd], ["claude", repo]);
+  assert.equal(s.node.calls.filter((c) => c.args[0] === "--bg").at(-1)?.options.cwd, repo);
+});
 
 test("the full new-start limit counts the old task; no continue exception", async (t) => {
   const s = await held(t, { sessions: { maxStartsPerDay: 1 } });
