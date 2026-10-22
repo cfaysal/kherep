@@ -56,7 +56,9 @@ for (const note of [true, false]) {
 
 test("a malformed stored source id is not resumed; the guarded fallback starts a new session", async (t) => {
   const { node, task } = await resumeNode(t);
-  writeTask(node.paths, { ...readTask(node.paths, task.taskId)!, sessionId: "bad\nsource" });
+  // Overlong rather than a control character: the turn budget keys a file by
+  // this id, and Windows refuses a newline in a file name.
+  writeTask(node.paths, { ...readTask(node.paths, task.taskId)!, sessionId: "a".repeat(129) });
   const { deps } = resumingExec(t, node, { output: copyOutput(true), listed: "c0ffee00-0000-4000-8000-000000000001" });
   await deliverToClosed(deps);
   assert.deepEqual(runs(node), ["--bg", "--bg"], "no native resume of a malformed id");
