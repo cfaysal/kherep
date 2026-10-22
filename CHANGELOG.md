@@ -21,14 +21,21 @@ increments the minor version; every other release increments the patch version.
   `decide`, `verify`, `report`, `record`). It classifies the claim and
   applies the promotion gates: a dated measurement at most two days old with
   command and excerpt, a revision bound on the page and present in the named
-  repository, a measurement that touches the claim, no forbidden source, and
-  no credential-shaped or control-character content. It renders the dated
-  measurement block before the `Related pages` footer, and re-reads the page
-  after the operator's `update --expected-version` and two-step `labels`
-  calls, asserting the reviewed label set with exactly one evidence label. A
-  format repair still never promotes. Human-assigned status is reported,
-  never relabelled. `status-author-*`, `currency-*` and `origin-wiki` are
-  never changed. Private pages stay excluded or UNKNOWN.
+  repository, a measurement that touches the claim (every tracker key the
+  page states, matched as a whole key; any one code file name), no forbidden
+  source, and no credential-shaped or control-character content. A `--kind`
+  override never makes a historical claim repeatable. It renders the dated
+  measurement block before the `Related pages` footer in a form that storage
+  normalisation keeps byte-identical (LF-only, only `&`, `<` and `>` escaped
+  in text), and re-reads the page after the operator's
+  `update --expected-version` and two-step `labels` calls, asserting the
+  reviewed label set with exactly one evidence label. Record and body files
+  lie outside every git work tree (checked on the resolved directory), are
+  never overwritten by `prepare` or `record`, and are replaced atomically by
+  `decide`. A format repair still never promotes. Human-assigned status is
+  reported, never relabelled. `status-author-*`, `currency-*` and
+  `origin-wiki` are never changed, and a `runtime-*` label is never removed
+  or changed. Private pages stay excluded or UNKNOWN.
 - Denied calls in delegated worker reports (issue #504). The guard
   dispatcher, and the hook runtime entry for its own denies, journal each
   guarded call of a delegated Claude worker (a payload with a valid
