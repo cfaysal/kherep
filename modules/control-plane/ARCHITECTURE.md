@@ -36,7 +36,12 @@ every child start, appends both output streams to the retained service log and
 restarts an exited daemon after 30 seconds. It accepts no arbitrary command,
 arguments, environment or shell setting.
 
-`node/service-transaction.mts` serializes activation with one local lock;
+`node/service-transaction.mts` serializes activation with one local lock.
+An exclusive create of that lock, of the drain file or of their reclaim gates
+that fails with EPERM, EACCES or EBUSY (Windows delete pending, issue #602) is
+retried on one bounded allowance per acquisition, reclaim included; EEXIST
+still requires owner proof. The admission lease is named uniquely per process
+and acquisition, so its create cannot meet that window.
 `node/service-rollback.mts` runs `service rollback` under the same lock, and
 `node/service-status.mts` with `node/service-configured-digest.mts` reports
 `service status`. The transaction preflights configured definition drift and the exact owned daemon, saves the
@@ -56,7 +61,9 @@ process identity again immediately before stopping the selected service. Managed
 daemons honor the admission drain; legacy adoption has no absolute race-free
 claim and aborts on any uncertain recheck. A Windows activation gives only the
 new supervisor generation a binding-specific, atomic one-use launch permit after
-the old supervisor and daemon are proven absent. Every other initial launch or
+the old supervisor and daemon are proven absent. Its two exclusive creates
+retry the same transient codes on one shared allowance, and EEXIST at the
+second create remains a conflict. Every other initial launch or
 restart waits for the drain. Windows stop retains positively attested handles
 for the selected supervisor and its one direct daemon child, stops and proves the
 supervisor first, then stops that exact daemon handle. A candidate succeeds only
@@ -443,7 +450,9 @@ confirming Stop remain the only canonical delivery evidence. A stalled CLI
 cannot block the CP publication lane. Source tests and an enqueue acknowledgement
 do not establish that a particular host has installed and processed this path.
 
-`node/codex-busy-ticket.mts` uses exclusive owner locks and atomic writes. The
+`node/codex-busy-ticket.mts` uses exclusive owner locks and atomic writes; a
+lock create failing with EPERM, EACCES or EBUSY reports busy, every other
+error failed (issue #602). The
 retained generation is immutable; a strictly newer admission may replace it.
 `node/codex-hook-owner.mts` validates matching native session/transcript-basename
 identities and rejects child contexts without opening the transcript.
@@ -693,7 +702,10 @@ session id) or permission mode `bypassPermissions` gets nothing; those records
 wait for the next prompt. A call with no accepted record and no unnoticed send
 failure or receipt leaves without a lock or a write. Otherwise an exclusive per-session
 lock (`listeners/<session_id>.deliver.lock`, stale after 5 seconds) serialises
-the concurrent `PostToolUse` calls of parallel tools, and the shared
+the concurrent `PostToolUse` calls of parallel tools. A create of that lock
+failing with EPERM, EACCES or EBUSY (Windows delete pending, issue #602) is
+retried for at most 50 attempts of at least 4 ms before the call defers, and
+these codes never trigger the stale takeover. The shared
 `deliveryContext` offers only `accepted` records. The offer is no receipt
 (issue #308): only the turn's `Stop` confirms `delivered`, and it injects only
 records still `accepted`, so the later boundary repeats nothing. Same-turn

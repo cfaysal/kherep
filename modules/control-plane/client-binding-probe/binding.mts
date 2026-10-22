@@ -2,6 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { withProbeLock } from "./probe-lock.mts";
+
+// The lock codes and the bound live in probe-lock.mts (issues #600, #602).
+export { LOCK_ATTEMPTS, LOCK_HELD_CODES } from "./probe-lock.mts";
+
 export const INTENT_TTL_MS = 30_000;
 const MAX_INTENTS = 128;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -35,7 +40,6 @@ type IntentRecord = {
 const intentsDir = (stateDir: string): string => path.join(stateDir, "intents");
 const intentFile = (stateDir: string, requestId: string): string => path.join(intentsDir(stateDir), `${requestId}.json`);
 const keyFile = (stateDir: string): string => path.join(stateDir, "probe.key");
-const locksDir = (stateDir: string): string => path.join(stateDir, "locks");
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -121,48 +125,15 @@ function prune(stateDir: string, now: number): void {
       const value: unknown = JSON.parse(fs.readFileSync(path.join(intentsDir(stateDir), name), "utf8"));
       if (!validIntent(value)) throw new Error("storage_error");
       if (value.expiresAt <= now) fs.unlinkSync(path.join(intentsDir(stateDir), name));
-    } catch {
+    } catch (error) {
+      // Issue #602: a concurrent verify removed it after the listing.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       malformed = true;
     }
   }
   if (malformed) throw new Error("storage_error");
   if (fs.readdirSync(intentsDir(stateDir)).filter((name) => name.endsWith(".json")).length >= MAX_INTENTS) {
     throw new Error("storage_error");
-  }
-}
-
-// Issue #600: on Windows the lock file of a holder that is releasing it is
-// delete-pending for a moment, and an exclusive create on it fails with
-// ERROR_ACCESS_DENIED, which libuv reports as EPERM (CREATE_NEW on a file that
-// simply exists gives EEXIST). EBUSY and EACCES are included defensively (issue
-// acceptance, #540 precedent); neither is observed or documented for an
-// exclusive create. These codes mean "still held" and wait out the same bound
-// (50 attempts of at least 4 ms); every other code is thrown at once.
-export const LOCK_HELD_CODES: ReadonlySet<string> = new Set(["EEXIST", "EPERM", "EACCES", "EBUSY"]);
-export const LOCK_ATTEMPTS = 50;
-const LOCK_PAUSE_MS = 4;
-
-function withLock<T>(stateDir: string, requestId: string, action: () => T): T {
-  ensureDir(locksDir(stateDir));
-  const file = path.join(locksDir(stateDir), `${requestId}.lock`);
-  let handle: number | undefined;
-  let held: unknown;
-  for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt++) {
-    try {
-      handle = fs.openSync(file, "wx", 0o600);
-      break;
-    } catch (error) {
-      if (!LOCK_HELD_CODES.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
-      held = error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_PAUSE_MS);
-    }
-  }
-  if (handle === undefined) throw new Error("storage_error", { cause: held });
-  try {
-    return action();
-  } finally {
-    fs.closeSync(handle);
-    try { fs.unlinkSync(file); } catch { /* another verifier will fail closed if the lock remains */ }
   }
 }
 
@@ -174,7 +145,7 @@ export function createIntent(stateDir: string, input: IntentInput, now: number =
   if (!validRaw(input.sessionId) || !validRaw(input.callId) || !NONCE.test(input.syntheticNonce)) {
     throw new Error("invalid_input");
   }
-  return withLock(stateDir, "create", () => {
+  return withProbeLock(stateDir, "create", () => {
     const key = readKey(stateDir, true);
     prune(stateDir, now);
     const requestId = crypto.randomUUID();
@@ -198,7 +169,7 @@ export function verifyIntent(stateDir: string, args: ProbeArguments, meta: Nativ
   }
   try {
     const key = readKey(stateDir, false);
-    return withLock(stateDir, args.requestId, () => {
+    return withProbeLock(stateDir, args.requestId, () => {
       const record = readIntent(stateDir, args.requestId);
       if (!record) return { ok: false, code: "intent_not_found" };
       if (record.expiresAt <= now) {

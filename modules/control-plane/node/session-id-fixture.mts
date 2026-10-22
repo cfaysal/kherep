@@ -88,20 +88,20 @@ export async function storedSource(t: test.TestContext, stored: Variant, options
   return { node, task: corrupt, id, turns, locks, launched, listing };
 }
 
-// Budget-lock writes of the turn budget (autonomy.mts takeTurn), observed from
-// setup on. fail(file) decides a synthetic error for a lock instead of the
-// write, so no file named by a malformed id is ever created.
+// Budget-lock creates of the turn budget (autonomy.mts takeTurn, an exclusive
+// open), observed from setup on. fail(file) decides a synthetic error for a
+// lock instead of the create, so no file named by a malformed id is ever created.
 export function budgetLocks(t: test.TestContext, node: Node, fail: (file: string) => string | null = () => null): string[] {
   const seen: string[] = [];
-  const write = fs.writeFileSync;
-  t.mock.method(fs, "writeFileSync", (...args: Parameters<typeof fs.writeFileSync>) => {
-    const file = typeof args[0] === "string" ? args[0] : "";
-    if (path.dirname(file) === listenerDir(node.paths) && file.endsWith(".turns.json.lock")) {
+  const open = fs.openSync;
+  t.mock.method(fs, "openSync", (target: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode | null) => {
+    const file = typeof target === "string" ? target : "";
+    if (flags === "wx" && path.dirname(file) === listenerDir(node.paths) && file.endsWith(".turns.json.lock")) {
       seen.push(path.basename(file, ".turns.json.lock"));
       const code = fail(file);
       if (code) throw Object.assign(new Error(`synthetic ${code} budget lock failure`), { code });
     }
-    return write(...args);
+    return open(target, flags, mode);
   });
   return seen;
 }

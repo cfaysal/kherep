@@ -143,7 +143,7 @@ function lockOpens(t: test.TestContext, codes: readonly string[]): string[] {
   const real = fs.openSync;
   const seen: string[] = [];
   t.mock.method(fs, "openSync", (file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode | null) => {
-    if (!String(file).endsWith("create.lock")) return real(file, flags, mode);
+    if (!(String(file).endsWith("create.lock") && flags === "wx")) return real(file, flags, mode);
     const code = codes[seen.length];
     seen.push(code ?? "open");
     if (code) throw Object.assign(new Error(`synthetic ${code}`), { code, syscall: "open" });
