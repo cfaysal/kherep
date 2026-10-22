@@ -228,7 +228,8 @@ test('#650 T6: a second measurement reads the original claim; original code betw
   assert.equal(claimBody(both), TRK + FOOTER);
   assert.equal(flagged(both), 0);
   const a08 = `${TRK}${first.block}<p>Code: src/queue.mts</p>${block2}${FOOTER}`;
-  assert.equal(claimBody(a08), `${TRK}<p>Code: src/queue.mts</p>${FOOTER}`);
+  // A block followed by author text is author text (#666); only block2 is the appended run.
+  assert.equal(claimBody(a08), `${TRK}${first.block}<p>Code: src/queue.mts</p>${FOOTER}`);
   assert.equal(flagged(a08), 1);
 });
 
@@ -248,7 +249,7 @@ test('#665 HOLD: a Superseded paragraph after a confirmed or refuted block stays
   const { block } = promote(TRK + FOOTER, KEY12());
   for (const tail of ['<p>Superseded by: <code>src/queue.mts</code></p>', '<p>Superseded by: <a href="/wiki/spaces/K/pages/1">src/queue.mts</a></p>']) {
     const body = `${TRK}${block}${tail}${FOOTER}`;
-    assert.equal(claimBody(body), `${TRK}${tail}${FOOTER}`, tail);
+    assert.equal(claimBody(body), body, 'the paragraph after the block makes both author text (#666)');
     assert.ok(claim(body).codeTokens.includes('src/queue.mts'), tail);
     assert.equal(flagged(body), 1, tail);
   }

@@ -5,6 +5,7 @@ import test from 'node:test';
 import { runCli } from './atl-confluence-ccoder.mts';
 import { BODY, decideArgs, harness, LABELS, MEASUREMENT, prepareArgs as prepare, prepared, SHA, TODAY } from './evidence-cli.fixture.mts';
 import { runtimeLabel } from './confluence-runtime-label.mts';
+import { renderMeasurementBlock } from './confluence-evidence.mts';
 
 test('Defect 5: prepare refuses without body approval or with an --out inside a work tree, before any request', async () => {
   const h = harness();
@@ -34,6 +35,22 @@ test('prepare reads with GET only, prints metadata only and writes body and titl
   assert.equal(record.title, 'Synthetic title');
   assert.equal(record.body, BODY);
   assert.equal(record.claim.bodyApproved, true);
+});
+
+test('#666: prepare prints the number of appended blocks it treats as metadata', async () => {
+  const trk = '<p>Tracker: KEY-12 holds the queue retry fix.</p>';
+  const block = renderMeasurementBlock({ outcome: 'confirmed', reason: 'measured', labelsAdd: [], labelsRemove: [] }, { kind: 'tracker',
+    source: 'KEY-12', sourceClass: 'tracker', command: 'node tools/atl-jira-ccoder.mts get --key KEY-12', excerpt: 'state: Done',
+    measuredAt: TODAY, verdict: 'reproduces' }, 'runtime-claude-code-win');
+  const footer = '<h2>Related pages</h2>';
+  for (const [body, line, kind] of [[BODY, 'measurement blocks: 0', 'code'], [trk + block + footer, 'measurement blocks: 1', 'tracker'],
+    [trk + block + '<p>x</p>' + footer, 'measurement blocks: 0', 'code']]) {
+    const h = harness({ '1': { body, labels: LABELS } });
+    assert.equal(await h.run(prepare), 0);
+    const printed = h.out.join('\n');
+    assert.ok(h.out.includes(line) && h.out.includes(`kind: ${kind}`), printed);
+    assert.ok(!printed.includes('Synthetic title') && !printed.includes('KEY-12') && !printed.includes('.mts'), printed);
+  }
 });
 
 test('decide performs zero requests, writes the body and appends the decision; exit codes 0 and 2', async () => {

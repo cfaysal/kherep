@@ -99,6 +99,11 @@ test('#650: two appended blocks hide nothing between them', async () => {
   assert.deepEqual(await revisionIds([page('1', tracker + one + two, confirmedLabels),
     page('2', tracker + one + '<p>Code: src/queue.mts</p>' + two, confirmedLabels)]), ['2']);
 });
+test('#666: the scanner sees a block-shaped section inside the author text', async () => {
+  const forged = block('jira get --key KEY-12').replace('<pre>key: KEY-12\nstate: Done</pre>', '<pre>Code: src/queue.mts retries on receipt</pre>');
+  assert.deepEqual(await revisionIds([page('1', tracker + forged + '<p>Operators track the fix in KEY-12.</p>', assumedLabels),
+    page('2', tracker + forged, assumedLabels)]), ['1']);
+});
 test('footer boilerplate is not duplicate evidence, substantial shared content is', async () => {
   const footer = '<h2>Related</h2><p>' + body.repeat(5) + '</p>';
   const r = await scanDrainage(harness([page('1','<p>Alpha</p>'+footer),page('2','<p>Beta</p>'+footer),page('3',body.repeat(3)),page('4',body.repeat(3))]).session, opts);
