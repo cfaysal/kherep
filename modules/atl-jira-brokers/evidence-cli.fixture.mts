@@ -2,7 +2,8 @@
 // Nothing here reaches a network, a real repository, a real file or a Confluence page.
 import assert from 'node:assert/strict';
 import { cmdEvidence } from './confluence-evidence-cli.mts';
-import type { ConfluenceSession, RequestSpec } from './confluence-contract.mts';
+import { ConfluenceError, type ConfluenceSession, type RequestSpec } from './confluence-contract.mts';
+import type { FileOps } from './confluence-evidence-io.mts';
 import type { NeighbourCliContext } from './confluence-neighbour-cli.mts';
 import type { ExecLike } from './confluence-semantic.mts';
 
@@ -15,7 +16,8 @@ export const MEASUREMENT = { kind: 'code', source: 'alpha (git checkout)', sourc
   excerpt: '12: retry(receipt)', measuredAt: TODAY, verdict: 'reproduces', revision: `alpha@${SHA}` };
 export type Pages = Record<string, { body: string; labels: string[]; spaceId?: string }>;
 // links maps a directory to its resolved real path; a directory mapped to null does not exist.
-export interface HarnessOptions { exec?: ExecLike; links?: Record<string, string | null> }
+// files replaces the in-memory files (with real ones, say); onRequest runs before each GET.
+export interface HarnessOptions { exec?: ExecLike; links?: Record<string, string | null>; files?: FileOps; onRequest?: () => void }
 
 export function harness(pages: Pages = { '1': { body: BODY, labels: LABELS } }, options: HarnessOptions = {}) {
   const calls: RequestSpec[] = [];
@@ -24,6 +26,7 @@ export function harness(pages: Pages = { '1': { body: BODY, labels: LABELS } }, 
   const out: string[] = [];
   const session: ConfluenceSession = { async request(spec) {
     assert.equal(spec.method, 'GET', 'the evidence verb never writes to Confluence');
+    options.onRequest?.();
     calls.push(spec);
     if (spec.path.includes('/spaces?')) return { status: 200, json: { results: [{ id: '9', key: 'K', name: 'Space' }] } };
     const id = /\/pages\/(\d+)/.exec(spec.path)?.[1] ?? '';
@@ -50,7 +53,11 @@ export function harness(pages: Pages = { '1': { body: BODY, labels: LABELS } }, 
     return target ?? dir;
   };
   const write = async (path: string, data: string) => { files.set(path, data); };
-  const deps = { session, exec, files: { write, exists: async (path: string) => files.has(path), realpath } };
+  const create = async (path: string, data: string) => {
+    if (files.has(path)) throw new ConfluenceError('out-exists: the file appeared after the check.');
+    files.set(path, data);
+  };
+  const deps = { session, exec, files: options.files ?? { write, create, exists: async (path: string) => files.has(path), realpath } };
   const run = (args: Record<string, string | undefined>) => cmdEvidence(ctx, args, deps);
   return { calls, execs, files, out, run };
 }
