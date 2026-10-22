@@ -10,7 +10,7 @@ import { findSpace, getPage } from './confluence-content.mts';
 import { drainageRules } from './confluence-drainage-rules.mts';
 import { drainageSnapshot } from './confluence-drainage-snapshot.mts';
 import {
-  BOUND_REVISION, classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, renderMeasurementBlock, renderReport,
+  BOUND_REVISION, classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, KINDS, PROPOSED, renderMeasurementBlock, renderReport,
   type DecideOptions, type Decision, type EvidenceRecord, type Measurement, type MeasuredKind,
 } from './confluence-evidence.mts';
 import type { NeighbourArgs, NeighbourCliContext } from './confluence-neighbour-cli.mts';
@@ -31,7 +31,6 @@ interface Io {
 }
 
 const TIMEOUT = { timeout: 15_000 };
-const PROPOSED = ['confirmed', 'refuted', 'superseded'];
 const execFileAsync: ExecLike = (file, args, options) => new Promise((resolve, reject) => {
   execFile(file, args, { timeout: options.timeout }, (error, stdout, stderr) => {
     if (error) reject(new Error(String(stderr).slice(0, 200) || error.message));
@@ -71,8 +70,7 @@ async function prepare(io: Io): Promise<number> {
   const { args, ctx } = io;
   if (!approved(io)) fail('Classify the page and approve its body for this session before preparing (--body-approved).');
   const id = numeric(args.id, '--id');
-  const kinds = ['code', 'tracker', 'live', 'doc'];
-  if (args.kind !== undefined && !kinds.includes(args.kind)) fail('--kind takes code, tracker, live or doc.');
+  if (args.kind !== undefined && !KINDS.includes(args.kind)) fail('--kind takes code, tracker, live or doc.');
   const out = await requireOutside(io, 'out');
   const session = io.session();
   const space = await findSpace(session, args.space ?? '') ?? fail('No space with that key is visible to the service account.');
