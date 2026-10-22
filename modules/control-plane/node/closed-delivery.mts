@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import { OPERATOR_NODE_ID, type MessageProgressCode } from "../protocol-messages.mts";
+import { isSessionRef, OPERATOR_NODE_ID, type MessageProgressCode } from "../protocol-messages.mts";
 import { DELEGATED_PERMISSION_MODES, type PermissionMode, type TaskRuntime } from "../protocol-tasks.mts";
 import { bypassesPermissions, rememberedMode, takeTurn, wakeAudit } from "./autonomy.mts";
 import { stillRuns } from "./codex-process.mts";
@@ -180,7 +180,8 @@ async function deliver(deps: RunnerDeps, found: Target, all: InboxRecord[], now:
     return true;
   }
   // A new intercom session instead is checked by startTask (admitStart), runtime included.
-  const reusable = intercom?.sessionId !== undefined && delegated(deps, intercom.permissionMode) ? intercom : undefined;
+  // Issue #639: an ended task's stored id keys its turn budget, so only a session reference is resumed.
+  const reusable = isSessionRef(intercom?.sessionId) && delegated(deps, intercom.permissionMode) ? intercom : undefined;
   // Issue #197: a runtime that cannot run a turn gets no attempt; its messages
   // are refused with a fixed reason. A pending probe keeps them waiting.
   const blocked = notReadyNow(deps.readiness, reusable ? runtime : found.runtime);

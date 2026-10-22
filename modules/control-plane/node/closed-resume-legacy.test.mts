@@ -56,8 +56,9 @@ for (const note of [true, false]) {
 
 test("a malformed stored source id is not resumed; the guarded fallback starts a new session", async (t) => {
   const { node, task } = await resumeNode(t);
-  // Overlong rather than a control character: the turn budget keys a file by
-  // this id, and Windows refuses a newline in a file name.
+  // Issue #639: the ended-task selection excludes this id before the turn
+  // budget, so the fallback no longer reaches the direct resume guard here;
+  // that refusal is checked directly in closed-delivery-stored-id.test.mts.
   writeTask(node.paths, { ...readTask(node.paths, task.taskId)!, sessionId: "a".repeat(129) });
   const { deps } = resumingExec(t, node, { output: copyOutput(true), listed: "c0ffee00-0000-4000-8000-000000000001" });
   await deliverToClosed(deps);
