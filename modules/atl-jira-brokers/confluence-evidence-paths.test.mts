@@ -35,8 +35,8 @@ test('P3: every write goes to the resolved real directory, never through the lin
   const h = harness(undefined, { links: { '/tmp/link': '/tmp/real' } });
   assert.equal(await h.run({ ...prepareArgs, out: '/tmp/link/r.json' }), 0);
   assert.deepEqual([...h.files.keys()], ['/tmp/real/r.json']);
+  // The record exists only in the real directory, so decide must read it there too.
   h.files.set('/tmp/link/m.json', JSON.stringify(MEASUREMENT));
-  h.files.set('/tmp/link/r.json', h.files.get('/tmp/real/r.json') ?? '');
   assert.equal(await h.run({ ...decideArgs, record: '/tmp/link/r.json', measurement: '/tmp/link/m.json', 'out-body': '/tmp/link/b.xml' }), 0);
   assert.ok(h.files.has('/tmp/real/b.xml') && !h.files.has('/tmp/link/b.xml'), [...h.files.keys()].join(', '));
   assert.ok(JSON.parse(h.files.get('/tmp/real/r.json') ?? '{}').decision, 'the record is written back to the real directory');
