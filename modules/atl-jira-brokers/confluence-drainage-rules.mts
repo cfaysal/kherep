@@ -36,7 +36,7 @@ export function drainageRules(pages: Snapshot[], graphComplete: boolean): Candid
     const claim = plain(claimBody(p.body));
     const codeBound = /(?:^|\n)\s*(?:Code|Repository|Repo|Revision|Commit|Code[- ]bound)\s*:/im.test(claim)
       || /\b[\w/-]+\.(?:mts|ts|tsx|js|py|java|go|rs)\b/.test(claim);
-    // Revision lines inside any block-shaped span never bind the author's claim (#650 T8, #666).
+    // Revision lines inside any measurement-shaped span, complete or not, never bind the author's claim (#650 T8, #666).
     if (p.labels.includes('type-observation') && codeBound && !revisionsValid(plain(revisionBody(p.body)),p.labels)) {
       out.push(candidate(p,'revision-missing-or-invalid','review-format','Code-bound observation lacks valid repository@full-SHA Revision lines or an allowed non-confirmed no-binding declaration; original evidence required.'));
     }

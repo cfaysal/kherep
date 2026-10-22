@@ -100,3 +100,50 @@ test('#666 T6: 2000 contiguous blocks followed by author text stay content; the 
   assert.ok(claim(body).codeTokens.includes('tools/atl-jira-ccoder.mts'));
   assert.equal(claimBody(TRK + run + FOOTER), TRK + FOOTER);
 });
+
+// Revision exclusion does not depend on the strict grammar: a block that lost its Superseded link still never binds, and
+// the excluded span ends with the block, so the author's own declarations after it keep their base meaning.
+const TARGET = { id: '99', title: 'Replacement', spaceId: '9', spaceKey: 'K' };
+const HISTORICAL: Measurement = { ...CODE_M, verdict: 'contradicts', supersededBy: '99' };
+const partial = renderMeasurementBlock(decide(claim(`<p>Revision: ${REV}</p>${AUTHOR}${FOOTER}`), HISTORICAL, { ...OPT, superseded: TARGET }),
+  HISTORICAL, RUNTIME, TARGET).replace(/<p>Superseded by:.*$/s, '');
+const ANY_SHA = { ...OPT, revisionExists: () => true };
+
+test('#666 T7: a superseded code block without its link never supplies the author\'s Revision', () => {
+  assert.ok(partial.includes(`<p>Revision: ${REV}</p>`) && partial.includes('Outcome: superseded') && partial.match(MEASUREMENT_BLOCK) === null);
+  for (const extra of ['', block]) {
+    for (const body of [`${AUTHOR}${partial}<p>Author followup.</p>${extra}${FOOTER}`, `${AUTHOR}${partial}${extra}${FOOTER}`,
+      `${AUTHOR}${extra}${FOOTER}${partial}`]) {
+      const c = claim(body);
+      assert.deepEqual(c.revisions.bound, [], body);
+      assert.equal(flagged(body, LABELS), 1, body);
+      assert.equal(decide(c, CODE_M, OPT).reason, 'revision-not-on-page', body);
+    }
+  }
+});
+
+test('#666 T7 controls: the author\'s own declarations before or after a link-less block keep their base meaning', () => {
+  const beta = `alpha@${'b'.repeat(40)}`;
+  for (const extra of ['', block]) {
+    for (const own of [`<p>Revision: ${REV}</p>${AUTHOR}${partial}<p>Author followup.</p>${extra}${FOOTER}`,
+      `${AUTHOR}${partial}<p>Revision: ${REV}</p>${extra}${FOOTER}`]) {
+      assert.deepEqual(claim(own).revisions.bound, [REV], own);
+      assert.equal(flagged(own, LABELS), 0, own);
+      assert.equal(decide(claim(own), CODE_M, OPT).outcome, 'confirmed', own);
+    }
+    const after = `${AUTHOR}${partial}<p>Revision: ${beta}</p>${extra}${FOOTER}`;
+    assert.deepEqual(claim(after).revisions.bound, [beta], after);
+    assert.equal(flagged(after, LABELS), 0, after);
+    assert.equal(decide(claim(after), { ...CODE_M, revision: beta }, ANY_SHA).outcome, 'confirmed', after);
+    // Malformed and unbound declarations stay what they were on base d5c15f4, wherever they stand.
+    for (const [line, kind, flags] of [['alpha@abc123', 'malformed', 1], [SHA, 'malformed', 1], ['none (no exact binding: dirty tree)', 'unbound', 0]] as const) {
+      const decl = `<p>Revision: ${line}</p>`;
+      for (const body of [`${decl}${AUTHOR}${partial}${extra}${FOOTER}`, `${AUTHOR}${partial}${decl}${extra}${FOOTER}`]) {
+        const c = claim(body);
+        assert.deepEqual([c.revisions.bound, c.revisions[kind]], [[], [line]], body);
+        assert.equal(flagged(body, LABELS), flags, body);
+        assert.equal(decide(c, CODE_M, ANY_SHA).reason, 'revision-not-on-page', body);
+      }
+    }
+  }
+});
