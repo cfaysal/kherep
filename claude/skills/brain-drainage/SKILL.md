@@ -25,3 +25,31 @@ Invoke only on operator request. Produce a candidate report first. The scanner i
 
    The broker refuses drift and checks target bytes after PUT. A mismatch may follow a successful write; report UNVERIFIED and investigate, never blindly retry. Independently read the target again before claiming delivery. Label and multi-page changes are separate operations, never atomic; require their own authority, guarded review and readbacks.
 6. Report applied and proposed changes separately, with passed, failed, excluded and UNKNOWN coverage. An empty candidate list is not a clean-brain verdict.
+7. **Confirm path (operator-requested, per page).** Use it only when the operator asks to confirm, refute or supersede `evidence-assumed` pages. Read the "Confirmation" rule in the [review rules](references/review-rules.md) first.
+   1. Scope: pages the operator named, or a bounded `drainage` subset. Eligible pages carry `type-observation` or `type-knowledge` and `evidence-assumed`. A page with `status-author-verified` or `status-author-operator` is reported as `reported-only: human-assigned status` and never relabelled. Step 2 applies unchanged: a private page never reaches `evidence prepare` in a cloud session. Register it without a read; it stays UNKNOWN by design (`private-no-local-route` or `private-local-result-not-returned`):
+
+      ```text
+      <configured broker> evidence --mode record --id <id> --excluded private --reason private-no-local-route --out <scratchpad>/<id>.record.json
+      ```
+
+   2. `<configured broker> evidence --mode prepare --id <id> --space <configured key> --body-approved --out <scratchpad>/<id>.record.json`. Record and body files hold page content, so they must lie outside every git work tree; the broker refuses otherwise. It classifies the claim as `code`, `tracker`, `live`, `doc`, `historical` or `unclassified`. `--kind <k>` overrides and is recorded; the measurement must then say why in `kindOverride`.
+   3. Measure the claim itself against its primary source, in this session:
+      - `code`: the repository at a Revision already bound on the page. `git -C <checkout> cat-file -t <sha>` must print `commit`; then `git show <sha>:<path>` or a detached throwaway worktree, running what the claim names. A green test that does not name the claim's file or test is not a measurement.
+      - `tracker`: a real tracker read, such as the configured Jira broker's `get --key <KEY-123>` (`state:` line or `state` field) or `gh issue view <n> --json state,closedAt`. A page or report that mentions the status is not a tracker read.
+      - `live`: the command on the target the claim is about, output verbatim. `doc`: `curl -sL <official URL>` raw text with the deciding sentence verbatim; WebFetch or WebSearch summaries are not a source.
+      - `historical`: no instrument. The page keeps `evidence-assumed` with reason `historical-not-repeatable`.
+   4. Write the measurement file from the real command and a bounded verbatim excerpt (at most 4000 characters, no credential-shaped content; the broker refuses rather than redacts), dated the day the command ran. Fields: `kind`, `source`, `sourceClass` (`repository|tracker|target-host|official-doc`), `command`, `excerpt`, `measuredAt` (`YYYY-MM-DD`), `verdict` (`reproduces|contradicts`), and as needed `revision` (`<repository>@<40 hex>`), `subject`, `supersededBy`, `kindOverride`. Any other field is refused. A brain page, search summary, peer report, paraphrase or memory is never a source.
+   5. `<configured broker> evidence --mode decide --record <record.json> --measurement <m.json> --out-body <body.xml> [--repo-root <checkout>] [--max-age-days <n>]`. Exit 0 proposes `confirmed`, `refuted` or `superseded`; exit 2 leaves the page UNKNOWN (or reported-only) with a named reason; exit 1 is malformed input. Measurements older than 2 days are refused; `--max-age-days` raises this to at most 7. `--repo-root` is the checkout whose directory name matches the Revision's repository. Without `--superseded-by`, `decide` sends no request.
+   6. A claim that holds only at a revision not bound on the page is never confirmed in place. Propose a superseding page. After the operator writes it through the normal observation path, re-run `decide` with `--superseded-by <new id> --body-approved` (one read of that page, same space only) to mark the old page `evidence-superseded`.
+   7. `<configured broker> evidence --mode report --records <r1.json,r2.json>`. Stop here: the report is the deliverable of an unapproved run. It prints the command, excerpt and verdict verbatim for every proposed change, so the operator approves what was measured, not a summary.
+   8. Only after explicit operator approval per page, in this order:
+
+      ```text
+      <configured broker> update --id <id> --format storage --body-file <body.xml> --expected-version <read-version>
+      <configured broker> labels --id <id> --labels evidence-<outcome>
+      <configured broker> labels --id <id> --remove evidence-assumed
+      <configured broker> evidence --mode verify --record <record.json> --body-file <body.xml>
+      ```
+
+      Adding before removing means a failure between the two leaves two evidence labels, visible and repairable, never none. `verify` prints `readback: match` or `readback: mismatch body|labels (...)`; then read `get --id` and `labels --id` once more yourself. A mismatch is UNVERIFIED and is never retried blindly. Never change `status-author-*`, `currency-*`, `origin-wiki`, `runtime-*`, `session-*` or `product-*`.
+   9. Report applied and proposed changes separately, with counts for confirmed, refuted, superseded, unknown by reason, reported-only, excluded and failed.

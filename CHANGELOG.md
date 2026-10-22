@@ -11,6 +11,23 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Brain drainage confirm path (issue #519). The `brain-drainage` skill
+  gains an operator-requested path that measures an `evidence-assumed` page
+  against its primary source: the repository at a Revision bound on the
+  page, a real tracker read, a raw official document, or a fresh measurement
+  on the target. It proposes `evidence-confirmed`, `evidence-refuted` or
+  `evidence-superseded`, or leaves the page `assumed` with a named reason.
+  Both Confluence brokers gain the read-only `evidence` verb (`prepare`,
+  `decide`, `verify`, `report`, `record`). It classifies the claim and
+  applies the promotion gates: a dated measurement at most two days old with
+  command and excerpt, a revision bound on the page and present in the named
+  repository, a measurement that touches the claim, no forbidden source, and
+  no credential-shaped excerpt. It renders the dated measurement block before
+  the `Related pages` footer, and re-reads the page after the operator's
+  `update --expected-version` and two-step `labels` calls, asserting exactly
+  one evidence label. A format repair still never promotes. Human-assigned
+  status is reported, never relabelled. `status-author-*`, `currency-*` and
+  `origin-wiki` are never changed. Private pages stay excluded or UNKNOWN.
 - Denied calls in delegated worker reports (issue #504). The guard
   dispatcher, and the hook runtime entry for its own denies, journal each
   guarded call of a delegated Claude worker (a payload with a valid
