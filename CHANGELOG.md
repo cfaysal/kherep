@@ -406,6 +406,25 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Confluence brokers: `related` and `stitch` build the CQL text search from
+  the title's words, not the raw title (issue #651). The value of
+  `text ~ "..."` is parsed by Lucene, whose syntax includes `( ) ~ " \ : * ?
+  [ ] { } ^ ! + - /`; a title carrying them was sent unescaped, and a title
+  with parentheses and commas drew HTTP 403, an earlier one with a tilde
+  HTTP 500. The query now holds only the title's lowercase content words
+  (the words `selectRelated` can accept a neighbour on), every word
+  required, no phrase and no OR. A title with no such word sends no
+  request. A text search that fails with an HTTP status no longer aborts
+  the run or reads as a missing scope: `related` prints the status and the
+  CQL, keeps hits from the semantic half, and exits 1 only when nothing
+  was found by a half that ran; `stitch` skips that page, counts it as
+  unsearched, prints `unsearched <id> <reason>` and exits 1 as it already
+  did for a failed semantic search. The cause of the 403 is not determined
+  and is not stated. `textSearch` moves to `confluence-text-search.mts`,
+  which the Claude and Codex installers project and drift-check beside its
+  siblings; `ConfluenceRequestError` carries Atlassian's body message as
+  `detail`.
+
 - Codex hook adapter: the capture-failed marker of the denied-call journal
   (`<CODEX_HOME>/.cache/denied-calls/<agent_id>.failed`) is on disk when the
   adapter process has exited (issue #612). `journalCall` gave the marker the

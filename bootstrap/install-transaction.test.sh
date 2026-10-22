@@ -458,7 +458,7 @@ test_default_confluence_brokers() {
   set -e
   [ "$rc" -eq 0 ] || { cat "$ROOT/log"; fail "default install failed (rc=$rc)"; }
   for tool in atlassian-credentials.mts atlassian-cli-args.mts confluence-contract.mts confluence-content.mts confluence-session.mts \
-    confluence-related.mts confluence-semantic.mts confluence-neighbours.mts confluence-neighbour-cli.mts \
+    confluence-related.mts confluence-text-search.mts confluence-semantic.mts confluence-neighbours.mts confluence-neighbour-cli.mts \
     confluence-runtime-label.mts confluence-label-cli.mts confluence-pagination.mts confluence-drainage-rules.mts confluence-drainage-snapshot.mts confluence-drainage-scan.mts confluence-drainage-cli.mts confluence-evidence.mts confluence-evidence-report.mts confluence-evidence-io.mts confluence-evidence-cli.mts atl-confluence.mts atl-confluence-ccoder.mts; do
     same "$HERE/../modules/atl-jira-brokers/$tool" "$W/tools/$tool"
   done

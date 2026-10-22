@@ -1099,6 +1099,7 @@ test("default install projects observation delivery without optional Jira toolin
 
     "confluence-session.mts",
     "confluence-related.mts",
+    "confluence-text-search.mts",
     "confluence-semantic.mts",
     "confluence-neighbours.mts",
     "confluence-neighbour-cli.mts",
@@ -1287,7 +1288,7 @@ test("rolls every managed target back when installation fails", (t) => {
     "atl-jira", "atl-jira-ccoder", "jira-adf", "jira-config", "jira-fields", "jira-links", "jira-transition-guard",
     "atlassian-credentials", "atlassian-cli-args", "atl-confluence", "confluence-contract", "confluence-content",
     "confluence-session",
-    "confluence-related", "confluence-semantic", "confluence-neighbours", "confluence-neighbour-cli", "confluence-runtime-label",
+    "confluence-related", "confluence-text-search", "confluence-semantic", "confluence-neighbours", "confluence-neighbour-cli", "confluence-runtime-label",
     "confluence-label-cli",
     "confluence-pagination",
     "confluence-drainage-rules",

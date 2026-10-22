@@ -20,7 +20,7 @@
 // same node is not enough on its own, and neither is a word many titles in the
 // space carry, such as the product name (issue #86). An unrankable signal plus an exact one beats
 // either alone.
-import { ConfluenceError, SCOPES, v1, v2, type ConfluenceSession } from "./confluence-contract.mts";
+import { ConfluenceError, SCOPES, v2, type ConfluenceSession } from "./confluence-contract.mts";
 
 import { strictRows, nextPath, ReadFailure, readFailure } from './confluence-pagination.mts';
 
@@ -201,22 +201,6 @@ export function selectRelated(
     out.push({ ...hit, terms, sibling });
   }
   return out;
-}
-
-// The exact-term half. It hits rarely and precisely, which is the opposite
-// failure mode to the semantic half - that is the entire reason to keep it.
-export async function textSearch(
-  session: ConfluenceSession,
-  spaceKey: string,
-  phrase: string,
-  limit = 10,
-): Promise<string[]> {
-  const cql = `space=${JSON.stringify(spaceKey)} and type=page and text ~ ${JSON.stringify(phrase)}`;
-  const path = v1(`/search?cql=${encodeURIComponent(cql)}&limit=${limit}`);
-  const { json } = await session.request({ method: "GET", path, scope: SCOPES.get });
-  return strictRows(json)
-    .map((row) => text((row.content as { title?: unknown } | undefined)?.title) || text(row.title))
-    .filter(Boolean);
 }
 
 // The storage body, which getPage deliberately does not carry: a verb that
