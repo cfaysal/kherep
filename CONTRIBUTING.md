@@ -36,6 +36,28 @@ Keep changes focused and preserve unrelated work. Include the problem, resulting
 
 Track changes to Kherep in the repository's GitHub Issues. Open or reference an issue before a non-trivial change and close it from the pull request with `Closes #<number>`. Typo and documentation fixes can go straight to a pull request. Commits and branch names in this repository carry no external tracker keys.
 
+Give every issue and every pull request at least one module label when you open it, so the work can be reported per module. Use several when a change spans modules:
+
+| Label | Area |
+| --- | --- |
+| `cp:intercom` | Control Plane node: messaging, inbox, delivery, wake, sessions |
+| `cp:codex-sessions` | Control Plane node: Codex app and session integration (`codex-*`) |
+| `cp:service` | Control Plane node: service install, upgrade and rollback, launcher, daemon lifecycle |
+| `cp:doctor` | Control Plane node: `kherep-node doctor` checks |
+| `cp:tasks` | Control Plane node: daemon-started tasks |
+| `cp:node-core` | Control Plane node: other node internals (config, policy, protocol, CLI) |
+| `cp:worker` | Control Plane Cloudflare Worker |
+| `cp:binding-probe` | Control Plane client binding probe |
+| `claude:hooks` | Claude adapter hooks, hook runtime, guard dispatch, integrity |
+| `claude:agents-skills` | Claude adapter agents, skills, commands, team routing |
+| `codex:hooks` | Codex adapter hooks and shell dispatcher |
+| `codex:install-parity` | Codex installer, parity projection, Codex lib and scripts |
+| `bootstrap` | Installers, drift check, manifests, transactions |
+| `atlassian-brokers` | Jira and Confluence brokers, the evidence verb, brain drainage |
+| `local-inference`, `mcp-auth-bridge`, `twg` | The module of the same name |
+
+Add `flaky-test` to an intermittent or load-dependent test failure, and `documentation` to a change that touches only documentation. When you work on an existing issue without a module label, add one.
+
 Changes reach `main` only through a pull request, which is merged by rebase.
 
 The `commit-policy` CI check re-runs the `commit-msg` hook on every commit of a pull request with this repository's policy: no work-item key is required, and AI attribution trailers are rejected. A commit made with `git commit --no-verify` that breaks the policy fails the check; reword it and push again.
