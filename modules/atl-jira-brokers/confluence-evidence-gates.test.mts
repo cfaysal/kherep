@@ -85,7 +85,9 @@ test('F2: once a page names a GitHub key, every #N it states is a key; a read of
   assert.deepEqual(both.trackerKeys, ['#10', '#648']);
   assert.equal(decide(both, GH('gh issue view 10 --json state,closedAt', closed), OPT).reason, 'measurement-does-not-touch-claim');
   assert.equal(decide(both, GH('gh api repos/o/r/issues', '#10 state: CLOSED\n#648 state: CLOSED'), OPT).outcome, 'confirmed');
-  assert.equal(decide(both, GH('gh issue view 10 --json state; gh issue view 648 --json state', closed), OPT).outcome, 'confirmed');
+  // Two gh invocations name no key by the command; the excerpt must state both.
+  assert.equal(decide(both, GH('gh issue view 10 --json state; gh issue view 648 --json state', closed), OPT).reason, 'measurement-does-not-touch-claim');
+  assert.equal(decide(both, GH('gh issue view 10 --json state; gh issue view 648 --json state', '#10 CLOSED\n#648 CLOSED'), OPT).outcome, 'confirmed');
   assert.deepEqual(claim('<p>GitHub issue #648 is closed.</p>').trackerKeys, ['#648']);
   assert.deepEqual(claim('<p>Fixed by <a href="https://github.com/o/r/pull/12">the PR</a>; see #13.</p>').trackerKeys, ['#12', '#13']);
   // A numeric character reference is not a key; without a GitHub key a #N stays prose and Jira keys are unchanged.
@@ -97,6 +99,28 @@ test('F2: once a page names a GitHub key, every #N it states is a key; a read of
   const promoted = `<p>GitHub issue #10 and #648 are closed.</p>${renderMeasurementBlock(d, m, 'runtime-claude-code-win')}`;
   assert.deepEqual([d.outcome, both.trackerKeys], ['confirmed', ['#10', '#648']]);
   assert.ok(claim(promoted).trackerKeys.includes('#999'), 'a re-classification would see the block, so none happens after prepare');
+});
+
+test('F3: the command names a key only as one gh issue/pr view of exactly N; #N in the excerpt is a whole token', () => {
+  const ten = claim('<p>GitHub issue #10 is closed.</p>');
+  const miss = (command: string, excerpt = closed) => assert.equal(decide(ten, GH(command, excerpt), OPT).reason,
+    'measurement-does-not-touch-claim', `${command} / ${excerpt}`);
+  const hit = (command: string, excerpt = closed) => assert.equal(decide(ten, GH(command, excerpt), OPT).outcome,
+    'confirmed', `${command} / ${excerpt}`);
+  for (const command of ['gh issue view 10-other --json state,closedAt', 'gh issue view 10.5', 'echo gh issue view 10',
+    'x gh issue view 10', 'gh issue view 010', 'gh issue view 648 && gh issue view 10', 'gh issue view 10 && gh issue view 648',
+    'gh issue view 10 | gh api x', 'gh issue view 10 --repo "o/r', 'gh "issue view" 10']) miss(command);
+  const pair = claim('<p>GitHub issue #648 and #10 are closed.</p>');
+  assert.equal(decide(pair, GH('gh issue view 648 && gh issue view 10', '#648 state: CLOSED'), OPT).reason, 'measurement-does-not-touch-claim');
+  miss('gh api repos/o/r/issues', '#10-other state: CLOSED');
+  miss('gh api repos/o/r/issues', '#10.5 state: CLOSED');
+  hit('gh issue view 10 --json state,closedAt');
+  hit('gh pr view 10 | jq .state', 'MERGED');
+  hit(`gh issue view '10' --json state`);
+  hit('gh api repos/o/r/issues', 'Issue #10. state: CLOSED');
+  hit('gh api repos/o/r/issues', '#10, state: CLOSED');
+  // The F1 date case: a 10 inside a date is never #10.
+  miss('gh api repos/o/r/issues', 'state: CLOSED, closedAt: 2026-10-10T13:00:00Z');
 });
 
 test('P3-c: a --kind override never bypasses historical-not-repeatable', () => {

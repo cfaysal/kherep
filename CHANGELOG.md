@@ -24,8 +24,11 @@ increments the minor version; every other release increments the patch version.
   repository, a measurement that touches the claim (every tracker key the
   page states, matched as a whole key; once a page names one GitHub key
   (`GitHub issue #N`, `/issues/N` or `/pull/N`), every `#N` it states is a
-  key, matched only as that token in the excerpt or as the number
-  `gh issue view` or `gh pr view` reads; any one code file name), no forbidden
+  key, matched only as a whole token `#N` in the excerpt (`#10.` and `#10,`
+  count, `#10-other` and `#10.5` do not) or as the number a command that is
+  one `gh issue view N` or `gh pr view N` reads: its first segment begins
+  with exactly those four words, and no other `gh` runs in it; any one code
+  file name), no forbidden
   source, and no credential-shaped or control-character content. A `--kind`
   override never makes a historical claim repeatable. It renders the dated
   measurement block before the `Related pages` footer in a form that storage
