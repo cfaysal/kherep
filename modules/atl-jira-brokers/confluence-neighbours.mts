@@ -61,7 +61,9 @@ export async function reportRelated(deps: NeighbourDeps, request: RelatedRequest
 
   printRows(deps, "related", related);
   deps.log(`count: ${related.length}`);
-  const failed = [proposed.error, exact.failure && textFailureLine(exact)].filter((x): x is string => Boolean(x));
+  const failed: string[] = [];
+  if (proposed.error) failed.push(proposed.error);
+  if (exact.failure) failed.push(textFailureLine(exact));
   if (!failed.length) return 0;
 
   for (const line of failed) deps.logError(line);
