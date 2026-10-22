@@ -25,7 +25,8 @@ export function renderReport(records: readonly EvidenceRecord[]): string {
     lines.push(`## Page ${r.pageId}`);
     const d = r.decision;
     if (r.excluded) { counts.excluded++; lines.push(`- excluded: ${r.excluded}`, `- reason: ${r.reason ?? 'none'}`, ''); continue; }
-    lines.push(`- read version: ${r.readVersion ?? 'UNKNOWN'}`, `- kind: ${r.claim?.kind ?? 'UNKNOWN'}`);
+    const override = r.claim?.classifiedKind ? ` (override; classified ${r.claim.classifiedKind})` : '';
+    lines.push(`- read version: ${r.readVersion ?? 'UNKNOWN'}`, `- kind: ${r.claim?.kind ?? 'UNKNOWN'}${override}`);
     if (!d) { counts.failed++; lines.push('- outcome: not decided', ''); continue; }
     if (d.outcome === 'unknown') unknown[d.reason] = (unknown[d.reason] ?? 0) + 1; else counts[d.outcome]++;
     const proposed = PROPOSED.includes(d.outcome);
@@ -33,7 +34,11 @@ export function renderReport(records: readonly EvidenceRecord[]): string {
       `- label diff: ${proposed ? `${d.labelsAdd.map(l => `+${l}`).join(', ')} / ${d.labelsRemove.map(l => `-${l}`).join(', ')}` : 'none'}`,
       `- passive labels: ${r.claim?.passiveLabels.join(', ') || 'none'}`);
     const m = r.measurement;
-    if (m && !UNVALIDATED.includes(d.reason)) lines.push(`- measurement: ${m.measuredAt}, ${m.sourceClass} ${m.source}`);
+    if (m && !UNVALIDATED.includes(d.reason)) {
+      lines.push(`- measurement: ${m.measuredAt}, ${m.sourceClass} ${m.source}`);
+      // Validated means secret-scanned, and present whenever the claim records an override.
+      if (override) lines.push(`- kind override reason: ${m.kindOverride}`);
+    }
     if (m && proposed) lines.push(`- verdict: ${m.verdict}`, '- command:', fenced(m.command), '- excerpt:', fenced(m.excerpt));
     lines.push('');
   }

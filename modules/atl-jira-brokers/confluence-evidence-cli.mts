@@ -86,7 +86,7 @@ async function prepare(io: Io): Promise<number> {
   await io.write(out, JSON.stringify(record, null, 2));
   const { bound, unbound, malformed } = claim.revisions;
   for (const line of [`id: ${id}`, `version: ${snapshot.version}`,
-    `kind: ${claim.kind}${claim.kindOverride ? ` (override; classified ${claim.kindOverride})` : ''}`,
+    `kind: ${claim.kind}${claim.classifiedKind ? ` (override; classified ${claim.classifiedKind})` : ''}`,
     `evidence: ${claim.evidenceLabel}`, `status-author: ${claim.statusAuthor}`, `passive labels: ${claim.passiveLabels.join(', ') || 'none'}`,
     `revisions: bound ${bound.length}, unbound ${unbound.length}, malformed ${malformed.length}`,
     `code tokens: ${claim.codeTokens.length}`, `tracker keys: ${claim.trackerKeys.length}`, 'record: written']) ctx.log(line);
