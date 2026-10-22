@@ -67,8 +67,9 @@ export function issueServiceLaunchPermit(paths: NodePaths, binding: ServiceBindi
   let closing = false;
   try { fs.writeFileSync(handle, bytes); fs.fsyncSync(handle); closing = true; fs.closeSync(handle); }
   catch (error) {
-    // A descriptor is closed at most once; the file stays (issue #644).
+    // Closed at most once, then the caller's own permit is removed; a failed removal leaves it for manual cleanup.
     if (!closing) try { fs.closeSync(handle); } catch { /* the write failed already */ }
+    try { fs.rmSync(permitFile, { force: true }); } catch { /* the original error is rethrown */ }
     throw error;
   }
   return () => {

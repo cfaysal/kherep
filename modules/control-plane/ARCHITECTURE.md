@@ -40,7 +40,9 @@ arguments, environment or shell setting.
 An exclusive create of that lock, of the drain file or of their reclaim gates
 that fails with EPERM, EACCES or EBUSY (Windows delete pending, issue #602) is
 retried on one bounded allowance per acquisition, reclaim included; EEXIST
-still requires owner proof. The admission lease is named uniquely per process
+still requires owner proof. A failed write, fsync or close after such a create
+removes the caller's own owner file and rethrows the original error; a failed
+removal leaves the file for manual cleanup (issue #644). The admission lease is named uniquely per process
 and acquisition, so its create cannot meet that window.
 `node/service-rollback.mts` runs `service rollback` under the same lock, and
 `node/service-status.mts` with `node/service-configured-digest.mts` reports
@@ -63,7 +65,9 @@ claim and aborts on any uncertain recheck. A Windows activation gives only the
 new supervisor generation a binding-specific, atomic one-use launch permit after
 the old supervisor and daemon are proven absent. Its two exclusive creates
 retry the same transient codes on one shared allowance, and EEXIST at the
-second create remains a conflict. Every other initial launch or
+second create remains a conflict. A failed write, fsync or close after the
+create removes the caller's own permit and rethrows the original error; a
+failed removal leaves it for manual cleanup. Every other initial launch or
 restart waits for the drain. Windows stop retains positively attested handles
 for the selected supervisor and its one direct daemon child, stops and proves the
 supervisor first, then stops that exact daemon handle. A candidate succeeds only

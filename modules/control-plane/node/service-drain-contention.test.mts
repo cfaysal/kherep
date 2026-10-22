@@ -115,11 +115,13 @@ test("the drain and its reclaim gate share one allowance", (t) => {
   assert.equal(fs.existsSync(`${drain}.reclaim`), false);
 });
 
-// Descriptors of the exclusive creates of `file`, and the closes of them. With
-// failClose a close releases the number and then reports EIO, as close(2) on
-// Linux may; the owner file stays in every case (issue #644).
-function ownerFileIo(t: test.TestContext, file: string, failClose: boolean) {
-  const realOpen = fs.openSync, realClose = fs.closeSync;
+// Descriptors of the exclusive creates of `file`, and the closes of them. The
+// failing step reports EIO after a complete write; a failing close releases the
+// number first, as close(2) on Linux may. With failRemove the removal of `file`
+// reports EACCES. A failure after the create removes the caller's own file
+// unless that removal fails (issue #644).
+function ownerFileIo(t: test.TestContext, file: string, step: "fsync" | "close", failRemove = false) {
+  const realOpen = fs.openSync, realClose = fs.closeSync, realFsync = fs.fsyncSync, realRm = fs.rmSync;
   const fds: number[] = [], closes: number[] = [];
   const failure = Object.assign(new Error("synthetic EIO"), { code: "EIO" });
   t.mock.method(fs, "openSync", (target: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode | null) => {
@@ -127,29 +129,39 @@ function ownerFileIo(t: test.TestContext, file: string, failClose: boolean) {
     if (String(target) === file && flags === "wx") fds.push(fd);
     return fd;
   });
+  t.mock.method(fs, "fsyncSync", (fd: number) => { if (step === "fsync" && fds.includes(fd)) throw failure; return realFsync(fd); });
   t.mock.method(fs, "closeSync", (fd: number) => {
     if (!fds.includes(fd)) return realClose(fd);
     closes.push(fd);
     realClose(fd);
-    if (failClose) throw failure;
+    if (step === "close") throw failure;
+  });
+  t.mock.method(fs, "rmSync", (target: fs.PathLike, options?: fs.RmOptions) => {
+    if (failRemove && String(target) === file) throw Object.assign(new Error("synthetic EACCES"), { code: "EACCES", syscall: "rm" });
+    return realRm(target, options);
   });
   return { fds, closes, failure };
 }
 
-test("a failed close after the owner write is not repeated and leaves the file", (t) => {
-  const { paths, drain } = setup(t);
-  const { fds, closes, failure } = ownerFileIo(t, drain, true);
-  assert.throws(() => beginServiceDrain(paths, staleProbe), (error: unknown) => error === failure);
-  assert.deepEqual([fds.length, closes], [1, fds], "one create, closed exactly once");
-  assert.equal(fs.existsSync(drain), true);
-});
+for (const step of ["fsync", "close"] as const) {
+  test(`a failed ${step} after the owner write closes once, rethrows unchanged and removes the file`, (t) => {
+    const { paths, drain } = setup(t);
+    const { fds, closes, failure } = ownerFileIo(t, drain, step);
+    assert.throws(() => beginServiceDrain(paths, staleProbe), (error: unknown) => error === failure);
+    assert.deepEqual([fds.length, closes], [1, fds], "one create, closed exactly once");
+    assert.equal(fs.existsSync(drain), false);
+    t.mock.restoreAll();
+    const release = beginServiceDrain(paths, staleProbe);
+    assert.equal(fs.readFileSync(drain, "utf8"), `${JSON.stringify(current)}\n`, "a second drain acquires normally");
+    release();
+    assert.equal(fs.existsSync(drain), false);
+  });
+}
 
-test("a failed fsync after the open closes once, rethrows unchanged and leaves the file", (t) => {
+test("a failed removal of the partial owner file rethrows the original error and leaves the file", (t) => {
   const { paths, drain } = setup(t);
-  const { fds, closes, failure } = ownerFileIo(t, drain, false);
-  const real = fs.fsyncSync;
-  t.mock.method(fs, "fsyncSync", (fd: number) => { if (fds.includes(fd)) throw failure; return real(fd); });
+  const { fds, closes, failure } = ownerFileIo(t, drain, "fsync", true);
   assert.throws(() => beginServiceDrain(paths, staleProbe), (error: unknown) => error === failure);
   assert.deepEqual([fds.length, closes], [1, fds], "one create, closed exactly once");
-  assert.equal(fs.existsSync(drain), true);
+  assert.equal(fs.existsSync(drain), true, "left for manual cleanup");
 });

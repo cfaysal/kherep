@@ -113,11 +113,13 @@ test("a permit open failing with another code is thrown unchanged at once", (t) 
   assert.deepEqual(seen, ["ENOSPC"]);
 });
 
-// Descriptors of the permit's exclusive creates, and the closes of them. With
-// failClose a close releases the number and then reports EIO, as close(2) on
-// Linux may; the permit file stays in every case (issue #644).
-function permitIo(t: test.TestContext, permit: string, failClose: boolean) {
-  const realOpen = fs.openSync, realClose = fs.closeSync;
+// Descriptors of the permit's exclusive creates, and the closes of them. The
+// failing step reports EIO after a complete write; a failing close releases the
+// number first, as close(2) on Linux may. With failRemove the removal of the
+// permit reports EACCES. A failure after the create removes the caller's own
+// permit unless that removal fails (issue #644).
+function permitIo(t: test.TestContext, permit: string, step: "fsync" | "close", failRemove = false) {
+  const realOpen = fs.openSync, realClose = fs.closeSync, realFsync = fs.fsyncSync, realRm = fs.rmSync;
   const fds: number[] = [], closes: number[] = [];
   const failure = Object.assign(new Error("synthetic EIO"), { code: "EIO" });
   t.mock.method(fs, "openSync", (target: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode | null) => {
@@ -125,29 +127,39 @@ function permitIo(t: test.TestContext, permit: string, failClose: boolean) {
     if (String(target) === permit && flags === "wx") fds.push(fd);
     return fd;
   });
+  t.mock.method(fs, "fsyncSync", (fd: number) => { if (step === "fsync" && fds.includes(fd)) throw failure; return realFsync(fd); });
   t.mock.method(fs, "closeSync", (fd: number) => {
     if (!fds.includes(fd)) return realClose(fd);
     closes.push(fd);
     realClose(fd);
-    if (failClose) throw failure;
+    if (step === "close") throw failure;
+  });
+  t.mock.method(fs, "rmSync", (target: fs.PathLike, options?: fs.RmOptions) => {
+    if (failRemove && String(target) === permit) throw Object.assign(new Error("synthetic EACCES"), { code: "EACCES", syscall: "rm" });
+    return realRm(target, options);
   });
   return { fds, closes, failure };
 }
 
-test("a failed close after the permit write is not repeated and leaves the file", (t) => {
-  const { paths, permit, candidate } = setup(t);
-  const { fds, closes, failure } = permitIo(t, permit, true);
-  assert.throws(() => issueServiceLaunchPermit(paths, candidate), (error: unknown) => error === failure);
-  assert.deepEqual([fds.length, closes], [1, fds], "one create, closed exactly once");
-  assert.equal(fs.existsSync(permit), true);
-});
+for (const step of ["fsync", "close"] as const) {
+  test(`a failed permit ${step} after the write closes once, rethrows unchanged and removes the permit`, (t) => {
+    const { paths, permit, candidate } = setup(t);
+    const { fds, closes, failure } = permitIo(t, permit, step);
+    assert.throws(() => issueServiceLaunchPermit(paths, candidate), (error: unknown) => error === failure);
+    assert.deepEqual([fds.length, closes], [1, fds], "one create, closed exactly once");
+    assert.deepEqual(fs.readdirSync(path.dirname(permit)), [], "no permit remains");
+    assert.equal(claimServiceLaunchPermit(paths, candidate), false);
+    t.mock.restoreAll();
+    const cleanup = issueServiceLaunchPermit(paths, candidate);
+    assert.equal(claimServiceLaunchPermit(paths, candidate), true, "a second issuance works normally");
+    cleanup();
+  });
+}
 
-test("a failed permit fsync after the open closes once, rethrows unchanged and leaves the file", (t) => {
+test("a failed removal of the partial permit rethrows the original error and leaves the file", (t) => {
   const { paths, permit, candidate } = setup(t);
-  const { fds, closes, failure } = permitIo(t, permit, false);
-  const real = fs.fsyncSync;
-  t.mock.method(fs, "fsyncSync", (fd: number) => { if (fds.includes(fd)) throw failure; return real(fd); });
+  const { fds, closes, failure } = permitIo(t, permit, "fsync", true);
   assert.throws(() => issueServiceLaunchPermit(paths, candidate), (error: unknown) => error === failure);
   assert.deepEqual([fds.length, closes], [1, fds], "one create, closed exactly once");
-  assert.equal(fs.existsSync(permit), true);
+  assert.equal(fs.existsSync(permit), true, "left for manual cleanup");
 });
