@@ -9,7 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { after, test } from "node:test";
 
-import { denialFaultEnv, MARKER_SLOW_MS } from "../../claude/hooks/denial-fault.fixture.mts";
+import { denialFaultEnv, faultSpan, MARKER_SLOW_MS } from "../../claude/hooks/denial-fault.fixture.mts";
 import { journalPaths } from "../../claude/hooks/lib/denial-journal.mts";
 import { readJournal, renderReport } from "../../claude/hooks/lib/denial-report.mts";
 import { assertSameAnswer, cleanupHomes, codexHome, exit2, run, shellPayload, type CodexHome } from "./denials-fixture.mts";
@@ -71,16 +71,27 @@ test("a marker append that settles late: the marker is on disk when the adapter 
 });
 
 // The lib's write ends within 1 s; a marker write that never settles is given up at the hook
-// deadline less 250 ms (issue #612), so this deny arrives late but before the deadline.
-test("a journal write that never settles: the same deny before the hook deadline, the marker given up there", async () => {
+// deadline less 250 ms (issue #612), so this deny arrives late but before the deadline. Issue #653:
+// measured inside the adapter from its time origin, the anchor of its START, by the fault receipt;
+// END_MS restates hook-adapter.mts HOOK_TIMEOUT_MS - SAFETY_MARGIN_MS - 250, never read from it.
+const END_MS = 8_250, LATE_MS = 500, NO_RECEIPT = "no fault receipt: the child was killed or the fault did not engage";
+test("a journal write that never settles: the same deny before the hook deadline, the marker given up there", async (t) => {
   const referenceHome = codexHome(GUARDS), home = codexHome(GUARDS);
   const reference = await adapt(referenceHome, "codex-guard.mts", shellPayload());
+  const receipt = path.join(home.root, "fault-receipt.json");
   const result = await run([path.join(home.hookDir, "codex-hook-adapter.mts"), path.join(home.hookDir, "codex-guard.mts"), "pre"],
-    shellPayload(), denialFaultEnv("all-hang", "codex-hook-adapter.mts"));
-  assert.equal(result.status, 0);
+    shellPayload(), denialFaultEnv("all-hang", "codex-hook-adapter.mts", process.env, receipt));
+  assert.equal(result.timedOut, false, `killed by the watchdog after ${result.ms} ms`);
+  assert.equal(result.status, 0, result.stderr);
   assertSameAnswer(result, home, reference, referenceHome);
   assert.equal(fs.existsSync(journalPaths(home.root, "agent-c1").marker), false, "nothing settled, so no marker: the named residual");
-  assert.ok(result.ms >= 8_000 && result.ms < 8_250 + Math.max(1_250, reference.ms), `${result.ms} ms against ${reference.ms} ms`);
+  const { ops, ms } = faultSpan(receipt, "origin");
+  t.diagnostic(JSON.stringify({ referenceMs: reference.ms, childMs: result.ms, spanMs: ms, ops }));
+  assert.ok(ms !== undefined, `${NO_RECEIPT} (childMs ${result.ms}, signal ${result.signal})`);
+  // The lib's mkdir hangs to its cap, then the marker's mkdir to the end: no append, no rename.
+  assert.deepEqual(ops, ["mkdir:dir", "mkdir:dir"]);
+  assert.ok(ms < END_MS + LATE_MS, `the adapter held ${ms} ms`);
+  assert.ok(ms >= END_MS - 250, `the deadline was abandoned early: ${ms} ms`);
 });
 
 test("runAdaptedHook, the in-process path, writes nothing", async () => {

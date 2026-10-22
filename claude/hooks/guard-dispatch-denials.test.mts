@@ -7,9 +7,9 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { after, test } from "node:test";
+import { after, test, type TestContext } from "node:test";
 
-import { denialFaultEnv, MARKER_SLOW_MS, type DenialFault } from "./denial-fault.fixture.mts";
+import { denialFaultEnv, faultSpan, MARKER_SLOW_MS, type DenialFault } from "./denial-fault.fixture.mts";
 import { dispatcherFixture, type DispatcherFixture } from "./guard-dispatch-fixture.mts";
 import { journalPaths } from "./lib/denial-journal.mts";
 import { readJournal, renderReport } from "./lib/denial-report.mts";
@@ -42,16 +42,18 @@ function fixture(lib: "present" | "missing" | "empty" | "throwing" | "hanging" =
 const payload = (extra: Record<string, unknown> = {}): string => JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash",
   tool_input: { command: "git push origin" }, cwd: "/w", agent_id: "agent-t1", agent_type: "general-purpose", tool_use_id: "toolu_1", ...extra });
 
-interface Run { status: number | null; stdout: string; ms: number }
-function dispatch(fx: DispatcherFixture, guards: string[], input: string, env: NodeJS.ProcessEnv = process.env): Promise<Run> {
+interface Run { status: number | null; signal: NodeJS.Signals | null; timedOut: boolean; stdout: string; ms: number }
+// timeoutMs is a hang guard only, above the 30 s hook timeout so a loaded start-up never turns into a kill; never the measure.
+function dispatch(fx: DispatcherFixture, guards: string[], input: string, env: NodeJS.ProcessEnv = process.env, timeoutMs = 40_000): Promise<Run> {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", fx.dispatch, ...guards.map((g) => path.join(fx.hooks, g))],
       { windowsHide: true, env });
-    let stdout = "";
+    let stdout = "", timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
     child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.on("error", reject);
-    child.on("close", (status) => resolve({ status, stdout, ms: Date.now() - start }));
+    child.on("error", (error) => { clearTimeout(timer); reject(error); });
+    child.on("close", (status, signal) => { clearTimeout(timer); resolve({ status, signal, timedOut, stdout, ms: Date.now() - start }); });
     child.stdin.end(input);
   });
 }
@@ -117,14 +119,28 @@ for (const lib of ["missing", "empty", "throwing", "hanging"] as const) {
   });
 }
 
-async function faulted(fault: DenialFault): Promise<{ fx: DispatcherFixture; run: Run; reference: Run }> {
+async function faulted(fault: DenialFault): Promise<{ fx: DispatcherFixture; run: Run; reference: Run; receipt: string }> {
   const fx = fixture();
   await dispatch(fx, ["allow.mts"], payload({ tool_use_id: "toolu_0" })); // an earlier, journalled call
   const reference = await dispatch(fixture(), ["exit2.mts"], payload());
-  const run = await dispatch(fx, ["exit2.mts"], payload(), denialFaultEnv(fault, "guard-dispatch.mts"));
+  const receipt = path.join(fx.root, "fault-receipt.json");
+  const run = await dispatch(fx, ["exit2.mts"], payload(), denialFaultEnv(fault, "guard-dispatch.mts", process.env, receipt));
+  assert.equal(run.timedOut, false, `killed by the hang guard after ${run.ms} ms`);
   assert.equal(run.status, 0);
   assert.equal(run.stdout, reference.stdout, "the decision is unchanged");
-  return { fx, run, reference };
+  return { fx, run, reference, receipt };
+}
+
+// Issue #653: a cap is measured inside the dispatcher, from the fault receipt, not as its wall clock against a
+// reference run (node start, guard spawns and teardown are noise the cap does not bound). The caps restate
+// guard-dispatch.mts: JOURNAL_CAP_MS, and HOOK_TIMEOUT_MS less SAFETY_MARGIN_MS for DEADLINE; never read from it.
+const JOURNAL_CAP_MS = 1_500, DEADLINE_MS = 25_000, LATE_MS = 500, DEADLINE_LATE_MS = 1_000;
+const NO_RECEIPT = "no fault receipt: the child was killed or the fault did not engage";
+function span(t: TestContext, receipt: string, from: "first-call" | "start", run: Run, reference: Run): { ops: string[]; ms: number } {
+  const { ops, ms } = faultSpan(receipt, from);
+  t.diagnostic(JSON.stringify({ referenceMs: reference.ms, childMs: run.ms, spanMs: ms, ops }));
+  assert.ok(ms !== undefined, `${NO_RECEIPT} (childMs ${run.ms}, signal ${run.signal})`);
+  return { ops, ms };
 }
 
 test("ENOSPC on the denying call: a marker, the renderer reads unknown (capture-failed)", async () => {
@@ -157,18 +173,28 @@ test("a marker append that settles late: the marker is on disk when the dispatch
   assert.ok(run.ms >= MARKER_SLOW_MS, `${run.ms} ms: the dispatcher waited for the append`);
 });
 
-test("a journal append that never settles (journal-hang): the decision within the cap, a marker, no broken guard, no re-check", async () => {
-  const { fx, run, reference } = await faulted("journal-hang");
+// From the lib's first write to the exit event: the lib waits its cap less 50 ms for the hung journal append,
+// then the marker chain writes append-timeout and the dispatcher emits.
+test("a journal append that never settles (journal-hang): the decision within the cap, a marker, no broken guard, no re-check", async (t) => {
+  const { fx, run, reference, receipt } = await faulted("journal-hang");
   assert.equal(fs.readFileSync(journalPaths(fx.root, "agent-t1").marker, "utf8"), "append-timeout\n");
-  assert.ok(run.ms < reference.ms + 1_900 + 1_500, `${run.ms} ms against ${reference.ms} ms`);
+  const { ops, ms } = span(t, receipt, "first-call", run, reference);
+  assert.deepEqual(ops, ["mkdir:dir", "appendFile:.jsonl", "mkdir:dir", "appendFile:.failed"]);
+  assert.ok(ms < JOURNAL_CAP_MS + LATE_MS, `capture held ${ms} ms`);
+  assert.ok(ms >= 1_000, `capture window abandoned early: ${ms} ms`);
   assert.doesNotMatch(run.stdout, /additionalContext|cannot run/);
 });
 
 // The lib's write ends within its 1.5 s cap; a marker write that never settles is given up at the dispatcher's
 // deadline, 25 s after its start (issue #614), so this decision arrives late but before the 30 s hook timeout.
-test("a writer that never settles (all-hang): the decision before the dispatcher deadline, the marker given up there", async () => {
-  const { fx, run, reference } = await faulted("all-hang");
+// Measured from the preload's evaluation, which precedes the dispatcher's own start by its module load: that
+// load is the extra 500 ms of DEADLINE_LATE_MS over LATE_MS.
+test("a writer that never settles (all-hang): the decision before the dispatcher deadline, the marker given up there", async (t) => {
+  const { fx, run, reference, receipt } = await faulted("all-hang");
   assert.equal(fs.existsSync(journalPaths(fx.root, "agent-t1").marker), false, "nothing settled, so no marker: the named residual");
-  assert.ok(run.ms >= 24_500 && run.ms < 25_000 + Math.max(1_500, reference.ms), `${run.ms} ms against ${reference.ms} ms`);
+  const { ops, ms } = span(t, receipt, "start", run, reference);
+  assert.deepEqual(ops, ["mkdir:dir", "mkdir:dir"]);
+  assert.ok(ms < DEADLINE_MS + DEADLINE_LATE_MS, `the dispatcher held ${ms} ms`);
+  assert.ok(ms >= DEADLINE_MS - 500, `the deadline was abandoned early: ${ms} ms`);
   assert.doesNotMatch(run.stdout, /additionalContext|cannot run/);
 });
