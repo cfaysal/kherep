@@ -2,8 +2,7 @@
 // tracker key matching and the historical refusal under --kind. Synthetic bodies only.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import * as evidence from './confluence-evidence.mts';
-import { classifyClaim, decide, renderMeasurementBlock, type Measurement } from './confluence-evidence.mts';
+import { classifyClaim, decide, escapeAttr, escapeText, renderMeasurementBlock, type Measurement } from './confluence-evidence.mts';
 
 const SHA = 'a'.repeat(40);
 const NOW = new Date(2026, 9, 22, 12).getTime();
@@ -37,11 +36,8 @@ test('P2: text nodes escape only &, < and >; line endings reach neither the gate
 });
 
 test('P2: an attribute value still escapes the double quote; a superseding title is text', () => {
-  const attr = (evidence as Record<string, unknown>).escapeAttr as ((v: string) => string) | undefined;
-  const text = (evidence as Record<string, unknown>).escapeText as ((v: string) => string) | undefined;
-  assert.equal(typeof attr, 'function', 'escapeAttr is exported');
-  assert.equal(attr?.(`/wiki/"x"?a=1&b='2'<`), `/wiki/&quot;x&quot;?a=1&amp;b='2'&lt;`);
-  assert.equal(text?.(`it's "x" & <y>`), `it's "x" &amp; &lt;y&gt;`);
+  assert.equal(escapeAttr(`/wiki/"x"?a=1&b='2'<`), `/wiki/&quot;x&quot;?a=1&amp;b='2'&lt;`);
+  assert.equal(escapeText(`it's "x" & <y>`), `it's "x" &amp; &lt;y&gt;`);
   const live = claim(`<p>Host: alpha-node</p><p>The queue listens on 8443.</p>${FOOTER}`);
   const m: Measurement = { kind: 'live', source: 'alpha-node', sourceClass: 'target-host', command: 'ss -ltn', excerpt: '8443 -> 8080',
     measuredAt: TODAY, verdict: 'contradicts', subject: '8443', supersededBy: '77' };
