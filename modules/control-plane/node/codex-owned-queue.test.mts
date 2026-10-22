@@ -3,7 +3,8 @@ import fs from "node:fs";
 import test from "node:test";
 
 import { taskNode } from "./task-fixture.mts";
-import { getMessage, markDelivered, readdress, storeMessage, writeJsonAtomic } from "./inbox.mts";
+import { getMessage, markDelivered, storeMessage, writeJsonAtomic } from "./inbox.mts";
+import { readdress } from "./_deprecated/session-handover.mts";
 import {
   MAX_QUEUE_BINDINGS, listQueueBindings, queueBindingDir, saveQueueBinding, type QueueBinding,
 } from "./codex-queue-binding.mts";

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { MessageDeliverBody } from "../protocol-messages.mts";
-import { attachDelivery, resolveDelivery, updateDeliverySession } from "./delivery-identity.mts";
+import { updateDeliverySession } from "./_deprecated/session-handover.mts";
+import { attachDelivery, resolveDelivery } from "./delivery-identity.mts";
 import { getMessage, setDeliveryTask, storeMessage } from "./inbox.mts";
 import { T0, TASK, taskNode } from "./task-fixture.mts";
 import type { TaskRecord } from "./task-records.mts";

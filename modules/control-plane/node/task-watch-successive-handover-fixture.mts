@@ -9,6 +9,7 @@ import { deliverToClosed } from "./closed-delivery.mts";
 import { SESSIONS_INTERVAL_MS } from "./daemon.mts";
 import { deliverForHook } from "./deliver-hook.mts";
 import { recordingSessions } from "./exchange.mts";
+import type { Diagnostics } from "./handover-diagnostics-fixture.mts";
 import { getMessage, getReceipt, storeMessage, UNDELIVERABLE_AFTER_MS, writeJsonAtomic, type InboxRecord } from "./inbox.mts";
 import { recordLockFile, RECORD_LOCK_WAIT_MS, setRecordLockWait } from "./inbox-record-lock.mts";
 import { CLOSED_AFTER_MISSES, CLOSED_MIN_AGE_MS, closedSession, knownSessionsFile } from "./known-sessions.mts";
@@ -22,9 +23,9 @@ const T = taskId(10), B = taskId(11), M1 = taskId(20), M2 = taskId(21), U = task
 const S1 = taskId(101), S2 = taskId(102), S3 = taskId(103), SX = taskId(104);
 const source = { binding: "external-run-receipt" };
 
-export async function diagnostic(t: test.TestContext, provenance: Provenance, scenario: Scenario, offered = false) {
+export async function diagnostic(t: test.TestContext, d: Diagnostics, provenance: Provenance, scenario: Scenario, offered = false) {
   const node = closedNode(t), caseName = `${provenance}/${scenario}${offered ? "/offered-retry" : ""}`;
-  let now = T0, target = S1, seen: SessionInfo[] = [], last: unknown;
+  let now = T0, target = S1, seen: SessionInfo[] = [];
   const logs: string[] = [], receiving: { event: string; session: string; ids: string[]; output: string }[] = [];
   const ids = [M1, M2, U, P];
   const record = (id: string) => getMessage(node.paths.inbox, id);
@@ -36,11 +37,11 @@ export async function diagnostic(t: test.TestContext, provenance: Provenance, sc
   const advance = (ms: number) => { now += ms; node.tick(ms); };
   const readKnown = (): Record<string, unknown>[] => JSON.parse(fs.readFileSync(knownSessionsFile(node.paths), "utf8")).sessions;
   function observe(stage: string, extra: Record<string, unknown> = {}) {
-    last = { case: caseName, source, stage, now, task: readTask(node.paths, T), discovery: seen.map((s) => s.sessionId),
+    d.observe(stage, { case: caseName, source, now, task: readTask(node.paths, T), discovery: seen.map((s) => s.sessionId),
       knownS2: readKnown().find((s) => s.sessionId === S2) ?? null, closedS2: closedSession(node.paths, S2),
-      records: ids.map((id) => fields(record(id))), receiving: [...receiving], audits: audits(node),
-      launches: runs().length, localTaskCount: listTasks(node.paths).length, logs: [...logs], ...extra };
-    console.log(`DIAGNOSTIC635 ${JSON.stringify(last)}`);
+      records: ids.map((id) => fields(record(id))), receiving, audits: audits(node), localTaskCount: listTasks(node.paths).length,
+      logs, counts: { launches: runs().length, hooks: receiving.length,
+        receipts: ids.filter((id) => getReceipt(node.paths.inbox, id)).length }, ...extra });
   }
   function view(sessionId: string) {
     target = sessionId;
@@ -74,7 +75,7 @@ export async function diagnostic(t: test.TestContext, provenance: Provenance, sc
   }
   const lock = recordLockFile(node.paths.inbox, M2);
   setRecordLockWait(0);
-  t.after(() => { setRecordLockWait(RECORD_LOCK_WAIT_MS); });
+  t.after(() => { setRecordLockWait(RECORD_LOCK_WAIT_MS); if (fs.existsSync(lock)) fs.unlinkSync(lock); });
   try {
     const task = writeTask(node.paths, { taskId: T, name: "synthetic-task-a", cwd: node.workspace,
       permissionMode: "auto", runtime: "claude", state: "running", local: "intercom", shortId: S1.slice(0, 8),
@@ -184,8 +185,5 @@ export async function diagnostic(t: test.TestContext, provenance: Provenance, sc
     observe("summary", { verdicts, firstIds, repeatIds, waitingBeforeHorizon, positiveRescue: true, unrelatedStable: true });
     return { case: caseName, verdicts, firstIds, repeatIds, target,
       entryRecords: entry, finalRecords: [record(M1)!, record(M2)!], receiving: [...receiving] };
-  } catch (error) {
-    console.log(`DIAGNOSTIC635 ${JSON.stringify({ case: caseName, stage: "UNKNOWN", error: String(error), last })}`);
-    throw error;
   } finally { if (fs.existsSync(lock)) fs.unlinkSync(lock); }
 }

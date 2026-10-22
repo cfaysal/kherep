@@ -291,6 +291,11 @@ increments the minor version; every other release increments the patch version.
   because the Worker rejects a call without the hook's `requestId`. The file
   stays outside `hooks/` and is not restored by hook integrity. Host
   behaviour (#537) and Windows (#534) remain UNKNOWN.
+- The unused internal `readdress` and `updateDeliverySession` exports move
+  from the active inbox and identity modules to
+  `node/_deprecated/session-handover.mts`. Their legacy tests retain the
+  previous behavior; active handover uses the shared task-owned helper
+  (issue #638).
 - Codex run guard: the regeneration hint for
   `codex/scripts/codex-run-expected.json` is printed only when the skipped
   tests differ from the list (C3), names the CI-log route first and states
@@ -710,11 +715,19 @@ increments the minor version; every other release increments the patch version.
   addresses, and corrects their destination identity (issue #635). Watcher and
   immediate resume adoption share the same record-locked operation. All pending
   messages at the previous address retain legacy movement; foreign identities,
-  provenance and offer/retry evidence are preserved. Busy resume recovery keeps
-  its old mapping and new short ID so watch can finish without another launch.
+  provenance and offer/retry evidence are preserved. Delivery identity updates
+  require a matching task and runtime; a destination record belonging to the
+  same task under another runtime keeps its existing identity. Busy resume
+  recovery keeps its old mapping and new short ID so watch can finish without
+  another launch.
   Target-local terminal metadata may correct, while terminal records elsewhere
   stay unchanged. Existing opt-in fallback limits for unowned intermediates
   remain; no historical sweep is added.
+- Malformed nonempty Claude adoption IDs are deferred per task, so later tasks
+  in the watch round continue. A bookkeeping error after a resumed run is kept,
+  including admission release failure, no longer authorizes a second session
+  start. Empty-ID mapping and the two explicit failed-resume fallback paths
+  retain their existing behavior (issue #638).
 - Receipts for messages whose reply had already reached this node no longer
   appear after a service restart or upgrade (issue #520). They had never been
   shown: the reply in the inbox kept them quiet, and the daemon start's purge

@@ -1,3 +1,4 @@
+import { isSessionRef } from "../protocol-messages.mts";
 import type { TaskState } from "../protocol-tasks.mts";
 import { MAX_RUNTIME_REASON } from "./codex-runner.mts";
 import { watchCodexTasks } from "./codex-watch.mts";
@@ -60,6 +61,10 @@ function deferOnBusy(error: unknown, taskId: string, step: string, log: (line: s
   log(`kherep-node: task ${taskId}: ${step} deferred: ${error.code}: ${error.message}`);
 }
 
+// Issue #638: a nonempty full id that is no session reference (isSessionRef)
+// is never adopted; an empty or missing one keeps the missing-mapping path.
+const malformedId = (id: unknown): boolean => typeof id === "string" && id !== "" && !isSessionRef(id);
+
 export async function watchTasks(deps: RunnerDeps, log: (line: string) => void = () => {}): Promise<void> {
   await watchCodexTasks(deps, log);
   const claude = listTasks(deps.paths).filter((t) => t.runtime !== "codex");
@@ -73,10 +78,17 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
     // A failed listing decides nothing; the deadline still applies.
     log(`kherep-node: task watch could not list sessions: ${String((error as Error).message ?? error)}`);
   }
+  const deferred = new Set<string>();
   for (const record of active) {
     // A launch in flight (session-runner.mts background, closed-resume.mts): its run maps it.
     if (!record.shortId && mappingPendingAt(record, now)) continue;
-    const row = rows ? findRow(rows, record) : undefined;
+    const found = rows ? findRow(rows, record) : undefined;
+    // A malformed listed id, or a malformed stored one a handover would leave,
+    // defers this task alone: only the row's short id serves its deadline stop.
+    const invalid = malformedId(found?.sessionId) || (record.local === "intercom" && malformedId(record.sessionId)
+      && typeof found?.sessionId === "string" && found.sessionId !== "" && found.sessionId !== record.sessionId);
+    if (invalid) deferred.add(record.taskId);
+    const row = invalid ? { id: found!.id } : found;
     let mapped = mapIds(record, row);
     if (now >= Date.parse(record.deadline)) {
       if (!mapped.shortId) {
@@ -91,6 +103,11 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
         await stopUnconfirmed(deps, mapped, row, error, log, now).catch((failed: unknown) => log(
           `kherep-node: could not stop task ${record.taskId}: ${String((error as Error).message ?? error)} (${String((failed as Error).message ?? failed)})`));
       }
+      continue;
+    }
+    if (invalid) {
+      // No evidence the session ended: clocks, carried messages and copies wait for a valid listing.
+      log(`kherep-node: task ${record.taskId}: listed session id is not valid; mapping deferred`);
       continue;
     }
     // Issue #197: no progress of the run's turn within NO_PROGRESS_MS fails it
@@ -142,7 +159,7 @@ export async function watchTasks(deps: RunnerDeps, log: (line: string) => void =
   }
   // Adopted copies (issue #111): the sessions their records held before are stopped once idle.
   if (!rows) return;
-  for (const record of listTasks(deps.paths).filter((t) => t.retire?.length)) {
+  for (const record of listTasks(deps.paths).filter((t) => t.retire?.length && !deferred.has(t.taskId))) {
     try {
       await retireCopies(deps, record, rows);
     } catch (error) {

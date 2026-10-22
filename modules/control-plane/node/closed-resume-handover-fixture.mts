@@ -9,7 +9,8 @@ import { deliverToClosed } from "./closed-delivery.mts";
 import { SESSIONS_INTERVAL_MS } from "./daemon.mts";
 import { deliverForHook } from "./deliver-hook.mts";
 import { recordingSessions } from "./exchange.mts";
-import { getMessage, storeMessage, type InboxRecord } from "./inbox.mts";
+import type { Diagnostics } from "./handover-diagnostics-fixture.mts";
+import { getMessage, getReceipt, storeMessage, type InboxRecord } from "./inbox.mts";
 import { recordLockFile, RECORD_LOCK_WAIT_MS, setRecordLockWait } from "./inbox-record-lock.mts";
 import { T0, taskId } from "./task-fixture.mts";
 import { listTasks, readTask, writeTask } from "./task-records.mts";
@@ -19,16 +20,17 @@ import { watchTasks } from "./task-watch.mts";
 // No runtime launch or private runtime/session read; the real fallback/hooks execute.
 export const T = taskId(10), M1 = taskId(20), M2 = taskId(21), Q = taskId(23);
 export const S1 = taskId(101), S2 = taskId(102), S3 = taskId(103);
-export async function resumedHandover(t: test.TestContext, contention?: "address" | "identity") {
+export async function resumedHandover(t: test.TestContext, d: Diagnostics, contention?: "address" | "identity") {
   const node = closedNode(t), logs: string[] = [], receiving: { event: string; ids: string[]; output: string }[] = [];
   let now = T0, seen: SessionInfo[] = [];
   const get = (id: string) => getMessage(node.paths.inbox, id)!;
   const messages = () => [get(M1), get(M2)];
   const advance = (ms: number) => { now += ms; node.tick(ms); };
   const log = (line: string) => logs.push(line);
-  const observe = (stage: string) => console.log(`DIAGNOSTIC635 ${JSON.stringify({ case: `immediate-resume/${contention ?? "normal"}`,
-    source: { binding: "external-run-receipt" }, stage, task: readTask(node.paths, T), records: [...messages(), get(Q)],
-    audits: audits(node), logs, receiving })}`);
+  const observe = (stage: string) => d.observe(stage, { case: `immediate-resume/${contention ?? "normal"}`,
+    source: { binding: "external-run-receipt" }, task: readTask(node.paths, T), records: [...messages(), get(Q)],
+    audits: audits(node), logs, receiving, counts: { launches: node.calls.filter((c) => c.args[0] !== "agents").length,
+      hooks: receiving.length, receipts: [M1, M2, Q].filter((id) => getReceipt(node.paths.inbox, id)).length } });
   const discover = recordingSessions(node.paths, async () => seen, log, () => now);
   function view(sessionId: string, shortId = sessionId.slice(0, 8)) {
     node.rows.splice(0, node.rows.length, { id: shortId, sessionId, name: "synthetic-task-a", state: "working", kind: "background" });
@@ -100,5 +102,5 @@ export async function resumedHandover(t: test.TestContext, contention?: "address
     assert.deepEqual(node.calls.filter((c) => c.args[0] !== "agents").map((c) => c.args[0]), ["--resume"]);
     assert.equal(listTasks(node.paths).length, 1); observe("summary");
   }
-  return { afterResume, entry, finish };
+  return { afterResume, entry, finish, paths: node.paths };
 }
