@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { after, test } from "node:test";
 
-import { denialFaultEnv, MARKER_SLOW_MS } from "./denial-fault.fixture.mts";
+import { denialFaultEnv, faultSpan, MARKER_SLOW_MS } from "./denial-fault.fixture.mts";
 import { cleanup, entry, runtimeHome, type Home } from "./hook-runtime-fixture.mts";
 import { journalPaths } from "./lib/denial-journal.mts";
 import { readJournal, renderReport } from "./lib/denial-report.mts";
@@ -66,11 +66,21 @@ test("a marker append that settles late: the marker is on disk when the recorder
 
 // The journal write ends within its 1.5 s cap; a marker write that never settles is given up at the
 // recorder's deadline, 5.5 s after its start (issue #614), before the entry's hook timeout of 10 s.
-test("a write that never settles: exit 0 before the recorder deadline, the marker given up there", () => {
-  const reference = record(home(), payload());
+// Issue #653: measured inside the recorder from its time origin, the anchor of its DEADLINE, by the
+// fault receipt; DEADLINE_MS restates denied-calls-delivered.mts HOOK_TIMEOUT_MS - SAFETY_MARGIN_MS.
+const DEADLINE_MS = 5_500, LATE_MS = 500, NO_RECEIPT = "no fault receipt: the child was killed or the fault did not engage";
+test("a write that never settles: exit 0 before the recorder deadline, the marker given up there", (t) => {
   const stalled = home();
-  const run = record(stalled, payload(), denialFaultEnv("all-hang", RECORDER));
+  const receipt = path.join(stalled.root, "fault-receipt.json");
+  const run = record(stalled, payload(), denialFaultEnv("all-hang", RECORDER, process.env, receipt));
+  assert.equal(run.signal, null, `killed after ${run.ms} ms`);
   assert.deepEqual([run.status, run.stdout], [0, ""]);
   assert.equal(fs.existsSync(journalPaths(stalled.root, "agent-d1").marker), false, "nothing settled, so no marker: the named residual");
-  assert.ok(run.ms >= 5_000 && run.ms < 5_500 + Math.max(1_500, reference.ms), `${run.ms} ms against ${reference.ms} ms`);
+  const { ops, ms } = faultSpan(receipt, "origin");
+  t.diagnostic(JSON.stringify({ childMs: run.ms, spanMs: ms, ops }));
+  assert.ok(ms !== undefined, `${NO_RECEIPT} (childMs ${run.ms}, signal ${run.signal})`);
+  // The journal's mkdir hangs to the cap, then the marker append directly, to the deadline.
+  assert.deepEqual(ops, ["mkdir:dir", "appendFile:.failed"]);
+  assert.ok(ms < DEADLINE_MS + LATE_MS, `the recorder held ${ms} ms`);
+  assert.ok(ms >= DEADLINE_MS - 500, `the deadline was abandoned early: ${ms} ms`);
 });
