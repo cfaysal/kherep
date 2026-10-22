@@ -59,11 +59,12 @@ const filled = (value: unknown): boolean => typeof value === 'string' && value.t
 
 export function classifyClaim(snapshot: ClaimSource, bodyApproved: boolean, kindOverride?: MeasuredKind): Claim {
   const labels = [...snapshot.labels].sort();
-  const text = plainText(snapshot.body);
+  const original = claimBody(snapshot.body);
+  const text = plainText(original);
   const revisions = parseRevisionLines(text);
   const codeTokens = unique(text.match(/\b[\w./-]+\.(?:mts|ts|tsx|js|py|java|go|rs)\b/g) ?? []);
   const githubKeys = [...text.matchAll(/\bGitHub\s+(?:issue|PR|pull request)\s*#(\d+)\b/gi),
-    ...snapshot.body.matchAll(/\/(?:issues|pull)\/(\d+)\b/g)].map(m => `#${m[1]}`);
+    ...original.matchAll(/\/(?:issues|pull)\/(\d+)\b/g)].map(m => `#${m[1]}`);
   // Once the page names one GitHub key, every #N it states is one ("#10 and #648"); a numeric entity is not.
   if (githubKeys.length > 0) githubKeys.push(...[...text.replace(/&#\w+;/g, ' ').matchAll(/(?<!\w)#(\d+)\b/g)].map(m => `#${m[1]}`));
   const trackerKeys = unique([...(text.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? []), ...githubKeys]);
@@ -74,7 +75,7 @@ export function classifyClaim(snapshot: ClaimSource, bodyApproved: boolean, kind
     ['historical', /\b(?:historical(?:ly)?|at the time of (?:measurement|writing))\b/i.test(text)],
     ['tracker', trackerKeys.length > 0],
     ['live', /(?:^|\n)\s*(?:Host|Target|Deployment|Live)\s*:/im.test(text) || /\b(?:kubectl|systemctl|journalctl)\b/.test(text)],
-    ['doc', /(?:^|\n)\s*(?:Doc|Documentation)\s*:/im.test(text) || /https?:\/\/(?:developer\.atlassian\.com|docs\.)/.test(snapshot.body)],
+    ['doc', /(?:^|\n)\s*(?:Doc|Documentation)\s*:/im.test(text) || /https?:\/\/(?:developer\.atlassian\.com|docs\.)/.test(original)],
   ];
   const signals = has.filter(([, on]) => on).map(([kind]) => kind);
   const classified: Kind = signals[0] ?? 'unclassified';
@@ -207,9 +208,21 @@ export function decide(claim: Claim, measurement: unknown, options: DecideOption
 // Measured on the live site (issue #662, 2026-10-22): Confluence returns " in text nodes as &quot; and keeps
 // ' raw, so a body written in that form survives the byte-exact update readback. &amp;, &lt; and &gt; are
 // the XML forms; whether Confluence returns > as &gt; or raw was not measured separately.
-export const escapeText = (value: string): string =>
-  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+export const escapeText = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const xml = escapeText;
+// Renderer and recogniser are one contract (the gates test enforces agreement). Every text field is escaped, so no
+// field contains '<'; the date must appear twice and agree. Only this exact form is a block; a heading alone is content.
+const FIELD = '[^<]*';
+export const MEASUREMENT_BLOCK = new RegExp(
+  `<h2>Measurement (\\d{4}-\\d{2}-\\d{2})</h2>\\s*`
+  + `<p>Outcome: (?:confirmed|refuted|superseded) \\(model-run, status-author-model unchanged\\)</p>\\s*`
+  + `(?:<p>Revision: ${FIELD}</p>\\s*)?`
+  + `<p>Source: (?:code|tracker|live|doc), ${FIELD}</p>\\s*`
+  + `<p>Command: <code>${FIELD}</code></p>\\s*<pre>${FIELD}</pre>\\s*`
+  + `<p>Measured via ${FIELD} on \\1\\.</p>`
+  + `(?:\\s*<p>Superseded by: (?:(?!</p>).)*</p>)?`, 'gs');
+// The claim as its author wrote it, without the blocks decide appended; only classification reads this view.
+export const claimBody = (body: string): string => body.replace(MEASUREMENT_BLOCK, '');
 export function renderMeasurementBlock(decision: Decision, raw: Measurement, runtimeLabel: string, superseded?: SupersedingPage): string {
   const m = normaliseMeasurement(raw);
   const parts = [`<h2>Measurement ${xml(m.measuredAt)}</h2>`,
