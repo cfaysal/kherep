@@ -731,6 +731,7 @@ test("installs the Mac-compatible projection without replacing user state", asyn
     "confluence-drainage-scan.mts",
     "confluence-drainage-cli.mts",
     "confluence-evidence.mts",
+    "confluence-evidence-report.mts",
     "confluence-evidence-cli.mts",
 
     "confluence-session.mts",
@@ -1091,6 +1092,7 @@ test("default install projects observation delivery without optional Jira toolin
     "confluence-drainage-scan.mts",
     "confluence-drainage-cli.mts",
     "confluence-evidence.mts",
+    "confluence-evidence-report.mts",
     "confluence-evidence-cli.mts",
 
     "confluence-session.mts",
@@ -1291,6 +1293,7 @@ test("rolls every managed target back when installation fails", (t) => {
     "confluence-drainage-scan",
     "confluence-drainage-cli",
     "confluence-evidence",
+    "confluence-evidence-report",
     "confluence-evidence-cli",
 
   ];

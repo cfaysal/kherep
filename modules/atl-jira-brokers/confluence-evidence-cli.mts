@@ -10,9 +10,10 @@ import { findSpace, getPage } from './confluence-content.mts';
 import { drainageRules } from './confluence-drainage-rules.mts';
 import { drainageSnapshot } from './confluence-drainage-snapshot.mts';
 import {
-  BOUND_REVISION, classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, KINDS, PROPOSED, renderMeasurementBlock, renderReport,
-  type DecideOptions, type Decision, type EvidenceRecord, type Measurement, type MeasuredKind,
+  BOUND_REVISION, classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, KINDS, renderMeasurementBlock,
+  type DecideOptions, type Decision, type Measurement, type MeasuredKind,
 } from './confluence-evidence.mts';
+import { PROPOSED, renderReport, type EvidenceRecord } from './confluence-evidence-report.mts';
 import type { NeighbourArgs, NeighbourCliContext } from './confluence-neighbour-cli.mts';
 import { readFailure } from './confluence-pagination.mts';
 import { runtimeLabel } from './confluence-runtime-label.mts';

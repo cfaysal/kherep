@@ -242,6 +242,8 @@ cmp_file "project/tools/confluence-drainage-cli.mts" \
   "$HERE/../modules/atl-jira-brokers/confluence-drainage-cli.mts" "$WS/tools/confluence-drainage-cli.mts"
 cmp_file "project/tools/confluence-evidence.mts" \
   "$HERE/../modules/atl-jira-brokers/confluence-evidence.mts" "$WS/tools/confluence-evidence.mts"
+cmp_file "project/tools/confluence-evidence-report.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-evidence-report.mts" "$WS/tools/confluence-evidence-report.mts"
 cmp_file "project/tools/confluence-evidence-cli.mts" \
   "$HERE/../modules/atl-jira-brokers/confluence-evidence-cli.mts" "$WS/tools/confluence-evidence-cli.mts"
 # Issue #302. The Jira set is optional, but presence decides: the flag adds it,
