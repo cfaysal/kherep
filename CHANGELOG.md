@@ -421,6 +421,27 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Confluence brokers: a line directly after a preformatted block is read
+  as its own line (issue #669). `plainText` ended a line at `</p>`,
+  `</div>`, `</h1>`-`</h6>` and `</li>`, but not at `</pre>`, so a
+  `<p>Revision: …</p>`, a disqualifier or a `Code:`, `Host:` or `Doc:`
+  line right after `<pre>…</pre>` was glued to the code block and never
+  parsed. A missing Revision failed safe, a hidden disqualifier did not.
+  `</pre>` now ends a line, for the `evidence` classification and the
+  drainage scanner alike. Revision lines are read in two views
+  (`revisionLines`, which replaces `parseRevisionLines` and takes the
+  storage body): the base view, where `</pre>` ends no line, keeps every
+  line the old reading found, disqualifiers included; a second view
+  drops each `<pre>` element, innermost first, and adds only the lines
+  that follow one. A quoted `Revision:` line that ends a `<pre>`, in
+  author text or in a block that lost its `Measured via` line, therefore
+  still never binds, as on base; Revision lines inside the excerpt of a
+  complete measurement block still never count. A `Revision:` paragraph
+  that also contains an empty `<pre>` now reads as malformed (stricter).
+  `<blockquote>`, table cells and rows and `<br />` are unchanged:
+  documented storage wraps quote text in `<p>`, and a table row or a
+  line break as a line is a separate decision.
+
 - Confluence brokers: a text-search result row without a readable title
   makes the exact-term half UNKNOWN instead of disappearing (issue #656).
   A row whose title was missing, not a string, or only whitespace in both

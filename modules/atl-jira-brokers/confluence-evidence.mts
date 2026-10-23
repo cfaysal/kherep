@@ -9,17 +9,17 @@ export const NO_BINDING_LINE = /^none \(no exact binding: (?:no repository|no fu
 export const DIRTY_LINE = /^(.*) \(no exact binding: dirty tree\)$/;
 export interface Revisions { bound: string[]; unbound: string[]; malformed: string[] }
 export function plainText(body: string): string {
-  return body.replace(/<\/(?:p|div|h[1-6]|li)>/gi, '\n').replace(/<[^>]*>/g, ' ')
+  return body.replace(/<\/(?:p|div|h[1-6]|li|pre)>/gi, '\n').replace(/<[^>]*>/g, ' ')
     .replace(/&(?:nbsp|amp|lt|gt|quot);/g, ' ').replace(/[ \t]+/g, ' ').trim();
 }
-export function parseRevisionLines(text: string): Revisions {
+// #669: the base view (</pre> ends no line) keeps every base line; the masked view (<pre> dropped, innermost first) adds lines after one.
+export function revisionLines(body: string): Revisions {
   const out: Revisions = { bound: [], unbound: [], malformed: [] };
-  for (const match of text.matchAll(/(?:^|\n)\s*Revision\s*:\s*([^\n]*)/gmi)) {
+  let masked = body; for (let last = ''; last !== masked;) [last, masked] = [masked, masked.replace(/<pre\b[^>]*>(?:(?!<pre\b)[^])*?<\/pre>/gi, ' [pre]</p>')];
+  for (const [view, text] of [body, masked].map(b => plainText(b.replace(/<\/pre>/gi, ' '))).entries()) for (const match of text.matchAll(/(?:^|\n)\s*Revision\s*:\s*([^\n]*)/gmi)) {
     const line = match[1].trim();
-    const dirty = DIRTY_LINE.exec(line);
-    if (BOUND_REVISION.test(line)) out.bound.push(line);
-    else if (NO_BINDING_LINE.test(line) || (dirty && BOUND_REVISION.test(dirty[1]))) out.unbound.push(line);
-    else out.malformed.push(line);
+    const kind = BOUND_REVISION.test(line) ? 'bound' : NO_BINDING_LINE.test(line) || BOUND_REVISION.test(DIRTY_LINE.exec(line)?.[1] ?? '') ? 'unbound' : 'malformed';
+    if (view === 0 || !out[kind].includes(line)) out[kind].push(line);
   }
   return out;
 }
@@ -61,7 +61,7 @@ export function classifyClaim(snapshot: ClaimSource, bodyApproved: boolean, kind
   const labels = [...snapshot.labels].sort();
   const original = claimBody(snapshot.body);
   const text = plainText(original);
-  const revisions = parseRevisionLines(plainText(revisionBody(snapshot.body)));
+  const revisions = revisionLines(revisionBody(snapshot.body));
   const codeTokens = unique(text.match(/\b[\w./-]+\.(?:mts|ts|tsx|js|py|java|go|rs)\b/g) ?? []);
   const githubKeys = [...text.matchAll(/\bGitHub\s+(?:issue|PR|pull request)\s*#(\d+)\b/gi),
     ...original.matchAll(/\/(?:issues|pull)\/(\d+)\b/g)].map(m => `#${m[1]}`);
