@@ -4,8 +4,8 @@ import {
   attestMacLaunchAgent, probeMacLaunchAgent, readMacPlist, type MacCommand, type MacLaunchAgentProbe,
 } from "./service-platform-mac-native.mts";
 
-// #594: a retry grace on a monotonic clock, not a total deadline. A new probe starts only while the grace has not
-// elapsed; every launchctl and plutil call keeps its own 15 s timeout, and an observation that allows the write is
+// #594: a retry grace on a monotonic clock, not a total deadline. A retry probe starts at the latest at the end of
+// the grace, never after it (checked again after every sleep); every launchctl and plutil call keeps its own 15 s timeout, and an observation that allows the write is
 // accepted even when its probe ends after the grace. The check can therefore last the grace plus one probe (two
 // launchctl calls) and one plutil. The first `print` after the pid was gone already said not-found and took at most
 // 145 ms in the issue's measurements; the grace is ~7x that.
@@ -45,6 +45,8 @@ function sameAsLoaded(probe: Extract<MacLaunchAgentProbe, { kind: "loaded" }>, i
   try { attestMacLaunchAgent(probe, input.file, parsed); return true; } catch { return false; }
 }
 
+const stillLoaded = () => new Error("LaunchAgent is still loaded with a different definition");
+
 // Not closed: a foreign bootstrap after the last probe and before the caller's rename (a gap that includes the
 // plutil call on the listed path) is not caught here; the next `read` attests the mismatch.
 export async function assertWritableOverLoaded(input: LoadedWriteInput): Promise<void> {
@@ -59,7 +61,8 @@ export async function assertWritableOverLoaded(input: LoadedWriteInput): Promise
     parsed ??= readMacPlist(input.run, input.temp); // one plutil per write, only on the listed path
     if (sameAsLoaded(observed.probe, input, parsed)) return;
     const remaining = deadline - input.clock.now();
-    if (remaining <= 0) throw new Error("LaunchAgent is still loaded with a different definition");
+    if (remaining <= 0) throw stillLoaded();
     await input.clock.sleep(Math.min(LOADED_WRITE_POLL_MS, remaining));
+    if (input.clock.now() > deadline) throw stillLoaded(); // a late sleep must not start a probe after the grace
   }
 }

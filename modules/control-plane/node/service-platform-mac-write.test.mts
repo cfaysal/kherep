@@ -60,13 +60,13 @@ function runner(f: Fixture, prints: MacCommandResult[], calls: string[],
 }
 
 function setup(t: test.TestContext, prints: (f: Fixture) => MacCommandResult[], domain?: (f: Fixture) => MacCommandResult,
-  delay: (call: string, index: number) => number = () => 0) {
+  delay: (call: string, index: number) => number = () => 0, oversleep: (index: number) => number = () => 0) {
   const f = fixture();
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
   const calls: string[] = [];
   let tick = 0;
   const sleeps: number[] = [];
-  const clock = { now: () => tick, sleep: async (ms: number) => { sleeps.push(ms); tick += ms; } };
+  const clock = { now: () => tick, sleep: async (ms: number) => { tick += ms + oversleep(sleeps.length); sleeps.push(ms); } };
   const run = runner(f, prints(f), calls, domain?.(f));
   const timed: MacCommand = (file, args, ...rest) => {
     const answer = run(file, args, ...rest);
@@ -210,6 +210,23 @@ test("Mac write accepts not found from a probe that started inside the grace and
   assert.deepEqual(s.sleeps, [100]);
   assert.equal(s.tick(), 2_100);
   s.noTemp();
+});
+
+test("Mac write starts no probe after a sleep that returns past the grace", async (t) => {
+  const s = setup(t, f => [loaded(f, f.argsOld), f.absent], undefined, undefined, () => 1_400);
+  await assert.rejects(s.write("NEW_PLIST"), /still loaded with a different definition/);
+  assert.equal(s.labelPrints(), 1);
+  assert.equal(s.tick(), 1_500);
+  assert.equal(s.content(), "OLD_PLIST");
+  s.noTemp();
+});
+
+test("Mac write still starts a probe exactly at the end of the grace", async (t) => {
+  const s = setup(t, f => [loaded(f, f.argsOld), f.absent], undefined, undefined, () => 900);
+  await s.write("NEW_PLIST");
+  assert.equal(s.labelPrints(), 2);
+  assert.equal(s.tick(), 1_000);
+  assert.equal(s.content(), "NEW_PLIST");
 });
 
 test("Mac write default clock is monotonic real time", async () => {

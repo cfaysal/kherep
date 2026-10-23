@@ -411,7 +411,7 @@ replaced, `launchctl print` must report the job as not found, or as loaded with
 the same bytes the file already holds and a loaded identity that attests
 against them (the check `read` uses). Otherwise the adapter retries every
 100 ms within a 1 second grace on a monotonic clock. The grace limits when a new
-check may start, not the total duration: each `launchctl` and `plutil` call
+check may start (no check starts after it), not the total duration: each `launchctl` and `plutil` call
 keeps its own 15 second timeout. In the issue's measurements the first print
 after the pid was gone already reported not found and took at most 145 ms. A
 job still loaded with another definition after the grace, or a launchd state
