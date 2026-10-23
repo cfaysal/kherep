@@ -469,7 +469,12 @@ increments the minor version; every other release increments the patch version.
   descendants, a fresh not-found print and a matching identity read in the
   same synchronous turn. Success needs a post-exit process table with
   nothing left in the daemon's group and none of the children seen while it
-  lived. No launchctl, ps or kill starts after the deadline. Every other
+  lived, also when the pid ends on its own after launchd reported the job
+  not found; a refusal (identity drift, children, an unreadable table) is
+  never overtaken by a later exit. No launchctl, ps, osascript or kill call,
+  including the second call of a two-step read, and no liveness poll starts
+  after the deadline; a parent whose fate after a signal is unknown at the
+  deadline leaves the family unproven. Every other
   case fails closed with a stop code; recovery then writes and starts
   nothing while the previous pid lives or its family is unproven, and the
   drain stays. Windows and adapters without the hook keep the generic poll.

@@ -10,10 +10,13 @@ import type { ServiceBinding, ServiceStopContext, ServiceStopProof, StopCode } f
 // (SIGTERM, then SIGKILL) to the attested pid only, on fixed points of the one deadline D the lifecycle computed:
 // P0 discriminates (alive every 100 ms, a strict print every second); two not-found answers >= 1 s apart with the pid
 // alive trigger P1 (one SIGTERM, at least RECLAIM_MIN_TERM_GRACE_MS before K = D - RECLAIM_KILL_WAIT_MS); from K, P2
-// sends one SIGKILL while now < D. No launchctl, ps or kill starts after D; a command already in flight may return later.
+// sends one SIGKILL while now < D. No launchctl, ps, osascript or kill call and no liveness poll starts at or after D,
+// also not the second call of a composite read; a command already in flight may return later.
 // Every signal follows a fresh inventory (no descendant), a fresh print (not found) and an identity read that matches
 // the pre-bootout snapshot, in the same synchronous turn. Not closed: kill(2) hits whoever holds the pid at the syscall,
 // so a pid reused between the identity read and the signal is signalled (accepted for this design).
+// Once triggered, a pid that is gone counts as stopped only after a clean family proof, and never after a refusal
+// other than running out of time: identity drift, descendants or an unreadable table stay the verdict.
 export const RECLAIM_KILL_WAIT_MS = 5_000;
 export const RECLAIM_MIN_TERM_GRACE_MS = 5_000;
 export const RECLAIM_PRINT_INTERVAL_MS = 1_000;
@@ -33,32 +36,44 @@ export async function reclaimMacStop(input: ReclaimInput): Promise<void> {
   const { clock, deadline, alive } = input;
   const pid = input.expected.pid;
   const kill = deadline - RECLAIM_KILL_WAIT_MS;
+  const open = (): boolean => clock.now() < deadline;
+  // The start contract per subcommand: a composite read (print, then the domain print; ps, then osascript) fails
+  // closed instead of starting its next call at or after D.
+  const run: MacCommand = (file, args, ...rest) => open() ? input.run(file, args, ...rest)
+    : { status: null, stdout: "", stderr: "", error: new Error("stop proof deadline reached") };
   const captured = new Map<number, string>(); // descendants seen while the parent lived: pid -> lstart
-  let signalled = false, familyReads = false, familyUnproven = false, nextInventory = 0;
+  let signalled = false, familyReads = false, familyUnproven = false, familyProven = false, aliveAtDeadline = false;
+  let nextInventory = 0;
   let refusal: StopCode | undefined;
+  // Unproven unless a post-exit proof was clean or, with nothing captured, the parent was seen alive at D.
   const fail = (code: StopCode): ReclaimFailure => Object.assign(new Error("previous daemon could not be proven stopped"),
-    { code, familyUnproven: familyUnproven || (signalled && captured.size > 0) });
+    { code, familyUnproven: familyUnproven || (!familyProven && (captured.size > 0 || !aliveAtDeadline)) });
   const refuse = (code: StopCode): "refused" => { refusal ??= code; return "refused"; };
   const matches = (identity: MacProcessIdentity | null): boolean => identity !== null && macIdentityMatches(identity,
     { uid: input.uid, binding: input.binding, startedAt: input.expected.startedAt, sourceRoot: input.expected.sourceRoot,
       lstart: input.snapshot.lstart });
+  const notFound = (): boolean => observeLoadedForWrite(run, input.uid, input.binding.serviceName).state === "not-found";
   const readFamily = (): ReturnType<typeof readMacInventory> => {
-    const rows = readMacInventory(input.run);
-    if (!rows) { if (signalled) familyUnproven = true; return null; }
+    const rows = readMacInventory(run);
+    if (!rows) { // after a signal the family is unknown for good: no further signal, no success (sticky)
+      if (signalled) { familyUnproven = true; refuse("STOP_UNKNOWN_DESCENDANTS"); }
+      return null;
+    }
     for (const child of macDescendants(rows.map(row => [row.pid, row.ppid] as const), pid)) {
       captured.set(child, rows.find(row => row.pid === child)!.lstart);
     }
     return rows;
   };
 
-  // Alive every 100 ms until `until`; after SIGTERM also the family every second. Never polls past D.
+  // Alive every 100 ms until `until`; after SIGTERM also the family every second. Never polls after D.
   const waitUntil = async (until: number): Promise<"gone" | "time"> => {
     for (;;) {
-      if (clock.now() > deadline) return "time";
-      if (!alive(pid)) return "gone";
       const now = clock.now();
+      if (now > deadline) return "time";
+      if (!alive(pid)) return "gone";
+      if (now >= deadline) aliveAtDeadline = true;
       if (now >= until) return "time";
-      if (familyReads && now >= nextInventory && now < deadline) {
+      if (familyReads && now >= nextInventory) {
         readFamily();
         nextInventory = now + RECLAIM_INVENTORY_INTERVAL_MS;
         continue;
@@ -67,15 +82,19 @@ export async function reclaimMacStop(input: ReclaimInput): Promise<void> {
     }
   };
 
-  // The pre-signal checks and the signal. From the identity read to the syscall nothing awaits.
+  // The pre-signal checks and the signal. From the identity read to the syscall nothing awaits; a read that returned
+  // at or after D ends the escalation before anything else is started.
   const signalIfOwned = (name: "SIGTERM" | "SIGKILL", inTime: () => boolean): "sent" | "gone" | "refused" => {
+    if (refusal !== undefined) return "refused"; // an earlier refusal is never followed by a signal
     const rows = readFamily();
+    if (!open()) return refuse("STOP_UNLISTED_ALIVE");
     if (!rows) return refuse("STOP_UNKNOWN_DESCENDANTS");
     if (macDescendants(rows.map(row => [row.pid, row.ppid] as const), pid).size) return refuse("STOP_BLOCKED_NATIVE_DESCENDANTS");
-    if (clock.now() >= deadline) return refuse("STOP_UNLISTED_ALIVE");
-    if (observeLoadedForWrite(input.run, input.uid, input.binding.serviceName).state !== "not-found") return refuse("STOP_IDENTITY_MISMATCH");
-    if (clock.now() >= deadline) return refuse("STOP_UNLISTED_ALIVE");
-    const identity = readMacProcessIdentity(input.run, pid);
+    const unlisted = notFound();
+    if (!open()) return refuse("STOP_UNLISTED_ALIVE");
+    if (!unlisted) return refuse("STOP_IDENTITY_MISMATCH");
+    const identity = readMacProcessIdentity(run, pid);
+    if (!open()) return refuse("STOP_UNLISTED_ALIVE");
     if (!alive(pid)) return "gone";
     if (!matches(identity)) return refuse("STOP_IDENTITY_MISMATCH");
     if (!inTime()) return refuse("STOP_UNLISTED_ALIVE");
@@ -85,38 +104,44 @@ export async function reclaimMacStop(input: ReclaimInput): Promise<void> {
       return "gone";
     }
     signalled = true;
-    // R3 floor: a live pid that no longer reads as the snapshot may be a foreign process; nothing follows it.
-    if (clock.now() < deadline && alive(pid) && !matches(readMacProcessIdentity(input.run, pid)) && alive(pid)) {
-      return refuse("STOP_IDENTITY_MISMATCH");
+    // R3 floor: a live pid that no longer reads as the snapshot may be a foreign process; this verdict is final.
+    if (open() && alive(pid)) {
+      const after = readMacProcessIdentity(run, pid);
+      if (open() && !matches(after) && alive(pid)) return refuse("STOP_IDENTITY_MISMATCH");
     }
     return "sent";
   };
 
-  // Parent exit alone is no proof once this code ended it: its group and every captured descendant must be gone too.
-  const familyGone = (): void => {
-    if (clock.now() >= deadline) { familyUnproven = true; throw fail("STOP_UNLISTED_ALIVE"); }
-    const rows = readMacInventory(input.run);
+  // Parent exit alone is no proof once launchd unlisted the job: its group and every captured descendant must be gone.
+  const familyGone = (): "clean" | "late" | "dirty" => {
+    if (familyUnproven) return "dirty"; // a later clean table cannot undo an unobserved family
+    if (!open()) { familyUnproven = true; return "late"; }
+    const rows = readMacInventory(run);
     if (!rows || rows.some(row => row.pgid === input.snapshot.pgid || captured.get(row.pid) === row.lstart)) {
       familyUnproven = true;
-      throw fail("STOP_BLOCKED_NATIVE_DESCENDANTS");
+      return "dirty";
     }
-    (input.report ?? console.error)("previous daemon was no longer loaded by launchd; its process was ended directly");
+    familyProven = true;
+    return "clean";
   };
 
-  if (clock.now() >= deadline) throw timedOut();
-  let firstNotFound: number | undefined, printing = true, nextPrint = clock.now(), triggered = false;
+  if (!open()) throw timedOut();
+  // A job launchd reported not found twice no longer has its group reaped by launchd, also when that came too late
+  // for a signal: its pid's own exit then needs the family proof too.
+  let firstNotFound: number | undefined, printing = true, nextPrint = clock.now(), triggered = false, unlisted = false;
   while (!triggered) {
-    if (clock.now() > deadline) throw timedOut();
-    if (!alive(pid)) return;
     const now = clock.now();
+    if (now > deadline) throw timedOut();
+    if (!alive(pid)) { if (!unlisted) return; break; }
     if (now >= deadline) throw timedOut();
     if (printing && now >= nextPrint) {
       nextPrint = now + RECLAIM_PRINT_INTERVAL_MS;
-      const observed = observeLoadedForWrite(input.run, input.uid, input.binding.serviceName).state;
+      const observed = observeLoadedForWrite(run, input.uid, input.binding.serviceName).state;
       if (observed === "read-error") printing = false; // fail closed: no signal, launchd may still end it
       else if (observed === "listed") firstNotFound = undefined;
       else if (firstNotFound === undefined) firstNotFound = now;
       else if (now - firstNotFound >= LOADED_WRITE_GRACE_MS) {
+        unlisted = true;
         triggered = clock.now() < kill - RECLAIM_MIN_TERM_GRACE_MS;
         printing = triggered; // a later trigger leaves no TERM grace and sends nothing
       }
@@ -125,17 +150,19 @@ export async function reclaimMacStop(input: ReclaimInput): Promise<void> {
     await clock.sleep(Math.min(RECLAIM_POLL_MS, deadline - now));
   }
 
-  let step = signalIfOwned("SIGTERM", () => kill - clock.now() >= RECLAIM_MIN_TERM_GRACE_MS);
+  let step = triggered ? signalIfOwned("SIGTERM", () => kill - clock.now() >= RECLAIM_MIN_TERM_GRACE_MS) : "gone";
   if (step === "sent") {
     familyReads = true;
     nextInventory = clock.now() + RECLAIM_INVENTORY_INTERVAL_MS;
-    if (await waitUntil(kill) === "gone") return familyGone();
-    step = clock.now() < deadline ? signalIfOwned("SIGKILL", () => clock.now() < deadline) : refuse("STOP_UNLISTED_ALIVE");
-    if (step === "sent") familyReads = false; // a killed parent starts no child
+    if (await waitUntil(kill) === "gone") step = "gone";
+    else {
+      step = open() ? signalIfOwned("SIGKILL", open) : refuse("STOP_UNLISTED_ALIVE");
+      if (step === "sent") familyReads = false; // a killed parent starts no child
+    }
   }
-  if (step === "gone" || await waitUntil(deadline) === "gone") {
-    if (signalled) return familyGone();
-    return;
-  }
-  throw fail(refusal ?? "STOP_UNLISTED_ALIVE");
+  if (step !== "gone" && await waitUntil(deadline) !== "gone") throw fail(refusal ?? "STOP_UNLISTED_ALIVE");
+  const family = familyGone();
+  if (refusal !== undefined && refusal !== "STOP_UNLISTED_ALIVE") throw fail(refusal); // never overtaken by the exit
+  if (family !== "clean") throw fail(family === "late" ? "STOP_UNLISTED_ALIVE" : "STOP_BLOCKED_NATIVE_DESCENDANTS");
+  if (signalled) (input.report ?? console.error)("previous daemon was no longer loaded by launchd; its process was ended directly");
 }

@@ -444,7 +444,12 @@ another process of your user between that read and the signal; that risk is
 accepted and not measured. After the pid is gone, one more process table must
 show nothing left in the daemon's process group and none of the children seen
 while it lived; only then does the upgrade continue, and the CLI prints one
-line to stderr without pid or path. Every other outcome fails closed with
+line to stderr without pid or path. The same proof applies when the pid ends
+on its own once launchd reported the job not found. A refusal (identity drift,
+children, an unreadable process table) stays the result even when the pid
+exits afterwards, and no `launchctl`, `ps` or `osascript` call, including the
+second call of a two-step read, and no liveness poll starts after the 75
+seconds. Every other outcome fails closed with
 `stage: prove-stopped`, `blocker: RECOVERY_ABSENCE_UNPROVEN` and one of
 `stopCode: STOP_UNLISTED_ALIVE` (the daemon outlived the budget),
 `STOP_BLOCKED_NATIVE_DESCENDANTS` (children appeared or may remain),
