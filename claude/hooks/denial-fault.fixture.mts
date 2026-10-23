@@ -13,7 +13,8 @@
 //                    the hook process has exited)
 //   marker-stuck     appendFile on a *.failed never settles, with a real referenced 60 s handle
 // With KHEREP_DENIAL_FAULT_RECEIPT set, the faulted process also records its intercepted calls (issue #652)
-// and two in-child anchors, so a suite measures a dispatcher's own wait, not its wall clock (issue #653).
+// and two in-child anchors, so a suite measures a dispatcher's own wait, not its wall clock (issue #653),
+// and the first Date.now() of the main with its caller, the main's own start (issue #661).
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -35,16 +36,17 @@ export function denialFaultEnv(fault: DenialFault, main: string, base: NodeJS.Pr
 // Every intercepted call, stamped in the faulted process, and the time of its exit event: no
 // receipt when that process was killed. tail is the suffix class of the path, never the path.
 // startAt is this preload's evaluation, just before the main module's; originAt is the process's
-// time origin, by the same expression as START in codex/hooks/hook-adapter.mts.
+// time origin, by the same expression as START in codex/hooks/hook-adapter.mts. firstNow is the value of the
+// first Date.now() after this preload and its caller as basename:line:col, never a path (issue #661).
 export interface FaultReceipt { calls: { at: number; op: "appendFile" | "mkdir" | "rename"; tail: ".jsonl" | ".failed" | "dir" | "" }[]; exitAt: number;
-  startAt: number; originAt: number }
+  startAt: number; originAt: number; firstNow?: { at: number; from: string } }
 export function readFaultReceipt(file: string): FaultReceipt | undefined {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as FaultReceipt : undefined;
 }
 // The exit event less an anchor (no ms without a receipt, or for first-call without a call), and the calls as op:tail.
-export function faultSpan(file: string, from: "first-call" | "start" | "origin"): { doc?: FaultReceipt; ops: string[]; ms?: number } {
+export function faultSpan(file: string, from: "first-call" | "start" | "origin" | "main-start"): { doc?: FaultReceipt; ops: string[]; ms?: number } {
   const doc = readFaultReceipt(file);
-  const anchor = from === "first-call" ? doc?.calls[0]?.at : from === "start" ? doc?.startAt : doc?.originAt;
+  const anchor = from === "first-call" ? doc?.calls[0]?.at : from === "start" ? doc?.startAt : from === "main-start" ? doc?.firstNow?.at : doc?.originAt;
   return { doc, ops: doc?.calls.map((c) => `${c.op}${c.tail ? `:${c.tail}` : ""}`) ?? [], ms: doc && anchor !== undefined ? doc.exitAt - anchor : undefined };
 }
 
@@ -62,11 +64,13 @@ if (fault && process.argv[1] && path.basename(process.argv[1]) === process.env.K
   const marker = (file: unknown): boolean => String(file).endsWith(".failed");
   const later = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, MARKER_SLOW_MS));
   const calls: FaultReceipt["calls"] = [];
+  const realNow = Date.now;
+  let firstNow: FaultReceipt["firstNow"];
   // A rename is classed by its target. The receipt is written synchronously: only fs.promises is patched.
   const note = (op: FaultReceipt["calls"][number]["op"], file: unknown): void => {
-    if (receipt) calls.push({ at: Date.now(), op, tail: op === "mkdir" ? "dir" : journal(file) ? ".jsonl" : marker(file) ? ".failed" : "" });
+    if (receipt) calls.push({ at: realNow(), op, tail: op === "mkdir" ? "dir" : journal(file) ? ".jsonl" : marker(file) ? ".failed" : "" });
   };
-  if (receipt) process.on("exit", () => fs.writeFileSync(receipt, JSON.stringify({ calls, exitAt: Date.now(), startAt, originAt })));
+  if (receipt) process.on("exit", () => fs.writeFileSync(receipt, JSON.stringify({ calls, exitAt: realNow(), startAt, originAt, firstNow })));
   promises.appendFile = function (file: unknown, ...rest: unknown[]) {
     note("appendFile", file);
     if (fault === "all-hang" || (fault === "journal-hang" && journal(file))) return never();
@@ -89,5 +93,18 @@ if (fault && process.argv[1] && path.basename(process.argv[1]) === process.env.K
   promises.mkdir = function (...args: unknown[]) {
     note("mkdir", args[0]);
     return fault === "all-hang" ? never() : mkdir.call(fs.promises, ...args);
+  };
+  // Only with a receipt: the first caller of Date.now() after this preload, the first frame outside this file.
+  const callerOf = (stack = ""): string => {
+    for (const frame of stack.split("\n").slice(1)) {
+      const m = /([^/\\]+):(\d+):(\d+)\)?\s*$/.exec(frame);
+      if (m && m[1] !== path.basename(import.meta.filename)) return `${m[1]}:${m[2]}:${m[3]}`;
+    }
+    return "";
+  };
+  if (receipt) Date.now = function () {
+    const at = realNow();
+    if (!firstNow) firstNow = { at, from: callerOf(new Error().stack) };
+    return at;
   };
 }
