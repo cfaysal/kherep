@@ -8,26 +8,29 @@ import { CatalogReadError, readAvailableModels } from "./model-catalog-process.m
 import { BASE, fakeClock, fakeServer, posix, probes, staged } from "./model-catalog-process.fixture.mts";
 
 test("POSIX cleanup re-asks a transient EPERM until ESRCH and accepts the catalog", async () => {
-  const probe = probes("denied", "denied", "absent"), clock = fakeClock();
-  const result = await readAvailableModels(posix(fakeServer(), probe, clock));
+  const probe = probes("denied", "denied", "absent"), clock = fakeClock(), server = fakeServer();
+  const result = await readAvailableModels(posix(server, probe, clock));
   assert.equal(result.complete, true);
   assert.deepEqual(probe.seen, ["denied", "denied", "absent"]);
   assert.deepEqual(clock.sleeps, [25, 25]);
+  assert.deepEqual(server.kills, ["SIGKILL"]);
 });
 
 test("POSIX cleanup fails closed when EPERM persists to the deadline", async () => {
-  const probe = probes("denied"), clock = fakeClock();
-  await assert.rejects(readAvailableModels({ ...posix(fakeServer(), probe, clock), cleanupGraceMs: 100 }),
+  const probe = probes("denied"), clock = fakeClock(), server = fakeServer();
+  await assert.rejects(readAvailableModels({ ...posix(server, probe, clock), cleanupGraceMs: 100 }),
     staged("cleanup", false, `${BASE} (stage: cleanup)`));
   assert.equal(probe.seen.length, 5);
   assert.deepEqual(clock.sleeps, [25, 25, 25, 25]);
+  assert.deepEqual(server.kills, ["SIGKILL"]);
 });
 
 test("POSIX cleanup confirmed by an immediate ESRCH costs one probe and no wait", async () => {
-  const probe = probes("absent"), clock = fakeClock();
-  assert.equal((await readAvailableModels(posix(fakeServer(), probe, clock))).complete, true);
+  const probe = probes("absent"), clock = fakeClock(), server = fakeServer();
+  assert.equal((await readAvailableModels(posix(server, probe, clock))).complete, true);
   assert.equal(probe.seen.length, 1);
   assert.deepEqual(clock.sleeps, []);
+  assert.deepEqual(server.kills, ["SIGKILL"]);
 });
 
 test("an unanswered initialize reports the start stage", async () => {
