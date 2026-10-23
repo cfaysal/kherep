@@ -453,19 +453,39 @@ increments the minor version; every other release increments the patch version.
   1..10000, default 2 s, probe cap, monotonic clock) and sends no further
   signal: a process-group number does not prove ownership once the owned
   close has run. Only ESRCH confirms; a group still present or denied at
-  the deadline fails closed as `stage: cleanup`. On POSIX the catalog
-  app-server is started with the per-invocation override
+  the deadline fails closed as `stage: cleanup`. On every platform the
+  catalog app-server is started with the per-invocation override
   `-c features.plugins=false`, measured effective on codex-cli 0.160.1
-  (macOS): the read then performs no plugin sync in a fresh home. This is a
+  (macOS and Windows 11): the read then performs no plugin sync in a fresh
+  home. This is a
   one-off CLI override; a managed configuration that pins the key, or a
   later Codex, may behave differently, and the bounded wait carries the
   read in that case. `--codex-home` naming a missing directory is created
   (0700) before the read; Codex refuses a `CODEX_HOME` that does not exist.
   `CatalogReadError` carries a bounded `stage` (`start`, `catalog`,
   `cleanup`) and whether cleanup was confirmed; the installer prints it as
-  a suffix of the existing message. The Windows invocation and the Windows
-  tree path are unchanged. A transport failure of the `initialized`
-  notification is reported as `stage: start`, not `catalog`.
+  a suffix of the existing message. A transport failure of the
+  `initialized` notification is reported as `stage: start`, not `catalog`.
+
+- Codex model catalog read on Windows (issue #667, Windows). The tree
+  signal's `taskkill` exit code was the verdict: a tree already gone
+  answered 128 and failed the read as `stage: cleanup` (4 of 12 fresh-home
+  reads; why `taskkill` answered 128 is unknown). A second mode, measured once in 40 reads, was a late child of the
+  fresh home's plugin sync that outlived the root, held its stdio pipe and
+  was still in the one post-kill snapshot 0.4 s after exit. The tree signal
+  is still sent only while the owned child holds its root, but its report
+  is no longer evidence either way. Cleanup is confirmed by observed state
+  only: exit and close of the owned child and a snapshot without a tracked
+  member or a descendant of the root, re-read within the same bounded
+  `cleanupGraceMs` loop as on POSIX. A tree observed gone no longer fails
+  because of the `taskkill` exit code. The loop itself signals nothing; only
+  the client's own close may still signal, and only while the child is
+  owned. A member
+  still present at the deadline, a snapshot that cannot be read, or a child
+  that never exits or closes fails closed as `stage: cleanup`. The catalog
+  app-server now starts with `-c features.plugins=false` on Windows too;
+  measured on codex-cli 0.160.1 the fresh-home tree is then the app-server
+  alone. `signalGroupReport` and the fork reply close are unchanged.
 
 - Confluence brokers: a line directly after a preformatted block is read
   as its own line (issue #669). `plainText` ended a line at `</p>`,

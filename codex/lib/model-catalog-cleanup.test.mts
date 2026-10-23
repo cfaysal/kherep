@@ -1,8 +1,8 @@
-// Issue #667 amendment: bounded POSIX cleanup confirmation and early-path stages, offline only.
+// Issue #667 amendment: bounded POSIX and Windows cleanup confirmation and early-path stages, offline only.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CatalogReadError, readAvailableModels } from "./model-catalog-process.mts";
-import { BASE, fakeClock, fakeServer, posix, probes, staged, timeline, type FakeClock } from "./model-catalog-process.fixture.mts";
+import { BASE, fakeClock, fakeServer, posix, probes, staged, timeline, windows, type FakeClock } from "./model-catalog-process.fixture.mts";
 
 const CLEANUP = `${BASE} (stage: cleanup)`, START = `${BASE} (stage: start)`;
 const START_UNCONFIRMED = `${BASE} (stage: start; cleanup unconfirmed)`;
@@ -100,7 +100,7 @@ test("the POSIX catalog app-server starts with plugins disabled, after any launc
   }
 });
 
-test("the Windows catalog argv is unchanged", async () => {
+test("the Windows catalog app-server starts with plugins disabled too", async () => {
   for (const [launchPrefix, expected] of [[undefined, []], [["x"], ["x"]]] as const) {
     let seen: readonly string[] = [];
     const server = fakeServer();
@@ -108,8 +108,59 @@ test("the Windows catalog argv is unchanged", async () => {
       ...(launchPrefix ? { launchPrefix: [...launchPrefix] } : {}),
       spawn(_file: string, args: readonly string[]) { seen = args; return server.child; },
       killGroup() { server.stop(); return "sent"; }, async relations() { return []; } });
-    assert.deepEqual(seen, [...expected, "app-server", "--listen", "stdio://"]);
+    assert.deepEqual(seen, [...expected, "-c", "features.plugins=false", "app-server", "--listen", "stdio://"]);
   }
+});
+
+// Issue #667, Windows: the tree signal's report is no evidence either way. Only observed exit and
+// close of the owned child and a snapshot without a tracked member or a root descendant confirm.
+test("Windows: an unconfirmed tree signal followed by an empty snapshot confirms", async () => {
+  const server = fakeServer(), clock = fakeClock(), options = windows(server, [[]], "unconfirmed", clock);
+  assert.equal((await readAvailableModels(options)).complete, true);
+  assert.deepEqual([options.reads(), clock.sleeps, server.kills], [2, [], ["SIGKILL"]]);
+});
+
+test("Windows: a foreign row in the snapshot is not a tree member", async () => {
+  const server = fakeServer(), options = windows(server, [[{ pid: 999, ppid: 1 }]], "unconfirmed");
+  assert.equal((await readAvailableModels(options)).complete, true);
+  assert.equal(options.reads(), 2);
+});
+
+test("Windows: a tracked member that ends within the grace confirms without a further signal", async () => {
+  const server = fakeServer(), clock = fakeClock(), late = [{ pid: 12346, ppid: 1 }];
+  const options = windows(server, [late, late, []], "unconfirmed", clock);
+  assert.equal((await readAvailableModels(options)).complete, true);
+  assert.deepEqual([options.reads(), clock.sleeps, server.kills], [4, [25, 25], ["SIGKILL"]]);
+});
+
+for (const [name, row, report] of [["a tracked member", { pid: 12346, ppid: 1 }, "unconfirmed"],
+  ["a late direct child of the root", { pid: 777, ppid: 12345 }, "sent"]] as const) {
+  test(`Windows: ${name} still present at the deadline fails closed without a further signal`, async () => {
+    const server = fakeServer(), clock = fakeClock(), options = windows(server, [[row]], report, clock);
+    await assert.rejects(readAvailableModels({ ...options, cleanupGraceMs: 100 }), staged("cleanup", false, CLEANUP));
+    assert.deepEqual([options.reads(), clock.sleeps, server.kills], [6, [25, 25, 25, 25], ["SIGKILL"]]);
+  });
+}
+
+// Mode B: the root exits while a late child still holds the inherited stdio pipe (close pending).
+for (const closes of [true, false]) {
+  test(`Windows: exit without close is re-asked without a snapshot and ${closes ? "confirmed once close arrives" : "fails closed"}`, async () => {
+    const server = fakeServer(), clock = fakeClock(), options = windows(server, [[]], "unconfirmed", clock, false);
+    const sleep = async (ms: number) => { if (closes && clock.sleeps.length === 0) server.close(); await clock.sleep(ms); };
+    const killGroup = (pid: number, signal: NodeJS.Signals) => { server.stopExitOnly(); return options.killGroup(pid, signal); };
+    const read = readAvailableModels({ ...options, sleep, killGroup, cleanupGraceMs: 100 });
+    if (closes) assert.equal((await read).complete, true);
+    else await assert.rejects(read, staged("cleanup", false, CLEANUP));
+    // The client's own second SIGKILL is refused by ownership once the child exited.
+    assert.deepEqual([options.reads(), clock.sleeps, server.kills], closes ? [2, [25], ["SIGKILL"]] : [1, [25, 25, 25, 25], ["SIGKILL"]]);
+  });
+}
+
+test("Windows: a child that never exits fails closed and is signalled only while owned", async () => {
+  const server = fakeServer(), clock = fakeClock(), options = windows(server, [[]], "sent", clock, false);
+  server.child.stdin.removeAllListeners("finish");
+  await assert.rejects(readAvailableModels({ ...options, cleanupGraceMs: 100 }), staged("cleanup", false, CLEANUP));
+  assert.deepEqual([options.reads(), clock.sleeps, server.kills], [1, [25, 25, 25, 25], ["SIGKILL", "SIGKILL"]]);
 });
 
 test("an opened hook failure is a start failure with one confirmed cleanup", async () => {
