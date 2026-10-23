@@ -115,7 +115,7 @@ cache; see the [service adoption contract](docs/INSTALLATION.md).
 
 [![Relief: scribes of Claude Code and Codex bring findings to one archive; a scale weighs the evidence, the broker seals each scroll, private matters stay in a locked shrine.](assets/illustrations/kherep-brain-relief.svg)](https://raw.githubusercontent.com/cfaysal/kherep/main/assets/illustrations/kherep-brain.svg)
 
-Sessions are asked to search the space before answering, and a substantial turn that shows neither research nor a stated reason to skip it is sent back once. The matching pages come back with their evidence status. After a substantial turn, the observation agent files what the turn established through the broker. See the [detailed diagram](https://raw.githubusercontent.com/cfaysal/kherep/main/assets/illustrations/kherep-brain.svg).
+Sessions are asked to search the space before answering, and a substantial turn that shows neither research nor a stated reason to skip it is sent back once. The matching pages come back with their evidence status. After a substantial turn, the observation agent files what the turn established through the broker. See the [detailed diagram](https://raw.githubusercontent.com/cfaysal/kherep/main/assets/illustrations/kherep-brain.svg). Clients that read the space directly, including through the Atlassian MCP server, follow [Reading the Central Brain](docs/CENTRAL-BRAIN-READING.md).
 
 ### Control Plane
 
@@ -185,6 +185,7 @@ To report a vulnerability, follow the [security policy](.github/SECURITY.md).
 | [Codex adapter architecture](codex/ARCHITECTURE.md) | Memory backends, research enforcement, hook integrity and MCP projection in Codex |
 | [Codex hook starts](docs/CODEX-HOOK-RUNS.md) | Reproducible comparison of Codex hook starts with the shell dispatcher |
 | [Atlassian brokers](modules/atl-jira-brokers/README.md) | Jira and Confluence service-account operations, including the Central Brain space |
+| [Reading the Central Brain](docs/CENTRAL-BRAIN-READING.md) | How any client, through a broker or the Atlassian MCP server, reads evidence status, absence, truncation and page versions faithfully |
 | [Control Plane](modules/control-plane/README.md) | Cloudflare Worker and node daemon for node enrollment, liveness, session messaging and task sessions |
 | [Teamwork Graph](modules/twg/README.md) | Runtime contract and installation of the Teamwork Graph integration |
 | [Public release review](docs/PUBLIC-RELEASE.md) | Review steps before pushing and before tagging a release |
