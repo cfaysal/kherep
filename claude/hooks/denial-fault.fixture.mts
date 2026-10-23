@@ -14,7 +14,8 @@
 //   marker-stuck     appendFile on a *.failed never settles, with a real referenced 60 s handle
 // With KHEREP_DENIAL_FAULT_RECEIPT set, the faulted process also records its intercepted calls (issue #652)
 // and two in-child anchors, so a suite measures a dispatcher's own wait, not its wall clock (issue #653),
-// and the first Date.now() of the main with its caller, the main's own start (issue #661).
+// and the first Date.now() of the main with its caller, the main's own start (issue #661). Date.now is
+// patched only in that receipt case; without the variable no global is touched.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
