@@ -26,12 +26,12 @@ This guide is for any client that reads the Central Brain: Claude Code, Codex or
    - On the MCP path, a CQL search with a space key that does not resolve returned `totalSize 0` with no error, the same shape as a search with no matches. The test used an unknown key, so the space was missing or not visible; a real space the identity is denied was not tested. Before reporting absence, resolve the space (for example with `getConfluenceSpace`), or use the broker search. For the same unknown key, the broker search exited 2 with `status: unavailable`.
    - A 404 on a single page read does not tell "missing" from "not permitted".
    - In every case the honest result is UNKNOWN until the read path itself is verified.
-4. **Check for truncation.** On MCP, `totalSize` greater than `size`, or a `_links.next` cursor, means more results exist. The broker prints `truncated: true`. A truncated result is not the full population.
+4. **Check for truncation.** On MCP, `totalSize` greater than `size`, or a `_links.next` cursor, means more results exist. The broker prints `truncated: true`. A truncated result is not the full population; to read further, follow the `next` cursor rather than estimating the remaining pages from `totalSize`.
 5. **A raw body hash does not identify a page version.** In #679 the stored representation of one page changed between two reads while its version stayed the same: Confluence added `local-id` attributes and converted plain links to `ac:link` macros. To compare reads across clients or over time, compare:
    - the page version;
    - the page body after a declared text normalization.
 
-   The two paths also return different raw formats for the same version: storage XML from the broker, HTML or markdown from MCP.
+   The two paths also return different raw formats for the same version: storage XML from the broker, HTML or markdown from MCP. Equal normalized text shows the visible text agrees; it does not prove equal markup, attributes or link targets, and it does not replace the stricter readback a write requires.
 6. **Reading never upgrades evidence.** A page that you read, quote or find agreeing with another page keeps its label. A relayed finding stays relayed. Only the evidence confirm path, which measures against a primary source, may propose a new status.
 
 ## Writing
