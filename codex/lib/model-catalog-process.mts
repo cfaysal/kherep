@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { performance } from "node:perf_hooks";
 import { AppServerClient, type AppServerSpawn, type KillReport } from "../../modules/control-plane/node/codex-app-server-client.mts";
 import { codexCommand, findCodex } from "../../modules/control-plane/node/codex-binary.mts";
 import { signalGroupReport } from "../../modules/control-plane/node/codex-process.mts";
@@ -18,7 +19,7 @@ export interface CatalogProcessOptions extends CatalogLimits {
   killGroup?: (pid: number, signal: NodeJS.Signals) => KillReport;
   relations?: () => Promise<ProcessRelation[]>;
   probeGroup?: (pid: number) => GroupProbe;
-  // How long a denied (EPERM) group probe may be re-asked; default 2000 ms.
+  // How long a remaining group may be re-asked: safe integer 1..10000 ms, default 2000.
   cleanupGraceMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -41,9 +42,7 @@ export class CatalogReadError extends Error {
   }
 }
 
-// Issue #667: on macOS kill(-pgid, 0) answers EPERM for ~100 ms after a clean app-server
-// exit in a fresh home, then ESRCH. EPERM is re-asked until ESRCH or the deadline; it is
-// never read as absent. Any other code fails closed as "present".
+// Any code other than ESRCH (gone) or EPERM (a member we may not signal) fails closed as "present".
 function probeGroup(pid: number): GroupProbe {
   try { process.kill(-pid, 0); return "present"; }
   catch (error) {
@@ -51,16 +50,31 @@ function probeGroup(pid: number): GroupProbe {
     return code === "ESRCH" ? "absent" : code === "EPERM" ? "denied" : "present";
   }
 }
-const GROUP_POLL_MS = 25;
-async function groupGone(pid: number, options: CatalogProcessOptions): Promise<boolean> {
-  const probe = options.probeGroup ?? probeGroup, now = options.now ?? Date.now;
+const GROUP_POLL_MS = 25, DEFAULT_CLEANUP_GRACE_MS = 2000, MAX_CLEANUP_GRACE_MS = 10_000;
+function cleanupGrace(options: CatalogProcessOptions): number {
+  const grace = options.cleanupGraceMs ?? DEFAULT_CLEANUP_GRACE_MS;
+  if (!Number.isSafeInteger(grace) || grace <= 0 || grace > MAX_CLEANUP_GRACE_MS) {
+    throw new CatalogStageError("start", "Invalid cleanup grace");
+  }
+  return grace;
+}
+
+// Issue #667, measured: after the forced close the group can keep one member for a few ms
+// (an orphaned git helper, ppid 1) and kill(-pgid, 0) may answer EPERM for ~100 ms. The group
+// is ours (detached: the app-server was its leader): a present member is re-signalled with
+// SIGKILL and asked again, a denied one is only asked again. Only a measured ESRCH confirms.
+// Deadline and probe cap end the loop independently, so a broken clock cannot extend it.
+async function groupGone(pid: number, grace: number, resignal: () => void, options: CatalogProcessOptions): Promise<boolean> {
+  const probe = options.probeGroup ?? probeGroup, now = options.now ?? (() => performance.now());
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const deadline = now() + (options.cleanupGraceMs ?? 2000);
-  for (;;) {
+  const maxProbes = Math.ceil(grace / GROUP_POLL_MS) + 1;
+  const deadline = now() + grace;
+  for (let probes = 1; ; probes++) {
     const state = probe(pid);
-    if (state !== "denied") return state === "absent";
+    if (state === "absent") return true;
+    if (state === "present") resignal();
     const left = deadline - now();
-    if (left <= 0) return false;
+    if (left <= 0 || probes >= maxProbes) return false;
     await sleep(Math.min(GROUP_POLL_MS, left));
   }
 }
@@ -71,6 +85,7 @@ function hasDescendants(pid: number, rows: ProcessRelation[]): boolean {
 // Metadata only. No configuration is read here; CODEX_HOME selects the caller's
 // runtime context. The process is held, group-scoped and never started via a shell.
 async function readCatalogProcess(options: CatalogProcessOptions): Promise<ModelCatalog> {
+  const grace = cleanupGrace(options);
   const platform = options.platform ?? process.platform;
   const executable = options.executable ?? (options.find ?? findCodex)();
   if (!executable) throw new Error("Codex executable unavailable for model catalog");
@@ -96,7 +111,7 @@ async function readCatalogProcess(options: CatalogProcessOptions): Promise<Model
     if (child.pid === undefined) { await client.shutdown(true); return false; }
     if (platform !== "win32") {
       const stopped = await client.shutdown(true);
-      return stopped && await groupGone(child.pid, options);
+      return stopped && await groupGone(child.pid, grace, () => { kill("SIGKILL"); }, options);
     }
     // Use the existing tree signal while this exact ChildProcess still owns its
     // root. A post-signal snapshot measures only whether that owned root/tree remains.
@@ -114,7 +129,12 @@ async function readCatalogProcess(options: CatalogProcessOptions): Promise<Model
     return signalled && exited && closed && !after.some((row) => tracked.has(row.pid)) && !hasDescendants(child.pid, after);
   };
   try { options.opened?.(child); }
-  catch (error) { await shutdown(); throw error; }
+  catch (error) {
+    // Early owned failure: start stage, one cleanup attempt, first error retained.
+    const failure = new CatalogStageError("start", "Model catalog start failed", { cause: error });
+    try { failure.cleanupConfirmed = await shutdown(); } catch { failure.cleanupConfirmed = false; }
+    throw failure;
+  }
   return collectModelCatalog({ request: async (method, params, timeout) => {
     const result = await client.request(method, params, timeout);
     if (serverRequest) throw new Error("Unexpected model catalog server request");
