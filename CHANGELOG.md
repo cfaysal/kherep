@@ -260,6 +260,29 @@ increments the minor version; every other release increments the patch version.
   names stay `ubuntu-latest`, because the main ruleset requires them by
   name (issue #670).
 
+- `MacServiceAdapter.write` refuses a plist write over a job launchd still
+  has loaded with a different definition (issue #594). After the temp file
+  is written and before the rename, the adapter reads `launchctl print`: a
+  job reported not found (rc 113, `Could not find service`, readable domain)
+  lets the write through; a listed job lets it through only when the bytes
+  equal the file's and the loaded identity attests against them (the same
+  predicate `read` uses). Otherwise it retries every 100 ms within a 1 s
+  grace on a monotonic clock. The grace limits when a new probe may start,
+  not the total duration: each `launchctl` and `plutil` call keeps its own
+  15 s timeout, and a probe that started inside the grace is honoured even
+  when it ends after it. The grace is about seven times the 145 ms that the
+  slowest first `launchctl print` after the pid was gone took in the
+  issue's measurements, a call that already reported not found. A job
+  still loaded with another definition after the grace refuses with
+  `LaunchAgent is still loaded with a different definition`. Any other
+  `print` result refuses at once with `LaunchAgent loaded state could not
+  be read before write`; a read error never counts as absent. Both leave
+  the file untouched. A foreign `bootstrap` between the last probe and the
+  rename, a gap that includes the `plutil` call on the listed path, is not
+  caught at the write; the next `read` attests it. Not found is not a stop
+  proof: a job launchd no longer lists may still have a live process
+  (issue #677).
+
 - The Claude control-plane hooks run through a stable entry point (issue
   #592). The eight control-plane commands of `settings.json` now read
   `node "<CLAUDE_HOME>/kherep/control-plane/claude-control-plane-hook.mts"
