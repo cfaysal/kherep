@@ -52,8 +52,9 @@ function probeGroup(pid: number): GroupProbe {
 }
 // Issue #667 (M3-M5): the plugin sync of a fresh home spawns a git fetch whose orphaned child
 // outlives the app-server by milliseconds. features.plugins=false keeps a metadata read free of
-// it; the -c form only warns on an unknown key, --disable would refuse to start. POSIX invocation
-// only; the Windows argv is unchanged.
+// it; the -c form only warns on an unknown key, --disable would refuse to start. Measured on macOS
+// and Windows 11 (codex-cli 0.160.1): on Windows the fresh-home tree of the argv without the flag
+// was codex + conhost + 3 git + git-remote-https, with the flag codex alone.
 const CATALOG_SESSION_FLAGS = ["-c", "features.plugins=false"];
 const GROUP_POLL_MS = 25, DEFAULT_CLEANUP_GRACE_MS = 2000, MAX_CLEANUP_GRACE_MS = 10_000;
 function cleanupGrace(options: CatalogProcessOptions): number {
@@ -70,13 +71,15 @@ function cleanupGrace(options: CatalogProcessOptions): number {
 // run, and a reused number would name a foreign group. The loop only observes. Only a measured
 // ESRCH confirms; present or denied at the deadline or at the probe cap is unconfirmed cleanup.
 // Deadline and probe cap end the loop independently, so a broken clock cannot extend it.
-async function groupGone(pid: number, grace: number, options: CatalogProcessOptions): Promise<boolean> {
-  const probe = options.probeGroup ?? probeGroup, now = options.now ?? (() => performance.now());
+// The Windows tree probe uses the same loop.
+type Probe = () => GroupProbe | Promise<GroupProbe>;
+async function settles(probe: Probe, grace: number, options: CatalogProcessOptions): Promise<boolean> {
+  const now = options.now ?? (() => performance.now());
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const maxProbes = Math.ceil(grace / GROUP_POLL_MS) + 1;
   const deadline = now() + grace;
   for (let probes = 1; ; probes++) {
-    if (probe(pid) === "absent") return true;
+    if (await probe() === "absent") return true;
     const left = deadline - now();
     if (left <= 0 || probes >= maxProbes) return false;
     await sleep(Math.min(GROUP_POLL_MS, left));
@@ -93,8 +96,7 @@ async function readCatalogProcess(options: CatalogProcessOptions): Promise<Model
   const platform = options.platform ?? process.platform;
   const executable = options.executable ?? (options.find ?? findCodex)();
   if (!executable) throw new Error("Codex executable unavailable for model catalog");
-  const command = codexCommand(executable, [...options.launchPrefix ?? [],
-    ...(platform === "win32" ? [] : CATALOG_SESSION_FLAGS), "app-server", "--listen", "stdio://"], platform);
+  const command = codexCommand(executable, [...options.launchPrefix ?? [], ...CATALOG_SESSION_FLAGS, "app-server", "--listen", "stdio://"], platform);
   const child = (options.spawn ?? spawn as AppServerSpawn)(command.file, command.args, {
     stdio: "pipe", windowsHide: true, detached: true,
     ...(options.codexHome ? { env: { ...process.env, CODEX_HOME: options.codexHome } } : {}),
@@ -113,25 +115,37 @@ async function readCatalogProcess(options: CatalogProcessOptions): Promise<Model
   const client = new AppServerClient(child, { requestTimeoutMs: options.timeoutMs ?? 10_000, strict: true, kill,
     onServerRequest: () => { serverRequest = true; client.escalate(); } });
   const shutdown = async (): Promise<boolean> => {
-    if (child.pid === undefined) { await client.shutdown(true); return false; }
+    const root = child.pid;
+    if (root === undefined) { await client.shutdown(true); return false; }
     if (platform !== "win32") {
       const stopped = await client.shutdown(true);
-      return stopped && await groupGone(child.pid, grace, options);
+      return stopped && await settles(() => (options.probeGroup ?? probeGroup)(root), grace, options);
     }
-    // Use the existing tree signal while this exact ChildProcess still owns its
-    // root. A post-signal snapshot measures only whether that owned root/tree remains.
+    // Issue #667, Windows, measured on Windows 11 / codex-cli 0.160.1: taskkill /T /F exited 128
+    // with the tree already gone (cause UNKNOWN; possibly members ending during its walk), and once
+    // in 40 reads a late child outlived the root, held the inherited stdio pipe (close pending) and
+    // was still in the snapshot 0.4 s after exit. The tree signal is attempted only while this exact
+    // ChildProcess owns its root; its report proves nothing either way. Cleanup is confirmed by
+    // observed state only: exit and close of the owned child, then a snapshot without a tracked
+    // member or a descendant of the root, re-read within the same bounded loop. The loop itself
+    // signals nothing; only the client's own close may still signal, and only while owned.
     let before: ProcessRelation[];
     try { before = await (options.relations ?? windowsRelations)(); }
     catch (error) { if (owned()) kill("SIGKILL"); await client.shutdown(); throw error; }
-    const tracked = new Set<number>([child.pid]);
+    const tracked = new Set<number>([root]);
     for (let changed = true; changed;) {
       changed = false;
       for (const row of before) if (tracked.has(row.ppid) && !tracked.has(row.pid)) { tracked.add(row.pid); changed = true; }
     }
-    const signalled = owned() && kill("SIGKILL") === "sent";
+    const attempted = owned();
+    if (attempted) kill("SIGKILL");
     await client.shutdown();
-    const after = await (options.relations ?? windowsRelations)();
-    return signalled && exited && closed && !after.some((row) => tracked.has(row.pid)) && !hasDescendants(child.pid, after);
+    const treeGone = async (): Promise<GroupProbe> => {
+      if (!exited || !closed) return "present";
+      const after = await (options.relations ?? windowsRelations)();
+      return after.some((row) => tracked.has(row.pid)) || hasDescendants(root, after) ? "present" : "absent";
+    };
+    return attempted && await settles(treeGone, grace, options);
   };
   try { options.opened?.(child); }
   catch (error) {

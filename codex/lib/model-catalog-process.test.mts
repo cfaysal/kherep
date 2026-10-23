@@ -114,12 +114,13 @@ test("Windows snapshot failure cleans the owned helper and redacts its error", a
 });
 
 test("Windows cleanup rejects surviving tracked children after a successful tree signal", async () => {
-  const server = fakeServer();
+  const server = fakeServer(), clock = fakeClock();
   let reads = 0;
-  await assert.rejects(readAvailableModels({ executable: "synthetic-codex.exe", platform: "win32",
-    spawn() { return server.child; }, killGroup() { server.stop(); return "sent"; },
+  await assert.rejects(readAvailableModels({ executable: "synthetic-codex.exe", platform: "win32", cleanupGraceMs: 100,
+    now: clock.now, sleep: clock.sleep, spawn() { return server.child; }, killGroup() { server.stop(); return "sent"; },
     async relations() { return reads++ === 0 ? [{ pid: 12346, ppid: 12345 }] : [{ pid: 12346, ppid: 1 }]; } }), /cleanup unconfirmed/);
-  assert.equal(reads, 2);
+  assert.equal(reads, 6);
+  assert.deepEqual(clock.sleeps, [25, 25, 25, 25]);
 });
 
 test("Windows timeout signals only the owned synthetic helper and returns a bounded failure", async () => {

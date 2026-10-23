@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { KillReport } from "../../modules/control-plane/node/codex-app-server-client.mts";
+import type { ProcessRelation } from "../../modules/control-plane/node/process-relations.mts";
 import { CatalogReadError, type GroupProbe } from "./model-catalog-process.mts";
 
 // respond: answer requests at all; page: the model/list result; serverRequestOn: the method
@@ -28,9 +30,16 @@ export function fakeServer(respond = true, page?: unknown, serverRequestOn?: str
     child.signalCode = "SIGKILL";
     queueMicrotask(() => { child.emit("exit", null, "SIGKILL"); child.emit("close", null, "SIGKILL"); });
   };
+  // Windows mode B: the child exits while a late process still holds its stdio pipe; close() ends it.
+  const stopExitOnly = () => {
+    if (child.signalCode !== null) return;
+    child.signalCode = "SIGKILL";
+    queueMicrotask(() => child.emit("exit", null, "SIGKILL"));
+  };
+  const close = () => { child.emit("close", null, "SIGKILL"); };
   // Exit on stdin end so POSIX tests skip the client's fixed shutdown grace.
   child.stdin.on("finish", stop);
-  return { child: child as unknown as ChildProcessWithoutNullStreams, stop, methods, kills };
+  return { child: child as unknown as ChildProcessWithoutNullStreams, stop, stopExitOnly, close, methods, kills };
 }
 export type FakeServer = ReturnType<typeof fakeServer>;
 
@@ -61,6 +70,21 @@ export function posix(server: FakeServer, probe: Probes, clock: FakeClock = fake
   return { executable: "synthetic-codex", platform: "linux" as const, spawn() { return server.child; },
     killGroup(pid: number, signal: NodeJS.Signals) { assert.equal(pid, 12345); server.kills.push(signal); server.stop(); return "sent" as const; },
     probeGroup: probe.probeGroup, now: clock.now, sleep: clock.sleep };
+}
+
+// Windows options around a fake server. killGroup answers `report`, records the signal and stops the
+// child unless `stops` is false; relations answers the before-snapshot (root 12345 with child 12346)
+// and then the entries of `after` in order, the last one repeating. reads() counts every snapshot.
+export function windows(server: FakeServer, after: ProcessRelation[][], report: KillReport = "sent",
+  clock: FakeClock = fakeClock(), stops = true) {
+  let reads = 0;
+  return { executable: "synthetic-codex.exe", platform: "win32" as const, spawn() { return server.child; },
+    now: clock.now, sleep: clock.sleep, reads: () => reads,
+    killGroup(pid: number, signal: NodeJS.Signals) { assert.equal(pid, 12345); server.kills.push(signal); if (stops) server.stop(); return report; },
+    async relations(): Promise<ProcessRelation[]> {
+      const i = reads++;
+      return i === 0 ? [{ pid: 12345, ppid: 1 }, { pid: 12346, ppid: 12345 }] : after[Math.min(i - 1, after.length - 1)];
+    } };
 }
 
 // Ownership timeline (independent review, H1): each step is the probe's answer and, optionally,
