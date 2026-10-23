@@ -46,7 +46,10 @@ export async function macHost(t: test.TestContext) {
   };
   let job: { args: string[]; pid?: number } | null = null;
   let daemon: DaemonState | null = null;
-  const options = { bootout: "normal" as Bootout, termExit: 2_000, printDelay: 0 };
+  // inventoryDelay: extra ticks for a full `ps -axo` inventory that starts at `tick`; inventoryUnreadable: that inventory
+  // fails; foreignAfterTerm: the pid reads as another program once it received SIGTERM; termExit < 0: SIGTERM is ignored.
+  const options = { bootout: "normal" as Bootout, termExit: 2_000, printDelay: 0, inventoryDelay: (_tick: number) => 0,
+    inventoryUnreadable: (_tick: number) => false, foreignAfterTerm: false };
   const calls: Array<{ tick: number; call: string }> = [];
   const signals: Array<{ pid: number; signal: string; tick: number }> = [];
   const launch = (args: string[]) => {
@@ -89,10 +92,16 @@ export async function macHost(t: test.TestContext) {
     if (command === "ps" && argv[0] === "-axo") return result(0, living().map(([pid]) => `${pid} 1\n`).join(""));
     if (command === "ps" && argv[2] === "pid=,uid=,command=") return result(0, `1 0 /sbin/launchd\n${living().map(([pid, p]) => `${pid} ${uid} ${p.args.join(" ")}\n`).join("")}`);
     if (command === "ps" && argv.includes("-axo")) {
+      const started = tick;
+      tick += options.inventoryDelay(started);
+      if (options.inventoryUnreadable(started)) return result(1, "", "synthetic unreadable");
       return result(0, `1 0 1 0 ${LSTART} /sbin/launchd\n${living().map(([pid, p]) => `${pid} 1 ${pid} ${uid} ${LSTART} ${p.args.join(" ")}\n`).join("")}`);
     }
     const pid = Number(argv.at(-1) === "lstart=,uid=,pgid=,ppid=,command=" ? argv[2] : argv.at(-1));
-    if (command === "ps" && argv.includes("-p")) return alive(pid) ? result(0, `${LSTART} ${uid} ${pid} 1 ${processes.get(pid)!.args.join(" ")}\n`) : result(1);
+    const foreign = options.foreignAfterTerm && signals.some(item => item.pid === pid && item.signal === "SIGTERM");
+    if (command === "ps" && argv.includes("-p")) {
+      return alive(pid) ? result(0, `${LSTART} ${uid} ${pid} 1 ${foreign ? "/usr/bin/foreign --task" : processes.get(pid)!.args.join(" ")}\n`) : result(1);
+    }
     if (command === "/usr/bin/osascript") return alive(pid) ? result(0, `${process.execPath}\n`) : result(1);
     return result(1, "", "unexpected synthetic command");
   };
@@ -108,5 +117,6 @@ export async function macHost(t: test.TestContext) {
   const deps: LifecycleDependencies = { paths, adapter, clock, sleep: clock.sleep, pidAlive: alive, readDaemonState: () => daemon,
     verifySource: () => true, reportAdmissionWait: () => {} };
   return { root, file, old, candidate, adapter, deps, paths, calls, signals, options, alive, tick: () => tick,
+    bootoutTick: () => calls.filter(item => item.call.startsWith("launchctl bootout ")).at(-1)?.tick ?? Number.NaN,
     daemonPid: () => (daemon as DaemonState | null)?.pid, inode: () => fs.statSync(file).ino, bytes: () => fs.readFileSync(file, "utf8") };
 }

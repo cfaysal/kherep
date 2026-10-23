@@ -51,7 +51,9 @@ export function world(script: Script = {}) {
   const reports: string[] = [];
   let prints = 0, inventories = 0, identities = 0, sleepsAtRead = 0, sleptBetween = false;
   let executable = process.execPath;
-  const alive = (pid: unknown): boolean => pid === PID && (script.alive ?? (() => true))(tick, signals.map(item => item.signal));
+  const living = (): boolean => (script.alive ?? (() => true))(tick, signals.map(item => item.signal));
+  const aliveTicks: number[] = []; // every liveness poll the hook makes, with its tick
+  const alive = (pid: unknown): boolean => { aliveTicks.push(tick); return pid === PID && living(); };
   const run: MacCommand = (file, args) => {
     const call = [file, ...args].join(" ");
     calls.push({ tick, call });
@@ -61,16 +63,16 @@ export function world(script: Script = {}) {
       answer = state === "listed" ? listed : state === "not-found" ? notFound : result(1, "", "synthetic unreadable");
     } else if (file === "launchctl" && args[1] === `gui/${UID}`) answer = result(0, `gui/${UID} = {\n}\n`);
     else if (file === "ps" && args.includes("-axo")) {
-      const rows = (script.inventory ?? (() => []))(tick, inventories++, alive(PID));
+      const rows = (script.inventory ?? (() => []))(tick, inventories++, living());
       answer = rows === null ? result(1, "", "synthetic unreadable")
-        : result(0, `${[...(alive(PID) ? [row(PID, 1, PID, LSTART, COMMAND)] : []), row(1, 0, 1, LSTART, "/sbin/launchd"), ...rows].join("\n")}\n`);
+        : result(0, `${[...(living() ? [row(PID, 1, PID, LSTART, COMMAND)] : []), row(1, 0, 1, LSTART, "/sbin/launchd"), ...rows].join("\n")}\n`);
     } else if (file === "ps" && args.includes("-p")) {
       const identity = script.identity ? script.identity(tick, identities++) : {};
       const value = identity && { ...OWN, ...identity };
-      answer = value && alive(PID) ? result(0, `${value.lstart} ${value.uid} ${value.pgid} 1 ${value.command}\n`) : result(1);
+      answer = value && living() ? result(0, `${value.lstart} ${value.uid} ${value.pgid} 1 ${value.command}\n`) : result(1);
       if (value) executable = value.executable;
     } else if (file === "/usr/bin/osascript") {
-      answer = alive(PID) ? result(0, `${executable}\n`) : result(1, "", "path unavailable");
+      answer = living() ? result(0, `${executable}\n`) : result(1, "", "path unavailable");
       sleepsAtRead = sleeps.length;
     } else answer = result(1, "", "unexpected synthetic command");
     tick += script.delay?.(call, tick) ?? 0;
@@ -94,7 +96,8 @@ export function world(script: Script = {}) {
     catch (error) { return { ok: false as const, tick, error: error as Error & { code?: string; familyUnproven?: boolean } }; }
   };
   const started = (pattern: RegExp) => calls.filter(item => pattern.test(item.call));
-  return { calls, signals, sleeps, reports, reclaim, started, tick: () => tick, sleptBetween: () => sleptBetween, alive, run, clock, signal };
+  return { calls, signals, sleeps, reports, reclaim, started, tick: () => tick, sleptBetween: () => sleptBetween, alive, run, clock, signal,
+    aliveTicks };
 }
 
 export const INVENTORY = /^ps -ww -axo /;
@@ -114,4 +117,5 @@ export function aliveUntil(w: () => ReturnType<typeof world>, signal: string, ms
 export function noCallAfter(w: ReturnType<typeof world>, limit = D): void {
   for (const item of w.calls) assert.ok(item.tick < limit, `${item.call} started at ${item.tick}`);
   for (const item of w.signals) assert.ok(item.tick < limit, `${item.signal} at ${item.tick}`);
+  for (const tick of w.aliveTicks) assert.ok(tick <= limit, `a liveness poll at ${tick}`);
 }
