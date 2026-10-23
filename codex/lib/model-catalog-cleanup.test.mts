@@ -63,6 +63,16 @@ test("a backwards clock cannot extend the probe loop beyond its cap", async () =
   assert.equal(probe.seen.length, 5);
 });
 
+test("the catalog app-server starts with plugins disabled, after any launch prefix", async () => {
+  for (const [launchPrefix, expected] of [[undefined, []], [["x"], ["x"]]] as const) {
+    let seen: readonly string[] = [];
+    const server = fakeServer();
+    await readAvailableModels({ ...posix(server, probes("absent")), ...(launchPrefix ? { launchPrefix: [...launchPrefix] } : {}),
+      spawn(_file: string, args: readonly string[]) { seen = args; return server.child; } });
+    assert.deepEqual(seen, [...expected, "-c", "features.plugins=false", "app-server", "--listen", "stdio://"]);
+  }
+});
+
 test("an opened hook failure is a start failure with one confirmed cleanup", async () => {
   const server = fakeServer();
   await assert.rejects(readAvailableModels({ ...posix(server, probes("absent")),

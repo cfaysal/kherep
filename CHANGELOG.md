@@ -430,6 +430,8 @@ increments the minor version; every other release increments the patch version.
   ESRCH confirms. The probe loop is capped (`cleanupGraceMs` 1..10000,
   monotonic clock). `--codex-home` naming a missing directory is created
   (0700) before the read; Codex refuses a `CODEX_HOME` that does not exist.
+  The catalog server runs with `features.plugins=false`, so a fresh home
+  performs no plugin sync during the read.
   `CatalogReadError` carries a bounded `stage` (`start`, `catalog`,
   `cleanup`) and whether cleanup was confirmed; the installer prints it as a
   suffix of the existing message. The Windows tree path is unchanged.
