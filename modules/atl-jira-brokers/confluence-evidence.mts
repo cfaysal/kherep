@@ -14,11 +14,11 @@ export function plainText(body: string, mark = ''): string { let depth = 0;
     : tag[1] === '/' ? (depth > 0 && --depth === 0 && mark ? `${tag}\n${mark}` : tag) : tag.endsWith('/>') ? tag : (depth++ === 0 && mark ? `${mark}\n${tag}` : tag))
     .replace(/<\/(?:p|div|h[1-6]|li)>/gi, '\n').replace(/<[^>]*>/g, ' ').replace(/&(?:nbsp|amp|lt|gt|quot);/g, ' ').replace(/[ \t]+/g, ' ').trim();
 }
-export const claimViews = (body: string): [string, string] => [plainText(body), plainText(body, '\x01').split('\n').filter(l => /^[^\S\n]*\x01/.test(l)).map(l => l.replace(/^[\s\x01]+/, '')).join('\n')];
-export function revisionLines(body: string): Revisions { // claimViews: the base text, then the lines that start at a mark (after a real </pre> or region)
+export const claimViews = (body: string): [string, string] => [plainText(body), ['\x01', ...plainText(body, '\x01').split('\n').map(l => /^[^\S\n]*\x01/.test(l) ? l.replace(/^[\s\x01]+/, '') : '\x01')].join('\n')];
+export function revisionLines(body: string): Revisions { // claimViews: the base text, then the lines after a real </pre> or region; every other line is a \x01 barrier (#672 review)
   const out: Revisions = { bound: [], unbound: [], malformed: [] };
   for (const [view, text] of claimViews(body).entries()) for (const match of text.matchAll(/(?:^|\n)\s*Revision\s*:\s*([^\n]*)/gmi)) {
-    const line = match[1].trim(), kind = BOUND_REVISION.test(line) ? 'bound' : NO_BINDING_LINE.test(line) || BOUND_REVISION.test(DIRTY_LINE.exec(line)?.[1] ?? '') ? 'unbound' : 'malformed';
+    const line = match[1].trim().replace(/^\x01$/, ''), kind = BOUND_REVISION.test(line) ? 'bound' : NO_BINDING_LINE.test(line) || BOUND_REVISION.test(DIRTY_LINE.exec(line)?.[1] ?? '') ? 'unbound' : 'malformed';
     if (view === 0 || !out[kind].includes(line)) out[kind].push(line);
   }
   return out;

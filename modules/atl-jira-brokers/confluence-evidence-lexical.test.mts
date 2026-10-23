@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { classifyClaim, decide, type Measurement } from './confluence-evidence.mts';
 import { drainageRules } from './confluence-drainage-rules.mts';
+import { decideArgs, harness, prepared } from './evidence-cli.fixture.mts';
 
 const SHA = 'a'.repeat(40);
 const REV = `alpha@${SHA}`;
@@ -123,4 +124,70 @@ test('#669 lexical signal controls: an author line after the region counts; a si
     }
   }
   assert.equal(observation(page('<pre>x</pre><!-- opaque --><p>Code: queue</p>')), 1, 'an author Code line after the region is code-bound');
+});
+
+// PR #672 review 3: a line dropped from the additive view is a barrier, so a label on one marked line never binds a colon
+// or value from a marked line that was not adjacent on the page, and the base/additive seam is a barrier too.
+const GAP = (value: string) => `${AUTHOR}<pre>x</pre><p>Revision:</p><p>${value}</p><pre>y</pre><p>${REV}</p>${FOOTER}`;
+
+test('#672 review: a Revision label after </pre> binds nothing across a discarded line', () => {
+  for (const body of [GAP('not a revision'), GAP('none (no exact binding: dirty tree)')]) {
+    assert.deepEqual(claim(body).revisions, { bound: [], unbound: [], malformed: [''] }, body);
+    assert.equal(decide(claim(body), M(REV), OPT).reason, 'revision-not-on-page', body);
+    assert.equal(flagged(body, ASSUMED), 1, body);
+    assert.equal(flagged(body, CONFIRMED), 1, body);
+  }
+});
+
+test('#672 review: a Host label after </pre> gains no colon across a discarded line', () => {
+  const body = page('<pre>x</pre><p>Host</p><p>not a claim</p><pre>y</pre><p>: queue</p>');
+  assert.deepEqual(claim(body).signals, []);
+  assert.equal(decide(claim(body), measured('live', 'target-host'), OPT).reason, 'unclassified-claim');
+  assert.equal(flagged(body, ASSUMED), 0, 'not code-bound, as on base');
+  assert.equal(flagged(body, CONFIRMED), 0, 'not code-bound, as on base');
+});
+
+test('#672 review: the view seam is a barrier', () => {
+  const body = '<!-- c -->: queue<p>The queue retries.</p><p>Host</p>';
+  assert.deepEqual(claim(body).signals, []);
+  assert.equal(decide(claim(body), measured('live', 'target-host'), OPT).reason, 'unclassified-claim');
+});
+
+test('#672 review: a barrier right after a label is an empty malformed declaration', () => {
+  const alone = `${AUTHOR}<pre>x</pre><p>Revision:</p><p>prose</p>${FOOTER}`;
+  assert.deepEqual(claim(alone).revisions, { bound: [], unbound: [], malformed: [''] });
+  assert.equal(decide(claim(alone), M(REV), OPT).reason, 'revision-not-on-page');
+  assert.equal(flagged(alone, ASSUMED), 1);
+  const bound = `${AUTHOR}<p>Revision: ${REV}</p><pre>x</pre><p>Revision:</p><p>prose</p>${FOOTER}`;
+  assert.deepEqual(claim(bound).revisions, { bound: [REV], unbound: [], malformed: [''] });
+  assert.equal(decide(claim(bound), M(REV), OPT).reason, 'revision-unbound-on-page');
+  assert.equal(flagged(bound, CONFIRMED), 1);
+  for (const body of [alone, bound]) assert.ok(!claim(body).revisions.malformed.some(l => l.includes('\x01')), body);
+});
+
+test('#672 review control: a contiguous marked run still binds', () => {
+  const body = `${AUTHOR}<pre>x</pre><p>Revision:</p><!-- note --><p>${REV}</p>${FOOTER}`;
+  assert.deepEqual(claim(body).revisions, { bound: [REV], unbound: [], malformed: [] });
+  assert.equal(decide(claim(body), M(REV), OPT).outcome, 'confirmed');
+  assert.equal(flagged(body, CONFIRMED), 0);
+  const host = page('<pre>x</pre><p>Host</p><!-- note --><p>: queue</p>');
+  assert.deepEqual(claim(host).signals, ['live']);
+  assert.equal(decide(claim(host), measured('live', 'target-host'), OPT).outcome, 'confirmed');
+});
+
+test('#672 review: the broker refuses the three reproducers and promotes the true positive to a page the scanner accepts', async () => {
+  const host = (body: string) => [body, measured('live', 'target-host')] as const;
+  const cases = [[GAP('not a revision'), M(REV)], [GAP('none (no exact binding: dirty tree)'), M(REV)],
+    host(page('<pre>x</pre><p>Host</p><p>not a claim</p><pre>y</pre><p>: queue</p>'))] as const;
+  for (const [body, m] of cases) {
+    const h = await prepared(harness({ '1': { body, labels: ASSUMED } }), m);
+    assert.equal(await h.run(decideArgs), 2, body);
+    assert.equal(h.files.get('/tmp/ev/b.xml'), undefined, body);
+    assert.ok(h.calls.every(c => c.method === 'GET'), body);
+  }
+  const h = await prepared(harness({ '1': { body: `${AUTHOR}<pre>x</pre><p>Revision: ${REV}</p>${FOOTER}`, labels: ASSUMED } }), M(REV));
+  assert.equal(await h.run(decideArgs), 0);
+  const record = JSON.parse(h.files.get('/tmp/ev/r.json') ?? '{}'), body = h.files.get('/tmp/ev/b.xml') ?? '';
+  assert.equal(record.decision.outcome, 'confirmed');
+  assert.equal(flagged(body, record.labelsAfter), 0);
 });

@@ -437,7 +437,13 @@ increments the minor version; every other release increments the patch version.
   storage body): the base view keeps every line, duplicate and
   disqualifier the old reading found, in order; a marked view adds only
   lines that start right after such a `</pre>` or after an opaque region,
-  which it replaces with a separator, never with nothing. Text quoted
+  which it replaces with a separator, never with nothing. Every line it
+  does not add stays in it as a barrier, and so does the seam to the base
+  view, so a label and a colon or value from two lines that were not
+  adjacent on the page never join. A bare `Revision:` label right after a
+  code block, followed by an ordinary paragraph, is an empty malformed
+  declaration and refuses confirmation; label and value belong on one
+  line. Text quoted
   inside a `<pre>`, comment, CDATA section or processing instruction, or
   in the excerpt of a complete measurement block, therefore never newly
   binds, and two halves of a SHA around an opaque region never join. The
