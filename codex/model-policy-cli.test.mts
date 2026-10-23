@@ -82,6 +82,40 @@ test("async CLI keeps the stage of an already redacted catalog error", async (t)
   assert.equal(fs.existsSync(f.options.workspace), false);
 });
 
+test("a missing --codex-home is created private before the catalog read", async (t) => {
+  const f = fixture(t);
+  fs.rmSync(f.codexHome, { recursive: true });
+  const result = await installFromCli(f.options, async ({ codexHome }) => {
+    assert.ok(fs.statSync(codexHome).isDirectory());
+    if (process.platform !== "win32") assert.equal(fs.statSync(codexHome).mode & 0o777, 0o700);
+    return fixtureModelCatalog();
+  });
+  assert.equal(result.codexHome, f.codexHome);
+});
+
+test("a failed read in a created --codex-home leaves it empty and the workspace absent", async (t) => {
+  const f = fixture(t);
+  fs.rmSync(f.codexHome, { recursive: true });
+  const staged = new CatalogReadError("start");
+  await assert.rejects(installFromCli(f.options, async () => { throw staged; }), (error: Error) => error === staged);
+  assert.deepEqual(fs.readdirSync(f.codexHome), []);
+  assert.equal(fs.existsSync(f.options.workspace), false);
+});
+
+test("a missing home taken from CODEX_HOME is not created", async (t) => {
+  const f = fixture(t);
+  const missing = path.join(f.root, "env-home");
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = missing;
+  t.after(() => { if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous; });
+  const { codexHome: _selected, ...options } = f.options;
+  const seen: string[] = [];
+  await assert.rejects(installFromCli(options, async ({ codexHome }) => { seen.push(codexHome); throw new CatalogReadError("start"); }),
+    /stage: start/);
+  assert.deepEqual(seen, [missing]);
+  assert.equal(fs.existsSync(missing), false);
+});
+
 test("unreadable canonical receipt refuses reinstall without treating it as a fresh catalog request", async (t) => {
   const f = fixture(t);
   const receipt = path.join(f.codexHome, "orchestra", "parity-receipt.json");
