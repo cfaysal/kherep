@@ -63,6 +63,26 @@ export function posix(server: FakeServer, probe: Probes, clock: FakeClock = fake
     probeGroup: probe.probeGroup, now: clock.now, sleep: clock.sleep };
 }
 
+// Ownership timeline (independent review, H1): each step is the probe's answer and, optionally,
+// who holds the group number once that probe callback returns ("foreign": a reused pgid, "none":
+// no group). killGroup records whose group a signal reached. The script is finite: a probe past
+// its end throws, so an unbounded loop fails fast. Only the owned close may ever signal.
+export type GroupOwner = "owned" | "foreign" | "none";
+export function timeline(server: FakeServer, clock: FakeClock, ...steps: Array<[GroupProbe, GroupOwner?]>) {
+  let owner: GroupOwner = "owned";
+  const seen: GroupProbe[] = [], signals: GroupOwner[] = [];
+  const probe: Probes = { seen, probeGroup(pid: number) {
+    assert.equal(pid, 12345);
+    const step = steps[seen.length];
+    if (!step) throw new Error("synthetic-budget-guard");
+    seen.push(step[0]);
+    if (step[1]) owner = step[1];
+    return step[0];
+  } };
+  const options = posix(server, probe, clock);
+  return { ...options, seen, signals, killGroup(pid: number, signal: NodeJS.Signals) { signals.push(owner); return options.killGroup(pid, signal); } };
+}
+
 export const BASE = "Codex model catalog unavailable or cleanup unconfirmed";
 export function staged(stage: string, cleanupConfirmed: boolean, message: string) {
   return (error: unknown) => {

@@ -423,18 +423,24 @@ increments the minor version; every other release increments the patch version.
 
 - Codex model catalog read in a fresh Codex home (issue #667, macOS/POSIX).
   After the app-server exits, the process-group probe may answer EPERM for
-  about 100 ms before ESRCH; the cleanup check now re-asks a denied probe for
-  a bounded 2 s and still fails closed on EPERM or a living group at the
-  deadline. A member that is still present (measured: an orphaned git helper
-  of the fresh home's plugin sync) is re-signalled and asked again; only
-  ESRCH confirms. The probe loop is capped (`cleanupGraceMs` 1..10000,
-  monotonic clock). `--codex-home` naming a missing directory is created
+  about 100 ms before ESRCH, and one orphaned helper of the fresh home's
+  plugin sync may outlive the group leader by a few milliseconds. The
+  cleanup check now re-asks the probe for a bounded time (`cleanupGraceMs`
+  1..10000, default 2 s, probe cap, monotonic clock) and sends no further
+  signal: a process-group number does not prove ownership once the owned
+  close has run. Only ESRCH confirms; a group still present or denied at
+  the deadline fails closed as `stage: cleanup`. On POSIX the catalog
+  app-server is started with the per-invocation override
+  `-c features.plugins=false`, measured effective on codex-cli 0.160.1
+  (macOS): the read then performs no plugin sync in a fresh home. This is a
+  one-off CLI override; a managed configuration that pins the key, or a
+  later Codex, may behave differently, and the bounded wait carries the
+  read in that case. `--codex-home` naming a missing directory is created
   (0700) before the read; Codex refuses a `CODEX_HOME` that does not exist.
-  The catalog server runs with `features.plugins=false`, so a fresh home
-  performs no plugin sync during the read.
   `CatalogReadError` carries a bounded `stage` (`start`, `catalog`,
-  `cleanup`) and whether cleanup was confirmed; the installer prints it as a
-  suffix of the existing message. The Windows tree path is unchanged.
+  `cleanup`) and whether cleanup was confirmed; the installer prints it as
+  a suffix of the existing message. The Windows invocation and the Windows
+  tree path are unchanged.
 
 - Confluence brokers: a text-search result row without a readable title
   makes the exact-term half UNKNOWN instead of disappearing (issue #656).

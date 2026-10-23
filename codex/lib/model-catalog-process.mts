@@ -52,7 +52,8 @@ function probeGroup(pid: number): GroupProbe {
 }
 // Issue #667 (M3-M5): the plugin sync of a fresh home spawns a git fetch whose orphaned child
 // outlives the app-server by milliseconds. features.plugins=false keeps a metadata read free of
-// it; the -c form only warns on an unknown key, --disable would refuse to start.
+// it; the -c form only warns on an unknown key, --disable would refuse to start. POSIX invocation
+// only; the Windows argv is unchanged.
 const CATALOG_SESSION_FLAGS = ["-c", "features.plugins=false"];
 const GROUP_POLL_MS = 25, DEFAULT_CLEANUP_GRACE_MS = 2000, MAX_CLEANUP_GRACE_MS = 10_000;
 function cleanupGrace(options: CatalogProcessOptions): number {
@@ -64,19 +65,18 @@ function cleanupGrace(options: CatalogProcessOptions): number {
 }
 
 // Issue #667, measured: after the forced close the group can keep one member for a few ms
-// (an orphaned git helper, ppid 1) and kill(-pgid, 0) may answer EPERM for ~100 ms. The group
-// is ours (detached: the app-server was its leader): a present member is re-signalled with
-// SIGKILL and asked again, a denied one is only asked again. Only a measured ESRCH confirms.
+// (an orphaned helper, ppid 1) and kill(-pgid, 0) may answer EPERM for ~100 ms. Nothing is
+// signalled here: a process-group number is no proof of ownership once the owned close has
+// run, and a reused number would name a foreign group. The loop only observes. Only a measured
+// ESRCH confirms; present or denied at the deadline or at the probe cap is unconfirmed cleanup.
 // Deadline and probe cap end the loop independently, so a broken clock cannot extend it.
-async function groupGone(pid: number, grace: number, resignal: () => void, options: CatalogProcessOptions): Promise<boolean> {
+async function groupGone(pid: number, grace: number, options: CatalogProcessOptions): Promise<boolean> {
   const probe = options.probeGroup ?? probeGroup, now = options.now ?? (() => performance.now());
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const maxProbes = Math.ceil(grace / GROUP_POLL_MS) + 1;
   const deadline = now() + grace;
   for (let probes = 1; ; probes++) {
-    const state = probe(pid);
-    if (state === "absent") return true;
-    if (state === "present") resignal();
+    if (probe(pid) === "absent") return true;
     const left = deadline - now();
     if (left <= 0 || probes >= maxProbes) return false;
     await sleep(Math.min(GROUP_POLL_MS, left));
@@ -93,8 +93,8 @@ async function readCatalogProcess(options: CatalogProcessOptions): Promise<Model
   const platform = options.platform ?? process.platform;
   const executable = options.executable ?? (options.find ?? findCodex)();
   if (!executable) throw new Error("Codex executable unavailable for model catalog");
-  const command = codexCommand(executable, [...options.launchPrefix ?? [], ...CATALOG_SESSION_FLAGS,
-    "app-server", "--listen", "stdio://"], platform);
+  const command = codexCommand(executable, [...options.launchPrefix ?? [],
+    ...(platform === "win32" ? [] : CATALOG_SESSION_FLAGS), "app-server", "--listen", "stdio://"], platform);
   const child = (options.spawn ?? spawn as AppServerSpawn)(command.file, command.args, {
     stdio: "pipe", windowsHide: true, detached: true,
     ...(options.codexHome ? { env: { ...process.env, CODEX_HOME: options.codexHome } } : {}),
@@ -116,7 +116,7 @@ async function readCatalogProcess(options: CatalogProcessOptions): Promise<Model
     if (child.pid === undefined) { await client.shutdown(true); return false; }
     if (platform !== "win32") {
       const stopped = await client.shutdown(true);
-      return stopped && await groupGone(child.pid, grace, () => { kill("SIGKILL"); }, options);
+      return stopped && await groupGone(child.pid, grace, options);
     }
     // Use the existing tree signal while this exact ChildProcess still owns its
     // root. A post-signal snapshot measures only whether that owned root/tree remains.
