@@ -3,7 +3,6 @@ import { pidAlive as defaultPidAlive, readDaemonState as defaultReadDaemonState,
 import { captureSourceIdentity, compareSourceIdentity, type SourceIdentity } from "./daemon-source.mts";
 import { serviceAdmissionsIdle } from "./service-drain.mts";
 import { issueServiceLaunchPermit } from "./service-launch-permit.mts";
-import { realMacWriteClock } from "./service-platform-mac-write-guard.mts";
 import {
   stopCode, type NativeServiceSnapshot, type ServiceAdapter, type ServiceBinding, type ServiceClock, type ServiceStopContext,
   type ServiceStopProof, type StopCode,
@@ -38,6 +37,8 @@ const candidateLoaded = (stopFailure: Error | undefined): CandidateLoadedError =
   new Error(`candidate service is still loaded; its stop ${stopFailure ? `failed: ${stopFailure.message}` : "reported success"}`),
   { code: "RECOVERY_CANDIDATE_LOADED" as const, stopCode: stopCode(stopFailure) });
 const wait = (milliseconds: number): Promise<void> => new Promise(resolve => setTimeout(resolve, milliseconds));
+// The message of every stop proof that ran out of time; `stopCode` maps it to STOP_UNPROVEN_TIMEOUT.
+export const STOP_PROOF_TIMEOUT_MESSAGE = "managed service verification timed out";
 
 export function sourceMatches(expected: SourceIdentity, actual: SourceIdentity | undefined): boolean {
   return compareSourceIdentity(expected, actual).status === "match";
@@ -46,7 +47,7 @@ export function sourceMatches(expected: SourceIdentity, actual: SourceIdentity |
 export function lifecycleDefaults(deps: LifecycleDependencies) {
   return { adapter: deps.adapter, readState: deps.readDaemonState ?? defaultReadDaemonState, alive: deps.pidAlive ?? defaultPidAlive,
     sleep: deps.sleep ?? wait, timeout: deps.timeoutMs ?? HEALTH_TIMEOUT_MS,
-    clock: deps.clock ?? { now: realMacWriteClock.now, sleep: deps.sleep ?? wait },
+    clock: deps.clock ?? { now: () => performance.now(), sleep: deps.sleep ?? wait },
     stopTimeout: deps.stopTimeoutMs ?? deps.timeoutMs ?? STOP_TIMEOUT_MS, now: deps.now ?? (() => new Date().toISOString()),
     verifySource: deps.verifySource ?? ((identity: SourceIdentity) => {
       try { return sourceMatches(identity, captureSourceIdentity(identity.root, false)); } catch { return false; }
@@ -54,7 +55,7 @@ export function lifecycleDefaults(deps: LifecycleDependencies) {
 }
 
 async function poll<T>(timeout: number, sleep: (ms: number) => Promise<void>, check: () => Promise<T | null>,
-  timeoutMessage = () => "managed service verification timed out"): Promise<T> {
+  timeoutMessage = () => STOP_PROOF_TIMEOUT_MESSAGE): Promise<T> {
   const deadline = Date.now() + timeout;
   do {
     const value = await check();
@@ -70,7 +71,7 @@ export async function pollStopped(pid: number, proof: ServiceStopProof): Promise
     if (!proof.alive(pid)) return;
     await proof.clock.sleep(100);
   } while (proof.clock.now() <= proof.deadline);
-  throw new Error("managed service verification timed out");
+  throw new Error(STOP_PROOF_TIMEOUT_MESSAGE);
 }
 
 // #677: the only stop-proof entry point, called right after `adapter.stop` returned. It computes the one deadline and

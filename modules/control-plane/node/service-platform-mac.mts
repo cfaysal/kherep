@@ -52,6 +52,7 @@ export class MacServiceAdapter implements ServiceAdapter {
   }
 
   #file(name: string): string { return path.join(this.#agents, `${validateServiceName(name)}.plist`); }
+  #receiptKey(serviceName: string, pid: number): string { return `${serviceName}\0${pid}`; }
   #probe(binding: ServiceBinding): MacLaunchAgentProbe {
     return probeMacLaunchAgent(this.#run, this.#uid, validateServiceName(binding.serviceName));
   }
@@ -223,7 +224,7 @@ export class MacServiceAdapter implements ServiceAdapter {
       return selected;
     });
     if (!expected && native.kind === "absent") return;
-    const receipt = expected && `${serviceName}\0${expected.pid}`;
+    const receipt = expected && this.#receiptKey(serviceName, expected.pid);
     const snapshot = expected && readMacProcessIdentity(this.#run, expected.pid); // #677: after the attestations
     if (receipt) { if (snapshot) this.#stopReceipts.set(receipt, snapshot); else this.#stopReceipts.delete(receipt); }
     const result = this.#run("launchctl", ["bootout", launchTarget(this.#uid, serviceName)]);
@@ -234,7 +235,7 @@ export class MacServiceAdapter implements ServiceAdapter {
   }
   // #677: without a receipt for exactly this pid (no context, another pid, a stop that failed) only the generic poll runs.
   async proveStopped(binding: ServiceBinding, expected: ServiceStopContext, proof: ServiceStopProof): Promise<void> {
-    const receipt = `${binding.serviceName}\0${expected.pid}`;
+    const receipt = this.#receiptKey(binding.serviceName, expected.pid);
     const snapshot = this.#stopReceipts.get(receipt);
     this.#stopReceipts.delete(receipt);
     if (!snapshot) return pollStopped(expected.pid, proof);

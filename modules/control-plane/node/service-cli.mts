@@ -11,7 +11,7 @@ import { readServiceReceipt, serviceRoot, type ServiceReceipt } from "./service-
 import { activateManagedService, rollbackManagedService } from "./service-transaction.mts";
 import { reportServiceStatus, reportUnmanagedStatus, type StatusDependencies } from "./service-status.mts";
 import { SERVICE_STAGES, type ServiceStage } from "./service-transaction-support.mts";
-import { STOP_CODES, type ServiceBinding, type StopCode } from "./service-types.mts";
+import { isStopCode, type ServiceBinding, type StopCode } from "./service-types.mts";
 
 export const SERVICE_USAGE = `  kherep-node service install --workspace <absolute> [--source <clean checkout>] [--service-name <name>] [--task-path <path>] [--adopt]
   kherep-node service upgrade [--source <clean checkout>]
@@ -45,7 +45,7 @@ export function safeServiceFailure(error: unknown): SafeServiceFailure | null {
   return { ok: false, code: value.code, recovery: value.recovery,
     ...(typeof value.stage === "string" && SERVICE_STAGE_SET.has(value.stage) ? { stage: value.stage as ServiceStage } : {}),
     ...(typeof value.blocker === "string" && /^RECOVERY_[A-Z_]{1,40}$/.test(value.blocker) ? { blocker: value.blocker } : {}),
-    ...((STOP_CODES as readonly unknown[]).includes(value.stopCode) ? { stopCode: value.stopCode as StopCode } : {}) };
+    ...(isStopCode(value.stopCode) ? { stopCode: value.stopCode } : {}) };
 }
 
 export function parseServiceCommand(argv: string[]): ServiceCommand {

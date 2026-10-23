@@ -48,6 +48,7 @@ export const STOP_NOT_ISSUED = "STOP_NOT_ISSUED";
 export const STOP_CODES = ["STOP_BLOCKED_NATIVE_DESCENDANTS", "STOP_UNKNOWN_DESCENDANTS", "STOP_NATIVE_REFUSED",
   "STOP_UNPROVEN_TIMEOUT", "STOP_PROCESS_UNAVAILABLE", "STOP_IDENTITY_MISMATCH", "STOP_UNLISTED_ALIVE", "STOP_FAILED_OTHER"] as const;
 export type StopCode = typeof STOP_CODES[number];
+export const isStopCode = (value: unknown): value is StopCode => (STOP_CODES as readonly unknown[]).includes(value);
 const STOP_CODE_OF_MESSAGE: ReadonlyArray<[string, StopCode]> = [
   ["STOP_BLOCKED_NATIVE_DESCENDANTS", "STOP_BLOCKED_NATIVE_DESCENDANTS"],
   ["STOP_UNKNOWN_DESCENDANTS", "STOP_UNKNOWN_DESCENDANTS"],
@@ -62,7 +63,7 @@ const STOP_CODE_OF_MESSAGE: ReadonlyArray<[string, StopCode]> = [
 // #677: a stop error that carries an allowlisted code is classified by it; any other error by its exact message.
 export function stopCode(error: unknown): StopCode {
   const code = (error as { code?: unknown } | null)?.code;
-  if ((STOP_CODES as readonly unknown[]).includes(code)) return code as StopCode;
+  if (isStopCode(code)) return code;
   const message = error instanceof Error ? error.message : "";
   return STOP_CODE_OF_MESSAGE.find(([text]) => text === message)?.[1] ?? "STOP_FAILED_OTHER";
 }
