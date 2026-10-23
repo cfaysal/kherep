@@ -271,9 +271,10 @@ increments the minor version; every other release increments the patch version.
   (at the latest at its end, rechecked after every sleep), not the total
   duration: each `launchctl` and `plutil` call keeps its own
   15 s timeout, and a probe that started inside the grace is honoured even
-  when it ends after it. The grace is about seven times the 145 ms that the
-  slowest first `launchctl print` after the pid was gone took in the
-  issue's measurements, a call that already reported not found. A job
+  when it ends after it. In the issue's measurements the slowest first
+  `launchctl print` after the pid was gone took 145 ms and already reported
+  not found; no stale listing was observed, so the grace is a heuristic,
+  not a measured bound (issue #677). A job
   still loaded with another definition after the grace refuses with
   `LaunchAgent is still loaded with a different definition`. Any other
   `print` result refuses at once with `LaunchAgent loaded state could not
@@ -454,6 +455,25 @@ increments the minor version; every other release increments the patch version.
   `service status` with a stopped service whose recorded daemon still runs
   names that state and the manual step, instead of the stale-drain upgrade
   text that the upgrade precondition refuses.
+
+- macOS stop proof after `launchctl bootout` returned 0 and unlisted a job
+  whose process stays alive (issue #677). `proveStopped` is the single
+  stop-proof entry point for upgrade, rollback and both recoveries; it
+  computes one deadline (75 s, monotonic clock) at its entry and hands it to
+  an optional adapter hook, which replaces the generic poll. The Mac hook
+  (`service-platform-mac-reclaim.mts`) records the daemon's identity right
+  before bootout and, only after `launchctl print` reports the job not found
+  twice at least 1 s apart with the pid alive and enough grace left, sends
+  one SIGTERM, then from 5 s before the deadline one SIGKILL, each to the
+  attested pid only and only after a fresh process table without
+  descendants, a fresh not-found print and a matching identity read in the
+  same synchronous turn. Success needs a post-exit process table with
+  nothing left in the daemon's group and none of the children seen while it
+  lived. No launchctl, ps or kill starts after the deadline. Every other
+  case fails closed with a stop code; recovery then writes and starts
+  nothing while the previous pid lives or its family is unproven, and the
+  drain stays. Windows and adapters without the hook keep the generic poll.
+  The read-to-signal pid-reuse race is stated, not closed.
 
 - Codex model catalog read in a fresh Codex home (issue #667, macOS/POSIX).
   After the app-server exits, the process-group probe may answer EPERM for

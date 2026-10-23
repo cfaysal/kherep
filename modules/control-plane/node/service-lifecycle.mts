@@ -3,7 +3,11 @@ import { pidAlive as defaultPidAlive, readDaemonState as defaultReadDaemonState,
 import { captureSourceIdentity, compareSourceIdentity, type SourceIdentity } from "./daemon-source.mts";
 import { serviceAdmissionsIdle } from "./service-drain.mts";
 import { issueServiceLaunchPermit } from "./service-launch-permit.mts";
-import { stopCode, type NativeServiceSnapshot, type ServiceAdapter, type ServiceBinding, type StopCode } from "./service-types.mts";
+import { realMacWriteClock } from "./service-platform-mac-write-guard.mts";
+import {
+  stopCode, type NativeServiceSnapshot, type ServiceAdapter, type ServiceBinding, type ServiceClock, type ServiceStopContext,
+  type ServiceStopProof, type StopCode,
+} from "./service-types.mts";
 
 export interface LifecycleDependencies {
   paths: NodePaths;
@@ -11,6 +15,7 @@ export interface LifecycleDependencies {
   readDaemonState?: (paths: NodePaths) => DaemonState | null;
   pidAlive?: (pid: unknown) => boolean;
   sleep?: (milliseconds: number) => Promise<void>;
+  clock?: ServiceClock; // #677: the stop proof's monotonic clock; by default performance.now with `sleep`
   timeoutMs?: number;
   stopTimeoutMs?: number;
   now?: () => string;
@@ -39,8 +44,9 @@ export function sourceMatches(expected: SourceIdentity, actual: SourceIdentity |
 }
 
 export function lifecycleDefaults(deps: LifecycleDependencies) {
-  return { readState: deps.readDaemonState ?? defaultReadDaemonState, alive: deps.pidAlive ?? defaultPidAlive,
+  return { adapter: deps.adapter, readState: deps.readDaemonState ?? defaultReadDaemonState, alive: deps.pidAlive ?? defaultPidAlive,
     sleep: deps.sleep ?? wait, timeout: deps.timeoutMs ?? HEALTH_TIMEOUT_MS,
+    clock: deps.clock ?? { now: realMacWriteClock.now, sleep: deps.sleep ?? wait },
     stopTimeout: deps.stopTimeoutMs ?? deps.timeoutMs ?? STOP_TIMEOUT_MS, now: deps.now ?? (() => new Date().toISOString()),
     verifySource: deps.verifySource ?? ((identity: SourceIdentity) => {
       try { return sourceMatches(identity, captureSourceIdentity(identity.root, false)); } catch { return false; }
@@ -58,9 +64,23 @@ async function poll<T>(timeout: number, sleep: (ms: number) => Promise<void>, ch
   throw new Error(timeoutMessage());
 }
 
-export async function proveStopped(pid: number | undefined, deps: ReturnType<typeof lifecycleDefaults>): Promise<void> {
-  if (pid === undefined) return;
-  await poll(deps.stopTimeout, deps.sleep, async () => deps.alive(pid) ? null : true);
+// #677: the generic stop proof, today's loop on the stop proof's clock: no poll starts after the deadline.
+export async function pollStopped(pid: number, proof: ServiceStopProof): Promise<void> {
+  do {
+    if (!proof.alive(pid)) return;
+    await proof.clock.sleep(100);
+  } while (proof.clock.now() <= proof.deadline);
+  throw new Error("managed service verification timed out");
+}
+
+// #677: the only stop-proof entry point, called right after `adapter.stop` returned. It computes the one deadline and
+// hands it to the adapter's hook, which then replaces the generic poll; nothing runs after either of them.
+export async function proveStopped(binding: ServiceBinding, expected: ServiceStopContext | undefined,
+  deps: ReturnType<typeof lifecycleDefaults>): Promise<void> {
+  if (expected === undefined) return;
+  const proof = { alive: deps.alive, clock: deps.clock, deadline: deps.clock.now() + deps.stopTimeout };
+  if (deps.adapter.proveStopped) return deps.adapter.proveStopped(binding, expected, proof);
+  await pollStopped(expected.pid, proof);
 }
 
 export async function prepareStop(
@@ -111,8 +131,9 @@ export async function removeFresh(binding: ServiceBinding, input: LifecycleDepen
         throw new Error("new service process ownership cannot be verified");
       }
       await input.adapter.preflightStop(binding, { pid: candidate.pid, startedAt: candidate.startedAt });
-      await input.adapter.stop(binding, { pid: candidate.pid, startedAt: candidate.startedAt });
-      await proveStopped(candidate.pid, deps);
+      const context = { pid: candidate.pid, startedAt: candidate.startedAt };
+      await input.adapter.stop(binding, context);
+      await proveStopped(binding, context, deps);
     } else if (native) {
       await input.adapter.preflightStop(binding, undefined);
       if (native.running !== false) await input.adapter.stop(binding, undefined);
@@ -158,6 +179,7 @@ export interface RecoveryInput {
   deps: LifecycleDependencies;
   candidate?: NativeServiceSnapshot;
   priorStopIssued?: boolean;
+  familyUnproven?: boolean; // #677: the stop proof could not show the previous daemon's family gone
 }
 
 export async function restorePrior(input: RecoveryInput): Promise<void> {
@@ -186,7 +208,7 @@ export async function restorePrior(input: RecoveryInput): Promise<void> {
           ? { pid: candidateState.pid, startedAt: candidateState.startedAt } : undefined;
         await input.deps.adapter.preflightStop(input.binding, context);
         await input.deps.adapter.stop(input.binding, context);
-        await proveStopped(context?.pid, runtime);
+        await proveStopped(input.binding, context, runtime);
         absenceProven = true;
       } catch (error) { stopFailure = error as Error; }
     } else if (native.running !== true) {
@@ -198,6 +220,10 @@ export async function restorePrior(input: RecoveryInput): Promise<void> {
         }
       } catch (error) { stopFailure = error as Error; }
     }
+  }
+  // #677: nothing is written or started while the previous daemon, or a family member it left, may still run.
+  if (input.familyUnproven || (input.previousPid !== undefined && runtime.alive(input.previousPid))) {
+    throw recoveryError("RECOVERY_ABSENCE_UNPROVEN", "previous daemon may still run; recovery refused");
   }
   // #582: the prior bytes are written only over nothing, over themselves, or over a candidate proven absent.
   if (overwritesLoaded && !absenceProven) {

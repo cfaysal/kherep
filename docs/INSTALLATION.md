@@ -395,8 +395,11 @@ when the current service or the backed-up one was running, also when the backup
 was taken from a stopped service. Upgrade and rollback report success only after
 they read the native service back with the exact expected bytes and, when it
 should run, as running with the daemon that passed the health check still
-recorded. The stop proof waits up to 75 seconds for the old daemon to exit,
-longer than the 60-second launchd `ExitTimeOut`. On macOS a stop refused before
+recorded. The stop proof starts nothing after 75 seconds from its start, right
+after the stop returned, longer than the 60-second launchd `ExitTimeOut`; a
+native call already running at that point may still return later (each keeps
+its own 15 second timeout, which ends the call's process but does not
+guarantee its return). On macOS a stop refused before
 `launchctl bootout` runs leaves the running service untouched and reports
 `restored`; any other stop failure counts as a stop that may have taken effect,
 so its recovery is never reported `restored` without proof. An `unknown`
@@ -416,12 +419,43 @@ the same bytes the file already holds and a loaded identity that attests
 against them (the check `read` uses). Otherwise the adapter retries every
 100 ms within a 1 second grace on a monotonic clock. The grace limits when a new
 check may start (no check starts after it), not the total duration: each `launchctl` and `plutil` call
-keeps its own 15 second timeout. In the issue's measurements the first print
-after the pid was gone already reported not found and took at most 145 ms. A
+keeps its own 15 second timeout. In the issue's measurements the slowest first
+print after the pid was gone took 145 ms and already reported not found; no
+stale listing was observed, so the grace is a heuristic, not a measured bound. A
 job still loaded with another definition after the grace, or a launchd state
 that cannot be read, refuses the write and the file stays as it was. Not found
 is not a stop proof: a job launchd no longer lists may still have a live
 process (issue #677).
+
+`launchctl bootout` can return 0 and unlist a job whose process stays alive
+(issue #677); launchd then neither escalates to SIGKILL nor reaps the process.
+The macOS stop proof therefore does what launchd would have done, to the pid it
+attested before the bootout and to nothing else, within the same 75 seconds:
+it polls the pid every 100 ms and `launchctl print` every second. Only when the
+job is reported not found twice at least 1 second apart while the pid is
+alive, and at least 5 seconds of grace remain before the last 5 seconds of the
+budget, does it send one SIGTERM; if the pid still runs when those last 5
+seconds begin, it sends one SIGKILL. Before each signal it reads the complete
+process table (any descendant of the daemon refuses the signal), `launchctl
+print` again (not found) and the process identity (user, Node executable,
+exact daemon arguments and the start time read before the bootout); the
+signal follows that read without a pause. The pid could still be reused by
+another process of your user between that read and the signal; that risk is
+accepted and not measured. After the pid is gone, one more process table must
+show nothing left in the daemon's process group and none of the children seen
+while it lived; only then does the upgrade continue, and the CLI prints one
+line to stderr without pid or path. Every other outcome fails closed with
+`stage: prove-stopped`, `blocker: RECOVERY_ABSENCE_UNPROVEN` and one of
+`stopCode: STOP_UNLISTED_ALIVE` (the daemon outlived the budget),
+`STOP_BLOCKED_NATIVE_DESCENDANTS` (children appeared or may remain),
+`STOP_UNKNOWN_DESCENDANTS` (the process table could not be read before a
+signal), `STOP_IDENTITY_MISMATCH` (the pid no longer reads as the daemon,
+launchd lists the job again, or the signal was refused) or
+`STOP_UNPROVEN_TIMEOUT` (launchd still lists the job, its state could not be
+read, or not found came too late for a grace). Recovery then writes and starts
+nothing while the old daemon or a child it left may still run, and the drain
+marker stays. Children that a dead daemon left behind do not block a later
+`service upgrade`.
 
 When the selected service is stopped (on macOS: launchd no longer lists the
 job) but the recorded daemon's process still runs, `service status` reports
@@ -439,7 +473,7 @@ waits up to 180 seconds for its health; after a failed `service install` (no
 receipt) repeat `kherep-node service install` with the same `--workspace` and
 `--service-name`, without `--adopt`. `--adopt` over a recorded candidate is
 refused. A second failed upgrade over the record can take several minutes
-before it reports: each stop proof waits up to 75 seconds (for the recorded
+before it reports: each stop proof starts nothing after 75 seconds (for the recorded
 candidate, and again for the new candidate during recovery), the health wait
 up to 30 seconds and a restore up to 180 seconds.
 

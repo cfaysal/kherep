@@ -119,7 +119,9 @@ test("the production wait reporter uses stderr when no reporter is supplied", as
 
 test("other lifecycle polling retains the default verification timeout", async (t) => {
   const f = fixture(t);
-  await assert.rejects(proveStopped(4242, lifecycleDefaults({ ...f.deps, pidAlive: () => true })), {
+  // #677: the stop proof runs on its injected clock; this one is the fixture's mocked Date.now and fake sleep.
+  await assert.rejects(proveStopped(f.binding, { pid: 4242, startedAt: owner.startedAt },
+    lifecycleDefaults({ ...f.deps, pidAlive: () => true, clock: { now: () => Date.now(), sleep: f.deps.sleep! } })), {
     message: "managed service verification timed out",
   });
   assert.equal(f.sleeps(), 3);

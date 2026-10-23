@@ -422,22 +422,28 @@ test("a stop that never completes reports its stage and keeps the drain while it
     (error: ServiceFailure) => error.code === "SERVICE_ROLLBACK_FAILED" && error.recovery === "unknown"
       && error.stage === "prove-stopped" && error.blocker === "RECOVERY_ABSENCE_UNPROVEN");
   assert.equal(h.adapter.events.includes("write:MANAGED_OLD_XML"), false, "the prior definition is never written");
+  assert.equal(h.adapter.events.some(event => event.startsWith("write:") || event.startsWith("start:")), false,
+    "#677: no write at all while the daemon told to stop lives");
   assert.equal(drainExists(h), true, "a daemon told to stop that is still alive keeps admissions drained");
   assert.equal(readServiceReceipt(h.paths)?.binding.source.commit, h.candidate.source.commit);
 });
 
+// #677: the daemon now exits once the stop proof has given up (its deadline on the injected clock), before recovery.
+// Recovery writes nothing while it lives; once it is gone the same-bytes rewrite of the current definition runs again.
 test("a stop that never completes releases the drain once its daemon has exited", async (t) => {
   const h = setup(t);
   seedManaged(h);
   await activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps);
   h.adapter.events.length = 0;
   h.adapter.stopKeepsPidAlive = true;
-  const exitedDuringRecovery = () => h.adapter.events.includes("write:RAW_NEW_XML");
-  await assert.rejects(rollbackManagedService({ binding: h.candidate }, { ...h.deps,
-    pidAlive: (pid: unknown) => (pid === 42 && h.adapter.candidatePidAlive && !exitedDuringRecovery()) || (pid === 41 && h.adapter.oldPidAlive) }),
+  let tick = 0;
+  const clock = { now: () => tick, sleep: async (ms: number) => { tick += ms; } };
+  await assert.rejects(rollbackManagedService({ binding: h.candidate }, { ...h.deps, clock,
+    pidAlive: (pid: unknown) => (pid === 42 && h.adapter.candidatePidAlive && tick <= 50) || (pid === 41 && h.adapter.oldPidAlive) }),
   (error: ServiceFailure) => error.recovery === "unknown" && error.stage === "prove-stopped");
   assert.equal(h.adapter.events.includes("write:MANAGED_OLD_XML"), false);
-  assert.equal(drainExists(h), false, "no definition was written and the stopped daemon is gone");
+  assert.deepEqual(h.adapter.events.filter(event => event.startsWith("write:") || event.startsWith("start:")), ["write:RAW_NEW_XML"]);
+  assert.equal(drainExists(h), false, "no new definition was written and the stopped daemon is gone");
 });
 
 test("a stop that throws before taking effect restores the live prior without restarting it", async (t) => {

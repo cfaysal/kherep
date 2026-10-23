@@ -38,6 +38,8 @@ export class FakeAdapter implements ServiceAdapter {
   startWithoutLoad = false;
   stopThrowsAfterEffect = false;
   stopFailureAfterEffect: Error | undefined; // #677: a coded stop failure after the native stop took effect
+  stopUnlistsAlive = false; // #677: the native stop reports success and unlists the job; its daemon lives on
+  proveStopped?: ServiceAdapter["proveStopped"]; // #677: the optional stop-proof hook; absent, the generic poll runs
   reportPid = true;
   disconnectAfterHealth = false;
   strictPreflightGeneration = false;
@@ -134,6 +136,7 @@ export class FakeAdapter implements ServiceAdapter {
     if (this.stopThrowsAfterEffect) throw new Error("synthetic stop failure after the native stop took effect");
     if (this.stopFailureAfterEffect) throw this.stopFailureAfterEffect;
     if (this.stopKeepsPidAlive) return;
+    if (this.stopUnlistsAlive) { if (this.snapshot) { this.snapshot.running = false; delete this.snapshot.pid; } return; }
     if (this.failCandidateRecoveryStop && binding.source.commit === this.candidate.source.commit && expected?.pid === this.candidatePid) {
       throw new Error("synthetic candidate stop failure");
     }

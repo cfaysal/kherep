@@ -7,8 +7,8 @@ import {
 // #594: a retry grace on a monotonic clock, not a total deadline. A retry probe starts at the latest at the end of
 // the grace, never after it (checked again after every sleep); every launchctl and plutil call keeps its own 15 s timeout, and an observation that allows the write is
 // accepted even when its probe ends after the grace. The check can therefore last the grace plus one probe (two
-// launchctl calls) and one plutil. The first `print` after the pid was gone already said not-found and took at most
-// 145 ms in the issue's measurements; the grace is ~7x that.
+// launchctl calls) and one plutil. In the issue's measurements the slowest first `print` after the pid was gone took
+// 145 ms and already said not-found; no stale listing was observed, so the 1 s grace is a heuristic, not a measured bound.
 export const LOADED_WRITE_GRACE_MS = 1_000;
 export const LOADED_WRITE_POLL_MS = 100;
 
