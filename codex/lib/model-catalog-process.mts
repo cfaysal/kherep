@@ -3,7 +3,7 @@ import { AppServerClient, type AppServerSpawn, type KillReport } from "../../mod
 import { codexCommand, findCodex } from "../../modules/control-plane/node/codex-binary.mts";
 import { signalGroupReport } from "../../modules/control-plane/node/codex-process.mts";
 import { windowsRelations, type ProcessRelation } from "../../modules/control-plane/node/process-relations.mts";
-import { collectModelCatalog, type CatalogLimits } from "./model-catalog.mts";
+import { CatalogStageError, collectModelCatalog, type CatalogLimits, type CatalogStage } from "./model-catalog.mts";
 import type { ModelCatalog } from "./model-policy.mts";
 
 export interface CatalogProcessOptions extends CatalogLimits {
@@ -17,17 +17,52 @@ export interface CatalogProcessOptions extends CatalogLimits {
   opened?: (child: ChildProcessWithoutNullStreams) => void;
   killGroup?: (pid: number, signal: NodeJS.Signals) => KillReport;
   relations?: () => Promise<ProcessRelation[]>;
-  groupAbsent?: (pid: number) => boolean;
+  probeGroup?: (pid: number) => GroupProbe;
+  // How long a denied (EPERM) group probe may be re-asked; default 2000 ms.
+  cleanupGraceMs?: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
 }
+export type GroupProbe = "absent" | "present" | "denied";
+export type { CatalogStage } from "./model-catalog.mts";
 
+// The message names at most the failing stage; never stderr, paths, account data or causes.
+// A cleanup-stage failure is unconfirmed cleanup by definition, so it needs no second suffix.
 export class CatalogReadError extends Error {
   readonly code = "catalog-unavailable";
-  constructor() { super("Codex model catalog unavailable or cleanup unconfirmed"); }
+  readonly stage?: CatalogStage;
+  readonly cleanupConfirmed: boolean;
+  constructor(stage?: CatalogStage, cleanupConfirmed = true) {
+    const unconfirmed = stage === "cleanup" || !cleanupConfirmed;
+    super("Codex model catalog unavailable or cleanup unconfirmed" + (stage
+      ? ` (stage: ${stage}${unconfirmed && stage !== "cleanup" ? "; cleanup unconfirmed" : ""})` : ""));
+    this.stage = stage;
+    this.cleanupConfirmed = !unconfirmed;
+  }
 }
 
-function groupAbsent(pid: number): boolean {
-  try { process.kill(-pid, 0); return false; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+// Issue #667: on macOS kill(-pgid, 0) answers EPERM for ~100 ms after a clean app-server
+// exit in a fresh home, then ESRCH. EPERM is re-asked until ESRCH or the deadline; it is
+// never read as absent. Any other code fails closed as "present".
+function probeGroup(pid: number): GroupProbe {
+  try { process.kill(-pid, 0); return "present"; }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ESRCH" ? "absent" : code === "EPERM" ? "denied" : "present";
+  }
+}
+const GROUP_POLL_MS = 25;
+async function groupGone(pid: number, options: CatalogProcessOptions): Promise<boolean> {
+  const probe = options.probeGroup ?? probeGroup, now = options.now ?? Date.now;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const deadline = now() + (options.cleanupGraceMs ?? 2000);
+  for (;;) {
+    const state = probe(pid);
+    if (state !== "denied") return state === "absent";
+    const left = deadline - now();
+    if (left <= 0) return false;
+    await sleep(Math.min(GROUP_POLL_MS, left));
+  }
 }
 function hasDescendants(pid: number, rows: ProcessRelation[]): boolean {
   return rows.some((row) => row.pid === pid || row.ppid === pid);
@@ -61,7 +96,7 @@ async function readCatalogProcess(options: CatalogProcessOptions): Promise<Model
     if (child.pid === undefined) { await client.shutdown(true); return false; }
     if (platform !== "win32") {
       const stopped = await client.shutdown(true);
-      return stopped && (options.groupAbsent ?? groupAbsent)(child.pid);
+      return stopped && await groupGone(child.pid, options);
     }
     // Use the existing tree signal while this exact ChildProcess still owns its
     // root. A post-signal snapshot measures only whether that owned root/tree remains.
@@ -89,7 +124,10 @@ async function readCatalogProcess(options: CatalogProcessOptions): Promise<Model
 
 // Raw RPC errors may include account details. The installer and CLI receive only
 // this bounded error type, never stderr, paths, server messages or raw causes.
+// Untagged errors arise only before the protocol starts.
 export async function readAvailableModels(options: CatalogProcessOptions = {}): Promise<ModelCatalog> {
   try { return await readCatalogProcess(options); }
-  catch { throw new CatalogReadError(); }
+  catch (error) {
+    throw error instanceof CatalogStageError ? new CatalogReadError(error.stage, error.cleanupConfirmed) : new CatalogReadError("start");
+  }
 }

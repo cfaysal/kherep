@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { collectModelCatalog } from "./model-catalog.mts";
+import { CatalogStageError, collectModelCatalog } from "./model-catalog.mts";
 
 const entry = { id: "gpt-6-sol", model: "gpt-6-sol", hidden: false, supportedReasoningEfforts: [{ reasoningEffort: "high" }] };
 function client(pages: unknown[]) {
@@ -43,4 +43,26 @@ test("invalid pages, repeated cursors, caps and unconfirmed cleanup fail closed"
   const port = client([{ data: [], nextCursor: "more" }]);
   await assert.rejects(collectModelCatalog(port, { maxPages: 1 }), /page limit/);
   assert.equal(port.closed, true);
+});
+
+test("collector tags the first failing stage and keeps an unconfirmed cleanup on it", async () => {
+  const stage = (expected: string, cleanupConfirmed: boolean) => (error: unknown) => {
+    assert.ok(error instanceof CatalogStageError);
+    assert.equal(error.stage, expected);
+    assert.equal(error.cleanupConfirmed, cleanupConfirmed);
+    return true;
+  };
+  const start = client([]);
+  start.request = async () => { throw new Error("synthetic-initialize"); };
+  await assert.rejects(collectModelCatalog(start), stage("start", true));
+  await assert.rejects(collectModelCatalog(client([{ data: "nope" }])), stage("catalog", true));
+  const cleanup = client([{ data: [entry], nextCursor: null }]);
+  cleanup.shutdown = async () => false;
+  await assert.rejects(collectModelCatalog(cleanup), stage("cleanup", false));
+  const both = client([{ data: "nope" }]);
+  both.shutdown = async () => false;
+  await assert.rejects(collectModelCatalog(both), stage("catalog", false));
+  const thrown = client([{ data: [entry], nextCursor: null }]);
+  thrown.shutdown = async () => { throw new Error("synthetic-relations"); };
+  await assert.rejects(collectModelCatalog(thrown), stage("cleanup", false));
 });

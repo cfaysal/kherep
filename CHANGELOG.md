@@ -421,6 +421,14 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Codex model catalog read in a fresh Codex home (issue #667, macOS/POSIX).
+  After the app-server exits, the process-group probe may answer EPERM for
+  about 100 ms before ESRCH; the cleanup check now re-asks a denied probe for
+  a bounded 2 s and still fails closed on EPERM or a living group at the
+  deadline. `CatalogReadError` carries a bounded `stage` (`start`, `catalog`,
+  `cleanup`) and whether cleanup was confirmed; the installer prints it as a
+  suffix of the existing message. The Windows tree path is unchanged.
+
 - Confluence brokers: a line directly after a preformatted block is read
   as its own line (issue #669). `plainText` ended a line at `</p>`,
   `</div>`, `</h1>`-`</h6>` and `</li>`, but not at `</pre>`, so a

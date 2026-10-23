@@ -6,6 +6,7 @@ import { test, type TestContext } from "node:test";
 
 import { installFromCli, parseArgs } from "./install.mts";
 import type { Capabilities } from "./lib/contracts.mts";
+import { CatalogReadError } from "./lib/model-catalog-process.mts";
 import { fixtureModelCatalog } from "./lib/model-policy.fixture.mts";
 
 function fixture(t: TestContext) {
@@ -58,6 +59,21 @@ test("async CLI catalog failure is redacted and leaves the first install untouch
   const f = fixture(t);
   await assert.rejects(installFromCli(f.options, async () => { throw new Error("synthetic-account-detail"); }), (error: Error) => {
     assert.equal(error.message, "Codex model catalog unavailable or cleanup unconfirmed");
+    assert.equal(error.cause, undefined);
+    return true;
+  });
+  assert.deepEqual(fs.readdirSync(f.codexHome), ["config.toml"]);
+  assert.equal(fs.readFileSync(f.configFile, "utf8"), f.operator);
+  assert.equal(fs.existsSync(f.options.workspace), false);
+});
+
+test("async CLI keeps the stage of an already redacted catalog error", async (t) => {
+  const f = fixture(t);
+  const staged = new CatalogReadError("cleanup");
+  await assert.rejects(installFromCli(f.options, async () => { throw staged; }), (error: Error) => {
+    assert.equal(error, staged);
+    assert.equal((error as CatalogReadError).stage, "cleanup");
+    assert.equal(error.message, "Codex model catalog unavailable or cleanup unconfirmed (stage: cleanup)");
     assert.equal(error.cause, undefined);
     return true;
   });
