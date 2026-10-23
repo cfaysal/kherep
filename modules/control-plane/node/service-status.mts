@@ -38,6 +38,11 @@ const CANDIDATE_UNKNOWN = {
   darwin: "the recorded candidate is loaded without a running process; upgrade and rollback refuse it; unload it by hand (launchctl bootout), then run kherep-node service rollback, see docs/INSTALLATION.md",
   win32: "the recorded candidate task is in an unknown state; upgrade and rollback refuse it; stop the task by hand, then run kherep-node service rollback, see docs/INSTALLATION.md",
 } as const;
+// #677: the stopped service no longer runs its daemon, whose process lives on; both verbs refuse until it ends.
+const OUTLIVED = {
+  darwin: "the previous daemon is no longer loaded by launchd but its process still runs; upgrade and rollback refuse until it ends; end that process by hand, then run kherep-node service upgrade --source <clean checkout>, see docs/INSTALLATION.md",
+  win32: "the Scheduled Task is stopped but its daemon process still runs; upgrade and rollback refuse until it ends; end that process by hand, then run kherep-node service upgrade --source <clean checkout>, see docs/INSTALLATION.md",
+} as const;
 // #582 (A2 P2-C): a failed install left its candidate loaded under the label and no receipt; only a repeated install completes it.
 const INSTALL_REPEAT = "a recorded install candidate is loaded without a receipt; repeat kherep-node service install with the same --workspace and --service-name, without --adopt, see docs/INSTALLATION.md";
 const priorState = (paths: Paths, record: ServiceCandidate, receipt: ServiceReceipt | null): "recorded" | "unbound" | "none" =>
@@ -102,6 +107,7 @@ export async function reportServiceStatus(paths: Paths, receipt: ServiceReceipt,
     ? (receipt.binding.platform === "darwin" ? UNATTESTED.darwin[configured!] : UNATTESTED.win32)
     : drain === "unknown" ? "the service drain owner cannot be verified; inspect the service/drain owner file"
       : record ? (native?.running === "unknown" ? CANDIDATE_UNKNOWN[receipt.binding.platform] : CANDIDATE)
+        : native?.running === false && state && alive(state.pid) && drain !== "active" ? OUTLIVED[receipt.binding.platform]
         : drain === "stale" ? `${upgrade} reclaims the stale drain ${installed}`
           : native?.running === false && (!state || !alive(state.pid)) ? `${upgrade} ${installed}` : undefined;
   // A2 P3-3: while unattested no record can be matched, so a present record is "unattested", never "stale".

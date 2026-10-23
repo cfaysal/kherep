@@ -10,7 +10,7 @@ import {
   type CandidateLoadedError, type LifecycleDependencies,
 } from "./service-lifecycle.mts";
 import {
-  assertSettled, candidateInPlace, failedWriteSnapshot, recordedPriorBackup, recoveryBlocker, sameBinding, serviceFailure, stopNotIssued,
+  assertSettled, candidateInPlace, failedWriteSnapshot, recordedPriorBackup, recoveryBlocker, sameBinding, serviceFailure, stageStopCode, stopNotIssued,
   type ServiceStage, type ServiceTransactionResult,
 } from "./service-transaction-support.mts";
 import type { NativeServiceSnapshot, ServiceBinding } from "./service-types.mts";
@@ -111,7 +111,7 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
         }
       }
       if (recovery === "unknown" && (writeAttempted || (stopIssued && deps.alive(state?.pid)))) drainSafeToRelease = false;
-      throw serviceFailure("SERVICE_ROLLBACK_FAILED", cause, recovery, stage, blocker);
+      throw serviceFailure("SERVICE_ROLLBACK_FAILED", cause, recovery, stage, blocker, stageStopCode(stage, cause));
     } finally { clearLaunchPermit(); if (drainSafeToRelease) endDrain(); }
   } finally { release(); }
 }

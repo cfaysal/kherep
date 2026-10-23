@@ -384,7 +384,11 @@ code and the measured recovery state, `restored` or `unknown`; it does not print
 the native definition, environment or native command output. It adds the
 `stage` that failed (`stop`, `prove-stopped`, `write`, `verify`, `start`,
 `health`, `settle` or `receipt`) and, for an `unknown` recovery, a fixed
-`blocker` such as `RECOVERY_ABSENCE_UNPROVEN` (issue #472).
+`blocker` such as `RECOVERY_ABSENCE_UNPROVEN` (issue #472). A failure in
+`stop` or `prove-stopped` also carries a fixed `stopCode` from the allowlist
+the candidate record uses, for example `STOP_UNPROVEN_TIMEOUT` when the stop
+proof ran out of time, also when no `service/candidate.json` is written
+(issue #677).
 
 A rollback keeps a running node running: it starts the restored definition
 when the current service or the backed-up one was running, also when the backup
@@ -418,6 +422,15 @@ job still loaded with another definition after the grace, or a launchd state
 that cannot be read, refuses the write and the file stays as it was. Not found
 is not a stop proof: a job launchd no longer lists may still have a live
 process (issue #677).
+
+When the selected service is stopped (on macOS: launchd no longer lists the
+job) but the recorded daemon's process still runs, `service status` reports
+`running: false` with a recovery text that names this state. Upgrade and
+rollback refuse it with `a live daemon remains outside the stopped selected
+service`; the stale-drain reclaim does not apply. End that process by hand:
+its pid is `pid` in `<config>/control-plane/daemon.json`; first check with
+`ps -ww -p <pid> -o command=` that it is the node daemon of this service. Then
+run `kherep-node service upgrade --source <clean checkout>`.
 
 `kherep-node service upgrade --source <clean checkout>` activates over the
 recorded candidate and stops it through the proven path; `kherep-node service
