@@ -4,7 +4,7 @@ import { lifecycleDefaults, type LifecycleDependencies } from "./service-lifecyc
 import type { NodePaths } from "./config.mts";
 import { readServiceBackup, snapshotDigests, type ServiceBackup, type ServiceCandidate, type ServiceReceipt } from "./service-records.mts";
 import {
-  FAILED_WRITE_SNAPSHOT, STOP_CODES, STOP_NOT_ISSUED, stopCode, type FailedServiceWrite, type NativeServiceSnapshot, type ServiceBinding, type StopCode,
+  FAILED_WRITE_SNAPSHOT, STOP_NOT_ISSUED, isStopCode, stopCode, type FailedServiceWrite, type NativeServiceSnapshot, type ServiceBinding, type StopCode,
 } from "./service-types.mts";
 
 export const SERVICE_STAGES = ["stop", "prove-stopped", "write", "verify", "start", "health", "settle", "receipt"] as const;
@@ -67,7 +67,7 @@ export const stageStopCode = (stage: ServiceStage, cause: unknown): StopCode | u
 // #677: an allowlisted stop failure that says the stopped daemon's family was not proven gone; never read from a message.
 export function stopFamilyUnproven(cause: unknown): boolean {
   const value = cause as { code?: unknown; familyUnproven?: unknown } | null;
-  return typeof value === "object" && value !== null && (STOP_CODES as readonly unknown[]).includes(value.code) && value.familyUnproven === true;
+  return typeof value === "object" && value !== null && isStopCode(value.code) && value.familyUnproven === true;
 }
 
 export function serviceFailure<C extends string>(code: C, cause: unknown, recovery: string, stage: ServiceStage,

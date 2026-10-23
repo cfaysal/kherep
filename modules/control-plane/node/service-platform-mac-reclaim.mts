@@ -1,6 +1,7 @@
 import {
   macDescendants, macIdentityMatches, readMacInventory, readMacProcessIdentity, type MacProcessIdentity,
 } from "./service-platform-mac-identity.mts";
+import { STOP_PROOF_TIMEOUT_MESSAGE } from "./service-lifecycle.mts";
 import type { MacCommand } from "./service-platform-mac-native.mts";
 import { LOADED_WRITE_GRACE_MS, observeLoadedForWrite } from "./service-platform-mac-write-guard.mts";
 import type { ServiceBinding, ServiceStopContext, ServiceStopProof, StopCode } from "./service-types.mts";
@@ -30,7 +31,7 @@ export interface ReclaimInput extends ServiceStopProof {
   signal: MacSignal; report?: (line: string) => void;
 }
 export type ReclaimFailure = Error & { code: StopCode; familyUnproven: boolean };
-const timedOut = (): Error => new Error("managed service verification timed out");
+const timedOut = (): Error => new Error(STOP_PROOF_TIMEOUT_MESSAGE);
 
 export async function reclaimMacStop(input: ReclaimInput): Promise<void> {
   const { clock, deadline, alive } = input;
@@ -53,16 +54,17 @@ export async function reclaimMacStop(input: ReclaimInput): Promise<void> {
     { uid: input.uid, binding: input.binding, startedAt: input.expected.startedAt, sourceRoot: input.expected.sourceRoot,
       lstart: input.snapshot.lstart });
   const notFound = (): boolean => observeLoadedForWrite(run, input.uid, input.binding.serviceName).state === "not-found";
-  const readFamily = (): ReturnType<typeof readMacInventory> => {
+  // The parent's current descendants (pid -> lstart), also recorded in `captured`; null when the table is unreadable.
+  const readFamily = (): Map<number, string> | null => {
     const rows = readMacInventory(run);
     if (!rows) { // after a signal the family is unknown for good: no further signal, no success (sticky)
       if (signalled) { familyUnproven = true; refuse("STOP_UNKNOWN_DESCENDANTS"); }
       return null;
     }
-    for (const child of macDescendants(rows.map(row => [row.pid, row.ppid] as const), pid)) {
-      captured.set(child, rows.find(row => row.pid === child)!.lstart);
-    }
-    return rows;
+    const lstarts = new Map(rows.map(row => [row.pid, row.lstart]));
+    const children = new Map([...macDescendants(rows.map(row => [row.pid, row.ppid] as const), pid)].map(child => [child, lstarts.get(child)!]));
+    for (const [child, lstart] of children) captured.set(child, lstart);
+    return children;
   };
 
   // Alive every 100 ms until `until`; after SIGTERM also the family every second. Never polls after D.
@@ -86,10 +88,10 @@ export async function reclaimMacStop(input: ReclaimInput): Promise<void> {
   // at or after D ends the escalation before anything else is started.
   const signalIfOwned = (name: "SIGTERM" | "SIGKILL", inTime: () => boolean): "sent" | "gone" | "refused" => {
     if (refusal !== undefined) return "refused"; // an earlier refusal is never followed by a signal
-    const rows = readFamily();
+    const children = readFamily();
     if (!open()) return refuse("STOP_UNLISTED_ALIVE");
-    if (!rows) return refuse("STOP_UNKNOWN_DESCENDANTS");
-    if (macDescendants(rows.map(row => [row.pid, row.ppid] as const), pid).size) return refuse("STOP_BLOCKED_NATIVE_DESCENDANTS");
+    if (!children) return refuse("STOP_UNKNOWN_DESCENDANTS");
+    if (children.size) return refuse("STOP_BLOCKED_NATIVE_DESCENDANTS");
     const unlisted = notFound();
     if (!open()) return refuse("STOP_UNLISTED_ALIVE");
     if (!unlisted) return refuse("STOP_IDENTITY_MISMATCH");

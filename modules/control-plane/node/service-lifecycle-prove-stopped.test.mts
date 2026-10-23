@@ -5,7 +5,6 @@ import test from "node:test";
 
 import { nodePaths } from "./config.mts";
 import { lifecycleDefaults, proveStopped, restorePrior, type RecoveryInput } from "./service-lifecycle.mts";
-import { realMacWriteClock } from "./service-platform-mac-write-guard.mts";
 import { seedManaged, setup } from "./service-transaction-fixture.mts";
 import type { ServiceAdapter, ServiceBinding, ServiceStopProof } from "./service-types.mts";
 
@@ -68,7 +67,8 @@ test("the default stop-proof clock is monotonic and keeps the injected sleep", (
   const sleep = async () => {};
   const clock = lifecycleDefaults({ paths: nodePaths("/synthetic"), adapter: {} as ServiceAdapter, sleep }).clock;
   assert.equal(clock.sleep, sleep);
-  assert.equal(clock.now, realMacWriteClock.now);
+  const before = performance.now(), read = clock.now();
+  assert.ok(read >= before && read <= performance.now(), "the default reads the monotonic performance clock");
 });
 
 type Shape = "listed" | "unlisted" | "missing";

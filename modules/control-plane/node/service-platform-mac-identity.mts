@@ -55,8 +55,9 @@ export function readMacInventory(run: MacCommand): MacProcessRow[] | null {
   const rows: MacProcessRow[] = [];
   for (const line of inventory.stdout.split("\n").filter(Boolean)) {
     const row = INVENTORY_ROW.exec(line);
-    const [pid, ppid, pgid, uid] = row ? [safe(row[1]), safe(row[2]), safe(row[3]), safe(row[4])] : [null, null, null, null];
-    if (!row || pid === null || ppid === null || pgid === null || uid === null) return null;
+    if (!row) return null;
+    const [pid, ppid, pgid, uid] = [safe(row[1]), safe(row[2]), safe(row[3]), safe(row[4])];
+    if (pid === null || ppid === null || pgid === null || uid === null) return null;
     rows.push({ pid, ppid, pgid, uid, lstart: row[5], command: row[6] });
   }
   return rows.length ? rows : null;
