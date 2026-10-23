@@ -1,5 +1,5 @@
 import { outgoingIds } from './confluence-related.mts';
-import { claimBody, plainText as plain, revisionBody, revisionLines } from './confluence-evidence.mts';
+import { claimBody, claimViews, plainText as plain, revisionBody, revisionLines } from './confluence-evidence.mts';
 
 export interface Snapshot {
   id: string; version: number; title: string; spaceId: string; parentId: string | null;
@@ -34,7 +34,7 @@ export function drainageRules(pages: Snapshot[], graphComplete: boolean): Candid
     const text = plain(p.body);
     // Only the author's claim decides code-boundness; the run of measurement blocks decide appended before the footer is metadata (#650, #666).
     const claim = plain(claimBody(p.body));
-    const codeBound = /(?:^|\n)\s*(?:Code|Repository|Repo|Revision|Commit|Code[- ]bound)\s*:/im.test(claim)
+    const codeBound = /(?:^|\n)\s*(?:Code|Repository|Repo|Revision|Commit|Code[- ]bound)\s*:/im.test(claimViews(claimBody(p.body)).join('\n'))
       || /\b[\w/-]+\.(?:mts|ts|tsx|js|py|java|go|rs)\b/.test(claim);
     // Revision lines are read without base-form blocks, positional or not, tail optional, as on d5c15f4 (#650 T8, #666).
     if (p.labels.includes('type-observation') && codeBound && !revisionsValid(revisionBody(p.body),p.labels)) {

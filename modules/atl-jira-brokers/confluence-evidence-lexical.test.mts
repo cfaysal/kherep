@@ -94,3 +94,33 @@ test('#669 lexical: an opaque region inside a Revision value never joins two hal
   }
 });
 
+
+// PR #672 review 2: a real </pre> followed by quoted claim text in a comment, CDATA section, PI or another <pre> adds no line-anchored signal;
+// an author line after such a region does, and a signal base already read inside a region stays.
+const SIGNALS: [string, string, string][] = [['Host', 'live', 'target-host'], ['Doc', 'doc', 'official-doc'], ['Code', 'code', 'repository']];
+const WRAP: [string, (t: string) => string][] = [['comment', t => `<!-- ${t} -->`], ['cdata', t => `<![CDATA[${t}]]>`], ['pi', t => `<?synthetic ${t}?>`],
+  ['bare pre', t => `<pre>${t.replace(/^<p>|<\/p>$/g, '')}</pre>`]];
+const measured = (kind: string, sourceClass: string): Measurement => ({ kind, sourceClass, subject: 'queue', source: 'queue', command: 'inspect queue',
+  excerpt: 'queue observed', measuredAt: '2026-10-22', verdict: 'reproduces', ...(kind === 'code' ? { revision: REV } : {}) } as Measurement);
+const page = (fragment: string) => `<p>The queue retries.</p>${fragment}${FOOTER}`;
+const observation = (body: string) => drainageRules([{ id: '1', version: 3, title: 't', spaceId: '9', parentId: null, body,
+  labels: ['type-observation', 'evidence-assumed', 'status-author-model'] }], false).filter(c => c.problem === 'revision-missing-or-invalid').length;
+
+test('#669 lexical signals: quoted claim text after a real </pre> adds no signal and confirms nothing', () => {
+  for (const [label, kind, sourceClass] of SIGNALS) for (const [name, wrap] of WRAP) {
+    const body = page(`<pre>x</pre>${wrap(`<p>${label}: queue</p>`)}`);
+    assert.deepEqual(claim(body).signals, [], `${label} ${name}`);
+    assert.notEqual(decide(claim(body), measured(kind, sourceClass), OPT).outcome, 'confirmed', `${label} ${name}`);
+    assert.equal(observation(body), 0, `${label} ${name}: not code-bound, as on base`);
+  }
+});
+
+test('#669 lexical signal controls: an author line after the region counts; a signal base read inside one stays', () => {
+  for (const [label, kind, sourceClass] of SIGNALS.slice(0, 2)) {
+    for (const body of [page(`<pre>x</pre><!-- opaque --><p>${label}: queue</p>`), page(`<!-- >\n${label}: queue\nend -->`)]) {
+      assert.deepEqual(claim(body).signals, [kind], body);
+      assert.equal(decide(claim(body), measured(kind, sourceClass), OPT).outcome, 'confirmed', body);
+    }
+  }
+  assert.equal(observation(page('<pre>x</pre><!-- opaque --><p>Code: queue</p>')), 1, 'an author Code line after the region is code-bound');
+});

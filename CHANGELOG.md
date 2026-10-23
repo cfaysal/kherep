@@ -441,7 +441,12 @@ increments the minor version; every other release increments the patch version.
   inside a `<pre>`, comment, CDATA section or processing instruction, or
   in the excerpt of a complete measurement block, therefore never newly
   binds, and two halves of a SHA around an opaque region never join. The
-  historical signal keeps the base reading. `<blockquote>`, table cells
+  line-anchored claim signals (`Code:`, `Host:`, `Doc:` and their
+  aliases, and the scanner's code-bound line check) read the same two
+  views (`claimViews`), so quoted text in a comment, CDATA section, PI or
+  another `<pre>` after a real `</pre>` adds no signal. Code tokens,
+  tracker keys, command words, URLs and the historical signal keep the
+  base text. `<blockquote>`, table cells
   and rows and `<br />` are unchanged: documented storage wraps quote
   text in `<p>`, and a table row or a line break as a line is a separate
   decision.
