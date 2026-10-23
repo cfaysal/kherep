@@ -445,7 +445,9 @@ accepted and not measured. After the pid is gone, one more process table must
 show nothing left in the daemon's process group and none of the children seen
 while it lived; only then does the upgrade continue, and the CLI prints one
 line to stderr without pid or path. The same proof applies when the pid ends
-on its own once launchd reported the job not found. A refusal (identity drift,
+on its own once launchd reported the job not found, and a stop proof that then
+runs out of time without having seen the pid alive at its end keeps the
+family unproven, so recovery writes and starts nothing. A refusal (identity drift,
 children, an unreadable process table) stays the result even when the pid
 exits afterwards, and no `launchctl`, `ps` or `osascript` call, including the
 second call of a two-step read, and no liveness poll starts after the 75

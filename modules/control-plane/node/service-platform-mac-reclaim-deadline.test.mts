@@ -7,6 +7,7 @@ import { D, IDENTITY, INVENTORY, K, PID, PRINT, UID, aliveUntil, noCallAfter, ro
 
 const OSASCRIPT = /^\/usr\/bin\/osascript /;
 const DOMAIN = new RegExp(`^launchctl print gui/${UID}$`);
+const TIMEOUT_CODE = "STOP_UNPROVEN_TIMEOUT";
 
 test("an identity ps that returns after D starts no osascript and no liveness poll", async () => {
   const w = world({ delay: (call, tick) => INVENTORY.test(call) && tick === K ? 4_000 : IDENTITY.test(call) && tick === D - 1_000 ? 2_000 : 0 });
@@ -118,3 +119,26 @@ for (const parentExits of [true, false]) {
     assert.deepEqual(w.reports, []);
   });
 }
+
+for (const [name, script] of [
+  ["a second print whose domain read returns after D", { delay: (call: string, tick: number) => DOMAIN.test(call) && tick === 68_000 ? 8_000 : 0 }],
+  ["a sleep that overshoots D", { oversleep: (_index: number, tick: number) => tick === 70_000 ? 10_000 : 0 }],
+] as const) {
+  test(`a late not-found then ${name}, with the parent gone, carries the family doubt`, async () => {
+    const w = world({ ...script, print: tick => tick < 67_000 ? "listed" : "not-found", alive: tick => tick < 72_000 });
+    const outcome = await w.reclaim();
+    assert.deepEqual(w.signals, []);
+    noCallAfter(w);
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.ok === false && outcome.error.code, TIMEOUT_CODE);
+    assert.equal(outcome.ok === false && outcome.error.familyUnproven, true);
+  });
+}
+
+test("a late not-found with the parent seen alive at D times out without family doubt", async () => {
+  const w = world({ print: tick => tick < 67_000 ? "listed" : "not-found" });
+  const outcome = await w.reclaim();
+  assert.equal(outcome.tick, D);
+  assert.equal(outcome.ok === false && outcome.error.code, TIMEOUT_CODE);
+  assert.equal(outcome.ok === false && outcome.error.familyUnproven, false, "the parent was seen alive at D");
+});

@@ -47,7 +47,7 @@ export async function reclaimMacStop(input: ReclaimInput): Promise<void> {
   let nextInventory = 0;
   let refusal: StopCode | undefined;
   // Unproven unless a post-exit proof was clean or, with nothing captured, the parent was seen alive at D.
-  const fail = (code: StopCode): ReclaimFailure => Object.assign(new Error("previous daemon could not be proven stopped"),
+  const fail = (code: StopCode, message = "previous daemon could not be proven stopped"): ReclaimFailure => Object.assign(new Error(message),
     { code, familyUnproven: familyUnproven || (!familyProven && (captured.size > 0 || !aliveAtDeadline)) });
   const refuse = (code: StopCode): "refused" => { refusal ??= code; return "refused"; };
   const matches = (identity: MacProcessIdentity | null): boolean => identity !== null && macIdentityMatches(identity,
@@ -131,11 +131,13 @@ export async function reclaimMacStop(input: ReclaimInput): Promise<void> {
   // A job launchd reported not found twice no longer has its group reaped by launchd, also when that came too late
   // for a signal: its pid's own exit then needs the family proof too.
   let firstNotFound: number | undefined, printing = true, nextPrint = clock.now(), triggered = false, unlisted = false;
+  // Once unlisted, a timeout carries the family doubt unless the parent was seen alive at D (an overshoot never was).
+  const timeout = (): Error => unlisted ? fail("STOP_UNPROVEN_TIMEOUT", STOP_PROOF_TIMEOUT_MESSAGE) : timedOut();
   while (!triggered) {
     const now = clock.now();
-    if (now > deadline) throw timedOut();
+    if (now > deadline) throw timeout();
     if (!alive(pid)) { if (!unlisted) return; break; }
-    if (now >= deadline) throw timedOut();
+    if (now >= deadline) { aliveAtDeadline = true; throw timeout(); }
     if (printing && now >= nextPrint) {
       nextPrint = now + RECLAIM_PRINT_INTERVAL_MS;
       const observed = observeLoadedForWrite(run, input.uid, input.binding.serviceName).state;

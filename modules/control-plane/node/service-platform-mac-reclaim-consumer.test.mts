@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
+import { STOP_TIMEOUT_MS } from "./service-lifecycle.mts";
 import { macHost } from "./service-platform-mac-transaction-fixture.mts";
 import { readServiceCandidate } from "./service-records.mts";
 import { activateManagedService, readServiceReceipt, rollbackManagedService } from "./service-transaction.mts";
@@ -77,6 +78,38 @@ for (const verb of ["upgrade", "rollback"] as const) {
       assert.equal(failure.blocker, "RECOVERY_ABSENCE_UNPROVEN");
       assert.equal(h.inode(), inode);
       assert.equal(bootstraps(h), before);
+      assert.equal(fs.readFileSync(receiptFile(h), "utf8"), receipt);
+      assert.equal(readServiceCandidate(h.paths), null);
+      assert.equal(drain(h), true);
+    });
+  }
+}
+
+// A job launchd still listed at the proof's entry is reported not found only at 67 s (after the TERM grace) and its
+// process ends at 72 s, no signal sent: a timeout or overshoot after that must keep the family doubt for recovery.
+for (const verb of ["upgrade", "rollback"] as const) {
+  for (const late of ["second print returns after D", "sleep overshoots D"] as const) {
+    test(`${verb}: a late not-found followed by a timeout keeps the family unproven (${late})`, mac, async (t) => {
+      const h = await macHost(t);
+      if (verb === "rollback") await activateManagedService({ mode: "upgrade", binding: h.candidate }, h.deps);
+      // a bounded health wait, so a wrong restore of the prior reports instead of polling its real-time 180 s
+      h.deps.timeoutMs = 50;
+      h.deps.stopTimeoutMs = STOP_TIMEOUT_MS;
+      h.options.bootout = "listed-alive";
+      h.options.exitAfterBootout = 72_000;
+      h.options.unlistAt = tick => tick - h.bootoutTick() >= 67_000;
+      if (late === "second print returns after D") h.options.domainDelay = tick => tick - h.bootoutTick() === 68_000 ? 8_000 : 0;
+      else h.options.oversleep = tick => tick - h.bootoutTick() === 70_000 ? 10_000 : 0;
+      const stopped = h.daemonPid(), before = bootstraps(h), inode = h.inode(), receipt = fs.readFileSync(receiptFile(h), "utf8");
+      const failure = await run(h, verb);
+      assert.deepEqual(h.signals, [], "a not-found too late for a grace sends nothing");
+      assert.equal(h.alive(stopped), false, "the parent is gone");
+      assert.equal(failure.stage, "prove-stopped");
+      assert.equal(failure.stopCode, "STOP_UNPROVEN_TIMEOUT");
+      assert.equal(failure.recovery, "unknown");
+      assert.equal(failure.blocker, "RECOVERY_ABSENCE_UNPROVEN");
+      assert.equal(h.inode(), inode, "recovery never replaced the plist");
+      assert.equal(bootstraps(h), before, "nothing was started");
       assert.equal(fs.readFileSync(receiptFile(h), "utf8"), receipt);
       assert.equal(readServiceCandidate(h.paths), null);
       assert.equal(drain(h), true);
