@@ -50,6 +50,10 @@ function probeGroup(pid: number): GroupProbe {
     return code === "ESRCH" ? "absent" : code === "EPERM" ? "denied" : "present";
   }
 }
+// Issue #667 (M3-M5): the plugin sync of a fresh home spawns a git fetch whose orphaned child
+// outlives the app-server by milliseconds. features.plugins=false keeps a metadata read free of
+// it; the -c form only warns on an unknown key, --disable would refuse to start.
+const CATALOG_SESSION_FLAGS = ["-c", "features.plugins=false"];
 const GROUP_POLL_MS = 25, DEFAULT_CLEANUP_GRACE_MS = 2000, MAX_CLEANUP_GRACE_MS = 10_000;
 function cleanupGrace(options: CatalogProcessOptions): number {
   const grace = options.cleanupGraceMs ?? DEFAULT_CLEANUP_GRACE_MS;
@@ -89,7 +93,8 @@ async function readCatalogProcess(options: CatalogProcessOptions): Promise<Model
   const platform = options.platform ?? process.platform;
   const executable = options.executable ?? (options.find ?? findCodex)();
   if (!executable) throw new Error("Codex executable unavailable for model catalog");
-  const command = codexCommand(executable, [...options.launchPrefix ?? [], "app-server", "--listen", "stdio://"], platform);
+  const command = codexCommand(executable, [...options.launchPrefix ?? [], ...CATALOG_SESSION_FLAGS,
+    "app-server", "--listen", "stdio://"], platform);
   const child = (options.spawn ?? spawn as AppServerSpawn)(command.file, command.args, {
     stdio: "pipe", windowsHide: true, detached: true,
     ...(options.codexHome ? { env: { ...process.env, CODEX_HOME: options.codexHome } } : {}),
