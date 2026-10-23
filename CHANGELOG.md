@@ -267,8 +267,9 @@ increments the minor version; every other release increments the patch version.
   lets the write through; a listed job lets it through only when the bytes
   equal the file's and the loaded identity attests against them (the same
   predicate `read` uses). Otherwise it retries every 100 ms within a 1 s
-  grace on a monotonic clock. The grace limits when a new probe may start,
-  not the total duration: each `launchctl` and `plutil` call keeps its own
+  grace on a monotonic clock. The grace limits when a new probe may start
+  (at the latest at its end, rechecked after every sleep), not the total
+  duration: each `launchctl` and `plutil` call keeps its own
   15 s timeout, and a probe that started inside the grace is honoured even
   when it ends after it. The grace is about seven times the 145 ms that the
   slowest first `launchctl print` after the pid was gone took in the
