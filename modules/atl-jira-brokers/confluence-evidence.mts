@@ -8,17 +8,17 @@ export const BOUND_REVISION = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-
 export const NO_BINDING_LINE = /^none \(no exact binding: (?:no repository|no full commit SHA|dirty tree|malformed repository or revision)\)$/;
 export const DIRTY_LINE = /^(.*) \(no exact binding: dirty tree\)$/;
 export interface Revisions { bound: string[]; unbound: string[]; malformed: string[] }
-export function plainText(body: string): string {
-  return body.replace(/<\/(?:p|div|h[1-6]|li|pre)>/gi, '\n').replace(/<[^>]*>/g, ' ')
-    .replace(/&(?:nbsp|amp|lt|gt|quot);/g, ' ').replace(/[ \t]+/g, ' ').trim();
+// #669: only a </pre> closing an outermost <pre> ends a line; comments, CDATA and PIs are opaque. A mark (null: no line ends) replaces outer ones.
+export function plainText(body: string, mark: string | null = ''): string { let depth = 0;
+  return body.replace(/<!--[^]*?(?:-->|$)|<!\[CDATA\[[^]*?(?:\]\]>|$)|<\?[^]*?(?:\?>|$)|<\/pre>|<pre\b(?:"[^"]*"|'[^']*'|[^>"'])*>/gi, tag => /^<[!?]/.test(tag) ? (mark && !depth ? mark : tag)
+    : tag[1] === '/' ? (depth > 0 && --depth === 0 && mark !== null ? `${tag}\n${mark}` : tag) : tag.endsWith('/>') ? tag : (depth++ === 0 && mark ? `${mark}\n${tag}` : tag))
+    .replace(/<\/(?:p|div|h[1-6]|li)>/gi, '\n').replace(/<[^>]*>/g, ' ').replace(/&(?:nbsp|amp|lt|gt|quot);/g, ' ').replace(/[ \t]+/g, ' ').trim();
 }
-// #669: the base view (</pre> ends no line) keeps every base line; the masked view (<pre> dropped, innermost first) adds lines after one.
-export function revisionLines(body: string): Revisions {
+export function revisionLines(body: string): Revisions { // base view kept whole; the marked view adds lines starting at a mark (a mark ends the line before an outer <pre>)
   const out: Revisions = { bound: [], unbound: [], malformed: [] };
-  let masked = body; for (let last = ''; last !== masked;) [last, masked] = [masked, masked.replace(/<pre\b[^>]*>(?:(?!<pre\b)[^])*?<\/pre>/gi, ' [pre]</p>')];
-  for (const [view, text] of [body, masked].map(b => plainText(b.replace(/<\/pre>/gi, ' '))).entries()) for (const match of text.matchAll(/(?:^|\n)\s*Revision\s*:\s*([^\n]*)/gmi)) {
-    const line = match[1].trim();
-    const kind = BOUND_REVISION.test(line) ? 'bound' : NO_BINDING_LINE.test(line) || BOUND_REVISION.test(DIRTY_LINE.exec(line)?.[1] ?? '') ? 'unbound' : 'malformed';
+  const views: [string, RegExp][] = [[plainText(body, null), /(?:^|\n)\s*Revision\s*:\s*([^\n]*)/gmi], [plainText(body, '\x01'), /(?:^|\n)(?:[^\S\n]|\x01)*\x01(?:[^\S\n]|\x01)*Revision\s*:\s*([^\n]*)/gi]];
+  for (const [view, [text, re]] of views.entries()) for (const match of text.matchAll(re)) {
+    const line = match[1].trim(), kind = BOUND_REVISION.test(line) ? 'bound' : NO_BINDING_LINE.test(line) || BOUND_REVISION.test(DIRTY_LINE.exec(line)?.[1] ?? '') ? 'unbound' : 'malformed';
     if (view === 0 || !out[kind].includes(line)) out[kind].push(line);
   }
   return out;
@@ -72,7 +72,7 @@ export function classifyClaim(snapshot: ClaimSource, bodyApproved: boolean, kind
   const has: [Kind, boolean][] = [
     ['code', Object.values(revisions).some(lines => lines.length > 0) || codeTokens.length > 0
       || /(?:^|\n)\s*(?:Code|Repository|Repo|Commit|Code[- ]bound)\s*:/im.test(text)],
-    ['historical', /\b(?:historical(?:ly)?|at the time of (?:measurement|writing))\b/i.test(text)],
+    ['historical', /\b(?:historical(?:ly)?|at the time of (?:measurement|writing))\b/i.test(plainText(original, null))],
     ['tracker', trackerKeys.length > 0],
     ['live', /(?:^|\n)\s*(?:Host|Target|Deployment|Live)\s*:/im.test(text) || /\b(?:kubectl|systemctl|journalctl)\b/.test(text)],
     ['doc', /(?:^|\n)\s*(?:Doc|Documentation)\s*:/im.test(text) || /https?:\/\/(?:developer\.atlassian\.com|docs\.)/.test(original)],
