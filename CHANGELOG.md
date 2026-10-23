@@ -445,6 +445,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- A stop failure is visible to the operator without a candidate record
+  (issue #677). A failure in the `stop` or `prove-stopped` stage carries a
+  fixed `stopCode` from the existing allowlist, which gains
+  `STOP_UNLISTED_ALIVE`; `stopCode` classifies a stop error by an
+  allowlisted `code` first and by its exact message otherwise. The CLI
+  prints the field only when it is in the allowlist, never raw text.
+  `service status` with a stopped service whose recorded daemon still runs
+  names that state and the manual step, instead of the stale-drain upgrade
+  text that the upgrade precondition refuses.
+
 - Codex model catalog read in a fresh Codex home (issue #667, macOS/POSIX).
   After the app-server exits, the process-group probe may answer EPERM for
   about 100 ms before ESRCH, and one orphaned helper of the fresh home's

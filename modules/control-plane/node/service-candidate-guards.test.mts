@@ -95,7 +95,7 @@ test("T4(e)/B-7: a stop failure maps to one allowlisted code by its exact messag
   for (const other of [new Error("ENOENT: realpath '/Users/x582leak/x.plist'"), new Error("managed service verification timed out; x"),
     "managed service verification timed out", undefined]) assert.equal(types.stopCode(other), "STOP_FAILED_OTHER");
   assert.deepEqual([...types.STOP_CODES].sort(), ["STOP_BLOCKED_NATIVE_DESCENDANTS", "STOP_FAILED_OTHER", "STOP_IDENTITY_MISMATCH",
-    "STOP_NATIVE_REFUSED", "STOP_PROCESS_UNAVAILABLE", "STOP_UNKNOWN_DESCENDANTS", "STOP_UNPROVEN_TIMEOUT"]);
+    "STOP_NATIVE_REFUSED", "STOP_PROCESS_UNAVAILABLE", "STOP_UNKNOWN_DESCENDANTS", "STOP_UNLISTED_ALIVE", "STOP_UNPROVEN_TIMEOUT"]);
 });
 
 test("T4(e)/B-7: a stop error that carries a home path reaches no record, CLI failure or status", async (t) => {

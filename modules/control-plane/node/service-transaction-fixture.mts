@@ -37,6 +37,7 @@ export class FakeAdapter implements ServiceAdapter {
   stopKeepsPidAlive = false;
   startWithoutLoad = false;
   stopThrowsAfterEffect = false;
+  stopFailureAfterEffect: Error | undefined; // #677: a coded stop failure after the native stop took effect
   reportPid = true;
   disconnectAfterHealth = false;
   strictPreflightGeneration = false;
@@ -131,6 +132,7 @@ export class FakeAdapter implements ServiceAdapter {
     this.stopCalls.push({ binding, expected });
     if (this.failStopBeforeEffect) throw Object.assign(new Error("synthetic stop failure before effect"), { code: STOP_NOT_ISSUED });
     if (this.stopThrowsAfterEffect) throw new Error("synthetic stop failure after the native stop took effect");
+    if (this.stopFailureAfterEffect) throw this.stopFailureAfterEffect;
     if (this.stopKeepsPidAlive) return;
     if (this.failCandidateRecoveryStop && binding.source.commit === this.candidate.source.commit && expected?.pid === this.candidatePid) {
       throw new Error("synthetic candidate stop failure");

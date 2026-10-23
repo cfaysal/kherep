@@ -15,7 +15,7 @@ import {
 } from "./service-lifecycle.mts";
 import {
   assertSettled, candidateInPlace, exact, failedWriteSnapshot, receiptFor, recordedPriorBackup, recoveryBlocker, sameBinding, sameSelector,
-  serviceFailure, stopNotIssued, type ServiceStage, type ServiceTransactionResult,
+  serviceFailure, stageStopCode, stopNotIssued, type ServiceStage, type ServiceTransactionResult,
 } from "./service-transaction-support.mts";
 import type { NativeServiceSnapshot, ServiceBinding } from "./service-types.mts";
 
@@ -184,7 +184,7 @@ export async function activateManagedService(options: ActivateOptions, input: De
       } catch (error) { blocker = recoveryBlocker(error); recordCandidate(error); }
       // #472: keep the drain once a write was attempted or while a daemon told to stop is still alive.
       if (recovery === "unknown" && (writeAttempted || (stopIssued && deps.alive(oldState?.pid)))) drainSafeToRelease = false;
-      throw serviceFailure("SERVICE_ACTIVATION_FAILED", cause, recovery, stage, blocker);
+      throw serviceFailure("SERVICE_ACTIVATION_FAILED", cause, recovery, stage, blocker, stageStopCode(stage, cause));
     } finally { clearLaunchPermit(); if (drainSafeToRelease) endDrain(); }
   } finally { release(); }
 }

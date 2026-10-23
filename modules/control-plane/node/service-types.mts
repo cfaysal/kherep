@@ -46,7 +46,7 @@ export type FailedServiceWrite = Error & { [FAILED_WRITE_SNAPSHOT]?: NativeServi
 export const STOP_NOT_ISSUED = "STOP_NOT_ISSUED";
 // #582: the reason a candidate stop failed travels as one allowlisted code; the raw message is never recorded or printed.
 export const STOP_CODES = ["STOP_BLOCKED_NATIVE_DESCENDANTS", "STOP_UNKNOWN_DESCENDANTS", "STOP_NATIVE_REFUSED",
-  "STOP_UNPROVEN_TIMEOUT", "STOP_PROCESS_UNAVAILABLE", "STOP_IDENTITY_MISMATCH", "STOP_FAILED_OTHER"] as const;
+  "STOP_UNPROVEN_TIMEOUT", "STOP_PROCESS_UNAVAILABLE", "STOP_IDENTITY_MISMATCH", "STOP_UNLISTED_ALIVE", "STOP_FAILED_OTHER"] as const;
 export type StopCode = typeof STOP_CODES[number];
 const STOP_CODE_OF_MESSAGE: ReadonlyArray<[string, StopCode]> = [
   ["STOP_BLOCKED_NATIVE_DESCENDANTS", "STOP_BLOCKED_NATIVE_DESCENDANTS"],
@@ -59,7 +59,10 @@ const STOP_CODE_OF_MESSAGE: ReadonlyArray<[string, StopCode]> = [
   ["LaunchAgent loaded definition does not match selected definition", "STOP_IDENTITY_MISMATCH"],
   ["LaunchAgent loaded identity changed during stop preflight", "STOP_IDENTITY_MISMATCH"],
 ];
+// #677: a stop error that carries an allowlisted code is classified by it; any other error by its exact message.
 export function stopCode(error: unknown): StopCode {
+  const code = (error as { code?: unknown } | null)?.code;
+  if ((STOP_CODES as readonly unknown[]).includes(code)) return code as StopCode;
   const message = error instanceof Error ? error.message : "";
   return STOP_CODE_OF_MESSAGE.find(([text]) => text === message)?.[1] ?? "STOP_FAILED_OTHER";
 }

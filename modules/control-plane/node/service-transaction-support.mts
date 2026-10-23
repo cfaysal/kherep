@@ -4,7 +4,7 @@ import { lifecycleDefaults, type LifecycleDependencies } from "./service-lifecyc
 import type { NodePaths } from "./config.mts";
 import { readServiceBackup, snapshotDigests, type ServiceBackup, type ServiceCandidate, type ServiceReceipt } from "./service-records.mts";
 import {
-  FAILED_WRITE_SNAPSHOT, STOP_NOT_ISSUED, type FailedServiceWrite, type NativeServiceSnapshot, type ServiceBinding,
+  FAILED_WRITE_SNAPSHOT, STOP_NOT_ISSUED, stopCode, type FailedServiceWrite, type NativeServiceSnapshot, type ServiceBinding, type StopCode,
 } from "./service-types.mts";
 
 export const SERVICE_STAGES = ["stop", "prove-stopped", "write", "verify", "start", "health", "settle", "receipt"] as const;
@@ -58,16 +58,21 @@ export function recoveryBlocker(error: unknown): string {
   return typeof code === "string" && code.startsWith("RECOVERY_") ? code : "RECOVERY_STEP_FAILED";
 }
 
-type ServiceFailure<C extends string> = Error & { code: C; recovery: string; stage: ServiceStage; blocker?: string };
+type ServiceFailure<C extends string> = Error & { code: C; recovery: string; stage: ServiceStage; blocker?: string; stopCode?: StopCode };
+
+// #677: the stop reason of a failed stop or stop proof travels on the failure itself, also when no candidate record is written.
+export const stageStopCode = (stage: ServiceStage, cause: unknown): StopCode | undefined =>
+  stage === "stop" || stage === "prove-stopped" ? stopCode(cause) : undefined;
 
 export function serviceFailure<C extends string>(code: C, cause: unknown, recovery: string, stage: ServiceStage,
-  blocker?: string): ServiceFailure<C> {
+  blocker?: string, failedStop?: StopCode): ServiceFailure<C> {
   const fallback = code === "SERVICE_ROLLBACK_FAILED" ? "managed service rollback failed" : "managed service activation failed";
   const error = new Error(cause instanceof Error ? cause.message : fallback) as ServiceFailure<C>;
   error.code = code;
   error.recovery = recovery;
   error.stage = stage;
   if (blocker) error.blocker = blocker;
+  if (failedStop) error.stopCode = failedStop;
   return error;
 }
 

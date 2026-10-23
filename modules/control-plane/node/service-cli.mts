@@ -11,7 +11,7 @@ import { readServiceReceipt, serviceRoot, type ServiceReceipt } from "./service-
 import { activateManagedService, rollbackManagedService } from "./service-transaction.mts";
 import { reportServiceStatus, reportUnmanagedStatus, type StatusDependencies } from "./service-status.mts";
 import { SERVICE_STAGES, type ServiceStage } from "./service-transaction-support.mts";
-import type { ServiceBinding } from "./service-types.mts";
+import { STOP_CODES, type ServiceBinding, type StopCode } from "./service-types.mts";
 
 export const SERVICE_USAGE = `  kherep-node service install --workspace <absolute> [--source <clean checkout>] [--service-name <name>] [--task-path <path>] [--adopt]
   kherep-node service upgrade [--source <clean checkout>]
@@ -35,16 +35,17 @@ interface ServiceCliDependencies extends StatusDependencies {
 
 const SERVICE_FAILURE_CODES = new Set(["SERVICE_ACTIVATION_FAILED", "SERVICE_ROLLBACK_FAILED"]);
 const SERVICE_STAGE_SET = new Set<string>(SERVICE_STAGES);
-interface SafeServiceFailure { ok: false; code: string; recovery: "restored" | "unknown"; stage?: ServiceStage; blocker?: string }
+interface SafeServiceFailure { ok: false; code: string; recovery: "restored" | "unknown"; stage?: ServiceStage; blocker?: string; stopCode?: StopCode }
 // Only fixed fields leave the process; the error message may carry native output and is never printed.
 export function safeServiceFailure(error: unknown): SafeServiceFailure | null {
   if (!error || typeof error !== "object") return null;
-  const value = error as { code?: unknown; recovery?: unknown; stage?: unknown; blocker?: unknown };
+  const value = error as { code?: unknown; recovery?: unknown; stage?: unknown; blocker?: unknown; stopCode?: unknown };
   if (typeof value.code !== "string" || !SERVICE_FAILURE_CODES.has(value.code)
     || (value.recovery !== "restored" && value.recovery !== "unknown")) return null;
   return { ok: false, code: value.code, recovery: value.recovery,
     ...(typeof value.stage === "string" && SERVICE_STAGE_SET.has(value.stage) ? { stage: value.stage as ServiceStage } : {}),
-    ...(typeof value.blocker === "string" && /^RECOVERY_[A-Z_]{1,40}$/.test(value.blocker) ? { blocker: value.blocker } : {}) };
+    ...(typeof value.blocker === "string" && /^RECOVERY_[A-Z_]{1,40}$/.test(value.blocker) ? { blocker: value.blocker } : {}),
+    ...((STOP_CODES as readonly unknown[]).includes(value.stopCode) ? { stopCode: value.stopCode as StopCode } : {}) };
 }
 
 export function parseServiceCommand(argv: string[]): ServiceCommand {
