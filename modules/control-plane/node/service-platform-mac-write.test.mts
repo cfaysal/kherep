@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { MacServiceAdapter } from "./service-platform-mac.mts";
 import type { MacCommand, MacCommandResult } from "./service-platform-mac-native.mts";
+// The adapter-driven tests use the real macOS file-security check, like the other Mac write tests (#594).
 import { observeLoadedForWrite, realMacWriteClock } from "./service-platform-mac-write-guard.mts";
 import type { ServiceBinding } from "./service-types.mts";
 
@@ -83,7 +84,7 @@ function setup(t: test.TestContext, prints: (f: Fixture) => MacCommandResult[], 
   return { f, calls, sleeps, tick: () => tick, write, labelPrints, domainPrints, plutils, noTemp, content };
 }
 
-test("Mac write over a job launchd reports not found proceeds after one probe", async (t) => {
+test("Mac write over a job launchd reports not found proceeds after one probe", { skip: process.platform !== "darwin" }, async (t) => {
   const s = setup(t, f => [f.absent]);
   await s.write("NEW_PLIST");
   assert.equal(s.content(), "NEW_PLIST");
@@ -94,7 +95,7 @@ test("Mac write over a job launchd reports not found proceeds after one probe", 
   s.noTemp();
 });
 
-test("Mac write waits for a listed job to become not found inside the grace", async (t) => {
+test("Mac write waits for a listed job to become not found inside the grace", { skip: process.platform !== "darwin" }, async (t) => {
   const s = setup(t, f => [loaded(f, f.argsOld), f.absent]);
   await s.write("NEW_PLIST");
   assert.equal(s.content(), "NEW_PLIST");
@@ -106,7 +107,7 @@ test("Mac write waits for a listed job to become not found inside the grace", as
   s.noTemp();
 });
 
-test("Mac write refuses a job still loaded with a different definition after the grace", async (t) => {
+test("Mac write refuses a job still loaded with a different definition after the grace", { skip: process.platform !== "darwin" }, async (t) => {
   const s = setup(t, f => [loaded(f, f.argsOld)]);
   await assert.rejects(s.write("NEW_PLIST"), /still loaded with a different definition/);
   assert.equal(s.content(), "OLD_PLIST");
@@ -117,7 +118,7 @@ test("Mac write refuses a job still loaded with a different definition after the
   s.noTemp();
 });
 
-test("Mac write over a listed job with the same bytes and an attesting identity proceeds", async (t) => {
+test("Mac write over a listed job with the same bytes and an attesting identity proceeds", { skip: process.platform !== "darwin" }, async (t) => {
   const s = setup(t, f => [loaded(f, f.argsOld)]);
   await s.write("OLD_PLIST");
   assert.equal(s.content(), "OLD_PLIST");
@@ -127,7 +128,7 @@ test("Mac write over a listed job with the same bytes and an attesting identity 
   s.noTemp();
 });
 
-test("Mac write refuses same bytes when the loaded identity differs", async (t) => {
+test("Mac write refuses same bytes when the loaded identity differs", { skip: process.platform !== "darwin" }, async (t) => {
   const s = setup(t, f => [loaded(f, f.argsNew)]);
   await assert.rejects(s.write("OLD_PLIST"), /still loaded with a different definition/);
   assert.equal(s.labelPrints(), 11);
@@ -136,7 +137,7 @@ test("Mac write refuses same bytes when the loaded identity differs", async (t) 
   s.noTemp();
 });
 
-test("Mac write refuses at once when the first probe cannot be read", async (t) => {
+test("Mac write refuses at once when the first probe cannot be read", { skip: process.platform !== "darwin" }, async (t) => {
   const s = setup(t, () => [result(1, "", "synthetic unreadable")]);
   const error = await s.write("NEW_PLIST").then(() => undefined, (caught: unknown) => caught);
   assert.ok(error instanceof Error);
@@ -150,14 +151,14 @@ test("Mac write refuses at once when the first probe cannot be read", async (t) 
   s.noTemp();
 });
 
-test("Mac write never counts not found with an unreadable domain as absent", async (t) => {
+test("Mac write never counts not found with an unreadable domain as absent", { skip: process.platform !== "darwin" }, async (t) => {
   const s = setup(t, f => [f.absent], () => result(1, "", "unreadable"));
   await assert.rejects(s.write("NEW_PLIST"), /loaded state could not be read before write/);
   assert.equal(s.content(), "OLD_PLIST");
   assert.equal(s.sleeps.length, 0);
 });
 
-test("Mac write refuses at once when a later probe cannot be read", async (t) => {
+test("Mac write refuses at once when a later probe cannot be read", { skip: process.platform !== "darwin" }, async (t) => {
   const s = setup(t, f => [loaded(f, f.argsOld), result(1, "", "unreadable")]);
   await assert.rejects(s.write("NEW_PLIST"), /loaded state could not be read before write/);
   assert.deepEqual(s.sleeps, [100]);
@@ -181,7 +182,7 @@ test("Mac loaded-write observation classifies listed, not found and read errors"
 
 const isLabelPrint = (call: string) => call.startsWith("launchctl print gui/") && call.endsWith(`/${label}`);
 
-test("Mac write grace is consumed by a slow print and no probe starts after it", async (t) => {
+test("Mac write grace is consumed by a slow print and no probe starts after it", { skip: process.platform !== "darwin" }, async (t) => {
   const s = setup(t, f => [loaded(f, f.argsOld)], undefined, call => isLabelPrint(call) ? 1_500 : 0);
   await assert.rejects(s.write("NEW_PLIST"), /still loaded with a different definition/);
   assert.equal(s.labelPrints(), 1);
@@ -191,7 +192,7 @@ test("Mac write grace is consumed by a slow print and no probe starts after it",
   s.noTemp();
 });
 
-test("Mac write grace is consumed by a slow plutil and no probe starts after it", async (t) => {
+test("Mac write grace is consumed by a slow plutil and no probe starts after it", { skip: process.platform !== "darwin" }, async (t) => {
   const s = setup(t, f => [loaded(f, f.argsOld)], undefined, call => call.startsWith("plutil ") ? 1_500 : 0);
   await assert.rejects(s.write("NEW_PLIST"), /still loaded with a different definition/);
   assert.equal(s.labelPrints(), 1);
@@ -200,7 +201,7 @@ test("Mac write grace is consumed by a slow plutil and no probe starts after it"
   assert.equal(s.content(), "OLD_PLIST");
 });
 
-test("Mac write accepts not found from a probe that started inside the grace and ended after it", async (t) => {
+test("Mac write accepts not found from a probe that started inside the grace and ended after it", { skip: process.platform !== "darwin" }, async (t) => {
   let printIndex = 0;
   const s = setup(t, f => [loaded(f, f.argsOld), f.absent], undefined,
     call => isLabelPrint(call) && ++printIndex === 2 ? 2_000 : 0);
@@ -212,7 +213,7 @@ test("Mac write accepts not found from a probe that started inside the grace and
   s.noTemp();
 });
 
-test("Mac write starts no probe after a sleep that returns past the grace", async (t) => {
+test("Mac write starts no probe after a sleep that returns past the grace", { skip: process.platform !== "darwin" }, async (t) => {
   const s = setup(t, f => [loaded(f, f.argsOld), f.absent], undefined, undefined, () => 1_400);
   await assert.rejects(s.write("NEW_PLIST"), /still loaded with a different definition/);
   assert.equal(s.labelPrints(), 1);
@@ -221,7 +222,7 @@ test("Mac write starts no probe after a sleep that returns past the grace", asyn
   s.noTemp();
 });
 
-test("Mac write still starts a probe exactly at the end of the grace", async (t) => {
+test("Mac write still starts a probe exactly at the end of the grace", { skip: process.platform !== "darwin" }, async (t) => {
   const s = setup(t, f => [loaded(f, f.argsOld), f.absent], undefined, undefined, () => 900);
   await s.write("NEW_PLIST");
   assert.equal(s.labelPrints(), 2);
