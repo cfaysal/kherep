@@ -427,20 +427,24 @@ increments the minor version; every other release increments the patch version.
   `<p>Revision: …</p>`, a disqualifier or a `Code:`, `Host:` or `Doc:`
   line right after `<pre>…</pre>` was glued to the code block and never
   parsed. A missing Revision failed safe, a hidden disqualifier did not.
-  `</pre>` now ends a line, for the `evidence` classification and the
-  drainage scanner alike. Revision lines are read in two views
+  Now only a `</pre>` that closes a real outermost `<pre>` ends a line,
+  for the `evidence` classification and the drainage scanner alike. XML
+  comments, CDATA sections and processing instructions are opaque, so a
+  `<pre>` or `</pre>` spelled inside one opens or closes nothing, also
+  inside a real `<pre>`; an unclosed `<pre>` ends no line, and a
+  self-closing `<pre/>` opens none. Revision lines are read in two views
   (`revisionLines`, which replaces `parseRevisionLines` and takes the
-  storage body): the base view, where `</pre>` ends no line, keeps every
-  line the old reading found, disqualifiers included; a second view
-  drops each `<pre>` element, innermost first, and adds only the lines
-  that follow one. A quoted `Revision:` line that ends a `<pre>`, in
-  author text or in a block that lost its `Measured via` line, therefore
-  still never binds, as on base; Revision lines inside the excerpt of a
-  complete measurement block still never count. A `Revision:` paragraph
-  that also contains an empty `<pre>` now reads as malformed (stricter).
-  `<blockquote>`, table cells and rows and `<br />` are unchanged:
-  documented storage wraps quote text in `<p>`, and a table row or a
-  line break as a line is a separate decision.
+  storage body): the base view keeps every line, duplicate and
+  disqualifier the old reading found, in order; a marked view adds only
+  lines that start right after such a `</pre>` or after an opaque region,
+  which it replaces with a separator, never with nothing. Text quoted
+  inside a `<pre>`, comment, CDATA section or processing instruction, or
+  in the excerpt of a complete measurement block, therefore never newly
+  binds, and two halves of a SHA around an opaque region never join. The
+  historical signal keeps the base reading. `<blockquote>`, table cells
+  and rows and `<br />` are unchanged: documented storage wraps quote
+  text in `<p>`, and a table row or a line break as a line is a separate
+  decision.
 
 - Confluence brokers: a text-search result row without a readable title
   makes the exact-term half UNKNOWN instead of disappearing (issue #656).
