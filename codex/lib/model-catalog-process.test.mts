@@ -5,7 +5,7 @@ import path from "node:path";
 import type { SpawnOptions } from "node:child_process";
 import { test } from "node:test";
 import { CatalogReadError, readAvailableModels } from "./model-catalog-process.mts";
-import { BASE, fakeClock, fakeServer, posix, probes, staged } from "./model-catalog-process.fixture.mts";
+import { BASE, fakeClock, fakeServer, posix, probes, staged, writeFault } from "./model-catalog-process.fixture.mts";
 
 test("POSIX cleanup re-asks a transient EPERM until ESRCH and accepts the catalog", async () => {
   const probe = probes("denied", "denied", "absent"), clock = fakeClock(), server = fakeServer();
@@ -46,6 +46,33 @@ test("a start failure keeps the first stage and carries an unconfirmed cleanup",
 test("a malformed model/list page reports the catalog stage", async () => {
   await assert.rejects(readAvailableModels(posix(fakeServer(true, { data: "nope" }), probes("absent"))),
     staged("catalog", true, `${BASE} (stage: catalog)`));
+});
+
+// PR #673 review P2: the shared client stores a notification's transport failure instead of throwing,
+// so a failed initialized must still be reported as the start stage, never as the catalog stage.
+for (const mode of ["throw", "error-event"] as const) {
+  test(`an initialized transport ${mode} is a start failure with confirmed cleanup`, async () => {
+    const server = fakeServer(), attempted = writeFault(server, "initialized", mode);
+    await assert.rejects(readAvailableModels(posix(server, probes("absent"))), staged("start", true, `${BASE} (stage: start)`));
+    assert.deepEqual(attempted, ["initialize", "initialized"]);
+    assert.deepEqual(server.kills, ["SIGTERM", "SIGKILL"]);
+  });
+
+  test(`an initialized transport ${mode} keeps the start stage when cleanup stays unconfirmed`, async () => {
+    const server = fakeServer(), attempted = writeFault(server, "initialized", mode);
+    await assert.rejects(readAvailableModels({ ...posix(server, probes("present")), cleanupGraceMs: 100 }),
+      staged("start", false, `${BASE} (stage: start; cleanup unconfirmed)`));
+    assert.ok(!attempted.includes("model/list"));
+  });
+}
+
+test("a transport failure of initialize or model/list keeps its own stage", async () => {
+  const early = fakeServer();
+  writeFault(early, "initialize", "throw");
+  await assert.rejects(readAvailableModels(posix(early, probes("absent"))), staged("start", true, `${BASE} (stage: start)`));
+  const late = fakeServer(), attempted = writeFault(late, "model/list", "error-event");
+  await assert.rejects(readAvailableModels(posix(late, probes("absent"))), staged("catalog", true, `${BASE} (stage: catalog)`));
+  assert.deepEqual(attempted, ["initialize", "initialized", "model/list"]);
 });
 
 test("Windows catalog uses owned tree stop and measures disappearance without a real process call", async () => {

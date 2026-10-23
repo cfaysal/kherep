@@ -440,7 +440,8 @@ increments the minor version; every other release increments the patch version.
   `CatalogReadError` carries a bounded `stage` (`start`, `catalog`,
   `cleanup`) and whether cleanup was confirmed; the installer prints it as
   a suffix of the existing message. The Windows invocation and the Windows
-  tree path are unchanged.
+  tree path are unchanged. A transport failure of the `initialized`
+  notification is reported as `stage: start`, not `catalog`.
 
 - Confluence brokers: a line directly after a preformatted block is read
   as its own line (issue #669). `plainText` ended a line at `</p>`,
