@@ -23,7 +23,7 @@ This guide is for any client that reads the Central Brain: Claude Code, Codex or
 
    A client that reads only the MCP body cannot tell a confirmed page from an assumed one.
 3. **Zero search results are not proof of absence.** The two paths behave differently:
-   - On the MCP path, a CQL search against a space the identity cannot see returns `totalSize 0` with no error, the same shape as a search with no matches. Before reporting absence, resolve the space (for example with `getConfluenceSpace`), or use the broker search. The broker search exits 2 with `status: unavailable` when the space is not visible.
+   - On the MCP path, a CQL search with a space key that does not resolve returned `totalSize 0` with no error, the same shape as a search with no matches. The test used an unknown key, so the space was missing or not visible; a real space the identity is denied was not tested. Before reporting absence, resolve the space (for example with `getConfluenceSpace`), or use the broker search. For the same unknown key, the broker search exited 2 with `status: unavailable`.
    - A 404 on a single page read does not tell "missing" from "not permitted".
    - In every case the honest result is UNKNOWN until the read path itself is verified.
 4. **Check for truncation.** On MCP, `totalSize` greater than `size`, or a `_links.next` cursor, means more results exist. The broker prints `truncated: true`. A truncated result is not the full population.

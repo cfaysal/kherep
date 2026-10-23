@@ -15,9 +15,10 @@ increments the minor version; every other release increments the patch version.
   maps who does what (Confluence, the Atlassian MCP v2 server, the brokers,
   the observation and lifecycle workflows) and states the measured reading
   rules for any client. The MCP read payload carries no labels, so evidence
-  status comes from the broker `labels` verb or a CQL `label =` filter. Zero
-  MCP search results for a space the identity cannot see look like an empty
-  match, and a 404 does not separate missing from not permitted. Truncation
+  status comes from the broker `labels` verb or a CQL `label =` filter. An MCP
+  search with an unknown space key returns zero results like an empty match
+  (real denied access is untested), and a 404 does not separate missing from
+  not permitted. Truncation
   shows as `totalSize`/`next` or `truncated: true`. A raw body hash does not
   identify a page version, and reading never upgrades evidence. Documentation
   only; no new service.
