@@ -11,6 +11,7 @@ import {
   type MacCommand, type MacLaunchAgentProbe,
 } from "./service-platform-mac-native.mts";
 import { attestMacNoContextStop, beforeStopEffect } from "./service-platform-mac-stop.mts";
+import { assertWritableOverLoaded, realMacWriteClock, type MacWriteClock } from "./service-platform-mac-write-guard.mts";
 import type { NativeServiceSnapshot, ServiceAdapter, ServiceBinding, ServiceStopContext } from "./service-types.mts";
 
 export { MAC_EXECUTABLE_PROBE, macAclAbsent } from "./service-platform-mac-native.mts";
@@ -35,12 +36,13 @@ export class MacServiceAdapter implements ServiceAdapter {
   readonly #agents: string;
   readonly #scratch: string;
   readonly #run: MacCommand;
+  readonly #clock: MacWriteClock;
 
-  constructor(serviceRoot: string, home = os.homedir(), uid = process.getuid?.(), gid = process.getgid?.(), run = runMacCommand) {
+  constructor(serviceRoot: string, home = os.homedir(), uid = process.getuid?.(), gid = process.getgid?.(), run = runMacCommand, clock: MacWriteClock = realMacWriteClock) {
     if (uid === undefined || gid === undefined) throw new Error("current macOS user identity is unavailable");
     this.#uid = uid; this.#gid = gid;
     this.#agents = path.join(home, "Library", "LaunchAgents");
-    this.#scratch = path.join(serviceRoot, "scratch"); this.#run = run;
+    this.#scratch = path.join(serviceRoot, "scratch"); this.#run = run; this.#clock = clock;
   }
 
   #file(name: string): string { return path.join(this.#agents, `${validateServiceName(name)}.plist`); }
@@ -219,6 +221,7 @@ export class MacServiceAdapter implements ServiceAdapter {
       fs.writeFileSync(temp, definition, { mode: own.mode, flag: "wx" });
       fs.chmodSync(temp, own.mode);
       if (!macFileSecurity(temp, this.#run).equals(metadata)) throw new Error("LaunchAgent temporary security metadata differs");
+      await assertWritableOverLoaded({ run: this.#run, uid: this.#uid, label: serviceName, file, temp, definition, clock: this.#clock }); // #594
       fs.renameSync(temp, file);
     } finally { fs.rmSync(temp, { force: true }); }
   }
