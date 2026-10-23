@@ -48,8 +48,11 @@ export async function macHost(t: test.TestContext) {
   let daemon: DaemonState | null = null;
   // inventoryDelay: extra ticks for a full `ps -axo` inventory that starts at `tick`; inventoryUnreadable: that inventory
   // fails; foreignAfterTerm: the pid reads as another program once it received SIGTERM; termExit < 0: SIGTERM is ignored.
+  // unlistAt: launchd drops a still listed job from that tick on; domainDelay: extra ticks of the domain print;
+  // oversleep: extra ticks of a sleep that starts at `tick`; exitAfterBootout >= 0: the process ends that long after bootout.
   const options = { bootout: "normal" as Bootout, termExit: 2_000, printDelay: 0, inventoryDelay: (_tick: number) => 0,
-    inventoryUnreadable: (_tick: number) => false, foreignAfterTerm: false };
+    inventoryUnreadable: (_tick: number) => false, foreignAfterTerm: false, unlistAt: (_tick: number) => false,
+    domainDelay: (_tick: number) => 0, oversleep: (_tick: number) => 0, exitAfterBootout: -1 };
   const calls: Array<{ tick: number; call: string }> = [];
   const signals: Array<{ pid: number; signal: string; tick: number }> = [];
   const launch = (args: string[]) => {
@@ -72,12 +75,15 @@ export async function macHost(t: test.TestContext) {
     if (command === "launchctl" && argv[0] === "print" && argv[1] === `gui/${uid}/${label}`) {
       tick += options.printDelay;
       if (job?.pid !== undefined && !alive(job.pid)) job = null; // launchd reaps a job whose process ended
+      if (job && options.unlistAt(calls.at(-1)!.tick)) job = null;
       return job ? result(0, printJob(job)) : result(113, "", `Bad request.\nCould not find service "${label}" in domain for user gui: ${uid}\n`);
     }
-    if (command === "launchctl" && argv[0] === "print") return result(0, `gui/${uid} = {\n}\n`);
+    if (command === "launchctl" && argv[0] === "print") { tick += options.domainDelay(tick); return result(0, `gui/${uid} = {\n}\n`); }
     if (command === "launchctl" && argv[0] === "getenv") return result(1);
     if (command === "launchctl" && argv[0] === "bootout") {
       const pid = job?.pid;
+      const entry = pid === undefined ? undefined : processes.get(pid);
+      if (entry && options.exitAfterBootout >= 0) entry.diesAt = tick + options.exitAfterBootout;
       if (options.bootout !== "listed-alive") job = null;
       if (options.bootout === "normal" && pid !== undefined) processes.delete(pid);
       return result(0);
@@ -105,7 +111,7 @@ export async function macHost(t: test.TestContext) {
     if (command === "/usr/bin/osascript") return alive(pid) ? result(0, `${process.execPath}\n`) : result(1);
     return result(1, "", "unexpected synthetic command");
   };
-  const clock = { now: () => tick, sleep: async (ms: number) => { tick += ms; } };
+  const clock = { now: () => tick, sleep: async (ms: number) => { tick += ms + options.oversleep(tick); } };
   const adapter = new MacServiceAdapter(path.join(root, "control-plane", "service"), home, uid, stat.gid, run, clock, (pid, signal) => {
     signals.push({ pid, signal, tick });
     const entry = processes.get(pid);

@@ -473,8 +473,9 @@ increments the minor version; every other release increments the patch version.
   not found; a refusal (identity drift, children, an unreadable table) is
   never overtaken by a later exit. No launchctl, ps, osascript or kill call,
   including the second call of a two-step read, and no liveness poll starts
-  after the deadline; a parent whose fate after a signal is unknown at the
-  deadline leaves the family unproven. Every other
+  after the deadline; a parent whose fate after a signal, or after launchd
+  reported the job not found, is unknown at the deadline leaves the family
+  unproven. Every other
   case fails closed with a stop code; recovery then writes and starts
   nothing while the previous pid lives or its family is unproven, and the
   drain stays. Windows and adapters without the hook keep the generic poll.
