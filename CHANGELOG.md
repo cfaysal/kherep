@@ -443,6 +443,42 @@ increments the minor version; every other release increments the patch version.
   tree path are unchanged. A transport failure of the `initialized`
   notification is reported as `stage: start`, not `catalog`.
 
+- Confluence brokers: a line directly after a preformatted block is read
+  as its own line (issue #669). `plainText` ended a line at `</p>`,
+  `</div>`, `</h1>`-`</h6>` and `</li>`, but not at `</pre>`, so a
+  `<p>Revision: …</p>`, a disqualifier or a `Code:`, `Host:` or `Doc:`
+  line right after `<pre>…</pre>` was glued to the code block and never
+  parsed. A missing Revision failed safe, a hidden disqualifier did not.
+  Now only a `</pre>` that closes a real outermost `<pre>` ends a line,
+  for the `evidence` classification and the drainage scanner alike. XML
+  comments, CDATA sections and processing instructions are opaque, so a
+  `<pre>` or `</pre>` spelled inside one opens or closes nothing, also
+  inside a real `<pre>`; an unclosed `<pre>` ends no line, and a
+  self-closing `<pre/>` opens none. Revision lines are read in two views
+  (`revisionLines`, which replaces `parseRevisionLines` and takes the
+  storage body): the base view keeps every line, duplicate and
+  disqualifier the old reading found, in order; a marked view adds only
+  lines that start right after such a `</pre>` or after an opaque region,
+  which it replaces with a separator, never with nothing. Every line it
+  does not add stays in it as a barrier, and so does the seam to the base
+  view, so a label and a colon or value from two lines that were not
+  adjacent on the page never join. A bare `Revision:` label right after a
+  code block, followed by an ordinary paragraph, is an empty malformed
+  declaration and refuses confirmation; label and value belong on one
+  line. Text quoted
+  inside a `<pre>`, comment, CDATA section or processing instruction, or
+  in the excerpt of a complete measurement block, therefore never newly
+  binds, and two halves of a SHA around an opaque region never join. The
+  line-anchored claim signals (`Code:`, `Host:`, `Doc:` and their
+  aliases, and the scanner's code-bound line check) read the same two
+  views (`claimViews`), so quoted text in a comment, CDATA section, PI or
+  another `<pre>` after a real `</pre>` adds no signal. Code tokens,
+  tracker keys, command words, URLs and the historical signal keep the
+  base text. `<blockquote>`, table cells
+  and rows and `<br />` are unchanged: documented storage wraps quote
+  text in `<p>`, and a table row or a line break as a line is a separate
+  decision.
+
 - Confluence brokers: a text-search result row without a readable title
   makes the exact-term half UNKNOWN instead of disappearing (issue #656).
   A row whose title was missing, not a string, or only whitespace in both

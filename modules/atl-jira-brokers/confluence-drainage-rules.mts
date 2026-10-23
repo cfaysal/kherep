@@ -1,5 +1,5 @@
 import { outgoingIds } from './confluence-related.mts';
-import { claimBody, parseRevisionLines, plainText as plain, revisionBody } from './confluence-evidence.mts';
+import { claimBody, claimViews, plainText as plain, revisionBody, revisionLines } from './confluence-evidence.mts';
 
 export interface Snapshot {
   id: string; version: number; title: string; spaceId: string; parentId: string | null;
@@ -22,8 +22,8 @@ function candidate(p: Snapshot, problem: string, proposedAction: Candidate['prop
 }
 // The published observation body grammar lives in confluence-evidence.mts, so the
 // confirm path and this scanner cannot disagree about a page it promoted.
-function revisionsValid(text: string, labels: string[]): boolean {
-  const { bound, unbound, malformed } = parseRevisionLines(text);
+function revisionsValid(body: string, labels: string[]): boolean {
+  const { bound, unbound, malformed } = revisionLines(body);
   const nonConfirmed = !labels.includes('evidence-confirmed')
     && labels.some(label=>['evidence-assumed','evidence-refuted','evidence-superseded'].includes(label));
   return bound.length + unbound.length > 0 && !malformed.length && (nonConfirmed || !unbound.length);
@@ -34,10 +34,10 @@ export function drainageRules(pages: Snapshot[], graphComplete: boolean): Candid
     const text = plain(p.body);
     // Only the author's claim decides code-boundness; the run of measurement blocks decide appended before the footer is metadata (#650, #666).
     const claim = plain(claimBody(p.body));
-    const codeBound = /(?:^|\n)\s*(?:Code|Repository|Repo|Revision|Commit|Code[- ]bound)\s*:/im.test(claim)
+    const codeBound = /(?:^|\n)\s*(?:Code|Repository|Repo|Revision|Commit|Code[- ]bound)\s*:/im.test(claimViews(claimBody(p.body)).join('\n'))
       || /\b[\w/-]+\.(?:mts|ts|tsx|js|py|java|go|rs)\b/.test(claim);
     // Revision lines are read without base-form blocks, positional or not, tail optional, as on d5c15f4 (#650 T8, #666).
-    if (p.labels.includes('type-observation') && codeBound && !revisionsValid(plain(revisionBody(p.body)),p.labels)) {
+    if (p.labels.includes('type-observation') && codeBound && !revisionsValid(revisionBody(p.body),p.labels)) {
       out.push(candidate(p,'revision-missing-or-invalid','review-format','Code-bound observation lacks valid repository@full-SHA Revision lines or an allowed non-confirmed no-binding declaration; original evidence required.'));
     }
     if (/only because (?:the )?search returned (?:it|this|that|them)/i.test(text)) {

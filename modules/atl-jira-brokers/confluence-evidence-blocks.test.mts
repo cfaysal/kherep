@@ -165,10 +165,10 @@ test('#666 T8: a span hidden from binding never hides a later disqualifier', () 
 });
 
 test('#666 T8 property: no layout is more confirmable than its disqualifier allows', () => {
-  for (const shape of [partial, missingVia, block]) for (const extra of ['', block]) for (const line of DISQUALIFIERS)
-    // <p>x</p> separates the declaration: plainText does not end a line at </pre>, on base either.
-    for (const body of [`<p>Revision: ${line}</p>${AUTHOR}${shape}<p>x</p>${extra}${FOOTER}`, `${AUTHOR}${shape}<p>x</p><p>Revision: ${line}</p>${extra}${FOOTER}`,
-      `<p>Revision: ${BETA}</p>${AUTHOR}${shape}<p>x</p><p>Revision: ${line}</p>${extra}${FOOTER}`, `${AUTHOR}${extra}${FOOTER}${shape}<p>x</p><p>Revision: ${line}</p>`]) {
+  // missingVia ends in </pre>, so sep '' puts the declaration directly after it (#669).
+  for (const shape of [partial, missingVia, block]) for (const extra of ['', block]) for (const line of DISQUALIFIERS) for (const sep of ['<p>x</p>', ''])
+    for (const body of [`<p>Revision: ${line}</p>${AUTHOR}${shape}${sep}${extra}${FOOTER}`, `${AUTHOR}${shape}${sep}<p>Revision: ${line}</p>${extra}${FOOTER}`,
+      `<p>Revision: ${BETA}</p>${AUTHOR}${shape}${sep}<p>Revision: ${line}</p>${extra}${FOOTER}`, `${AUTHOR}${extra}${FOOTER}${shape}${sep}<p>Revision: ${line}</p>`]) {
       const c = claim(body);
       assert.ok([...c.revisions.unbound, ...c.revisions.malformed].includes(line), body);
       assert.notEqual(decide(c, { ...CODE_M, revision: BETA }, ANY_SHA).outcome, 'confirmed', body);
@@ -201,5 +201,57 @@ test('#666 T9: a superseded block hides a Revision line in its link title; a tai
   for (const outcome of ['confirmed', 'refuted'] as const) {
     const core = renderMeasurementBlock({ ...CONFIRMED, outcome, measuredRevision: REV }, CODE_M, RUNTIME);
     assert.deepEqual(claim(`${AUTHOR}${core}${tail}${FOOTER}`).revisions.bound, [REV], outcome);
+  }
+});
+
+// Issue #669: </pre> ends a line like </p>, so the author's own declaration directly after a code block is read.
+const PRE = '<pre>retry(receipt)</pre>';
+
+test('#669: a Revision line directly after </pre> binds the claim', () => {
+  const body = `${AUTHOR}${PRE}<p>Revision: ${REV}</p>${FOOTER}`;
+  assert.deepEqual(claim(body).revisions, { bound: [REV], unbound: [], malformed: [] });
+  assert.equal(flagged(body, LABELS), 0);
+  assert.equal(decide(claim(body), CODE_M, OPT).outcome, 'confirmed');
+});
+
+test('#669: a disqualifier directly after </pre> is read and refuses confirmation', () => {
+  for (const line of DISQUALIFIERS.filter(l => l !== SHA)) {
+    const body = `<p>Revision: ${BETA}</p>${AUTHOR}${PRE}<p>Revision: ${line}</p>${FOOTER}`;
+    assert.ok([...claim(body).revisions.unbound, ...claim(body).revisions.malformed].includes(line), body);
+    assert.equal(decide(claim(body), { ...CODE_M, revision: BETA }, ANY_SHA).reason, 'revision-unbound-on-page', body);
+    assert.equal(flagged(body, AFTER_LABELS), 1, body);
+  }
+});
+
+test('#669: Code:, Host: and Doc: lines directly after </pre> are read', () => {
+  const coded669 = `${TRK}${PRE}<p>Code: the retry path</p>${FOOTER}`;
+  assert.equal(claim(coded669).kind, 'code');
+  assert.equal(flagged(coded669, LABELS), 1);
+  assert.deepEqual(claim(`<p>The queue retries.</p>${PRE}<p>Host: alpha-node</p>${PRE}<p>Doc: vendor guide</p>${FOOTER}`).signals, ['live', 'doc']);
+});
+
+test('#669 guard: a Revision line that ends a block excerpt\'s <pre> never supplies the author\'s Revision', () => {
+  for (const excerpt of [`Revision: ${BETA}`, `src/queue.mts changed\nRevision: ${BETA}`]) {
+    const b = renderMeasurementBlock({ ...CONFIRMED, measuredRevision: REV }, { ...CODE_M, excerpt }, RUNTIME);
+    assert.equal(b.match(MEASUREMENT_BLOCK)?.[0], b);
+    for (const body of [`${AUTHOR}${b}<p>Author followup.</p>${FOOTER}`, `${AUTHOR}${b}${FOOTER}`, `${AUTHOR}${FOOTER}${b}`]) {
+      assert.deepEqual(claim(body).revisions, { bound: [], unbound: [], malformed: [] }, body);
+      assert.equal(flagged(body, LABELS), 1, body);
+      assert.equal(decide(claim(body), { ...CODE_M, revision: BETA }, ANY_SHA).reason, 'revision-not-on-page', body);
+    }
+  }
+});
+
+// Reviewer sentinels: base glues a <pre>'s last line to the next text, so a quoted Revision there was malformed. Ending the
+// line at </pre> must not turn it into a binding; a nested <pre> cannot end its outer one early.
+test('#669 sentinels: a Revision line quoted inside <pre> never newly binds', () => {
+  const quoted = `<pre>quoted\nRevision: ${REV}</pre>`;
+  const excerpted = renderMeasurementBlock(CONFIRMED, { ...CODE_M, excerpt: `quoted\nRevision: ${REV}` }, RUNTIME);
+  for (const body of [`${AUTHOR}${quoted}<p>Author followup.</p>${FOOTER}`, `${AUTHOR}${quoted}${FOOTER}`,
+    `${AUTHOR}${excerpted.replace(/<p>Measured via [^<]*<\/p>/, '')}${FOOTER}`, `${AUTHOR}${excerpted}${FOOTER}`,
+    `${AUTHOR}${FOOTER}<pre>a<pre>b</pre>Revision: ${REV}</pre>`]) {
+    assert.deepEqual(claim(body).revisions.bound, [], body);
+    assert.equal(decide(claim(body), CODE_M, OPT).reason, 'revision-not-on-page', body);
+    assert.equal(flagged(body, LABELS), 1, body);
   }
 });
