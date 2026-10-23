@@ -15,7 +15,7 @@ import {
 } from "./service-lifecycle.mts";
 import {
   assertSettled, candidateInPlace, exact, failedWriteSnapshot, receiptFor, recordedPriorBackup, recoveryBlocker, sameBinding, sameSelector,
-  serviceFailure, stageStopCode, stopNotIssued, type ServiceStage, type ServiceTransactionResult,
+  serviceFailure, stageStopCode, stopFamilyUnproven, stopNotIssued, type ServiceStage, type ServiceTransactionResult,
 } from "./service-transaction-support.mts";
 import type { NativeServiceSnapshot, ServiceBinding } from "./service-types.mts";
 
@@ -134,11 +134,10 @@ export async function activateManagedService(options: ActivateOptions, input: De
         const sourceRoot = oldBinding ? undefined : legacySourceRoot;
         if (existing.running === true) {
           stopIssued = true;
-          await input.adapter.stop(oldBinding ?? binding, oldState ? {
-            pid: oldState.pid, startedAt: oldState.startedAt, ...(sourceRoot ? { sourceRoot } : {}),
-          } : undefined);
+          const context = oldState ? { pid: oldState.pid, startedAt: oldState.startedAt, ...(sourceRoot ? { sourceRoot } : {}) } : undefined;
+          await input.adapter.stop(oldBinding ?? binding, context);
           stage = "prove-stopped";
-          await proveStopped(oldState?.pid, deps);
+          await proveStopped(oldBinding ?? binding, context, deps);
         }
       }
       mutationStarted = true;
@@ -166,6 +165,7 @@ export async function activateManagedService(options: ActivateOptions, input: De
       if (!mutationStarted) throw cause;
       candidateSnapshot ??= failedWriteSnapshot(cause);
       if (stopNotIssued(stage, cause)) stopIssued = false;
+      const familyUnproven = stopFamilyUnproven(cause);
       let recovery = "unknown", blocker: string | undefined;
       const recordCandidate = (error: unknown): void => {
         if (blocker !== "RECOVERY_CANDIDATE_LOADED" || !candidateSnapshot) return;
@@ -178,12 +178,12 @@ export async function activateManagedService(options: ActivateOptions, input: De
       };
       try {
         if (existing) await restorePrior({ binding, previous: existing, previousBinding: oldBinding,
-          previousPid: oldState?.pid, deps: input, candidate: candidateSnapshot, priorStopIssued: stopIssued });
+          previousPid: oldState?.pid, deps: input, candidate: candidateSnapshot, priorStopIssued: stopIssued, familyUnproven });
         else await removeFresh(binding, input);
         recovery = "restored";
       } catch (error) { blocker = recoveryBlocker(error); recordCandidate(error); }
-      // #472: keep the drain once a write was attempted or while a daemon told to stop is still alive.
-      if (recovery === "unknown" && (writeAttempted || (stopIssued && deps.alive(oldState?.pid)))) drainSafeToRelease = false;
+      // #472: keep the drain once a write was attempted or while a daemon told to stop is still alive (#677: or its family).
+      if (recovery === "unknown" && (writeAttempted || familyUnproven || (stopIssued && deps.alive(oldState?.pid)))) drainSafeToRelease = false;
       throw serviceFailure("SERVICE_ACTIVATION_FAILED", cause, recovery, stage, blocker, stageStopCode(stage, cause));
     } finally { clearLaunchPermit(); if (drainSafeToRelease) endDrain(); }
   } finally { release(); }

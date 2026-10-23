@@ -67,6 +67,9 @@ export function stopCode(error: unknown): StopCode {
   return STOP_CODE_OF_MESSAGE.find(([text]) => text === message)?.[1] ?? "STOP_FAILED_OTHER";
 }
 export interface ServiceStopContext { pid: number; startedAt: string; sourceRoot?: string }
+export interface ServiceClock { now: () => number; sleep: (milliseconds: number) => Promise<void> }
+// #677: the one stop-proof deadline, computed by the lifecycle on `clock`; an adapter hook starts nothing after it.
+export interface ServiceStopProof { alive: (pid: unknown) => boolean; clock: ServiceClock; deadline: number }
 
 export interface ServiceAdapter {
   platform: ServicePlatform;
@@ -85,5 +88,7 @@ export interface ServiceAdapter {
   write(binding: ServiceBinding, definition: Buffer, security: Buffer): Promise<void>;
   remove(binding: ServiceBinding): Promise<void>;
   stop(binding: ServiceBinding, expected: ServiceStopContext | undefined): Promise<void>;
+  // #677: optional; replaces the generic stop proof after `stop` for the same context, never runs after it.
+  proveStopped?(binding: ServiceBinding, expected: ServiceStopContext, proof: ServiceStopProof): Promise<void>;
   start(binding: ServiceBinding): Promise<void>;
 }

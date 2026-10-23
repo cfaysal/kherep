@@ -3,16 +3,18 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  adoptMacDefinition, freshMacDefinition, legacyDaemonArguments, managedArguments, retargetMacDefinition, validateMacExecutionFields,
+  adoptMacDefinition, freshMacDefinition, managedArguments, retargetMacDefinition, validateMacExecutionFields,
 } from "./service-definitions.mts";
+import { pollStopped } from "./service-lifecycle.mts";
+import { macDescendants, macIdentityMatches, readMacProcessIdentity, type MacProcessIdentity } from "./service-platform-mac-identity.mts";
 import {
-  MAC_EXECUTABLE_PROBE, PID_PATH_JXA, attestMacLaunchAgent, macFileSecurity, probeMacLaunchAgent, readMacPlist,
-  runMacCommand, sameMacLaunchAgent,
+  attestMacLaunchAgent, macFileSecurity, probeMacLaunchAgent, readMacPlist, runMacCommand, sameMacLaunchAgent,
   type MacCommand, type MacLaunchAgentProbe,
 } from "./service-platform-mac-native.mts";
+import { defaultMacSignal, reclaimMacStop, type MacSignal } from "./service-platform-mac-reclaim.mts";
 import { attestMacNoContextStop, beforeStopEffect } from "./service-platform-mac-stop.mts";
 import { assertWritableOverLoaded, realMacWriteClock, type MacWriteClock } from "./service-platform-mac-write-guard.mts";
-import type { NativeServiceSnapshot, ServiceAdapter, ServiceBinding, ServiceStopContext } from "./service-types.mts";
+import type { NativeServiceSnapshot, ServiceAdapter, ServiceBinding, ServiceStopContext, ServiceStopProof } from "./service-types.mts";
 
 export { MAC_EXECUTABLE_PROBE, macAclAbsent } from "./service-platform-mac-native.mts";
 
@@ -37,12 +39,16 @@ export class MacServiceAdapter implements ServiceAdapter {
   readonly #scratch: string;
   readonly #run: MacCommand;
   readonly #clock: MacWriteClock;
+  readonly #signal: MacSignal;
+  // #677: the identity read right before bootout, per (label, pid); the stop proof consumes it once.
+  readonly #stopReceipts = new Map<string, MacProcessIdentity>();
 
-  constructor(serviceRoot: string, home = os.homedir(), uid = process.getuid?.(), gid = process.getgid?.(), run = runMacCommand, clock: MacWriteClock = realMacWriteClock) {
+  constructor(serviceRoot: string, home = os.homedir(), uid = process.getuid?.(), gid = process.getgid?.(), run = runMacCommand,
+    clock: MacWriteClock = realMacWriteClock, signal: MacSignal = defaultMacSignal) {
     if (uid === undefined || gid === undefined) throw new Error("current macOS user identity is unavailable");
     this.#uid = uid; this.#gid = gid;
     this.#agents = path.join(home, "Library", "LaunchAgents");
-    this.#scratch = path.join(serviceRoot, "scratch"); this.#run = run; this.#clock = clock;
+    this.#scratch = path.join(serviceRoot, "scratch"); this.#run = run; this.#clock = clock; this.#signal = signal;
   }
 
   #file(name: string): string { return path.join(this.#agents, `${validateServiceName(name)}.plist`); }
@@ -162,24 +168,8 @@ export class MacServiceAdapter implements ServiceAdapter {
     const native = this.#probe(binding);
     if (native.kind === "absent") return false;
     try { attestMacLaunchAgent(native, this.#file(binding.serviceName), undefined, pid); } catch { return false; }
-    const started = this.#run("ps", ["-ww", "-p", String(pid), "-o", "lstart="]);
-    const uid = this.#run("ps", ["-p", String(pid), "-o", "uid="]);
-    const argv = this.#run("ps", ["-ww", "-p", String(pid), "-o", "command="]);
-    const executable = this.#run(MAC_EXECUTABLE_PROBE, ["-l", "JavaScript", "-e", PID_PATH_JXA, String(pid)]);
-    if (started.status !== 0 || uid.status !== 0 || argv.status !== 0 || executable.status !== 0
-      || Number(uid.stdout.trim()) !== this.#uid) return false;
-    const actualExecutable = executable.stdout.trim();
-    if (!path.isAbsolute(actualExecutable) || actualExecutable.includes("\0")) return false;
-    let actualReal: string;
-    let expectedReal: string;
-    try { actualReal = fs.realpathSync.native(actualExecutable); expectedReal = fs.realpathSync.native(binding.nodeExecutable); }
-    catch { return false; }
-    if (actualReal !== expectedReal) return false;
-    const created = Date.parse(started.stdout.trim());
-    const processCommand = argv.stdout.trim();
-    const expected = [[binding.nodeExecutable, ...managedArguments(binding)], [binding.nodeExecutable, ...legacyDaemonArguments(binding, sourceRoot)]];
-    return expected.some(argv => processCommand === argv.join(" "))
-      && Number.isFinite(created) && Math.abs(Date.parse(startedAt) - created) <= 60_000;
+    const identity = readMacProcessIdentity(this.#run, pid);
+    return identity !== null && macIdentityMatches(identity, { uid: this.#uid, binding, startedAt, sourceRoot });
   }
 
   async preflightStop(binding: ServiceBinding, expected: ServiceStopContext | undefined): Promise<void> {
@@ -197,13 +187,7 @@ export class MacServiceAdapter implements ServiceAdapter {
     if (result.status !== 0) throw new Error("STOP_UNKNOWN_DESCENDANTS");
     const rows = result.stdout.split(/\r?\n/).map(line => line.trim().split(/\s+/).map(Number))
       .filter((row): row is [number, number] => row.length === 2 && row.every(Number.isInteger));
-    const seen = new Set([pid]);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const [child, parent] of rows) if (seen.has(parent) && !seen.has(child)) { seen.add(child); changed = true; }
-    }
-    if (seen.size > 1) throw new Error("STOP_BLOCKED_NATIVE_DESCENDANTS");
+    if (macDescendants(rows, pid).size) throw new Error("STOP_BLOCKED_NATIVE_DESCENDANTS");
   }
 
   async write(binding: ServiceBinding, definition: Buffer, metadata: Buffer): Promise<void> {
@@ -239,8 +223,22 @@ export class MacServiceAdapter implements ServiceAdapter {
       return selected;
     });
     if (!expected && native.kind === "absent") return;
+    const receipt = expected && `${serviceName}\0${expected.pid}`;
+    const snapshot = expected && readMacProcessIdentity(this.#run, expected.pid); // #677: after the attestations
+    if (receipt) { if (snapshot) this.#stopReceipts.set(receipt, snapshot); else this.#stopReceipts.delete(receipt); }
     const result = this.#run("launchctl", ["bootout", launchTarget(this.#uid, serviceName)]);
-    if (result.status !== 0) throw new Error("launchctl could not prove the selected service stopped");
+    if (result.status !== 0) {
+      if (receipt) this.#stopReceipts.delete(receipt);
+      throw new Error("launchctl could not prove the selected service stopped");
+    }
+  }
+  // #677: without a receipt for exactly this pid (no context, another pid, a stop that failed) only the generic poll runs.
+  async proveStopped(binding: ServiceBinding, expected: ServiceStopContext, proof: ServiceStopProof): Promise<void> {
+    const receipt = `${binding.serviceName}\0${expected.pid}`;
+    const snapshot = this.#stopReceipts.get(receipt);
+    this.#stopReceipts.delete(receipt);
+    if (!snapshot) return pollStopped(expected.pid, proof);
+    return reclaimMacStop({ ...proof, run: this.#run, uid: this.#uid, binding, expected, snapshot, signal: this.#signal });
   }
   async start(binding: ServiceBinding): Promise<void> {
     const serviceName = binding.serviceName;

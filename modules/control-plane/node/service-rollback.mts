@@ -10,7 +10,7 @@ import {
   type CandidateLoadedError, type LifecycleDependencies,
 } from "./service-lifecycle.mts";
 import {
-  assertSettled, candidateInPlace, failedWriteSnapshot, recordedPriorBackup, recoveryBlocker, sameBinding, serviceFailure, stageStopCode, stopNotIssued,
+  assertSettled, candidateInPlace, failedWriteSnapshot, recordedPriorBackup, recoveryBlocker, sameBinding, serviceFailure, stageStopCode, stopFamilyUnproven, stopNotIssued,
   type ServiceStage, type ServiceTransactionResult,
 } from "./service-transaction-support.mts";
 import type { NativeServiceSnapshot, ServiceBinding } from "./service-types.mts";
@@ -62,9 +62,10 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
       mutationStarted = true;
       if (current.running === true) {
         stopIssued = true;
-        await input.adapter.stop(currentBinding, state ? { pid: state.pid, startedAt: state.startedAt } : undefined);
+        const context = state ? { pid: state.pid, startedAt: state.startedAt } : undefined;
+        await input.adapter.stop(currentBinding, context);
         stage = "prove-stopped";
-        await proveStopped(state?.pid, deps);
+        await proveStopped(currentBinding, context, deps);
       }
       stage = "write"; writeAttempted = true;
       await input.adapter.write(currentBinding, previous.definition, previous.security);
@@ -93,10 +94,11 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
       if (!mutationStarted) throw cause;
       previousSnapshot ??= failedWriteSnapshot(cause);
       if (stopNotIssued(stage, cause)) stopIssued = false;
+      const familyUnproven = stopFamilyUnproven(cause);
       let recovery = "unknown", blocker: string | undefined;
       try {
         await restorePrior({ binding: priorBinding, previous: current, previousBinding: currentBinding,
-          previousPid: state?.pid, deps: input, candidate: previousSnapshot, priorStopIssued: stopIssued });
+          previousPid: state?.pid, deps: input, candidate: previousSnapshot, priorStopIssued: stopIssued, familyUnproven });
         recovery = "restored";
       } catch (error) {
         blocker = recoveryBlocker(error);
@@ -110,7 +112,7 @@ export async function rollbackManagedService(options: { binding: ServiceBinding 
           }
         }
       }
-      if (recovery === "unknown" && (writeAttempted || (stopIssued && deps.alive(state?.pid)))) drainSafeToRelease = false;
+      if (recovery === "unknown" && (writeAttempted || familyUnproven || (stopIssued && deps.alive(state?.pid)))) drainSafeToRelease = false;
       throw serviceFailure("SERVICE_ROLLBACK_FAILED", cause, recovery, stage, blocker, stageStopCode(stage, cause));
     } finally { clearLaunchPermit(); if (drainSafeToRelease) endDrain(); }
   } finally { release(); }
