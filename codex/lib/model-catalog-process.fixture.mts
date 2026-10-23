@@ -95,3 +95,20 @@ export function staged(stage: string, cleanupConfirmed: boolean, message: string
     return true;
   };
 }
+
+// One transport fault on the fake stdin: the write carrying `method` throws, or emits a synchronous
+// 'error' event and returns false (the two ways a Writable can fail a write before it returns).
+// Returns every attempted method, also the ones that never reached the fake server.
+export function writeFault(server: FakeServer, method: string, mode: "throw" | "error-event"): string[] {
+  const attempted: string[] = [], stdin = server.child.stdin, write = stdin.write.bind(stdin);
+  stdin.write = ((chunk: unknown, ...rest: unknown[]) => {
+    const name = JSON.parse(String(chunk)).method as string;
+    attempted.push(name);
+    if (name !== method) return (write as (...args: unknown[]) => boolean)(chunk, ...rest);
+    const error = new Error("synthetic-transport");
+    if (mode === "throw") throw error;
+    stdin.emit("error", error);
+    return false;
+  }) as typeof stdin.write;
+  return attempted;
+}

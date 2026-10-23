@@ -140,11 +140,18 @@ async function readCatalogProcess(options: CatalogProcessOptions): Promise<Model
     try { failure.cleanupConfirmed = await shutdown(); } catch { failure.cleanupConfirmed = false; }
     throw failure;
   }
+  // The shared client keeps a notification's transport failure to itself: notify returns void and
+  // stores it, and the next request would consume it as a catalog failure. Reading it back here
+  // keeps a failed initialized inside the collector's start stage (PR #673 review, P2).
+  const notify = (method: string, params: unknown): void => {
+    client.notify(method, params);
+    if (client.failure) throw client.failure;
+  };
   return collectModelCatalog({ request: async (method, params, timeout) => {
     const result = await client.request(method, params, timeout);
     if (serverRequest) throw new Error("Unexpected model catalog server request");
     return result;
-  }, notify: client.notify.bind(client), shutdown }, options);
+  }, notify, shutdown }, options);
 }
 
 // Raw RPC errors may include account details. The installer and CLI receive only
