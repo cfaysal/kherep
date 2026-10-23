@@ -425,7 +425,12 @@ increments the minor version; every other release increments the patch version.
   After the app-server exits, the process-group probe may answer EPERM for
   about 100 ms before ESRCH; the cleanup check now re-asks a denied probe for
   a bounded 2 s and still fails closed on EPERM or a living group at the
-  deadline. `CatalogReadError` carries a bounded `stage` (`start`, `catalog`,
+  deadline. A member that is still present (measured: an orphaned git helper
+  of the fresh home's plugin sync) is re-signalled and asked again; only
+  ESRCH confirms. The probe loop is capped (`cleanupGraceMs` 1..10000,
+  monotonic clock). `--codex-home` naming a missing directory is created
+  (0700) before the read; Codex refuses a `CODEX_HOME` that does not exist.
+  `CatalogReadError` carries a bounded `stage` (`start`, `catalog`,
   `cleanup`) and whether cleanup was confirmed; the installer prints it as a
   suffix of the existing message. The Windows tree path is unchanged.
 

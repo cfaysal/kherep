@@ -178,6 +178,10 @@ export async function installFromCli(options: InstallOptions, readCatalog: Model
   let modelCatalog = options.modelCatalog;
   if (options.refreshModels === true || existing === undefined) {
     if (modelCatalog === undefined) {
+      // Codex refuses a CODEX_HOME that does not exist (measured 0.160.1). A home named by the caller
+      // is created here, private, before the read; the transaction would create it moments later
+      // anyway. A home taken from CODEX_HOME or the default is left as it is.
+      if (options.codexHome && !fs.existsSync(codexHome)) fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
       try { modelCatalog = await readCatalog({ codexHome }); }
       catch (error) { throw error instanceof CatalogReadError ? error : new CatalogReadError(); }
     }
