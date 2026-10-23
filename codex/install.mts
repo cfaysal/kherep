@@ -179,7 +179,7 @@ export async function installFromCli(options: InstallOptions, readCatalog: Model
   if (options.refreshModels === true || existing === undefined) {
     if (modelCatalog === undefined) {
       try { modelCatalog = await readCatalog({ codexHome }); }
-      catch { throw new CatalogReadError(); }
+      catch (error) { throw error instanceof CatalogReadError ? error : new CatalogReadError(); }
     }
   }
   return install({ ...options, codexHome, modelCatalog });

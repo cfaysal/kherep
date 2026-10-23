@@ -421,6 +421,14 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Codex model catalog read in a fresh Codex home (issue #667, macOS/POSIX).
+  After the app-server exits, the process-group probe may answer EPERM for
+  about 100 ms before ESRCH; the cleanup check now re-asks a denied probe for
+  a bounded 2 s and still fails closed on EPERM or a living group at the
+  deadline. `CatalogReadError` carries a bounded `stage` (`start`, `catalog`,
+  `cleanup`) and whether cleanup was confirmed; the installer prints it as a
+  suffix of the existing message. The Windows tree path is unchanged.
+
 - Confluence brokers: a text-search result row without a readable title
   makes the exact-term half UNKNOWN instead of disappearing (issue #656).
   A row whose title was missing, not a string, or only whitespace in both

@@ -6,25 +6,107 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
 import { test } from "node:test";
-import { readAvailableModels } from "./model-catalog-process.mts";
+import { CatalogReadError, readAvailableModels, type GroupProbe } from "./model-catalog-process.mts";
 
-function fakeServer(respond = true) {
+function fakeServer(respond = true, page?: unknown) {
   const child = Object.assign(new EventEmitter(), { pid: 12345, stdin: new PassThrough(), stdout: new PassThrough(),
     stderr: new PassThrough(), exitCode: null as number | null, signalCode: null as NodeJS.Signals | null, killed: false });
   child.stdin.on("data", (chunk) => {
     if (!respond) return;
     const message = JSON.parse(String(chunk));
     if (message.id === undefined) return;
-    const result = message.method === "initialize" ? {} : { data: [{ id: "gpt-6-sol", model: "gpt-6-sol", hidden: false,
+    const result = message.method === "initialize" ? {} : page ?? { data: [{ id: "gpt-6-sol", model: "gpt-6-sol", hidden: false,
       supportedReasoningEfforts: [{ reasoningEffort: "high" }] }], nextCursor: null };
     queueMicrotask(() => child.stdout.write(JSON.stringify({ id: message.id, result }) + "\n"));
   });
   const stop = () => {
+    if (child.signalCode !== null) return;
     child.signalCode = "SIGKILL";
     queueMicrotask(() => { child.emit("exit", null, "SIGKILL"); child.emit("close", null, "SIGKILL"); });
   };
+  // Exit on stdin end so POSIX tests skip the client's fixed shutdown grace.
+  child.stdin.on("finish", stop);
   return { child: child as unknown as ChildProcessWithoutNullStreams, stop };
 }
+
+// Injected clock: sleep advances time and records each wait.
+function fakeClock() {
+  let t = 0;
+  const sleeps: number[] = [];
+  return { now: () => t, sleep: async (ms: number) => { sleeps.push(ms); t += ms; }, sleeps };
+}
+// Scripted group probe answers; the last one repeats.
+function probes(...states: GroupProbe[]) {
+  const seen: GroupProbe[] = [];
+  return { seen, probeGroup(pid: number) {
+    assert.equal(pid, 12345);
+    const state = states[Math.min(seen.length, states.length - 1)];
+    seen.push(state);
+    return state;
+  } };
+}
+function posix(server: ReturnType<typeof fakeServer>, probe: ReturnType<typeof probes>, clock = fakeClock()) {
+  return { executable: "synthetic-codex", platform: "linux" as const, spawn() { return server.child; },
+    killGroup(pid: number) { assert.equal(pid, 12345); server.stop(); return "sent" as const; },
+    probeGroup: probe.probeGroup, now: clock.now, sleep: clock.sleep };
+}
+const BASE = "Codex model catalog unavailable or cleanup unconfirmed";
+function staged(stage: string, cleanupConfirmed: boolean, message: string) {
+  return (error: unknown) => {
+    assert.ok(error instanceof CatalogReadError);
+    assert.equal(error.stage, stage);
+    assert.equal(error.cleanupConfirmed, cleanupConfirmed);
+    assert.equal(error.message, message);
+    assert.equal(error.cause, undefined);
+    assert.doesNotMatch(JSON.stringify(error) + error.message, /synthetic|nope/);
+    return true;
+  };
+}
+
+test("POSIX cleanup re-asks a transient EPERM until ESRCH and accepts the catalog", async () => {
+  const probe = probes("denied", "denied", "absent"), clock = fakeClock();
+  const result = await readAvailableModels(posix(fakeServer(), probe, clock));
+  assert.equal(result.complete, true);
+  assert.deepEqual(probe.seen, ["denied", "denied", "absent"]);
+  assert.deepEqual(clock.sleeps, [25, 25]);
+});
+
+test("POSIX cleanup fails closed when EPERM persists to the deadline", async () => {
+  const probe = probes("denied"), clock = fakeClock();
+  await assert.rejects(readAvailableModels({ ...posix(fakeServer(), probe, clock), cleanupGraceMs: 100 }),
+    staged("cleanup", false, `${BASE} (stage: cleanup)`));
+  assert.equal(probe.seen.length, 5);
+  assert.deepEqual(clock.sleeps, [25, 25, 25, 25]);
+});
+
+test("POSIX cleanup confirmed by an immediate ESRCH costs one probe and no wait", async () => {
+  const probe = probes("absent"), clock = fakeClock();
+  assert.equal((await readAvailableModels(posix(fakeServer(), probe, clock))).complete, true);
+  assert.equal(probe.seen.length, 1);
+  assert.deepEqual(clock.sleeps, []);
+});
+
+test("POSIX cleanup never waits for a living group", async () => {
+  const probe = probes("present"), clock = fakeClock();
+  await assert.rejects(readAvailableModels(posix(fakeServer(), probe, clock)), staged("cleanup", false, `${BASE} (stage: cleanup)`));
+  assert.equal(probe.seen.length, 1);
+  assert.deepEqual(clock.sleeps, []);
+});
+
+test("an unanswered initialize reports the start stage", async () => {
+  await assert.rejects(readAvailableModels({ ...posix(fakeServer(false), probes("absent")), timeoutMs: 25 }),
+    staged("start", true, `${BASE} (stage: start)`));
+});
+
+test("a start failure keeps the first stage and carries an unconfirmed cleanup", async () => {
+  await assert.rejects(readAvailableModels({ ...posix(fakeServer(false), probes("present")), timeoutMs: 25 }),
+    staged("start", false, `${BASE} (stage: start; cleanup unconfirmed)`));
+});
+
+test("a malformed model/list page reports the catalog stage", async () => {
+  await assert.rejects(readAvailableModels(posix(fakeServer(true, { data: "nope" }), probes("absent"))),
+    staged("catalog", true, `${BASE} (stage: catalog)`));
+});
 
 test("Windows catalog uses owned tree stop and measures disappearance without a real process call", async () => {
   const server = fakeServer();
@@ -56,7 +138,8 @@ test("Windows snapshot failure cleans the owned helper and redacts its error", a
   await assert.rejects(readAvailableModels({ executable: "synthetic-codex.exe", platform: "win32",
     spawn() { return server.child; }, killGroup() { signals++; server.stop(); return "sent"; },
     async relations() { throw new Error("synthetic-sensitive-snapshot-error"); } }), (error: Error) => {
-      assert.equal(error.message, "Codex model catalog unavailable or cleanup unconfirmed");
+      assert.equal(error.message, "Codex model catalog unavailable or cleanup unconfirmed (stage: cleanup)");
+      assert.equal((error as CatalogReadError).stage, "cleanup");
       assert.equal(error.cause, undefined);
       return true;
     });
