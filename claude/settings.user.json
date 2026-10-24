@@ -63,6 +63,16 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "SubagentHandback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts\" pretool \"__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts\" \"__KHEREP_CLAUDE_HOME__/hooks/obs-handback-gate.mts\"",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "PostToolUse": [
