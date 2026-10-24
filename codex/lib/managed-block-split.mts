@@ -2,8 +2,16 @@
 // its `[hooks.state]` tables sit inside the managed block while the rest of the
 // managed fragment sits behind the end marker, and the end marker can separate
 // the keys of one trust table. The TOML is unchanged, the text matches no fragment.
+// Issue #684. The Codex CLI writes its trust tables and `[tui]` between the
+// managed tables inside the block instead, with nothing managed behind it.
+
+import { isDeepStrictEqual } from "node:util";
 
 import { stableHookCommands } from "./control-plane-hook-path.mts";
+import {
+  blockPieces, fragmentPieces, scanDocument, structure, TomlStructureError,
+  type ScannedDocument, type ScannedTable, type Span,
+} from "./toml-block-structure.mts";
 
 const MESSAGE = "Refusing to overwrite a managed block without an exact known managed fragment";
 
@@ -16,9 +24,8 @@ export class UnknownManagedFragmentError extends Error {
   }
 }
 
-const isState = (table: string): boolean => /^\[hooks\.state[\].]/.test(table);
-// Each part opens with a table header and owns every line up to the next one.
-const tables = (text: string): string[] => text.split(/^(?=\[)/m);
+const isState = ({ path, array }: ScannedTable): boolean => !array && path[0] === "hooks" && path[1] === "state";
+const pathKey = (path: string[]): string => JSON.stringify(path);
 
 // Issue #397. The checkout hooks run from the checkout or source pin the
 // installer ran from, so a block from an earlier pin names another directory
@@ -43,46 +50,93 @@ function atCheckoutOf(fragment: string): (text: string) => string {
   return (text) => text.replace(CHECKOUT_DIR, () => dir);
 }
 
-// Returns the config with the trust tables behind the end marker and the tail in
-// the block, or undefined unless the block without its trust tables is the exact
-// start of a known fragment whose exact rest follows the marker, with nothing but
-// trust tables in between. Matching, refusals and the rewrite stay with the caller.
+// Returns the config with the fragment in the block and every table the Codex
+// app or CLI added there, with the text TOML gives it, behind the end marker; or
+// undefined unless the managed tables left in the block, followed by those
+// behind the marker, are exactly a known fragment. Matching, refusals and the
+// rewrite stay with the caller.
 export function reanchorSplitManagedBlock(
   config: string, startMarker: string, endMarker: string, knownFragments: string[],
 ): string | undefined {
   const start = config.indexOf(startMarker);
   const end = start < 0 ? -1 : config.indexOf(endMarker, start);
-  if (end < 0 || config[end - 1] !== "\n") return undefined;
-  const body = tables(config.slice(start + startMarker.length, end));
-  const head = body.filter((table) => !isState(table)).join("").trim();
-  const after = config.slice(end + endMarker.length);
-  if (!head || !after.startsWith("\n")) return undefined;
-  const firstTable = after.search(/^\[/m);
-  if (firstTable < 0) return undefined;
-  // In TOML, the keys between the marker and the next table belong to the last
-  // table of the block. They may move only along with a trust table.
-  const separated = after.slice(0, firstTable);
-  if (separated.trim() && !isState(body.at(-1) ?? "")) return undefined;
-  const following = tables(after.slice(firstTable));
-  const tailIndex = following.findIndex((table) => !isState(table));
-  if (tailIndex < 0) return undefined;
-  const restTables = following.slice(tailIndex);
-  const moved = [...body.filter(isState), separated.slice(1), ...following.slice(0, tailIndex)]
-    .join("").replace(/^\n+|\n+$/g, "");
-  const fragments = knownFragments.map((fragment) => fragment.trim()).sort((left, right) => right.length - left.length);
-  for (const fragment of fragments) {
+  if (end < 0 || config[end - 1] !== "\n" || (start > 0 && config[start - 1] !== "\n")) return undefined;
+  try {
+    return reanchor(config, start, end, startMarker, endMarker, knownFragments);
+  } catch (error) {
+    // A document the scanner cannot follow is refused like any unknown block.
+    if (error instanceof TomlStructureError) return undefined;
+    throw error;
+  }
+}
+
+function reanchor(
+  config: string, start: number, end: number, startMarker: string, endMarker: string, knownFragments: string[],
+): string | undefined {
+  const text = ({ start: from, end: to }: Span): string => config.slice(from, to);
+  const startLineEnd = config.indexOf("\n", start) + 1;
+  const endLineEnd = config.indexOf("\n", end) < 0 ? config.length : config.indexOf("\n", end) + 1;
+  const doc = scanDocument(config);
+  // A multiline value in the block could hide or fake a table header.
+  if (doc.multiline.some((span) => span.start < end && span.end > startLineEnd)) return undefined;
+  const block = blockPieces(doc, startLineEnd, end, endLineEnd);
+  if (text(block.preamble).split("\n").some((line) => line.trim() && !line.trim().startsWith("#"))) return undefined;
+  const fragments = knownFragments.map((fragment) => fragment.trim()).sort((left, right) => right.length - left.length)
+    .map((fragment) => ({ fragment, pieces: fragmentPieces(fragment) }));
+  // Only a table whose binding does not depend on its position may move: plain,
+  // under no array of tables, and a trust table or one no fragment defines.
+  const managedPaths = new Set(fragments.flatMap(({ pieces }) => pieces.tables.map(({ table }) => pathKey(table.path))));
+  const arrayPaths = new Set(doc.tables.filter(({ array }) => array).map(({ path }) => pathKey(path)));
+  const liftable = (table: ScannedTable): boolean => !table.array
+    && table.path.every((_, at) => at === table.path.length - 1 || !arrayPaths.has(pathKey(table.path.slice(0, at + 1))))
+    && (isState(table) || (!managedPaths.has(pathKey(table.path)) && table.path[0] !== "mcp_servers" && table.path[0] !== "hooks"));
+  const lifted = block.tables.filter(({ table }) => liftable(table));
+  const kept = block.tables.filter(({ table }) => !liftable(table));
+  // In TOML, the text between the marker and the next table belongs to the last
+  // table of the block. It may move only along with a table that moves.
+  const owner = block.tables.at(-1);
+  if (text(block.carry).trim() && !(owner && liftable(owner.table))) return undefined;
+  const behind = doc.tables.filter(({ span }) => span.start >= block.carry.end);
+  const stateCount = behind.findIndex((table) => !isState(table));
+  const stateBehind = behind.slice(0, stateCount < 0 ? behind.length : stateCount);
+  const following = behind.slice(stateBehind.length);
+  for (const { fragment, pieces } of fragments) {
+    if (kept.length > pieces.tables.length) continue;
+    // Issue #274: the tables behind the trust tables complete the fragment.
+    const tail = following.slice(0, pieces.tables.length - kept.length);
+    const managed = [...kept, ...tail.map((table) => ({ table, piece: table.span }))];
+    if (managed.length !== pieces.tables.length) continue;
+    if (text(block.preamble).trim() !== fragment.slice(pieces.preamble.start, pieces.preamble.end).trim()) continue;
     const atCheckout = atCheckoutOf(fragment);
-    const ownHead = atCheckout(head);
-    if (!fragment.startsWith(`${ownHead}\n`)) continue;
-    const tail = fragment.slice(ownHead.length).trim();
-    // Only the tables the tail can cover are compared at the fragment's
-    // checkout; whatever follows them stays as written.
-    const covered = tables(tail).length;
-    const rest = atCheckout(restTables.slice(0, covered).join("")) + restTables.slice(covered).join("");
-    if (rest !== tail && !rest.startsWith(`${tail}\n`)) continue;
-    const remainder = rest.slice(tail.length).replace(/^\n+/, "");
-    return `${config.slice(0, start)}${startMarker}\n${fragment}\n${endMarker}\n`
+    const matches = managed.every(({ table, piece }, index) => {
+      const known = pieces.tables[index];
+      return isDeepStrictEqual(table.path, known.table.path) && table.array === known.table.array
+        && atCheckout(text(piece).trimEnd()) === fragment.slice(known.piece.start, known.piece.end).trimEnd();
+    });
+    if (!matches) continue;
+    const moved = [...lifted.map(({ piece }) => text(piece)), text(block.carry), ...stateBehind.map(({ span }) => text(span))]
+      .join("").replace(/^\n+|\n+$/g, "");
+    const last = tail.at(-1);
+    const consumed = last ? last.span.start + text(last.span).trimEnd().length : stateBehind.at(-1)?.span.end ?? block.carry.end;
+    const remainder = config.slice(consumed).replace(/^\n+/, "");
+    const candidate = `${config.slice(0, start)}${startMarker}\n${fragment}\n${endMarker}\n`
       + (moved ? `\n${moved}\n` : "") + (remainder ? `\n${remainder}` : "");
+    return sameDocument(doc, managed.map(({ table }) => table), candidate, start + startMarker.length + 1, fragment.length)
+      ? candidate : undefined;
   }
   return undefined;
+}
+
+// Outside the managed tables, the candidate holds the same tables with the same
+// lines as the original. A managed table matched exactly, and the text behind
+// the marker that the last one owns is blank, so excluding them hides no key.
+function sameDocument(
+  doc: ScannedDocument, managed: ScannedTable[], candidate: string, blockStart: number, length: number,
+): boolean {
+  const next = scanDocument(candidate);
+  const inside = next.tables.filter(({ span }) => span.start >= blockStart && span.start < blockStart + length);
+  const identity = ({ address, array }: ScannedTable): string => `${array ? "[[" : "["}${address}`;
+  if (!isDeepStrictEqual(inside.map(identity), managed.map(identity))) return false;
+  return isDeepStrictEqual(structure(doc, new Set(managed.map(({ address }) => address))),
+    structure(next, new Set(inside.map(({ address }) => address))));
 }

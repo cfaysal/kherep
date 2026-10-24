@@ -469,6 +469,11 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Codex installer: an upgrade no longer refuses a managed block into which the
+  Codex CLI wrote its `[hooks.state]` trust tables and `[tui]` (issue #684);
+  they move behind the end marker with the text TOML gives them, and any other
+  difference, a multiline value in the block or a changed document still refuses.
+
 - A stop failure is visible to the operator without a candidate record
   (issue #677). A failure in the `stop` or `prove-stopped` stage carries a
   fixed `stopCode` from the existing allowlist, which gains
