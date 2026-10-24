@@ -11,6 +11,18 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Observation handback gate (issue #571): the Claude `PreToolUse` guard
+  `hooks/obs-handback-gate.mts` refuses a `claude-obs` handback through
+  SubagentHandback whose first non-empty line is not exactly one valid
+  `OBS-RESULT` status line, once per agent id for a gate that ran, with a reason
+  naming the fixed problem. It uses the recorder's parser and keeps the marker
+  `<CLAUDE_HOME>/.cache/obs-result-check/<agent_id>.refused`, which is retained
+  and removed by no hook. A second malformed handback of the same id is
+  delivered and reported by `obs-handback-record` as before. The template gains
+  one new `PreToolUse` group with matcher `SubagentHandback` and changes no
+  existing entry; on a host, an existing dispatcher entry under that matcher is
+  replaced and logged by the #568 rule. Measured on Claude Code 2.1.309, one
+  refusal led to a corrected handback about 4 seconds later. Codex is unchanged.
 - Reading guide for the Central Brain (issue #679): `docs/CENTRAL-BRAIN-READING.md`
   maps who does what (Confluence, the Atlassian MCP v2 server, the brokers,
   the observation and lifecycle workflows) and states the measured reading
