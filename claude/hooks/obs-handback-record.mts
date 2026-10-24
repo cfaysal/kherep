@@ -19,8 +19,9 @@
  *     blocks a delivered report.
  *   - a valid failed report, and a malformed one: the operator notice that
  *     obs-result-check.mts prints for them, the same text. A malformed report is
- *     reported, never refused: the tool already ran, and whether a refused
- *     handback would be retried is not known.
+ *     reported, never refused: the tool already ran. Issue #571: the PreToolUse
+ *     gate obs-handback-gate.mts refuses the first malformed handback of an
+ *     agent id before it runs; this hook judges what is delivered.
  *   - no visible message: a notice, nothing recorded.
  *   - any error: a one-line systemMessage, exit 0.
  *

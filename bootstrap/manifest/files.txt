@@ -48,6 +48,8 @@ hooks/obs-result-check.mts
 hooks/obs-result-check.test.mts
 hooks/obs-handback-record.mts
 hooks/obs-handback-record.test.mts
+hooks/obs-handback-gate.mts
+hooks/obs-handback-gate.test.mts
 hooks/research-first.mts
 hooks/research-first.test.mts
 hooks/research-stop.mts

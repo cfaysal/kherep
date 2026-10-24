@@ -118,14 +118,14 @@ test("an upgrade from direct guard entries leaves each guard in one dispatcher e
   const upgraded = JSON.parse(fs.readFileSync(path.join(dir, "upgraded.json"), "utf8")) as Settings;
   const commands = upgraded.hooks!.PreToolUse!.flatMap((group) => (group.hooks ?? []).map((hook) => String(hook.command)));
   const guards = ["privacy-boundary-guard", "secret-output-guard", "playwright-file-guard", "dispatch-contract-guard",
-    "commit-guard", "deploy-guard", "main-checkout-guard", "atlassian-destructive-guard"];
+    "commit-guard", "deploy-guard", "main-checkout-guard", "atlassian-destructive-guard", "obs-handback-gate"];
   for (const guard of guards) {
     const wiring = commands.filter((command) => command.includes(`/hooks/${guard}.mts`));
     assert.equal(wiring.length, 1, `${guard} is wired once: ${JSON.stringify(wiring)}`);
     assert.match(wiring[0]!, /^node "[^"]+\/kherep\/hook-runtime\/entry\.mts" pretool "[^"]+\/hooks\/guard-dispatch\.mts" /,
       `${guard} runs through the runtime and the dispatcher`);
   }
-  assert.equal(commands.length, 5, `one dispatcher entry per group: ${JSON.stringify(commands)}`);
+  assert.equal(commands.length, 6, `one dispatcher entry per group: ${JSON.stringify(commands)}`);
   const unwired = lines.filter((line) => line.startsWith("hooks: unwire PreToolUse "));
   assert.equal(unwired.length, guards.length, lines.join("\n"));
   for (const line of unwired) assert.match(line, /\(managed under PreToolUse via hooks\/guard-dispatch\.mts\)$/);

@@ -238,6 +238,25 @@ test("a dispatch-contract notice (#505) leaves the wired dispatcher as additiona
   assert.match(String(run.context), /^\[dispatch-contract:OBS_BRIEF_REVISION\] Observation brief revision: /);
 });
 
+// Issue #571. Not a PRETOOL_GUARDS item: the gate keys on agent_id and agent_type,
+// which runCase does not send. Its .refused markers land in the Claude copy.
+test("obs-handback-gate is wired under PreToolUse SubagentHandback and refuses a malformed handback once per agent id", () => {
+  const wired = wiredCommand("obs-handback-gate.mts");
+  assert.equal(wired.event, "PreToolUse");
+  assert.equal(wired.matcher, "SubagentHandback");
+  assert.equal(wired.command, 'node "__KHEREP_CLAUDE_HOME__/kherep/hook-runtime/entry.mts" pretool '
+    + '"__KHEREP_CLAUDE_HOME__/hooks/guard-dispatch.mts" "__KHEREP_CLAUDE_HOME__/hooks/obs-handback-gate.mts"');
+  const handback = (message: string, agent_id: string, agent_type = "claude-obs") =>
+    runWired(wired, { tool_name: "SubagentHandback", tool_input: { message }, agent_id, agent_type }, claudeSource, NEUTRAL_ENV);
+  const malformed = "OBS-RESULT: failed wrote 4 pages: 1,2,3,4";
+  const first = handback(malformed, "wired-a");
+  assert.ok(first.status === 0 && first.permission === "deny" && String(first.reason).includes("obs-handback-gate"), JSON.stringify(first));
+  for (const run of [handback(malformed, "wired-a"), handback("OBS-RESULT: empty nothing new", "wired-b"),
+    handback(malformed, "wired-c", "general-purpose")]) {
+    assert.ok(run.status === 0 && run.permission === null, JSON.stringify(run));
+  }
+});
+
 // Issue #507. A 0-byte or missing guard used to exit without a decision (fail-open).
 // Through the dispatcher it denies every call, benign included, naming the file.
 test("a 0-byte or missing PreToolUse guard denies every call and names its file", () => {

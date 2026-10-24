@@ -4,8 +4,11 @@
 // existing entry kept the old entry next to the new one, and two
 // obs-result-check instances would have raced over the same handback record;
 // managed-hook-upgrade-render.test.mts now covers that replace rule. The
-// previous template is this one without the SubagentHandback PostToolUse group,
-// with the SubagentStop entry as main carried it before #555.
+// previous template is this one without the SubagentHandback PostToolUse group
+// and, issue #571, without the SubagentHandback PreToolUse gate group, with the
+// SubagentStop entry as main carried it before #555. The host cases of the gate
+// group (an operator's hook in it, a colliding dispatcher, rollback) live in
+// obs-handback-gate-upgrade.test.mts.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -26,6 +29,7 @@ const PREVIOUS_STOP_ENTRY: Hook = {
 
 function previousTemplate(): unknown {
   const settings = JSON.parse(fs.readFileSync(SOURCE, "utf8")) as { hooks: Hooks };
+  settings.hooks.PreToolUse = settings.hooks.PreToolUse!.filter((group) => group.matcher !== "SubagentHandback");
   settings.hooks.PostToolUse = settings.hooks.PostToolUse!.filter((group) => group.matcher !== "SubagentHandback");
   const stop = settings.hooks.SubagentStop!.find((group) => group.matcher === "claude-obs")!;
   stop.hooks = [PREVIOUS_STOP_ENTRY];
@@ -36,6 +40,18 @@ function wired(hooks: Hooks, main: string): { event: string; matcher: string }[]
   return Object.entries(hooks).flatMap(([event, groups]) => groups.flatMap((group) => group.hooks
     .filter((hook) => typeof hook.command === "string" && hook.command.includes(`/hooks/${main}"`))
     .map(() => ({ event, matcher: group.matcher ?? "" }))));
+}
+
+function quietly(render: () => void): string[] {
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (...items: unknown[]) => { lines.push(items.join(" ")); };
+  try {
+    render();
+  } finally {
+    console.log = log;
+  }
+  return lines;
 }
 
 test("an upgrade from the previous template keeps exactly one entry of each observation hook", () => {
@@ -50,12 +66,15 @@ test("an upgrade from the previous template keeps exactly one entry of each obse
       const args = (source: string, existingUser: string, existingProject: string, user: string, proj: string) =>
         [profile, "/example/Kherep", "/example/credentials", "/example/.claude", source, project, existingUser, existingProject, user, proj];
       renderSettings(args(previous, "-", "-", out("user.before"), out("project.before")));
-      renderSettings(args(SOURCE, out("user.before"), out("project.before"), out("user.after"), out("project.after")));
+      const lines = quietly(() => renderSettings(args(SOURCE, out("user.before"), out("project.before"), out("user.after"), out("project.after"))));
       const before = (JSON.parse(fs.readFileSync(out("user.before"), "utf8")) as { hooks: Hooks }).hooks;
       const after = (JSON.parse(fs.readFileSync(out("user.after"), "utf8")) as { hooks: Hooks }).hooks;
       assert.deepEqual(wired(before, "obs-handback-record.mts"), [], `${profile}: the previous template has no recorder`);
+      assert.deepEqual(wired(before, "obs-handback-gate.mts"), [], `${profile}: the previous template has no gate`);
       assert.deepEqual(wired(after, "obs-result-check.mts"), [{ event: "SubagentStop", matcher: "claude-obs" }], profile);
       assert.deepEqual(wired(after, "obs-handback-record.mts"), [{ event: "PostToolUse", matcher: "SubagentHandback" }], profile);
+      assert.deepEqual(wired(after, "obs-handback-gate.mts"), [{ event: "PreToolUse", matcher: "SubagentHandback" }], profile);
+      assert.deepEqual(lines.filter((line) => line.startsWith("hooks: replace ")), [], `${profile}: the gate is a new entry only`);
     }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
