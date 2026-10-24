@@ -10,7 +10,8 @@ import process from "node:process";
 import { agentKey, appendLine, deliveredLine, markCaptureFailed } from "./lib/denial-journal.mts";
 
 // Its PostToolUse entry in claude/settings.user.json has "timeout": 10. The deadline counts from this process's
-// time origin; outside this clock: the entry's Node start (<= 2 s) and exit.
+// time origin; outside this clock: the entry's Node start (<= 2 s) and exit. This process's own start-up counts
+// inside DEADLINE, so a start near 4.8 s or more loses a slow marker write (issue #664).
 const HOOK_TIMEOUT_MS = 10_000, SAFETY_MARGIN_MS = 4_500, CAP_MS = 1_500;
 const START = Date.now();
 const DEADLINE = Math.floor(performance.timeOrigin) + HOOK_TIMEOUT_MS - SAFETY_MARGIN_MS;
