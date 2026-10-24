@@ -9,7 +9,8 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  clearDelivered, homeOf, prune, readDelivered, recordDelivered, stateDir, validId, writeStopTrace,
+  clearDelivered, homeOf, markRefused, OBS_RESULT_FORMAT, prune, readDelivered, recordDelivered, refusedReason, stateDir,
+  validId, writeStopTrace,
 } from "./obs-handback-state.mts";
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "obs-handback-state-test-")));
@@ -85,10 +86,16 @@ test("prune removes files older than 24 h and keeps young ones", () => {
   const then = new Date(Date.now() - 25 * 3_600_000);
   fs.utimesSync(file(h, "old.delivered"), then, then);
   fs.utimesSync(file(h, "old.stop"), then, then);
+  assert.equal(markRefused(h, "old", "t1"), "created");
+  assert.equal(markRefused(h, "young", "t2"), "created");
+  fs.utimesSync(file(h, "old.refused"), then, then);
   prune(h);
   assert.equal(fs.existsSync(file(h, "old.delivered")), false);
   assert.equal(fs.existsSync(file(h, "old.stop")), false);
   assert.equal(fs.existsSync(file(h, "young.delivered")), true);
+  // Issue #571, D1: the gate's once-only marker is retained, old or young.
+  assert.equal(fs.readFileSync(file(h, "old.refused"), "utf8"), "refused\tt1\n");
+  assert.equal(fs.existsSync(file(h, "young.refused")), true);
 });
 
 test("prune does not follow a state directory that is a link", () => {
@@ -113,4 +120,45 @@ test("writeStopTrace writes the fixed keys and never a payload value", () => {
   assert.match(fs.readFileSync(file(h, "a1.stop"), "utf8"), /^mode=other state=present /);
   writeStopTrace(h, "a1", { mode: undefined, state: "present", waited: 0, after: "-", transcript: "delivered", branch: "state" });
   assert.match(fs.readFileSync(file(h, "a1.stop"), "utf8"), /^mode=- /);
+});
+
+// Issue #571: the once-only marker of the PreToolUse gate obs-handback-gate.mts.
+test("markRefused creates the marker once, then reports that it exists", () => {
+  const h = home();
+  assert.equal(markRefused(h, "a1", "toolu_01ABC"), "created");
+  assert.equal(fs.readFileSync(file(h, "a1.refused"), "utf8"), "refused\ttoolu_01ABC\n");
+  assert.equal(markRefused(h, "a1", "toolu_02DEF"), "exists");
+  assert.equal(fs.readFileSync(file(h, "a1.refused"), "utf8"), "refused\ttoolu_01ABC\n");
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(file(h, "a1.refused")).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(stateDir(h)).mode & 0o777, 0o700);
+  }
+  assert.equal(markRefused(h, "a2", 42), "created");
+  assert.equal(fs.readFileSync(file(h, "a2.refused"), "utf8"), "refused\t-\n");
+  assert.equal(markRefused(h, "a3", "not an id"), "created");
+  assert.equal(fs.readFileSync(file(h, "a3.refused"), "utf8"), "refused\t-\n");
+});
+
+test("markRefused reports a directory in the marker's place as exists", () => {
+  const h = home();
+  fs.mkdirSync(file(h, "d1.refused"), { recursive: true });
+  assert.equal(markRefused(h, "d1", "t1"), "exists");
+});
+
+const asRoot = typeof process.getuid === "function" && process.getuid() === 0;
+test("markRefused reports an unwritable state directory as failed", { skip: process.platform === "win32" || asRoot }, () => {
+  const h = home();
+  fs.mkdirSync(stateDir(h), { recursive: true });
+  fs.chmodSync(stateDir(h), 0o500);
+  try {
+    assert.equal(markRefused(h, "a1", "t1"), "failed");
+    assert.equal(fs.existsSync(file(h, "a1.refused")), false);
+  } finally {
+    fs.chmodSync(stateDir(h), 0o700);
+  }
+});
+
+test("the gate reason carries the shared format on one line", () => {
+  assert.ok(refusedReason("x").includes(OBS_RESULT_FORMAT));
+  assert.doesNotMatch(refusedReason("x"), /\n/);
 });

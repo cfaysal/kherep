@@ -248,6 +248,16 @@ test("(j) the trace holds the fixed keys only, and nothing reaches stdout", () =
   assert.equal(trace("hb-j"), "mode=other state=absent waited=0 after=- transcript=none branch=final-message\n");
 });
 
+// Issue #571: the gate's .refused marker outlives the stop; only .delivered is cleared.
+test("(l) the stop clears the delivery and keeps the gate's .refused marker", () => {
+  plantDelivered("hb-l", "wrote\ttoolu_l2\n");
+  fs.writeFileSync(path.join(STATE, "hb-l.refused"), "refused\ttoolu_l1\n");
+  silent(run({ agent_id: "hb-l", last_assistant_message: "Report delivered." }));
+  assert.equal(fs.existsSync(stateFile("hb-l", "delivered")), false);
+  assert.equal(fs.readFileSync(path.join(STATE, "hb-l.refused"), "utf8"), "refused\ttoolu_l1\n");
+  assert.match(trace("hb-l"), /^mode=\S+ state=\S+ waited=\d+ after=\S+ transcript=\S+ branch=\S+\n$/);
+});
+
 test("without a valid agent_id there is no state, no wait and no .cache under the home", () => {
   const bare = fixture("bare");
   for (const agent_id of [undefined, "../x"]) {

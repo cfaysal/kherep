@@ -54,8 +54,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
-  clearDelivered, type Delivered, type DeliveredRead, FAILED_MESSAGE, homeOf, PREFIX, prune, readDelivered,
-  stillMalformed, type StopTrace, validId, writeStopTrace,
+  clearDelivered, type Delivered, type DeliveredRead, FAILED_MESSAGE, homeOf, OBS_RESULT_FORMAT, PREFIX, prune,
+  readDelivered, stillMalformed, type StopTrace, validId, writeStopTrace,
 } from "./lib/obs-handback-state.mts";
 import { checkObsResult } from "./lib/obs-result-policy.mts";
 import { type Handback, lastAssistantText, lastHandback, readTranscript, type TranscriptEntry } from "./lib/turn-substance.mts";
@@ -80,9 +80,7 @@ const POLL_MS = 100;
 export const OBS_RESULT_REASON = [
   "OBS-RESULT check (ROUTING.md, Session observations): your final message does not start with one valid status line.",
   "Restate exactly one OBS-RESULT line from what you actually did, as the first line of your final message:",
-  "`OBS-RESULT: wrote <n> <page ids>` with n equal to the number of numeric ids,",
-  "or `OBS-RESULT: empty <reason>` or `OBS-RESULT: failed <reason>`, the reason not starting with wrote, empty or failed.",
-  "Create no further pages.",
+  OBS_RESULT_FORMAT,
 ].join(" ");
 
 const NOT_VISIBLE = `${PREFIX} the claude-obs result was not visible to the hook; check its OBS-RESULT line by hand.`;
