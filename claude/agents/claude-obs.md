@@ -26,7 +26,7 @@ The first line of your final message, or of the message you hand back through Su
   A finding you could not file is `failed` too. If pages were already created before the failure,
   the reason names their ids.
 
-After it: one line per written page (id, title), nothing else. The SubagentStop hook `obs-result-check` checks it, and the PostToolUse hook `obs-handback-record` checks the message you hand back.
+After it: one line per written page (id, title), nothing else. The SubagentStop hook `obs-result-check` checks it, and the PostToolUse hook `obs-handback-record` checks the message you hand back. A handback whose first non-empty line is not a valid status line is refused once with the reason; send it again with the corrected line and the same page list, and create no further pages.
 
 ## What an observation is
 
