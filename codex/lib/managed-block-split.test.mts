@@ -89,13 +89,11 @@ test("refuses a split block whose tail differs in one line", () => {
   const altered = TAIL.replace("startup_timeout_sec = 30.0", "startup_timeout_sec = 31.0");
   assert.notEqual(altered, TAIL);
 
-  assert.throws(() => prepareManagedConfig(split(altered), OPTIONS),
-    REFUSAL);
+  assert.throws(() => prepareManagedConfig(split(altered), OPTIONS), REFUSAL);
 });
 
 test("refuses a split block with an unknown table between the end marker and the tail", () => {
-  assert.throws(() => prepareManagedConfig(split(TAIL, `${STATE_BETWEEN}\n\n${OPERATOR}`), OPTIONS),
-    REFUSAL);
+  assert.throws(() => prepareManagedConfig(split(TAIL, `${STATE_BETWEEN}\n\n${OPERATOR}`), OPTIONS), REFUSAL);
 });
 
 test("moves a key after the end marker only along with a trust table that ends the block", () => {
@@ -107,28 +105,24 @@ test("moves a key after the end marker only along with a trust table that ends t
     [BEFORE + START, middle, END, ...(key ? [key] : []), "", STATE_BETWEEN, "", TAIL, ""].join("\n");
 
   assert.equal(prepareManagedConfig(layout(""), OPTIONS).managedFragment, "replaced");
-  assert.throws(() => prepareManagedConfig(layout(SEPARATED_KEY), OPTIONS),
-    REFUSAL);
+  assert.throws(() => prepareManagedConfig(layout(SEPARATED_KEY), OPTIONS), REFUSAL);
 });
 
 test("refuses a split block whose head differs in one line", () => {
   const altered = HEAD.replace(/timeout = (\d+)/, (_, seconds) => `timeout = ${Number(seconds) + 1}`);
   assert.notEqual(altered, HEAD);
 
-  assert.throws(() => prepareManagedConfig(split(TAIL).replace(HEAD, altered), OPTIONS),
-    REFUSAL);
+  assert.throws(() => prepareManagedConfig(split(TAIL).replace(HEAD, altered), OPTIONS), REFUSAL);
 });
 
 test("refuses a split block with CRLF line endings", () => {
-  assert.throws(() => prepareManagedConfig(split(TAIL).replace(/\n/g, "\r\n"), OPTIONS),
-    REFUSAL);
+  assert.throws(() => prepareManagedConfig(split(TAIL).replace(/\n/g, "\r\n"), OPTIONS), REFUSAL);
 });
 
 test("refuses a split block with unknown content left inside the block", () => {
   const config = split(TAIL).replace(`${HEAD}\n`, `${HEAD}\n\n${OPERATOR}\n`);
 
-  assert.throws(() => prepareManagedConfig(config, OPTIONS),
-    REFUSAL);
+  assert.throws(() => prepareManagedConfig(config, OPTIONS), REFUSAL);
 });
 
 // Issue #397. A block written from an earlier source pin names that pin before
@@ -168,8 +162,7 @@ test("refuses a split block from an earlier source pin with any other difference
       REFUSAL);
   }
   const tail = fromPin(TAIL).replace("startup_timeout_sec = 30.0", "startup_timeout_sec = 31.0");
-  assert.throws(() => prepareManagedConfig(fromPin(split(tail)), OPTIONS),
-    REFUSAL);
+  assert.throws(() => prepareManagedConfig(fromPin(split(tail)), OPTIONS), REFUSAL);
 });
 
 // Issue #684 changed how the re-anchor finds the tables it moves. Every layout

@@ -91,10 +91,13 @@ export function scanDocument(text: string): ScannedDocument {
   let lineStart = true;
   for (let at = 0; at < text.length; at++) {
     const char = text[at];
-    if (lineStart && !open.length && /^[ \t]*\[/.test(text.slice(at, lineEnd(text, at)))) {
-      headers.push({ start: at, ...headerPath(text.slice(at, lineEnd(text, at))) });
-      at = lineEnd(text, at);
-      continue;
+    if (lineStart && !open.length) {
+      const line = text.slice(at, lineEnd(text, at));
+      if (/^[ \t]*\[/.test(line)) {
+        headers.push({ start: at, ...headerPath(line) });
+        at += line.length;
+        continue;
+      }
     }
     lineStart = char === "\n";
     if (char === "#") at = lineEnd(text, at) - 1;

@@ -75,7 +75,8 @@ function reanchor(
 ): string | undefined {
   const text = ({ start: from, end: to }: Span): string => config.slice(from, to);
   const startLineEnd = config.indexOf("\n", start) + 1;
-  const endLineEnd = config.indexOf("\n", end) < 0 ? config.length : config.indexOf("\n", end) + 1;
+  const endNewline = config.indexOf("\n", end);
+  const endLineEnd = endNewline < 0 ? config.length : endNewline + 1;
   const doc = scanDocument(config);
   // A multiline value in the block could hide or fake a table header.
   if (doc.multiline.some((span) => span.start < end && span.end > startLineEnd)) return undefined;
@@ -88,7 +89,7 @@ function reanchor(
   const managedPaths = new Set(fragments.flatMap(({ pieces }) => pieces.tables.map(({ table }) => pathKey(table.path))));
   const arrayPaths = new Set(doc.tables.filter(({ array }) => array).map(({ path }) => pathKey(path)));
   const liftable = (table: ScannedTable): boolean => !table.array
-    && table.path.every((_, at) => at === table.path.length - 1 || !arrayPaths.has(pathKey(table.path.slice(0, at + 1))))
+    && table.path.slice(0, -1).every((_, at) => !arrayPaths.has(pathKey(table.path.slice(0, at + 1))))
     && (isState(table) || (!managedPaths.has(pathKey(table.path)) && table.path[0] !== "mcp_servers" && table.path[0] !== "hooks"));
   const lifted = block.tables.filter(({ table }) => liftable(table));
   const kept = block.tables.filter(({ table }) => !liftable(table));
