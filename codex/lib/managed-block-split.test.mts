@@ -1,46 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { prepareManagedConfig, type ManagedConfigOptions } from "./config-preservation.mts";
+import { prepareManagedConfig } from "./config-preservation.mts";
 import { legacyForm } from "./legacy-control-plane-form.mts";
+import {
+  BEFORE, END, FRESH, HEAD, OPTIONS, REFUSAL, START, TAIL, managedBlock, tomlDocument,
+} from "./managed-block-split.fixture.mts";
 import { render } from "./parity-config.mts";
 
 // Issue #274. Measured on a Windows host: the Codex app, storing hook trust,
 // rewrote config.toml so that its trust tables sit inside the managed block,
 // the managed tail sits after the end marker, and the end marker separates the
 // keys of one trust table. The TOML is the same document as a normal install.
-
-const START = "# >>> Kherep Codex Maestro >>>";
-const END = "# <<< Kherep Codex Maestro <<<";
-
-const OPTIONS: ManagedConfigOptions = {
-  startMarker: START,
-  endMarker: END,
-  retiredMcpServerNames: [],
-  registryProjections: [],
-  pluginMcpServers: {},
-  contextHook: String.raw`C:\Synthetic\.codex\hooks\kherep-maestro-context.mts`,
-  hookDir: String.raw`C:\Synthetic\.codex\hooks\kherep-maestro`,
-  memoryNotifyHook: String.raw`C:\Synthetic\.codex\hooks\kherep-maestro\codex-memory-notify.mts`,
-  node: String.raw`C:\Program Files\nodejs\node.exe`,
-  registry: String.raw`C:\Synthetic\.codex\orchestra\mcp-registry.json`,
-  registryBridge: String.raw`C:\Synthetic\.codex\orchestra\registry-http-bridge.mts`,
-  registryRuntime: String.raw`C:\Synthetic\.codex\orchestra\supergateway-secret-wrapper.mts`,
-  controlPlaneHook: String.raw`C:\Synthetic\repo\modules\control-plane\node\deliver-hook.mts`,
-  messagingClient: {
-    enabled: true,
-    bridge: String.raw`C:\Synthetic\repo\modules\control-plane\node\mcp-stdio-bridge.mts`,
-    intentHook: String.raw`C:\Synthetic\repo\modules\control-plane\node\mcp-intent-hook.mts`,
-    configRoot: String.raw`C:\Synthetic\kherep`,
-  },
-};
-
-const FRESH = prepareManagedConfig("", OPTIONS).config;
-const BEFORE = FRESH.slice(0, FRESH.indexOf(START));
-const BLOCK = FRESH.slice(FRESH.indexOf(START) + START.length, FRESH.indexOf(END));
-// The tail opens with the deliver hooks: the last SessionStart group of the block.
-const HEAD = BLOCK.slice(0, BLOCK.lastIndexOf("[[hooks.SessionStart]]")).trim();
-const TAIL = BLOCK.slice(BLOCK.lastIndexOf("[[hooks.SessionStart]]")).trim();
 
 const STATE_INSIDE = [
   "[hooks.state]", "",
@@ -50,35 +21,10 @@ const STATE_INSIDE = [
 const SEPARATED_KEY = "enabled = false";
 const STATE_BETWEEN = "[hooks.state.'fixture-c.toml:session_start:0:0']\ntrusted_hash = \"sha256:fixture-c\"";
 const OPERATOR = '[operator_fixture]\nkeep = "operator-owned"';
+const trust = (config: string) => Object.entries(tomlDocument(config).tables).filter(([address]) => address.startsWith("hooks.state"));
 
 function split(tail: string, between = STATE_BETWEEN): string {
   return [BEFORE + START, HEAD, "", STATE_INSIDE, END, SEPARATED_KEY, "", between, "", tail, "", OPERATOR, ""].join("\n");
-}
-
-// What a TOML parser reports for the hooks arrays and hooks.state. Comments end
-// no table, so a key after the end marker belongs to the table before it.
-function tomlShape(config: string) {
-  const events: Record<string, { keys: string[]; hooks: string[][] }[]> = {};
-  const state: Record<string, string[]> = {};
-  let current: string[] | undefined;
-  for (const line of config.split("\n").map((value) => value.trim())) {
-    if (!line || line.startsWith("#")) continue;
-    const array = /^\[\[hooks\.(\w+)(\.hooks)?\]\]$/.exec(line);
-    if (array) {
-      const groups = events[array[1]] ??= [];
-      if (array[2]) groups.at(-1)!.hooks.push(current = []);
-      else groups.push({ keys: current = [], hooks: [] });
-    } else if (line.startsWith("[")) {
-      current = line.startsWith("[hooks.state") ? state[line] = [] : undefined;
-    } else {
-      current?.push(line);
-    }
-  }
-  return { events, state };
-}
-
-function managedBlock(config: string): string {
-  return config.slice(config.indexOf(START), config.indexOf(END) + END.length);
 }
 
 test("the split fixture holds the measured layout", () => {
@@ -87,8 +33,8 @@ test("the split fixture holds the measured layout", () => {
   assert.match(TAIL, /\[mcp_servers\.kherep_messaging\][^]*tool_timeout_sec = 60\.0$/);
   assert.match(HEAD, /\[\[hooks\.SubagentStart\.hooks\]\][^[]*$/);
   const config = split(TAIL);
-  assert.deepEqual(tomlShape(config).events, tomlShape(FRESH).events);
-  assert.deepEqual(tomlShape(config).state["[hooks.state.'fixture-b.json:stop:0:0']"],
+  assert.deepEqual(tomlDocument(config).arrays, tomlDocument(FRESH).arrays);
+  assert.deepEqual(tomlDocument(config).tables['hooks.state."fixture-b.json:stop:0:0"'],
     ['trusted_hash = "sha256:fixture-b"', SEPARATED_KEY]);
 });
 
@@ -100,7 +46,7 @@ test("re-anchors a block whose tail the Codex app moved behind the end marker", 
 
     assert.equal(result.managedFragment, "replaced");
     assert.equal(managedBlock(result.config), managedBlock(FRESH));
-    assert.deepEqual(tomlShape(result.config), tomlShape(config));
+    assert.deepEqual(tomlDocument(result.config), tomlDocument(config));
     // The tail went back into the block and left no copy behind.
     assert.equal(result.config.split("[mcp_servers.kherep_messaging]").length, FRESH.split("[mcp_servers.kherep_messaging]").length);
     assert.equal(result.config.split("codex-control-plane-hook.mts").length, FRESH.split("codex-control-plane-hook.mts").length);
@@ -134,7 +80,7 @@ test("still keeps trust tables inside a block that holds the whole fragment", ()
     assert.equal(result.managedFragment, windowsHookCommands ? "current" : "replaced");
     assert.ok(result.config.includes(render({ ...OPTIONS, mcpServers: [] }).trim()));
     assert.ok(result.config.includes(`${STATE_INSIDE}\n${END}\n${SEPARATED_KEY}\n`));
-    assert.deepEqual(tomlShape(result.config).state, tomlShape(config).state);
+    assert.deepEqual(trust(result.config), trust(config));
     assert.equal(prepareManagedConfig(result.config, OPTIONS).managedFragment, "current");
   }
 });
@@ -144,12 +90,12 @@ test("refuses a split block whose tail differs in one line", () => {
   assert.notEqual(altered, TAIL);
 
   assert.throws(() => prepareManagedConfig(split(altered), OPTIONS),
-    /Refusing to overwrite a managed block without an exact known managed fragment/);
+    REFUSAL);
 });
 
 test("refuses a split block with an unknown table between the end marker and the tail", () => {
   assert.throws(() => prepareManagedConfig(split(TAIL, `${STATE_BETWEEN}\n\n${OPERATOR}`), OPTIONS),
-    /Refusing to overwrite a managed block without an exact known managed fragment/);
+    REFUSAL);
 });
 
 test("moves a key after the end marker only along with a trust table that ends the block", () => {
@@ -162,7 +108,7 @@ test("moves a key after the end marker only along with a trust table that ends t
 
   assert.equal(prepareManagedConfig(layout(""), OPTIONS).managedFragment, "replaced");
   assert.throws(() => prepareManagedConfig(layout(SEPARATED_KEY), OPTIONS),
-    /Refusing to overwrite a managed block without an exact known managed fragment/);
+    REFUSAL);
 });
 
 test("refuses a split block whose head differs in one line", () => {
@@ -170,19 +116,19 @@ test("refuses a split block whose head differs in one line", () => {
   assert.notEqual(altered, HEAD);
 
   assert.throws(() => prepareManagedConfig(split(TAIL).replace(HEAD, altered), OPTIONS),
-    /Refusing to overwrite a managed block without an exact known managed fragment/);
+    REFUSAL);
 });
 
 test("refuses a split block with CRLF line endings", () => {
   assert.throws(() => prepareManagedConfig(split(TAIL).replace(/\n/g, "\r\n"), OPTIONS),
-    /Refusing to overwrite a managed block without an exact known managed fragment/);
+    REFUSAL);
 });
 
 test("refuses a split block with unknown content left inside the block", () => {
   const config = split(TAIL).replace(`${HEAD}\n`, `${HEAD}\n\n${OPERATOR}\n`);
 
   assert.throws(() => prepareManagedConfig(config, OPTIONS),
-    /Refusing to overwrite a managed block without an exact known managed fragment/);
+    REFUSAL);
 });
 
 // Issue #397. A block written from an earlier source pin names that pin before
@@ -219,9 +165,28 @@ test("refuses a split block from an earlier source pin with any other difference
     const config = fromPin(split(TAIL)).replace(fromPin(HEAD), edit(fromPin(HEAD)));
     assert.notEqual(config, fromPin(split(TAIL)));
     assert.throws(() => prepareManagedConfig(config, OPTIONS),
-      /Refusing to overwrite a managed block without an exact known managed fragment/);
+      REFUSAL);
   }
   const tail = fromPin(TAIL).replace("startup_timeout_sec = 30.0", "startup_timeout_sec = 31.0");
   assert.throws(() => prepareManagedConfig(fromPin(split(tail)), OPTIONS),
-    /Refusing to overwrite a managed block without an exact known managed fragment/);
+    REFUSAL);
+});
+
+// Issue #684 changed how the re-anchor finds the tables it moves. Every layout
+// above that it accepts still yields the bytes it yielded before (b9a84e53).
+test("re-anchors every #274 layout to the same bytes as before issue #684", () => {
+  const last = HEAD.lastIndexOf("[[hooks.SubagentStart]]");
+  const middle = `${HEAD.slice(0, last)}${STATE_INSIDE}\n\n${HEAD.slice(last)}`;
+  const split274 = `${FRESH}\n${STATE_INSIDE}\n${SEPARATED_KEY}\n\n${STATE_BETWEEN}\n\n${OPERATOR}\n`;
+  const cases: [string, string][] = [
+    [split(TAIL), split274],
+    [split(TAIL, ""), `${FRESH}\n${STATE_INSIDE}\n${SEPARATED_KEY}\n\n${OPERATOR}\n`],
+    [[BEFORE + START, HEAD, END, "", TAIL, ""].join("\n"), FRESH],
+    // The blank line after the end marker stays between the moved trust tables.
+    [[BEFORE + START, middle, END, "", STATE_BETWEEN, "", TAIL, ""].join("\n"),
+      `${FRESH}\n${STATE_INSIDE}\n\n\n${STATE_BETWEEN}\n`],
+    [fromPin(split(TAIL)), split274],
+    [fromNode(fromPin(split(TAIL))), split274],
+  ];
+  for (const [config, expected] of cases) assert.equal(prepareManagedConfig(config, OPTIONS).config, expected);
 });
