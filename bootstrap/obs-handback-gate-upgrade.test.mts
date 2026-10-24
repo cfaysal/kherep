@@ -13,6 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
+import { isDeepStrictEqual } from "node:util";
 
 import { renderSettings } from "./render-profile.mts";
 import { danglingHookCommands } from "./retired-hooks.mts";
@@ -116,7 +117,7 @@ test("C2 an operator's hooks in a SubagentHandback group stay, the gate joins th
     const groups = group(read(upgraded.user).hooks!, "PreToolUse", MATCHER);
     assert.equal(groups.length, 1, profile);
     assert.equal(groups[0]!.hooks.length, 3, profile);
-    for (const hook of [gateEntry(home), ...foreign]) assert.ok(groups[0]!.hooks.some((h) => isDeepEqual(h, hook)), `${profile}: ${hook.command}`);
+    for (const hook of [gateEntry(home), ...foreign]) assert.ok(groups[0]!.hooks.some((h) => isDeepStrictEqual(h, hook)), `${profile}: ${hook.command}`);
     assert.deepEqual(replaceLines(upgraded), [], profile);
     assertStable(profile, "current", upgraded, "C2");
   }
@@ -138,15 +139,6 @@ test("C3 an operator's dispatcher under the gate's identity is replaced and logg
   }
 });
 
-function isDeepEqual(a: unknown, b: unknown): boolean {
-  try {
-    assert.deepStrictEqual(a, b);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // The gate-bearing output with an operator's hook in the gate group, then the previous template over it.
 function residual(profile: string): { home: string; live: string; rolled: Render; foreign: Hook } {
   const installed = render(profile, "current", "-");
@@ -161,7 +153,7 @@ test("R1 a render of the previous template does not remove the gate entry", () =
     const { home, rolled, foreign } = residual(profile);
     const settings = read(rolled.user);
     assert.deepEqual(gateWired(settings), [{ at: `PreToolUse[${MATCHER}]`, hook: gateEntry(home) }], profile);
-    assert.ok(group(settings.hooks!, "PreToolUse", MATCHER)[0]!.hooks.some((h) => isDeepEqual(h, foreign)), profile);
+    assert.ok(group(settings.hooks!, "PreToolUse", MATCHER)[0]!.hooks.some((h) => isDeepStrictEqual(h, foreign)), profile);
     assert.deepEqual(rolled.lines.filter((line) => line.startsWith("hooks: unwire ") && line.includes("obs-handback-gate")), [], profile);
     // F1: rendering the previous template again over the residual file keeps the
     // gate wired, byte for byte. This idempotent preservation is not an unwire:
@@ -187,13 +179,14 @@ function discover(files: Settings[]): Candidate[] {
 type Outcome = { removed: true; files: Settings[] } | { removed: false; candidates: number };
 function rollback(files: Settings[], home: string): Outcome {
   const candidates = discover(files);
-  const only = candidates[0];
-  if (candidates.length !== 1 || only!.file !== 0 || only!.event !== "PreToolUse" || only!.matcher !== MATCHER
-    || !isDeepEqual(only!.hook, gateEntry(home))) return { removed: false, candidates: candidates.length };
+  const [only, ...others] = candidates;
+  if (!only || others.length > 0 || only.file !== 0 || only.event !== "PreToolUse" || only.matcher !== MATCHER
+    || !isDeepStrictEqual(only.hook, gateEntry(home))) return { removed: false, candidates: candidates.length };
   const next = structuredClone(files);
   const groups = next[0]!.hooks!.PreToolUse!;
-  groups[only!.group]!.hooks.splice(only!.index, 1);
-  if (groups[only!.group]!.hooks.length === 0) groups.splice(only!.group, 1);
+  const hooks = groups[only.group]!.hooks;
+  hooks.splice(only.index, 1);
+  if (hooks.length === 0) groups.splice(only.group, 1);
   return { removed: true, files: next };
 }
 
@@ -205,7 +198,7 @@ test("R2 the manual procedure removes exactly the gate entry and keeps every oth
     assert.ok(outcome.removed, profile);
     const expected = structuredClone(files);
     const gateGroup = expected[0]!.hooks!.PreToolUse!.find((g) => g.matcher === MATCHER)!;
-    gateGroup.hooks = gateGroup.hooks.filter((h) => !isDeepEqual(h, gateEntry(home)));
+    gateGroup.hooks = gateGroup.hooks.filter((h) => !isDeepStrictEqual(h, gateEntry(home)));
     assert.deepEqual(outcome.files, expected, `${profile}: every other hook object is unchanged`);
     assert.deepEqual(group(outcome.files[0]!.hooks!, "PreToolUse", MATCHER).map((g) => g.hooks), [[foreign]], `${profile}: the group keeps the foreign hook`);
     assert.deepEqual(discover(outcome.files), [], profile);
@@ -259,7 +252,7 @@ test("R4b an edited gate entry stops the procedure with no change", () => {
     for (const [index, edit] of edits.entries()) {
       const live = read(seed(rolled.user, (h) => {
         const hooks = group(h, "PreToolUse", MATCHER)[0]!.hooks;
-        edit(hooks.find((hook) => isDeepEqual(hook, gateEntry(home)))!);
+        edit(hooks.find((hook) => isDeepStrictEqual(hook, gateEntry(home)))!);
       }));
       const files = [live, read(rolled.project)];
       const snapshot = structuredClone(files);
