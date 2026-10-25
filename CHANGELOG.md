@@ -469,6 +469,13 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Brain drainage confirm path (issue #687): a `code` page that declares no
+  binding can be marked `evidence-superseded` when a same-space page binds the
+  revision at which the measurement contradicts the claim. `decide
+  --superseded-by` reads that page's storage body for its Revision lines; new
+  reason `superseded-page-not-bound`, and a superseding page whose status is not
+  `current` is refused (`superseded-page-not-current`). Confirm and refute still
+  require the page's own bound revision.
 - Codex installer: an upgrade no longer refuses a managed block into which the
   Codex CLI wrote its `[hooks.state]` trust tables and `[tui]` (issue #684);
   they move behind the end marker with the text TOML gives them, and any other

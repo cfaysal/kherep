@@ -14,7 +14,7 @@ export const BODY = `<p>Revision: alpha@${SHA}</p><p>Code: src/queue.mts</p><p>Q
 export const LABELS = ['type-observation', 'evidence-assumed', 'status-author-model', 'runtime-claude-code-win'];
 export const MEASUREMENT = { kind: 'code', source: 'alpha (git checkout)', sourceClass: 'repository', command: `git show ${SHA}:src/queue.mts`,
   excerpt: '12: retry(receipt)', measuredAt: TODAY, verdict: 'reproduces', revision: `alpha@${SHA}` };
-export type Pages = Record<string, { body: string; labels: string[]; spaceId?: string }>;
+export type Pages = Record<string, { body: string; labels: string[]; spaceId?: string; status?: string }>;
 // links maps a directory to its resolved real path; a directory mapped to null does not exist.
 // files replaces the in-memory files (with real ones, say); onRequest runs before each GET.
 export interface HarnessOptions { exec?: ExecLike; links?: Record<string, string | null>; files?: FileOps; onRequest?: () => void }
@@ -32,7 +32,7 @@ export function harness(pages: Pages = { '1': { body: BODY, labels: LABELS } }, 
     const id = /\/pages\/(\d+)/.exec(spec.path)?.[1] ?? '';
     const p = pages[id];
     if (spec.path.includes('/labels')) return { status: 200, json: { results: p.labels.map(name => ({ name })) } };
-    return { status: 200, json: { id, title: 'Synthetic title', spaceId: p.spaceId ?? '9', status: 'current', parentId: null,
+    return { status: 200, json: { id, title: 'Synthetic title', spaceId: p.spaceId ?? '9', status: p.status ?? 'current', parentId: null,
       version: { number: 3 }, body: { storage: { value: p.body } }, authorId: 'svc', _links: {} } };
   } };
   const git: ExecLike = async (file, args) => {

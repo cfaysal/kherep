@@ -77,17 +77,55 @@ test('Defect 4 and 5: a secret marker writes no body; --out-body inside a work t
   assert.equal(inside.files.has('/repo/b.xml'), false);
 });
 
-test('--superseded-by needs body approval, then one GET, and refuses another space', async () => {
+test('--superseded-by needs body approval, then two GETs, and refuses another space after one', async () => {
   const contradicts = { ...MEASUREMENT, verdict: 'contradicts' };
   const h = await prepared(harness({ '1': { body: BODY, labels: LABELS }, '77': { body: '<p>x</p>', labels: [] } }), contradicts);
   await assert.rejects(() => h.run({ ...decideArgs, 'superseded-by': '77' }), /body-approved/);
   assert.equal(h.calls.length, 0);
   assert.equal(await h.run({ ...decideArgs, 'superseded-by': '77', 'body-approved': undefined }), 0);
-  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls.length, 2, 'metadata, then the storage body of a same-space target');
   assert.match(h.files.get('/tmp/ev/b.xml') ?? '', /pages\/77">Synthetic title<\/a>/);
   const other = await prepared(harness({ '1': { body: BODY, labels: LABELS }, '78': { body: '', labels: [], spaceId: '8' } }), contradicts);
   assert.equal(await other.run({ ...decideArgs, 'superseded-by': '78', 'body-approved': undefined }), 2);
   assert.match(other.out.join('\n'), /superseded-other-space/);
+  assert.equal(other.calls.length, 1, 'the body of a page in another space is not read');
+});
+
+const UNBOUND = '<p>Revision: none (no exact binding: dirty tree)</p><p>Code: src/queue.mts</p><h2>Related pages</h2>';
+const SUPERSEDING = `<p>Revision: alpha@${SHA}</p><p>Code: src/queue.mts</p><p>The queue keeps receipts.</p>`;
+const supArgs = { ...decideArgs, 'superseded-by': '77', 'body-approved': undefined };
+
+test('#687 --superseded-by on an unbound code record: two GETs, superseded, no body text printed', async () => {
+  const h = await prepared(harness({ '1': { body: UNBOUND, labels: LABELS }, '77': { body: SUPERSEDING, labels: [] } }), { ...MEASUREMENT, verdict: 'contradicts' });
+  assert.equal(await h.run(supArgs), 0);
+  assert.equal(h.calls.length, 2);
+  const body = h.files.get('/tmp/ev/b.xml') ?? '';
+  assert.ok(body.includes('pages/77">Synthetic title</a>') && body.includes(`<p>Revision: alpha@${SHA}</p>`), body);
+  const record = JSON.parse(h.files.get('/tmp/ev/r.json') ?? '{}');
+  assert.equal(record.decision.outcome, 'superseded');
+  assert.ok(record.labelsAfter.includes('evidence-superseded') && !record.labelsAfter.includes('evidence-assumed'));
+  const printed = h.out.join('\n');
+  assert.ok(!printed.includes('src/queue.mts') && !printed.includes('Synthetic title') && !printed.includes('receipts'), printed);
+});
+
+test('#687 a superseding page that does not bind the revision, or is not current, is refused', async () => {
+  const h = await prepared(harness({ '1': { body: UNBOUND, labels: LABELS }, '77': { body: '<p>x</p>', labels: [] } }), { ...MEASUREMENT, verdict: 'contradicts' });
+  assert.equal(await h.run(supArgs), 2);
+  assert.match(h.out.join('\n'), /reason: superseded-page-not-bound/);
+  assert.equal(h.files.has('/tmp/ev/b.xml'), false);
+  const archived = await prepared(harness({ '1': { body: UNBOUND, labels: LABELS }, '77': { body: SUPERSEDING, labels: [], status: 'archived' } }),
+    { ...MEASUREMENT, verdict: 'contradicts' });
+  await assert.rejects(() => archived.run(supArgs), /superseded-page-not-current/);
+  assert.deepEqual([archived.calls.length, archived.files.has('/tmp/ev/b.xml')], [1, false]);
+});
+
+test('#687 an unbound record without a target stays revision-not-on-page and reads nothing', async () => {
+  for (const verdict of ['reproduces', 'contradicts']) {
+    const h = await prepared(harness({ '1': { body: UNBOUND, labels: LABELS } }), { ...MEASUREMENT, verdict });
+    assert.equal(await h.run(decideArgs), 2, verdict);
+    assert.match(h.out.join('\n'), /reason: revision-not-on-page/);
+    assert.equal(h.calls.length, 0);
+  }
 });
 
 test('--max-age-days above 7 exits 1 through the broker', async () => {
