@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, renderMeasurementBlock,
+  classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, MEASUREMENT_BLOCK, renderMeasurementBlock,
   type Measurement,
 } from './confluence-evidence.mts';
 import { renderReport } from './confluence-evidence-report.mts';
@@ -210,4 +210,53 @@ test('type-knowledge pages are eligible; command and excerpt are escaped in the 
   assert.ok(block.includes('<code>git show ' + SHA + ':src/queue.mts | grep -n &quot;a&lt;b &amp;&amp; c&quot;</code>'), block);
   assert.ok(block.includes('<pre>12: if (a &lt; b &amp;&amp; retry(receipt)) {}</pre>'), block);
   assert.ok(!block.includes('a<b') && !block.includes('a < b'));
+});
+
+// #687: a code page that declares no binding is superseded only through a same-space page that binds the measured revision.
+const UNBOUND = '<p>Revision: none (no exact binding: dirty tree)</p><p>Code: src/queue.mts</p>' + FOOTER;
+const SUP = M({ verdict: 'contradicts', supersededBy: '77' });
+const BOUND77 = { ...SUPER, bound: [`alpha@${SHA}`] };
+const AFTER_SUP = ['type-observation', 'evidence-superseded', 'status-author-model', 'runtime-claude-code-win'];
+
+test('#687 unbound code page is superseded by a bound same-space page', () => {
+  const d = decide(claim(UNBOUND), SUP, OPT({ superseded: BOUND77 }));
+  assert.deepEqual([d.outcome, d.labelsAdd, d.labelsRemove, d.measuredRevision, d.supersededBy],
+    ['superseded', ['evidence-superseded'], ['evidence-assumed'], `alpha@${SHA}`, '77']);
+  const block = renderMeasurementBlock(d, SUP, 'runtime-claude-code-win', BOUND77);
+  assert.match(block, new RegExp(MEASUREMENT_BLOCK.source, 's'));
+  assert.ok(block.includes(`<p>Revision: alpha@${SHA}</p>`) && block.includes('/wiki/spaces/K/pages/77"'), block);
+  const out = insertBeforeFooter(UNBOUND, block);
+  assert.deepEqual(drainageRules([snap(out, AFTER_SUP)], true).filter(c => c.problem === 'revision-missing-or-invalid'), []);
+  assert.deepEqual(claim(out).revisions.bound, []);
+  assert.equal(decide(claim(out, AFTER_SUP), SUP, OPT({ superseded: BOUND77 })).reason, 'page-not-assumed');
+});
+
+test('#687 confirm, refute, other revisions and format defects stay refused; every other refusal is unchanged', () => {
+  const page = (revision: string) => `${revision}<p>Code: src/queue.mts</p>` + FOOTER;
+  const at = (over: Record<string, unknown>) => OPT({ superseded: BOUND77, ...over });
+  const cases: [string, ReturnType<typeof decide>, string][] = [
+    ['reproduces', decide(claim(UNBOUND), M(), at({})), 'revision-not-on-page'],
+    ['contradicts without target', decide(claim(UNBOUND), M({ verdict: 'contradicts' }), OPT()), 'revision-not-on-page'],
+    ['no superseding page', decide(claim(UNBOUND), SUP, OPT()), 'superseded-needs-page'],
+    ['same page', decide(claim(UNBOUND), M({ verdict: 'contradicts', supersededBy: '1' }), OPT()), 'superseded-same-page'],
+    ['other space', decide(claim(UNBOUND), SUP, OPT({ superseded: { ...BOUND77, spaceId: '8' } })), 'superseded-other-space'],
+    ['target without bound', decide(claim(UNBOUND), SUP, OPT({ superseded: SUPER })), 'superseded-page-not-bound'],
+    ['target bound empty', decide(claim(UNBOUND), SUP, OPT({ superseded: { ...SUPER, bound: [] } })), 'superseded-page-not-bound'],
+    ['target binds another', decide(claim(UNBOUND), SUP, OPT({ superseded: { ...SUPER, bound: [`alpha@${SHA_B}`] } })), 'superseded-page-not-bound'],
+    ['not in repository', decide(claim(UNBOUND), SUP, at({ revisionExists: () => false })), 'revision-not-in-repository'],
+    ['no repo root', decide(claim(UNBOUND), SUP, at({ repoRoot: undefined })), 'revision-not-verified'],
+    ['other repo', decide(claim(UNBOUND), SUP, at({ repoTopLevel: '/x/other' })), 'repo-root-name-mismatch'],
+    ['missing revision', decide(claim(UNBOUND), { ...SUP, revision: undefined }, at({})), 'revision-missing'],
+    ['dirty revision', decide(claim(UNBOUND), { ...SUP, revision: `alpha@${SHA} (no exact binding: dirty tree)` }, at({})), 'revision-dirty'],
+    ['unrelated', decide(claim(UNBOUND), { ...SUP, command: 'npm test', excerpt: '# pass' }, at({})), 'measurement-does-not-touch-claim'],
+    ['bound to another revision', decide(claim(page(`<p>Revision: alpha@${SHA_B}</p>`)), SUP, at({ revisionExists: () => true })), 'revision-not-on-page'],
+    ['no Revision line', decide(claim(page('')), SUP, at({})), 'revision-not-on-page'],
+    ['malformed Revision line', decide(claim(page(`<p>Revision: ${SHA}</p>`)), SUP, at({})), 'revision-not-on-page'],
+  ];
+  for (const [name, d, reason] of cases) assert.deepEqual([d.outcome, d.reason, d.labelsAdd], ['unknown', reason, []], name);
+});
+
+test('#687 existing supersede paths keep their shape', () => {
+  assert.equal(decide(claim(), M({ verdict: 'contradicts', supersededBy: '77' }), OPT({ superseded: SUPER })).outcome, 'superseded');
+  assert.equal(decide(claim(LIVE + FOOTER), LIVE_M({ supersededBy: '77' }), OPT({ superseded: SUPER })).outcome, 'superseded');
 });

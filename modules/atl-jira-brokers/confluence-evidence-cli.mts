@@ -3,11 +3,11 @@
 // go through confluence-evidence-io.mts. Stdout carries ids, versions, kinds,
 // labels, reasons and counts only.
 import type { ConfluenceSession } from './confluence-contract.mts';
-import { findSpace, getPage } from './confluence-content.mts';
+import { findSpace, getPage, getPageBody } from './confluence-content.mts';
 import { drainageRules } from './confluence-drainage-rules.mts';
 import { drainageSnapshot } from './confluence-drainage-snapshot.mts';
 import {
-  BOUND_REVISION, claimSpan, classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, KINDS, normaliseMeasurement, renderMeasurementBlock,
+  BOUND_REVISION, claimSpan, classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, KINDS, normaliseMeasurement, renderMeasurementBlock, revisionBody, revisionLines,
   type DecideOptions, type Decision, type Measurement, type MeasuredKind,
 } from './confluence-evidence.mts';
 import {
@@ -94,7 +94,10 @@ async function decideMode(io: Io): Promise<number> {
   const options: DecideOptions = { now: ctx.now(), maxAgeDays, ...(await repository(io, m)) };
   if (supersededBy !== undefined) {
     const page = await getPage(io.session(), supersededBy);
-    options.superseded = { id: page.id, title: page.title, spaceId: page.spaceId, spaceKey: record.spaceKey ?? '' };
+    if (page.status !== 'current') fail('superseded-page-not-current: the superseding page is not current.');
+    // #687: the target's own bound Revision lines, from its author body; same space only, never printed or written.
+    const bound = page.spaceId === record.spaceId ? revisionLines(revisionBody(await getPageBody(io.session(), supersededBy, 'storage'))).bound : [];
+    options.superseded = { id: page.id, title: page.title, spaceId: page.spaceId, spaceKey: record.spaceKey ?? '', bound };
   }
   let decision: Decision = decide(record.claim!, measurement, options);
   const labels = record.labels ?? [];
