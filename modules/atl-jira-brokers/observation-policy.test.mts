@@ -5,6 +5,30 @@ import { publishObservations, type ObservationBroker } from './observation-publi
 const finding = {title:'Synthetic finding',bodyStorage:'<p>Synthetic prose</p>',evidence:'assumed',
   labels:['type-observation','evidence-assumed','status-author-model'],placement:{project:'Kherep',app:'-'}};
 const request=(bodyStorage:string)=>({sessionId:'synthetic',turnId:'turn',observations:[{...finding,bodyStorage}]});
+for (const key of ['sessionId', 'turnId']) test(`${key}: invalid identity rejects before receipt or broker access`, async () => {
+  for (const value of [undefined, null, 42, {}, [], '', ' ', ' bad', 'bad ', 'bad\nvalue', '<markup>', 'UPPER', 'a'.repeat(81)]) {
+    let brokerCalls = 0, receiptCalls = 0;
+    const broker = new Proxy({} as ObservationBroker, { get() { brokerCalls++; throw new Error('unexpected broker I/O'); } });
+    const result = await publishObservations({ ...request(finding.bodyStorage), [key]: value }, broker,
+      { claim() { receiptCalls++; throw new Error('unexpected receipt I/O'); } });
+    assert.equal(result, 'OBS-RESULT: failed invalid-request');
+    assert.equal(brokerCalls, 0); assert.equal(receiptCalls, 0);
+  }
+});
+test('exact 80-character session and turn identities remain admissible', () => {
+  const valid = { ...request(finding.bodyStorage), sessionId: 's'.repeat(80), turnId: 't'.repeat(80) };
+  assert.deepEqual(observationRequest(valid), valid);
+});
+for (const key of ['sessionId', 'turnId']) test(`${key}: terminal line separators reject before receipt or broker access`, async () => {
+  for (const end of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
+    let brokerCalls = 0, receiptCalls = 0;
+    const broker = new Proxy({} as ObservationBroker, { get() { brokerCalls++; throw new Error('unexpected broker I/O'); } });
+    const result = await publishObservations({ ...request(finding.bodyStorage), [key]: `native-id${end}` }, broker,
+      { claim() { receiptCalls++; throw new Error('unexpected receipt I/O'); } });
+    assert.equal(result, 'OBS-RESULT: failed invalid-request');
+    assert.equal(brokerCalls, 0); assert.equal(receiptCalls, 0);
+  }
+});
 for(const body of [
   '<img src="https://canary.invalid/pixel">', '<p style="background:url(https://canary.invalid/pixel)">text</p>',
   '<style>p{background:url(https://canary.invalid/pixel)}</style>', '<link href="https://canary.invalid/style.css"/>',

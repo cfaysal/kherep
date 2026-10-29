@@ -9,10 +9,14 @@ import { installObservationPublisher, checkObservationPublisher } from './instal
 import { fixtureModelOptions } from './lib/model-policy.fixture.mts';
 import { renderAgent } from './lib/component-render.mts';
 import { renderObservationHook, renderObservationPublisher, observationFiles } from './lib/observation-projection.mts';
-import { OBSERVATION_SOURCES, observationSnapshot } from './lib/observation-source.mts';
+import { OBSERVATION_SOURCES, observationSnapshot, observationHash } from './lib/observation-source.mts';
 import { observationSource } from './hooks/hook-integrity-repair.mts';
 const REPO = path.resolve(import.meta.dirname, '..');
 const predecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex', 'parity', 'observation-predecessor.json'), 'utf8')) as Record<string, string>;
+const identityPredecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex/parity/observation-turn-identity-predecessor.json'), 'utf8')) as Record<string, string>;
+const pilotPredecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex/parity/observation-turn-identity-pilot-predecessor.json'), 'utf8')) as Record<string, string>;
+const scopedPredecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex/parity/observation-scoped-revision-predecessor.json'), 'utf8')) as Record<string, string>;
+const identityVersions = [['60cde716 main', identityPredecessor], ['9241eba pilot', pilotPredecessor]] as const;
 function fixture(t: {
     after(fn: () => void): void;
 }, messaging = false) {
@@ -71,6 +75,73 @@ function snapshot(root: string) {
     walk(root);
     return out;
 }
+function installIdentityPredecessor(f: ReturnType<typeof fixture>, previous = identityPredecessor) {
+    installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    const agentFile = path.join(f.home, 'agents', 'codex-obs.toml');
+    const model = JSON.parse(/^model = (.*)$/m.exec(fs.readFileSync(agentFile, 'utf8'))![1]);
+    fs.writeFileSync(agentFile, renderAgent('codex-obs', previous['codex/agents/codex-obs.md'], { model, reasoning: 'low', sandbox: 'read-only' }));
+    const relative = 'codex/hooks/kherep-maestro-context.mts', bytes = previous[relative] ?? fs.readFileSync(path.join(REPO, relative), 'utf8');
+    fs.writeFileSync(path.join(f.home, 'hooks', path.basename(relative)), bytes);
+    const restoreRoot = path.join(f.home, 'orchestra', 'observation-source');
+    fs.writeFileSync(path.join(restoreRoot, relative), bytes);
+    const manifestFile = path.join(restoreRoot, 'manifest.json'), manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    manifest[relative] = observationHash(bytes);
+    if (previous === pilotPredecessor) {
+        const hookDir = path.join(f.home, 'hooks', 'kherep-maestro');
+        for (const [from, file] of [
+            ['modules/atl-jira-brokers/observation-candidate.mts', path.join(hookDir, 'obs-candidate-policy.mts')],
+            ['modules/atl-jira-brokers/observation-candidate.mts', path.join(f.workspace, 'tools', 'observation-candidate.mts')],
+            ['codex/hooks/observation-stop.mts', path.join(hookDir, 'codex-observation-stop.mts')],
+            ['codex/hooks/observation-turn-completion.mts', path.join(hookDir, 'codex-observation-turn-completion.mts')],
+        ]) {
+            const old = scopedPredecessor[from];
+            fs.writeFileSync(file, from.startsWith('codex/hooks/') ? renderObservationHook(old, f.workspace) : old);
+            fs.writeFileSync(path.join(restoreRoot, from), old);
+            manifest[from] = observationHash(old);
+        }
+        const routingFile = path.join(f.home, 'orchestra', 'ROUTING.md'), routing = fs.readFileSync(routingFile, 'utf8');
+        const section = (text: string) => text.slice(text.indexOf('## Session observations'), text.indexOf('## Linking'));
+        fs.writeFileSync(routingFile, routing.replace(section(routing), section(scopedPredecessor['codex/ROUTING.md'])));
+    }
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+}
+for (const [version, previous] of identityVersions) test(`exact ${version} native identity predecessor upgrades installed hook, snapshot and recovery source idempotently`, t => {
+    const f = fixture(t);
+    installIdentityPredecessor(f, previous);
+    const before = snapshot(f.root);
+    assert.equal(checkObservationPublisher({ codexHome: f.home, workspace: f.workspace }).predecessorRecognized, true);
+    const result = installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    assert.equal(result.receipt.installedHashesMatch, true);
+    const installed = snapshot(f.root);
+    for (const parts of [['home', 'hooks.state.json'], ['home', 'orchestra', 'parity-receipt.json'], ['home', 'orchestra', 'control-plane-source.json'], ['home', 'hooks', 'parity', 'capabilities.json']]) {
+        const name = path.join(...parts);
+        assert.ok(Object.hasOwn(before, name) && Object.hasOwn(installed, name), name);
+        assert.equal(installed[name], before[name], name);
+    }
+    const relative = 'codex/hooks/kherep-maestro-context.mts', hookFile = path.join(f.home, 'hooks', path.basename(relative));
+    const source = fs.readFileSync(path.join(REPO, relative), 'utf8');
+    assert.equal(fs.readFileSync(hookFile, 'utf8'), source);
+    assert.equal(observationSnapshot(f.home, relative)?.toString(), source);
+    assert.equal(observationSource(f.home, relative)?.toString(), source);
+    for (const turn_id of ['native-turn', undefined]) {
+        const hook = spawnSync(process.execPath, [hookFile], { encoding: 'utf8', env: { ...process.env, KHEREP_WORKSPACE: f.workspace },
+            input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', cwd: f.workspace, session_id: 'main-session', turn_id, prompt: 'PRIVATE_PROMPT_CANARY' }) });
+        assert.equal(hook.status, 0, hook.stderr);
+        assert.ok(hook.stdout.includes(turn_id ? '{"sessionId":"main-session","turnId":"native-turn"}' : 'OBS-RESULT: failed missing-turn-identity'));
+        assert.doesNotMatch(hook.stdout, /PRIVATE_PROMPT_CANARY/);
+    }
+    const after = snapshot(f.root);
+    installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    assert.deepEqual(snapshot(f.root), after);
+});
+test('unknown immediate context drift refuses before any installation write', t => {
+    const f = fixture(t);
+    installIdentityPredecessor(f);
+    fs.appendFileSync(path.join(f.home, 'hooks', 'kherep-maestro-context.mts'), '\n// UNKNOWN_IDENTITY_DRIFT\n');
+    const before = snapshot(f.root);
+    assert.throws(() => installObservationPublisher({ codexHome: f.home, workspace: f.workspace }), /hook-drift/);
+    assert.deepEqual(snapshot(f.root), before);
+});
 test('scoped upgrade preserves opaque config, trust, pin and shared pointer and measures installed closure', t => {
     const f = fixture(t);
     const before = snapshot(f.root);
@@ -98,8 +169,9 @@ test('scoped upgrade preserves opaque config, trust, pin and shared pointer and 
     assert.match(rpc.stdout, /OBS-RESULT: empty no-admissible-findings/);
     assert.doesNotMatch(rpc.stdout, /CANARY|credential|confluence\.json/);
 });
-test('transaction rollback restores every original home and workspace file after an injected write failure', t => {
+for (const [version, previous] of identityVersions) test(`${version} rollback restores every original home and workspace file after an injected write failure`, t => {
     const f = fixture(t);
+    installIdentityPredecessor(f, previous);
     const before = snapshot(f.root);
     assert.throws(() => installObservationPublisher({ codexHome: f.home, workspace: f.workspace, afterWrite: n => {
             if (n === 17)
@@ -107,8 +179,9 @@ test('transaction rollback restores every original home and workspace file after
         } }), /rolled-back/);
     assert.deepEqual(snapshot(f.root), before);
 });
-test('unknown observer drift fails closed before modifying target files', t => {
+for (const [version, previous] of identityVersions) test(`${version} unknown observer drift fails closed before modifying target files`, t => {
     const f = fixture(t);
+    installIdentityPredecessor(f, previous);
     fs.appendFileSync(path.join(f.home, 'agents', 'codex-obs.toml'), '# unknown drift\n');
     const before = snapshot(f.root);
     assert.throws(() => installObservationPublisher({ codexHome: f.home, workspace: f.workspace }), /agent-drift/);

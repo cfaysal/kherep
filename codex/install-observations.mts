@@ -46,6 +46,8 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
     const lookupPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-lookup-predecessor.json'))) as Record<string, string>;
     const prosePredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-prose-predecessor.json'))) as Record<string, string>;
     const scopedPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-scoped-revision-predecessor.json'))) as Record<string, string>;
+    const identityPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-turn-identity-predecessor.json'))) as Record<string, string>;
+    const pilotPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-turn-identity-pilot-predecessor.json'))) as Record<string, string>;
     const source = (relative: string) => read(path.join(repo, relative));
     const configFile = path.join(home, 'config.toml'), beforeConfig = read(configFile);
     const start = beforeConfig.indexOf(START), end = beforeConfig.indexOf(END);
@@ -72,7 +74,7 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
     const agentOptions = { model: agent.model, reasoning: 'low', sandbox: 'read-only' };
     const agentFile = path.join(home, 'agents', `${agentName}.toml`), beforeAgent = read(agentFile);
     const newAgent = renderAgent(agentName, source('codex/agents/codex-obs.md'), agentOptions);
-    if (beforeAgent !== newAgent && ![predecessor, scopedPredecessor].some(known => beforeAgent === renderAgent(agentName, known['codex/agents/codex-obs.md'], agentOptions)))
+    if (beforeAgent !== newAgent && ![predecessor, scopedPredecessor, identityPredecessor, pilotPredecessor].some(known => beforeAgent === renderAgent(agentName, known['codex/agents/codex-obs.md'], agentOptions)))
         throw new Error('observation-agent-drift');
     const changes = new Map<string, string>();
     changes.set(agentFile, newAgent);
@@ -82,7 +84,8 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
         const render = (text: string) => name.startsWith('observation-') ? renderObservationHook(text, workspace) : text;
         const next = render(source(relative));
         if (fs.existsSync(file) && read(file) !== next && read(file) !== render(predecessor[relative]) && read(file) !== lookupPredecessor[relative]
-            && (scopedPredecessor[relative] === undefined || read(file) !== render(scopedPredecessor[relative])))
+            && (scopedPredecessor[relative] === undefined || read(file) !== render(scopedPredecessor[relative]))
+            && read(file) !== identityPredecessor[relative])
             throw new Error('observation-hook-drift');
         changes.set(file, next);
     }

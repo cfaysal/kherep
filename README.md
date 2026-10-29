@@ -84,7 +84,7 @@ flowchart LR
   bootstrap -->|one resolved model snapshot| codex
   bootstrap -->|binds| githook
   runtimes --> brokers --> confluence
-  codex -->|pinned Luna, read-only filesystem| observationAdapter["Narrow observation MCP adapter"]
+  codex -->|validated native main-turn IDs, pinned Luna, read-only filesystem| observationAdapter["Narrow observation MCP adapter"]
   observationAdapter -->|authority, journal, readback| brokers
   runtimes --> runner --> model
   runtimes --> bridge --> mcp

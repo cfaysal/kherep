@@ -8,6 +8,7 @@ export interface HookData {
   hook_event_name?: unknown;
   cwd?: unknown;
   session_id?: unknown;
+  turn_id?: unknown;
   prompt?: unknown;
   [key: string]: unknown;
 }
@@ -51,9 +52,15 @@ export function sessionContext(): string {
   ].join("\n");
 }
 
-export function turnContext(): string {
+export function turnContext(data: HookData = {}): string {
+  const safeId = (value: unknown): value is string => typeof value === "string"
+    && /^[a-z0-9][a-z0-9._-]{0,79}$/.test(value);
+  const identity = safeId(data.session_id) && safeId(data.turn_id)
+    ? `Observation identity: ${JSON.stringify({ sessionId: data.session_id, turnId: data.turn_id })}\nCopy this JSON verbatim into the Luna brief: these are the dispatching MAIN turn IDs, not worker IDs.`
+    : "Observation turn identity unavailable. Maestro: continue the user task and its tools; pass this unavailable-identity condition to codex-obs. The observation WORKER must return OBS-RESULT: failed missing-turn-identity with no WORKER tool calls.";
   return [
     "MAESTRO TURN CHECK:",
+    identity,
     "Use current primary evidence; unresolved facts are UNKNOWN. Prior-session memory needs active context or current artifacts.",
     "Classify privacy before tools; private material is forbidden to Codex/cloud paths.",
     "Delegate only for parallelism, specialization, isolation or independent review; never overlap writes. Bound workers by objective, scope, constraints, evidence and return format; Maestro owns acceptance.",
@@ -79,7 +86,7 @@ async function main(): Promise<void> {
   }
 
   if (data.hook_event_name === "UserPromptSubmit") {
-    process.stdout.write(turnContext());
+    process.stdout.write(turnContext(data));
   }
 }
 

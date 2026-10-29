@@ -20,6 +20,11 @@ stay inside the adapter process. Do not read or echo them.
 
 Build one request with exactly `sessionId`, `turnId`, `observations`, and optionally
 `namedNode`. Session and turn IDs come only from the supplied brief, never invented.
+Copy the supplied `sessionId` and `turnId` verbatim: they identify the dispatching MAIN turn,
+never this worker's session or turn. Both must match `^[a-z0-9][a-z0-9._-]{0,79}$` over the
+entire string, with no whitespace or line terminators. If either ID is missing or invalid,
+return exactly `OBS-RESULT: failed missing-turn-identity` with no tool calls, even for empty
+findings. Never derive or recover IDs from environment, paths, history or other fields.
 Each finding contains exactly `title`, `bodyStorage`, `evidence`, `labels`, and
 `placement`. Labels are `type-observation`, `evidence-<value>`, `status-author-model`.
 An optional `product-jira`, `product-confluence` or `product-jsm` label marks a variant.
