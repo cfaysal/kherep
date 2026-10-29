@@ -12,6 +12,8 @@
 // - Issue #505: on a confirmed candidate, every `<p>Revision: …</p>` paragraph
 //   its body carries is exactly <repo>@<full commit sha>. Assumed bodies and a body
 //   without such a line are not checked: absence is undeclared.
+// - Issue #693: the line may add " -- " and 1..16 distinct repo-relative paths, the
+//   grammar of confluence-claim-text.mts; the published page and this check agree.
 //
 // Pure: no I/O, and a problem is a fixed text that never quotes the message.
 export type CandidateCheck = {
@@ -27,6 +29,19 @@ const ENVELOPE_KEYS = ["observations"];
 const REVISION_LINE = /<p>\s*Revision:((?:(?!<\/p>)[\s\S])*)<\/p>/g;
 // The name grammar of claude/hooks/lib/obs-brief-policy.mts NAME, then @<40 hex>.
 const BOUND_REVISION = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*@[0-9a-f]{40}$/;
+// Copied, not imported, from confluence-claim-text.mts PATH (this file is projected on its own as a hook helper).
+const PATH = /^(?!-)(?:(?!\.{1,2}(?:\/|$))[A-Za-z0-9._-]+)(?:\/(?!\.{1,2}(?:\/|$))[A-Za-z0-9._-]+)*$/;
+// <repo>@<sha>, optionally " -- " and the path list; runs of spaces and tabs count as one space, as on the page.
+function scopedOk(value: string): boolean {
+    const line = value.trim().replace(/[ \t]+/g, " ");
+    const at = line.indexOf(" -- ");
+    if (!BOUND_REVISION.test(at < 0 ? line : line.slice(0, at)))
+        return false;
+    if (at < 0)
+        return true;
+    const paths = line.slice(at + 4).split(" ");
+    return paths.length <= 16 && new Set(paths).size === paths.length && paths.every(p => p.length <= 200 && PATH.test(p));
+}
 function record(value: unknown): Record<string, unknown> | null {
     return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
@@ -63,8 +78,8 @@ function candidateProblem(value: unknown): string | null {
         return "a candidate's placement is not exactly a non-empty project and app";
     }
     if (item.evidence === "confirmed"
-        && [...(item.bodyStorage as string).matchAll(REVISION_LINE)].some(([, value]) => !BOUND_REVISION.test(value.trim()))) {
-        return "a confirmed candidate names a revision that is not <repo>@<full commit sha>";
+        && [...(item.bodyStorage as string).matchAll(REVISION_LINE)].some(([, value]) => !scopedOk(value))) {
+        return "a confirmed candidate names a revision that is not <repo>@<full commit sha> with an optional repo-relative path list";
     }
     return null;
 }

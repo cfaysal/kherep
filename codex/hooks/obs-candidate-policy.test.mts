@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { checkObsCandidate } from "./obs-candidate-policy.mts";
+import { revisionLines } from "../../modules/atl-jira-brokers/confluence-claim-text.mts";
 
 function candidate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -77,6 +78,8 @@ test("placement is exactly a non-empty project and app", () => {
 
 // Issue #505 (D3). A confirmed candidate that names a revision names it as
 // <repo>@<full commit sha>; assumed bodies and absent lines are not checked.
+const NOT_BOUND = "a confirmed candidate names a revision that is not <repo>@<full commit sha> with an optional repo-relative path list";
+
 test("a confirmed candidate's Revision lines bind a full commit SHA", () => {
   const sha = "2733b35e2c102ac54295568509c68b18b6d92cab";
   const confirmed = (body: string) => doc(candidate({
@@ -91,13 +94,13 @@ test("a confirmed candidate's Revision lines bind a full commit SHA", () => {
     "none (no exact binding: no repository)", `kherep@${sha.toUpperCase()}`, `https://example.com/kherep@${sha}`,
     `D:/work/kherep@${sha}`, `/home/x/kherep@${sha}`, `@${sha}`]) {
     const body = `<p>Revision: kherep@${sha}</p><p>Revision: ${value}</p>`;
-    assert.equal(problem(confirmed(body)), "a confirmed candidate names a revision that is not <repo>@<full commit sha>", value);
+    assert.equal(problem(confirmed(body)), NOT_BOUND, value);
     assert.doesNotMatch(problem(confirmed(body)), /example|kherep@|[0-9a-f]{7,}/, value);
     assert.deepEqual(checkObsCandidate(assumed(body)), { count: 1 }, value);
   }
   assert.deepEqual(checkObsCandidate(confirmed("<p>The printed label is Revision: draft.</p>")), { count: 1 }, "prose is no Revision line");
   assert.equal(problem(confirmed(`<p>Revision: alpha@${sha}<em>-dirty</em></p>`)),
-    "a confirmed candidate names a revision that is not <repo>@<full commit sha>", "markup cannot hide a suffix");
+    NOT_BOUND, "markup cannot hide a suffix");
   assert.deepEqual(checkObsCandidate(confirmed(`<p>Revision:\nalpha@${sha}</p>`)), { count: 1 }, "a line break after Revision:");
   assert.match(problem(doc(candidate({ evidence: "confirmed", bodyStorage: `<p>Revision: kherep@${sha}</p>`, extra: 1 }))),
     /exactly title, bodyStorage/, "a sixth key fails as before");
@@ -108,4 +111,23 @@ test("a problem never quotes the message", () => {
   for (const message of [secret, doc(candidate({ evidence: secret })), doc(candidate({ placement: { project: secret } }))]) {
     assert.ok(!problem(message).includes("Example Corp"));
   }
+});
+
+// Issue #693 T10: a confirmed candidate may scope its Revision line to repo-relative paths, by the page grammar.
+test("a confirmed candidate's Revision line may carry a path list, validated like the page", () => {
+  const sha = "2733b35e2c102ac54295568509c68b18b6d92cab";
+  const as = (evidence: string, value: string) => doc(candidate({ evidence, labels: ["type-observation", `evidence-${evidence}`, "status-author-model"],
+    bodyStorage: `<p>Revision: ${value}</p>` }));
+  const lines = [`kherep@${sha} -- modules/a.mts docs/b.md`, `kherep@${sha}  --\tsrc/a.mts`, `kherep@${sha} -- src/*.mts`, `kherep@${sha} -- ../x.mts`,
+    `kherep@${sha} -- a.mts a.mts`, `kherep@${sha} --`, `kherep@${sha} -- a -- b`, `kherep@${sha} -- /abs.mts`, `kherep@${sha}`, `kherep@HEAD -- a.mts`,
+    `kherep@${sha} -- ${Array.from({ length: 17 }, (_, i) => `f${i}`).join(" ")}`];
+  for (const value of lines) {
+    const page = revisionLines(`<p>Revision: ${value}</p>`);
+    const pageOk = page.bound.length === 1 && page.malformed.length === 0;
+    assert.equal("count" in checkObsCandidate(as("confirmed", value)), pageOk, `page and candidate agree: ${value}`);
+    assert.deepEqual(checkObsCandidate(as("assumed", value)), { count: 1 }, `assumed stays unchecked: ${value}`);
+  }
+  assert.deepEqual(checkObsCandidate(as("confirmed", lines[0])), { count: 1 });
+  assert.equal(problem(as("confirmed", lines[2])), NOT_BOUND);
+  assert.doesNotMatch(problem(as("confirmed", lines[2])), /src|kherep|[0-9a-f]{7,}/);
 });
