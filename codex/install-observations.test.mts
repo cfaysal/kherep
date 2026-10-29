@@ -145,7 +145,6 @@ for (const messaging of [false, true])
         install(f.installOptions);
         assert.equal(fs.readFileSync(f.configFile, 'utf8'), before);
     });
-
 test('known b9f5ef72 stdio predecessor upgrades and an idempotent rerun preserves installed bytes', t => {
     const f = fixture(t);
     const relative = 'modules/atl-jira-brokers/observation-stdio.mts';
@@ -157,7 +156,6 @@ test('known b9f5ef72 stdio predecessor upgrades and an idempotent rerun preserve
     installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
     assert.deepEqual(snapshot(f.root), after);
 });
-
 test('arbitrary stdio byte drift still refuses before any installation write', t => {
     const f = fixture(t);
     const entry = path.join(f.workspace, 'tools', 'observation-stdio.mts');
@@ -166,7 +164,6 @@ test('arbitrary stdio byte drift still refuses before any installation write', t
     assert.throws(() => checkObservationPublisher({ codexHome: f.home, workspace: f.workspace }), /broker-drift/);
     assert.deepEqual(snapshot(f.root), before);
 });
-
 test('rollback restores known stdio predecessor after its replacement was actually written', t => {
     const f = fixture(t);
     const entry = path.join(f.workspace, 'tools', 'observation-stdio.mts');
@@ -183,7 +180,6 @@ test('rollback restores known stdio predecessor after its replacement was actual
     assert.equal(replaced, true);
     assert.deepEqual(snapshot(f.root), before);
 });
-
 test('known 6577d76 policy predecessor upgrades idempotently but arbitrary policy drift refuses', t => {
     const f = fixture(t);
     const relative = 'modules/atl-jira-brokers/observation-policy.mts';
@@ -200,20 +196,21 @@ test('known 6577d76 policy predecessor upgrades idempotently but arbitrary polic
     assert.throws(() => checkObservationPublisher({ codexHome: f.home, workspace: f.workspace }), /broker-drift/);
     assert.deepEqual(snapshot(f.root), drifted);
 });
-
 const lookupPredecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex/parity/observation-lookup-predecessor.json'), 'utf8')) as Record<string, string>;
-function installLookupPredecessor(f: ReturnType<typeof fixture>) {
-    fs.rmSync(path.join(f.workspace, 'tools', 'observation-lookup.mts'));
-    for (const [relative, bytes] of Object.entries(lookupPredecessor)) {
+const headerPredecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex/parity/observation-header-predecessor.json'), 'utf8')) as Record<string, string>;
+function installLookupPredecessor(f: ReturnType<typeof fixture>, previous: Record<string, string>) {
+    if (previous === lookupPredecessor) fs.rmSync(path.join(f.workspace, 'tools', 'observation-lookup.mts'));
+    for (const [relative, bytes] of Object.entries(previous)) {
         const file = relative.startsWith('modules/') ? path.join(f.workspace, 'tools', path.basename(relative))
             : path.join(f.home, 'hooks', 'kherep-maestro', path.basename(relative));
         fs.writeFileSync(file, bytes);
     }
-    fs.writeFileSync(path.join(f.home, 'hooks', 'kherep-maestro', 'obs-result-policy.mts'), lookupPredecessor['modules/atl-jira-brokers/observation-result.mts']);
+    if (previous === lookupPredecessor) fs.writeFileSync(path.join(f.home, 'hooks', 'kherep-maestro', 'obs-result-policy.mts'), previous['modules/atl-jira-brokers/observation-result.mts']);
 }
-test('exact immediate lookup predecessor upgrades both receipt policy copies, closure and snapshot', t => {
+for (const [version, previous] of [['1532', lookupPredecessor], ['e13', headerPredecessor]] as const) {
+test(`exact ${version} predecessor upgrades both receipt policy copies, closure and snapshot`, t => {
     const f = fixture(t);
-    installLookupPredecessor(f);
+    installLookupPredecessor(f, previous);
     const before = snapshot(f.root);
     installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
     for (const name of ['home/hooks.state.json', 'home/orchestra/parity-receipt.json', 'home/orchestra/control-plane-source.json', 'home/hooks/parity/capabilities.json'])
@@ -225,16 +222,22 @@ test('exact immediate lookup predecessor upgrades both receipt policy copies, cl
     const after = snapshot(f.root);
     installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
     assert.deepEqual(snapshot(f.root), after);
+    const broker = path.join(f.workspace, 'tools', 'observation-broker.mts');
+    fs.appendFileSync(broker, '\n// UNKNOWN_BROKER_DRIFT\n');
+    const drifted = snapshot(f.root);
+    assert.throws(() => checkObservationPublisher({ codexHome: f.home, workspace: f.workspace }), /broker-drift/);
+    assert.deepEqual(snapshot(f.root), drifted);
 });
-test('immediate predecessor rollback preserves exact files and unknown helper drift refuses preflight', t => {
+test(`${version} predecessor rollback preserves exact files and unknown helper drift refuses preflight`, t => {
     const f = fixture(t);
-    installLookupPredecessor(f);
+    installLookupPredecessor(f, previous);
     const before = snapshot(f.root);
     let replaced = false;
     assert.throws(() => installObservationPublisher({ codexHome: f.home, workspace: f.workspace, afterWrite: () => {
-        if (fs.existsSync(path.join(f.workspace, 'tools', 'observation-lookup.mts'))) {
+        if (fs.existsSync(path.join(f.workspace, 'tools', 'observation-lookup.mts'))
+            && fs.readFileSync(path.join(f.workspace, 'tools', 'observation-broker.mts'), 'utf8') !== previous['modules/atl-jira-brokers/observation-broker.mts']) {
             replaced = true;
-            throw new Error('synthetic failure after helper creation');
+            throw new Error('synthetic failure after broker replacement');
         }
     } }), /rolled-back/);
     assert.equal(replaced, true);
@@ -245,3 +248,4 @@ test('immediate predecessor rollback preserves exact files and unknown helper dr
     assert.throws(() => checkObservationPublisher({ codexHome: f.home, workspace: f.workspace }), /helper-drift/);
     assert.deepEqual(snapshot(f.root), drift);
 });
+}

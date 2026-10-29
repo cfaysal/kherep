@@ -208,9 +208,6 @@ const boundedFetch: ConfluenceContext['fetch'] = async (url, options) => {
         if (signal.aborted) throw new ObservationLookupError('space-lookup-timeout');
         throw error;
     }
-    // A spaces result with any Link header is conservatively incomplete.
-    if (/^\/ex\/confluence\/[^/]+\/wiki\/api\/v2\/spaces$/.test(new URL(url).pathname) && response.headers.get('link')?.trim())
-        throw new Error('collection-unavailable');
     let text: string | undefined;
     const read = async () => {
         if (text !== undefined)
@@ -233,7 +230,15 @@ const boundedFetch: ConfluenceContext['fetch'] = async (url, options) => {
                 }
                 chunks.push(part.value);
             }
-        text = Buffer.concat(chunks).toString('utf8');
+        const body = Buffer.concat(chunks).toString('utf8');
+        // Link metadata cannot prove absence. A positive row still passes the
+        // narrow session's key/shape/continuation and publisher's identity checks.
+        if (/^\/ex\/confluence\/[^/]+\/wiki\/api\/v2\/spaces$/.test(new URL(url).pathname) && response.headers.get('link')?.trim()) {
+            const json = JSON.parse(body) as { results?: unknown } | null;
+            if (!Array.isArray(json?.results) || json.results.length !== 1)
+                throw new Error('collection-unavailable');
+        }
+        text = body;
         return text;
     };
     return { status: response.status, ok: response.ok, text: read, json: async () => JSON.parse(await read()) };
