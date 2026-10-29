@@ -120,7 +120,15 @@ Beside the origin line, a code-bound body carries one line per validated token,
 itself carried `-dirty`, whatever the evidence label. A token that did not validate gets
 `<p>Revision: none (no exact binding: <the one reason>)</p>`. A valid `<name>` has letters, digits, `.`, `_`, `-` and single `/`, a
 valid `<sha>` is 40 lowercase hex; any other value (a URL, a path, a short or symbolic revision) is
-never copied into a candidate, a title or a notice.
+never copied into a candidate, a title or a notice. When the brief follows a validated token with
+` -- ` and the repo-relative paths the finding rests on, and that list validates (1 to 16 distinct
+paths of letters, digits, `.`, `_`, `-` and single `/`, no leading `/` or `-`, no `.` or `..`
+segment, no trailing `/`, no glob or `:`), the line is `<p>Revision: <name>@<sha> -- <path> <path></p>`;
+a list that does not validate is dropped and the line is written unscoped, never copied raw. When
+the brief names no paths, a tool result in the turn that shows the files the command read or
+touched may supply them, copied verbatim from that output; you never guess a path. Paths never
+change the evidence label, and the candidate check refuses a confirmed body whose path list the
+page grammar would reject.
 
 ## Limits
 

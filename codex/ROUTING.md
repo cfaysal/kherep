@@ -162,7 +162,12 @@ today. The brief declares a code-bound finding as
 `` measured: code <name>@<sha> `<command>` -> <deciding output excerpt> ``: the token `code` right
 after `measured:`, then one `<name>@<sha>` per repository, with the SHA from `git rev-parse HEAD` of
 the checkout the command ran in and `-dirty` when that tree had uncommitted changes, all before the
-command. The dispatch guard of each runtime reports, and never denies, a missing or incomplete
+command. Each `<name>@<sha>` may be followed by ` -- ` and the repo-relative paths the finding
+rests on, `` measured: code <name>@<sha> -- <path> <path> `<command>` -> <deciding output excerpt> ``; the
+page then carries `Revision: <name>@<sha> -- <paths>`, and brain drainage with `--repo-root` flags the
+confirmed page when one of those paths changes after that commit (issue #693). The guard reports a
+clean binding without paths and a malformed path list as notices, never a deny; paths never change
+the evidence label. The dispatch guard of each runtime reports, and never denies, a missing or incomplete
 binding (issue #505): a `code` finding without complete tokens gets a notice naming its position, and
 a `measured:` finding without `code` gets a fixed conditional notice when it names no binding or not
 every binding it names is complete. The guard checks declarations only and gives no completeness

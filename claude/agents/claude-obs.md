@@ -62,8 +62,9 @@ revision>", never a raw value. Each validated token gets a body line beside the 
 `<p>Revision: <name>@<sha></p>`, with ` (no exact binding: dirty tree)` before `</p>` on a dirty one; without one the
 line is `<p>Revision: none (no exact binding: <reason>)</p>`. A valid `<name>` has letters, digits, `.`, `_`, `-` and
 single `/`, a valid `<sha>` is 40 lowercase hex; any other value (a URL, a path, a short or symbolic revision) is
-never copied into a page, a title or a notice. A finding that is not about repository code is labelled exactly as
-today. A finding marked `relayed:` is `assumed`, and the body names its source. A finding marked `measured:` without
+never copied into a page, a title or a notice. Paths the brief gives after a token as ` -- <paths>` make the line `<p>Revision: <name>@<sha> -- <paths></p>` only when all are valid (1 to 16 distinct repo-relative paths of letters, digits, `.`, `_`, `-` and single `/`, no leading `/` or `-`, no `.` or `..` segment, no glob or `:`);
+else the line stays unscoped and the list is never copied. Without brief paths, only a tool result in the turn that shows the touched files may supply them, verbatim; never guess a path. Paths never change the label.
+A finding that is not about repository code is labelled exactly as today. A finding marked `relayed:` is `assumed`, and the body names its source. A finding marked `measured:` without
 the command or the excerpt, or with no marker, is `assumed`.
 
 A work item, report or page that describes a measurement made in another turn or session is second-hand: reading that
