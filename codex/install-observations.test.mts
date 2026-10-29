@@ -145,3 +145,41 @@ for (const messaging of [false, true])
         install(f.installOptions);
         assert.equal(fs.readFileSync(f.configFile, 'utf8'), before);
     });
+
+test('known b9f5ef72 stdio predecessor upgrades and an idempotent rerun preserves installed bytes', t => {
+    const f = fixture(t);
+    const relative = 'modules/atl-jira-brokers/observation-stdio.mts';
+    const entry = path.join(f.workspace, 'tools', 'observation-stdio.mts');
+    fs.writeFileSync(entry, predecessor[relative]);
+    installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    assert.equal(fs.readFileSync(entry, 'utf8'), fs.readFileSync(path.join(REPO, relative), 'utf8'));
+    const after = snapshot(f.root);
+    installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    assert.deepEqual(snapshot(f.root), after);
+});
+
+test('arbitrary stdio byte drift still refuses before any installation write', t => {
+    const f = fixture(t);
+    const entry = path.join(f.workspace, 'tools', 'observation-stdio.mts');
+    fs.appendFileSync(entry, '\n// UNKNOWN_SYNTHETIC_DRIFT\n');
+    const before = snapshot(f.root);
+    assert.throws(() => checkObservationPublisher({ codexHome: f.home, workspace: f.workspace }), /broker-drift/);
+    assert.deepEqual(snapshot(f.root), before);
+});
+
+test('rollback restores known stdio predecessor after its replacement was actually written', t => {
+    const f = fixture(t);
+    const entry = path.join(f.workspace, 'tools', 'observation-stdio.mts');
+    const previous = predecessor['modules/atl-jira-brokers/observation-stdio.mts'];
+    fs.writeFileSync(entry, previous);
+    const before = snapshot(f.root);
+    let replaced = false;
+    assert.throws(() => installObservationPublisher({ codexHome: f.home, workspace: f.workspace, afterWrite: () => {
+        if (fs.readFileSync(entry, 'utf8') !== previous) {
+            replaced = true;
+            throw new Error('synthetic failure after stdio replacement');
+        }
+    } }), /rolled-back/);
+    assert.equal(replaced, true);
+    assert.deepEqual(snapshot(f.root), before);
+});
