@@ -734,6 +734,9 @@ test("installs the Mac-compatible projection without replacing user state", asyn
     "confluence-evidence-report.mts",
     "confluence-evidence-io.mts",
     "confluence-evidence-cli.mts",
+    "confluence-claim-text.mts",
+    "confluence-revision-staleness.mts",
+    "confluence-revision-staleness-git.mts",
 
     "confluence-session.mts",
   ]) {
@@ -1096,6 +1099,9 @@ test("default install projects observation delivery without optional Jira toolin
     "confluence-evidence-report.mts",
     "confluence-evidence-io.mts",
     "confluence-evidence-cli.mts",
+    "confluence-claim-text.mts",
+    "confluence-revision-staleness.mts",
+    "confluence-revision-staleness-git.mts",
 
     "confluence-session.mts",
     "confluence-related.mts",
@@ -1257,6 +1263,9 @@ test("rolls every managed target back when installation fails", (t) => {
     "confluence-evidence-report",
     "confluence-evidence-io",
     "confluence-evidence-cli",
+    "confluence-claim-text",
+    "confluence-revision-staleness",
+    "confluence-revision-staleness-git",
 
   ];
   for (const name of brokerNames) {

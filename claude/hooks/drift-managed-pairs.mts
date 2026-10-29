@@ -195,6 +195,18 @@ export function fixedPairs(home: string, workspace: string): ManagedPair[] {
       live: joinPathLike(workspace, "tools/confluence-evidence-cli.mts"),
       source: "modules/atl-jira-brokers/confluence-evidence-cli.mts",
     },
+    {
+      live: joinPathLike(workspace, "tools/confluence-claim-text.mts"),
+      source: "modules/atl-jira-brokers/confluence-claim-text.mts",
+    },
+    {
+      live: joinPathLike(workspace, "tools/confluence-revision-staleness.mts"),
+      source: "modules/atl-jira-brokers/confluence-revision-staleness.mts",
+    },
+    {
+      live: joinPathLike(workspace, "tools/confluence-revision-staleness-git.mts"),
+      source: "modules/atl-jira-brokers/confluence-revision-staleness-git.mts",
+    },
   ]);
 }
 

@@ -305,6 +305,9 @@ export function install(options: InstallOptions = {}) {
     confluenceEvidenceReport: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-evidence-report.mts"),
     confluenceEvidenceIo: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-evidence-io.mts"),
     confluenceEvidenceCli: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-evidence-cli.mts"),
+    confluenceClaimText: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-claim-text.mts"),
+    confluenceRevisionStaleness: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-revision-staleness.mts"),
+    confluenceRevisionStalenessGit: path.join(repoRoot, "modules", "atl-jira-brokers", "confluence-revision-staleness-git.mts"),
     codexConfluenceBroker: path.join(repoRoot, "modules", "atl-jira-brokers", "atl-confluence.mts"),
     claudeConfluenceBroker: path.join(repoRoot, "modules", "atl-jira-brokers", "atl-confluence-ccoder.mts"),
   };
@@ -356,6 +359,9 @@ export function install(options: InstallOptions = {}) {
     confluenceEvidenceReport: path.join(workspace, "tools", "confluence-evidence-report.mts"),
     confluenceEvidenceIo: path.join(workspace, "tools", "confluence-evidence-io.mts"),
     confluenceEvidenceCli: path.join(workspace, "tools", "confluence-evidence-cli.mts"),
+    confluenceClaimText: path.join(workspace, "tools", "confluence-claim-text.mts"),
+    confluenceRevisionStaleness: path.join(workspace, "tools", "confluence-revision-staleness.mts"),
+    confluenceRevisionStalenessGit: path.join(workspace, "tools", "confluence-revision-staleness-git.mts"),
     codexConfluenceBroker: path.join(workspace, "tools", "atl-confluence.mts"),
     claudeConfluenceBroker: path.join(workspace, "tools", "atl-confluence-ccoder.mts"),
     hook: contextHook,
@@ -497,6 +503,9 @@ export function install(options: InstallOptions = {}) {
       [sources.confluenceEvidenceReport, targets.confluenceEvidenceReport],
       [sources.confluenceEvidenceIo, targets.confluenceEvidenceIo],
       [sources.confluenceEvidenceCli, targets.confluenceEvidenceCli],
+      [sources.confluenceClaimText, targets.confluenceClaimText],
+      [sources.confluenceRevisionStaleness, targets.confluenceRevisionStaleness],
+      [sources.confluenceRevisionStalenessGit, targets.confluenceRevisionStalenessGit],
       [sources.codexConfluenceBroker, targets.codexConfluenceBroker],
     ] as const) workspaceTransaction.copyFile(source, target);
 
