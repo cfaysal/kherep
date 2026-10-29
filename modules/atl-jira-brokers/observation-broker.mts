@@ -123,7 +123,10 @@ export function observationBroker(home: string, context?: ConfluenceContext, opt
             }), { title: finding.title, parentId: parent });
             if (result !== 0 || errors.length)
                 throw new Error('related-unavailable');
-            return withRelated(finding.bodyStorage, rows.length ? relatedSection(key, rows) : '<h2>Related pages</h2><p>No related page found in a complete lookup.</p>');
+            // Confluence storage encodes literal > in prose. Preserve tags and
+            // existing entities; the publisher still requires exact readback.
+            const prose = finding.bodyStorage.replace(/(<[^>]*>)|>/g, (_match, tag: string | undefined) => tag ?? '&gt;');
+            return withRelated(prose, rows.length ? relatedSection(key, rows) : '<h2>Related pages</h2><p>No related page found in a complete lookup.</p>');
         },
         async create(spaceId, finding, parent, body) {
             await assertAuthorityUnchanged();
