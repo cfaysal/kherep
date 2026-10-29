@@ -315,3 +315,13 @@ test("writes the xhigh default only when the top-level reasoning effort is absen
   assert.equal(repeated.config, result.config);
   assert.deepEqual(repeated.reasoningEffort, { status: "preserved-existing", value: "xhigh" });
 });
+
+test("full upgrade recognizes the exact unbound current block, binds only context, and settles", () => {
+  const old = prepareManagedConfig("", MANAGED_OPTIONS).config;
+  const options = { ...MANAGED_OPTIONS, contextWorkspace: "/synthetic/workspace" };
+  const upgraded = prepareManagedConfig(old, options);
+  assert.equal(upgraded.managedFragment, "replaced");
+  assert.match(upgraded.config, /--workspace-b64/);
+  assert.equal(prepareManagedConfig(upgraded.config, options).config, upgraded.config);
+  assert.throws(() => prepareManagedConfig(old.replace("Loading Kherep Maestro", "unknown"), options), /exact known managed fragment/);
+});

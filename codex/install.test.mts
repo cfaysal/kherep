@@ -196,7 +196,17 @@ function beforePostEditDispatcher(config: string, hookDir: string): string {
 
 // Issue #507, part 4. The three guards that ran directly until then, as every
 // earlier installer wrote them: command and commandWindows of each, in place.
+// Historical fixtures predate the explicit workspace argument.
+function withoutContextWorkspace(config: string): string {
+  return config.replace(/^(command(?:Windows)? = )(.+)$/gm, (line, prefix: string, raw: string) => {
+    const cmd = JSON.parse(raw) as string;
+    return cmd.includes('kherep-maestro-context.mts')
+      ? prefix + JSON.stringify(cmd.replace(/ "--workspace-b64" "[A-Za-z0-9_-]+"/g, '')) : line;
+  });
+}
+
 function beforeAdaptedDirectGuards(config: string, hookDir: string): string {
+  config = withoutContextWorkspace(config);
   const adapter = path.join(hookDir, "codex-hook-adapter.mts");
   for (const [script, args] of [["atlassian-destructive-guard.mts", ["--runtime", "codex"]],
     ["codex-dispatch-contract-guard.mts", []], ["playwright-file-guard.mts", []]] as const) {
@@ -219,6 +229,7 @@ function intentCommands(codexHome: string, outbox: string): { adapted: string; d
 }
 
 function beforeAdaptedIntentHook(config: string, codexHome: string, outbox: string): string {
+  config = withoutContextWorkspace(config);
   const { adapted, direct } = intentCommands(codexHome, outbox);
   const entry = (value: string, timeout: number): string =>
     `command = ${JSON.stringify(value)}\ncommandWindows = ${JSON.stringify(`& ${value}`)}\ntimeout = ${timeout}\n`;
@@ -1968,7 +1979,7 @@ test("T13 replacing the managed block prints one trust-review line naming the th
   const { root, codexHome, installOptions } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const LINE = "config.toml: the managed hook block was replaced; Codex skips a changed hook definition until it is reviewed and trusted in /hooks"
-    + " (this upgrade changes the atlassian-destructive-guard, codex-dispatch-contract-guard and playwright-file-guard entries, which do not run until then)";
+    + " (this upgrade changes the atlassian-destructive-guard, codex-dispatch-contract-guard, playwright-file-guard, SessionStart context and UserPromptSubmit context entries, which do not run until then)";
   const logged = (): { lines: string[]; result: ReturnType<typeof install> } => {
     const lines: string[] = [];
     return { lines, result: install({ ...installOptions, log: (line: string) => { lines.push(line); } }) };
@@ -1990,7 +2001,7 @@ test("T14 replacing a c44f3e4 messaging block prints one trust-review line namin
   const { root, codexHome, installOptions } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const LINE = "config.toml: the managed hook block was replaced; Codex skips a changed hook definition until it is reviewed and trusted in /hooks"
-    + " (this upgrade changes the messaging intent entry, which does not run until then)";
+    + " (this upgrade changes the SessionStart context, UserPromptSubmit context and messaging intent entries, which do not run until then)";
   const logged = (): { lines: string[]; result: ReturnType<typeof install> } => {
     const lines: string[] = [];
     return { lines, result: install({ ...installOptions, messagingClient: true, log: (line: string) => { lines.push(line); } }) };
@@ -2003,4 +2014,22 @@ test("T14 replacing a c44f3e4 messaging block prints one trust-review line namin
   assert.equal(fs.readFileSync(upgrade.result.targets.config, "utf8"), config);
   const again = logged();
   assert.ok(!again.lines.some((line) => line.startsWith("config.toml:")), again.lines.join("\n"));
+});
+
+test("explicit selected workspace binds both context hooks and an unbound upgrade names their trust review", t => {
+  const { root, codexHome, installOptions, workspace } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const first = install(installOptions);
+  const config = fs.readFileSync(first.targets.config, "utf8");
+  const token = Buffer.from(workspace).toString("base64url");
+  assert.equal((config.match(/--workspace-b64/g) || []).length, 4);
+  assert.ok(config.includes(token));
+  const stateFile = path.join(codexHome, 'hooks.state.json');
+  fs.writeFileSync(stateFile, '{"synthetic":"preserve"}');
+  fs.writeFileSync(first.targets.config, withoutContextWorkspace(config));
+  const lines: string[] = [];
+  install({ ...installOptions, log: line => lines.push(line) });
+  assert.equal(fs.readFileSync(first.targets.config, "utf8"), config);
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), '{"synthetic":"preserve"}');
+  assert.ok(lines.some(line => /SessionStart context and UserPromptSubmit context entries/.test(line)));
 });

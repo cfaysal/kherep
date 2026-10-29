@@ -550,3 +550,26 @@ test('exports exact renderers for the immediately preceding observation-free pro
   assert.doesNotMatch(oldest, /codex-confluence-delivery-check\.mts/);
   assert.doesNotMatch(oldest, /codex-observation-turn-completion\.mts/);
 });
+
+test("workspace binding changes only the two context definitions and roundtrips through the host shell", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-command-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const contextHook = path.join(root, "synthetic-context.mjs");
+  fs.writeFileSync(contextHook, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))');
+  const workspace = path.resolve("/synthetic/space ' $() `tick/Ünicode");
+  const options = { contextHook, hookDir: root, node: process.execPath, mcpServers: [] };
+  const old = render(options), bound = render({ ...options, contextWorkspace: workspace });
+  const token = Buffer.from(workspace).toString("base64url");
+  assert.equal(bound.replaceAll(JSON.stringify(` "--workspace-b64" "${token}"`).slice(1, -1), ""), old);
+  const commands = [...bound.matchAll(/^command = (.+)$/gm)].map(m => JSON.parse(m[1]) as string).filter(cmd => cmd.includes(contextHook));
+  assert.equal(commands.length, 2);
+  for (const cmd of commands) {
+    assert.ok(cmd.includes(token));
+    const result = process.platform === "win32"
+      ? spawnSync("pwsh", ["-NoProfile", "-Command", `& ${cmd}`], { encoding: "utf8" })
+      : spawnSync("/bin/sh", ["-c", cmd], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), ["--workspace-b64", token]);
+    assert.equal(Buffer.from(JSON.parse(result.stdout)[1], "base64url").toString("utf8"), workspace);
+  }
+});

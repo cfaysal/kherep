@@ -11,12 +11,15 @@ import { renderAgent } from './lib/component-render.mts';
 import { renderObservationHook, renderObservationPublisher, observationFiles } from './lib/observation-projection.mts';
 import { OBSERVATION_SOURCES, observationSnapshot, observationHash } from './lib/observation-source.mts';
 import { observationSource } from './hooks/hook-integrity-repair.mts';
+import { scanDocument } from './lib/toml-block-structure.mts';
 const REPO = path.resolve(import.meta.dirname, '..');
 const predecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex', 'parity', 'observation-predecessor.json'), 'utf8')) as Record<string, string>;
 const identityPredecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex/parity/observation-turn-identity-predecessor.json'), 'utf8')) as Record<string, string>;
 const pilotPredecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex/parity/observation-turn-identity-pilot-predecessor.json'), 'utf8')) as Record<string, string>;
 const scopedPredecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex/parity/observation-scoped-revision-predecessor.json'), 'utf8')) as Record<string, string>;
-const identityVersions = [['60cde716 main', identityPredecessor], ['9241eba pilot', pilotPredecessor]] as const;
+const workspacePredecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex/parity/observation-context-workspace-predecessor.json'), 'utf8')) as Record<string, string>;
+const c1Predecessor = { 'codex/agents/codex-obs.md': fs.readFileSync(path.join(REPO, 'codex/agents/codex-obs.md'), 'utf8'), ...workspacePredecessor };
+const identityVersions = [['60cde716 main', identityPredecessor], ['9241eba pilot', pilotPredecessor], ['c1af727 current', c1Predecessor]] as const;
 function fixture(t: {
     after(fn: () => void): void;
 }, messaging = false) {
@@ -33,6 +36,7 @@ function fixture(t: {
     let config = fs.readFileSync(configFile, 'utf8');
     const table = renderObservationPublisher({ entry: path.join(workspace, 'tools', 'observation-stdio.mts'), home }, process.execPath);
     config = config.replace(messaging ? `${table}\n\n` : `\n\n${table}`, '');
+    config = config.replaceAll(JSON.stringify(` \"--workspace-b64\" \"${Buffer.from(workspace).toString('base64url')}\"`).slice(1, -1), '');
     assert.doesNotMatch(config, /mcp_servers\.kherep_observations/);
     fs.writeFileSync(configFile, config + '\n[mcp_servers.operator_fixture]\ncommand = "preserve"\n');
     const agentFile = path.join(home, 'agents', 'codex-obs.toml');
@@ -77,6 +81,8 @@ function snapshot(root: string) {
 }
 function installIdentityPredecessor(f: ReturnType<typeof fixture>, previous = identityPredecessor) {
     installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    const config = fs.readFileSync(f.configFile, 'utf8');
+    fs.writeFileSync(f.configFile, config.replaceAll(JSON.stringify(` \"--workspace-b64\" \"${Buffer.from(f.workspace).toString('base64url')}\"`).slice(1, -1), ''));
     const agentFile = path.join(f.home, 'agents', 'codex-obs.toml');
     const model = JSON.parse(/^model = (.*)$/m.exec(fs.readFileSync(agentFile, 'utf8'))![1]);
     fs.writeFileSync(agentFile, renderAgent('codex-obs', previous['codex/agents/codex-obs.md'], { model, reasoning: 'low', sandbox: 'read-only' }));
@@ -112,6 +118,8 @@ for (const [version, previous] of identityVersions) test(`exact ${version} nativ
     assert.equal(checkObservationPublisher({ codexHome: f.home, workspace: f.workspace }).predecessorRecognized, true);
     const result = installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
     assert.equal(result.receipt.installedHashesMatch, true);
+    assert.equal(result.receipt.contextWorkspaceBinding, 'installer-workspace');
+    assert.deepEqual(result.receipt.changedContextDefinitions, ['UserPromptSubmit', 'SessionStart']);
     const installed = snapshot(f.root);
     for (const parts of [['home', 'hooks.state.json'], ['home', 'orchestra', 'parity-receipt.json'], ['home', 'orchestra', 'control-plane-source.json'], ['home', 'hooks', 'parity', 'capabilities.json']]) {
         const name = path.join(...parts);
@@ -124,7 +132,9 @@ for (const [version, previous] of identityVersions) test(`exact ${version} nativ
     assert.equal(observationSnapshot(f.home, relative)?.toString(), source);
     assert.equal(observationSource(f.home, relative)?.toString(), source);
     for (const turn_id of ['native-turn', undefined]) {
-        const hook = spawnSync(process.execPath, [hookFile], { encoding: 'utf8', env: { ...process.env, KHEREP_WORKSPACE: f.workspace },
+        const env = { ...process.env };
+        delete env.KHEREP_WORKSPACE;
+        const hook = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', hookFile, '--workspace-b64', Buffer.from(f.workspace).toString('base64url')], { encoding: 'utf8', env,
             input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', cwd: f.workspace, session_id: 'main-session', turn_id, prompt: 'PRIVATE_PROMPT_CANARY' }) });
         assert.equal(hook.status, 0, hook.stderr);
         assert.ok(hook.stdout.includes(turn_id ? '{"sessionId":"main-session","turnId":"native-turn"}' : 'OBS-RESULT: failed missing-turn-identity'));
@@ -333,3 +343,89 @@ test(`${version} predecessor rollback preserves exact files and unknown helper d
     assert.deepEqual(snapshot(f.root), drift);
 });
 }
+
+test('scoped context binding changes exactly the recognized command lines before full install', t => {
+    const f = fixture(t);
+    installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    const bound = fs.readFileSync(f.configFile, 'utf8');
+    const argument = JSON.stringify(` "--workspace-b64" "${Buffer.from(f.workspace).toString('base64url')}"`).slice(1, -1);
+    const old = bound.replaceAll(argument, '');
+    fs.writeFileSync(f.configFile, old);
+    const result = installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    assert.equal(fs.readFileSync(f.configFile, 'utf8'), bound);
+    assert.equal(result.receipt.unrelatedConfigUnchanged, true);
+    assert.deepEqual(result.receipt.changedContextDefinitions, ['UserPromptSubmit', 'SessionStart']);
+    install(f.installOptions);
+    assert.equal(fs.readFileSync(f.configFile, 'utf8'), bound);
+});
+for (const drift of ['foreign-workspace', 'mixed', 'command']) test(`scoped ${drift} binding refuses before writes`, t => {
+    const f = fixture(t);
+    installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    let config = fs.readFileSync(f.configFile, 'utf8');
+    const token = Buffer.from(f.workspace).toString('base64url');
+    if (drift === 'foreign-workspace')
+        config = config.replaceAll(token, Buffer.from(path.resolve('/foreign')).toString('base64url'));
+    else if (drift === 'mixed')
+        config = config.replace(JSON.stringify(` "--workspace-b64" "${token}"`).slice(1, -1), '');
+    else
+        config = config.replace('Loading Kherep Maestro', 'unknown drift');
+    fs.writeFileSync(f.configFile, config);
+    const before = snapshot(f.root);
+    assert.throws(() => checkObservationPublisher({ codexHome: f.home, workspace: f.workspace }), /context-wiring-drift/);
+    assert.throws(() => installObservationPublisher({ codexHome: f.home, workspace: f.workspace }), /context-wiring-drift/);
+    assert.deepEqual(snapshot(f.root), before);
+});
+
+test('failure after receipt write restores context config recovery and previous receipt together', t => {
+    const f = fixture(t);
+    installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    const oldConfig = fs.readFileSync(f.configFile, 'utf8').replaceAll(JSON.stringify(` "--workspace-b64" "${Buffer.from(f.workspace).toString('base64url')}"`).slice(1, -1), '');
+    fs.writeFileSync(f.configFile, oldConfig);
+    const relative = 'codex/hooks/kherep-maestro-context.mts';
+    const old = workspacePredecessor[relative];
+    fs.writeFileSync(path.join(f.home, 'hooks', path.basename(relative)), old);
+    const recovery = path.join(f.home, 'orchestra', 'observation-source');
+    fs.writeFileSync(path.join(recovery, relative), old);
+    const manifestFile = path.join(recovery, 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    manifest[relative] = observationHash(old);
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    const receiptFile = path.join(f.home, 'orchestra', 'observation-install-receipt.json');
+    fs.writeFileSync(receiptFile, '{"synthetic":"old receipt"}');
+    const before = snapshot(f.root);
+    let reachedReceipt = false;
+    assert.throws(() => installObservationPublisher({ codexHome: f.home, workspace: f.workspace, afterWrite: () => {
+        if (fs.readFileSync(receiptFile, 'utf8') !== '{"synthetic":"old receipt"}') {
+            reachedReceipt = true;
+            assert.notEqual(fs.readFileSync(path.join(f.home, 'hooks', path.basename(relative)), 'utf8'), old);
+            assert.match(fs.readFileSync(f.configFile, 'utf8'), /--workspace-b64/);
+            throw new Error('synthetic post-receipt failure');
+        }
+    } }), /rolled-back/);
+    assert.equal(reachedReceipt, true);
+    assert.deepEqual(snapshot(f.root), before);
+});
+
+for (const location of ['before', 'between']) test(`publisher insertion stays active with messaging ${location} the context groups`, t => {
+    const f = fixture(t, true);
+    const old = fs.readFileSync(f.configFile, 'utf8');
+    const messaging = scanDocument(old).tables.find(table => table.path.join('.') === 'mcp_servers.kherep_messaging')!;
+    const end = Math.min(messaging.span.end, old.indexOf('# <<< Kherep Codex Maestro <<<'));
+    const table = old.slice(messaging.span.start, end).trimEnd()
+        + '\nsynthetic_note = """\n' + 'synthetic multiline content '.repeat(100) + '\n"""\n\n';
+    const withoutMessaging = old.slice(0, messaging.span.start) + old.slice(end);
+    const at = withoutMessaging.indexOf(location === 'before' ? '[[hooks.UserPromptSubmit]]' : '[[hooks.SessionStart]]');
+    const before = withoutMessaging.slice(0, at) + table + withoutMessaging.slice(at);
+    fs.writeFileSync(f.configFile, before);
+    installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    const after = fs.readFileSync(f.configFile, 'utf8');
+    const tables = scanDocument(after).tables;
+    const publishers = tables.filter(item => item.path.join('.') === 'mcp_servers.kherep_observations');
+    assert.equal(publishers.length, 1, 'the publisher is an active structural table');
+    const index = tables.indexOf(publishers[0]);
+    assert.equal(tables[index + 1].path.join('.'), 'mcp_servers.kherep_messaging');
+    assert.equal(after.slice(tables[index + 1].span.start, tables[index + 1].span.end), table);
+    const publisher = renderObservationPublisher({ entry: path.join(f.workspace, 'tools', 'observation-stdio.mts'), home: f.home }, process.execPath);
+    const argument = JSON.stringify(` "--workspace-b64" "${Buffer.from(f.workspace).toString('base64url')}"`).slice(1, -1);
+    assert.equal(after.replace(`${publisher}\n\n`, '').replaceAll(argument, ''), before, 'all unrelated config bytes reconstruct exactly');
+});

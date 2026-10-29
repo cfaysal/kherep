@@ -7,10 +7,10 @@ import { turnContext } from "./kherep-maestro-context.mts";
 
 const hook = path.join(import.meta.dirname, "kherep-maestro-context.mts");
 
-function run(input: unknown, env: NodeJS.ProcessEnv = {}) {
+function run(input: unknown, env: NodeJS.ProcessEnv = {}, args: string[] = []) {
   const childEnv: NodeJS.ProcessEnv = { ...process.env, KHEREP_WORKSPACE: "", ...env };
   if (!Object.hasOwn(env, "KHEREP_WORKSPACE")) delete childEnv.KHEREP_WORKSPACE;
-  return spawnSync(process.execPath, [hook], {
+  return spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", hook, ...args], {
     input: typeof input === "string" ? input : JSON.stringify(input),
     encoding: "utf8",
     env: childEnv,
@@ -137,5 +137,35 @@ test("only the identity is copied from scoped native input; malformed and out-of
     assert.strictEqual(quiet.status, 0);
     assert.strictEqual(quiet.stdout, "");
     assert.strictEqual(quiet.stderr, "");
+  }
+});
+
+const explicitWorkspace = path.resolve("/synthetic/bound space ' $() `tick/Ünicode");
+const binding = ["--workspace-b64", Buffer.from(explicitWorkspace).toString("base64url")];
+test("explicit binding overrides missing, empty and conflicting ambient workspace for both context events", () => {
+  for (const event of ["SessionStart", "UserPromptSubmit"]) for (const env of [{}, { KHEREP_WORKSPACE: "" }, { KHEREP_WORKSPACE: path.resolve("/conflicting") }]) {
+    for (const cwd of [explicitWorkspace, path.join(explicitWorkspace, "child")]) {
+      const result = run({ hook_event_name: event, cwd, session_id: "native-main", turn_id: "native-turn", prompt: "PROMPT_CANARY", extra: "EXTRA_CANARY" }, env, binding);
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stderr, "");
+      assert.match(result.stdout, event === "SessionStart" ? /KHEREP CODEX ORCHESTRA ACTIVE/ : /MAESTRO TURN CHECK/);
+      assert.doesNotMatch(result.stdout, /CANARY|bound space|workspace-b64|Ünicode/);
+      if (event === "UserPromptSubmit") assert.ok(result.stdout.includes(header("native-main", "native-turn")));
+    }
+    for (const cwd of [explicitWorkspace + "-sibling", path.resolve("/conflicting/child"), undefined])
+      assert.strictEqual(run({ hook_event_name: event, cwd }, env, binding).stdout, "");
+  }
+});
+test("malformed explicit binding is quiet with no ambient fallback", () => {
+  const encode = (value: string) => Buffer.from(value).toString("base64url");
+  const malformed = [["--workspace-b64"], ["--unknown", binding[1]], [...binding, "extra"], [...binding, ...binding],
+    ["--workspace-b64", ""], ["--workspace-b64", binding[1] + "="], ["--workspace-b64", "%%%"], ["--workspace-b64", "L3h"],
+    ...["relative", "", explicitWorkspace + "\n", explicitWorkspace + "\r", explicitWorkspace + "\0"].map(value => ["--workspace-b64", encode(value)]),
+    ["--workspace-b64", Buffer.from([0xff]).toString("base64url")]];
+  for (const args of malformed) {
+    const result = run({ hook_event_name: "SessionStart", cwd: explicitWorkspace }, { KHEREP_WORKSPACE: explicitWorkspace }, args);
+    assert.strictEqual(result.status, 0);
+    assert.strictEqual(result.stdout, "", JSON.stringify(args));
+    assert.strictEqual(result.stderr, "");
   }
 });

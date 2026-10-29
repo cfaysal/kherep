@@ -48,12 +48,13 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
     const scopedPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-scoped-revision-predecessor.json'))) as Record<string, string>;
     const identityPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-turn-identity-predecessor.json'))) as Record<string, string>;
     const pilotPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-turn-identity-pilot-predecessor.json'))) as Record<string, string>;
+    const workspacePredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-context-workspace-predecessor.json'))) as Record<string, string>;
     const source = (relative: string) => read(path.join(repo, relative));
     const configFile = path.join(home, 'config.toml'), beforeConfig = read(configFile);
     const start = beforeConfig.indexOf(START), end = beforeConfig.indexOf(END);
     if (start < 0 || end < start || beforeConfig.split(START).length !== 2 || beforeConfig.split(END).length !== 2)
         throw new Error('observation-managed-block-unrecognized');
-    const wiring = observationWiring(beforeConfig, home, options.nodePath ?? stableNodePath(process.execPath));
+    const wiring = observationWiring(beforeConfig, home, options.nodePath ?? stableNodePath(process.execPath), workspace);
     const receipt = JSON.parse(read(path.join(home, 'orchestra', 'parity-receipt.json')));
     const resolution = selectModelResolution(source('codex/parity/model-policy.toml'), { existing: receipt.modelResolution });
     const defaults = receipt.projection?.agentDefaults as Record<string, {
@@ -85,7 +86,7 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
         const next = render(source(relative));
         if (fs.existsSync(file) && read(file) !== next && read(file) !== render(predecessor[relative]) && read(file) !== lookupPredecessor[relative]
             && (scopedPredecessor[relative] === undefined || read(file) !== render(scopedPredecessor[relative]))
-            && read(file) !== identityPredecessor[relative])
+            && read(file) !== identityPredecessor[relative] && read(file) !== workspacePredecessor[relative])
             throw new Error('observation-hook-drift');
         changes.set(file, next);
     }
@@ -105,13 +106,21 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
     changes.set(routingFile, replaceKnown(routing, oldRouting, section(source('codex/ROUTING.md'))));
     const table = renderObservationPublisher({ entry: path.join(workspace, 'tools', 'observation-stdio.mts'), home }, wiring.node);
     let config = beforeConfig;
-    let insertedText = '';
+    for (const edit of [...wiring.contextEdits].reverse())
+        config = config.slice(0, edit.start) + edit.after + config.slice(edit.end);
+    const commandDelta = wiring.contextEdits.reduce((sum, edit) => sum + edit.after.length - edit.before.length, 0);
+    const contextConfig = config;
+    let insertedText = '', insertedAt = 0;
     if (config.includes('[mcp_servers.kherep_observations]')) {
-        if (!config.slice(start, end).includes(table) || config.split('[mcp_servers.kherep_observations]').length !== 2)
+        if (!config.slice(start, end + commandDelta).includes(table) || config.split('[mcp_servers.kherep_observations]').length !== 2)
             throw new Error('observation-tool-table-drift');
     }
     else {
-        const insert = wiring.messagingStart ?? end;
+        const originalInsert = wiring.messagingStart ?? end;
+        const precedingDelta = wiring.contextEdits.filter(edit => edit.end <= originalInsert)
+            .reduce((sum, edit) => sum + edit.after.length - edit.before.length, 0);
+        const insert = originalInsert + precedingDelta;
+        insertedAt = insert;
         insertedText = wiring.messagingStart === undefined ? `\n${table}\n` : `${table}\n\n`;
         config = config.slice(0, insert) + insertedText + config.slice(insert);
     }
@@ -124,14 +133,31 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
             && read(file) !== headerPredecessor[relative] && read(file) !== prosePredecessor[relative] && read(file) !== scopedPredecessor[relative])
             throw new Error('observation-broker-drift');
     }
-    return { home, workspace, repo, changes, config, beforeConfig, newAgent, agentFile, capabilities, insertedText };
+    // Reverse exactly the validated command-line edits and the optional table insertion.
+    // No managed-block-wide difference is allowed by this preservation proof.
+    let restored = config;
+    if (insertedText) {
+        if (restored.slice(insertedAt, insertedAt + insertedText.length) !== insertedText) throw new Error('observation-config-preservation-failed');
+        restored = restored.slice(0, insertedAt) + restored.slice(insertedAt + insertedText.length);
+    }
+    if (restored !== contextConfig) throw new Error('observation-config-preservation-failed');
+    let delta = commandDelta;
+    for (const edit of [...wiring.contextEdits].reverse()) {
+        delta -= edit.after.length - edit.before.length;
+        const at = edit.start + delta;
+        if (restored.slice(at, at + edit.after.length) !== edit.after) throw new Error('observation-config-preservation-failed');
+        restored = restored.slice(0, at) + edit.before + restored.slice(at + edit.after.length);
+    }
+    if (restored !== beforeConfig) throw new Error('observation-config-preservation-failed');
+    return { home, workspace, repo, changes, config, newAgent, agentFile, capabilities,
+        changedContextDefinitions: ['UserPromptSubmit', 'SessionStart'] };
 }
 export function checkObservationPublisher(options: ObservationInstallOptions) {
-    prepareObservationPublisher(options);
-    return { predecessorRecognized: true, unknownObservationDrift: false, pinUnchanged: true, sandbox: 'read-only', nativeToolDiscovery: 'UNKNOWN' };
+    const { changedContextDefinitions } = prepareObservationPublisher(options);
+    return { contextWorkspaceBinding: 'installer-workspace', changedContextDefinitions, nativeTrustReview: 'required', predecessorRecognized: true, unknownObservationDrift: false, pinUnchanged: true, sandbox: 'read-only', nativeToolDiscovery: 'UNKNOWN' };
 }
 export function installObservationPublisher(options: ObservationInstallOptions) {
-    const { home, workspace, repo, changes, config, beforeConfig, newAgent, agentFile, capabilities, insertedText } = prepareObservationPublisher(options);
+    const { home, workspace, repo, changes, config, newAgent, agentFile, capabilities, changedContextDefinitions } = prepareObservationPublisher(options);
     const source = (relative: string) => read(path.join(repo, relative));
     const backup = path.join(home, 'backups', 'kherep-observations', `${Date.now()}-${process.pid}`);
     let writes = 0;
@@ -153,13 +179,12 @@ export function installObservationPublisher(options: ObservationInstallOptions) 
             && Object.entries(manifest).every(([from, hash]) => observationHash(read(path.join(home, 'orchestra', 'observation-source', from))) === hash);
         const pinMatches = read(agentFile) === newAgent && JSON.stringify(JSON.parse(read(path.join(home, 'hooks', 'parity', 'capabilities.json')))) === JSON.stringify(capabilities);
         const report = { schemaVersion: 1, predecessorRecognized: true, installedHashesMatch: brokerMatches && snapshotMatches && [...changes].every(([file, text]) => read(file) === text),
-            unrelatedConfigUnchanged: false,
+            contextWorkspaceBinding: 'installer-workspace', changedContextDefinitions,
+            nativeTrustReview: 'required', unrelatedConfigUnchanged: true,
             hookStateUnchanged: (fs.existsSync(hookStateFile) ? read(hookStateFile) : null) === oldState,
             controlPlanePointerUnchanged: (fs.existsSync(controlPointer) ? read(controlPointer) : null) === oldPointer,
             externalHookPositionsUnchanged: true, integritySourceMatches: snapshotMatches, pinUnchanged: pinMatches, sandbox: 'read-only',
             nativeToolDiscovery: 'UNKNOWN', livePublication: 'UNTESTED', hashes, brokerHashes, source: { kind: 'content-manifest', sha256: observationHash(JSON.stringify({ hashes, brokerHashes, manifest })) } };
-        // Whitespace added for the table has no effect on opaque settings or hooks.
-        report.unrelatedConfigUnchanged = config === beforeConfig || (!!insertedText && config.replace(insertedText, '') === beforeConfig);
         if (!report.installedHashesMatch || !report.unrelatedConfigUnchanged || !report.hookStateUnchanged || !report.controlPlanePointerUnchanged || !report.pinUnchanged || !report.integritySourceMatches)
             throw new Error('observation-target-verification-failed');
         homeTx.writeFile(path.join(home, 'orchestra', 'observation-install-receipt.json'), JSON.stringify(report, null, 2) + '\n');
@@ -191,7 +216,7 @@ if (main) {
     catch (error) {
         const allowed = new Set(['observation-explicit-targets-required', 'observation-managed-block-unrecognized', 'observation-role-unrecognized',
             'observation-pin-unrecognized', 'observation-agent-drift', 'observation-hook-drift', 'observation-helper-drift', 'observation-tool-table-drift',
-            'observation-context-wiring-drift', 'observation-result-wiring-drift', 'observation-broker-drift', 'observation-predecessor-unrecognized', 'observation-install-failed-rolled-back']);
+            'observation-context-wiring-drift', 'observation-config-preservation-failed', 'observation-result-wiring-drift', 'observation-broker-drift', 'observation-predecessor-unrecognized', 'observation-install-failed-rolled-back']);
         const message = error instanceof Error && allowed.has(error.message) ? error.message : 'observation-upgrade-unavailable';
         process.stderr.write(`${message}\n`);
         process.exitCode = 1;

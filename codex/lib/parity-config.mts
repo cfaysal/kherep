@@ -46,6 +46,7 @@ export interface MessagingClientRenderOptions {
 
 export interface RenderOptions extends McpRenderOptions {
   contextHook: string;
+  contextWorkspace?: string;
   hookDir: string;
   node: string;
   nativeHooks?: { contextCli: string; captureCli: string; profile: string; extraCaCertificates?: string };
@@ -87,6 +88,12 @@ function tomlString(value: unknown): string {
 export function command(...parts: unknown[]): string {
   const quote = (value: unknown): string => `"${String(value).replace(/"/g, '\\"')}"`;
   return parts.map(quote).join(" ");
+}
+
+// Only the workspace argument is encoded; generic command quoting stays unchanged.
+export function contextCommand(node: string, hook: string, workspace?: string): string {
+  return command(node, hook, ...(workspace === undefined ? []
+    : ["--workspace-b64", Buffer.from(workspace, "utf8").toString("base64url")]));
 }
 
 export function hookGroup(event: string, matcher: string, hooks: HookSpec[]): string {
@@ -218,7 +225,7 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
     ...(messaging?.enabled ? [group("PreToolUse", "^mcp__kherep_messaging__(sessions|send|inbox|reply|status)$", [intent(messaging)])] : []),
     group("UserPromptSubmit", "", [
       {
-        command: command(node, contextHook),
+        command: contextCommand(node, contextHook, options.contextWorkspace),
         status: "Applying evidence-first routing",
       },
       hook("codex-research-first.mts"),
@@ -227,7 +234,7 @@ export function renderHooks(options: RenderOptions, previousNative = false): str
     postEditGroup(options),
     ...(attribution.length ? [group("PostToolUse", SHELL_MATCHER, attribution)] : []),
     group("SessionStart", "startup|resume|clear|compact", [
-      { command: command(node, contextHook), status: "Loading Kherep Maestro" },
+      { command: contextCommand(node, contextHook, options.contextWorkspace), status: "Loading Kherep Maestro" },
       hook("codex-cbm-reminder.mts"),
       // Read-only. Says whether the Confluence write path exists in tools/ yet,
       // and says it once when it appears. It replaces a proposed hourly task:
