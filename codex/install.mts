@@ -191,6 +191,8 @@ function trustReviewLine(previous: string, node: string, hookDir: string,
     ...([atlassianDestructiveGuard(node, hookDir).command, command(node, path.join(hookDir, "codex-dispatch-contract-guard.mts")),
       command(node, path.join(hookDir, "playwright-file-guard.mts"))].some(ran)
       ? ["atlassian-destructive-guard", "codex-dispatch-contract-guard", "playwright-file-guard"] : []),
+    ...(ran(command(node, path.join(path.dirname(hookDir), "kherep-maestro-context.mts")))
+      ? ["SessionStart context", "UserPromptSubmit context"] : []),
     ...(messaging.enabled && ran(command(node, messaging.intentHook, "--config-root", messaging.configRoot)) ? ["messaging intent"] : []),
   ];
   const head = "config.toml: the managed hook block was replaced; Codex skips a changed hook definition until it is reviewed and trusted in /hooks";
@@ -446,6 +448,7 @@ export function install(options: InstallOptions = {}) {
     optionalPluginMcpServers,
     predecessorOptionalPluginMcpServers,
     contextHook: targets.contextHook,
+    contextWorkspace: workspace,
     hookDir: targets.hookDir,
     node: mcp.node,
     registry: mcp.registry,

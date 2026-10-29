@@ -21,14 +21,15 @@ export function normalize(value: unknown): string {
 export function isKherepScope(
   data: HookData | null | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  workspace?: string,
 ): boolean {
   const cwd = normalize(data && data.cwd);
   if (!cwd) return false;
 
   const configuredValue = Object.hasOwn(env, "KHEREP_WORKSPACE") ? env.KHEREP_WORKSPACE : undefined;
-  const configured = normalize(configuredValue === undefined
+  const configured = normalize(workspace ?? (configuredValue === undefined
     ? path.join(env.USERPROFILE || env.HOME || os.homedir(), "Kherep")
-    : configuredValue);
+    : configuredValue));
   return Boolean(configured && (cwd === configured || cwd.startsWith(`${configured}/`)));
 }
 
@@ -71,6 +72,14 @@ export function turnContext(data: HookData = {}): string {
 }
 
 async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  let workspace: string | undefined;
+  if (args.length) {
+    if (args.length !== 2 || args[0] !== "--workspace-b64" || !/^[A-Za-z0-9_-]+$/.test(args[1])) return;
+    workspace = Buffer.from(args[1], "base64url").toString("utf8");
+    if (Buffer.from(workspace, "utf8").toString("base64url") !== args[1]
+      || !path.isAbsolute(workspace) || /[\0\r\n]/.test(workspace)) return;
+  }
   let data: HookData;
   try {
     data = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
@@ -78,7 +87,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (!isKherepScope(data)) return;
+  if (!isKherepScope(data, process.env, workspace)) return;
 
   if (data.hook_event_name === "SessionStart") {
     process.stdout.write(sessionContext());

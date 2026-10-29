@@ -81,6 +81,7 @@ flowchart LR
   operator --> runtimes
   bootstrap -->|installs| runtimes
   codexModels -->|first install or explicit refresh| bootstrap
+  bootstrap -->|explicit workspace: two context hooks| codex
   bootstrap -->|one resolved model snapshot| codex
   bootstrap -->|binds| githook
   runtimes --> brokers --> confluence

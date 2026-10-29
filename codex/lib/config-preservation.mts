@@ -51,6 +51,7 @@ export interface ManagedConfigOptions {
   // block carrying one of them is the installer's own as well.
   predecessorOptionalPluginMcpServers?: Record<string, PluginMcpServer>[];
   contextHook: string;
+  contextWorkspace?: string;
   hookDir: string;
   node: string;
   registry: string;
@@ -310,11 +311,11 @@ function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
         : [value])
       .flatMap((value) => value.controlPlaneHook ? [value, { ...value, omitDeliveryHooks: true }] : [value])
       .flatMap((value) => [value, { ...value, windowsHookCommands: false }])
-      .map((value) => ({ ...value, pluginMcpServers: plugins }));
+      .map((value) => ({ ...value, pluginMcpServers: plugins, contextWorkspace: undefined }));
     const beforeControlPlaneWindowsVariants = currentVariants
       .map((value) => ({ ...value, controlPlaneHook: undefined }));
     // Every block written before issue #68 lacks the commandWindows forms.
-    const beforeWindowsCommands = { ...withoutOutbox, pluginMcpServers: plugins, windowsHookCommands: false };
+    const beforeWindowsCommands = { ...withoutOutbox, contextWorkspace: undefined, pluginMcpServers: plugins, windowsHookCommands: false };
     // Every block written before the control-plane hook existed lacks it.
     const beforeControlPlane = { ...beforeWindowsCommands, controlPlaneHook: undefined };
     const currentLegacyOptions = { ...beforeControlPlane, memoryProvider: "unconfigured" as const };
@@ -337,9 +338,10 @@ function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
       registryBridge: retiredBridge,
     };
     const historical = recognizeHistoricalManagedConfig(
-      next, { ...currentRenderOptions, pluginMcpServers: plugins }, legacyRenderOptions, predecessorRenderOptions,
+      next, { ...currentRenderOptions, contextWorkspace: undefined, pluginMcpServers: plugins }, legacyRenderOptions, predecessorRenderOptions,
     );
     return [
+      ...currentVariants.map(value => parityConfig.render({ ...value, contextWorkspace: options.contextWorkspace })),
       ...[...currentVariants, ...beforeControlPlaneWindowsVariants].flatMap((value) =>
         [parityConfig.renderBeforeShellDispatcher(value), parityConfig.renderBeforeAdaptedDirectGuards(value),
           parityConfig.renderBeforeAdaptedIntentHook(value)]),
