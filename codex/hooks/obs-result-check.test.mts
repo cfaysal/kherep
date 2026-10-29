@@ -149,3 +149,8 @@ test("a valid failed receipt warns in the same turn without a correction or data
   assert.match(message(run({last_assistant_message:'OBS-RESULT: failed readback-unverified created=123'})), /same turn/);
   assert.match(OBS_RESULT_REASON, /NO further publication/);
 });
+
+for (const code of ['space-lookup-unavailable', 'space-unresolved', 'space-lookup-bindings-missing',
+    'space-lookup-network-unavailable', 'space-lookup-timeout']) test(`lookup failure ${code} warns without requesting a retry`, () => {
+    assert.match(message(run({ last_assistant_message: `OBS-RESULT: failed ${code}` })), /same turn/);
+});

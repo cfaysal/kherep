@@ -6,7 +6,8 @@ export type ObsResult = {
     problem: string;
 };
 export const OBS_FAILURES = new Set(['invalid-request', 'authority-unavailable', 'authority-denied',
-    'space-mismatch', 'placement-unresolved', 'identity-unavailable', 'related-unavailable',
+    'space-mismatch', 'space-lookup-unavailable', 'space-unresolved', 'space-lookup-bindings-missing',
+    'space-lookup-network-unavailable', 'space-lookup-timeout', 'placement-unresolved', 'identity-unavailable', 'related-unavailable',
     'create-unverified', 'labels-unverified', 'readback-unverified', 'stitch-unverified',
     'receipt-unavailable', 'receipt-conflict', 'publication-incomplete', 'broker-unavailable']);
 export function checkObsResult(text: string): ObsResult {

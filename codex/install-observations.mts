@@ -42,6 +42,7 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
     if (!path.isAbsolute(options.codexHome) || !path.isAbsolute(options.workspace))
         throw new Error('observation-explicit-targets-required');
     const predecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-predecessor.json'))) as Record<string, string>;
+    const lookupPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-lookup-predecessor.json'))) as Record<string, string>;
     const source = (relative: string) => read(path.join(repo, relative));
     const configFile = path.join(home, 'config.toml'), beforeConfig = read(configFile);
     const start = beforeConfig.indexOf(START), end = beforeConfig.indexOf(END);
@@ -77,13 +78,13 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
         const relative = `codex/hooks/${name}`, file = path.resolve(hookDir, target);
         const render = (text: string) => name.startsWith('observation-') ? renderObservationHook(text, workspace) : text;
         const next = render(source(relative));
-        if (fs.existsSync(file) && read(file) !== next && read(file) !== render(predecessor[relative]))
+        if (fs.existsSync(file) && read(file) !== next && read(file) !== render(predecessor[relative]) && read(file) !== lookupPredecessor[relative])
             throw new Error('observation-hook-drift');
         changes.set(file, next);
     }
     for (const [target, from] of [['obs-candidate-policy.mts', 'observation-candidate.mts'], ['obs-result-policy.mts', 'observation-result.mts']]) {
         const file = path.join(hookDir, target), next = source(`modules/atl-jira-brokers/${from}`);
-        const old = target === 'obs-candidate-policy.mts' ? predecessor['codex/hooks/obs-candidate-policy.mts'] : undefined;
+        const old = target === 'obs-candidate-policy.mts' ? predecessor['codex/hooks/obs-candidate-policy.mts'] : lookupPredecessor[`modules/atl-jira-brokers/${from}`];
         if (fs.existsSync(file) && read(file) !== next && read(file) !== old)
             throw new Error('observation-helper-drift');
         changes.set(file, next);
@@ -110,7 +111,7 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
     for (const name of observationFiles(repo)) {
         const file = path.join(workspace, 'tools', name);
         const relative = `modules/atl-jira-brokers/${name}`;
-        if (fs.existsSync(file) && read(file) !== source(relative) && read(file) !== predecessor[relative])
+        if (fs.existsSync(file) && read(file) !== source(relative) && read(file) !== predecessor[relative] && read(file) !== lookupPredecessor[relative])
             throw new Error('observation-broker-drift');
     }
     return { home, workspace, repo, changes, config, beforeConfig, newAgent, agentFile, capabilities, insertedText };

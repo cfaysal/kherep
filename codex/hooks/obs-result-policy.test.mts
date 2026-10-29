@@ -13,3 +13,10 @@ test('rejects candidates, fences, duplicates, count mismatch and arbitrary error
         assert.ok('problem' in checkObsResult(text), text);
     }
 });
+
+for (const code of ['space-lookup-unavailable', 'space-unresolved', 'space-lookup-bindings-missing',
+    'space-lookup-network-unavailable', 'space-lookup-timeout']) test(`fixed lookup receipt ${code} stays strict`, () => {
+    assert.deepEqual(checkObsResult(`OBS-RESULT: failed ${code}`), { status: 'failed', ids: [] });
+    assert.deepEqual(checkObsResult(`OBS-RESULT: failed ${code} created=123`), { status: 'failed', ids: ['123'] });
+    assert.ok('problem' in checkObsResult(`OBS-RESULT: failed ${code}-CANARY`));
+});

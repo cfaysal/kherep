@@ -67,6 +67,7 @@ export function observationSource(home: string, from: string): Buffer | null {
   const allowed = new Set(['codex/hooks/obs-result-check.mts', 'codex/hooks/kherep-maestro-context.mts',
     'codex/hooks/confluence-delivery-check.mts', 'codex/hooks/observation-stop.mts', 'codex/hooks/observation-turn-completion.mts',
     'modules/atl-jira-brokers/observation-candidate.mts', 'modules/atl-jira-brokers/observation-result.mts',
+    'modules/atl-jira-brokers/observation-lookup.mts',
     'codex/hooks/hook-integrity-repair.mts', 'codex/hooks/hook-integrity-sources.mts']);
   if (!allowed.has(from)) return null;
   const root = path.join(home, 'orchestra', 'observation-source');
