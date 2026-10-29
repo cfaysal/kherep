@@ -73,7 +73,8 @@ test("maps every installed file to its versioned source, and the rendered ones t
     ["kherep-maestro/research-common.mts", "codex/hooks/research-common.mts"],
     ["kherep-maestro/post-edit-tool-calls.mts", "codex/hooks/post-edit-tool-calls.mts"],
     ["kherep-maestro/acceptance-policy.mts", "codex/hooks/acceptance-policy.mts"],
-    ["kherep-maestro/obs-candidate-policy.mts", "codex/hooks/obs-candidate-policy.mts"],
+    ["kherep-maestro/obs-candidate-policy.mts", "modules/atl-jira-brokers/observation-candidate.mts"],
+    ["kherep-maestro/obs-result-policy.mts", "modules/atl-jira-brokers/observation-result.mts"],
     ["kherep-maestro/codex-obs-result-check.mts", "codex/hooks/obs-result-check.mts"],
     ["kherep-maestro-context.mts", "codex/hooks/kherep-maestro-context.mts"],
   ];

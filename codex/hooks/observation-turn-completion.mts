@@ -13,25 +13,18 @@ export interface StopDecision {
   reason: string;
 }
 
-function powershellLiteral(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
 export function renderObservationInstruction(workspace: string): string {
-  const broker = powershellLiteral(path.join(workspace, "tools", "atl-confluence.mts"));
+  void workspace;
   return [
     "Dispatch exactly one `codex-obs` with `fork_turns: \"none\"`.",
     "Pass only the completed turn, relevant tool evidence, and compact task state.",
     "Mark each finding at the start of its own line as measured: `<command>` -> <deciding output excerpt>, or relayed: <source>.",
     "A finding about repository code starts with code after measured: and names each repository as <name>@<full commit sha> before the command.",
-    "Require the worker to return one strict JSON document; the worker performs no config or broker I/O.",
-    "Validate the candidate envelope and every title, bodyStorage, evidence, labels, and placement field.",
-    "A confirmed candidate whose body carries `Revision:` must bind `<name>@<full sha>`; otherwise set evidence assumed before publishing.",
-    "Require placement to contain exactly project and app, and base labels to contain exactly type-observation, evidence-<value>, and status-author-model.",
-    "The worker performs no related, create, delete, stitch, or other broker call.",
-    "An empty `observations` array means zero writes.",
-    "For nonempty candidates, read the canonical Codex Confluence configuration and require observationPublishingAuthorized to be literal `true`.",
-    `Then, from this trusted Maestro main thread, use the Codex broker projected into the selected workspace with \`node ${broker}\` for related, create, readback verification, and stitch in the configured space.`,
+    "Luna owns extraction and publication through mcp__kherep_observations__publish_observations only, using the supplied session/turn IDs and named node.",
+    "Require one strict OBS-RESULT receipt: wrote <n> <numeric IDs>, empty no-admissible-findings, or failed <safe-code> with created IDs.",
+    "The adapter validates candidates, literal canonical authority bound to the resolved space, placement, related lookup, labels, trusted author readback and targeted stitch.",
+    "Independently validate the receipt and read target pages. Report failures and any created IDs in the same turn; never silently publish or repair.",
+    "A malformed-handback correction allows NO further publication, retry, tool call or replacement page. Empty findings cause zero I/O.",
     "Never dispatch a second pass.",
   ].join(" ");
 }

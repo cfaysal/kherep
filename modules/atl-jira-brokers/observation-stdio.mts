@@ -1,0 +1,117 @@
+#!/usr/bin/env node
+/** Local MCP surface: one bounded publication tool, no arbitrary broker/CLI. */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { publishObservations } from './observation-publisher.mts';
+import { observationBroker } from './observation-broker.mts';
+import { observationRequest } from './observation-policy.mts';
+import { receiptStore } from './observation-receipt.mts';
+export const OBSERVATION_TOOL = {
+    name: 'publish_observations', description: 'Publish admissible observations once through the authorized Codex service-account broker; returns a safe OBS-RESULT receipt.',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    inputSchema: { type: 'object', additionalProperties: false, required: ['sessionId', 'turnId', 'observations'], properties: {
+            sessionId: { type: 'string', pattern: '^[a-z0-9][a-z0-9._-]{0,79}$' }, turnId: { type: 'string', pattern: '^[a-z0-9][a-z0-9._-]{0,79}$' },
+            namedNode: { type: 'string', enum: ['Atlassian', 'Development/General', 'Development/DC Apps', 'Development/Forge Apps', 'Kherep', 'Operations'] },
+            observations: { type: 'array', maxItems: 20, items: { type: 'object', additionalProperties: false,
+                    required: ['title', 'bodyStorage', 'evidence', 'labels', 'placement'], properties: { title: { type: 'string', maxLength: 200 },
+                        bodyStorage: { type: 'string', maxLength: 24000 }, evidence: { type: 'string', enum: ['confirmed', 'assumed', 'refuted', 'superseded'] },
+                        labels: { type: 'array', items: { type: 'string' } }, placement: { type: 'object', additionalProperties: false, required: ['project', 'app'],
+                            properties: { project: { type: 'string' }, app: { type: 'string', description: 'Exact app shelf child title, or - when no app applies.' } } } } },
+            }
+        } },
+};
+type Publish = (value: unknown) => Promise<string>;
+export async function observationRpc(value: unknown, publish: Publish): Promise<unknown | null> {
+    const r = value as {
+        id?: unknown;
+        jsonrpc?: unknown;
+        method?: unknown;
+        params?: {
+            name?: unknown;
+            arguments?: unknown;
+        };
+    } | null;
+    const id = typeof r?.id === 'string' && /^[a-zA-Z0-9._-]{1,80}$/.test(r.id) || typeof r?.id === 'number' && Number.isSafeInteger(r.id) ? r.id : null;
+    if (!r || r.jsonrpc !== '2.0' || typeof r.method !== 'string')
+        return { jsonrpc: '2.0', id, error: { code: -32600, message: 'invalid-request' } };
+    if (!Object.hasOwn(r, 'id'))
+        return null;
+    if (id === null)
+        return { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'invalid-request' } };
+    const result = (data: unknown) => ({ jsonrpc: '2.0', id, result: data });
+    if (r.method === 'initialize')
+        return result({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'kherep-observations', version: '1.0.0' } });
+    if (r.method === 'ping')
+        return result({});
+    if (r.method === 'tools/list')
+        return result({ tools: [OBSERVATION_TOOL] });
+    if (r.method === 'tools/call' && (!r.params || typeof r.params !== 'object' || Array.isArray(r.params)
+        || Object.keys(r.params).some(key => !['name', 'arguments'].includes(key))
+        || typeof r.params.name !== 'string' || !Object.hasOwn(r.params, 'arguments'))) {
+        return { jsonrpc: '2.0', id, error: { code: -32602, message: 'invalid-parameters' } };
+    }
+    if (r.method === 'tools/call' && r.params?.name === 'publish_observations') {
+        let receipt: string;
+        try {
+            receipt = await publish(r.params.arguments);
+        }
+        catch {
+            receipt = 'OBS-RESULT: failed broker-unavailable';
+        }
+        return result({ content: [{ type: 'text', text: receipt }], isError: receipt.startsWith('OBS-RESULT: failed') });
+    }
+    return { jsonrpc: '2.0', id, error: { code: -32601, message: 'method-unavailable' } };
+}
+export async function serveObservations(input: AsyncIterable<Buffer | string>, write: (value: string) => void, publish: Publish): Promise<void> {
+    let pending = Buffer.alloc(0);
+    for await (const chunk of input) {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        let start = 0;
+        for (let i = 0; i < bytes.length; i++)
+            if (bytes[i] === 10) {
+                const line = Buffer.concat([pending, bytes.subarray(start, i)]);
+                if (line.length > 600000)
+                    throw new Error('invalid-request');
+                pending = Buffer.alloc(0);
+                start = i + 1;
+                let value: unknown;
+                try {
+                    value = JSON.parse(line.toString('utf8'));
+                }
+                catch {
+                    value = null;
+                }
+                const response = await observationRpc(value, publish);
+                if (response)
+                    write(`${JSON.stringify(response)}\n`);
+            }
+        pending = Buffer.concat([pending, bytes.subarray(start)]);
+        if (pending.length > 600000)
+            throw new Error('invalid-request');
+    }
+    if (pending.length)
+        throw new Error('invalid-request');
+}
+async function main() {
+    if (process.argv.length !== 2)
+        throw new Error('invalid-request');
+    const home = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+    // Lazy broker construction preserves the empty-finding zero-I/O contract.
+    await serveObservations(process.stdin, line => process.stdout.write(line), async (request) => {
+        const validated = observationRequest(request);
+        if (!validated)
+            return 'OBS-RESULT: failed invalid-request';
+        if (!validated.observations.length)
+            return 'OBS-RESULT: empty no-admissible-findings';
+        return publishObservations(validated, observationBroker(home), receiptStore(path.join(home, '.cache', 'observation-publisher')));
+    });
+}
+let mainModule = false;
+try {
+    mainModule = import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1] ?? '')).href;
+}
+catch { }
+if (mainModule)
+    void main().catch(() => { process.stderr.write('observation-adapter-unavailable\n'); process.exitCode = 1; });

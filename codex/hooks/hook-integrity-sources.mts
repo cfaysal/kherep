@@ -29,13 +29,15 @@ export const computedImports = (rel: string): string => (COMPUTED[rel] || []).ma
 export const DISPATCHERS = new Set(["kherep-maestro/codex-hook-adapter.mts", "kherep-maestro/hook-adapter.mts", "kherep-maestro/codex-shell-checks.mts"]);
 export const RENDERED = new Set(["kherep-maestro/codex-observation-stop.mts", "kherep-maestro/codex-observation-turn-completion.mts"]);
 // Copied from codex/hooks under their own name; every other plain name is a shared Claude guard.
-export const CODEX_HELPERS = new Set(["acceptance-policy.mts", "obs-candidate-policy.mts", "research-common.mts", "research-exec-parser.mts",
+export const CODEX_HELPERS = new Set(["acceptance-policy.mts", "obs-candidate-policy.mts", "obs-result-policy.mts", "research-common.mts", "research-exec-parser.mts",
   "research-transcript.mts", "post-edit-tool-calls.mts", "hook-adapter.mts", "hook-adapter-payload.mts", "hook-adapter-verdict.mts",
   "hook-adapter-run.mts", "hook-integrity-repair.mts", "hook-integrity-sources.mts"]);
 
 // The checkout path of the versioned source of an installed file (rel to
 // <CODEX_HOME>/hooks), or why there is none.
 export function sourceOf(rel: string): { from: string } | { hint: string } {
+  if (rel === "kherep-maestro/obs-candidate-policy.mts") return {from:"modules/atl-jira-brokers/observation-candidate.mts"};
+  if (rel === "kherep-maestro/obs-result-policy.mts") return {from:"modules/atl-jira-brokers/observation-result.mts"};
   if (RENDERED.has(rel)) return { hint: "rendered by the installer, no byte-identical source; run codex/install.mts" };
   if (rel === "kherep-maestro-context.mts") return { from: "codex/hooks/kherep-maestro-context.mts" };
   const own = /^kherep-maestro\/(.+)$/.exec(rel)?.[1];

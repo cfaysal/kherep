@@ -5,12 +5,6 @@ import { decision as acceptanceDecision } from "./acceptance-policy.mts";
 
 const SELECTED_WORKSPACE = "__KHEREP_SELECTED_WORKSPACE__";
 
-function shellLiteral(value: string, platform: NodeJS.Platform): string {
-  return platform === "win32"
-    ? `'${value.replaceAll("'", "''")}'`
-    : `'${value.replaceAll("'", "'\\''")}'`;
-}
-
 interface StopInput {
   turn_id?: unknown;
   stop_hook_active?: unknown;
@@ -25,18 +19,17 @@ interface Continuation {
 }
 
 export function observationPrompt(workspace = SELECTED_WORKSPACE, platform = process.platform): string {
-  const pathApi = platform === "win32" ? path.win32 : path.posix;
-  const broker = shellLiteral(pathApi.join(workspace, "tools", "atl-confluence.mts"), platform);
+  void workspace; void platform;
   return [
   "Before the final response, dispatch the codex-obs agent for this completed user turn using agent_type codex-obs, the exact model from its installed agent TOML, reasoning_effort low, and fork_turns none.",
   "Give it only a bounded, sanitized summary; never pass raw sessions, credentials, customer-private material, or private infrastructure.",
   "Mark each finding at the start of its own line as measured: `<command>` -> <deciding output excerpt>, or relayed: <source>.",
   "A finding about repository code starts with code after measured: and names each repository as <name>@<full commit sha> before the command.",
-  "Require one strict JSON candidate. The worker performs no configuration or broker I/O.",
-  "Validate the candidate fields title, bodyStorage, evidence, labels, and placement. An empty result is valid; an empty observations array means zero writes.",
-  "A confirmed candidate whose body carries `Revision:` must bind `<name>@<full sha>`; otherwise set evidence assumed before publishing.",
-  "For nonempty candidates, read the canonical Codex Confluence configuration and require observationPublishingAuthorized to be literal true.",
-  `From this trusted Maestro main thread, use \`node ${broker}\` for related, create, readback, and stitch in the configured space.`,
+    "Luna owns extraction and publication through mcp__kherep_observations__publish_observations only, using the supplied session/turn IDs and named node.",
+    "Require one strict OBS-RESULT receipt: wrote <n> <numeric IDs>, empty no-admissible-findings, or failed <safe-code> with created IDs.",
+    "The adapter validates candidates, literal canonical authority bound to the resolved space, placement, related lookup, labels, trusted author readback and targeted stitch.",
+    "Independently validate the receipt and read target pages. Report failures and any created IDs in the same turn; never silently publish or repair.",
+    "A malformed-handback correction allows NO further publication, retry, tool call or replacement page. Empty findings cause zero I/O.",
   "Follow orchestra/ROUTING.md. If codex-obs was already dispatched for this turn, do not dispatch it again; an observation run never dispatches another observation run.",
   "Check the agent result, then complete the user response.",
   ].join(" ");

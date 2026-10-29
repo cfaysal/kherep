@@ -11,7 +11,7 @@
 - Obtain explicit user authority for consequential external actions and reuse existing authority within its approved scope.
 - Verify the final diff, relevant functional tests and actual target artifact before claiming delivery.
 - For behavior changes, report C1 requested behavior, C2 verification, C3 security/privacy and C4 scope integrity. Distinguish passing, failing, skipped and untestable checks.
-- After a completed turn, dispatch `codex-obs` with its pinned model for a read-only JSON candidate; an empty result is valid and an observation run never triggers another. The Maestro validates and publishes nonempty candidates through the Codex service-account broker only when `kherep/confluence.json` in the active Codex home grants observation publishing for the resolved space. Placement nodes, labels, search-before-write and stitch-after are in orchestra/ROUTING.md under "Session observations" and "Linking".
+- After a completed turn, dispatch `codex-obs` with its pinned model for extraction and publication through `mcp__kherep_observations__publish_observations`. It keeps a read-only filesystem sandbox and returns one strict `OBS-RESULT` receipt. The narrow adapter owns canonical authority, placement, search, creation, labels, readback and targeted stitching through the Codex service account. Empty means no admissible finding and zero I/O. The Maestro independently validates the receipt and reads targets, reports failures with created IDs in the same turn, and never silently publishes or repairs. A malformed-handback correction permits NO further publication. An observation run never triggers another. Follow orchestra/ROUTING.md.
 
 <!-- kherep-intercom:start -->
 ## Intercom

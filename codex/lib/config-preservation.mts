@@ -34,6 +34,7 @@ export interface ConfigUpgradeResult {
 }
 
 export interface ManagedConfigOptions {
+  observationPublisher?: import("./observation-projection.mts").ObservationProjection;
   memoryProvider?: "unconfigured";
   retiredCentralBrain?: RetiredCentralBrainRender;
   observationStopHook?: boolean;
@@ -303,6 +304,7 @@ function prepareAnchoredConfig(config: string, options: ManagedConfigOptions) {
   // Every block shape below is known with and without the optional plugin servers.
   const knownFragments = ({ plugins, predecessorPlugins }: PluginSet): string[] => {
     const currentVariants = [withoutOutbox, ...outboxVariants]
+      .flatMap(value => [value, {...value, observationPublisher: undefined}])
       .flatMap((value) => value.messagingClient
         ? [value, { ...value, messagingClient: { ...value.messagingClient, enabled: !value.messagingClient.enabled } }]
         : [value])

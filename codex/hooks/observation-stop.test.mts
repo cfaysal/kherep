@@ -19,7 +19,7 @@ test("first Stop requests one pinned codex-obs dispatch without copying turn tex
   assert.match(result.reason, /codex-obs/);
   assert.match(result.reason, /installed agent TOML/);
   assert.match(result.reason, /low/);
-  assert.match(result.reason, /empty result/i);
+  assert.match(result.reason, /Empty findings/i);
   assert.doesNotMatch(JSON.stringify(result), /Synthetic private sentinel/);
 });
 
@@ -46,16 +46,11 @@ test("acceptance requirement survives first and repeated Stop events", async () 
   assert.equal(await decision({ ...input, last_assistant_message: "C1 C2 C3 C4", stop_hook_active: true }, env), null);
 });
 
-test("observation broker path is literal on macOS and Windows shells", () => {
-  const macWorkspace = "/tmp/space's $(printf expanded)";
-  const macBroker = path.posix.join(macWorkspace, "tools", "atl-confluence.mts");
-  assert.ok(observationPrompt(macWorkspace, "darwin").includes(
-    `node '${macBroker.replaceAll("'", "'\\''")}'`,
-  ));
-
-  const winWorkspace = "C:\\temp\\space's $(throw expanded)";
-  const winBroker = path.win32.join(winWorkspace, "tools", "atl-confluence.mts");
-  assert.ok(observationPrompt(winWorkspace, "win32").includes(
-    `node '${winBroker.replaceAll("'", "''")}'`,
-  ));
+test("observation prompt exposes only the narrow tool, independent of workspace shell syntax", () => {
+  for(const platform of ["darwin","win32"] as const){
+    const prompt=observationPrompt("/synthetic/space's $(throw expanded)",platform);
+    assert.match(prompt,/mcp__kherep_observations__publish_observations/);
+    assert.doesNotMatch(prompt,/atl-confluence|node '|throw expanded/);
+    assert.match(prompt,/NO further publication/);
+  }
 });

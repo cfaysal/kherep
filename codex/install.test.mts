@@ -1125,64 +1125,22 @@ test("default install projects observation delivery without optional Jira toolin
   assert.equal(hookRun.status, 0, hookRun.stderr);
   assert.equal(withoutTypeStrippingWarning(hookRun.stderr), "");
   const hookDecision = JSON.parse(hookRun.stdout) as { reason: string };
-  const broker = path.join(workspace, "tools", "atl-confluence.mts");
-  const brokerLiteral = `'${broker.replaceAll("'", "''")}'`;
-  assert.ok(hookDecision.reason.includes(`node ${brokerLiteral}`));
-  if (process.platform === "win32") {
-    const parsed = spawnSync(
-      "powershell.exe",
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `[Console]::Out.Write(${brokerLiteral})`],
-      { encoding: "utf8", windowsHide: true },
-    );
-    assert.equal(parsed.status, 0, parsed.error?.message || parsed.stderr);
-    assert.equal(withoutTypeStrippingWarning(parsed.stderr), "");
-    assert.equal(parsed.stdout, broker);
-  }
+  assert.match(hookDecision.reason, /mcp__kherep_observations__publish_observations/);
+  assert.doesNotMatch(hookDecision.reason, /node '|atl-confluence/);
   assert.doesNotMatch(installedObservationHook, /__KHEREP_SELECTED_WORKSPACE__/);
   assert.doesNotMatch(installedObservationHook, /D:\/CFcon-DEV/i);
   assert.ok(fs.existsSync(path.join(workspace, "tools", "atl-confluence.mts")));
   const instructionsLine = observationAgent.split("\n")
     .find((line) => line.startsWith("developer_instructions = "))!;
   const instructions = JSON.parse(instructionsLine.slice("developer_instructions = ".length)) as string;
-  const candidateSection = instructions
-    .split("## Codex candidate-only mode\n")[1]!
-    .split("\n## What an observation is")[0]!;
-  const example = JSON.parse(candidateSection.match(/```json\n([\s\S]*?)\n```/)![1]) as {
-    observations: Array<Record<string, unknown>>;
-  };
-  assert.deepEqual(Object.keys(example), ["observations"]);
-  assert.equal(example.observations.length, 1);
-  assert.deepEqual(Object.keys(example.observations[0]), [
-    "title", "bodyStorage", "evidence", "labels", "placement",
-  ]);
-  assert.deepEqual(example.observations[0].labels, [
-    "type-observation", "evidence-confirmed", "status-author-model",
-  ]);
-  assert.deepEqual(example.observations[0].placement, {
-    project: "Unambiguous project from the supplied turn",
-    app: "Unambiguous app from the supplied turn",
-  });
-  assert.doesNotMatch(candidateSection, /session-<session-id>|"kind"|"name"|"parentTitle"/);
-  assert.match(
-    observationAgent,
-    /Codex.*one strict JSON document/s,
-  );
-  assert.match(
-    observationAgent,
-    /title.*bodyStorage.*evidence.*labels.*placement/s,
-  );
-  assert.match(
-    observationAgent,
-    /Codex worker performs no configuration or broker I\/O/,
-  );
-  assert.match(
-    candidateSection,
-    /Do not read the[\s\S]*canonical configuration, call a broker, search related pages, create, delete or stitch a page/,
-  );
-  assert.match(
-    observationAgent,
-    /trusted Maestro main thread is the Codex publisher/,
-  );
+  const publisherSection = instructions.split("## Codex publication mode\n")[1]!.split("\n## What an observation is")[0]!;
+  assert.match(publisherSection, /mcp__kherep_observations__publish_observations/);
+  assert.match(publisherSection, /NO further publication/);
+  assert.match(publisherSection, /Maestro independently validates/);
+  assert.match(observationAgent, /title.*bodyStorage.*evidence.*labels.*placement/s);
+  assert.doesNotMatch(observationAgent, /trusted Maestro main thread is the Codex publisher/);
+  assert.ok(fs.existsSync(path.join(workspace, "tools", "observation-stdio.mts")));
+  assert.match(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"), /enabled_tools = \["publish_observations"\]/);
   assert.equal(result.receipt.pluginMcpServers.some((entry) => entry.name === ATLASSIAN_MCP_SERVER), false);
   assert.equal(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8").includes("[mcp_servers.atlassian]"), false);
   assert.deepEqual(codexCalls.filter(({ args }) => args[1] === "add").map(({ args }) => args), [["plugin", "add", LOCAL_PLUGIN_ID]]);

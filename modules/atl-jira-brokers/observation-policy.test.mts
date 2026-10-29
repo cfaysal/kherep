@@ -1,0 +1,36 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { ordinaryXhtml, observationRequest } from './observation-policy.mts';
+import { publishObservations, type ObservationBroker } from './observation-publisher.mts';
+const finding = {title:'Synthetic finding',bodyStorage:'<p>Synthetic prose</p>',evidence:'assumed',
+  labels:['type-observation','evidence-assumed','status-author-model'],placement:{project:'Kherep',app:'-'}};
+const request=(bodyStorage:string)=>({sessionId:'synthetic',turnId:'turn',observations:[{...finding,bodyStorage}]});
+for(const body of [
+  '<img src="https://canary.invalid/pixel">', '<p style="background:url(https://canary.invalid/pixel)">text</p>',
+  '<style>p{background:url(https://canary.invalid/pixel)}</style>', '<link href="https://canary.invalid/style.css"/>',
+  '<svg><image href="https://canary.invalid/pixel"/></svg>', '<video src="https://canary.invalid/movie"/>',
+  '<audio><source src="https://canary.invalid/sound"/></audio>', '<form action="https://canary.invalid/send"><input/></form>',
+  '<p href="https://canary.invalid">text</p>', '<p src="https://canary.invalid">text</p>',
+  '<p xmlns="https://canary.invalid">text</p>', '<?xml version="1.0"?><p>text</p>',
+  '<!DOCTYPE p SYSTEM "https://canary.invalid/entity"><p>text</p>', '<!--comment--><p>text</p>',
+  '<ac:structured-macro/>', '<math><mi>resource</mi></math>', '<p>unclosed', '<p></code>',
+]) test(`resource or malformed XHTML rejected before any I/O: ${body.split('>')[0]}>`, async()=>{
+  let brokerCalls=0,receiptCalls=0;
+  const broker=new Proxy({} as ObservationBroker,{get(){brokerCalls++;throw new Error('unexpected broker I/O');}});
+  const result=await publishObservations(request(body),broker,{claim(){receiptCalls++;throw new Error('unexpected receipt I/O');}});
+  assert.equal(result,'OBS-RESULT: failed invalid-request');assert.equal(brokerCalls,0);assert.equal(receiptCalls,0);
+  assert.equal(ordinaryXhtml(body),false);
+});
+test('ordinary prose XHTML including escaped resource examples remains admissible',()=>{
+  const prose='<h2>Finding</h2><p><strong>Measured</strong> <em>synthetic</em><br/></p>'
+    +'<pre><code>&lt;img src="example"&gt;</code></pre><ul><li>One</li></ul>'
+    +'<table><thead><tr><th>Check</th></tr></thead><tbody><tr><td>Pass</td></tr></tbody></table>';
+  assert.equal(ordinaryXhtml(prose),true);assert.ok(observationRequest(request(prose)));
+});
+test('product label must be a string and duplicate/base label rules remain enforced',()=>{
+  for(const labels of [[...finding.labels,['product-jira']],[...finding.labels,'product-jira','product-jsm'],
+    [...finding.labels,'type-observation'],['type-observation','status-author-model','product-jira']]) {
+    assert.equal(observationRequest({...request(finding.bodyStorage),observations:[{...finding,labels}]}),null);
+  }
+  assert.ok(observationRequest({...request(finding.bodyStorage),observations:[{...finding,labels:[...finding.labels,'product-jira']}]}));
+});

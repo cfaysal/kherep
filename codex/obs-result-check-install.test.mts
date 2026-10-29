@@ -49,10 +49,10 @@ test("installs the obs-result check and its helper byte-identical, wired in the 
   const { codexHome, result, config } = fixture(t);
   const hookDir = path.join(codexHome, "hooks", "kherep-maestro");
   for (const [target, source] of [["codex-obs-result-check.mts", "obs-result-check.mts"],
-    ["obs-candidate-policy.mts", "obs-candidate-policy.mts"], ["research-transcript.mts", "research-transcript.mts"]]) {
+    ["obs-result-policy.mts", "obs-result-policy.mts"], ["research-transcript.mts", "research-transcript.mts"]]) {
     assert.equal(fs.readFileSync(path.join(hookDir, target!), "utf8"),
-      fs.readFileSync(path.join(REPO, "codex", "hooks", source!), "utf8"), target);
-    assert.deepEqual(sourceOf(`kherep-maestro/${target}`), { from: `codex/hooks/${source}` }, target);
+      fs.readFileSync(source === "obs-result-policy.mts" ? path.join(REPO,"modules","atl-jira-brokers","observation-result.mts") : path.join(REPO, "codex", "hooks", source!), "utf8"), target);
+    assert.deepEqual(sourceOf(`kherep-maestro/${target}`), { from: source === "obs-result-policy.mts" ? "modules/atl-jira-brokers/observation-result.mts" : `codex/hooks/${source}` }, target);
   }
   const groups = subagentStopGroups(config);
   assert.equal(groups.length, 1, "one SubagentStop group");
@@ -73,7 +73,7 @@ test("the installed command sends a malformed candidate back once and passes a v
     assert.equal(outcome.status, 0);
     return outcome.stdout ? JSON.parse(outcome.stdout) as Record<string, unknown> : null;
   };
-  assert.equal(run({ last_assistant_message: '{ "observations": [] }' }), null);
+  assert.equal(run({ last_assistant_message: 'OBS-RESULT: empty no-admissible-findings' }), null);
   assert.equal(run({ last_assistant_message: "```json\n{}\n```" })?.decision, "block");
   assert.match(String(run({ stop_hook_active: true, last_assistant_message: "prose" })?.systemMessage), /still malformed/);
   assert.match(String(run({})?.systemMessage), /not visible/);

@@ -173,11 +173,11 @@ test("the Codex projection keeps its own worker contract and no Claude broker", 
   assert.equal(options.as, "codex-obs");
   assert.equal(options.source, "codex/agents/codex-obs.md");
   const text = codexProjection();
-  assert.match(text, /## Codex candidate-only mode\n/);
-  assert.match(text, /Codex worker performs no configuration or broker I\/O/);
-  assert.match(text, /Codex.*one strict JSON document/s);
-  assert.match(text, /trusted Maestro main thread is the Codex publisher/);
-  assert.doesNotMatch(text, /atl-confluence-ccoder|OBS-RESULT|KHEREP_ATL_CRED_FILE_CLAUDE/);
+  assert.match(text, /## Codex publication mode/);
+  assert.match(text, /mcp__kherep_observations__publish_observations/);
+  assert.match(text, /NO further publication/);
+  assert.match(text, /Maestro independently validates/);
+  assert.doesNotMatch(text, /atl-confluence-ccoder|KHEREP_ATL_CRED_FILE_CLAUDE/);
 });
 
 test("both routing files treat OBS-RESULT: failed as a failure, not an empty result", () => {

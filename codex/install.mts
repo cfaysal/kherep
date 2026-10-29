@@ -17,6 +17,8 @@ import { setPluginEnabled } from "./lib/plugin-config.mts";
 import {
   atlassianMcpServer, hasManagedAtlassianTable, managedAtlassianTokenFile, PREDECESSOR_NATIVE_ATLASSIAN,
 } from "./lib/atlassian-mcp.mts";
+import { copyObservationBroker, renderObservationHook } from "./lib/observation-projection.mts";
+import { copyObservationSnapshot } from "./lib/observation-source.mts";
 import { componentHash } from "./lib/component-hash.mts";
 import { prepareManagedConfig } from "./lib/config-preservation.mts";
 import { atlassianDestructiveGuard, command } from "./lib/parity-config.mts";
@@ -52,8 +54,6 @@ export const LOCAL_PLUGIN_ID = "kherep-maestro@kherep";
 // The v2 Atlassian remote MCP server, rendered only with the optional Atlassian
 // tool set, through the Codex service account (issue #376).
 export { ATLASSIAN_MCP_SERVER };
-const OBSERVATION_WORKSPACE_SENTINEL =
-  'const SELECTED_WORKSPACE = "__KHEREP_SELECTED_WORKSPACE__";';
 const RETIRED_MCP_SERVERS = ["claude-baton"];
 const SHARED_HOOKS = [
   "commit-guard.mts", "deploy-guard.mts", "playwright-file-guard.mts", "main-checkout-guard.mts",
@@ -79,16 +79,7 @@ const RETIRED_TARGETS = [
   path.join("kherep", "local-inference", "runner.js"),
 ];
 
-export function renderObservationHook(source: string, workspace: string): string {
-  const occurrences = source.split(OBSERVATION_WORKSPACE_SENTINEL).length - 1;
-  if (occurrences !== 1) {
-    throw new Error("Observation hook workspace sentinel must occur exactly once");
-  }
-  return source.replace(
-    OBSERVATION_WORKSPACE_SENTINEL,
-    `const SELECTED_WORKSPACE = ${JSON.stringify(workspace)};`,
-  );
-}
+export { renderObservationHook };
 
 // Everything the installer accepts from the CLI, the environment and the
 // tests. The command wrappers (runCodex, resolveRegistryRuntime) exist so a
@@ -270,7 +261,8 @@ export function install(options: InstallOptions = {}) {
     researchExecParser: path.join(sourceRoot, "hooks", "research-exec-parser.mts"),
     researchTranscript: path.join(sourceRoot, "hooks", "research-transcript.mts"),
     obsResultHook: path.join(sourceRoot, "hooks", "obs-result-check.mts"),
-    obsCandidatePolicy: path.join(sourceRoot, "hooks", "obs-candidate-policy.mts"),
+    obsCandidatePolicy: path.join(repoRoot, "modules", "atl-jira-brokers", "observation-candidate.mts"),
+    obsResultPolicy: path.join(repoRoot, "modules", "atl-jira-brokers", "observation-result.mts"),
     registryBridge: path.join(repoRoot, "modules", "mcp-auth-bridge", "registry-http-wrapper.mts"),
     registryRuntime: path.join(repoRoot, "modules", "mcp-auth-bridge", "supergateway-secret-wrapper.mts"),
     localInferenceRunner: path.join(repoRoot, "modules", "local-inference", "runner.mts"),
@@ -434,6 +426,7 @@ export function install(options: InstallOptions = {}) {
   // block, ROUTING.md and the rules; an unquotable root stops here, before any write.
   const intercom = intercomValues(messagingClient.configRoot);
   const managedConfigOptions = {
+    observationPublisher: { entry: path.join(workspace, "tools", "observation-stdio.mts"), home: codexHome },
     memoryProvider: memoryProvider.provider,
     // OP-1429. A block an older installer wrote for the retired Central Brain is
     // recognised as managed and replaced; the selection file goes to the backup.
@@ -506,6 +499,8 @@ export function install(options: InstallOptions = {}) {
       [sources.confluenceEvidenceCli, targets.confluenceEvidenceCli],
       [sources.codexConfluenceBroker, targets.codexConfluenceBroker],
     ] as const) workspaceTransaction.copyFile(source, target);
+
+    copyObservationBroker(repoRoot, workspace, workspaceTransaction);
 
     if (installAtlassianTools) {
       workspaceTransaction.copyFile(sources.jiraAdfRenderer, targets.jiraAdfRenderer);
@@ -598,6 +593,8 @@ export function install(options: InstallOptions = {}) {
     // Issue #326, PR-B. It reads its rollout fallback through research-transcript.mts.
     transaction.copyFile(sources.obsResultHook, path.join(targets.hookDir, "codex-obs-result-check.mts"));
     transaction.copyFile(sources.obsCandidatePolicy, path.join(targets.hookDir, "obs-candidate-policy.mts"));
+    transaction.copyFile(sources.obsResultPolicy, path.join(targets.hookDir, "obs-result-policy.mts"));
+    copyObservationSnapshot(repoRoot, codexHome, transaction);
     transaction.remove(targets.memoryNotifyHook);
     // Issue #72. Beside the deliver hook: the msg CLI allowlist.
     // Issue #436. Only the stable launcher, which the task prompt, the delivery

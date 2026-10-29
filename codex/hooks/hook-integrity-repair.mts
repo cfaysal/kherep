@@ -61,10 +61,31 @@ export function checkoutOf(lib: Libs, parts: string[], payload: ScopePayload | n
   return lib.checkoutFor(payload, lib.normalizePathLike(env.CLAUDE_HOME || path.join(os.homedir(), ".claude")), env);
 }
 
+// Observation-only snapshots prevent a scoped upgrade from reverting to the
+// older shared Control Plane checkout. Only this fixed source set may override it.
+export function observationSource(home: string, from: string): Buffer | null {
+  const allowed = new Set(['codex/hooks/obs-result-check.mts', 'codex/hooks/kherep-maestro-context.mts',
+    'codex/hooks/confluence-delivery-check.mts', 'codex/hooks/observation-stop.mts', 'codex/hooks/observation-turn-completion.mts',
+    'modules/atl-jira-brokers/observation-candidate.mts', 'modules/atl-jira-brokers/observation-result.mts',
+    'codex/hooks/hook-integrity-repair.mts', 'codex/hooks/hook-integrity-sources.mts']);
+  if (!allowed.has(from)) return null;
+  const root = path.join(home, 'orchestra', 'observation-source');
+  if (!fs.existsSync(root)) return null;
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8')) as Record<string, unknown>;
+  const file = path.join(root, from), stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 100000) throw new Error('observation-source-unverified');
+  const bytes = fs.readFileSync(file);
+  if (manifest[from] !== sha256(bytes)) throw new Error('observation-source-unverified');
+  return bytes;
+}
+
 export function restore(lib: Libs, file: string, from: string, repoRoot: string, hooksDir: string): Restored {
-  if (!repoRoot) return { proven: false, why: "no checkout resolved via the control-plane pointer, the deliver-hook command, workspace, KHEREP_WORKSPACE or install note" };
+  let snapshot: Buffer | null;
+  try { snapshot = observationSource(path.dirname(hooksDir), from); }
+  catch { return {proven: false, why: 'observation source snapshot is unverified'}; }
+  if (!repoRoot && !snapshot) return { proven: false, why: "no checkout resolved via the control-plane pointer, the deliver-hook command, workspace, KHEREP_WORKSPACE or install note" };
   const source = lib.joinPathLike(repoRoot, from);
-  const wanted = read(source);
+  const wanted = snapshot ?? read(source);
   if (typeof wanted === "string") return { proven: false, why: `versioned source ${from} unreadable (${wanted})` };
   if (!wanted.length) return { proven: false, why: `versioned source ${from} is itself 0 bytes` };
   const refusal = lib.writeExact(file, wanted, hooksDir);
@@ -83,7 +104,7 @@ export function journal(home: string, entry: Record<string, unknown>): void {
   try { fs.mkdirSync(dir, { recursive: true }); fs.appendFileSync(path.join(dir, "incidents.jsonl"), `${JSON.stringify(entry)}\n`, "utf8"); } catch { /* ignored */ }
 }
 
-export function sourceReaders(lib: Libs, { repoRoot, sourceOf, COMPUTED, computedImports, realOrNull }: Ctx) {
+export function sourceReaders(lib: Libs, { home, repoRoot, sourceOf, COMPUTED, computedImports, realOrNull }: Ctx) {
   // The live file, named by its real path: Node loads its imports from there (issue #524).
   const liveOnly = (file: string, rel: string): SourceText | null => {
     const live = read(file);
@@ -96,7 +117,9 @@ export function sourceReaders(lib: Libs, { repoRoot, sourceOf, COMPUTED, compute
     const live = liveOnly(file, rel);
     if (live) return live;
     const source = sourceOf(rel);
-    const versioned = repoRoot && "from" in source ? read(lib.joinPathLike(repoRoot, source.from)) : "";
+    let versioned: Buffer | string = "";
+    try { if ("from" in source) versioned = observationSource(home, source.from)
+      ?? (repoRoot ? read(lib.joinPathLike(repoRoot, source.from)) : ""); } catch { return null; }
     const text = typeof versioned === "string" ? "" : versioned.toString("utf8");
     return COMPUTED[rel] ? text + computedImports(rel) : text || null;
   };

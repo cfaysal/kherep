@@ -37,7 +37,7 @@ test("nothing delivered is reported as absent, not as partial", () => {
   assert.equal(delivery.absent, true);
   assert.deepEqual(delivery.missing, [ENTRY]);
   assert.match(message(delivery, false), /not installed/);
-  assert.match(message(delivery, false), /OP-1405/);
+  assert.match(message(delivery, false), /documented installer/);
 });
 
 test("the import graph is walked transitively, not counted", () => {
@@ -98,14 +98,14 @@ test("a bare or absolute specifier is not treated as a delivered file", () => {
 
 test("the complete message is announced once and then stays silent", () => {
   const delivery = { present: [ENTRY], missing: [], absent: false };
-  assert.match(message(delivery, false), /write path is installed/);
+  assert.match(message(delivery, false), /adapter import closure is installed/);
   assert.equal(message(delivery, true), "", "the state changes once; so does the announcement");
 });
 
-test("the complete message points at the ticket and claims nothing else about it", () => {
+test("the complete message keeps native and live publication status UNKNOWN", () => {
   const line = message({ present: [ENTRY], missing: [], absent: false }, false);
-  assert.match(line, /OP-1398/);
-  assert.match(line, /nothing else about that ticket changed/);
+  assert.match(line, /Native MCP discovery/);
+  assert.match(line, /UNKNOWN/);
 });
 
 test("scope follows the configured workspace", () => {

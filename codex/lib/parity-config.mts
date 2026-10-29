@@ -1,4 +1,5 @@
 import path from "node:path";
+import { renderObservationPublisher, type ObservationProjection } from "./observation-projection.mts";
 import { nativeCommand } from "./memory-provider.mts";
 import { renderOutboxWritableRoot } from "./outbox-writable-root.mts";
 
@@ -24,6 +25,7 @@ interface HookOptions {
 
 // Options for the MCP part alone; the hook part needs the full RenderOptions.
 export interface McpRenderOptions {
+  observationPublisher?: ObservationProjection;
   // "central-brain" is retired (OP-1429). The installer never renders it as the
   // current block; it only reproduces blocks older installers wrote, so the
   // upgrade can recognise and replace them (see retired-central-brain.mts).
@@ -379,7 +381,7 @@ function renderPrefix(options: RenderOptions): string {
 
 export function render(options: RenderOptions): string {
   const messaging = renderMessagingClient(options);
-  return [renderPrefix(options), renderMcp(options), renderPluginMcp(options), ...(messaging ? [messaging] : []), ""]
+  return [renderPrefix(options), renderMcp(options), renderPluginMcp(options), ...(options.observationPublisher ? [renderObservationPublisher(options.observationPublisher, options.node)] : []), ...(messaging ? [messaging] : []), ""]
     .join("\n\n");
 }
 
