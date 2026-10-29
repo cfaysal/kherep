@@ -198,6 +198,7 @@ test('known 6577d76 policy predecessor upgrades idempotently but arbitrary polic
 });
 const lookupPredecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex/parity/observation-lookup-predecessor.json'), 'utf8')) as Record<string, string>;
 const headerPredecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex/parity/observation-header-predecessor.json'), 'utf8')) as Record<string, string>;
+const prosePredecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex/parity/observation-prose-predecessor.json'), 'utf8')) as Record<string, string>;
 function installLookupPredecessor(f: ReturnType<typeof fixture>, previous: Record<string, string>) {
     if (previous === lookupPredecessor) fs.rmSync(path.join(f.workspace, 'tools', 'observation-lookup.mts'));
     for (const [relative, bytes] of Object.entries(previous)) {
@@ -207,10 +208,20 @@ function installLookupPredecessor(f: ReturnType<typeof fixture>, previous: Recor
     }
     if (previous === lookupPredecessor) fs.writeFileSync(path.join(f.home, 'hooks', 'kherep-maestro', 'obs-result-policy.mts'), previous['modules/atl-jira-brokers/observation-result.mts']);
 }
-for (const [version, previous] of [['1532', lookupPredecessor], ['e13', headerPredecessor]] as const) {
+for (const [version, previous] of [['1532', lookupPredecessor], ['e13', headerPredecessor], ['b2d23faa', prosePredecessor]] as const) {
 test(`exact ${version} predecessor upgrades both receipt policy copies, closure and snapshot`, t => {
     const f = fixture(t);
     installLookupPredecessor(f, previous);
+    if (previous === prosePredecessor) {
+        const relative = 'modules/atl-jira-brokers/observation-broker.mts';
+        assert.deepEqual(Object.keys(previous), [relative]);
+        const entry = path.join(f.workspace, 'tools', 'observation-broker.mts');
+        fs.appendFileSync(entry, '\n// UNKNOWN_B2_BROKER_DRIFT\n');
+        const drifted = snapshot(f.root);
+        assert.throws(() => checkObservationPublisher({ codexHome: f.home, workspace: f.workspace }), /broker-drift/);
+        assert.deepEqual(snapshot(f.root), drifted);
+        fs.writeFileSync(entry, previous[relative]);
+    }
     const before = snapshot(f.root);
     installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
     for (const name of ['home/hooks.state.json', 'home/orchestra/parity-receipt.json', 'home/orchestra/control-plane-source.json', 'home/hooks/parity/capabilities.json'])

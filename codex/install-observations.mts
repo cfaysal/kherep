@@ -44,6 +44,7 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
     const predecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-predecessor.json'))) as Record<string, string>;
     const headerPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-header-predecessor.json'))) as Record<string, string>;
     const lookupPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-lookup-predecessor.json'))) as Record<string, string>;
+    const prosePredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-prose-predecessor.json'))) as Record<string, string>;
     const source = (relative: string) => read(path.join(repo, relative));
     const configFile = path.join(home, 'config.toml'), beforeConfig = read(configFile);
     const start = beforeConfig.indexOf(START), end = beforeConfig.indexOf(END);
@@ -113,7 +114,7 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
         const file = path.join(workspace, 'tools', name);
         const relative = `modules/atl-jira-brokers/${name}`;
         if (fs.existsSync(file) && read(file) !== source(relative) && read(file) !== predecessor[relative] && read(file) !== lookupPredecessor[relative]
-            && read(file) !== headerPredecessor[relative])
+            && read(file) !== headerPredecessor[relative] && read(file) !== prosePredecessor[relative])
             throw new Error('observation-broker-drift');
     }
     return { home, workspace, repo, changes, config, beforeConfig, newAgent, agentFile, capabilities, insertedText };

@@ -139,9 +139,9 @@ export function observationBroker(home: string, context?: ConfluenceContext, opt
             }), { title: finding.title, parentId: parent });
             if (result !== 0 || errors.length)
                 throw new Error('related-unavailable');
-            // Confluence storage encodes literal > in prose. Preserve tags and
-            // existing entities; the publisher still requires exact readback.
-            const prose = finding.bodyStorage.replace(/(<[^>]*>)|>/g, (_match, tag: string | undefined) => tag ?? '&gt;');
+            // Encode literal > and " in accepted attribute-free prose; preserve
+            // tags, entities and backslashes. Related anchors are appended below.
+            const prose = finding.bodyStorage.replace(/(<[^>]*>)|[>"]/g, (match, tag: string | undefined) => tag ?? (match === '>' ? '&gt;' : '&quot;'));
             return withRelated(prose, rows.length ? relatedSection(key, rows) : '<h2>Related pages</h2><p>No related page found in a complete lookup.</p>');
         },
         async create(spaceId, finding, parent, body) {
