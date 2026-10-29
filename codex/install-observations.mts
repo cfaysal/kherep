@@ -109,7 +109,8 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
     changes.set(configFile, config);
     for (const name of observationFiles(repo)) {
         const file = path.join(workspace, 'tools', name);
-        if (fs.existsSync(file) && read(file) !== source(`modules/atl-jira-brokers/${name}`))
+        const relative = `modules/atl-jira-brokers/${name}`;
+        if (fs.existsSync(file) && read(file) !== source(relative) && read(file) !== predecessor[relative])
             throw new Error('observation-broker-drift');
     }
     return { home, workspace, repo, changes, config, beforeConfig, newAgent, agentFile, capabilities, insertedText };

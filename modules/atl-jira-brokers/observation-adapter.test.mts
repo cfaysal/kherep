@@ -145,9 +145,12 @@ test('real stdio empty findings succeed without configuration, credentials or va
     const f = fixture(t);
     const home = path.join(f.home, 'absent-home');
     const run = spawnSync(process.execPath, [path.join(import.meta.dirname, 'observation-stdio.mts')], { encoding: 'utf8', env: { PATH: process.env.PATH, CODEX_HOME: home, KHEREP_PROFILE: 'unconfigured' },
-        input: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'publish_observations', arguments: { ...request(), observations: [] } } }) + '\n' });
+        input: [undefined, { progressToken: 1, threadId: 'METADATA_CANARY' }].map((_meta, index) => JSON.stringify({ jsonrpc: '2.0', id: index + 1, method: 'tools/call', params: { name: 'publish_observations', arguments: { ...request(), observations: [] }, ...(_meta ? { _meta } : {}) } })).join('\n') + '\n' });
     assert.equal(run.status, 0, run.stderr);
-    assert.match(run.stdout, /OBS-RESULT: empty no-admissible-findings/);
+    const responses = run.stdout.trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(responses.length, 2);
+    assert.ok(responses.every(response => response.result.content[0].text === 'OBS-RESULT: empty no-admissible-findings'));
+    assert.doesNotMatch(run.stdout, /METADATA_CANARY/);
     assert.equal(fs.existsSync(home), false);
 });
 test('targeted stitching adds and independently verifies the new page link on its related neighbour', async (t) => {
@@ -173,4 +176,45 @@ test('stitch fresh-version merge preserves an intervening human body edit', asyn
     assert.match(write.body.body.value, /HUMAN_EDIT/);
     assert.match(write.body.body.value, /pages\/100/);
     assert.equal(write.body.version.number, 3);
+});
+test('native tools/call accepts _meta progressToken:number and threadId without forwarding metadata', async () => {
+    const args = { ...request(), observations: [] };
+    const received: unknown[] = [];
+    const call = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
+            name: 'publish_observations', arguments: args,
+            _meta: { progressToken: 7, threadId: 'METADATA_CANARY_NATIVE_THREAD' },
+        } };
+    const response = await observationRpc(call, async (value) => {
+        received.push(value);
+        return 'OBS-RESULT: empty no-admissible-findings';
+    }) as any;
+    assert.deepEqual(received, [args]);
+    assert.equal(response.result.content[0].text, 'OBS-RESULT: empty no-admissible-findings');
+    assert.doesNotMatch(JSON.stringify(response), /METADATA_CANARY|progressToken|threadId/);
+});
+test('bounded metadata extensions and string progress tokens are accepted without publication identity changes', async () => {
+    const args = { ...request(), observations: [] };
+    let calls = 0;
+    for (const metadata of [{}, { progressToken: 'synthetic-progress' }, { threadId: { extension: true }, otherExtension: ['ignored'] }]) {
+        await observationRpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
+                name: 'publish_observations', arguments: args, _meta: metadata,
+            } }, async (value) => { calls++; assert.strictEqual(value, args); return 'OBS-RESULT: empty no-admissible-findings'; });
+    }
+    assert.equal(calls, 3);
+});
+test('malformed or oversized metadata and unknown control keys never invoke publication', async () => {
+    let calls = 0;
+    const publish = async () => { calls++; return 'OBS-RESULT: empty no-admissible-findings'; };
+    const params = { name: 'publish_observations', arguments: { ...request(), observations: [] } };
+    for (const metadata of [null, [], 'METADATA_CANARY', 7, { progressToken: null }, { progressToken: {} },
+        { progressToken: true }, { progressToken: Number.POSITIVE_INFINITY }, { extension: 'x'.repeat(4096) }, { extension: 'é'.repeat(2050) }]) {
+        const response = await observationRpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { ...params, _meta: metadata } }, publish) as any;
+        assert.equal(response.error.code, -32602);
+        assert.doesNotMatch(JSON.stringify(response), /METADATA_CANARY|progressToken|threadId/);
+    }
+    const response = await observationRpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
+            ...params, _meta: { progressToken: 1 }, spaceId: '999',
+        } }, publish) as any;
+    assert.equal(response.error.code, -32602);
+    assert.equal(calls, 0);
 });

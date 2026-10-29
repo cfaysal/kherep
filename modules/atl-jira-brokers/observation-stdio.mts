@@ -23,6 +23,26 @@ export const OBSERVATION_TOOL = {
         } },
 };
 type Publish = (value: unknown) => Promise<string>;
+// MCP Request.params._meta permits progressToken (string | number) and unknown
+// extension keys. Metadata is ignored, never publication identity or arguments.
+// The 4 KiB encoded limit is a local resource bound, not an MCP schema limit.
+function validRequestMetadata(value: unknown): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null)
+        return false;
+    const metadata = value as Record<string, unknown>;
+    if (Object.hasOwn(metadata, 'progressToken') && typeof metadata.progressToken !== 'string'
+        && !(typeof metadata.progressToken === 'number' && Number.isFinite(metadata.progressToken)))
+        return false;
+    try {
+        return Buffer.byteLength(JSON.stringify(metadata), 'utf8') <= 4096;
+    }
+    catch {
+        return false;
+    }
+}
 export async function observationRpc(value: unknown, publish: Publish): Promise<unknown | null> {
     const r = value as {
         id?: unknown;
@@ -31,6 +51,7 @@ export async function observationRpc(value: unknown, publish: Publish): Promise<
         params?: {
             name?: unknown;
             arguments?: unknown;
+            _meta?: unknown;
         };
     } | null;
     const id = typeof r?.id === 'string' && /^[a-zA-Z0-9._-]{1,80}$/.test(r.id) || typeof r?.id === 'number' && Number.isSafeInteger(r.id) ? r.id : null;
@@ -48,8 +69,9 @@ export async function observationRpc(value: unknown, publish: Publish): Promise<
     if (r.method === 'tools/list')
         return result({ tools: [OBSERVATION_TOOL] });
     if (r.method === 'tools/call' && (!r.params || typeof r.params !== 'object' || Array.isArray(r.params)
-        || Object.keys(r.params).some(key => !['name', 'arguments'].includes(key))
-        || typeof r.params.name !== 'string' || !Object.hasOwn(r.params, 'arguments'))) {
+        || Object.keys(r.params).some(key => !['name', 'arguments', '_meta'].includes(key))
+        || typeof r.params.name !== 'string' || !Object.hasOwn(r.params, 'arguments')
+        || Object.hasOwn(r.params, '_meta') && !validRequestMetadata(r.params._meta))) {
         return { jsonrpc: '2.0', id, error: { code: -32602, message: 'invalid-parameters' } };
     }
     if (r.method === 'tools/call' && r.params?.name === 'publish_observations') {
