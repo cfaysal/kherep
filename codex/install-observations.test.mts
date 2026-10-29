@@ -200,3 +200,48 @@ test('known 6577d76 policy predecessor upgrades idempotently but arbitrary polic
     assert.throws(() => checkObservationPublisher({ codexHome: f.home, workspace: f.workspace }), /broker-drift/);
     assert.deepEqual(snapshot(f.root), drifted);
 });
+
+const lookupPredecessor = JSON.parse(fs.readFileSync(path.join(REPO, 'codex/parity/observation-lookup-predecessor.json'), 'utf8')) as Record<string, string>;
+function installLookupPredecessor(f: ReturnType<typeof fixture>) {
+    fs.rmSync(path.join(f.workspace, 'tools', 'observation-lookup.mts'));
+    for (const [relative, bytes] of Object.entries(lookupPredecessor)) {
+        const file = relative.startsWith('modules/') ? path.join(f.workspace, 'tools', path.basename(relative))
+            : path.join(f.home, 'hooks', 'kherep-maestro', path.basename(relative));
+        fs.writeFileSync(file, bytes);
+    }
+    fs.writeFileSync(path.join(f.home, 'hooks', 'kherep-maestro', 'obs-result-policy.mts'), lookupPredecessor['modules/atl-jira-brokers/observation-result.mts']);
+}
+test('exact immediate lookup predecessor upgrades both receipt policy copies, closure and snapshot', t => {
+    const f = fixture(t);
+    installLookupPredecessor(f);
+    const before = snapshot(f.root);
+    installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    for (const name of ['home/hooks.state.json', 'home/orchestra/parity-receipt.json', 'home/orchestra/control-plane-source.json', 'home/hooks/parity/capabilities.json'])
+        assert.equal(snapshot(f.root)[name], before[name], name);
+    const helper = 'modules/atl-jira-brokers/observation-lookup.mts';
+    assert.equal(observationSnapshot(f.home, helper)?.toString(), fs.readFileSync(path.join(REPO, helper), 'utf8'));
+    for (const file of [path.join(f.workspace, 'tools', 'observation-result.mts'), path.join(f.home, 'hooks', 'kherep-maestro', 'obs-result-policy.mts')])
+        assert.equal(fs.readFileSync(file, 'utf8'), fs.readFileSync(path.join(REPO, 'modules/atl-jira-brokers/observation-result.mts'), 'utf8'));
+    const after = snapshot(f.root);
+    installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    assert.deepEqual(snapshot(f.root), after);
+});
+test('immediate predecessor rollback preserves exact files and unknown helper drift refuses preflight', t => {
+    const f = fixture(t);
+    installLookupPredecessor(f);
+    const before = snapshot(f.root);
+    let replaced = false;
+    assert.throws(() => installObservationPublisher({ codexHome: f.home, workspace: f.workspace, afterWrite: () => {
+        if (fs.existsSync(path.join(f.workspace, 'tools', 'observation-lookup.mts'))) {
+            replaced = true;
+            throw new Error('synthetic failure after helper creation');
+        }
+    } }), /rolled-back/);
+    assert.equal(replaced, true);
+    assert.deepEqual(snapshot(f.root), before);
+    const helper = path.join(f.home, 'hooks', 'kherep-maestro', 'obs-result-policy.mts');
+    fs.appendFileSync(helper, '\n// UNKNOWN_CANARY_DRIFT\n');
+    const drift = snapshot(f.root);
+    assert.throws(() => checkObservationPublisher({ codexHome: f.home, workspace: f.workspace }), /helper-drift/);
+    assert.deepEqual(snapshot(f.root), drift);
+});

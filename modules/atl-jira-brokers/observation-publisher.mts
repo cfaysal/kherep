@@ -1,3 +1,4 @@
+import { lookupFailure } from './observation-lookup.mts';
 import { observationRequest, failed, pageId, type Finding } from './observation-policy.mts';
 import { contentDigest, receiptKey, type ReceiptStore } from './observation-receipt.mts';
 export interface Authority {
@@ -59,8 +60,12 @@ export async function publishObservations(input: unknown, broker: ObservationBro
         if (authority.observationPublishingAuthorized !== true || typeof authority.spaceKey !== 'string'
             || !pageId(authority.spaceId))
             throw new Error();
-        phase = 'space-mismatch';
+        phase = 'space-lookup-unavailable';
         const space = await broker.space(authority.spaceKey);
+        if (space && (!pageId(space.id) || typeof space.key !== 'string' || !/^[A-Za-z0-9_~]+$/.test(space.key)
+            || space.key.toUpperCase() !== authority.spaceKey.trim().toUpperCase()))
+            throw new Error();
+        phase = space ? 'space-mismatch' : 'space-unresolved';
         if (!space || space.id !== authority.spaceId)
             throw new Error();
         phase = 'identity-unavailable';
@@ -109,8 +114,8 @@ export async function publishObservations(input: unknown, broker: ObservationBro
         held.save();
         return receipt.result;
     }
-    catch {
-        const result = failed(phase, receipt.ids);
+    catch (error) {
+        const result = failed(phase === 'space-lookup-unavailable' ? lookupFailure(error) : phase, receipt.ids);
         try {
             receipt.result = result;
             held.save();

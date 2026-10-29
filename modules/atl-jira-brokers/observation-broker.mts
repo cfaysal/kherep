@@ -10,6 +10,7 @@ import { outgoingIds, requireResolvableAnchors } from './confluence-related.mts'
 import { semanticProposals } from './confluence-semantic.mts';
 import { SCOPES, v2, type ConfluenceSession } from './confluence-contract.mts';
 import type { ObservationBroker, Authority } from './observation-publisher.mts';
+import { ObservationLookupError } from './observation-lookup.mts';
 import { pageId } from './observation-policy.mts';
 const CREDENTIAL = 'KHEREP_ATL_CRED_FILE_CODEX';
 // A broken collection must not become an empty successful search or child list.
@@ -27,6 +28,17 @@ export function checkedSession(session: ConfluenceSession): ConfluenceSession {
                     throw new Error('collection-unavailable');
                 const next = json._links?.next;
                 if (next !== undefined && (typeof next !== 'string' || (next && !/^\/(?:wiki\/)?api\//.test(next))))
+                    throw new Error('collection-unavailable');
+            }
+            if (spec.method === 'GET' && /^\/wiki\/api\/v2\/spaces\?/.test(spec.path)) {
+                const json = response.json as { results?: unknown; _links?: { next?: unknown } } | null;
+                const wanted = new URLSearchParams(spec.path.split('?')[1]).get('keys');
+                if (!Array.isArray(json?.results) || json.results.length > 1 || json.results.some(row =>
+                    !row || typeof row !== 'object' || Array.isArray(row) || !pageId(row.id)
+                    || typeof row.key !== 'string' || !/^[A-Za-z0-9_~]+$/.test(row.key)
+                    || row.key.toUpperCase() !== wanted?.toUpperCase() || typeof row.name !== 'string' || !row.name.trim())
+                    || (json._links !== undefined && (!json._links || typeof json._links !== 'object' || Array.isArray(json._links)))
+                    || (json._links?.next !== undefined && json._links.next !== ''))
                     throw new Error('collection-unavailable');
             }
             return response;
@@ -88,7 +100,11 @@ export function observationBroker(home: string, context?: ConfluenceContext, opt
                 throw new Error('authority-unavailable');
             return JSON.parse(authorityText) as Authority;
         },
-        space: key => findSpace(session, key),
+        async space(key) {
+            if (!ctx.env.KHEREP_ATL_SITE?.trim() || !ctx.env[CREDENTIAL]?.trim())
+                throw new ObservationLookupError('space-lookup-bindings-missing');
+            return findSpace(session, key);
+        },
         identity: async () => (await currentUser(session))?.accountId ?? null,
         async parent(spaceId, nodeId, app) {
             const shelf = await getPage(session, nodeId);
@@ -185,7 +201,16 @@ export function observationBroker(home: string, context?: ConfluenceContext, opt
 }
 // Bound provider bodies and timeouts without returning raw provider failures.
 const boundedFetch: ConfluenceContext['fetch'] = async (url, options) => {
-    const response = await fetch(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(30000) });
+    const signal = AbortSignal.timeout(30000);
+    let response: Response;
+    try { response = await fetch(url, { ...options, redirect: 'error', signal }); }
+    catch (error) {
+        if (signal.aborted) throw new ObservationLookupError('space-lookup-timeout');
+        throw error;
+    }
+    // A spaces result with any Link header is conservatively incomplete.
+    if (/^\/ex\/confluence\/[^/]+\/wiki\/api\/v2\/spaces$/.test(new URL(url).pathname) && response.headers.get('link')?.trim())
+        throw new Error('collection-unavailable');
     let text: string | undefined;
     const read = async () => {
         if (text !== undefined)
@@ -195,7 +220,10 @@ const boundedFetch: ConfluenceContext['fetch'] = async (url, options) => {
         let size = 0;
         if (reader)
             while (true) {
-                const part = await reader.read();
+                const part = await reader.read().catch(error => {
+                    if (signal.aborted) throw new ObservationLookupError('space-lookup-timeout');
+                    throw error;
+                });
                 if (part.done)
                     break;
                 size += part.value.length;

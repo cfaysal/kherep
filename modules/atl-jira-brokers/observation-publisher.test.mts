@@ -59,7 +59,7 @@ for (const grant of [undefined, false, 'true', null])
         assert.equal(await publishObservations(request(), f.broker, f.store), 'OBS-RESULT: failed authority-denied');
         assert.ok(!f.calls.includes('create'));
     });
-for (const [member, expected] of [['authority', 'authority-unavailable'], ['space', 'space-mismatch'], ['identity', 'identity-unavailable'],
+for (const [member, expected] of [['authority', 'authority-unavailable'], ['space', 'space-lookup-unavailable'], ['identity', 'identity-unavailable'],
     ['parent', 'placement-unresolved'], ['related', 'related-unavailable'], ['create', 'create-unverified'], ['labels', 'labels-unverified'],
     ['read', 'readback-unverified'], ['stitch', 'stitch-unverified']] as const)
     test(`safe failure during ${member} is terminal`, async (t) => {
@@ -109,5 +109,27 @@ test('named node overrides all findings; partial creation retains IDs without a 
     f.broker.create = async (...args) => { if (f.calls.includes('create'))
         throw new Error('timeout CANARY'); return original(...args); };
     assert.equal(await publishObservations({ ...r, namedNode: 'Kherep' }, f.broker, f.store), 'OBS-RESULT: failed create-unverified created=101');
+    assert.equal(f.calls.filter(c => c === 'create').length, 1);
+});
+
+for (const [space, code] of [
+    [null, 'space-unresolved'], [{ id: '999', key: 'SYNTHETIC' }, 'space-mismatch'],
+    [{ id: '10', key: 'OTHER' }, 'space-lookup-unavailable'], [{ id: '10', key: 'SYNTHETIC_EXTRA' }, 'space-lookup-unavailable'], [{ id: 'CANARY', key: 'SYNTHETIC' }, 'space-lookup-unavailable'],
+] as const) test(`space lookup distinguishes ${code} for ${JSON.stringify(space)}`, async t => {
+    const f = fixture(t);
+    let lookups = 0;
+    f.broker.space = async () => { lookups++; return space; };
+    const result = await publishObservations(request(), f.broker, f.store);
+    assert.equal(result, `OBS-RESULT: failed ${code}`);
+    assert.equal(await publishObservations(request(), f.broker, f.store), result);
+    assert.equal(lookups, 1);
+    assert.deepEqual(f.calls, ['authority']);
+});
+
+for (const key of ['synthetic', ' SYNTHETIC ']) test(`canonical space key normalization preserves publication: ${key}`, async t => {
+    const f = fixture(t);
+    const authority = f.broker.authority;
+    f.broker.authority = async () => ({ ...await authority(), spaceKey: key });
+    assert.equal(await publishObservations(request(), f.broker, f.store), 'OBS-RESULT: wrote 1 101');
     assert.equal(f.calls.filter(c => c === 'create').length, 1);
 });
