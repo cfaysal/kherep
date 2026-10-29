@@ -7,8 +7,10 @@ export interface Snapshot {
 }
 export interface Candidate {
   pageId: string; readVersion: number; problem: string;
-  proposedAction: 'review-format' | 'review-link' | 'review-duplicate' | 'verify-current-status';
+  proposedAction: 'review-format' | 'review-link' | 'review-duplicate' | 'verify-current-status' | 'recheck-evidence';
   evidence: string; uncertainty: 'UNKNOWN'; relatedPageId?: string;
+  // #693 revision-stale only: ids, commits and the changed bound paths of the operator's checkout.
+  detail?: { repository: string; boundCommit: string; comparedRef: string; comparedSha: string; changedPaths: string[] };
 }
 function meaningful(body: string): Set<string> {
   // Related navigation and provenance metadata must not manufacture duplicates.
@@ -38,7 +40,7 @@ export function drainageRules(pages: Snapshot[], graphComplete: boolean): Candid
       || /\b[\w/-]+\.(?:mts|ts|tsx|js|py|java|go|rs)\b/.test(claim);
     // Revision lines are read without base-form blocks, positional or not, tail optional, as on d5c15f4 (#650 T8, #666).
     if (p.labels.includes('type-observation') && codeBound && !revisionsValid(revisionBody(p.body),p.labels)) {
-      out.push(candidate(p,'revision-missing-or-invalid','review-format','Code-bound observation lacks valid repository@full-SHA Revision lines or an allowed non-confirmed no-binding declaration; original evidence required.'));
+      out.push(candidate(p,'revision-missing-or-invalid','review-format','Code-bound observation lacks valid repository@full-SHA Revision lines (with an optional repo-relative path list) or an allowed non-confirmed no-binding declaration; original evidence required.'));
     }
     if (/only because (?:the )?search returned (?:it|this|that|them)/i.test(text)) {
       out.push(candidate(p,'search-only-link-justification','review-link','Explicit search-only justification; inspect link context before changing it.'));

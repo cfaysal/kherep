@@ -4,6 +4,7 @@ import { InventoryError, spaceIndex, type SpaceIndex } from './confluence-relate
 import { drainageRules, type Candidate, type Snapshot } from './confluence-drainage-rules.mts';
 import { readFailure, ReadFailure } from './confluence-pagination.mts';
 import { drainageSnapshot } from './confluence-drainage-snapshot.mts';
+import { revisionStaleness, staleCandidates, type StalenessOptions, type StalenessReport } from './confluence-revision-staleness.mts';
 
 export interface ScanOptions {
   spaceId: string;
@@ -11,6 +12,8 @@ export interface ScanOptions {
   pageIds?: string[];
   excludeIds?: string[];
   now?: () => number;
+  // #693: the read-only git probe of the operator's --repo-root; absent means no checkout was given.
+  staleness?: StalenessOptions;
 }
 interface ReadError { pageId?: string; stage: 'inventory' | 'snapshot' | 'inventory-readback'; reason: string; httpStatus?: number }
 export interface DrainageReport {
@@ -21,6 +24,7 @@ export interface DrainageReport {
   graph: 'visible-space-read' | 'not-evaluated';
   limitations: string[];
   candidates: Candidate[];
+  revisionStaleness: StalenessReport;
 }
 function ids(values: string[] = []): string[] {
   if (values.some(id => !/^\d+$/.test(id))) throw new ConfluenceError('Page ids must be numeric.');
@@ -71,6 +75,8 @@ export async function scanDrainage(session: ConfluenceSession, options: ScanOpti
   if (errors.length && !index.byId.size && !pages.length) status = 'failed';
   else if (errors.length || excludedIds.length) status = 'partial';
   else status = 'complete';
+  const staleness = await revisionStaleness(pages, {status,selected:selected.length,read:pages.length},
+    options.staleness ?? {probe:null,ref:'HEAD'});
   return {
     scope:{spaceId:options.spaceId,selection:options.pageIds ? 'subset':'visible-space',requestedIds,excludedIds},
     inventory:{status,
@@ -83,7 +89,9 @@ export async function scanDrainage(session: ConfluenceSession, options: ScanOpti
       'Complete inventory does not prove that contradictions, duplicates or external incoming links are absent.',
       'Historical measurements remain valid for their original scope; later changes require current verification.',
       ...(excludedIds.length ? ['Excluded pages were not read; private or unavailable routes remain outside review.'] : []),
+      'Revision staleness compares bound paths between commits of the given checkout; it is a signal to re-measure, not a refutation, and a page without paths or without a checkout stays unjudged.',
     ],
-    candidates:drainageRules(pages,graphComplete),
+    candidates:[...drainageRules(pages,graphComplete),...staleCandidates(staleness)],
+    revisionStaleness:staleness,
   };
 }
