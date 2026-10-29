@@ -54,7 +54,7 @@ export const MSG_USAGE = `usage:
   kherep-node msg send <node> --new claude|codex --directive <the operator's answer, verbatim> [--cwd <dir>] [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg send --reply-to <messageId> [--to <node>/<session>] [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg inbox [--from <codex-session-id>] [--all | --receive]
-  kherep-node msg inbox --message-id <incoming-UUID> --from <owner-UUID> --expect-node <sender-node-UUID> --expect-session <exact-sender-ref> --expect-target-session <target-session-UUID> --expect-reply-to <sent-root-UUID> --expect-text-sha256 <safe-text-SHA256>
+  kherep-node msg inbox --message-id <incoming-UUID> --from <owner-UUID> --expect-node <sender-node-UUID> --expect-session <exact-sender-ref> --expect-target-session <exact-target-ref> --expect-reply-to <sent-root-UUID> --expect-text-sha256 <safe-text-SHA256>
   kherep-node msg status <messageId>
   kherep-node msg stop <taskId | sent messageId | owned requestId> [--expected-run-version <run version>] [--wait <seconds>]
 Without --from the session is named by ${SESSION_ENV} (Claude Code), ${CODEX_THREAD_ENV} (Codex) or ${KHEREP_SESSION_ENV} (the node's Codex runs). --from names the resolved current session, or the full id of a Codex session recorded by a Kherep hook within 12 hours. The recorded-session alternative must match any node task binding from ${KHEREP_SESSION_ENV}.`;

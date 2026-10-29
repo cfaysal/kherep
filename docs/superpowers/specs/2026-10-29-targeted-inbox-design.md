@@ -2,16 +2,17 @@
 
 The authorized design adds a read-only exact inspection mode to `msg inbox`.
 Seven mandatory selectors bind the externally preclassified safe incoming UUID,
-exact owner UUID, sender node UUID, exact raw sender reference, full outgoing
-target-session UUID, original sent UUID and known text SHA-256. The raw sender
-reference may be a name or UUID, and its relationship to the target UUID must
-come from trusted external evidence. This path never resolves an alias. These inputs are not semantic classification evidence.
+exact owner UUID, sender node UUID, exact raw sender reference, exact original
+sent destination reference, original sent UUID and known text SHA-256. Both raw
+references may be a name or UUID. Their association with the chosen peer must
+come from trusted external evidence. This path compares them literally, never
+resolves aliases, and does not attest a canonical peer UUID from names. These inputs are not semantic classification evidence.
 Without an externally known safe ID and hash, this mode remains unavailable.
 
 Preflight rejects incomplete, malformed, duplicate or mixed modes and selector
 spellings after the inbox option terminator, verifies the existing
 caller identity, then reads only the selected authored-safe sent root and checks
-its exact owner and full destination. An ordinary threaded sent parent is
+its exact owner and exact original destination. An ordinary threaded sent parent is
 allowed after validating its optional parent UUID, without following it. No
 incoming or sent directory listing is allowed.
 Under the existing selected-record lock it opens only that incoming regular
