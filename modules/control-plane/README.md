@@ -395,12 +395,12 @@ A task is an instruction that a node runs as a Claude Code background session (i
 #### Inspect one already classified safe reply
 
 When a trusted external source has already identified a safe incoming reply's
-exact ID, owner, raw sender tuple, full sent destination, original sent root
+exact ID, owner, raw sender tuple, exact original sent destination, original sent root
 and text SHA-256, inspect only
 that record:
 
 ```sh
-node "<config directory>/bin/kherep-node.mjs" msg inbox --message-id <incoming-UUID> --from <owner-UUID> --expect-node <sender-node-UUID> --expect-session <exact-raw-sender-ref> --expect-target-session <target-full-UUID> --expect-reply-to <original-sent-UUID> --expect-text-sha256 <safe-text-SHA256>
+node "<config directory>/bin/kherep-node.mjs" msg inbox --message-id <incoming-UUID> --from <owner-UUID> --expect-node <sender-node-UUID> --expect-session <exact-raw-sender-ref> --expect-target-session <exact-raw-target-ref> --expect-reply-to <original-sent-UUID> --expect-text-sha256 <safe-text-SHA256>
 ```
 
 The stable launcher follows the installed service pin. To use this read-only
@@ -408,27 +408,29 @@ operation from a reviewed, clean committed checkout before upgrading that pin,
 invoke the supported source CLI with the same selectors:
 
 ```sh
-node "<clean checkout>/modules/control-plane/node/cli.mts" msg inbox --message-id <incoming-UUID> --from <owner-UUID> --expect-node <sender-node-UUID> --expect-session <exact-raw-sender-ref> --expect-target-session <target-full-UUID> --expect-reply-to <original-sent-UUID> --expect-text-sha256 <safe-text-SHA256>
+node "<clean checkout>/modules/control-plane/node/cli.mts" msg inbox --message-id <incoming-UUID> --from <owner-UUID> --expect-node <sender-node-UUID> --expect-session <exact-raw-sender-ref> --expect-target-session <exact-raw-target-ref> --expect-reply-to <original-sent-UUID> --expect-text-sha256 <safe-text-SHA256>
 ```
 
 Verify that checkout's commit and reader bytes before use. This invocation
 does not start or restart the daemon, change its pin, or run its inbox index.
 
-All seven selectors are mandatory. IDs use full lowercase UUIDs, the text hash
-is a lowercase 64-character SHA-256, and `--expect-session` is the exact raw
-sender reference, either a session name or a UUID. They bind the selection; they do not prove the content is
+All seven selectors are mandatory. Message, owner and node IDs use full lowercase
+UUIDs, and the text hash is a lowercase 64-character SHA-256. `--expect-session`
+is the exact raw sender reference; `--expect-target-session` is the exact original
+sent destination reference. Both accept a session name or UUID. They bind the selection; they do not prove the content is
 public or safe. Sender identity or an original public request does not classify
-its reply. The raw sender reference and the full target UUID must both come from
-trusted external evidence. The command never resolves aliases or infers a
-relationship between a sender name and that UUID. Codex normally supplies the
-same full UUID for both selectors. If the reply ID or safe hash is unknown,
+its reply. Both raw references and their association with the chosen peer must
+come from trusted external evidence. The command compares them literally, never
+resolves aliases, and does not attest a canonical peer UUID from names. A
+`msg send --reply-to` destination can retain the original peer's raw sender name.
+Codex normally supplies the same full UUID for both selectors. If the reply ID or safe hash is unknown,
 this path is unavailable.
 Do not discover them by scanning inbox bodies or falling back to `--all`.
 
 Before any incoming body access, the command rejects malformed, incomplete,
 duplicate or mixed options, including selector spellings after `--`, verifies the existing exact caller identity and
 reads only the explicitly selected authored-safe sent root. That root must
-belong to the exact owner and store the expected full destination tuple. A sent
+belong to the exact owner and store the expected exact destination tuple. A sent
 message may itself be an ordinary threaded reply; its optional parent UUID is
 validated without reading or following that ancestor. Proxy parents are refused. Under
 the selected record's existing lock, it then reads only that bounded regular

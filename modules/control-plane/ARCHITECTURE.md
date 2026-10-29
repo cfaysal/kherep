@@ -1046,14 +1046,17 @@ the opt-in policy disables execution without removing the durable audit records.
 `node/msg-cli.mts` dispatches exact selector flags to `node/msg-inbox-exact.mts`
 before legacy inbox, status or send handling. This local read-only path requires
 an externally preclassified safe incoming ID, exact owner UUID, raw sender
-node/reference tuple, full outgoing target UUID, original authored-safe sent
+node/reference tuple, exact original sent destination reference, authored-safe sent
 root ID and text SHA-256. The flags and hash bind a
 selection, not a semantic safety classification. Unknown ID or classification
 remains unavailable; there is no discovery scan or fallback. `--expect-session`
 binds the incoming raw sender reference (a name or UUID), while the mandatory
-`--expect-target-session` binds the authored-safe sent destination's full UUID.
-Their relationship must already be supported by trusted external evidence; this
-command does not resolve aliases or establish that relationship itself. Exact
+`--expect-target-session` binds the authored-safe sent destination's exact raw
+reference, also a name or UUID. Both raw references and their association with
+the chosen peer must already be supported by trusted external evidence. This
+command compares them literally, does not resolve aliases, and does not attest
+a canonical peer UUID from names. A native `msg send --reply-to` can retain the
+original peer's raw sender name as its destination. Exact
 selector spellings after the inbox option terminator also fail before legacy
 dispatch; `msg send` retains literal message text after its terminator.
 
@@ -1062,7 +1065,7 @@ flowchart LR
   safe[Externally known safe ID, tuple and hash] --> syntax[Validate all seven selectors and unmixed mode]
   syntax --> identity[Existing exact caller verification]
   identity --> root[Read only selected authored-safe sent root]
-  root --> owner[Match root owner and full destination]
+  root --> owner[Match root owner and exact raw destination]
   owner --> lock[Existing selected inbox record lock]
   lock --> read[Bounded regular nonsymlink single-link descriptor read]
   read --> match[Verify current envelope and text hash]

@@ -85,7 +85,7 @@ const selectors = ["--message-id", "--from", "--expect-node", "--expect-session"
 for (const flag of selectors) for (const mode of ["missing", "malformed"]) {
   test(`${mode} ${flag} fails before incoming reads`, async t => {
     const f = fixture(t), argv = [...f.argv], i = argv.indexOf(flag);
-    if (mode === "missing") argv.splice(i, 2); else argv[i + 1] = flag === "--expect-session" ? "unsafe\nref" : "unsafe/path";
+    if (mode === "missing") argv.splice(i, 2); else argv[i + 1] = ["--expect-session", "--expect-target-session"].includes(flag) ? "unsafe\nref" : "unsafe/path";
     const result = await inspect(t, f, argv);
     assert.deepEqual(result, { code: 1, out: "", err: "kherep-node msg: exact-inbox-invalid-selectors", reads: 0 });
   });
@@ -232,7 +232,7 @@ test("exact selector spellings after option terminator never enter broad inbox",
   assert.deepEqual(result, { code: 1, out: "", err: "kherep-node msg: exact-inbox-invalid-selectors", reads: 0 });
 });
 
-test("named raw sender and explicit full target bind independently without alias resolution", async t => {
+test("named raw sender and explicit target ref bind independently without alias resolution", async t => {
   const f = fixture(t), argv = [...f.argv], raw = "peer-review";
   fs.writeFileSync(f.file, JSON.stringify({ ...f.record, from: { nodeId: PEER, session: raw } }));
   argv[argv.indexOf("--expect-session") + 1] = raw;
@@ -246,4 +246,14 @@ test("send retains selector spellings as literal text after option terminator", 
   const parsed = parseMsgArgs(args);
   assert.deepEqual(parsed.positionals, ["send", "peer/session", "--message-id", "literal", "--expect-target-session=literal"]);
   assert.deepEqual({ ...parsed.values }, {});
+});
+
+for (const matches of [true, false]) test(`named authored destination literal match ${matches}`, async t => {
+  const f = fixture(t), argv = [...f.argv];
+  fs.writeFileSync(f.sentFile, JSON.stringify({ ...f.sent, to: { nodeId: PEER, session: "peer-target" } }));
+  argv[argv.indexOf("--expect-target-session") + 1] = matches ? "peer-target" : "other-target";
+  const result = await inspect(t, f, argv);
+  assert.equal(result.code, matches ? 0 : 1, result.err);
+  assert.equal(result.reads, matches ? 1 : 0);
+  assert.equal(result.err, matches ? "" : "kherep-node msg: exact-inbox-root-mismatch");
 });

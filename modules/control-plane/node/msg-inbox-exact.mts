@@ -62,7 +62,7 @@ export function exactInbox(io: Io, positionals: string[], values: MsgArgs["value
   const allowed = new Set<string>(["from", ...EXACT_INBOX_FLAGS]);
   if (positionals.length !== 1 || positionals[0] !== "inbox"
     || Object.keys(values).some(key => !allowed.has(key))
-    || !isMessageId(owner) || !isMessageId(id) || !isMessageId(node) || !isSessionRef(session) || !isMessageId(target) || !isMessageId(root)
+    || !isMessageId(owner) || !isMessageId(id) || !isMessageId(node) || !isSessionRef(session) || !isSessionRef(target) || !isMessageId(root)
     || typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)) return fail("invalid-selectors");
   try {
     const verified = senderSession(io.paths, io.env, owner, io.now(), io);
