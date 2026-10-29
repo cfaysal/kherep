@@ -58,7 +58,12 @@ function fixture(t: {
                 }
             }
             else if (route === '/wiki/api/v2/pages' && method === 'POST') {
-                const stored = mode === 'encode-prose-gt' ? body.body.value.split(/(<[^>]*>)/).map((part: string, index: number) => index % 2 ? part : part.replaceAll('>', '&gt;')).join('') : body.body.value;
+                // Model Confluence's stored text nodes, independently of the broker serializer.
+                let stored = body.body.value.split(/(<[^>]*>)/).map((part: string, index: number) => index % 2 ? part : part.replaceAll('>', '&gt;').replaceAll('"', '&quot;')).join('');
+                if (mode === 'stitch-corrupt-text') stored = stored.replace('measured', 'changed');
+                if (mode === 'stitch-corrupt-backslash') stored = stored.replace('\\synthetic', '\\\\synthetic');
+                if (mode === 'stitch-corrupt-tag') stored = stored.replace('<code>', '<pre>');
+                if (mode === 'stitch-corrupt-link') stored = stored.replace('/pages/30"', '/pages/31"');
                 page = { id: '100', status: 'current', title: body.title, parentId: body.parentId, spaceId: body.spaceId,
                     authorId: mode === 'wrong-author' ? 'foreign' : 'synthetic-service', version: { number: 1 }, body: { storage: { value: stored } } };
                 json = page;
@@ -229,7 +234,6 @@ for (const [body, expected] of [
     ['<pre><code>Origin: measured command -&gt; passed &amp; recorded</code></pre>', '<pre><code>Origin: measured command -&gt; passed &amp; recorded</code></pre>'],
 ]) test(`Confluence prose greater-than encoding preserves exact readback: ${body.includes('->') ? 'literal arrow' : 'existing entity'}`, async t => {
     const f = fixture(t);
-    f.mode('encode-prose-gt');
     const r = request();
     r.observations[0].bodyStorage = body;
     assert.equal(await publishObservations(r, f.broker, f.store), 'OBS-RESULT: wrote 1 100');
@@ -237,4 +241,38 @@ for (const [body, expected] of [
     assert.ok(create.body.body.value.startsWith(expected));
     assert.doesNotMatch(create.body.body.value, /&amp;gt;/);
     assert.equal(f.calls.filter(call => call.method === 'POST' && call.route === '/wiki/api/v2/pages').length, 1);
+});
+
+for (const [body, expected] of [
+    ['<p>Origin: measured "synthetic" -> passed</p>', '<p>Origin: measured &quot;synthetic&quot; -&gt; passed</p>'],
+    [String.raw`<pre><code>Origin: measured C:\synthetic\"quote\" -> 'passed' &amp; &lt; &gt; &quot; &#34; &#x22;</code></pre>`,
+        String.raw`<pre><code>Origin: measured C:\synthetic\&quot;quote\&quot; -&gt; 'passed' &amp; &lt; &gt; &quot; &#34; &#x22;</code></pre>`],
+]) test(`default broker POST and GET agree on prose quotes: ${body.startsWith('<p>') ? 'literal' : 'backslashes and entities'}`, async t => {
+    const f = fixture(t), r = request();
+    r.observations[0].bodyStorage = body;
+    assert.equal(await publishObservations(r, f.broker, f.store), 'OBS-RESULT: wrote 1 100');
+    const creates = f.calls.filter(call => call.method === 'POST' && call.route === '/wiki/api/v2/pages');
+    assert.equal(creates.length, 1);
+    assert.equal(creates[0].body.body.value.slice(0, expected.length), expected);
+    assert.equal((await f.broker.read('100')).body, creates[0].body.body.value);
+    assert.equal(await publishObservations(r, f.broker, f.store), 'OBS-RESULT: wrote 1 100');
+    assert.equal(f.calls.filter(call => call.method === 'POST' && call.route === '/wiki/api/v2/pages').length, 1);
+});
+test('caller tag attributes are rejected before broker or journal I/O', async t => {
+    const f = fixture(t), r = request();
+    r.observations[0].bodyStorage = String.raw`<p title="C:\synthetic > quote">Origin: measured "value"</p>`;
+    assert.equal(await publishObservations(r, f.broker, f.store), 'OBS-RESULT: failed invalid-request');
+    assert.equal(f.calls.length, 0);
+    assert.equal(fs.existsSync(path.join(f.home, 'receipts')), false);
+});
+for (const corruption of ['text', 'backslash', 'tag', 'link']) test(`exact readback rejects stored ${corruption} corruption without retry or stitching`, async t => {
+    const f = fixture(t), r = request();
+    f.mode(`stitch-corrupt-${corruption}`);
+    r.observations[0].bodyStorage = String.raw`<p>Origin: measured "value"</p><pre><code>C:\synthetic</code></pre>`;
+    assert.equal(await publishObservations(r, f.broker, f.store), 'OBS-RESULT: failed readback-unverified created=100');
+    const count = f.calls.length;
+    assert.equal(await publishObservations(r, f.broker, f.store), 'OBS-RESULT: failed readback-unverified created=100');
+    assert.equal(f.calls.length, count);
+    assert.equal(f.calls.filter(call => call.method === 'POST' && call.route === '/wiki/api/v2/pages').length, 1);
+    assert.equal(f.calls.filter(call => call.method === 'PUT').length, 0);
 });
