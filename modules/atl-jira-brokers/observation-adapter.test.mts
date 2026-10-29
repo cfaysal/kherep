@@ -58,8 +58,9 @@ function fixture(t: {
                 }
             }
             else if (route === '/wiki/api/v2/pages' && method === 'POST') {
+                const stored = mode === 'encode-prose-gt' ? body.body.value.split(/(<[^>]*>)/).map((part: string, index: number) => index % 2 ? part : part.replaceAll('>', '&gt;')).join('') : body.body.value;
                 page = { id: '100', status: 'current', title: body.title, parentId: body.parentId, spaceId: body.spaceId,
-                    authorId: mode === 'wrong-author' ? 'foreign' : 'synthetic-service', version: { number: 1 }, body: { storage: { value: body.body.value } } };
+                    authorId: mode === 'wrong-author' ? 'foreign' : 'synthetic-service', version: { number: 1 }, body: { storage: { value: stored } } };
                 json = page;
             }
             else if (route === '/wiki/api/v2/pages/20')
@@ -217,4 +218,19 @@ test('malformed or oversized metadata and unknown control keys never invoke publ
         } }, publish) as any;
     assert.equal(response.error.code, -32602);
     assert.equal(calls, 0);
+});
+
+for (const [body, expected] of [
+    ['<p>Origin: measured command -> passed &amp; recorded</p>', '<p>Origin: measured command -&gt; passed &amp; recorded</p>'],
+    ['<pre><code>Origin: measured command -&gt; passed &amp; recorded</code></pre>', '<pre><code>Origin: measured command -&gt; passed &amp; recorded</code></pre>'],
+]) test(`Confluence prose greater-than encoding preserves exact readback: ${body.includes('->') ? 'literal arrow' : 'existing entity'}`, async t => {
+    const f = fixture(t);
+    f.mode('encode-prose-gt');
+    const r = request();
+    r.observations[0].bodyStorage = body;
+    assert.equal(await publishObservations(r, f.broker, f.store), 'OBS-RESULT: wrote 1 100');
+    const create = f.calls.find(call => call.method === 'POST' && call.route === '/wiki/api/v2/pages')!;
+    assert.ok(create.body.body.value.startsWith(expected));
+    assert.doesNotMatch(create.body.body.value, /&amp;gt;/);
+    assert.equal(f.calls.filter(call => call.method === 'POST' && call.route === '/wiki/api/v2/pages').length, 1);
 });
