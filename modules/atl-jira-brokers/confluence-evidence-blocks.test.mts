@@ -181,7 +181,7 @@ test('#666 T8 control: a Revision line inside a strict block\'s excerpt is metad
   const strict = renderMeasurementBlock({ ...CONFIRMED, measuredRevision: REV }, m, RUNTIME);
   assert.equal(strict.match(MEASUREMENT_BLOCK)?.[0], strict);
   const body = `<p>Revision: ${REV}</p>${AUTHOR}${strict}<p>Author followup.</p>${FOOTER}`;
-  assert.deepEqual(claim(body).revisions, { bound: [REV], unbound: [], malformed: [] });
+  assert.deepEqual(claim(body).revisions, { bound: [REV], unbound: [], malformed: [], paths: {} });
   assert.equal(decide(claim(body), CODE_M, OPT).outcome, 'confirmed');
   assert.equal(flagged(body, AFTER_LABELS), 0);
 });
@@ -209,7 +209,7 @@ const PRE = '<pre>retry(receipt)</pre>';
 
 test('#669: a Revision line directly after </pre> binds the claim', () => {
   const body = `${AUTHOR}${PRE}<p>Revision: ${REV}</p>${FOOTER}`;
-  assert.deepEqual(claim(body).revisions, { bound: [REV], unbound: [], malformed: [] });
+  assert.deepEqual(claim(body).revisions, { bound: [REV], unbound: [], malformed: [], paths: {} });
   assert.equal(flagged(body, LABELS), 0);
   assert.equal(decide(claim(body), CODE_M, OPT).outcome, 'confirmed');
 });
@@ -235,7 +235,7 @@ test('#669 guard: a Revision line that ends a block excerpt\'s <pre> never suppl
     const b = renderMeasurementBlock({ ...CONFIRMED, measuredRevision: REV }, { ...CODE_M, excerpt }, RUNTIME);
     assert.equal(b.match(MEASUREMENT_BLOCK)?.[0], b);
     for (const body of [`${AUTHOR}${b}<p>Author followup.</p>${FOOTER}`, `${AUTHOR}${b}${FOOTER}`, `${AUTHOR}${FOOTER}${b}`]) {
-      assert.deepEqual(claim(body).revisions, { bound: [], unbound: [], malformed: [] }, body);
+      assert.deepEqual(claim(body).revisions, { bound: [], unbound: [], malformed: [], paths: {} }, body);
       assert.equal(flagged(body, LABELS), 1, body);
       assert.equal(decide(claim(body), { ...CODE_M, revision: BETA }, ANY_SHA).reason, 'revision-not-on-page', body);
     }

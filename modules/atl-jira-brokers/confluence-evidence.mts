@@ -3,26 +3,9 @@
 import { createHash } from 'node:crypto';
 import { RELATED_HEADING } from './confluence-neighbours.mts';
 
-// The published observation Revision grammar; the drainage scanner imports it, so both judge a page alike.
-export const BOUND_REVISION = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*@[0-9a-f]{40}$/;
-export const NO_BINDING_LINE = /^none \(no exact binding: (?:no repository|no full commit SHA|dirty tree|malformed repository or revision)\)$/;
-export const DIRTY_LINE = /^(.*) \(no exact binding: dirty tree\)$/;
-export interface Revisions { bound: string[]; unbound: string[]; malformed: string[] }
-// #669: plainText(body) is the base text. With a mark, only a </pre> closing an outermost <pre> ends a line; outer comments, CDATA and PIs become marks.
-export function plainText(body: string, mark = ''): string { let depth = 0;
-  return body.replace(/<!--[^]*?(?:-->|$)|<!\[CDATA\[[^]*?(?:\]\]>|$)|<\?[^]*?(?:\?>|$)|<\/pre>|<pre\b(?:"[^"]*"|'[^']*'|[^>"'])*>/gi, tag => /^<[!?]/.test(tag) ? (mark && !depth ? mark : tag)
-    : tag[1] === '/' ? (depth > 0 && --depth === 0 && mark ? `${tag}\n${mark}` : tag) : tag.endsWith('/>') ? tag : (depth++ === 0 && mark ? `${mark}\n${tag}` : tag))
-    .replace(/<\/(?:p|div|h[1-6]|li)>/gi, '\n').replace(/<[^>]*>/g, ' ').replace(/&(?:nbsp|amp|lt|gt|quot);/g, ' ').replace(/[ \t]+/g, ' ').trim();
-}
-export const claimViews = (body: string): [string, string] => [plainText(body), ['\x01', ...plainText(body, '\x01').split('\n').map(l => /^[^\S\n]*\x01/.test(l) ? l.replace(/^[\s\x01]+/, '') : '\x01')].join('\n')];
-export function revisionLines(body: string): Revisions { // claimViews: the base text, then the lines after a real </pre> or region; every other line is a \x01 barrier (#672 review)
-  const out: Revisions = { bound: [], unbound: [], malformed: [] };
-  for (const [view, text] of claimViews(body).entries()) for (const match of text.matchAll(/(?:^|\n)\s*Revision\s*:\s*([^\n]*)/gmi)) {
-    const line = match[1].trim().replace(/^\x01$/, ''), kind = BOUND_REVISION.test(line) ? 'bound' : NO_BINDING_LINE.test(line) || BOUND_REVISION.test(DIRTY_LINE.exec(line)?.[1] ?? '') ? 'unbound' : 'malformed';
-    if (view === 0 || !out[kind].includes(line)) out[kind].push(line);
-  }
-  return out;
-}
+// #693: the Revision grammar and claim text live in confluence-claim-text.mts; re-exported for every current importer.
+import { BOUND_REVISION, claimViews, DIRTY_LINE, plainText, revisionLines, type Revisions } from './confluence-claim-text.mts';
+export { BOUND_REVISION, claimViews, DIRTY_LINE, NO_BINDING_LINE, plainText, revisionLines, scopedRevision, type Revisions, type Scoped } from './confluence-claim-text.mts';
 // Copied, not imported (neither source is in the broker install closure): codex-output.mts:76-81 in
 // modules/control-plane/node and bootstrap/publication-audit.mts:67. A hit is refused, never redacted.
 export const SECRET_MARKERS: readonly RegExp[] = [
@@ -71,7 +54,7 @@ export function classifyClaim(snapshot: ClaimSource, bodyApproved: boolean, kind
   const trackerKeys = unique([...(text.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? []), ...githubKeys]);
   // Priority order: a bound revision makes code repeatable; nothing repeats a historical claim.
   const has: [Kind, boolean][] = [
-    ['code', Object.values(revisions).some(lines => lines.length > 0) || codeTokens.length > 0
+    ['code', [revisions.bound, revisions.unbound, revisions.malformed].some(lines => lines.length > 0) || codeTokens.length > 0
       || /(?:^|\n)\s*(?:Code|Repository|Repo|Commit|Code[- ]bound)\s*:/im.test(lines)],
     ['historical', /\b(?:historical(?:ly)?|at the time of (?:measurement|writing))\b/i.test(text)],
     ['tracker', trackerKeys.length > 0],

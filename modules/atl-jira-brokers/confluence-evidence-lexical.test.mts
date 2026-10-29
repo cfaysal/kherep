@@ -41,7 +41,7 @@ test('#669 lexical: a Revision quoted in a comment or CDATA never binds', () => 
 test('#669 lexical controls: an author Revision after the comment or CDATA still binds', () => {
   for (const [name, fragment] of Object.entries(LEXICAL)) {
     for (const body of [`${AUTHOR}${fragment}<pre>y</pre><p>Revision: ${BETA}</p>${FOOTER}`, `${AUTHOR}${fragment}<p>x</p><p>Revision: ${BETA}</p>${FOOTER}`]) {
-      assert.deepEqual(claim(body).revisions, { bound: [BETA], unbound: [], malformed: [] }, `${name} ${body}`);
+      assert.deepEqual(claim(body).revisions, { bound: [BETA], unbound: [], malformed: [], paths: {} }, `${name} ${body}`);
       assert.equal(decide(claim(body), M(BETA), OPT).outcome, 'confirmed', body);
       assert.equal(flagged(body, CONFIRMED), 0, body);
     }
@@ -82,7 +82,7 @@ test('#669 lexical: a fake close inside a real <pre> ends nothing; the real clos
     assert.equal(flagged(after(line), CONFIRMED), 1, line);
   }
   for (const body of [`${AUTHOR}${Q}<p>Revision: ${REV}</p>${FOOTER}`, `${AUTHOR}<pre title="x > y">a<pre/>b</pre><p>Revision: ${REV}</p>${FOOTER}`]) {
-    assert.deepEqual(claim(body).revisions, { bound: [REV], unbound: [], malformed: [] }, body);
+    assert.deepEqual(claim(body).revisions, { bound: [REV], unbound: [], malformed: [], paths: {} }, body);
     assert.equal(decide(claim(body), M(REV), OPT).outcome, 'confirmed', body);
   }
 });
@@ -132,7 +132,7 @@ const GAP = (value: string) => `${AUTHOR}<pre>x</pre><p>Revision:</p><p>${value}
 
 test('#672 review: a Revision label after </pre> binds nothing across a discarded line', () => {
   for (const body of [GAP('not a revision'), GAP('none (no exact binding: dirty tree)')]) {
-    assert.deepEqual(claim(body).revisions, { bound: [], unbound: [], malformed: [''] }, body);
+    assert.deepEqual(claim(body).revisions, { bound: [], unbound: [], malformed: [''], paths: {} }, body);
     assert.equal(decide(claim(body), M(REV), OPT).reason, 'revision-not-on-page', body);
     assert.equal(flagged(body, ASSUMED), 1, body);
     assert.equal(flagged(body, CONFIRMED), 1, body);
@@ -155,11 +155,11 @@ test('#672 review: the view seam is a barrier', () => {
 
 test('#672 review: a barrier right after a label is an empty malformed declaration', () => {
   const alone = `${AUTHOR}<pre>x</pre><p>Revision:</p><p>prose</p>${FOOTER}`;
-  assert.deepEqual(claim(alone).revisions, { bound: [], unbound: [], malformed: [''] });
+  assert.deepEqual(claim(alone).revisions, { bound: [], unbound: [], malformed: [''], paths: {} });
   assert.equal(decide(claim(alone), M(REV), OPT).reason, 'revision-not-on-page');
   assert.equal(flagged(alone, ASSUMED), 1);
   const bound = `${AUTHOR}<p>Revision: ${REV}</p><pre>x</pre><p>Revision:</p><p>prose</p>${FOOTER}`;
-  assert.deepEqual(claim(bound).revisions, { bound: [REV], unbound: [], malformed: [''] });
+  assert.deepEqual(claim(bound).revisions, { bound: [REV], unbound: [], malformed: [''], paths: {} });
   assert.equal(decide(claim(bound), M(REV), OPT).reason, 'revision-unbound-on-page');
   assert.equal(flagged(bound, CONFIRMED), 1);
   for (const body of [alone, bound]) assert.ok(!claim(body).revisions.malformed.some(l => l.includes('\x01')), body);
@@ -167,7 +167,7 @@ test('#672 review: a barrier right after a label is an empty malformed declarati
 
 test('#672 review control: a contiguous marked run still binds', () => {
   const body = `${AUTHOR}<pre>x</pre><p>Revision:</p><!-- note --><p>${REV}</p>${FOOTER}`;
-  assert.deepEqual(claim(body).revisions, { bound: [REV], unbound: [], malformed: [] });
+  assert.deepEqual(claim(body).revisions, { bound: [REV], unbound: [], malformed: [], paths: {} });
   assert.equal(decide(claim(body), M(REV), OPT).outcome, 'confirmed');
   assert.equal(flagged(body, CONFIRMED), 0);
   const host = page('<pre>x</pre><p>Host</p><!-- note --><p>: queue</p>');
