@@ -121,7 +121,7 @@ for (const status of [401, 503]) test(`provider HTTP ${status} keeps generic loo
     assert.doesNotMatch(fs.readdirSync(path.join(f.home, 'receipts')).map(n => fs.readFileSync(path.join(f.home, 'receipts', n), 'utf8')).join(), /CANARY|ENOTFOUND|ETIMEDOUT/);
 });
 
-test('default observation transport refuses Link-only spaces continuation without exposing its contents', t => {
+function defaultLookup(t: { after(fn: () => void): void }, spaces: unknown, link = '<https://CANARY.invalid/path>; rel="alternate"') {
     const f = fixture(t);
     const credential = path.join(f.home, 'synthetic-binding');
     fs.writeFileSync(credential, 'client_id: synthetic\nclient_secret: CANARY');
@@ -129,28 +129,69 @@ test('default observation transport refuses Link-only spaces continuation withou
         import { observationBroker } from ${JSON.stringify(new URL('./observation-broker.mts', import.meta.url).href)};
         import { publishObservations } from ${JSON.stringify(new URL('./observation-publisher.mts', import.meta.url).href)};
         import { receiptStore } from ${JSON.stringify(new URL('./observation-receipt.mts', import.meta.url).href)};
-        let calls = 0;
-        globalThis.fetch = async url => {
+        let calls = 0, writes = 0, page;
+        const labels = [];
+        globalThis.fetch = async (url, options) => {
             calls++;
+            const route = url.slice(url.indexOf('/wiki/'));
+            const body = options?.body ? JSON.parse(options.body.toString()) : undefined;
             let json;
             if (url.endsWith('/oauth/token')) json = { access_token: 'CANARY', expires_in: 3600 };
             else if (url.endsWith('/_edge/tenant_info')) json = { cloudId: 'synthetic-cloud' };
-            else if (url.includes('/spaces?')) json = { results: [] };
+            else if (url.includes('/spaces?')) json = ${JSON.stringify(spaces)};
+            else if (route === '/wiki/rest/api/user/current') json = { accountId: 'synthetic-service' };
+            else if (route === '/wiki/api/v2/pages/20') json = { id: '20', spaceId: '10', title: 'Kherep', status: 'current' };
+            else if (route.startsWith('/wiki/api/v2/spaces/10/pages?')) json = { results: [{ id: '20', title: 'Kherep' }, ...(page ? [page] : [])] };
+            else if (route.startsWith('/wiki/rest/api/search?')) json = { results: [] };
+            else if (route === '/wiki/api/v2/pages' && options.method === 'POST') {
+                writes++;
+                page = { id: '100', title: body.title, spaceId: body.spaceId, parentId: body.parentId, status: 'current',
+                    authorId: 'synthetic-service', version: { number: 1 }, body: { storage: { value: body.body.value } } };
+                json = page;
+            }
+            else if (route.startsWith('/wiki/api/v2/pages/100/labels?')) json = { results: labels.map(name => ({ name })) };
+            else if (route === '/wiki/rest/api/content/100/label' && options.method === 'POST') {
+                labels.push(...body.map(value => value.name));
+                json = { results: labels.map(name => ({ name })) };
+            }
+            else if (route.startsWith('/wiki/api/v2/pages/100')) json = page;
             else throw new Error('CANARY_UNEXPECTED_REQUEST');
-            return new Response(JSON.stringify(json), { headers: { Link: '<https://CANARY.invalid/path>; rel="next"' } });
+            return new Response(JSON.stringify(json), { headers: { Link: ${JSON.stringify(link)} } });
         };
-        const broker = observationBroker(${JSON.stringify(f.home)});
+        const broker = observationBroker(${JSON.stringify(f.home)}, undefined, { semantic: async () => ({ titles: [] }) });
         const store = receiptStore(${JSON.stringify(path.join(f.home, 'receipts'))});
         const input = ${JSON.stringify(request())};
         const first = await publishObservations(input, broker, store);
+        const beforeRepeat = calls;
         const second = await publishObservations(input, broker, store);
-        process.stdout.write(JSON.stringify({ first, second, calls }));
+        process.stdout.write(JSON.stringify({ first, second, calls, beforeRepeat, writes }));
     `;
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
         encoding: 'utf8', env: { KHEREP_ATL_SITE: 'https://synthetic.invalid', KHEREP_ATL_CRED_FILE_CODEX: credential, KHEREP_PROFILE: 'mac' },
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout), { first: 'OBS-RESULT: failed space-lookup-unavailable', second: 'OBS-RESULT: failed space-lookup-unavailable', calls: 3 });
     assert.doesNotMatch(result.stdout + result.stderr, /CANARY/);
     assert.doesNotMatch(fs.readdirSync(path.join(f.home, 'receipts')).map(n => fs.readFileSync(path.join(f.home, 'receipts', n), 'utf8')).join(), /CANARY|https:/);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.first, output.second);
+    assert.equal(output.calls, output.beforeRepeat);
+    return output;
+}
+test('default observation transport refuses Link-only spaces continuation without exposing its contents', t => {
+    const output = defaultLookup(t, { results: [] }, '<https://CANARY.invalid/path>; rel="next"');
+    assert.equal(output.first, 'OBS-RESULT: failed space-lookup-unavailable');
+    assert.equal(output.calls, 3);
+    assert.equal(output.writes, 0);
+});
+const row = { id: '10', key: 'SYNTHETIC', name: 'Synthetic' };
+for (const [title, spaces, expected, writes] of [
+    ['single exact space with alternate metadata', { results: [row] }, 'OBS-RESULT: wrote 1 100', 1],
+    ['wrong key', { results: [{ ...row, key: 'SYNTHETIC_EXTRA' }] }, 'OBS-RESULT: failed space-lookup-unavailable', 0],
+    ['ambiguous rows', { results: [row, { ...row, id: '11' }] }, 'OBS-RESULT: failed space-lookup-unavailable', 0],
+    ['body continuation', { results: [row], _links: { next: '/wiki/api/v2/spaces?cursor=CANARY' } }, 'OBS-RESULT: failed space-lookup-unavailable', 0],
+    ['different numeric identity', { results: [{ ...row, id: '999' }] }, 'OBS-RESULT: failed space-mismatch', 0],
+] as const) test(`default observation transport with Link: ${title}`, t => {
+    const output = defaultLookup(t, spaces);
+    assert.equal(output.first, expected);
+    assert.equal(output.writes, writes);
 });
