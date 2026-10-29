@@ -250,6 +250,12 @@ cmp_file "project/tools/confluence-evidence-io.mts" \
   "$HERE/../modules/atl-jira-brokers/confluence-evidence-io.mts" "$WS/tools/confluence-evidence-io.mts"
 cmp_file "project/tools/confluence-evidence-cli.mts" \
   "$HERE/../modules/atl-jira-brokers/confluence-evidence-cli.mts" "$WS/tools/confluence-evidence-cli.mts"
+cmp_file "project/tools/confluence-claim-text.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-claim-text.mts" "$WS/tools/confluence-claim-text.mts"
+cmp_file "project/tools/confluence-revision-staleness.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-revision-staleness.mts" "$WS/tools/confluence-revision-staleness.mts"
+cmp_file "project/tools/confluence-revision-staleness-git.mts" \
+  "$HERE/../modules/atl-jira-brokers/confluence-revision-staleness-git.mts" "$WS/tools/confluence-revision-staleness-git.mts"
 # Issue #302. The Jira set is optional, but presence decides: the flag adds it,
 # and a host that has any of its files is compared like a flagged one, so a stale
 # broker cannot hide behind a missing flag. Only these exact names count, never
