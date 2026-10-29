@@ -146,7 +146,7 @@ function noticeCheck(name: string, payload: Payload, expected: "notice" | "silen
 }
 noticeCheck("claude-obs bare code brief allowed with a notice", obs(BARE_CODE), "notice");
 noticeCheck("claude-obs unmarked brief gets the conditional notice", obs(GOOD_BRIEF), "notice");
-noticeCheck("claude-obs complete binding is silent", obs(`- measured: code kherep@${SHA} \`node x.test.mts\` -> 12 pass`), "silent");
+noticeCheck("claude-obs complete binding is silent", obs(`- measured: code kherep@${SHA} -- x.test.mts \`node x.test.mts\` -> 12 pass`), "silent");
 noticeCheck("other agent with a bare code prompt gets no notice", { tool_name: "Agent", tool_input: { subagent_type: "kherep-builder", model: "opus", prompt: BARE_CODE } }, "silent");
 noticeCheck("claude-obs pin deny carries no notice", obs(BARE_CODE, "Record observations", "opus"), "deny");
 check("claude-obs pin deny keeps its rule", obs(BARE_CODE, "Record observations", "opus"), true, "OWNED_AGENT_MODEL_MISMATCH");

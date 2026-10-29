@@ -76,7 +76,7 @@ export function observationBriefIssue(brief: string, nothingToFile: string = CLA
 // binding tokens follow, before the command's code span. This is a report,
 // never a deny: the notice names positions only and quotes nothing.
 export const OBS_BRIEF_REVISION =
-  "A finding about repository code starts with code after measured: and names each repository as <name>@<full commit sha> before the command.";
+  "A finding about repository code starts with code after measured: and names each repository as <name>@<full commit sha> before the command, each followed by -- and the repo-relative paths the finding rests on.";
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/;
 const SHA = /^[0-9a-f]{40}$/;
@@ -87,6 +87,14 @@ const MALFORMED = "has a malformed repository or revision";
 const BOUND_ADVICE = "The observation agent files each as assumed: no exact binding to the measured code. "
   + "Give <name>@<sha> after `code`, the SHA from `git rev-parse HEAD` of the checkout the command ran in, "
   + "add -dirty only when that tree had uncommitted changes, or drop `code` when the finding is not about repository code.";
+// Issue #693. Each binding may be followed by `--` and the repo-relative paths the finding rests on, the
+// path grammar of modules/atl-jira-brokers/confluence-claim-text.mts (copied: this hook is installed alone).
+const PATH = /^(?!-)(?:(?!\.{1,2}(?:\/|$))[A-Za-z0-9._-]+)(?:\/(?!\.{1,2}(?:\/|$))[A-Za-z0-9._-]+)*$/;
+const PATH_LIST = "has a path list that is not repo-relative forward-slash paths";
+const UNSCOPED = "binds a repository without naming the paths the finding rests on";
+const PATHS_ADVICE = "Paths never change the evidence label; without a valid list the Revision line is unscoped and never checked for staleness. "
+  + "After each <name>@<sha> give -- and 1 to 16 distinct repo-relative paths with forward slashes, no glob, no .., "
+  + "unless the finding rests on the whole repository.";
 const UNMARKED = "names no repository and commit SHA";
 const UNMARKED_PARTIAL = "has no complete binding of all named repositories";
 const UNMARKED_ADVICE = "If it is about repository code, tests or a build, the observation agent files it as assumed; "
@@ -111,11 +119,45 @@ function prefixWords(text: string): string[] {
   return text.slice(0, CODE_SPAN.exec(text)?.index ?? 0).split(/\s+/).filter(Boolean);
 }
 
-// null when every measured: finding is bound or plainly not declared, else one
+const pathListOk = (paths: string[]): boolean => paths.length >= 1 && paths.length <= 16
+  && new Set(paths).size === paths.length && paths.every((p) => p.length <= 200 && PATH.test(p));
+
+// The words after `code`: binding groups, each a <name>@<sha> word, optionally `--` and its paths. The first
+// binding problem in order wins (#505); else a path-list problem; else a clean binding without paths.
+function codeProblem(tokens: string[]): { bound?: string; paths?: string } {
+  if (!tokens.length) return { bound: NO_REPOSITORY };
+  let binding: "none" | "clean" | "flawed" = "none", list: string[] | null = null, pathIssue = false, unscoped = false;
+  let boundIssue: string | null = null;
+  const close = () => {
+    if (binding === "clean" && list === null) unscoped = true;
+    if (list !== null && !pathListOk(list)) pathIssue = true;
+  };
+  for (const word of tokens) {
+    // A word before any binding is a binding token as in #505, unless a stray -- opened an orphan list.
+    if (word.includes("@") || (binding === "none" && list === null && word !== "--")) {
+      close();
+      const problem = tokenProblem(word);
+      boundIssue ??= problem;
+      binding = problem ? "flawed" : "clean";
+      list = null;
+    } else if (word === "--") {
+      if (binding === "none" || list !== null) pathIssue = true;
+      list ??= [];
+    } else if (list !== null) list.push(word);
+    else pathIssue = true;
+  }
+  close();
+  if (binding === "none") return { bound: NO_REPOSITORY };
+  if (boundIssue) return { bound: boundIssue };
+  return pathIssue ? { paths: PATH_LIST } : unscoped ? { paths: UNSCOPED } : {};
+}
+
+// null when every measured: finding is bound and scoped or plainly not declared, else one
 // notice. Computed only for a brief observationBriefIssue accepts.
 export function observationBriefNotice(brief: string): string | null {
   if (firstProblem(brief)) return null;
   const bound: string[] = [];
+  const scoped: string[] = [];
   const unmarked: string[] = [];
   for (const [index, finding] of findings(brief).entries()) {
     if (finding.kind !== "measured") continue;
@@ -129,12 +171,13 @@ export function observationBriefNotice(brief: string): string | null {
       else if (named.some((word) => tokenProblem(word) !== null)) unmarked.push(`${position} ${UNMARKED_PARTIAL}`);
       continue;
     }
-    const tokens = words.slice(1);
-    const problem = tokens.length ? tokens.map(tokenProblem).find((clause) => clause !== null) : NO_REPOSITORY;
-    if (problem) bound.push(`${position} ${problem}`);
+    const problem = codeProblem(words.slice(1));
+    if (problem.bound) bound.push(`${position} ${problem.bound}`);
+    else if (problem.paths) scoped.push(`${position} ${problem.paths}`);
   }
   const parts = [
     bound.length ? `${bound.join("; ")}. ${BOUND_ADVICE}` : "",
+    scoped.length ? `${scoped.join("; ")}. ${PATHS_ADVICE}` : "",
     unmarked.length ? `${unmarked.join("; ")}. ${UNMARKED_ADVICE}` : "",
   ].filter(Boolean);
   return parts.length ? `Observation brief revision: ${parts.join(" Also, ")}` : null;

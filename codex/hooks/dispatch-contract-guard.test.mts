@@ -23,7 +23,7 @@ const OBS_MODEL = PINS.get("codex-obs") ?? "";
 // Issue #505: the finding names the commit it was measured against, so an
 // allowed dispatch of this brief is silent.
 const SHA = "2733b35e2c102ac54295568509c68b18b6d92cab";
-const BRIEF = `- measured: code kherep@${SHA} \`node x.test.mts\` -> 12 pass, 0 fail\n- relayed: the operator, in chat`;
+const BRIEF = `- measured: code kherep@${SHA} -- x.test.mts \`node x.test.mts\` -> 12 pass, 0 fail\n- relayed: the operator, in chat`;
 
 function spawnDispatch(input: Record<string, unknown>, tool = "spawn_agent") {
   return { tool_name: tool, tool_input: { task_name: "t", message: "m", ...input } };
@@ -295,7 +295,7 @@ test("a pasted tool output block never binds a finding; only the prefix after me
   assert.match(advise(obsDispatch(`${pasted}${BARE_CODE}`), POLICY) ?? "", /is code-bound but names no repository/);
   assert.match(advise(obsDispatch(`${pasted}- measured: \`npm test\` -> 42 pass`), POLICY) ?? "",
     /names no repository and commit SHA\. If it is about repository code/);
-  assert.equal(advise(obsDispatch(`${pasted}- measured: code kherep@${SHA} \`npm test\` -> 42 pass`), POLICY), null);
+  assert.equal(advise(obsDispatch(`${pasted}- measured: code kherep@${SHA} -- package.json \`npm test\` -> 42 pass`), POLICY), null);
 });
 
 test("the installed guard writes the notice as context and a system message, and a stale lib stays silent", (t) => {

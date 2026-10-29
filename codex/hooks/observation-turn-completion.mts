@@ -19,7 +19,7 @@ export function renderObservationInstruction(workspace: string): string {
     "Dispatch exactly one `codex-obs` with `fork_turns: \"none\"`.",
     "Pass only the completed turn, relevant tool evidence, and compact task state.",
     "Mark each finding at the start of its own line as measured: `<command>` -> <deciding output excerpt>, or relayed: <source>.",
-    "A finding about repository code starts with code after measured: and names each repository as <name>@<full commit sha> before the command.",
+    "A finding about repository code starts with code after measured: and names each repository as <name>@<full commit sha> before the command, each followed by -- and the repo-relative paths the finding rests on.",
     "Luna owns extraction and publication through mcp__kherep_observations__publish_observations only, using the supplied session/turn IDs and named node.",
     "Require one strict OBS-RESULT receipt: wrote <n> <numeric IDs>, empty no-admissible-findings, or failed <safe-code> with created IDs.",
     "The adapter validates candidates, literal canonical authority bound to the resolved space, placement, related lookup, labels, trusted author readback and targeted stitch.",

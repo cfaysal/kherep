@@ -24,7 +24,7 @@ export function observationPrompt(workspace = SELECTED_WORKSPACE, platform = pro
   "Before the final response, dispatch the codex-obs agent for this completed user turn using agent_type codex-obs, the exact model from its installed agent TOML, reasoning_effort low, and fork_turns none.",
   "Give it only a bounded, sanitized summary; never pass raw sessions, credentials, customer-private material, or private infrastructure.",
   "Mark each finding at the start of its own line as measured: `<command>` -> <deciding output excerpt>, or relayed: <source>.",
-  "A finding about repository code starts with code after measured: and names each repository as <name>@<full commit sha> before the command.",
+  "A finding about repository code starts with code after measured: and names each repository as <name>@<full commit sha> before the command, each followed by -- and the repo-relative paths the finding rests on.",
     "Luna owns extraction and publication through mcp__kherep_observations__publish_observations only, using the supplied session/turn IDs and named node.",
     "Require one strict OBS-RESULT receipt: wrote <n> <numeric IDs>, empty no-admissible-findings, or failed <safe-code> with created IDs.",
     "The adapter validates candidates, literal canonical authority bound to the resolved space, placement, related lookup, labels, trusted author readback and targeted stitch.",

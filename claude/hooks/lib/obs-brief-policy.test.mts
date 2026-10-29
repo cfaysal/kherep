@@ -98,13 +98,13 @@ const bound = (binding: string, command = "npm test") => `measured: code ${bindi
 
 test("the revision sentence is pinned", () => {
   assert.equal(OBS_BRIEF_REVISION,
-    "A finding about repository code starts with code after measured: and names each repository as <name>@<full commit sha> before the command.");
+    "A finding about repository code starts with code after measured: and names each repository as <name>@<full commit sha> before the command, each followed by -- and the repo-relative paths the finding rests on.");
 });
 
-test("T1 a complete binding is silent", () => {
-  assert.equal(notice(bound(`kherep@${SHA}`)), null);
-  assert.equal(notice(bound(`cfaysal/kherep@${SHA}`)), null);
-  assert.equal(notice(`- ${bound(`kherep@${SHA}`)}\n- ${RELAYED}`), null);
+test("T1 a complete, scoped binding is silent", () => {
+  assert.equal(notice(bound(`kherep@${SHA} -- README.md`)), null);
+  assert.equal(notice(bound(`cfaysal/kherep@${SHA} -- src/a.mts`)), null);
+  assert.equal(notice(`- ${bound(`kherep@${SHA} -- README.md`)}\n- ${RELAYED}`), null);
 });
 
 test("T2 a bare code finding names no repository and is not the conditional notice", () => {
@@ -128,12 +128,12 @@ test("T4 a dirty tree is no exact binding", () => {
 });
 
 test("T5 the validator never inspects the command", () => {
-  assert.equal(notice(bound(`kherep@${SHA}`, `git show ${SHA}:README.md`)), null);
+  assert.equal(notice(bound(`kherep@${SHA} -- README.md`, `git show ${SHA}:README.md`)), null);
   assert.match(notice(bound(`kherep@${SHA}-dirty`, `git show ${SHA}:README.md`)) ?? "", DIRTY);
 });
 
 test("T6 every repository needs its own complete token, and the finding is named once", () => {
-  assert.equal(notice(bound(`kherep@${SHA} cfaysal/other@${OTHER}`)), null);
+  assert.equal(notice(bound(`kherep@${SHA} -- a.mts cfaysal/other@${OTHER} -- b.mts`)), null);
   const text = notice(bound(`kherep@${SHA} other@HEAD`)) ?? "";
   assert.match(text, NO_SHA);
   assert.equal(text.match(/finding 1 /g)?.length, 1, text);
@@ -141,7 +141,7 @@ test("T6 every repository needs its own complete token, and the finding is named
 
 test("T7 a finding never borrows a binding from the preamble or another finding", () => {
   assert.match(notice(`Revision: kherep@${SHA}\nmeasured: code \`npm test\` -> ok`) ?? "", NO_REPO);
-  const text = notice(`${bound(`kherep@${SHA}`)}\nmeasured: code \`npm test\` -> ok`) ?? "";
+  const text = notice(`${bound(`kherep@${SHA} -- README.md`)}\nmeasured: code \`npm test\` -> ok`) ?? "";
   assert.match(text, /finding 2 \(measured:\) is code-bound but names no repository/);
   assert.doesNotMatch(text, /finding 1/);
 });
