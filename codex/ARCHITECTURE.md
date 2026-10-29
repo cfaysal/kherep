@@ -109,6 +109,8 @@ The hook runs with three triggers: `session-start` (its `SessionStart` entry), a
 
 Both hosts project the research and acceptance `Stop` hooks. The `UserPromptSubmit` Maestro context hook supplies a quiet per-turn instruction to dispatch `codex-obs` once before final. Previous macOS combined and Windows separate observation Stop blocks are recognized as managed and replaced during reinstall. Their old script files may remain installed but are not configured, so they cannot produce user-visible observation continuation prompts.
 
+The context hook validates native top-level `session_id` and `turn_id` with the adapter's exact 1-80 character ID grammar and emits only a bounded JSON identity header. The Maestro copies it verbatim into the Luna brief as the dispatching main turn's IDs. Missing or invalid fields produce fixed identity-unavailable guidance: the Maestro continues its user task and tools, while the observation worker returns `OBS-RESULT: failed missing-turn-identity` without worker tool calls. No prompt, cwd, transcript, environment value or fallback is used to supply identity. Native field availability remains UNKNOWN until measured in the host runtime.
+
 The normal projection installs `codex-obs` from `codex/agents/codex-obs.md` with the resolved Luna/low model pin, `enforcePin`, and `sandbox_mode = "read-only"`. The existing dispatch guard checks the pin and measured/relayed brief markers; code evidence requires exact clean repository revisions. The Maestro sends only a bounded nonprivate summary with session and turn IDs. Luna owns extraction and publication and returns a strict `OBS-RESULT` receipt. The Maestro independently validates that receipt and reads the target, without silently generating, publishing or repairing pages.
 
 `mcp_servers.kherep_observations` starts `<workspace>/tools/observation-stdio.mts` as a local stdio MCP process. Its only tool is `publish_observations`; no shell, arbitrary broker invocation, space/config/path override, update or delete tool exists. This process reuses the existing Confluence broker modules and its fixed Codex credential binding. Only environment variable names are forwarded for the existing credential/site/profile, semantic lookup and CA bindings. The agent never reads credentials or canonical configuration, and receives only fixed safe result codes and numeric created IDs. It gains no blanket network or filesystem permission.
@@ -137,8 +139,8 @@ flowchart TB
         I --> MA[Maestro]
         I --> OB[codex-obs]
         I --> UC[UserPromptSubmit context hook]
-        UC --> MA
-        MA --> OB
+        UC -->|validated native session/turn IDs| MA
+        MA -->|bounded brief with exact main-turn IDs| OB
         OB -->|strict OBS-RESULT receipt| MA
         I --> SS[SubagentStop group:<br/>codex-obs receipt check]
         OB -.->|on stop| SS
