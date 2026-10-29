@@ -119,8 +119,10 @@ function prefixWords(text: string): string[] {
   return text.slice(0, CODE_SPAN.exec(text)?.index ?? 0).split(/\s+/).filter(Boolean);
 }
 
-const pathListOk = (paths: string[]): boolean => paths.length >= 1 && paths.length <= 16
-  && new Set(paths).size === paths.length && paths.every((p) => p.length <= 200 && PATH.test(p));
+function pathListOk(paths: string[]): boolean {
+  return paths.length >= 1 && paths.length <= 16
+    && new Set(paths).size === paths.length && paths.every((p) => p.length <= 200 && PATH.test(p));
+}
 
 // The words after `code`: binding groups, each a <name>@<sha> word, optionally `--` and its paths. The first
 // binding problem in order wins (#505); else a path-list problem; else a clean binding without paths.
@@ -149,7 +151,9 @@ function codeProblem(tokens: string[]): { bound?: string; paths?: string } {
   close();
   if (binding === "none") return { bound: NO_REPOSITORY };
   if (boundIssue) return { bound: boundIssue };
-  return pathIssue ? { paths: PATH_LIST } : unscoped ? { paths: UNSCOPED } : {};
+  if (pathIssue) return { paths: PATH_LIST };
+  if (unscoped) return { paths: UNSCOPED };
+  return {};
 }
 
 // null when every measured: finding is bound and scoped or plainly not declared, else one

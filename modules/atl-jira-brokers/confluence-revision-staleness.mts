@@ -34,8 +34,10 @@ export function planStaleness(pages: Snapshot[]): { planned: PlannedPage[]; notE
     if (!p.labels.includes('evidence-confirmed') || !p.labels.some(l => l === 'type-observation' || l === 'type-knowledge')) continue;
     const r = revisionLines(revisionBody(p.body));
     if (!r.bound.length) continue;
-    const bindings = [...new Set(r.bound)].map(revision => ({ revision, repository: repositoryOf(revision.slice(0, revision.lastIndexOf('@'))),
-      sha: revision.slice(revision.lastIndexOf('@') + 1), paths: r.paths[revision] ?? [] }));
+    const bindings = [...new Set(r.bound)].map(revision => {
+      const at = revision.lastIndexOf('@');
+      return { revision, repository: repositoryOf(revision.slice(0, at)), sha: revision.slice(at + 1), paths: r.paths[revision] ?? [] };
+    });
     planned.push({ pageId: p.id, readVersion: p.version, bindings });
   }
   return { planned, notEligible: pages.length - planned.length };
