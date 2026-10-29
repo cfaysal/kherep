@@ -11,6 +11,18 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Revision staleness (issue #693): a Revision line may name the repo-relative
+  paths a code finding rests on (`Revision: <name>@<sha> -- <path> <path>`),
+  and `drainage --repo-root <checkout> [--ref <ref>]` compares those paths
+  between the bound commit and the compared ref with read-only git. The report
+  gains a `revisionStaleness` section (`stale`, `current`, `unscoped`,
+  `unknown` with a reason, coverage and unread pages) and one
+  `revision-stale` / `recheck-evidence` candidate per stale page; no label or
+  page changes. Observation briefs may give `-- <paths>` after each
+  `<name>@<sha>`; the dispatch guards report a binding without paths or a
+  malformed list as a notice, and the Codex candidate check accepts the
+  scoped line under the same grammar. The brain-drainage skill documents the
+  manual recheck and relabel path for a stale page.
 - Observation handback gate (issue #571): the Claude `PreToolUse` guard
   `hooks/obs-handback-gate.mts` refuses a `claude-obs` handback through
   SubagentHandback whose first non-empty line is not exactly one valid
