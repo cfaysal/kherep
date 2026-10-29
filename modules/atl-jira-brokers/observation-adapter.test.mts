@@ -34,7 +34,7 @@ function fixture(t: {
     const context: ConfluenceContext = { env: { KHEREP_ATL_SITE: 'https://synthetic.invalid', KHEREP_ATL_CRED_FILE_CODEX: '/synthetic-credential', KHEREP_PROFILE: 'mac' },
         credEnv: 'KHEREP_ATL_CRED_FILE_CODEX', readFile: async () => 'client_id: synthetic\nclient_secret: CANARY_SECRET', now: Date.now, session: {},
         fetch: async (url, opts) => {
-            const route = url.replace(/^https:\/\/api.atlassian.com\/ex\/confluence\/synthetic-cloud/, '');
+            const route = url.replace(/^https:\/\/api\.atlassian\.com\/ex\/confluence\/synthetic-cloud(?=\/|$)/, '');
             const method = opts?.method ?? 'GET';
             const body = opts?.body ? JSON.parse(opts.body.toString()) : undefined;
             calls.push({ method, route, body });
@@ -91,8 +91,12 @@ function fixture(t: {
             return { status, ok: status === 200, json: async () => json, text: async () => JSON.stringify(json) };
         } };
     const broker = observationBroker(home, context, { semantic: async () => mode === 'semantic-error' ? { titles: [], error: 'CANARY_PROVIDER' } : { titles: mode.startsWith('stitch') ? [peer.title] : [] } });
-    return { home, calls, broker, store: receiptStore(path.join(home, 'receipts')), mode: (value: string) => { mode = value; } };
+    return { home, calls, broker, context, store: receiptStore(path.join(home, 'receipts')), mode: (value: string) => { mode = value; } };
 }
+test('synthetic transport refuses lookalike Atlassian hostname', async (t) => {
+    const f = fixture(t);
+    await assert.rejects(() => f.context.fetch('https://apiXatlassian.com/ex/confluence/synthetic-cloud/wiki/rest/api/user/current'), /Unexpected synthetic route/);
+});
 test('actual broker publishes with mandatory successful-empty related section, runtime labels and author verification', async (t) => {
     const f = fixture(t);
     assert.equal(await publishObservations(request(), f.broker, f.store), 'OBS-RESULT: wrote 1 100');

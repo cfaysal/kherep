@@ -13,6 +13,8 @@ for(const body of [
   '<p href="https://canary.invalid">text</p>', '<p src="https://canary.invalid">text</p>',
   '<p xmlns="https://canary.invalid">text</p>', '<?xml version="1.0"?><p>text</p>',
   '<!DOCTYPE p SYSTEM "https://canary.invalid/entity"><p>text</p>', '<!--comment--><p>text</p>',
+  '<script', '<script>alert(1)</script>', '<p><script', '<p><script>alert(1)</script></p>',
+  '<p><script<p></p>', '<p>text<', '<p><p</p>', '<p><<p></p>', '<p></p><script',
   '<ac:structured-macro/>', '<math><mi>resource</mi></math>', '<p>unclosed', '<p></code>',
 ]) test(`resource or malformed XHTML rejected before any I/O: ${body.split('>')[0]}>`, async()=>{
   let brokerCalls=0,receiptCalls=0;
@@ -22,7 +24,7 @@ for(const body of [
   assert.equal(ordinaryXhtml(body),false);
 });
 test('ordinary prose XHTML including escaped resource examples remains admissible',()=>{
-  const prose='<h2>Finding</h2><p><strong>Measured</strong> <em>synthetic</em><br/></p>'
+  const prose='<p>literal -&gt; and -> stay prose</p><h2>Finding</h2><p><strong>Measured</strong> <em>synthetic</em><br/></p>'
     +'<pre><code>&lt;img src="example"&gt;</code></pre><ul><li>One</li></ul>'
     +'<table><thead><tr><th>Check</th></tr></thead><tbody><tr><td>Pass</td></tr></tbody></table>';
   assert.equal(ordinaryXhtml(prose),true);assert.ok(observationRequest(request(prose)));
