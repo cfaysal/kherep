@@ -58,8 +58,8 @@ export function turnContext(): string {
     "Classify privacy before tools; private material is forbidden to Codex/cloud paths.",
     "Delegate only for parallelism, specialization, isolation or independent review; never overlap writes. Bound workers by objective, scope, constraints, evidence and return format; Maestro owns acceptance.",
     "Inspect the final diff; report C1 correctness, C2 verification, C3 safety and C4 scope integrity. Trivial conversation skips ceremony.",
-    "Before final, dispatch codex-obs once: agent_type codex-obs, the exact model from its installed agent TOML, reasoning_effort low, fork_turns none; bounded nonprivate summary, strict JSON.",
-    "Validate candidates; only Maestro publishes through the configured Codex Confluence broker when observationPublishingAuthorized is literal true. Empty means zero writes; omit routine observation status.",
+    "Before final, dispatch codex-obs once: agent_type codex-obs, the exact model from its installed agent TOML, reasoning_effort low, fork_turns none; bounded nonprivate summary with session/turn IDs; require a strict OBS-RESULT receipt.",
+    "Luna extracts and publishes only through mcp__kherep_observations__publish_observations; its adapter enforces canonical authority and target checks. Independently validate the receipt and read targets. Empty means zero I/O. Report failed receipts and created IDs in the same turn; never silently publish or repair.",
   ].join("\n");
 }
 

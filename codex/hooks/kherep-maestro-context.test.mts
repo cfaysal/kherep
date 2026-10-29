@@ -37,7 +37,7 @@ function run(input: unknown, env: NodeJS.ProcessEnv = {}) {
   assert.match(result.stdout, /C1 correctness/);
   assert.match(result.stdout, /Never overlap writes/i);
   assert.match(result.stdout, /dispatch codex-obs once.*installed agent TOML.*fork_turns none/);
-  assert.match(result.stdout, /observationPublishingAuthorized is literal true/);
+  assert.match(result.stdout, /Luna extracts and publishes only through mcp__kherep_observations__publish_observations/);
   assert.doesNotMatch(result.stdout, /Before the final response, dispatch the codex-obs agent/);
 }
 

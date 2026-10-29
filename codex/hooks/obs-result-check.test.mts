@@ -14,14 +14,8 @@ import { OBS_RESULT_REASON } from "./obs-result-check.mts";
 const HOOK = path.join(import.meta.dirname, "obs-result-check.mts");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "codex-obs-result-check-test-"));
 const SECRET = "Example Corp host.example.com";
-const EMPTY = '{ "observations": [] }';
-const VALID = JSON.stringify({ observations: [{
-  title: "Synthetic finding",
-  bodyStorage: "<p>Synthetic body.</p>",
-  evidence: "assumed",
-  labels: ["type-observation", "evidence-assumed", "status-author-model"],
-  placement: { project: "Synthetic project", app: "Synthetic app" },
-}] });
+const EMPTY = 'OBS-RESULT: empty no-admissible-findings';
+const VALID = 'OBS-RESULT: wrote 1 123';
 
 test.after(() => fs.rmSync(TMP, { recursive: true, force: true }));
 
@@ -79,7 +73,7 @@ function message(result: Run): string {
   return result.output!.systemMessage as string;
 }
 
-test("a valid candidate, empty or not, is silent", () => {
+test("a valid receipt, empty or not, is silent", () => {
   silent(run({ last_assistant_message: EMPTY }));
   silent(run({ last_assistant_message: VALID }));
 });
@@ -90,23 +84,23 @@ test("other agents are never judged", () => {
   }
 });
 
-test("a malformed candidate is sent back once with the fixed reason", () => {
+test("a malformed receipt is sent back once with the fixed reason", () => {
   for (const text of [`Done. ${SECRET}`, `\`\`\`json\n${EMPTY}\n\`\`\``, '{"observations":[{"title":"x"}]}']) {
     const result = run({ last_assistant_message: text });
     assert.equal(result.status, 0);
     assert.deepEqual(result.output, { decision: "block", reason: OBS_RESULT_REASON });
   }
-  assert.match(OBS_RESULT_REASON, /exactly one strict JSON document/);
+  assert.match(OBS_RESULT_REASON, /one strict OBS-RESULT line/);
   assert.match(OBS_RESULT_REASON, /no Markdown fence/);
   assert.match(OBS_RESULT_REASON, /no configuration or broker I\/O/);
 });
 
-test("a malformed candidate on the continuation only warns the operator", () => {
+test("a malformed receipt on the continuation only warns the operator", () => {
   for (const stop_hook_active of [true, undefined, "false"]) {
     const text = message(run({ stop_hook_active, last_assistant_message: `Done. ${SECRET}` }));
     assert.match(text, /codex-obs/);
-    assert.match(text, /no strict JSON document/);
-    assert.match(text, /publishes nothing/);
+    assert.match(text, /strict publication receipt/);
+    assert.match(text, /must not publish or repair silently/);
   }
 });
 
@@ -149,4 +143,9 @@ test("nothing from the message, the rollout or the payload reaches stdout", () =
       assert.ok(!result.stdout.includes(fragment), `${fragment} leaked: ${result.stdout}`);
     }
   }
+});
+
+test("a valid failed receipt warns in the same turn without a correction or data echo", () => {
+  assert.match(message(run({last_assistant_message:'OBS-RESULT: failed readback-unverified created=123'})), /same turn/);
+  assert.match(OBS_RESULT_REASON, /NO further publication/);
 });

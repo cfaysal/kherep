@@ -31,7 +31,7 @@ export interface HookData {
 
 // The Codex broker. Its Claude twin sits beside it and is delivered by the same
 // step, but this hook belongs to Codex and asks about Codex's own entry point.
-export const ENTRY = "atl-confluence.mts";
+export const ENTRY = "observation-stdio.mts";
 
 export function normalize(value: unknown): string {
   return String(value || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -107,20 +107,11 @@ export function inspect(dir: string, read: (file: string) => string, exists: (fi
 
 export function message(delivery: Delivery, announcedComplete: boolean): string {
   if (!delivery.missing.length) {
-    if (announcedComplete) return "";
-    return "CONFLUENCE DELIVERY: the write path is installed. The broker and all "
-      + `${delivery.present.length} modules it imports are in tools/. The Confluence write test in `
-      + "OP-1398 can be taken now; nothing else about that ticket changed.";
+    return announcedComplete ? "" : "CONFLUENCE DELIVERY: observation adapter import closure is installed. Native MCP discovery, canonical authority and live publication remain UNKNOWN until independently measured after restart.";
   }
-  if (delivery.absent) {
-    return "CONFLUENCE DELIVERY: not installed. No Confluence broker in tools/, so there is no "
-      + "write path on this box at all. It is delivered by the bootstrap installer under OP-1405, "
-      + "not by you - do not copy anything into tools/. The write test in OP-1398 stays blocked.";
-  }
-  return `CONFLUENCE DELIVERY: incomplete. ${delivery.present.length} of `
-    + `${delivery.present.length + delivery.missing.length} files are in tools/; the broker would `
-    + `fail to load. Missing: ${delivery.missing.join(", ")}. This is the installer's job (OP-1405), `
-    + "not yours.";
+  return delivery.absent
+    ? "CONFLUENCE DELIVERY: observation adapter not installed in tools/. Use the documented installer; do not copy modules manually."
+    : `CONFLUENCE DELIVERY: observation adapter import closure incomplete. Publication is unavailable; use the documented installer. Missing: ${delivery.missing.join(", ")}.`;
 }
 
 async function main(): Promise<void> {

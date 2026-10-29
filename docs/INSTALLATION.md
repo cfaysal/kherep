@@ -229,6 +229,10 @@ Start the selected runtime normally in the configured workspace. Confirm:
 
 Read the installed source receipt and target files when comparing an upgrade. Report unavailable integrations separately from working ones.
 
+### Codex observation publisher upgrade
+
+An existing Codex installation can use the [observation-only updater](CODEX.md#observation-only-upgrade) after an isolated review. It preserves authority, model pin, read-only sandbox, unrelated MCP settings, hook positions/state and the shared Control Plane pointer. Its separate receipt and observation-only restore snapshot cover the changed artifacts. Restart the native session and measure exact tool discovery and target readback before claiming activation; source tests do not prove live publication. Claude installation and publication remain unchanged.
+
 ## Upgrades and rollback
 
 The enrolled Control Plane node can run as a supported per-user login service

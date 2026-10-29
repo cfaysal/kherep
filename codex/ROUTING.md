@@ -79,17 +79,22 @@ missing or differs; the reason names the pinned model. It also denies hook input
 attribute to a tool, and every dispatch while its pin source is unreadable. Agents without
 `enforcePin` keep the allowed model the Maestro selects, or inherit one. An observation run never dispatches another observation run.
 
-The Codex worker is read-only and returns only a strict JSON candidate. The Maestro validates it,
-reads the configured authority and publishes a nonempty candidate. An empty result is valid and
-causes zero writes. A `SubagentStop` hook with matcher `codex-obs` checks the candidate first: a
-malformed one, a fenced one included, goes back to the worker once with a fixed instruction; a second
-malformed result reaches the operator as a warning, and the Maestro treats it as a failure and
-publishes nothing. A result the hook cannot see is reported as not visible, and the Maestro's own
-validation still applies to every candidate. Claude keeps its direct-publication workflow: `claude-obs` starts its final
-message with one `OBS-RESULT: wrote | empty | failed` status line, and the Claude Maestro reports
-`OBS-RESULT: failed` to the user in the same turn as a failure, never as a valid empty result. The
-Codex Maestro does the same for its own publish step: a missing broker, missing credential or
-non-zero broker exit is reported as a failure in the same turn, not as an empty result.
+The Codex worker owns extraction and publication through the exact narrow local tool
+`mcp__kherep_observations__publish_observations`, backed by the existing Codex service-account broker.
+Its filesystem sandbox stays read-only. The adapter keeps credentials and canonical configuration
+inside its process, validates candidates before publication, checks literal authority bound to the
+resolved space and a trusted current-user identity before creation, completes related lookup before
+each create, creates one page per finding with required labels, verifies space/parent/body/labels/author,
+and performs only targeted verified stitching for created IDs. A durable journal prevents repeat,
+corrective or uncertain requests from creating replacement pages. Empty findings cause zero I/O.
+The worker returns exactly one strict `OBS-RESULT` receipt: wrote with count and comma-separated
+numeric IDs, empty no-admissible-findings, or failed with a safe code and any created IDs.
+A `SubagentStop` hook with matcher `codex-obs` checks the receipt, requests one malformed-handback
+correction with NO further publication or tool calls, and warns on a second malformed or invisible
+result. The Maestro independently validates every receipt and reads the target pages. It never
+silently generates, publishes or repairs observations. `OBS-RESULT: failed` is reported in the
+same turn with created IDs as a failure, never as a valid empty result. Claude keeps its separate
+direct-publication workflow and existing status-line checks.
 
 Observations are stored in the Confluence knowledge space configured for this host, read from
 `<runtime-home>/kherep/confluence.json`. On Codex that is `kherep/confluence.json` inside the active
@@ -103,11 +108,10 @@ status has to stay filterable: `type-observation`,
 `product-<jira | confluence | jsm>` where the finding applies to one product's variant. Origin,
 timestamp and source reference belong in the page body.
 
-The Codex Maestro writes through the Confluence broker under the Codex service account, never
-through `twg`, which runs as the operator's personal account. The Codex worker does not read the
-configuration or call a broker. The Maestro requires `observationPublishingAuthorized` to be literal
-`true` in the canonical configuration, scoped to the resolved space identity. The Claude broker and
-its direct-publication path remain separate.
+The Codex observation adapter writes through the Confluence broker under the Codex service account,
+never through `twg`, which runs as the operator's personal account. The worker never reads canonical
+configuration or credentials. The adapter requires `observationPublishingAuthorized` to be literal
+`true` in canonical configuration, scoped to the resolved space identity. Claude remains separate.
 
 Placement follows the content. The exception is a node named in the brief: it binds every finding of that run, whatever a finding's content suggests. The hierarchy says what a page is about and is deliberately
 shallow: `Development/General`, `Development/Forge Apps/<App>`, `Development/DC Apps/<App>`,
@@ -164,8 +168,8 @@ a `measured:` finding without `code` gets a fixed conditional notice when it nam
 every binding it names is complete. The guard checks declarations only and gives no completeness
 guarantee: it reads no command, so an unmarked code finding is left to the observation agent's
 contract. The denies above (issue #331) are unchanged. That a filed page carries its `Revision:`
-line stays unproven at the target: the Codex result check only verifies the shape of a `Revision:`
-line a `confirmed` candidate carries, not that the line is present or belongs to the finding.
+line stays unproven at the target: the pure pre-publication candidate validator verifies the shape of a `Revision:`
+line a `confirmed` candidate carries, not completeness or its association with the finding.
 
 The runtime label carries the host as well as the runtime, because there are four hosts and not two:
 both runtimes run on Windows and on macOS, the two service accounts are shared across machines, and
@@ -211,7 +215,8 @@ remembers it is not a check (golden rule 16). The sweep itself writes into a liv
 when the operator decides, not when a session starts. Codex has no such check yet.
 
 One observation is one page. An attempt that went wrong is not left behind in silence: the
-observation agent neither writes a second page beside it nor deletes it, because deleting is outside
+Codex observation adapter never retries or replaces an uncertain page. The observation agent
+neither writes a second page beside it nor deletes it, because deleting is outside
 its permissions; on Claude it reports `OBS-RESULT: failed abandoned page <id>`, and the Maestro
 decides in the same turn whether the page is removed.
 Labels are written in the call that creates the page, never afterwards: a page that exists without

@@ -34,7 +34,7 @@ Use Kherep to give your agents consistent working rules, reusable skills and a s
 - **Model and tool routing:** choose available capabilities through operator-configured policies. Codex roles name model families, not versions: installation resolves them against the available models into native agent files and one dispatch snapshot, which a reinstall keeps until `--refresh-models`; see [Codex integration](docs/CODEX.md#install).
 - **MCP integration:** connect explicitly configured services through transport and authentication adapters.
 - **Local inference:** use configured local processing routes, including a separate path for private inputs.
-- **Central Brain:** a shared knowledge base in a dedicated Confluence space. With a configured space and brokers, durable findings from completed turns become pages: the Claude observation agent files them itself, and the Codex observation agent returns candidates that the Maestro validates and, when authorized, publishes. A finding about repository code counts as `confirmed` only when it names each repository as `<name>@<full commit sha>` measured on a clean tree; otherwise it is filed as `assumed`.
+- **Central Brain:** a shared knowledge base in a dedicated Confluence space. With a configured space and brokers, durable findings from completed turns become pages: the Claude observation agent files them itself, and the pinned Codex Luna observation agent extracts and publishes through a narrow local service-account adapter. The Codex Maestro independently checks its receipt and target pages. A finding about repository code counts as `confirmed` only when it names each repository as `<name>@<full commit sha>` measured on a clean tree; otherwise it is filed as `assumed`.
 - **Brain drainage:** operator-invoked knowledge-space hygiene review through the read-only service-account scanner, with explicit-authority repairs and reviewed-version protection, and an operator-requested confirm path that measures `evidence-assumed` pages against their primary source before proposing a new evidence label. See [broker workflow](modules/atl-jira-brokers/README.md#brain-drainage).
 - **Turn-completion observations:** after a substantial Claude turn a Stop hook has the Maestro dispatch `claude-obs`, and Codex can dispatch one bounded `codex-obs` pass; see [Codex integration](docs/CODEX.md#turn-completion-observations).
 - **Control Plane:** enrolled nodes connect to a Cloudflare Worker to exchange session messages and start tasks on each other. On a host with a managed service, sessions use one stable command, `node "<config directory>/bin/kherep-node.mjs"`, which follows the active service pin. The details are in [Control Plane](modules/control-plane/README.md), including prerequisites, task controls and platform limits:
@@ -84,6 +84,8 @@ flowchart LR
   bootstrap -->|one resolved model snapshot| codex
   bootstrap -->|binds| githook
   runtimes --> brokers --> confluence
+  codex -->|pinned Luna, read-only filesystem| observationAdapter["Narrow observation MCP adapter"]
+  observationAdapter -->|authority, journal, readback| brokers
   runtimes --> runner --> model
   runtimes --> bridge --> mcp
   nodeDaemon <--> worker <--> peers
