@@ -25,10 +25,15 @@ const PROSE_TAGS = new Set(['p','pre','code','h1','h2','h3','h4','h5','h6',
     'ul','ol','li','blockquote','strong','em','b','i','s','u','del','ins','sub','sup',
     'table','thead','tbody','tfoot','tr','td','th','br','hr']);
 export function ordinaryXhtml(storage: string): boolean {
-    const tags = storage.match(/<[^>]*>/g) ?? [];
-    if (storage.replace(/<[^>]*>/g,'').includes('<')) return false;
     const open: string[] = [];
-    for (const tag of tags) {
+    let cursor = 0;
+    while (true) {
+        const start = storage.indexOf('<', cursor);
+        if (start === -1) break;
+        const end = storage.indexOf('>', start + 1);
+        if (end === -1) return false;
+        const tag = storage.slice(start, end + 1);
+        cursor = end + 1;
         const parsed = /^<(\/?)([a-z][a-z0-9]*)\s*(\/?)>$/.exec(tag);
         if (!parsed || !PROSE_TAGS.has(parsed[2]) || parsed[1] && parsed[3]) return false;
         const [,closing,name,selfClosing] = parsed;

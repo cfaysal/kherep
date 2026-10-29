@@ -183,3 +183,20 @@ test('rollback restores known stdio predecessor after its replacement was actual
     assert.equal(replaced, true);
     assert.deepEqual(snapshot(f.root), before);
 });
+
+test('known 6577d76 policy predecessor upgrades idempotently but arbitrary policy drift refuses', t => {
+    const f = fixture(t);
+    const relative = 'modules/atl-jira-brokers/observation-policy.mts';
+    const entry = path.join(f.workspace, 'tools', 'observation-policy.mts');
+    assert.equal(typeof predecessor[relative], 'string');
+    fs.writeFileSync(entry, predecessor[relative]);
+    installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    assert.equal(fs.readFileSync(entry, 'utf8'), fs.readFileSync(path.join(REPO, relative), 'utf8'));
+    const after = snapshot(f.root);
+    installObservationPublisher({ codexHome: f.home, workspace: f.workspace });
+    assert.deepEqual(snapshot(f.root), after);
+    fs.appendFileSync(entry, '\n// UNKNOWN_SYNTHETIC_POLICY_DRIFT\n');
+    const drifted = snapshot(f.root);
+    assert.throws(() => checkObservationPublisher({ codexHome: f.home, workspace: f.workspace }), /broker-drift/);
+    assert.deepEqual(snapshot(f.root), drifted);
+});
