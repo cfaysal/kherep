@@ -58,6 +58,7 @@ export function replayHooks(render: Renderer = projection.renderHooks, baselineR
     fs.writeFileSync(preload, `import cp from 'node:child_process'; import fs from 'node:fs'; import path from 'node:path'; import {syncBuiltinESMExports} from 'node:module';
 const original=cp.spawnSync; cp.spawnSync=function(file,args,options){const r=original.apply(this,arguments); if(!r.error) fs.appendFileSync(process.env.KHEREP_BENCH_TRACE,JSON.stringify({file:path.basename(String(file)),script:Array.isArray(args)?args.find(x=>String(x).endsWith('.mts')):null})+'\\n'); return r;}; syncBuiltinESMExports();`);
     const env: NodeJS.ProcessEnv = { ...process.env, KHEREP_CONFIG_DIR: node.root, KHEREP_WORKSPACE: node.workspace,
+      KHEREP_WORK_ITEM_REQUIRED: "1", KHEREP_WORK_ITEM_PATTERN: "SYN-[0-9]+",
       CODEX_HOME: path.join(node.root, "codex-home"), CODEX_THREAD_ID: BUSY_OWNER,
       KHEREP_BENCH_TRACE: trace, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` };
     delete env.KHEREP_SESSION_ID;
@@ -110,8 +111,11 @@ const original=cp.spawnSync; cp.spawnSync=function(file,args,options){const r=or
     fs.writeFileSync(path.join(node.workspace, "sample.mts"), "const value = 1;\n");
     assert.equal(event("edit", "PreToolUse", edit).denied, false);
     event("edit", "PostToolUse", edit);
-    assert.equal(event("commit-allowed", "PreToolUse", shell('git commit -m "fix: synthetic fixture"')).denied, false);
-    assert.equal(event("commit-denied", "PreToolUse", shell('git commit -m "fix: synthetic\nCo-Authored-By: Bot <bot@example.invalid>"')).denied, true);
+    assert.equal(event("commit-allowed", "PreToolUse", shell('git commit -m "SYN-123 fix: synthetic fixture"')).denied, false);
+    const deniedCommit = event("commit-denied", "PreToolUse", shell('git commit -m "SYN-123 fix: synthetic\nCo-Authored-By: Bot <bot@example.invalid>"'));
+    assert.equal(deniedCommit.denied, true);
+    assert.ok(deniedCommit.output.includes("commit message contains a Co-Authored-By trailer"));
+    assert.equal(deniedCommit.output.includes("commit subject does not start with the configured work-item key and a space"), false);
     assert.equal(event("deploy-allowed", "PreToolUse", shell("kubectl get pods")).denied, false);
     assert.equal(event("deploy-denied", "PreToolUse", shell("kubectl delete pods synthetic")).denied, true);
     assert.equal(event("deploy-approved", "PreToolUse", shell("KHEREP_DEPLOY_AUTH=approved kubectl delete pods synthetic")).denied, false);
