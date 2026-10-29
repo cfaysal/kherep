@@ -21,7 +21,6 @@
       { "name": "resolveWorkspace keeps a POSIX workspace on a POSIX host", "reason": null }
     ],
     "linux": [
-      { "name": "PowerShell parses the rendered broker path without interpolation", "reason": null },
       { "name": "codex execpolicy loads the Windows launcher rule and allows only msg subcommands", "reason": "codex is not on PATH" },
       { "name": "codex execpolicy loads the macOS launcher rule and allows only msg subcommands", "reason": "codex is not on PATH" },
       { "name": "recognizes complete preserved upgrade artifacts while rejecting modified guards", "reason": "External preserved upgrade fixture not supplied" },
