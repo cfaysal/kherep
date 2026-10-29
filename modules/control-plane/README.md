@@ -23,6 +23,8 @@ new native caller --> node sessions.snapshot --> Registry --> subsequent native 
 held Codex task intake --> bounded peer window --> known Codex inbox --> existing queue lane
 successful original-owner Codex queue --> bounded metadata ticket --> serialized claim storage
 trusted original-owner PostToolUse --> targeted ticket validation --> short hint --> existing Inbox receive
+externally known safe reply ID + tuple + hash --> exact CLI preflight --> selected sent root
+verified exact owner + selected root --> selected inbox lock/read --> tuple + hash check --> bounded JSON
 ```
 
 While a Codex task intake waits, a bounded window keeps receipts, sender status,
@@ -65,7 +67,7 @@ gates. See [busy-turn admission](ARCHITECTURE.md#codex-busy-turn-hint-admission)
 | Codex fork reply (opt-in, darwin only) | `node/codex-fork-attempts.mts`, `node/codex-fork-admission.mts`, `node/codex-app-server-client.mts`, `node/codex-fork-process.mts`, `node/codex-fork-reply.mts`, `node/codex-fork-relay.mts`, `node/inbox-proxied.mts`, `worker/src/message-proxy.mts` | One attempt per message with exclusive create, the ordered admission guards, the stdio app-server client, the fork producer of the idle reply proxy (issue #408), and the relay of a completed answer as one `proxyOf` message with the owner's local sidecar and the Worker's lineage validation |
 | Directory | `worker/src/directory.mts`, `worker/src/node-intake.mts`, `protocol-intake.mts` | The `directory` frame: non-revoked nodes, their sessions and each node's queue at the Worker (issue #441), and the reader rules for that queue |
 | Session exchange | `node/exchange.mts` | The files the daemon shares with the session tools, and the daemon's 2 second exchange round |
-| Session tools | `node/msg-cli.mts`, `node/msg-inbox.mts`, `node/msg-resolve.mts`, `node/msg-intake.mts`, `node/deliver-hook.mts`, `node/wake-hook.mts` | `kherep-node msg ...`, the Claude Code delivery hook and the idle wake listener |
+| Session tools | `node/msg-cli.mts`, `node/msg-inbox.mts`, `node/msg-inbox-exact.mts`, `node/msg-resolve.mts`, `node/msg-intake.mts`, `node/deliver-hook.mts`, `node/wake-hook.mts` | `kherep-node msg ...`, the Claude Code delivery hook and the idle wake listener |
 | Task protocol | `protocol-tasks.mts` | Session command args, `task.report` and `task.request` bodies, the `sessions.v1` capabilities and their validators |
 | Tasks (Worker) | `worker/src/tasks-api.mts`, `worker/src/task-store.mts`, `worker/src/task-dispatch.mts`, `worker/src/task-frames.mts` | `/api/tasks`, the Registry's `tasks` table, node selection, `session.start` dispatch, task reports and requests |
 | Tasks (node) | `node/session-policy.mts`, `node/session-runner.mts`, `node/task-watch.mts`, `node/task-exchange.mts`, `node/task-cli.mts` | The `sessions` policy section, `claude --bg` start, stop and resume, the watch round, and `kherep-node task ...` |
@@ -388,6 +390,60 @@ A task is an instruction that a node runs as a Claude Code background session (i
 - **Reports.** `task.report` (node to Worker) carries `taskId`, `state` (`started`, `running`, `needs-input`, `done`, `failed`, `stopped`), optional `sessionId`, `reason` (at most 256 characters) and `summary` (at most 2048). The Worker accepts it only from the node the task was dispatched to.
 - **Limits.** Claude and Codex tasks share the node's limits: `maxConcurrent` and `maxStartsPerDay` count both.
 - **Retention and audit.** The Registry keeps the task text for `GET /api/tasks/{id}`; the task list and the audit table never contain it, nor a continue prompt. Every create, refusal, report, state change, stop and continue is audited with the task id.
+
+
+#### Inspect one already classified safe reply
+
+When a trusted external source has already identified a safe incoming reply's
+exact ID, owner, raw sender tuple, full sent destination, original sent root
+and text SHA-256, inspect only
+that record:
+
+```sh
+node "<config directory>/bin/kherep-node.mjs" msg inbox --message-id <incoming-UUID> --from <owner-UUID> --expect-node <sender-node-UUID> --expect-session <exact-raw-sender-ref> --expect-target-session <target-full-UUID> --expect-reply-to <original-sent-UUID> --expect-text-sha256 <safe-text-SHA256>
+```
+
+The stable launcher follows the installed service pin. To use this read-only
+operation from a reviewed, clean committed checkout before upgrading that pin,
+invoke the supported source CLI with the same selectors:
+
+```sh
+node "<clean checkout>/modules/control-plane/node/cli.mts" msg inbox --message-id <incoming-UUID> --from <owner-UUID> --expect-node <sender-node-UUID> --expect-session <exact-raw-sender-ref> --expect-target-session <target-full-UUID> --expect-reply-to <original-sent-UUID> --expect-text-sha256 <safe-text-SHA256>
+```
+
+Verify that checkout's commit and reader bytes before use. This invocation
+does not start or restart the daemon, change its pin, or run its inbox index.
+
+All seven selectors are mandatory. IDs use full lowercase UUIDs, the text hash
+is a lowercase 64-character SHA-256, and `--expect-session` is the exact raw
+sender reference, either a session name or a UUID. They bind the selection; they do not prove the content is
+public or safe. Sender identity or an original public request does not classify
+its reply. The raw sender reference and the full target UUID must both come from
+trusted external evidence. The command never resolves aliases or infers a
+relationship between a sender name and that UUID. Codex normally supplies the
+same full UUID for both selectors. If the reply ID or safe hash is unknown,
+this path is unavailable.
+Do not discover them by scanning inbox bodies or falling back to `--all`.
+
+Before any incoming body access, the command rejects malformed, incomplete,
+duplicate or mixed options, including selector spellings after `--`, verifies the existing exact caller identity and
+reads only the explicitly selected authored-safe sent root. That root must
+belong to the exact owner and store the expected full destination tuple. A sent
+message may itself be an ordinary threaded reply; its optional parent UUID is
+validated without reading or following that ancestor. Proxy parents are refused. Under
+the selected record's existing lock, it then reads only that bounded regular
+nonsymlink, single-link incoming file. The stored envelope is checked **after**
+this preauthorized file read, not independently attested before it. Current
+message ID, exact owner, sender node/session, reply root and text hash must all
+match; proxy and forwarded records are refused.
+
+Success writes one JSON object with `messageId`, `from`, `toSession`, `inReplyTo`,
+`text`, `state`, `createdAt` and `receivedAt`, bounded to 128 KiB. Inspection does
+not offer, receive, readdress or confirm the message and leaves its record bytes
+unchanged. Errors are fixed `exact-inbox-*` codes with no record content, paths,
+notices or directory rendering; failures never mean an empty inbox. Legacy
+broad inspection, `--receive` and `msg status` retain their existing behavior.
+
 
 ### Session policy
 

@@ -1039,3 +1039,56 @@ Older nodes without the capability cannot participate. Existing task records wit
 trusted provenance are not granted ownership retroactively. A local intercom task
 can register once its source message and delivery identity are available. Reverting
 the opt-in policy disables execution without removing the durable audit records.
+
+
+## Exact reply inspection (#691)
+
+`node/msg-cli.mts` dispatches exact selector flags to `node/msg-inbox-exact.mts`
+before legacy inbox, status or send handling. This local read-only path requires
+an externally preclassified safe incoming ID, exact owner UUID, raw sender
+node/reference tuple, full outgoing target UUID, original authored-safe sent
+root ID and text SHA-256. The flags and hash bind a
+selection, not a semantic safety classification. Unknown ID or classification
+remains unavailable; there is no discovery scan or fallback. `--expect-session`
+binds the incoming raw sender reference (a name or UUID), while the mandatory
+`--expect-target-session` binds the authored-safe sent destination's full UUID.
+Their relationship must already be supported by trusted external evidence; this
+command does not resolve aliases or establish that relationship itself. Exact
+selector spellings after the inbox option terminator also fail before legacy
+dispatch; `msg send` retains literal message text after its terminator.
+
+```mermaid
+flowchart LR
+  safe[Externally known safe ID, tuple and hash] --> syntax[Validate all seven selectors and unmixed mode]
+  syntax --> identity[Existing exact caller verification]
+  identity --> root[Read only selected authored-safe sent root]
+  root --> owner[Match root owner and full destination]
+  owner --> lock[Existing selected inbox record lock]
+  lock --> read[Bounded regular nonsymlink single-link descriptor read]
+  read --> match[Verify current envelope and text hash]
+  match --> json[Bounded selected JSON]
+```
+
+There is no incoming body read before selector, caller and root preflight passes.
+A selected sent message may itself be an ordinary threaded reply. Its optional
+`inReplyTo` UUID is validated without reading or following that ancestor; proxy
+parents remain refused. Only the selected incoming file is opened, never an inbox enumeration, `InboxIndex`,
+`listInbox`, status reply scan, directory renderer or delivery context. The
+stored incoming envelope is necessarily verified after its single preauthorized
+read; no independent current-owner attestation precedes that read. The existing
+per-record lock serializes cooperating writers. Descriptor reads stop at 128 KiB
+plus one byte; lstat/fstat comparisons refuse replacement or detectable content
+changes, including a noncooperating writer, and hardlinks/symlinks are refused.
+No filesystem snapshot or protection against a malicious local account owner is
+claimed. Fixed opaque failures distinguish invalid selectors, unverified identity,
+root unavailability/mismatch, missing, unreadable, malformed, oversized,
+nonregular, changed, mismatched and locked incoming records.
+
+Only validated envelope fields and hash-matching text reach a single bounded
+JSON object. Lock lifecycle uses the existing helper; record bytes, offers,
+receipts, delivery ownership and replay semantics are unchanged. No sidecar,
+protocol, runtime permission, guard or legacy inbox migration is introduced.
+The staged optional MCP messaging client does not import `msg-cli.mts` or
+`msg-inbox.mts`; its closed import inventory therefore does not gain this file.
+The full Control Plane source pin includes the new CLI module through its
+normal source inventory.

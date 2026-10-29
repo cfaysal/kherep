@@ -10,6 +10,7 @@ import { getMessage, markAnswered } from "./inbox.mts";
 import {
   CODEX_THREAD_ENV, KHEREP_SESSION_ENV, processTableOnce, resolveSendTarget, senderSession, senderSessionId, SESSION_ENV, sessionIdFromEnv, type IdentityDeps,
 } from "./msg-resolve.mts";
+import { exactInbox, EXACT_INBOX_FLAGS } from "./msg-inbox-exact.mts";
 import { inbox, offerLine, replyLines } from "./msg-inbox.mts";
 import { targetLine } from "./msg-intake.mts";
 import { sendNew } from "./msg-new.mts";
@@ -53,6 +54,7 @@ export const MSG_USAGE = `usage:
   kherep-node msg send <node> --new claude|codex --directive <the operator's answer, verbatim> [--cwd <dir>] [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg send --reply-to <messageId> [--to <node>/<session>] [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg inbox [--from <codex-session-id>] [--all | --receive]
+  kherep-node msg inbox --message-id <incoming-UUID> --from <owner-UUID> --expect-node <sender-node-UUID> --expect-session <exact-sender-ref> --expect-target-session <target-session-UUID> --expect-reply-to <sent-root-UUID> --expect-text-sha256 <safe-text-SHA256>
   kherep-node msg status <messageId>
   kherep-node msg stop <taskId | sent messageId | owned requestId> [--expected-run-version <run version>] [--wait <seconds>]
 Without --from the session is named by ${SESSION_ENV} (Claude Code), ${CODEX_THREAD_ENV} (Codex) or ${KHEREP_SESSION_ENV} (the node's Codex runs). --from names the resolved current session, or the full id of a Codex session recorded by a Kherep hook within 12 hours. The recorded-session alternative must match any node task binding from ${KHEREP_SESSION_ENV}.`;
@@ -117,19 +119,33 @@ function fail(io: Io, message: string): number {
 export interface MsgArgs {
   positionals: string[];
   values: { from?: string; to?: string; "reply-to"?: string; wait?: string; all?: boolean; receive?: boolean; new?: string; cwd?: string; directive?: string;
-    "expected-run-version"?: string };
+    "expected-run-version"?: string; "message-id"?: string; "expect-node"?: string; "expect-session"?: string;
+    "expect-target-session"?: string; "expect-reply-to"?: string; "expect-text-sha256"?: string };
 }
 
 export function parseMsgArgs(argv: string[]): MsgArgs {
-  return parseArgs({
-    args: argv, allowPositionals: true,
+  const parsed = parseArgs({
+    args: argv, allowPositionals: true, tokens: true,
     options: { from: { type: "string" }, to: { type: "string" }, "reply-to": { type: "string" }, wait: { type: "string" }, all: { type: "boolean" }, receive: { type: "boolean" },
-      new: { type: "string" }, cwd: { type: "string" }, directive: { type: "string" }, "expected-run-version": { type: "string" } },
+      new: { type: "string" }, cwd: { type: "string" }, directive: { type: "string" }, "expected-run-version": { type: "string" },
+      "message-id": { type: "string" }, "expect-node": { type: "string" }, "expect-session": { type: "string" },
+      "expect-target-session": { type: "string" }, "expect-reply-to": { type: "string" }, "expect-text-sha256": { type: "string" } },
   });
+  if (EXACT_INBOX_FLAGS.some(key => parsed.values[key] !== undefined)) {
+    const names = parsed.tokens.filter(token => token.kind === "option").map(token => token.name);
+    if (new Set(names).size !== names.length) throw new Error("exact-inbox-invalid-selectors");
+  }
+  return parsed;
 }
 
 export function runMsg(argv: string[], context: MsgContext): Promise<number> {
-  return runMsgArgs(parseMsgArgs(argv), context);
+  let parsed: MsgArgs;
+  try { parsed = parseMsgArgs(argv); } catch (error) {
+    if (!argv.some(arg => EXACT_INBOX_FLAGS.some(flag => arg === `--${flag}` || arg.startsWith(`--${flag}=`)))) throw error;
+    (context.err ?? console.error)("kherep-node msg: exact-inbox-invalid-selectors");
+    return Promise.resolve(1);
+  }
+  return runMsgArgs(parsed, context);
 }
 
 // Runs parsed arguments; the Worker tests call it directly because workerd
@@ -140,6 +156,9 @@ export async function runMsgArgs({ positionals, values }: MsgArgs, context: MsgC
     out: context.out ?? ((line) => console.log(line)), err: context.err ?? ((line) => console.error(line)),
     sleep: context.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
   };
+  const positionalSelector = positionals[0] === "inbox" && positionals.slice(1).some(arg =>
+    ["from", ...EXACT_INBOX_FLAGS].some(flag => arg === `--${flag}` || arg.startsWith(`--${flag}=`)));
+  if (positionalSelector || EXACT_INBOX_FLAGS.some(key => values[key] !== undefined)) return exactInbox(io, positionals, values);
   const [command, ...rest] = positionals;
   if (command === "sessions") return sessions(io, values.from);
   if (command === "send") return send(io, rest, values);
