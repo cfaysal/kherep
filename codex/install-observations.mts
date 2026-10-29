@@ -45,6 +45,7 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
     const headerPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-header-predecessor.json'))) as Record<string, string>;
     const lookupPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-lookup-predecessor.json'))) as Record<string, string>;
     const prosePredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-prose-predecessor.json'))) as Record<string, string>;
+    const scopedPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-scoped-revision-predecessor.json'))) as Record<string, string>;
     const source = (relative: string) => read(path.join(repo, relative));
     const configFile = path.join(home, 'config.toml'), beforeConfig = read(configFile);
     const start = beforeConfig.indexOf(START), end = beforeConfig.indexOf(END);
@@ -71,7 +72,7 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
     const agentOptions = { model: agent.model, reasoning: 'low', sandbox: 'read-only' };
     const agentFile = path.join(home, 'agents', `${agentName}.toml`), beforeAgent = read(agentFile);
     const newAgent = renderAgent(agentName, source('codex/agents/codex-obs.md'), agentOptions);
-    if (beforeAgent !== newAgent && beforeAgent !== renderAgent(agentName, predecessor['codex/agents/codex-obs.md'], agentOptions))
+    if (beforeAgent !== newAgent && ![predecessor, scopedPredecessor].some(known => beforeAgent === renderAgent(agentName, known['codex/agents/codex-obs.md'], agentOptions)))
         throw new Error('observation-agent-drift');
     const changes = new Map<string, string>();
     changes.set(agentFile, newAgent);
@@ -80,22 +81,25 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
         const relative = `codex/hooks/${name}`, file = path.resolve(hookDir, target);
         const render = (text: string) => name.startsWith('observation-') ? renderObservationHook(text, workspace) : text;
         const next = render(source(relative));
-        if (fs.existsSync(file) && read(file) !== next && read(file) !== render(predecessor[relative]) && read(file) !== lookupPredecessor[relative])
+        if (fs.existsSync(file) && read(file) !== next && read(file) !== render(predecessor[relative]) && read(file) !== lookupPredecessor[relative]
+            && (scopedPredecessor[relative] === undefined || read(file) !== render(scopedPredecessor[relative])))
             throw new Error('observation-hook-drift');
         changes.set(file, next);
     }
     for (const [target, from] of [['obs-candidate-policy.mts', 'observation-candidate.mts'], ['obs-result-policy.mts', 'observation-result.mts']]) {
         const file = path.join(hookDir, target), next = source(`modules/atl-jira-brokers/${from}`);
-        const old = target === 'obs-candidate-policy.mts' ? predecessor['codex/hooks/obs-candidate-policy.mts'] : lookupPredecessor[`modules/atl-jira-brokers/${from}`];
-        if (fs.existsSync(file) && read(file) !== next && read(file) !== old)
+        const old = target === 'obs-candidate-policy.mts' ? [predecessor['codex/hooks/obs-candidate-policy.mts'], scopedPredecessor[`modules/atl-jira-brokers/${from}`]]
+            : [lookupPredecessor[`modules/atl-jira-brokers/${from}`]];
+        if (fs.existsSync(file) && read(file) !== next && !old.includes(read(file)))
             throw new Error('observation-helper-drift');
         changes.set(file, next);
     }
     const agentsFile = path.join(home, 'AGENTS.md'), oldAgents = predecessor['codex/AGENTS.maestro.md'];
     const line = (text: string) => text.split('\n').find(row => row.startsWith('- After a completed turn,'))!;
     changes.set(agentsFile, replaceKnown(read(agentsFile), line(oldAgents), line(source('codex/AGENTS.maestro.md'))));
-    const routingFile = path.join(home, 'orchestra', 'ROUTING.md');
-    changes.set(routingFile, replaceKnown(read(routingFile), section(predecessor['codex/ROUTING.md']), section(source('codex/ROUTING.md'))));
+    const routingFile = path.join(home, 'orchestra', 'ROUTING.md'), routing = read(routingFile);
+    const oldRouting = [predecessor, scopedPredecessor].map(known => section(known['codex/ROUTING.md'])).find(old => routing.includes(old)) ?? section(predecessor['codex/ROUTING.md']);
+    changes.set(routingFile, replaceKnown(routing, oldRouting, section(source('codex/ROUTING.md'))));
     const table = renderObservationPublisher({ entry: path.join(workspace, 'tools', 'observation-stdio.mts'), home }, wiring.node);
     let config = beforeConfig;
     let insertedText = '';
@@ -114,7 +118,7 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
         const file = path.join(workspace, 'tools', name);
         const relative = `modules/atl-jira-brokers/${name}`;
         if (fs.existsSync(file) && read(file) !== source(relative) && read(file) !== predecessor[relative] && read(file) !== lookupPredecessor[relative]
-            && read(file) !== headerPredecessor[relative] && read(file) !== prosePredecessor[relative])
+            && read(file) !== headerPredecessor[relative] && read(file) !== prosePredecessor[relative] && read(file) !== scopedPredecessor[relative])
             throw new Error('observation-broker-drift');
     }
     return { home, workspace, repo, changes, config, beforeConfig, newAgent, agentFile, capabilities, insertedText };
