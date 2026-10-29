@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
-import { render, command, hookGroup } from './parity-config.mts';
+import { render, command, contextCommand, hookGroup } from './parity-config.mts';
 import { observationWiring } from './observation-wiring.mts';
 
 const home = path.resolve('/synthetic/codex'), workspace = path.resolve('/synthetic/workspace');
@@ -23,7 +23,8 @@ for (const windowsHookCommands of [true, false]) test(`only exact old or workspa
   assert.equal(edited, bound);
   assert.deepEqual(observationWiring(bound, home, node, workspace).contextEdits, []);
   const foreign = frame(render({ ...options, contextWorkspace: path.resolve('/foreign'), windowsHookCommands }));
-  const mixed = unbound.replace(command(node, contextHook).replaceAll('"', '\\"'), command(node, contextHook, '--workspace-b64', Buffer.from(workspace).toString('base64url')).replaceAll('"', '\\"'));
+  const mixed = unbound.replace(JSON.stringify(command(node, contextHook)), JSON.stringify(contextCommand(node, contextHook, workspace)));
+  assert.notEqual(mixed, unbound, 'the mixed fixture must replace an actual TOML command value');
   const duplicate = unbound + hookGroup('SessionStart', '', [{ command: command(node, contextHook), status: 'Loading Kherep Maestro' }]);
   for (const drift of [foreign, mixed, duplicate, unbound.replace('Loading Kherep Maestro', 'drift')])
     assert.throws(() => observationWiring(drift, home, node, workspace), /context-wiring-drift/);

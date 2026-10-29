@@ -16,6 +16,7 @@ import { test, type TestContext } from "node:test";
 
 import { install } from "./install.mts";
 import { fixtureModelOptions } from "./lib/model-policy.fixture.mts";
+import { command, contextCommand } from "./lib/parity-config.mts";
 
 const GUARDS = ["commit-guard", "deploy-guard", "playwright-file-guard"] as const;
 
@@ -183,9 +184,17 @@ test("commit-guard and deploy-guard deny through the rendered Windows command un
 test("an upgrade over the .js projection replaces its block and removes the old copies", (t) => {
   const { hookDir, options } = fixture(t);
   const first = install(options);
-  // The block and the files the installer wrote before batch 2: identical except
-  // that the three shared guards are .js.
+  // Historical context commands were unbound; remove the new workspace pair
+  // before reconstructing the three shared guards' .js projection.
   let previous = fs.readFileSync(first.targets.config, "utf8");
+  const contextHook = path.join(path.dirname(hookDir), "kherep-maestro-context.mts");
+  for (const prefix of ["", "& "]) {
+    const bound = JSON.stringify(prefix + contextCommand(options.nodePath, contextHook, options.workspace));
+    const unbound = JSON.stringify(prefix + command(options.nodePath, contextHook));
+    assert.equal(previous.split(bound).length - 1, 2, "both context events carry the current workspace binding");
+    previous = previous.replaceAll(bound, unbound);
+    assert.equal(previous.split(unbound).length - 1, 2, "both historical context commands are unbound");
+  }
   for (const guard of GUARDS) {
     previous = previous.replaceAll(`${guard}.mts`, `${guard}.js`);
     fs.rmSync(path.join(hookDir, `${guard}.mts`));
