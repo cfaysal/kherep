@@ -220,6 +220,29 @@ test("the real expectation has exactly the win32 and linux lists in the entry sh
   }
 });
 
+// Synthetic TAP rebuilt from the complete sanitized Linux run metadata for
+// PR #690 (run 40852887200), never from a raw CI log.
+test("the Linux MCP transport run has no retired PowerShell broker-shell skip", (t) => {
+  const observed: [string, string | null][] = [
+    ["codex execpolicy loads the Windows launcher rule and allows only msg subcommands", "codex is not on PATH"],
+    ["codex execpolicy loads the macOS launcher rule and allows only msg subcommands", "codex is not on PATH"],
+    ["recognizes complete preserved upgrade artifacts while rejecting modified guards", "External preserved upgrade fixture not supplied"],
+    ["native selection rejects Windows-unrepresentable bindings without changing old three-field compatibility", null],
+    ["native CA path survives the actual Windows command shell", null],
+    ["every new native command argument rejects Windows expansion bytes before emission", null],
+    ["resolveWorkspace turns an MSYS drive path into the Windows drive", null],
+  ];
+  const lines = Array.from({ length: 802 }, (_, index) => `ok ${index + 1} - synthetic passing test ${index + 1}\n  ---\n  type: 'test'\n  ...`);
+  for (const [index, [name, reason]] of observed.entries())
+    lines.push(`ok ${803 + index} - ${name} # SKIP${reason ? ` ${reason}` : ""}\n  ---\n  type: 'test'\n  ...`);
+  const tap = path.join(tempRepo(t, "node --test"), "hosted-linux.tap");
+  fs.writeFileSync(tap, ["TAP version 13", ...lines, "1..809", "# tests 809", "# suites 0", "# pass 802",
+    "# fail 0", "# cancelled 0", "# skipped 7", "# todo 0", "# duration_ms 1", ""].join("\n"));
+  const result = cli(["check", tap, "--platform", "linux"]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(result.stdout, "codex-run-guard: linux tests=809 skipped=7 todo=0 ok\n");
+});
+
 test("a summary that contradicts its records is red at C8, with no observed block and no hint (issue #578)", () => {
   const cases: [string, string, string[]][] = [
     ["pass-inflated.tap", "win32", ["C8 2 passing records but # pass 999"]],
