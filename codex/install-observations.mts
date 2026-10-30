@@ -49,6 +49,8 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
     const identityPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-turn-identity-predecessor.json'))) as Record<string, string>;
     const pilotPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-turn-identity-pilot-predecessor.json'))) as Record<string, string>;
     const workspacePredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-context-workspace-predecessor.json'))) as Record<string, string>;
+    // Issue #701: the 764200b hook-integrity-sources.mts, before the dispatch guard's worker-brief lib.
+    const workerPredecessor = JSON.parse(read(path.join(repo, 'codex', 'parity', 'observation-worker-brief-predecessor.json'))) as Record<string, string>;
     const source = (relative: string) => read(path.join(repo, relative));
     const configFile = path.join(home, 'config.toml'), beforeConfig = read(configFile);
     const start = beforeConfig.indexOf(START), end = beforeConfig.indexOf(END);
@@ -86,7 +88,7 @@ function prepareObservationPublisher(options: ObservationInstallOptions) {
         const next = render(source(relative));
         if (fs.existsSync(file) && read(file) !== next && read(file) !== render(predecessor[relative]) && read(file) !== lookupPredecessor[relative]
             && (scopedPredecessor[relative] === undefined || read(file) !== render(scopedPredecessor[relative]))
-            && read(file) !== identityPredecessor[relative] && read(file) !== workspacePredecessor[relative])
+            && read(file) !== identityPredecessor[relative] && read(file) !== workspacePredecessor[relative] && read(file) !== workerPredecessor[relative])
             throw new Error('observation-hook-drift');
         changes.set(file, next);
     }

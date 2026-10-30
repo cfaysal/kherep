@@ -51,10 +51,12 @@
   ],
   "agents": {
     "kherep-builder": {
-      "role": "builder"
+      "role": "builder",
+      "codeBound": true
     },
     "dc-plugin-build-runner": {
-      "role": "support"
+      "role": "support",
+      "codeBound": true
     },
     "forge-deploy-validator": {
       "sandbox": "read-only",

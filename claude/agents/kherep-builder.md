@@ -37,6 +37,9 @@ VERIFY: commands and decisive output
 SCOPE: in scope or exact boundary issue
 RISKS: remaining risks or none
 NEXT: required next action or done
+REVISION: <name>@<sha>[-dirty] | <name>@<base>..<head>
 ```
+
+`REVISION:` names, per repository, the full 40-hex SHA from `git rev-parse HEAD` of the checkout your final diff sits on, with `-dirty` when that diff is uncommitted. When the brief authorized a commit and HEAD moved, write the range `<name>@<base>..<head>`, where base is the brief's revision.
 
 Do not write a `DENIED-CALLS` line: the Maestro reads the calls a guard denied from the denied-call journal.

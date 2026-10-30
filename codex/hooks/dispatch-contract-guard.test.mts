@@ -21,12 +21,13 @@ const PINS = POLICY.pins;
 const OBS_MODEL = PINS.get("codex-obs") ?? "";
 // Issue #331: a codex-obs message must be a well-formed observation brief.
 // Issue #505: the finding names the commit it was measured against, so an
-// allowed dispatch of this brief is silent.
+// allowed dispatch of this brief is silent. Issue #701: the default message is
+// a well-formed worker brief, so a code-bound role reaches its model checks.
 const SHA = "2733b35e2c102ac54295568509c68b18b6d92cab";
 const BRIEF = `- measured: code kherep@${SHA} -- x.test.mts \`node x.test.mts\` -> 12 pass, 0 fail\n- relayed: the operator, in chat`;
 
 function spawnDispatch(input: Record<string, unknown>, tool = "spawn_agent") {
-  return { tool_name: tool, tool_input: { task_name: "t", message: "m", ...input } };
+  return { tool_name: tool, tool_input: { task_name: "t", message: `revision: kherep@${SHA}\ndecided: none`, ...input } };
 }
 
 function runGuard(stdin: string): string {
@@ -128,7 +129,7 @@ test("a codex-obs dispatch with a malformed brief is denied and told the format"
 
 test("the brief check binds only the observation agent, named by the manifest", () => {
   assert.equal(POLICY.observationAgent, "codex-obs");
-  assert.equal(validate(spawnDispatch({ agent_type: "kherep-builder", message: "MEASURED by hand." }), POLICY), null);
+  assert.equal(validate(spawnDispatch({ agent_type: "personal-agent", message: "MEASURED by hand." }), POLICY), null);
   assert.equal(validate(spawnDispatch({ message: "MEASURED by hand." }), POLICY), null);
   const renamed = dispatchPolicy({ modelResolution: capabilities.modelResolution, projectedAgents: { "obs-x": { model: OBS_MODEL, reasoning: "low" } }, agents: { "claude-obs": { as: "obs-x", model: OBS_MODEL, reasoning: "low" } } });
   assert.equal(renamed.observationAgent, "obs-x");

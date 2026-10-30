@@ -34,6 +34,31 @@ increments the minor version; every other release increments the patch version.
   malformed list as a notice, and the Codex candidate check accepts the
   scoped line under the same grammar. The brain-drainage skill documents the
   manual recheck and relabel path for a stale page.
+- Worker brief revision (issue #701): a brief to a code-bound worker marks
+  `revision: <name>@<sha>` per repository (a review `<name>@<base>..<head>`,
+  `-dirty` for uncommitted changes) and `decided: <decision>` or
+  `decided: none` at the start of a line. `kherep-builder` and
+  `dc-plugin-build-runner` are code-bound by role (`CODE_BOUND_AGENTS` in
+  `hooks/lib/dispatch-policy.mts`, `"codeBound": true` in
+  `codex/parity/capabilities.json`, no environment override); any other
+  dispatch is checked when its brief declares `revision:`. Both dispatch guards
+  deny a missing marker on a code-bound role and a malformed token, a
+  `revision:` without a token or an empty `decided:` on any checked dispatch
+  (Claude rule `WORKER_BRIEF_FORMAT`), through the new pure lib
+  `hooks/lib/worker-brief-policy.mts`; a brief that mentions a review without
+  `revision:` gets a notice only (`WORKER_BRIEF_REVISION`). The guards read no
+  git state and judge no completeness. `codex:codex-rescue`, `codex exec` from
+  a shell and Control Plane directives stay rule-only. Codex refuses a
+  code-bound dispatch when the installed lib is missing and checks no other;
+  hook integrity checks and restores the lib, and the observation-only updater
+  accepts the `764200b` bytes of `hook-integrity-sources.mts` through
+  `codex/parity/observation-worker-brief-predecessor.json`. The builder and DC
+  build runner receipts gain `REVISION:` (`<name>@<base>..<head>` after an
+  authorized commit). Both `ROUTING.md` files name the fields, the review
+  receipt lines `REVISION:` and `ASSUMED:` with the reviewer rule quoted
+  verbatim in Dispatch, and the Maestro's `Revision: bound | mismatch |
+  unknown` receipt line, which compares the base SHA, in Verification.
+  Observation briefs are unchanged.
 - Observation handback gate (issue #571): the Claude `PreToolUse` guard
   `hooks/obs-handback-gate.mts` refuses a `claude-obs` handback through
   SubagentHandback whose first non-empty line is not exactly one valid

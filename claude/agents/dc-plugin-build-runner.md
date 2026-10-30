@@ -35,4 +35,4 @@ Resolve missing technical facts from safe repository instructions. Ask only when
 
 ## Receipt
 
-Return `RESULT`, `SOURCE`, `BUILD`, `ARTIFACT`, `CHECKSUM`, `TARGET`, `VERIFY`, and `NEXT`. Use `PARTIAL` when the artifact is built but installation was not authorized or not verified.
+Return `RESULT`, `SOURCE`, `REVISION`, `BUILD`, `ARTIFACT`, `CHECKSUM`, `TARGET`, `VERIFY`, and `NEXT`. `SOURCE` is the requested revision or branch; `REVISION` is what you measured: `<name>@<sha>[-dirty]` from `git rev-parse HEAD` of the checkout the build ran from, `-dirty` when that tree had uncommitted changes, or `<name>@<base>..<head>` when the brief authorized a commit and HEAD moved, where base is the brief's revision. Use `PARTIAL` when the artifact is built but installation was not authorized or not verified.

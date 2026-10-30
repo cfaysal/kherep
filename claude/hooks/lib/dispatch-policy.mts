@@ -4,6 +4,7 @@
 
 import { observationBriefIssue, observationBriefNotice } from "./obs-brief-policy.mts";
 import { referencesArtifact, referencesCredentials } from "./private-path-policy.mts";
+import { declaresRevision, workerBriefIssue, workerBriefNotice } from "./worker-brief-policy.mts";
 
 export type CanonicalModel = string;
 export type DispatchDecision = "allow" | "deny";
@@ -40,6 +41,8 @@ export interface DispatchResult {
   reason?: string;
   // Issue #505. A report on an allowed dispatch, never a deny.
   notice?: string;
+  // Issue #701. The rule the notice reports.
+  noticeRuleId?: "OBS_BRIEF_REVISION" | "WORKER_BRIEF_REVISION";
   metadata?: DispatchMetadata;
 }
 
@@ -56,6 +59,11 @@ const DEFAULT_AGENT_MODELS = new Map<string, CanonicalModel | CanonicalModel[]>(
   ["claude-obs", "haiku"],
   ["atlassian-broker", "haiku"],
 ]);
+
+// Issue #701. Agents whose brief must always carry revision: and decided:
+// (worker-brief-policy.mts); codex/parity/capabilities.json marks the same
+// agents "codeBound". Fixed: no environment override.
+export const CODE_BOUND_AGENTS: ReadonlySet<string> = new Set(["kherep-builder", "dc-plugin-build-runner"]);
 
 const configuredAllowedModels = process.env.KHEREP_ALLOWED_MODELS;
 export const CANONICAL_MODELS: ReadonlySet<string> = new Set(
@@ -193,15 +201,23 @@ export function evaluateDispatch(event: DispatchEvent | null | undefined): Dispa
   // Issue #331. Only the prompt is the brief: the description is a short label
   // that must neither supply a finding marker nor be read as part of one.
   let notice: string | null = null;
+  let noticeRuleId: DispatchResult["noticeRuleId"] = "OBS_BRIEF_REVISION";
+  const brief = String(event.brief ?? "");
   if (normalized.agent === "claude-obs") {
-    const brief = String(event.brief ?? "");
     const issue = observationBriefIssue(brief);
     if (issue) return deny("OBS_BRIEF_FORMAT", issue, normalized);
     notice = observationBriefNotice(brief);
+  } else if (CODE_BOUND_AGENTS.has(normalized.agent) || declaresRevision(brief)) {
+    // Issue #701. Code-bound by role, or by declaring revision:.
+    const issue = workerBriefIssue(brief, CODE_BOUND_AGENTS.has(normalized.agent));
+    if (issue) return deny("WORKER_BRIEF_FORMAT", issue, normalized);
+  } else {
+    notice = workerBriefNotice(brief);
+    noticeRuleId = "WORKER_BRIEF_REVISION";
   }
   return {
     decision: "allow",
-    ...(notice ? { notice } : {}),
+    ...(notice ? { notice, noticeRuleId } : {}),
     metadata: { agent: normalized.agent, model: normalized.model, privacy: normalized.privacy },
   };
 }

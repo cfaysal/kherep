@@ -31,12 +31,13 @@ function emitDeny(ruleId: string | undefined, reason: string | undefined, metada
 }
 
 // Issue #505. A notice is context for the dispatching session: no
-// permissionDecision (it neither grants nor gates), no systemMessage.
-function emitNotice(notice: string): void {
+// permissionDecision (it neither grants nor gates), no systemMessage. Its
+// prefix names the rule that reported it (issue #701).
+function emitNotice(ruleId: string, notice: string): void {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      additionalContext: `[dispatch-contract:OBS_BRIEF_REVISION] ${notice}`,
+      additionalContext: `[dispatch-contract:${ruleId}] ${notice}`,
     },
   }));
 }
@@ -67,7 +68,7 @@ function main(): void {
   };
   const result = evaluateDispatch(event);
   if (result.decision === "deny") emitDeny(result.ruleId, result.reason, result.metadata);
-  else if (result.notice) emitNotice(result.notice);
+  else if (result.notice) emitNotice(result.noticeRuleId || "OBS_BRIEF_REVISION", result.notice);
 }
 
 try {
