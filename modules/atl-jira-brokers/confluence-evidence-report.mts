@@ -8,7 +8,7 @@ export interface EvidenceRecord {
 }
 export const PROPOSED: readonly string[] = ['confirmed', 'refuted', 'superseded'];
 // Reasons decided before the measurement was validated: its fields stay unprinted.
-const UNVALIDATED = ['page-not-eligible', 'page-not-assumed', 'labels-malformed', 'status-author-not-model', 'record-not-body-approved',
+const UNVALIDATED = ['page-not-eligible', 'page-already-decided', 'labels-malformed', 'status-author-not-model', 'record-not-body-approved',
   'historical-not-repeatable', 'no-measurement', 'measurement-unknown-field', 'measurement-source-forbidden', 'measurement-incomplete',
   'excerpt-too-long', 'excerpt-control-chars', 'excerpt-secret-marker','measurement-stale', 'measurement-in-future'];
 function fenced(text: string): string {
