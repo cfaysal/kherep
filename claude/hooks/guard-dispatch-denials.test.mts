@@ -24,6 +24,8 @@ const GUARDS: Record<string, string> = {
   "json-deny.mts": `process.stdout.write(${JSON.stringify(decision("deny", "[json-guard] json says no"))});\n`,
   "allow.mts": "process.exit(0);\n",
   "empty.mts": "",
+  // Issue #700: the header-then-violations shape of commit-, deploy- and main-checkout-guard.
+  "header.mts": "process.stderr.write(\"header-guard blocked this command:\\n  - cannot write /h/repo/out.txt\\n  - second\\n\\nadvice\\n\");\nprocess.exit(2);\n",
 };
 
 // A dispatcher copy with synthetic guards; lib is the journal lib's state in it.
@@ -81,6 +83,30 @@ test("a delegated call is journalled with one denial per denying guard; the deci
     { guard: "guard-dispatch", target: "git", reason: "[guard-dispatch] empty.mts cannot run (empty, 0 bytes); the tool call is blocked until hook integrity restores it", broken: true },
   ]);
   assert.equal(firstLine(fx), "DENIED-CALLS: 3");
+});
+
+// Issue #700. A guard's header is skipped for its first violation, path-reduced (I1); the real commit-guard
+// with an em dash renders its violation, the decision as without agent_id (I2).
+test("a header guard is journalled with its first violation, not its header", async () => {
+  const fx = fixture();
+  await dispatch(fx, ["header.mts"], payload());
+  assert.deepEqual(lines(fx)[0]!.denials, [{ guard: "header-guard", target: "git", reason: "cannot write out.txt", broken: false }]);
+  assert.equal(renderReport(readJournal(fx.root, "agent-t1")).text.split("\n")[1], "- Bash git [header-guard] cannot write out.txt");
+});
+
+test("the real commit-guard: an em dash renders as its violation", async () => {
+  const fx = fixture();
+  fs.copyFileSync(path.join(import.meta.dirname, "commit-guard.mts"), path.join(fx.hooks, "commit-guard.mts"));
+  fs.copyFileSync(path.join(import.meta.dirname, "lib", "git-commit-match.mts"), path.join(fx.hooks, "lib", "git-commit-match.mts"));
+  const env = { ...process.env };
+  delete env.KHEREP_WORK_ITEM_REQUIRED;
+  const commit = { tool_input: { command: "git commit -m \"x \u2014 y\"" } };
+  const plain = await dispatch(fx, ["commit-guard.mts"], payload({ ...commit, agent_id: undefined }), env);
+  const run = await dispatch(fx, ["commit-guard.mts"], payload(commit), env);
+  assert.equal(run.stdout, plain.stdout);
+  assert.match(run.stdout, /"permissionDecision":"deny"/);
+  assert.deepEqual(lines(fx)[0]!.denials, [{ guard: "commit-guard", target: "git", reason: "commit message contains an em dash (U+2014)", broken: false }]);
+  assert.equal(renderReport(readJournal(fx.root, "agent-t1")).text.split("\n")[1], "- Bash git [commit-guard] commit message contains an em dash (U+2014)");
 });
 
 test("an allow is a call line without denials, the handback is not journalled, a non-string tool_use_id is null", async () => {
