@@ -16,7 +16,8 @@ export const SECRET_MARKERS: readonly RegExp[] = [
 
 export type MeasuredKind = 'code' | 'tracker' | 'live' | 'doc';
 export type Kind = MeasuredKind | 'historical' | 'unclassified';
-export type Outcome = 'confirmed' | 'refuted' | 'superseded' | 'unknown' | 'reported-only';
+// holds (#695): a confirmed page measured again and still true; nothing to write.
+export type Outcome = 'confirmed' | 'refuted' | 'superseded' | 'holds' | 'unknown' | 'reported-only';
 export interface ClaimSource { id: string; version: number; spaceId: string; body: string; labels: string[] }
 export interface Claim {
   pageId: string; spaceId: string; readVersion: number; bodySha256: string; bodyApproved: boolean; labels: string[];
@@ -29,7 +30,7 @@ export interface Measurement {
 }
 export interface SupersedingPage { id: string; title: string; spaceId: string; spaceKey: string; bound?: string[] }
 export interface DecideOptions { now: number; maxAgeDays?: number; repoRoot?: string; repoTopLevel?: string;
-  revisionExists?: (sha: string) => boolean; superseded?: SupersedingPage }
+  revisionExists?: (sha: string) => boolean; revisionNewer?: (revision: string) => boolean; superseded?: SupersedingPage }
 export interface Decision { outcome: Outcome; reason: string; labelsAdd: string[]; labelsRemove: string[]; measuredRevision?: string; supersededBy?: string }
 
 export const KINDS: readonly string[] = ['code', 'tracker', 'live', 'doc'];
@@ -125,7 +126,14 @@ function codeGate(claim: Claim, m: Measurement, options: DecideOptions): string 
   const name = revision.slice(0, at).split('/').at(-1);
   if (name !== options.repoTopLevel.split(/[\\/]/).filter(Boolean).at(-1)) return 'repo-root-name-mismatch';
   if (!options.revisionExists(revision.slice(at + 1))) return 'revision-not-in-repository';
-  if (!claim.revisions.bound.includes(revision) && !(m.verdict === 'contradicts' && targetOf(m, options) !== undefined && noBinding(claim.revisions))) return 'revision-not-on-page'; // #687: supersedeGate checks the target
+  if (!claim.revisions.bound.includes(revision)) {
+    const target = targetOf(m, options) !== undefined;
+    // #695: a confirmed page may be measured at a strict descendant of its binding; a later change never refutes it.
+    if (claim.evidenceLabel === 'confirmed') {
+      if (!options.revisionNewer?.(revision)) return target ? 'revision-not-newer' : 'revision-not-on-page';
+      if (m.verdict === 'contradicts' && !target) return 'revision-not-on-page';
+    } else if (!(m.verdict === 'contradicts' && target && noBinding(claim.revisions))) return 'revision-not-on-page'; // #687: supersedeGate checks the target
+  }
   // Drainage rejects unbound Revision lines once a page is confirmed (Defect 1).
   if (m.verdict === 'reproduces' && claim.revisions.unbound.length + claim.revisions.malformed.length > 0) return 'revision-unbound-on-page';
   return null;
@@ -158,17 +166,21 @@ function touches(claim: Claim, m: Measurement): boolean {
   return filled(m.subject) && hay.includes(m.subject ?? '');
 }
 function supersedeGate(claim: Claim, m: Measurement, options: DecideOptions): string | null {
-  const target = targetOf(m, options); if (m.verdict !== 'contradicts' || target === undefined) return null;
+  const target = targetOf(m, options), confirmed = claim.evidenceLabel === 'confirmed';
+  if (confirmed && target !== undefined && m.verdict === 'reproduces') return 'superseded-needs-contradiction';
+  if (m.verdict !== 'contradicts' || target === undefined) return null;
   if (target === claim.pageId) return 'superseded-same-page';
   if (!options.superseded || options.superseded.id !== target) return 'superseded-needs-page';
   if (options.superseded.spaceId !== claim.spaceId) return 'superseded-other-space';
-  return m.kind === 'code' && !claim.revisions.bound.includes(m.revision ?? '') && !options.superseded.bound?.includes(m.revision ?? '') ? 'superseded-page-not-bound' : null;
+  // A confirmed page's target must bind the measured revision itself (#695); an assumed page's page or target may (#687).
+  const binds = (bound?: string[]): boolean => bound?.includes(m.revision ?? '') ?? false;
+  return m.kind === 'code' && !binds(options.superseded.bound) && (confirmed || !binds(claim.revisions.bound)) ? 'superseded-page-not-bound' : null;
 }
 const refuse = (reason: string, outcome: Outcome = 'unknown'): Decision => ({ outcome, reason, labelsAdd: [], labelsRemove: [] });
 // Gates run in order; the first failing gate names the reason. No measurement never promotes, so neither does a format repair.
 export function decide(claim: Claim, measurement: unknown, options: DecideOptions): Decision {
   if (!claim.typeLabel) return refuse('page-not-eligible');
-  if (claim.evidenceLabel !== 'assumed' && claim.evidenceLabel !== 'malformed') return refuse('page-not-assumed');
+  if (claim.evidenceLabel === 'refuted' || claim.evidenceLabel === 'superseded') return refuse('page-already-decided');
   if (claim.evidenceLabel === 'malformed' || claim.statusAuthor === 'malformed') return refuse('labels-malformed');
   if (claim.statusAuthor !== 'model') return refuse('status-author-not-model', claim.statusAuthor === 'missing' ? 'unknown' : 'reported-only');
   if (!claim.bodyApproved) return refuse('record-not-body-approved');
@@ -184,9 +196,11 @@ export function decide(claim: Claim, measurement: unknown, options: DecideOption
     ?? (touches(claim, m) ? null : 'measurement-does-not-touch-claim')
     ?? supersedeGate(claim, m, options);
   if (reason) return refuse(reason);
+  const revision = m.kind === 'code' ? { measuredRevision: m.revision } : {};
+  if (m.verdict === 'reproduces' && claim.evidenceLabel === 'confirmed') return { outcome: 'holds', reason: 'measured', labelsAdd: [], labelsRemove: [], ...revision };
   const outcome: Outcome = m.verdict === 'reproduces' ? 'confirmed' : targetOf(m, options) ? 'superseded' : 'refuted';
-  return { outcome, reason: 'measured', labelsAdd: [`evidence-${outcome}`], labelsRemove: ['evidence-assumed'],
-    ...(m.kind === 'code' ? { measuredRevision: m.revision } : {}), ...(outcome === 'superseded' ? { supersededBy: targetOf(m, options) } : {}) };
+  return { outcome, reason: 'measured', labelsAdd: [`evidence-${outcome}`], labelsRemove: [`evidence-${claim.evidenceLabel}`],
+    ...revision, ...(outcome === 'superseded' ? { supersededBy: targetOf(m, options) } : {}) };
 }
 // Measured on the live site (issue #662, 2026-10-22): Confluence returns " in text nodes as &quot; and keeps
 // ' raw, so a body written in that form survives the byte-exact update readback. &amp;, &lt; and &gt; are

@@ -105,7 +105,7 @@ test('malformed and refused inputs give unknown with the exact reason, never con
     ['no evidence label', () => decide(claim(undefined, LABELS.filter(l => l !== 'evidence-assumed')), M(), OPT()), 'labels-malformed'],
     ['no type label', () => decide(claim(undefined, LABELS.slice(1)), M(), OPT()), 'page-not-eligible'],
     ['unrelated green test', () => decide(claim(), M({ command: 'npm test', excerpt: '# pass 42' }), OPT()), 'measurement-does-not-touch-claim'],
-    ['already confirmed', () => decide(claim(undefined, ['type-observation', 'evidence-confirmed', 'status-author-model']), M(), OPT()), 'page-not-assumed'],
+    ['already decided', () => decide(claim(undefined, ['type-observation', 'evidence-refuted', 'status-author-model']), M(), OPT()), 'page-already-decided'],
     ['not body-approved', () => decide(claim(undefined, undefined, false), M(), OPT()), 'record-not-body-approved'],
   ];
   for (const [name, run, reason] of cases) {
@@ -228,7 +228,7 @@ test('#687 unbound code page is superseded by a bound same-space page', () => {
   const out = insertBeforeFooter(UNBOUND, block);
   assert.deepEqual(drainageRules([snap(out, AFTER_SUP)], true).filter(c => c.problem === 'revision-missing-or-invalid'), []);
   assert.deepEqual(claim(out).revisions.bound, []);
-  assert.equal(decide(claim(out, AFTER_SUP), SUP, OPT({ superseded: BOUND77 })).reason, 'page-not-assumed');
+  assert.equal(decide(claim(out, AFTER_SUP), SUP, OPT({ superseded: BOUND77 })).reason, 'page-already-decided');
 });
 
 test('#687 confirm, refute, other revisions and format defects stay refused; every other refusal is unchanged', () => {
