@@ -11,6 +11,17 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Confirmed pages in the evidence verb (issue #695): `evidence --mode decide`
+  now accepts an `evidence-confirmed` page. A contradicting measurement at a
+  bound revision proposes `refuted`; at a newer revision (a strict descendant
+  of a bound commit, checked with read-only `git merge-base` in
+  `--repo-root`) it only supersedes, through a same-space page that binds the
+  measured revision. A holding measurement is the new outcome `holds` (exit 0,
+  no body, no label change), counted and printed by `report`. New refusals:
+  `revision-not-newer`, `superseded-needs-contradiction`, and
+  `page-already-decided` for refuted or superseded pages (replacing
+  `page-not-assumed`). The brain-drainage recheck path for `revision-stale`
+  candidates now uses the evidence verb instead of a manual relabel.
 - Revision staleness (issue #693): a Revision line may name the repo-relative
   paths a code finding rests on (`Revision: <name>@<sha> -- <path> <path>`),
   and `drainage --repo-root <checkout> [--ref <ref>]` compares those paths
