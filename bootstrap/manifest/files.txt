@@ -103,6 +103,7 @@ hooks/lib/guard-recheck.mts
 hooks/lib/guard-recheck.test.mts
 hooks/lib/denial-journal.mts
 hooks/lib/denial-journal.test.mts
+hooks/lib/denial-journal-reason.test.mts
 hooks/lib/denial-report.mts
 hooks/lib/denial-report.test.mts
 hooks/lib/integrity-proof.mts

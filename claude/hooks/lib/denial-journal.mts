@@ -4,9 +4,9 @@
 // marker line, else the journal renamed to it), so the reader never prints `none` from a
 // journal that lost a line. Every write is fs.promises raced against an absolute end: capture
 // never changes a decision and never holds a hook past its cap. Nothing raw is stored: tool
-// names, target classes, guard tags and first-line reasons with every absolute path reduced to
-// its basename; a privacy denial, and a target or reason matching the private marker pattern,
-// is `<withheld>`. lib/denial-report.mts is the read side.
+// names, target classes, guard tags and each reason's first informative line (issue #700) with
+// every absolute path reduced to its basename; a privacy denial, and a target or reason matching
+// the private marker pattern, is `<withheld>`. lib/denial-report.mts is the read side.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -107,12 +107,19 @@ function basenameOf(match: string): string {
   return (body.split(/[\\/]/).filter(Boolean).pop() ?? "") + trail;
 }
 
-// The first line of a reason, every absolute path reduced to its basename, control characters
-// dropped, `<withheld>` when the line matches the private marker pattern, cut at 240 characters.
+const LIST_MARKER = /^[-*\u2022]\s+/;
+const reducePaths = (text: string): string => text.replace(ABSOLUTE_PATHS, basenameOf).trim();
+
+// The first informative line of a reason (issue #700): its first non-empty line, unless that line
+// ends with `:` and another follows, a guard's header; then the next line without its list marker.
+// Control characters dropped, every absolute path reduced to its basename, `<withheld>` when the
+// chosen line or the skipped header matches the private marker pattern, cut at 240 characters.
 export function redactReason(reason: unknown): string {
-  const first = String(reason ?? "").split(/\r?\n/)[0]!.replace(/[\x00-\x1f\x7f]/g, "");
-  const reduced = first.replace(ABSOLUTE_PATHS, basenameOf).trim();
-  return PRIVATE_MARKER_PATTERN.test(reduced) ? WITHHELD : reduced.slice(0, REASON_MAX);
+  const lines = String(reason ?? "").split(/\r?\n/).map((line) => line.replace(/[\x00-\x1f\x7f]/g, "").trim()).filter(Boolean);
+  const header = lines.length > 1 && lines[0]!.endsWith(":") ? lines[0] : undefined;
+  const reduced = reducePaths((header ? lines[1]! : lines[0] ?? "").replace(LIST_MARKER, ""));
+  const withheld = PRIVATE_MARKER_PATTERN.test(reduced) || (header !== undefined && PRIVATE_MARKER_PATTERN.test(reducePaths(header)));
+  return withheld ? WITHHELD : reduced.slice(0, REASON_MAX);
 }
 
 // The bracket tag a reason starts with, else its leading word when ` blocked` follows it (absolute

@@ -35,10 +35,10 @@ test("a call line carries the decision, agent_type and one denial per denying ve
   assert.equal(line.agent_type, "general-purpose");
   assert.equal(line.decision, "deny");
   assert.deepEqual(line.denials, [
-    { guard: "commit-guard", target: "git", reason: "commit-guard blocked this commit:", broken: false },
+    { guard: "commit-guard", target: "git", reason: "bullet", broken: false },
     { guard: "guard-dispatch", target: "git", reason: "[guard-dispatch] x.mts cannot run (missing); the tool call is blocked", broken: true },
   ]);
-  assert.ok(!JSON.stringify(line).includes("bullet"), "only the first line of a reason");
+  assert.ok(!JSON.stringify(line).includes("blocked this commit"), "a header is skipped for its first violation (issue #700)");
 });
 
 test("a tool_use_id that is no string is null, never a skip; no denial is decision none or allow", () => {
