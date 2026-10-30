@@ -71,13 +71,13 @@ async function repository(io: Io, m: Partial<Measurement> | null, claim: Claim):
   // #695: on a confirmed page an unbound revision may be a strict descendant of a bound commit of the same
   // repository (merge-base prints the bound sha). A failed probe answers "not newer"; nothing is fetched.
   let newer = false;
-  const revision = m.revision ?? '', name = repositoryOf(revision.slice(0, revision.lastIndexOf('@')));
+  const revision = m.revision ?? '';
   if (exists && claim.evidenceLabel === 'confirmed' && !claim.revisions.bound.includes(revision)) {
-    const probe = gitProbe(io.exec, root);
+    const probe = gitProbe(io.exec, root), name = repositoryOf(revision.slice(0, -41));
     for (const bound of claim.revisions.bound) {
       const base = bound.slice(-40);
       if (repositoryOf(bound.slice(0, -41)) !== name || base === sha) continue;
-      if ((newer = await probe.ancestor(base, sha) === 'yes')) break;
+      if (await probe.ancestor(base, sha) === 'yes') { newer = true; break; }
     }
   }
   return { repoRoot: root, ...(top ? { repoTopLevel: top } : {}), revisionExists: (candidate: string) => candidate === sha && exists,
