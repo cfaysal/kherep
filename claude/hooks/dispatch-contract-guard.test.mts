@@ -66,9 +66,11 @@ function check(name: string, payload: Payload, expectedDenied: boolean, reasonNe
   );
 }
 
+// Issue #701: a well-formed worker brief, so a code-bound role reaches its pin checks.
+const WORKER_BRIEF = "revision: kherep@2733b35e2c102ac54295568509c68b18b6d92cab\ndecided: none\nBuild it.";
 const call = (agent: string, model?: string, toolName = "Agent", field = "subagent_type") => ({
   tool_name: toolName,
-  tool_input: { [field]: agent, ...(model === undefined ? {} : { model }) },
+  tool_input: { [field]: agent, ...(model === undefined ? {} : { model }), prompt: WORKER_BRIEF },
 });
 const ABSENT_MODEL_CONFIG = {
   KHEREP_ALLOWED_MODELS: null,
@@ -147,10 +149,11 @@ function noticeCheck(name: string, payload: Payload, expected: "notice" | "silen
 noticeCheck("claude-obs bare code brief allowed with a notice", obs(BARE_CODE), "notice");
 noticeCheck("claude-obs unmarked brief gets the conditional notice", obs(GOOD_BRIEF), "notice");
 noticeCheck("claude-obs complete binding is silent", obs(`- measured: code kherep@${SHA} -- x.test.mts \`node x.test.mts\` -> 12 pass`), "silent");
-noticeCheck("other agent with a bare code prompt gets no notice", { tool_name: "Agent", tool_input: { subagent_type: "kherep-builder", model: "opus", prompt: BARE_CODE } }, "silent");
+noticeCheck("other agent with a bare code prompt gets no notice", { tool_name: "Agent", tool_input: { subagent_type: "kherep-builder", model: "opus", prompt: `${WORKER_BRIEF}\n${BARE_CODE}` } }, "silent");
 noticeCheck("claude-obs pin deny carries no notice", obs(BARE_CODE, "Record observations", "opus"), "deny");
 check("claude-obs pin deny keeps its rule", obs(BARE_CODE, "Record observations", "opus"), true, "OWNED_AGENT_MODEL_MISMATCH");
 noticeCheck("claude-obs format deny carries no notice", obs("measured: code npm test -> green"), "deny");
+// Issue #701: the worker brief cases are in dispatch-contract-guard-worker.test.mts.
 check("non-dispatch tool ignored", { tool_name: "Bash", tool_input: { command: "echo ok" } }, false);
 check("malformed dispatch input fails closed", "not-json", true, "HOOK_INPUT_INVALID");
 check("missing tool_input fails closed", { tool_name: "Agent" }, true, "HOOK_SCHEMA_UNKNOWN");

@@ -17,23 +17,33 @@ export type Pins = ReadonlyMap<string, string>;
 export interface DispatchPolicy {
   pins: Pins;
   observationAgent: string | null;
+  // Issue #701. Projected names of the agents marked "codeBound", whose brief
+  // must carry revision: and decided: (claude/hooks/lib/worker-brief-policy.mts).
+  codeBoundAgents: ReadonlySet<string>;
   supportedModels: ReadonlyMap<string, ReadonlySet<string>>;
   agentDefaults: ReadonlyMap<string, { model: string; reasoning: string }>;
 }
 // The manifest key of the observation agent; the projected name is its `as`.
 const OBSERVATION_ENTRY = "claude-obs";
 
-// The brief check is the Claude hook lib, found the way privacy-boundary-guard.mts
+// The brief checks are Claude hook libs, found the way privacy-boundary-guard.mts
 // finds its libs: beside this file at the install target (hookDir/lib, copied from
-// claude/hooks/lib), else in the checkout under claude/hooks/lib. It is loaded only
-// for an observation dispatch, so a missing lib refuses that dispatch (main fails
-// closed) and no other.
+// claude/hooks/lib), else in the checkout under claude/hooks/lib. The observation
+// lib is loaded only for an observation dispatch and the worker lib (issue #701)
+// is required only for a code-bound one, so a missing lib refuses that dispatch
+// (main fails closed) and no other.
 type ObsBriefPolicy = typeof import("../../claude/hooks/lib/obs-brief-policy.mts");
+type WorkerBriefPolicy = typeof import("../../claude/hooks/lib/worker-brief-policy.mts");
 const require = createRequire(import.meta.url);
-function obsBriefPolicy(): ObsBriefPolicy {
-  const local = path.join(import.meta.dirname, "lib", "obs-brief-policy.mts");
-  const checkout = path.resolve(import.meta.dirname, "..", "..", "claude", "hooks", "lib", "obs-brief-policy.mts");
-  return require(fs.existsSync(local) ? local : checkout) as ObsBriefPolicy;
+function hookLib<T>(name: string): T {
+  const local = path.join(import.meta.dirname, "lib", name);
+  return require(fs.existsSync(local) ? local : path.resolve(import.meta.dirname, "..", "..", "claude", "hooks", "lib", name)) as T;
+}
+const obsBriefPolicy = () => hookLib<ObsBriefPolicy>("obs-brief-policy.mts");
+const workerBriefPolicy = () => hookLib<WorkerBriefPolicy>("worker-brief-policy.mts");
+// A dispatch that is not code-bound is checked only when the lib is there.
+function optionalWorkerBriefPolicy(): WorkerBriefPolicy | null {
+  try { return workerBriefPolicy(); } catch { return null; }
 }
 
 function deny(reason: string): void {
@@ -122,14 +132,16 @@ export function dispatchPolicy(capabilities: unknown): DispatchPolicy {
       throw new Error(`Agent ${name} differs from the installed defaults snapshot`);
     }
   }
-  return { pins, supportedModels, agentDefaults, observationAgent: isRecord(entry) ? projectedName(OBSERVATION_ENTRY, entry) : null };
+  const codeBoundAgents = new Set(Object.entries(manifest.agents)
+    .filter(([, agent]) => isRecord(agent) && agent.codeBound === true).map(([name, agent]) => projectedName(name, agent as Record<string, unknown>)));
+  return { pins, supportedModels, agentDefaults, codeBoundAgents, observationAgent: isRecord(entry) ? projectedName(OBSERVATION_ENTRY, entry) : null };
 }
 
 export function loadPolicy(): DispatchPolicy {
   return dispatchPolicy(JSON.parse(fs.readFileSync(CAPABILITIES_FILE, "utf8")));
 }
 
-export function validate(payload: unknown, { pins, observationAgent, supportedModels, agentDefaults }: DispatchPolicy): string | null {
+export function validate(payload: unknown, { pins, observationAgent, supportedModels, agentDefaults, codeBoundAgents }: DispatchPolicy): string | null {
   // codex/lib/parity-config.mts registers this guard for Agent|spawn_agent only, so
   // input that does not name its tool is an unclassifiable dispatch.
   if (!isRecord(payload) || typeof payload.tool_name !== "string") {
@@ -165,19 +177,25 @@ export function validate(payload: unknown, { pins, observationAgent, supportedMo
     const policy = obsBriefPolicy();
     return policy.observationBriefIssue(input.message, policy.CODEX_NOTHING_TO_FILE);
   }
-  return null;
+  // Issue #701. Code-bound by role, or by declaring revision:.
+  const codeBound = codeBoundAgents.has(agent);
+  const worker = codeBound ? workerBriefPolicy() : optionalWorkerBriefPolicy();
+  return worker ? worker.workerBriefIssue(input.message, codeBound) : null;
 }
 
 // Issue #505. The revision notice for an observation dispatch that validate
-// allows; null otherwise. A report, not a gate: an installed lib that predates
-// observationBriefNotice yields no notice and no deny.
+// allows; issue #701, the review notice for a dispatch that is neither code-bound
+// nor an observation; null otherwise. A report, not a gate: a missing or older
+// installed lib yields no notice and no deny.
 export function advise(payload: unknown, policy: DispatchPolicy): string | null {
   if (validate(payload, policy) !== null || !isRecord(payload) || !DISPATCH_TOOLS.has(payload.tool_name as string)) return null;
   const input = payload.tool_input;
   if (!isRecord(input) || typeof input.message !== "string") return null;
-  if ((typeof input.agent_type === "string" ? input.agent_type.trim() : "") !== policy.observationAgent) return null;
-  const { observationBriefNotice } = obsBriefPolicy();
-  return typeof observationBriefNotice === "function" ? observationBriefNotice(input.message) : null;
+  const agent = typeof input.agent_type === "string" ? input.agent_type.trim() : "";
+  if (policy.codeBoundAgents.has(agent)) return null;
+  const notice = agent === policy.observationAgent
+    ? obsBriefPolicy().observationBriefNotice : optionalWorkerBriefPolicy()?.workerBriefNotice;
+  return typeof notice === "function" ? notice(input.message) : null;
 }
 
 export function decide(raw: string, readPolicy: () => DispatchPolicy = loadPolicy): string | null {

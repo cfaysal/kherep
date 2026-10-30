@@ -23,6 +23,10 @@ export interface AgentRenderOptions {
   // true: the Codex dispatch guard denies a dispatch of this agent whose model is
   // missing or differs from `model` (codex/hooks/dispatch-contract-guard.mts).
   enforcePin?: boolean;
+  // true: the Codex dispatch guard denies a dispatch of this agent whose brief
+  // lacks a well-formed revision: or decided: marker (issue #701); mirrors
+  // CODE_BOUND_AGENTS in claude/hooks/lib/dispatch-policy.mts.
+  codeBound?: boolean;
   reasoning?: string;
   sandbox?: string;
 }

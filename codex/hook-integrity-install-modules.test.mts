@@ -140,6 +140,20 @@ for (const [name, kind] of [["hook-syntax.mts", "self"], ["git-commit-match.mts"
   });
 }
 
+// Issue #701, as 2c in hook-integrity-install.test.mts: the dispatch guard's second computed-required lib.
+test("2e. a 0-byte worker-brief lib the dispatch guard loads through a computed require is restored", (t) => {
+  const ctx = fixture(t);
+  const file = path.join(ctx.hookDir, "lib", "worker-brief-policy.mts");
+  fs.writeFileSync(file, "");
+  const context = sessionStart(ctx);
+  assert.match(context, /lib\/worker-brief-policy\.mts \(imported by [^)]*codex-dispatch-contract-guard\.mts/);
+  assert.match(context, /RESTORED from the repo, verified at the target/);
+  assert.ok(fs.readFileSync(file).equals(fs.readFileSync(path.join(REPO, "claude", "hooks", "lib", "worker-brief-policy.mts"))));
+  const [entry] = journal(ctx);
+  assert.deepEqual([entry?.kind, entry?.restoreProven, entry?.sizeBefore ?? 0], ["import", true, 0]);
+  assert.equal(sessionStart(ctx), "", "the next session start is silent again");
+});
+
 test("an upgrade installs every module again, byte-equal, and an install over an untouched home keeps them", (t) => {
   const ctx = fixture(t);
   for (const name of MODULES) fs.rmSync(path.join(ctx.hookDir, name));

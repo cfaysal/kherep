@@ -20,6 +20,19 @@ Keep direct, low-risk work in the main agent. Use bounded delegation when indepe
 
 Every dispatch states the objective, exact ownership, constraints, required evidence and return format. Use separate worktrees for independent writers. Read-only reviews may run alongside implementation. Do not delegate a task whose result cannot be retrieved and checked.
 
+### Worker briefs
+
+A brief for a worker that builds or reviews code binds the work to a revision (issue #701). It marks, each at the start of its own line and optionally as a list item:
+
+- `revision: <name>@<sha>` once per repository, with the full 40-hex SHA from `git rev-parse HEAD` of the checkout the dispatcher measured, and `-dirty` appended when that tree had uncommitted changes. A build names the base the worker starts from; a review names its range as `<name>@<base>..<head>`, where `<head>-dirty` means the range plus the working tree and `<name>@<sha>-dirty` on its own means uncommitted work on `<sha>`. The tokens are the rest of the marker's line; several repositories take several tokens or several lines.
+- `decided: <decision or assumption already made>`, one per marker or a multi-line list under one marker. `decided: none` is the explicit empty form.
+
+`kherep-builder` and `dc-plugin-build-runner` are code-bound by role: the dispatch guard denies their dispatch without both markers, with rule `WORKER_BRIEF_FORMAT`. Any other dispatch whose brief declares `revision:` is checked as well, and the guard denies a malformed token or an empty `decided:` there too. A dispatch that is neither code-bound nor an observation, declares no `revision:` and whose brief mentions a review (`review`, `reviews`, `reviewed`, `reviewing` or `reviewer`) gets the notice `WORKER_BRIEF_REVISION` once, never a deny. The guard checks presence and form only: it reads no git state and does not judge completeness. The observation brief keeps its own rules (Session observations). Outside the guard's view, and bound by this rule alone, are `codex exec` started from a shell, a peer directive over the Control Plane, and `codex:codex-rescue`, which the guard allows before it reads any brief.
+
+The builder receipt ends with `REVISION: <name>@<sha>[-dirty]`, or `<name>@<base>..<head>` when the brief authorized a commit and HEAD moved. A review brief requires the receipt lines `REVISION: <name>@<base>..<head>[-dirty]` and `ASSUMED: none | <n>`, and carries this rule verbatim:
+
+> A finding that rests on an assumption stated neither in the brief nor in the code is reported as `assumed: <assumption> -> <finding>` and counted in ASSUMED:, never resolved silently.
+
 ## Privacy and authority
 
 Classify private inputs before selecting a tool. Credentials, customer internals, raw private sessions, private deployment inventories and explicitly marked private files stay outside cloud tools and agents. Use only a configured, explicitly authorized local processing route with a receipt that reveals no private content. If unavailable, stop the dependent operation without a cloud fallback.
@@ -41,6 +54,8 @@ Before the first message to a node in a conversation, list that node's sessions 
 The Maestro inspects worker changes, verifies the final diff and runs proportional checks. A build, commit or worker message alone is not delivery evidence. Measure artifact identity at the destination when delivery is in scope.
 
 For behavior-changing work, report C1 requested behavior, C2 tests/build/runtime evidence, C3 security and privacy impact, and C4 scope and diff integrity. Mark checks as passed, failed, skipped or not testable. Final acceptance stays with the Maestro and user.
+
+Worker revision (issue #701): after a code-bound worker finished, copy its `REVISION:` into the dispatch receipt as `Revision: bound <name>@<sha> | mismatch <name> (brief <sha7>, receipt <sha7>) | unknown (no-receipt-line)`. Compare per repository name the 40-hex SHAs only: the sole SHA of a build receipt, or the base of a `<base>..<head>` receipt, against the brief's `<sha>` (or its base). `-dirty` on either side is noted, not compared. Equal binds the result to that revision. A different one fails C4 for that worker: the Maestro then re-dispatches on the brief's revision or re-measures the target itself, and says which. A missing line or a name the brief never named is `unknown`, which is UNKNOWN in acceptance and never bound.
 
 Denied calls (issue #504): after a delegated worker finished, through its completion notification or `status: delivered`, run `node "<CLAUDE_HOME>/hooks/denied-calls.mts" render <agent_id>` with the agent ID Claude Code returned, and copy its first line into the dispatch receipt as `Denied: none | <n> | unknown (<code>)`. Read the full list, write-tool denials first, not only the first line. Exit code 3 means `unknown`; `unknown` and a missing line are UNKNOWN in acceptance, never `none`. Explore and Plan workers return no agent ID: their line is `Denied: unknown (no-agent-id)`, and `list` is an operator diagnostic, never acceptance evidence. `none` covers Kherep guard denials only: permission rules of the runtime, auto-mode classifier denials and a guard `ask` the operator refused are not listed. That the returned agent ID equals the `agent_id` of the worker's hook payloads is UNVERIFIED until measured; a mismatch reads `unknown (journal-missing)`, never `none`. The list is evidence about the worker; it does not replace measuring the target.
 
