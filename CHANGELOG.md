@@ -127,8 +127,9 @@ increments the minor version; every other release increments the patch version.
   guarded call of a delegated Claude worker (a payload with a valid
   `agent_id`, the handback excluded) to
   `<CLAUDE_HOME>/.cache/denied-calls/<agent_id>.jsonl`: tool, worker type,
-  a target class and per denying guard its tag and the first line of its
-  reason, absolute paths reduced to their basename, privacy denials and
+  a target class and per denying guard its tag and one line of its
+  reason (a guard's header skipped for its first violation, #700),
+  absolute paths reduced to their basename, privacy denials and
   marker matches `<withheld>`. Every write is asynchronous, capped (1.5 s,
   0.5 s in the entry) and never changes or delays a decision past its cap;
   a lost write leaves `<agent_id>.failed`, a marker line or the journal
@@ -149,8 +150,8 @@ increments the minor version; every other release increments the patch version.
   installed as `hooks/kherep-maestro/denied-calls.mts`. Limits: append
   and rename both failing loses the line; a call the hook entry denies
   whose payload is over 1 MiB leaves no line and no marker; an absolute
-  path with a space keeps the part after the space; the three stderr
-  guards record their first line only; Explore and Plan workers return no agent ID and
+  path with a space keeps the part after the space; a deny with several
+  violations records only the first; Explore and Plan workers return no agent ID and
   read `unknown (no-agent-id)`; that the returned agent ID equals the
   hooks' `agent_id` is UNVERIFIED until the host measurement in
   `docs/CODEX-HOOK-RUNS.md`. `hooks/lib/denial-journal.mts` holds a fourth
@@ -517,6 +518,16 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- Denied-call reports name the violation, not a guard's header (issue
+  #700). The commit, deploy and main-checkout guards print a header ending
+  in `:` and then their violations; the journal now records the first
+  violation without its list marker, so a commit-guard denial renders as
+  `[commit-guard] commit message contains an em dash (U+2014)` on Claude
+  and Codex. A reason whose first non-empty line is no such header keeps
+  that line. Path reduction, the 240-character cut and the private-marker
+  refusal apply to the chosen line, and the refusal also to the skipped
+  header. Only the first violation is recorded. The journal format is
+  unchanged; lines written before the fix still render with the header.
 - Brain drainage confirm path (issue #687): a `code` page that declares no
   binding can be marked `evidence-superseded` when a same-space page binds the
   revision at which the measurement contradicts the claim. `decide
