@@ -15,11 +15,11 @@ function fenced(text: string): string {
   const fence = '`'.repeat(Math.max(2, ...(text.match(/`+/g) ?? []).map(run => run.length)) + 1);
   return `${fence}text\n${text}\n${fence}`;
 }
-// Deterministic. No titles and no bodies; excerpts only for proposed changes, which decide allows only
+// Deterministic. No titles and no bodies; excerpts only for proposed changes and holds, which decide allows only
 // for records prepared with --body-approved.
 export function renderReport(records: readonly EvidenceRecord[]): string {
   const lines = ['# Brain drainage confirm path: candidate report', ''];
-  const counts: Record<string, number> = { confirmed: 0, refuted: 0, superseded: 0, 'reported-only': 0, excluded: 0, failed: 0 };
+  const counts: Record<string, number> = { confirmed: 0, refuted: 0, superseded: 0, holds: 0, 'reported-only': 0, excluded: 0, failed: 0 };
   const unknown: Record<string, number> = {};
   for (const r of [...records].sort((a, b) => a.pageId.localeCompare(b.pageId, 'en', { numeric: true }))) {
     lines.push(`## Page ${r.pageId}`);
@@ -39,12 +39,13 @@ export function renderReport(records: readonly EvidenceRecord[]): string {
       // Validated means secret-scanned, and present whenever the claim records an override.
       if (override) lines.push(`- kind override reason: ${m.kindOverride}`);
     }
-    if (m && proposed) lines.push(`- verdict: ${m.verdict}`, '- command:', fenced(m.command), '- excerpt:', fenced(m.excerpt));
+    // holds (#695): the verbatim re-measurement of a body-approved record, for the operator's work record.
+    if (m && (proposed || d.outcome === 'holds')) lines.push(`- verdict: ${m.verdict}`, '- command:', fenced(m.command), '- excerpt:', fenced(m.excerpt));
     lines.push('');
   }
   const total = Object.values(unknown).reduce((a, b) => a + b, 0);
   const reasons = Object.keys(unknown).sort().map(k => `${k}: ${unknown[k]}`).join(', ');
-  lines.push('## Totals', `- confirmed: ${counts.confirmed}`, `- refuted: ${counts.refuted}`, `- superseded: ${counts.superseded}`,
+  lines.push('## Totals', `- confirmed: ${counts.confirmed}`, `- refuted: ${counts.refuted}`, `- superseded: ${counts.superseded}`, `- holds: ${counts.holds}`,
     `- unknown: ${total}${total ? ` (${reasons})` : ''}`, `- reported-only: ${counts['reported-only']}`,
     `- excluded: ${counts.excluded}`, `- failed: ${counts.failed}`, '',
     'Coverage is limited to the pages listed above; every other page remains UNKNOWN.',

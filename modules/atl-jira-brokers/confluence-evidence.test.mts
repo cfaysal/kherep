@@ -170,7 +170,7 @@ test('renderReport: verbatim proposals, passive labels, no titles or bodies, det
     'passive labels: currency-uncertain, origin-wiki', 'measurement-stale', 'reported-only']) assert.ok(report.includes(text), text);
   assert.ok(!report.includes('stale-only output'), 'unknown records print no excerpt');
   for (const line of report.split('\n').filter(l => l.startsWith('- label diff:'))) assert.doesNotMatch(line, /currency|origin/);
-  assert.match(report, /confirmed: 1\n- refuted: 0\n- superseded: 0\n- unknown: 1 \(measurement-stale: 1\)\n- reported-only: 1\n- excluded: 1\n- failed: 1/);
+  assert.match(report, /confirmed: 1\n- refuted: 0\n- superseded: 0\n- holds: 0\n- unknown: 1 \(measurement-stale: 1\)\n- reported-only: 1\n- excluded: 1\n- failed: 1/);
   assert.match(report, /not a Brain-confirmed verdict/);
   assert.ok(report.indexOf('## Page 1') < report.indexOf('## Page 2'));
 });

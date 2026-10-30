@@ -14,10 +14,15 @@ export const BODY = `<p>Revision: alpha@${SHA}</p><p>Code: src/queue.mts</p><p>Q
 export const LABELS = ['type-observation', 'evidence-assumed', 'status-author-model', 'runtime-claude-code-win'];
 export const MEASUREMENT = { kind: 'code', source: 'alpha (git checkout)', sourceClass: 'repository', command: `git show ${SHA}:src/queue.mts`,
   excerpt: '12: retry(receipt)', measuredAt: TODAY, verdict: 'reproduces', revision: `alpha@${SHA}` };
+// #695: a confirmed record, a commit newer than SHA and a contradicting measurement of the same claim.
+export const CONFIRMED = ['type-observation', 'evidence-confirmed', 'status-author-model', 'runtime-claude-code-win'];
+export const NEWER = 'c'.repeat(40);
+export const CONTRADICTS = { ...MEASUREMENT, verdict: 'contradicts' };
 export type Pages = Record<string, { body: string; labels: string[]; spaceId?: string; status?: string }>;
 // links maps a directory to its resolved real path; a directory mapped to null does not exist.
-// files replaces the in-memory files (with real ones, say); onRequest runs before each GET.
-export interface HarnessOptions { exec?: ExecLike; links?: Record<string, string | null>; files?: FileOps; onRequest?: () => void }
+// files replaces the in-memory files (with real ones, say); onRequest runs before each GET; mergeBase is what
+// git merge-base prints (absent: the call fails).
+export interface HarnessOptions { exec?: ExecLike; links?: Record<string, string | null>; files?: FileOps; onRequest?: () => void; mergeBase?: string }
 
 export function harness(pages: Pages = { '1': { body: BODY, labels: LABELS } }, options: HarnessOptions = {}) {
   const calls: RequestSpec[] = [];
@@ -39,6 +44,7 @@ export function harness(pages: Pages = { '1': { body: BODY, labels: LABELS } }, 
     if (args[0] === '--version') return { stdout: 'git version 2.50.0\n', stderr: '' };
     const dir = args[1] ?? '';
     if (args.includes('cat-file')) return { stdout: 'commit\n', stderr: '' };
+    if (args.includes('merge-base')) { if (options.mergeBase === undefined) throw new Error('fatal: merge-base failed'); return { stdout: `${options.mergeBase}\n`, stderr: '' }; }
     if (dir.startsWith('/x/') || dir.startsWith('/repo')) return { stdout: dir.split('/').slice(0, 3).join('/') + '\n', stderr: '' };
     if (dir.startsWith('/dubious')) throw new Error(`fatal: detected dubious ownership in repository at '${dir}'`);
     throw new Error('fatal: not a git repository (or any of the parent directories): .git');
