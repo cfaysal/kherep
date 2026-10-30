@@ -125,15 +125,15 @@ export function dispatchPolicy(capabilities: unknown): DispatchPolicy {
     }
     agentDefaults.set(name, { model: agent.model, reasoning: agent.reasoning });
   }
+  const codeBoundAgents = new Set<string>();
   for (const [name, agent] of Object.entries(manifest.agents)) {
     if (!isRecord(agent)) throw new Error(`Agent ${name} is malformed`);
     const actual = agentDefaults.get(projectedName(name, agent));
     if (!actual || actual.model !== agent.model || actual.reasoning !== agent.reasoning) {
       throw new Error(`Agent ${name} differs from the installed defaults snapshot`);
     }
+    if (agent.codeBound === true) codeBoundAgents.add(projectedName(name, agent));
   }
-  const codeBoundAgents = new Set(Object.entries(manifest.agents)
-    .filter(([, agent]) => isRecord(agent) && agent.codeBound === true).map(([name, agent]) => projectedName(name, agent as Record<string, unknown>)));
   return { pins, supportedModels, agentDefaults, codeBoundAgents, observationAgent: isRecord(entry) ? projectedName(OBSERVATION_ENTRY, entry) : null };
 }
 
