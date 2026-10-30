@@ -73,10 +73,11 @@ async function repository(io: Io, m: Partial<Measurement> | null, claim: Claim):
   let newer = false;
   const revision = m.revision ?? '', name = repositoryOf(revision.slice(0, revision.lastIndexOf('@')));
   if (exists && claim.evidenceLabel === 'confirmed' && !claim.revisions.bound.includes(revision)) {
+    const probe = gitProbe(io.exec, root);
     for (const bound of claim.revisions.bound) {
       const base = bound.slice(-40);
       if (repositoryOf(bound.slice(0, -41)) !== name || base === sha) continue;
-      if ((newer = await gitProbe(io.exec, root).ancestor(base, sha) === 'yes')) break;
+      if ((newer = await probe.ancestor(base, sha) === 'yes')) break;
     }
   }
   return { repoRoot: root, ...(top ? { repoTopLevel: top } : {}), revisionExists: (candidate: string) => candidate === sha && exists,
