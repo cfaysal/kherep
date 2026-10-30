@@ -8,7 +8,7 @@ import { drainageRules } from './confluence-drainage-rules.mts';
 import { drainageSnapshot } from './confluence-drainage-snapshot.mts';
 import {
   BOUND_REVISION, claimSpan, classifyClaim, decide, evidenceLabelsOk, insertBeforeFooter, KINDS, normaliseMeasurement, renderMeasurementBlock, revisionBody, revisionLines,
-  type DecideOptions, type Decision, type Measurement, type MeasuredKind,
+  type Claim, type DecideOptions, type Decision, type Measurement, type MeasuredKind,
 } from './confluence-evidence.mts';
 import {
   execFileAsync, fail, nodeFiles, readJson, readRecord, requireAbsent, requireOutside, TIMEOUT, type FileOps, type Io,
@@ -16,6 +16,7 @@ import {
 import { PROPOSED, renderReport, type EvidenceRecord } from './confluence-evidence-report.mts';
 import type { NeighbourArgs, NeighbourCliContext } from './confluence-neighbour-cli.mts';
 import { readFailure } from './confluence-pagination.mts';
+import { gitProbe, repositoryOf } from './confluence-revision-staleness-git.mts';
 import { runtimeLabel } from './confluence-runtime-label.mts';
 import type { ExecLike } from './confluence-semantic.mts';
 import { createSession } from './confluence-session.mts';
@@ -60,14 +61,26 @@ async function prepare(io: Io): Promise<number> {
 }
 
 // git sees only a validated 40-hex SHA and the operator's checkout path.
-async function repository(io: Io, m: Partial<Measurement> | null): Promise<Partial<DecideOptions>> {
+async function repository(io: Io, m: Partial<Measurement> | null, claim: Claim): Promise<Partial<DecideOptions>> {
   const root = io.args['repo-root'];
   if (!root) return {};
   const sha = (m?.revision ?? '').slice(-40);
   if (m?.kind !== 'code' || !BOUND_REVISION.test(m.revision ?? '') || !/^[0-9a-f]{40}$/.test(sha)) return { repoRoot: root };
   const top = await io.exec('git', ['-C', root, 'rev-parse', '--show-toplevel'], TIMEOUT).then(r => r.stdout.trim(), () => '');
   const exists = await io.exec('git', ['-C', root, 'cat-file', '-t', sha], TIMEOUT).then(r => r.stdout.trim() === 'commit', () => false);
-  return { repoRoot: root, ...(top ? { repoTopLevel: top } : {}), revisionExists: (candidate: string) => candidate === sha && exists };
+  // #695: on a confirmed page an unbound revision may be a strict descendant of a bound commit of the same
+  // repository (merge-base prints the bound sha). A failed probe answers "not newer"; nothing is fetched.
+  let newer = false;
+  const revision = m.revision ?? '', name = repositoryOf(revision.slice(0, revision.lastIndexOf('@')));
+  if (exists && claim.evidenceLabel === 'confirmed' && !claim.revisions.bound.includes(revision)) {
+    for (const bound of claim.revisions.bound) {
+      const base = bound.slice(-40);
+      if (repositoryOf(bound.slice(0, -41)) !== name || base === sha) continue;
+      if ((newer = await gitProbe(io.exec, root).ancestor(base, sha) === 'yes')) break;
+    }
+  }
+  return { repoRoot: root, ...(top ? { repoTopLevel: top } : {}), revisionExists: (candidate: string) => candidate === sha && exists,
+    revisionNewer: (candidate: string) => candidate === revision && newer };
 }
 
 async function decideMode(io: Io): Promise<number> {
@@ -91,7 +104,7 @@ async function decideMode(io: Io): Promise<number> {
   if (supersededBy !== undefined && m?.supersededBy !== undefined && m.supersededBy !== supersededBy) {
     fail('--superseded-by differs from supersededBy in the measurement.');
   }
-  const options: DecideOptions = { now: ctx.now(), maxAgeDays, ...(await repository(io, m)) };
+  const options: DecideOptions = { now: ctx.now(), maxAgeDays, ...(await repository(io, m, record.claim!)) };
   if (supersededBy !== undefined) {
     const page = await getPage(io.session(), supersededBy);
     if (page.status !== 'current') fail('superseded-page-not-current: the superseding page is not current.');
@@ -124,7 +137,8 @@ async function decideMode(io: Io): Promise<number> {
   const diff = decision.labelsAdd.length ? `${decision.labelsAdd.map(l => `+${l}`).join(', ')} / ${decision.labelsRemove.map(l => `-${l}`).join(', ')}` : 'none';
   for (const line of [`outcome: ${decision.outcome}`, `reason: ${decision.reason}`, `labels: ${diff}`,
     `body: ${body === undefined ? 'not written' : 'written'}`]) ctx.log(line);
-  return body === undefined ? 2 : 0;
+  // holds (#695) is a measured result with nothing to write, so it exits 0 like a proposed change.
+  return body === undefined && decision.outcome !== 'holds' ? 2 : 0;
 }
 
 async function verify(io: Io): Promise<number> {
@@ -174,7 +188,7 @@ async function recordMode(io: Io): Promise<number> {
 
 const MODES: Record<string, (io: Io) => Promise<number>> = { prepare, decide: decideMode, verify, report, record: recordMode };
 
-// Exit 0: proposed change or report; 2: unknown, reported-only or readback
+// Exit 0: proposed change, holds or report; 2: unknown, reported-only or readback
 // mismatch; a thrown ConfluenceError is exit 1 at the broker boundary.
 export async function cmdEvidence(ctx: NeighbourCliContext, args: NeighbourArgs, deps: EvidenceDeps = {}): Promise<number> {
   const run = MODES[args.mode ?? ''];

@@ -145,6 +145,7 @@ test('git receives only a validated 40-hex SHA', async () => {
   const catFile = good.execs.filter(c => c.includes('cat-file'));
   assert.equal(catFile.length, 1);
   assert.ok(catFile.every(c => /^[0-9a-f]{40}$/.test(c.at(-1) ?? '')));
+  assert.ok(good.execs.filter(c => c.includes('merge-base')).every(c => c.slice(-2).every(a => /^[0-9a-f]{40}$/.test(a)))); // #695
 });
 
 test('Defect 2: verify matches only the reviewed body with exactly the outcome label', async () => {
