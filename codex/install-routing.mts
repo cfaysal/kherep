@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { updateRouting, rollbackRouting } from "./lib/routing-update.mts";
@@ -17,6 +18,16 @@ export function main(args = process.argv.slice(2)): void {
     : updateRouting({ codexHome, mode: mode as "check" | "apply", configRoot: values.get("--config-root")!, exampleTarget: values.get("--example-target")! });
   console.log(JSON.stringify(result));
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+function isMainModule(): boolean {
+  const entry = process.argv[1] || "";
+  try {
+    return import.meta.url === pathToFileURL(path.resolve(entry)).href
+      || import.meta.url === pathToFileURL(fs.realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   try { main(); } catch { console.error("Routing update refused; target, render binding or backup evidence did not pass validation."); process.exitCode = 1; }
 }
