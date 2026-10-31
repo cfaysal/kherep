@@ -390,8 +390,8 @@ flowchart LR
   turn --> receive
   ticket --> hook[Originalowner PostToolUse additionalContext]
   hook --> receive[Actual Receive: returned messages offered]
-  receive --> stop[Confirming Stop: delivered]
-  stop --> reconcile[Await exact owned Queue list/delete/readback]
+  receive --> ack[Explicit exact-offer processing ACK: delivered]
+  ack --> reconcile[Await exact owned Queue list/delete/readback]
   native --> attempts[Durable batch identity and duplicate barrier]
   attempts --> reconcile
 ```
@@ -418,6 +418,11 @@ hint generations. It rechecks current enrollment, policy fingerprint, owner
 permission mode, app/full-ID grant, task exclusion, kill switch and message
 address/depth immediately before enqueue. It uses the captured Codex home and
 approved executable identity, with no model, sandbox or approval overrides.
+A durable owner reservation precedes budget consumption and invocation; a pending
+submitted, uncertain or incompletely recorded group blocks another native group.
+New accepted IDs remain unattempted, and the submitted IDs/input/count never grow.
+Restart reconstructs a fence from outstanding attempt history. Exact complete
+Queue reconciliation retires the reservation; already ACKed newer IDs need no card.
 Exclusive-create attempt records precede invocation in the separate
 `codex-native-attempts/<owner>/` namespace. Known IDs record submission only;
 unknown results remain uncertain and cannot authorize a retry. A crashed or
@@ -450,7 +455,7 @@ empty turns under every such race. No global lock or additional model turn is ad
 
 Native Queue arbitration, rather than the directory's recent-session `active`
 label, decides when an owner can start. The regular original-owner intake and
-confirming Stop remain the only canonical delivery evidence. A stalled CLI
+explicit processing ACK remain the original-owner delivery evidence. A stalled CLI
 cannot block the CP publication lane. Source tests and an enqueue acknowledgement
 do not establish that a particular host has installed and processed this path.
 
@@ -468,10 +473,11 @@ IDs, paths or command recipe. Admission and claim do not offer or confirm.
 The synchronous hook feeds the same running turn at its next supported tool
 boundary. It does not interrupt sampling or invoke literal `turn/steer`. Idle or
 reasoning without another boundary waits for original-owner intake. Explicit
-Receive offers only the returned framed messages, and confirming Stop alone
-confirms those offered records. Interrupt and missing Receive retain CP data.
+Receive offers only complete returned framed messages. Explicit owner-bound receipt
+ACK declares processing and commits those exact current generations as delivered.
+Stop does not confirm fetched content. Interrupt and missing Receive retain CP data.
 The existing guarded Stop continuation for accepted messages remains available.
-Codex Stop no longer imports native cleanup; old native artifacts remain intact.
+Codex Stop still awaits the existing exact native reconciliation; legacy bindings remain intact.
 
 The independent synchronous PostToolUse projection is unchanged by this change.
 Native hook trust, activation and actual owner-turn processing need acceptance

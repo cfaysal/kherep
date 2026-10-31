@@ -1,3 +1,7 @@
+import path from "node:path";
+import { isMessageId, isMessageText } from "../protocol-messages.mts";
+import { readSelected } from "./inbox-selected-read.mts";
+import { acknowledgeCodexOffer } from "./codex-inbox-ack.mts";
 import { codexSessionRefs, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { CODEX_CONTEXT_BYTES, CODEX_ESCALATION_NOTE } from "./deliver-codex.mts";
 import { deliveryContext } from "./deliver-core.mts";
@@ -12,9 +16,12 @@ import { repliesTo } from "./sent-notices.mts";
 type InboxIo = Required<MsgContext>;
 
 // Inspection is read-only. --receive offers bounded peer context to the current
-// Codex continuation; its next Stop confirms that the carrying turn completed.
-export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
+// Codex continuation; only an explicit exact-offer ACK confirms processing.
+export function inbox(io: InboxIo, values: MsgArgs["values"], selectors: string[] = []): number {
   const fail = (message: string): number => { io.err("kherep-node msg: " + message); return 1; };
+  if ((values.receive || values.ack !== undefined) && Object.keys(values).some(key => !["from", "receive", "ack", "all"].includes(key))) return fail("receive and ACK accept only their own inbox selectors");
+  if (selectors.length > 1 || (selectors.length && (!values.receive || !isMessageId(selectors[0])))) return fail("single receive needs exactly one message id and --receive");
+  if (values.ack !== undefined && (values.receive || values.all || !values.from)) return fail("--ack needs --from and cannot combine with --receive or --all");
   if (values.receive && values.all) return fail("--receive cannot be combined with --all");
   if (values.receive && !values.from) return fail("--receive needs --from with the recorded Codex session id");
 
@@ -52,11 +59,24 @@ export function inbox(io: InboxIo, values: MsgArgs["values"]): number {
     }
   }
 
+  if (values.ack !== undefined) {
+    try { io.out(acknowledgeCodexOffer(io.paths, values.from!, values.ack, refs)); return 0; }
+    catch (error) { return fail(error instanceof Error ? error.message : "Codex ACK failed"); }
+  }
   if (values.receive) {
+    let selected: InboxRecord | undefined;
+    if (selectors.length) {
+      try {
+        selected = readSelected(path.join(io.paths.inbox, `${selectors[0]}.json`)) as InboxRecord;
+        if (!selected || selected.messageId !== selectors[0] || !refs.includes(selected.toSession)
+          || !["accepted", "offered"].includes(selected.state) || !isMessageText(selected.text)) return fail("single receive record is not currently owned and waiting");
+      } catch { return fail("single receive record is missing, invalid or unreadable"); }
+    }
     const context = deliveryContext("UserPromptSubmit", refs, {
       paths: io.paths, now: io.now, replyFrom: values.from,
-      maxBytes: CODEX_CONTEXT_BYTES - Buffer.byteLength(CODEX_ESCALATION_NOTE) - 1,
-      reofferOffered: false, offeredBy: "receive",
+      maxBytes: (selected ? 128 * 1024 : CODEX_CONTEXT_BYTES) - Buffer.byteLength(CODEX_ESCALATION_NOTE) - 1,
+      codexSelected: selected,
+      reofferOffered: true, offeredBy: "receive", codexOwner: values.from,
     });
     io.out(context ? context + "\n" + CODEX_ESCALATION_NOTE : "no messages waiting for this continuation");
     return 0;

@@ -53,7 +53,7 @@ export const MSG_USAGE = `usage:
   kherep-node msg send <node>/<session> [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg send <node> --new claude|codex --directive <the operator's answer, verbatim> [--cwd <dir>] [--from <session>] [--wait <seconds>] [--] <text...>
   kherep-node msg send --reply-to <messageId> [--to <node>/<session>] [--from <session>] [--wait <seconds>] [--] <text...>
-  kherep-node msg inbox [--from <codex-session-id>] [--all | --receive]
+  kherep-node msg inbox [--from <codex-session-id>] [--all | --receive [<messageId>] | --ack <receipt>]
   kherep-node msg inbox --message-id <incoming-UUID> --from <owner-UUID> --expect-node <sender-node-UUID> --expect-session <exact-sender-ref> --expect-target-session <exact-target-ref> --expect-reply-to <sent-root-UUID> --expect-text-sha256 <safe-text-SHA256>
   kherep-node msg status <messageId>
   kherep-node msg stop <taskId | sent messageId | owned requestId> [--expected-run-version <run version>] [--wait <seconds>]
@@ -118,7 +118,7 @@ function fail(io: Io, message: string): number {
 
 export interface MsgArgs {
   positionals: string[];
-  values: { from?: string; to?: string; "reply-to"?: string; wait?: string; all?: boolean; receive?: boolean; new?: string; cwd?: string; directive?: string;
+  values: { from?: string; to?: string; "reply-to"?: string; wait?: string; all?: boolean; receive?: boolean; ack?: string; new?: string; cwd?: string; directive?: string;
     "expected-run-version"?: string; "message-id"?: string; "expect-node"?: string; "expect-session"?: string;
     "expect-target-session"?: string; "expect-reply-to"?: string; "expect-text-sha256"?: string };
 }
@@ -126,7 +126,7 @@ export interface MsgArgs {
 export function parseMsgArgs(argv: string[]): MsgArgs {
   const parsed = parseArgs({
     args: argv, allowPositionals: true, tokens: true,
-    options: { from: { type: "string" }, to: { type: "string" }, "reply-to": { type: "string" }, wait: { type: "string" }, all: { type: "boolean" }, receive: { type: "boolean" },
+    options: { from: { type: "string" }, to: { type: "string" }, "reply-to": { type: "string" }, wait: { type: "string" }, all: { type: "boolean" }, receive: { type: "boolean" }, ack: { type: "string" },
       new: { type: "string" }, cwd: { type: "string" }, directive: { type: "string" }, "expected-run-version": { type: "string" },
       "message-id": { type: "string" }, "expect-node": { type: "string" }, "expect-session": { type: "string" },
       "expect-target-session": { type: "string" }, "expect-reply-to": { type: "string" }, "expect-text-sha256": { type: "string" } },
@@ -162,7 +162,7 @@ export async function runMsgArgs({ positionals, values }: MsgArgs, context: MsgC
   const [command, ...rest] = positionals;
   if (command === "sessions") return sessions(io, values.from);
   if (command === "send") return send(io, rest, values);
-  if (command === "inbox") return inbox(io, values);
+  if (command === "inbox") return inbox(io, values, rest);
   if (command === "status" && rest.length === 1) return status(io, rest[0]);
   if (command === "stop" && rest.length === 1) return stopTask(io, rest[0], values);
   io.err(MSG_USAGE);

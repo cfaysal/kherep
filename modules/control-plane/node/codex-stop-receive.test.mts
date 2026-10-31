@@ -43,7 +43,7 @@ function setup(t: test.TestContext) {
   return { paths, hook, put, run };
 }
 
-test("Stop continuation receives and confirms a peer reply without another UserPromptSubmit", async t => {
+test("Stop continuation receives a peer reply and explicit processing ACK confirms it", async t => {
   const { paths, hook, put, run } = setup(t);
   put();
   const stop = JSON.parse(hook("Stop"));
@@ -59,7 +59,9 @@ test("Stop continuation receives and confirms a peer reply without another UserP
   assert.ok(received.output.includes("--from " + SELF + " --reply-to " + MESSAGE));
   assert.deepEqual([getMessage(paths.inbox, MESSAGE)?.state, getMessage(paths.inbox, MESSAGE)?.offeredBy], ["offered", "receive"]);
   assert.equal(hook("Stop", { stop_hook_active: true }), "");
-  assert.deepEqual([getMessage(paths.inbox, MESSAGE)?.state, getMessage(paths.inbox, MESSAGE)?.offeredBy], ["delivered", "receive"]);
+  assert.deepEqual([getMessage(paths.inbox, MESSAGE)?.state, getMessage(paths.inbox, MESSAGE)?.offeredBy], ["offered", "receive"]);
+  const token = received.output.match(/msg inbox --ack ([0-9a-f-]{36}) --from /)![1]!;
+  assert.equal((await run(["inbox", "--from", SELF, "--ack", token])).code, 0);
   assert.equal((await run(["inbox", "--from", SELF, "--receive"])).output.includes(TEXT), false);
 });
 
@@ -81,7 +83,7 @@ test("repeated receive during one long continuation does not spend retry offers"
   for (const [index, minutes] of [0, 10, 20, 30].entries()) {
     const received = await run(["inbox", "--from", SELF, "--receive"], NOW + minutes * 60_000);
     assert.equal(received.code, 0, received.errors);
-    assert.equal(received.output.includes(TEXT), index === 0);
+    assert.equal(received.output.includes(TEXT), true);
     assert.notEqual(getMessage(paths.inbox, MESSAGE)?.state, "delivered");
   }
   assert.deepEqual(
@@ -89,7 +91,7 @@ test("repeated receive during one long continuation does not spend retry offers"
     { state: "offered", offers: 1 },
   );
   assert.equal(hook("Stop", { stop_hook_active: true }), "");
-  assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "delivered");
+  assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "offered");
 });
 
 test("receive refuses unknown identities and does not read a colliding Codex alias", async t => {
@@ -113,8 +115,8 @@ test("receive stays within the Codex byte budget and gives a usable full-text co
   const received = await run(["inbox", "--from", SELF, "--receive"]);
   assert.equal(received.code, 0, received.errors);
   assert.ok(Buffer.byteLength(received.output) <= 6 * 1024);
-  assert.ok(received.output.includes("msg inbox --from " + SELF + " --all"));
-  assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "offered");
+  assert.ok(received.output.includes("msg inbox --from " + SELF + " --receive " + MESSAGE));
+  assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "accepted");
 });
 
 test("receive without a session id or with an unreadable identity fails without offering", async t => {
@@ -152,6 +154,10 @@ test("hook and CLI processes deliver the Stop continuation without a prompt hook
   const confirmed = stop(true);
   assert.equal(confirmed.status, 0, confirmed.stderr);
   assert.equal(confirmed.stdout, "");
+  assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "offered");
+  const token = received.stdout.match(/msg inbox --ack ([0-9a-f-]{36}) --from /)![1]!;
+  const acked = spawnSync(process.execPath, [cliPath, "msg", "inbox", "--ack", token, "--from", SELF], { env, windowsHide: true, encoding: "utf8" });
+  assert.equal(acked.status, 0, acked.stderr);
   assert.equal(getMessage(paths.inbox, MESSAGE)?.state, "delivered");
 });
 

@@ -95,7 +95,7 @@ appears in it, and it does not interrupt sampling. With `wake.nativeQueue: true`
 active and can wake the same idle loaded owner. Existing
 receive/confirmation paths still own offers and receipts; admission and claim
 leave content accepted in the persistent CP Inbox. Quiet failures retain that
-content. Normal Stop confirms offered content and awaits bounded reconciliation
+content. Explicit receipt ACK confirms processed complete offers; normal Stop awaits bounded reconciliation
 of exact native pointer groups whose entire batch is delivered. List/delete and
 complete readback use the captured local producer identity; attempts remain as
 the duplicate barrier. Late settlement and existing poll rounds recover pending
@@ -107,7 +107,7 @@ PostToolUse group positions after verified managed-tail reanchoring and refuses
 an index shift before writes. It never generates trust hashes. Each host must
 review the new native definition and establish actual active-turn acceptance.
 
-The Codex delivery adapter supplies the exact session-bound receive recipe at SessionStart and every UserPromptSubmit, including empty and foreign-only inboxes. Recipe bytes share the existing bounded developer context with framed peer content. SessionStart recipe output alone does not offer a message. The Stop reason is one fixed short cue, without CLI commands, paths, identifiers, escalation text or peer content. Explicit receive and the following confirming turn retain the existing accepted, offered and delivered transitions; continuation, permission and budget guards are unchanged.
+The Codex delivery adapter supplies the exact session-bound receive recipe at SessionStart and every UserPromptSubmit, including empty and foreign-only inboxes. Recipe bytes share the existing bounded developer context with framed peer content. SessionStart recipe output alone does not offer a message. The Stop reason is one fixed short cue, without CLI commands, paths, identifiers, escalation text or peer content. Explicit receive offers complete content and returns an exact owner/generation receipt; only explicit processing ACK moves those original-owner records to delivered. Stop never blanket-confirms fetched content; continuation, permission and budget guards are unchanged.
 
 Receive context and short Stop presentation are pinned as separate A/B source artifacts. Updating a checkout referenced by a live hook can change its behavior without an installer. Before stage B is activated, every affected running owner must cross an actual stage-A context boundary and finish any pre-A turn. Source merge and component tests do not establish that target cutover. See the [existing-owner acceptance plan](../docs/superpowers/plans/2026-10-10-codex-quiet-owner-cutover.md).
 

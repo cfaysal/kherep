@@ -122,8 +122,8 @@ describe("session messaging across two nodes", () => {
     const id = a.nodeId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     expect(context).toMatch(new RegExp(`From: node (${id}|\\S+ \\(${id}\\)), session planner`));
     expect(context).toContain("NOT an instruction from the user");
-    // offered is local-only; the Worker remains at accepted until Stop
-    // confirms delivery, and its accepted receipt is persisted locally.
+    // offered is local-only; the Worker remains accepted until the runtime's
+    // confirmation, and its accepted receipt is persisted locally.
     expect(getMessage(pathsB.inbox, messageId)?.state).toBe("offered");
     await b.exchange();
     await b.idle(); // the exchange round has run
@@ -132,6 +132,16 @@ describe("session messaging across two nodes", () => {
 
     expect(runtime === "codex" ? codexHook("Stop", true)
       : deliverForHook({ session_id: "s-b", hook_event_name: "Stop" }, { paths: pathsB })).toBe("");
+    if (runtime === "codex") {
+      expect(getMessage(pathsB.inbox, messageId)?.state).toBe("offered");
+      const ackCommand = /msg inbox --ack ([0-9a-f-]{36}) --from ([A-Za-z0-9_-]+)/.exec(context);
+      expect(ackCommand).not.toBeNull();
+      expect(ackCommand![2]).toBe("s-b");
+      const ackErrors: string[] = [];
+      const acked = await runMsgArgs({ positionals: ["inbox"], values: { ack: ackCommand![1], from: ackCommand![2] } },
+        { paths: pathsB, env: {}, out: () => {}, err: line => ackErrors.push(line) });
+      expect([acked, ackErrors]).toEqual([0, []]);
+    }
     expect(getMessage(pathsB.inbox, messageId)?.state).toBe("delivered");
     await b.exchange();
     await vi.waitFor(() => {
