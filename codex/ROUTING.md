@@ -2,7 +2,7 @@
 
 ## Roles
 
-The user directs the objective and owns consequential decisions. The SOL main agent, the Maestro, owns grounding, coordination, review, integration and final acceptance. The managed Astra designer owns nontrivial design. The managed SOL implementation builder owns product source, tests and implementation documentation. Workers receive bounded tasks and never inherit authority beyond their explicit assignment.
+The user directs the objective and owns consequential decisions. The SOL root chat, the Maestro, is an orchestrator, not the execution worker. It owns goal and scope intake, bounded dispatch, compact result collection, decisions and final acceptance. The managed Astra designer owns nontrivial design. The managed SOL implementation builder owns product source, tests and implementation documentation. Workers receive bounded tasks and never inherit authority beyond their explicit assignment. This root boundary applies to Codex; it does not change Claude routing.
 
 ## Intake
 
@@ -16,7 +16,9 @@ Evidence first. The Maestro classifies every directive and researches a relevant
 
 ## Dispatch
 
-Keep direct, low-risk grounding and coordination in the main agent. Delegate nontrivial design to the managed Astra designer and product implementation to the managed SOL implementation builder. Use bounded delegation when independent investigation, expertise, parallelism or review helps. Select available models according to task complexity, configured cost limits and privacy boundaries. Never assume a particular provider, model identifier, host or tool is installed.
+Product implementation, detailed investigations and analysis, builds, long functional suites and native platform tests belong to suitable subagents; the main chat does not execute them itself. Delegate nontrivial design to the managed Astra designer and product implementation to the managed SOL implementation builder, with bounded independent support and review. Short routing and evidence readbacks needed for coordination and acceptance remain in the root. Keep required privacy and authority checks. Select available models according to task complexity, configured cost limits and privacy boundaries. Never assume a particular provider, model identifier, host or tool is installed.
+
+Main turns are short coordination steps: no long synchronous waits, repeated unchanged-status polling or chains of successive worker and review phases held in one root turn. At a bounded handoff with no immediate decision, close the main turn instead of keeping it open solely for worker execution.
 
 Codex role families and reasoning defaults are versioned in `codex/parity/model-policy.toml`
 and installed at `orchestra/model-policy.toml` within the selected Codex home:
@@ -47,7 +49,7 @@ the Maestro take over product implementation. Read concrete model IDs from the
 installed resolution, never from this guidance. These are routing instructions;
 they add no runtime guard and establish no native enforcement measurement.
 
-Every dispatch states the objective, exact ownership, constraints, required evidence and return format. Use separate worktrees for independent writers. Read-only reviews may run alongside implementation. Do not delegate a task whose result cannot be retrieved and checked.
+Every dispatch states the objective, exact ownership, constraints, required evidence and return format, including a retrievable result or receipt, failure handling and a real pickup path. Use actual supported completion or input events, or an explicit pickup point; unknown runtime support stays UNKNOWN. Do not invent automatic runtime continuation or build a wake mechanism to hold the workflow open. Use separate worktrees for independent writers. Read-only reviews may run alongside implementation. Do not delegate a task whose result cannot be retrieved and checked; uncollectible fire-and-forget is forbidden.
 
 ### Worker briefs
 
@@ -80,7 +82,7 @@ Before the first message to a node in a conversation, list that node's sessions 
 
 ## Verification
 
-The Maestro inspects worker changes, verifies the final diff and runs proportional checks. A build, commit or worker message alone is not delivery evidence. Measure artifact identity at the destination when delivery is in scope.
+Verification remains mandatory. Delegate long checks and independent review to suitable subagents. The Maestro reads compact evidence, inspects the final diff and actual artifact identity, and decides acceptance; short evidence readbacks remain part of coordination. A build, commit or worker self-claim alone is not delivery evidence. Measure artifact identity at the destination when delivery is in scope. Delegation does not weaken acceptance, privacy or authority checks.
 
 For behavior-changing work, report C1 requested behavior, C2 tests/build/runtime evidence, C3 security and privacy impact, and C4 scope and diff integrity. Mark checks as passed, failed, skipped or not testable. Final acceptance stays with the Maestro and user.
 
