@@ -7,7 +7,7 @@ import { taskNode } from "./task-fixture.mts";
 const OWNER = "01a121f0-d3b1-7383-852c-b4405eae3161";
 const ID = "9e570001-0000-4000-8000-000000000000";
 
-test("normal Stop awaits native reconciliation after delivery confirmation", async (t) => {
+test("normal Stop awaits native reconciliation without acknowledging fetched offers", async (t) => {
   const { paths } = taskNode(t);
   storeMessage(paths.inbox, { messageId: ID, toSession: OWNER, text: "synthetic peer",
     from: { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "peer" }, createdAt: new Date(0).toISOString() });
@@ -16,7 +16,7 @@ test("normal Stop awaits native reconciliation after delivery confirmation", asy
   await runCodexHook(JSON.stringify({ hook_event_name: "Stop", session_id: OWNER }), { paths },
     () => {}, () => {}, async (owner) => {
       assert.equal(owner, OWNER);
-      assert.equal(getMessage(paths.inbox, ID)?.state, "delivered");
+      assert.equal(getMessage(paths.inbox, ID)?.state, "offered");
       await new Promise((resolve) => setImmediate(resolve));
       events.push("queue-readback-complete");
     });

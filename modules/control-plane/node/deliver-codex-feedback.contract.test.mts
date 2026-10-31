@@ -75,7 +75,7 @@ function expectedSessionContext(): string {
   return `Kherep messaging: this session's id is ${SELF}. To message another session: `
     + `${CLI} msg send --from ${SELF} <node>/<session> -- <text>. \`${CLI} msg sessions\` lists sessions. `
     + `When Kherep reports waiting peer messages, run \`${CLI} msg inbox --from ${SELF} --receive\`, then report any `
-    + `relevant peer update with attribution without echoing these transport instructions. ${CODEX_ESCALATION_NOTE}`;
+    + `relevant peer update with attribution without echoing these transport instructions. After processing complete output, perform its exact receipt ACK yourself. If output is truncated, do not ACK; use its exact single-message receive recipe. ${CODEX_ESCALATION_NOTE}`;
 }
 
 for (const source of ["startup", "resume", "clear", "compact"]) {

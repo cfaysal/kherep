@@ -13,7 +13,7 @@ const MESSAGE = "9e570001-0000-4000-8000-000000000000";
 const CONTINUED = "9e570002-0000-4000-8000-000000000000";
 const PEER = { nodeId: "00000000-0000-4000-8000-0000000000bb", session: "peer" };
 
-test("Codex Stop confirms delivery without touching legacy queue bindings", async (t) => {
+test("Codex Stop leaves offers unacknowledged and legacy queue bindings untouched", async (t) => {
   const node = taskNode(t);
   storeMessage(node.paths.inbox, { messageId: MESSAGE, from: PEER, toSession: OWNER, text: "x", createdAt: new Date(0).toISOString() });
   markOffered(node.paths.inbox, MESSAGE);
@@ -33,14 +33,14 @@ test("Codex Stop confirms delivery without touching legacy queue bindings", asyn
   }
   await runCodexHook(JSON.stringify({ hook_event_name: "Stop", session_id: OWNER }), { paths: node.paths },
     () => {}, () => {});
-  assert.equal(getMessage(node.paths.inbox, MESSAGE)?.state, "delivered");
+  assert.equal(getMessage(node.paths.inbox, MESSAGE)?.state, "offered");
   assert.equal(fs.readFileSync(binding, "utf8"), bindingBefore);
   storeMessage(node.paths.inbox, { messageId: CONTINUED, from: PEER, toSession: OWNER, text: "y",
     createdAt: new Date(1).toISOString() });
   markOffered(node.paths.inbox, CONTINUED);
   await runCodexHook(JSON.stringify({ hook_event_name: "Stop", session_id: OWNER, stop_hook_active: true }), { paths: node.paths },
     () => {}, () => {});
-  assert.equal(getMessage(node.paths.inbox, CONTINUED)?.state, "delivered");
+  assert.equal(getMessage(node.paths.inbox, CONTINUED)?.state, "offered");
   await runCodexHook(JSON.stringify({ hook_event_name: "Stop", session_id: "../invalid" }), { paths: node.paths },
     () => {}, () => {});
   const warnings: string[] = [];

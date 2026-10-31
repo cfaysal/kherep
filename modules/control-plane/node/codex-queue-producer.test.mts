@@ -32,7 +32,7 @@ test("repeated polls and new hint generations do not submit the same message aga
   assert.equal(node.fake.runs().length, 1);
   node.add("Second public message");
   await node.poll();
-  assert.equal(node.fake.runs().length, 2);
+  assert.equal(node.fake.runs().length, 1, "new IDs wait behind the outstanding owner group");
 });
 
 test("a fresh node process preserves the durable native attempt and never repeats it", async (t) => {
@@ -40,6 +40,7 @@ test("a fresh node process preserves the durable native attempt and never repeat
   node.add();
   await node.poll();
   node.tick(TURN_SPACING_MS + 1);
+  const newer = node.add("New arrival before daemon restart");
   const context = path.join(node.root, "public-restart-context.json");
   const deps = node.deps();
   fs.writeFileSync(context, JSON.stringify({ paths: deps.paths, policy: deps.policy,
@@ -65,6 +66,9 @@ test("a native success without an exact Queue ID remains uncertain and is not re
   assert.equal(getMessage(node.paths.inbox, id)?.state, "accepted");
   const file = path.join(node.paths.dir, "codex-native-attempts", node.owner, `${id}.json`);
   assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).state, "uncertain");
+  node.add("New content during uncertain outcome");
+  await node.poll();
+  assert.equal(node.fake.runs().length, 1);
 });
 
 test("an exhausted native budget leaves CP hints working and permits a later first attempt", async (t) => {
@@ -125,4 +129,18 @@ test("the default policy schedules no native Queue pointer while the CP hint sti
     await node.poll();
     assert.equal(node.fake.runs().length, 0);
   });
+});
+
+test("a pending owner group coalesces newer accepted IDs without changing its immutable submission", async t => {
+  const node = fixture(t), first = node.add();
+  await node.poll();
+  const file = path.join(node.paths.dir, "codex-native-attempts", OWNER, `${first}.json`);
+  const before = fs.readFileSync(file, "utf8");
+  node.tick(TURN_SPACING_MS + 1);
+  const newer = node.add("Newer accepted content");
+  await node.poll();
+  assert.equal(node.fake.runs().length, 1);
+  assert.equal(fs.existsSync(path.join(node.paths.dir, "codex-native-attempts", OWNER, `${newer}.json`)), false);
+  assert.equal(fs.readFileSync(file, "utf8"), before);
+  assert.equal(getMessage(node.paths.inbox, newer)?.state, "accepted");
 });

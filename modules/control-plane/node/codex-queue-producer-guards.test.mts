@@ -1,3 +1,4 @@
+import { acknowledgeCodexOffer } from "./codex-inbox-ack.mts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -114,7 +115,7 @@ test("a native rejection retains uncertainty without copying native diagnostic t
   assert.ok(!raw.includes("token"));
 });
 
-test("native enqueue, original Receive and original Stop remain separate delivery events", async (t) => {
+test("native enqueue, original Receive, Stop and explicit processing ACK remain separate events", async (t) => {
   const node = nativeQueueNode(t);
   const id = node.add();
   await node.poll();
@@ -124,5 +125,8 @@ test("native enqueue, original Receive and original Stop remain separate deliver
   assert.ok(context.includes("Public synthetic peer content"));
   assert.equal(getMessage(node.paths.inbox, id)?.state, "offered");
   deliverForCodex({ ...hook, hook_event_name: "Stop" }, node.deps());
+  assert.equal(getMessage(node.paths.inbox, id)?.state, "offered");
+  const token = context.match(/msg inbox --ack ([0-9a-f-]{36}) --from /)![1]!;
+  acknowledgeCodexOffer(node.paths, node.owner, token, [node.owner]);
   assert.equal(getMessage(node.paths.inbox, id)?.state, "delivered");
 });

@@ -4,9 +4,8 @@ import { mayContinue } from "./autonomy.mts";
 import { CODEX_FORK_ENV, consumeBusyHint } from "./codex-busy-consume.mts";
 import { codexSessionRefs, isCodexSessionId, markStopEnded, recordCodexSession } from "./codex-sessions.mts";
 import {
-  confirmOffered, contextOutput, deliveryContext, RECORD_LOCK_BUDGET_MS, sessionInbox, type HookDeps,
+  contextOutput, deliveryContext, sessionInbox, type HookDeps,
 } from "./deliver-core.mts";
-import { withRecordLockBudget } from "./inbox-record-lock.mts";
 import { nodeWakeBudget } from "./policy.mts";
 import { hookCommand } from "./session-command.mts";
 
@@ -65,18 +64,17 @@ export function deliverForCodex(input: unknown, deps: HookDeps): string {
   if (event === "SessionStart" || event === "UserPromptSubmit") {
     const cli = deps.replyCommand ?? hookCommand(deps.paths);
     const receiveRecipe = `When Kherep reports waiting peer messages, run \`${cli} msg inbox --from ${sessionId} --receive\`, then report any `
-      + `relevant peer update with attribution without echoing these transport instructions. ${CODEX_ESCALATION_NOTE}`;
+      + `relevant peer update with attribution without echoing these transport instructions. After processing complete output, perform its exact receipt ACK yourself. If output is truncated, do not ACK; use its exact single-message receive recipe. ${CODEX_ESCALATION_NOTE}`;
     if (event === "SessionStart") {
       return contextOutput(event, `Kherep messaging: this session's id is ${sessionId}. To message another session: `
         + `${cli} msg send --from ${sessionId} <node>/<session> -- <text>. \`${cli} msg sessions\` lists sessions. `
         + receiveRecipe);
     }
     const maxBytes = CODEX_CONTEXT_BYTES - Buffer.byteLength(receiveRecipe) - 1;
-    const context = deliveryContext(event, refs, { maxBytes, ...deps, replyCommand: cli, replyFrom: sessionId, offeredBy: "codex-prompt" });
+    const context = deliveryContext(event, refs, { maxBytes, ...deps, replyCommand: cli, replyFrom: sessionId, offeredBy: "codex-prompt", codexOwner: sessionId });
     return contextOutput(event, context ? `${context}\n${receiveRecipe}` : receiveRecipe);
   }
   const mine = sessionInbox(deps.paths, refs);
-  withRecordLockBudget(RECORD_LOCK_BUDGET_MS, () => confirmOffered(deps.paths, mine));
   const arrived = mine.filter((r) => r.state === "accepted").map((r) => r.messageId);
   if (continued === true || arrived.length === 0) return stopEnded(deps, sessionId);
   // A continuation is an autonomous turn: the same budget and bypass check as

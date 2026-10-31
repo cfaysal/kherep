@@ -9,6 +9,7 @@ import { tuiMarker } from "./codex-daemon.mts";
 import { queueProducerIdentity } from "./codex-queue-context.mts";
 import { queueArgs, runQueue } from "./codex-queue-run.mts";
 import { MAX_NATIVE_ATTEMPTS, nativeAttemptsPath, nativeQueueInput } from "./codex-native-attempts.mts";
+import { reserveNativeOwner, releaseNativeOwner } from "./codex-native-pending.mts";
 import { reconcileNativeQueues } from "./codex-native-reconcile.mts";
 import { CODEX_ACTIVE_MS, listCodexSessions, readCodexSession } from "./codex-sessions.mts";
 import { ensureDir, readConfig } from "./config.mts";
@@ -122,7 +123,11 @@ async function produce(deps: RunnerDeps, owner: string, messageIds: string[], fi
   const producer = queueProducerIdentity(file, queueArgs(owner, ids.length), deps);
   if (producer.route !== "local" || producer.approvedFiles.length === 0) return;
   const now = deps.now?.() ?? Date.now();
-  if (takeTurn(deps.paths, owner, now, admission.budget) !== "ok") return;
+  if (!reserveNativeOwner(deps.paths, owner, ids)) return;
+  if (takeTurn(deps.paths, owner, now, admission.budget) !== "ok") {
+    releaseNativeOwner(deps.paths, owner, ids);
+    return;
+  }
   const claimed: string[] = [];
   for (const messageId of ids) {
     try {
@@ -142,13 +147,17 @@ async function produce(deps: RunnerDeps, owner: string, messageIds: string[], fi
         ...(queueId ? { queueId } : {}) });
   };
   const current = admitted(deps, owner, claimed, fingerprint, grant);
-  if (!current || current.ids.length !== claimed.length) { settle("cancelled-before-submit"); return; }
+  if (!current || current.ids.length !== claimed.length) {
+    settle("cancelled-before-submit");
+    releaseNativeOwner(deps.paths, owner, ids);
+    return;
+  }
   try {
     const result = await runQueue({ ...deps, codex: { ...deps.codex,
       findCodex: () => file, home: producer.resolvedCodexHome } }, queueArgs(owner, claimed.length), producer, serviceAdmission);
     settle(result.queueId ? "submitted" : "uncertain", result.queueId);
   } catch { settle("uncertain"); return; }
-  // Stop may have confirmed the content while native admission was in flight.
+  // Explicit processing ACK may have delivered content while native admission was in flight.
   // Cleanup failure must never overwrite the successfully persisted queue ID.
   await reconcile(deps, owner, serviceAdmission);
 }

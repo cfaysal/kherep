@@ -51,23 +51,23 @@ function setup(t: test.TestContext, enrolled = true) {
   return { paths, put, hook, receive };
 }
 
-test("Stop confirms the old offer, while explicit receive offers the new arrival and the next Stop confirms it", async t => {
+test("Stop preserves old offers, while explicit receive recovers them and offers the new arrival", async t => {
   const { paths, put, hook, receive } = setup(t);
   put(1);
   assert.match(hook("UserPromptSubmit"), /synthetic peer update 1/);
   put(2);
   assert.equal(JSON.parse(hook("Stop", { stop_hook_active: false }, () => true)).decision, "block");
-  assert.deepEqual([getMessage(paths.inbox, id(1))?.state, getMessage(paths.inbox, id(2))?.state], ["delivered", "accepted"]);
+  assert.deepEqual([getMessage(paths.inbox, id(1))?.state, getMessage(paths.inbox, id(2))?.state], ["offered", "accepted"]);
 
   const received = await receive();
   assert.equal(received.code, 0, received.err);
   assert.match(received.out, /synthetic peer update 2/);
   assert.deepEqual([getMessage(paths.inbox, id(2))?.state, getMessage(paths.inbox, id(2))?.offers], ["offered", 1]);
   assert.equal(hook("Stop", { stop_hook_active: true }, () => true), "");
-  assert.equal(getMessage(paths.inbox, id(2))?.state, "delivered");
+  assert.equal(getMessage(paths.inbox, id(2))?.state, "offered");
 });
 
-test("repeated receive after the retry window neither reoffers nor spends an offer", async t => {
+test("repeated receive after the retry window recovers content without spending an offer", async t => {
   const { paths, put, hook, receive } = setup(t);
   put(1);
   assert.equal(JSON.parse(hook("Stop", { stop_hook_active: false }, () => true)).decision, "block");
@@ -75,7 +75,7 @@ test("repeated receive after the retry window neither reoffers nor spends an off
   for (const at of [NOW + REOFFER_AFTER_MS, NOW + 2 * REOFFER_AFTER_MS]) {
     const repeated = await receive(at);
     assert.equal(repeated.code, 0, repeated.err);
-    assert.equal(repeated.out, "no messages waiting for this continuation");
+    assert.match(repeated.out, /synthetic peer update 1/);
   }
   assert.deepEqual(
     { state: getMessage(paths.inbox, id(1))?.state, offers: getMessage(paths.inbox, id(1))?.offers },

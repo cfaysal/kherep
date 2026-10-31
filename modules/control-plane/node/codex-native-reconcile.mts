@@ -1,4 +1,5 @@
 import { readConfig, type NodePaths } from "./config.mts";
+import { releaseNativeOwner } from "./codex-native-pending.mts";
 import { getMessage } from "./inbox.mts";
 import { nativeQueueGroups, retireNativeQueue } from "./codex-native-attempts.mts";
 import { connectNativeQueue } from "./codex-native-queue.mts";
@@ -47,4 +48,5 @@ async function reconcileAdmitted(paths: NodePaths, owner: string,
           retireNativeQueue(paths, binding);
         } });
   }
+  releaseNativeOwner(paths, owner);
 }
