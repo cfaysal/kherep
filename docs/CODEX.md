@@ -40,6 +40,51 @@ Keep private registry configuration outside the checkout. Read [adapter architec
 
 The first CLI model resolution requires a signed-in Codex context in the selected configuration home. For an isolated or offline candidate, the synchronous `install()` API accepts a complete `modelCatalog` object exported by `node codex/scripts/model-catalog.mts` from an existing context. Login files do not need to be copied. Model metadata alone does not establish Desktop activation or access under a different account.
 
+### Routing-only update
+
+For the exact predecessor at `2b592140fd25e5e1f49dc3547ca3a798ef418721`, the
+standalone updater changes only `orchestra/ROUTING.md`. Review a synthetic
+candidate first. Supply absolute Codex-home and public Control Plane config-root
+paths and an explicit public example address. The config root is only a rendering
+input; the updater does not open it.
+
+```sh
+node codex/install-routing.mts check --codex-home /tmp/candidate-codex --config-root /opt/public-kherep --example-target peer/session
+node codex/install-routing.mts apply --codex-home /tmp/candidate-codex --config-root /opt/public-kherep --example-target peer/session
+node codex/install-routing.mts rollback --codex-home /tmp/candidate-codex --backup-id <returned-backup-id>
+```
+
+On Windows use absolute paths such as `C:/Public/CandidateCodex` and
+`C:/Public/Kherep`. The host's stable launcher command is rendered through the
+shared pure renderer. No command or binding is inferred from installed text.
+
+`check` returns `ready` or `unchanged` without writes. `apply` accepts only the
+complete rendered predecessor bytes, or returns `unchanged` for the complete
+current bytes with no backup or timestamp change. Unknown drift, newline
+differences, missing targets, directory targets and redirected paths are refused.
+Successful application saves the original bytes at
+`backups/kherep-routing/<id>/orchestra/ROUTING.md` and a sanitized `receipt.json`
+in the same directory. The unique id binds the public render parameters. The
+receipt records predecessor revision, source and before/after/backup SHA-256
+digests, render binding and status. Transaction failures restore and verify the
+original routing bytes.
+
+Rollback verifies the receipt, binding, frozen predecessor, backup hash and exact
+current target before restoring. A repeated exact rollback is a no-op; corrupted
+evidence or later routing changes are refused. Keep this source checkout with
+the backup: rollback requires the same versioned routing source. Backup evidence
+is retained after rollback. It is local integrity evidence, not a signed audit
+record or protection against an actor able to replace all evidence.
+
+This entry point reads only its fixed routing source/predecessor and the selected
+target, plus its dedicated receipt and backup on rollback. It checks ancestor
+path metadata without enumerating the home. It never invokes the full installer,
+reads private profiles or registries, refreshes models, changes hooks or
+integrations, reads Claude configuration, or updates the top-level parity
+receipt. These routing instructions assign SOL coordination and implementation
+and Astra design ownership; they add no runtime enforcement. Native compliance
+remains UNKNOWN until separately measured at the target.
+
 ### Remote messaging client opt-in
 
 `--enable-messaging-client`, or `-EnableMessagingClient` through `install.ps1`, adds the
@@ -483,7 +528,7 @@ The top-level `model_reasoning_effort` in `config.toml` belongs to you. If it is
 
 Agent model selection comes from [`codex/parity/model-policy.toml`](../codex/parity/model-policy.toml), which names families rather than release numbers. The main designer uses Astra with high reasoning, builders use SOL with high reasoning, support and research use Terra with medium and low reasoning, and observers and brokers use Luna with low reasoning. The root role uses SOL with xhigh reasoning. The `feature-dev` code architect takes designer precedence over generic plugin model mappings; Opus agents and the code simplifier map to the builder role. Claude definitions remain unchanged.
 
-For nontrivial design work, use the managed Astra designer as the default main designer, normally `code-architect`, and use `kherep-builder` with SOL as the default implementation worker. The Maestro coordinates and verifies their results. A brief to `kherep-builder` or `dc-plugin-build-runner` marks `revision: <name>@<sha>` and `decided: <decision>` (or `decided: none`) at the start of a line, and the dispatch guard denies it otherwise; the builder ends its receipt with `REVISION:`. The Worker briefs part of the Dispatch section of the installed `ROUTING.md` has the full rule, the review receipt and the reviewer rule, and its Verification section the Maestro's revision comparison (issue #701). If a personal agent already owns the designer's normal name, consult `projection.agentDefaults` in the receipt or `projectedAgents` in the installed dispatch snapshot for the actual managed name and role.
+For nontrivial design work, use the managed Astra designer, normally `code-architect`; product implementation belongs to the managed SOL `kherep-builder`. The SOL Maestro owns grounding, coordination, review and final acceptance. Resolve both actual managed names and validate their identity and task purpose through the installed routing; role alone is ambiguous, and missing or inconsistent identity requires STOP/UNKNOWN. A brief to `kherep-builder` or `dc-plugin-build-runner` marks `revision: <name>@<sha>` and `decided: <decision>` (or `decided: none`) at the start of a line, and the dispatch guard denies it otherwise; the builder ends its receipt with `REVISION:`. The Worker briefs part of the Dispatch section of the installed `ROUTING.md` has the full rule, the review receipt and the reviewer rule, and its Verification section the Maestro's revision comparison (issue #701). If a personal agent already owns the designer's normal name, consult `projection.agentDefaults` in the receipt or `projectedAgents` in the installed dispatch snapshot for the actual managed name and role.
 
 The metadata collector initializes an isolated Codex app-server and exhausts visible `model/list` pagination. It opens no threads and starts no inference. Resolution selects the numerically newest exact family member that advertises the requested reasoning level. Hidden, preview, dated or ambiguous aliases do not establish a family match. Missing families, incomplete pagination, unsupported reasoning or unconfirmed process cleanup stop model selection. An unavailable catalog names the failing stage (start, catalog or cleanup) without any server output, and cleanup confirmation re-asks its probe (the process-group probe on POSIX; on Windows exit and close of the owned child followed by a process snapshot without a tracked member or a descendant of the root, the tree signal's report counting for nothing) within a default retry budget of two seconds (`cleanupGraceMs`, configurable up to ten seconds) with a capped number of probes; the budget bounds the probes, not the wall-clock time, which event-loop scheduling can extend. During that wait nothing is signalled again, because a process-group number does not prove ownership after the owned close; only a measured disappearance confirms cleanup, and a group still present or denied at the deadline is an unconfirmed cleanup. A missing directory named with `--codex-home` is created with mode 0700 before the read. On every platform the catalog app-server is started with the per-invocation override `-c features.plugins=false`, measured effective on codex-cli 0.160.1 on macOS and Windows 11, so the read performs no plugin sync in a fresh home; this is a one-off override whose behaviour under a managed configuration or a later Codex release is not guaranteed. Offline tests inject catalog fixtures and never call a real Codex account.
 
