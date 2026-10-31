@@ -10,6 +10,7 @@ import { codexSessionName, recordCodexSession } from "./codex-sessions.mts";
 import { deliverForCodex } from "./deliver-codex.mts";
 import { writeLocalSessions } from "./exchange.mts";
 import { getMessage, getMessageProgress, storeMessage } from "./inbox.mts";
+import { runMsg } from "./msg-cli.mts";
 import { T0, taskNode } from "./task-fixture.mts";
 import { listTasks } from "./task-records.mts";
 
@@ -47,7 +48,18 @@ function setup(t: test.TestContext, resumeClosed: boolean, address = APP, tui?: 
   return { ...node, poll, launches: () => fake.runs().length };
 }
 
-test("a Desktop CP hint keeps the original mailbox and only that chat's hook confirms delivery", async (t) => {
+async function acknowledge(node: ReturnType<typeof taskNode>, context: string): Promise<void> {
+  const command = /msg inbox --ack ([0-9a-f-]{36}) --from ([0-9a-f-]{36})/.exec(context);
+  assert.ok(command, "complete intake prints the exact processing ACK");
+  assert.equal(command[2], APP);
+  const errors: string[] = [];
+  const status = await runMsg(["inbox", "--ack", command[1]!, "--from", command[2]!], {
+    paths: node.paths, env: {}, now: () => T0 + 3000, out: () => {}, err: line => errors.push(line),
+  });
+  assert.deepEqual([status, errors], [0, []]);
+}
+
+test("a Desktop CP hint keeps the original mailbox and only that chat's processing ACK confirms delivery", async (t) => {
   for (const resumeClosed of [true, false]) {
     const node = setup(t, resumeClosed);
     await node.poll();
@@ -66,6 +78,8 @@ test("a Desktop CP hint keeps the original mailbox and only that chat's hook con
     assert.ok(output.hookSpecificOutput.additionalContext.includes(`In reply to: ${ORIGINAL}`));
     assert.equal(getMessage(node.paths.inbox, MESSAGE)?.state, "offered");
     deliverForCodex({ ...input, hook_event_name: "Stop" }, { paths: node.paths, now: () => T0 + 2000 });
+    assert.equal(getMessage(node.paths.inbox, MESSAGE)?.state, "offered", "Stop is not a processing ACK");
+    await acknowledge(node, output.hookSpecificOutput.additionalContext);
     assert.equal(getMessage(node.paths.inbox, MESSAGE)?.state, "delivered");
   }
 });
@@ -124,15 +138,20 @@ test("an unresolved TUI marker cannot turn the automatic app grant into TUI auth
   assert.equal(takeTurn(node.paths, APP, T0), "ok", "an unresolved grant consumes no budget");
 });
 
-test("a message arriving after prompt intake is not confirmed by another message's Stop", async (t) => {
+test("a message arriving after prompt intake is not confirmed by the earlier receipt ACK", async (t) => {
   const node = setup(t, false);
   await node.poll();
   const input = { session_id: APP, cwd: node.workspace, permission_mode: "default" };
-  deliverForCodex({ ...input, hook_event_name: "UserPromptSubmit" }, { paths: node.paths, now: () => T0 + 1000 });
+  const output = JSON.parse(deliverForCodex({ ...input, hook_event_name: "UserPromptSubmit" }, {
+    paths: node.paths, now: () => T0 + 1000,
+  })) as { hookSpecificOutput: { additionalContext: string } };
   const later = "a1560000-0000-4000-8000-000000000003";
   storeMessage(node.paths.inbox, { messageId: later, from: PEER, toSession: APP, text: "later synthetic message",
     createdAt: new Date(T0 + 1500).toISOString() }, T0 + 1500);
   deliverForCodex({ ...input, hook_event_name: "Stop" }, { paths: node.paths, now: () => T0 + 2000 });
+  assert.equal(getMessage(node.paths.inbox, MESSAGE)?.state, "offered");
+  assert.equal(getMessage(node.paths.inbox, later)?.state, "accepted");
+  await acknowledge(node, output.hookSpecificOutput.additionalContext);
   assert.equal(getMessage(node.paths.inbox, MESSAGE)?.state, "delivered");
-  assert.notEqual(getMessage(node.paths.inbox, later)?.state, "delivered", "only actually offered records are confirmed");
+  assert.equal(getMessage(node.paths.inbox, later)?.state, "accepted", "the receipt covers only its exact offered records");
 });

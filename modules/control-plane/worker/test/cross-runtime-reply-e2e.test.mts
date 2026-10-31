@@ -109,11 +109,19 @@ describe("cross-runtime reply", { timeout: E2E_TIMEOUT_MS }, () => {
     await a.handled.seen("message.status", { messageId: question, state: "accepted" });
     expect(getSent(pathsA, question)?.state).toBe("accepted");
 
-    // B's Codex hook offers it with the ready reply command, then Stop confirms it.
+    // B processes the complete hook offer and explicitly ACKs its printed receipt.
     const context = JSON.parse(codexHook("UserPromptSubmit")).hookSpecificOutput.additionalContext as string;
     expect(context).toContain("which branch are you on?");
     expect(context).toContain(`kherep-node msg send --from ${THREAD} --reply-to ${question} -- <reply text>`);
     codexHook("Stop");
+    expect(getMessage(pathsB.inbox, question)?.state).toBe("offered");
+    const ackCommand = /msg inbox --ack ([0-9a-f-]{36}) --from ([0-9a-f-]{36})/.exec(context);
+    expect(ackCommand).not.toBeNull();
+    expect(ackCommand![2]).toBe(THREAD);
+    const ackErrors: string[] = [];
+    const acked = await runMsgArgs({ positionals: ["inbox"], values: { ack: ackCommand![1], from: ackCommand![2] } },
+      { paths: pathsB, env: {}, out: () => {}, err: line => ackErrors.push(line) });
+    expect([acked, ackErrors]).toEqual([0, []]);
     expect(getMessage(pathsB.inbox, question)?.state).toBe("delivered");
 
     // The Codex session runs that command (no CLAUDE_CODE_SESSION_ID in a Codex

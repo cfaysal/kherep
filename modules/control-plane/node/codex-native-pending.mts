@@ -36,7 +36,14 @@ export function reserveNativeOwner(paths: NodePaths, owner: string, messageIds: 
 // Called only after exact Queue reconciliation or a proven no-submit path.
 // Every per-ID original attempt stays durable and its group stays immutable.
 export function releaseNativeOwner(paths: NodePaths, owner: string, neverSubmittedIds?: string[]): void {
-  locked(paths, owner, () => {
+  if (!isCodexSessionId(owner)) throw new Error("invalid native owner");
+  try {
+    if (fs.lstatSync(directory(paths)).isSymbolicLink()) throw new Error("invalid native owner reservation directory");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  withRecordLock(directory(paths), owner, () => {
     const file = fileOf(paths, owner), saved = readJson<Reservation>(file);
     if (!saved) return;
     if (saved.version !== 1 || saved.owner !== owner || !Array.isArray(saved.messageIds)

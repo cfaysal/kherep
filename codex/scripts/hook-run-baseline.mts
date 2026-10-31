@@ -142,7 +142,15 @@ const original=cp.spawnSync; cp.spawnSync=function(file,args,options){const r=or
     assert.ok(receive.stdout.includes(BUSY_BODY));
     assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "offered");
     event("stop-confirm", "Stop", { stop_hook_active: false });
+    assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "offered", "Stop is not a processing ACK");
+    const command = /msg inbox --ack ([0-9a-f-]{36}) --from ([0-9a-f-]{36})/.exec(receive.stdout);
+    assert.ok(command, "complete synthetic intake prints the exact processing ACK");
+    assert.equal(command[2], BUSY_OWNER);
+    const ack = spawnSync(process.execPath, [path.join(repo, "modules/control-plane/node/cli.mts"), "msg", "inbox",
+      "--ack", command[1]!, "--from", command[2]!], { env, encoding: "utf8" });
+    assert.equal(ack.status, 0, ack.stderr);
     assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "delivered");
+    assert.equal(fs.readFileSync(turnsFile, "utf8"), budgetBytes, "processing ACK spends no autonomous budget");
     const totals = rows.reduce((r: Record<string, number>, x) => {
       for (const key of ["hookCommands", "nodeProcesses", "totalProcesses", "contextBytes", "durationMs"] as const) r[key] = (r[key] || 0) + x[key];
       return r;
