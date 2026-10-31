@@ -11,6 +11,11 @@ increments the minor version; every other release increments the patch version.
 
 ### Added
 
+- Codex routing-only updater (issue #707): exact predecessor/current byte checks,
+  explicit public Intercom rendering, isolated backup receipts and verified
+  rollback without full installation or model refresh. Routing assigns SOL
+  coordination and implementation, managed Astra design, and stops on ambiguous
+  managed worker identity. These instructions add no runtime guard.
 - Confirmed pages in the evidence verb (issue #695): `evidence --mode decide`
   now accepts an `evidence-confirmed` page. A contradicting measurement at a
   bound revision proposes `refuted`; at a newer revision (a strict descendant

@@ -2,7 +2,7 @@
 
 ## Roles
 
-The user directs the objective and owns consequential decisions. The main agent, the Maestro, owns grounding, coordination, integration and acceptance. Workers receive bounded tasks and never inherit authority beyond their explicit assignment.
+The user directs the objective and owns consequential decisions. The SOL main agent, the Maestro, owns grounding, coordination, review, integration and final acceptance. The managed Astra designer owns nontrivial design. The managed SOL implementation builder owns product source, tests and implementation documentation. Workers receive bounded tasks and never inherit authority beyond their explicit assignment.
 
 ## Intake
 
@@ -16,7 +16,7 @@ Evidence first. The Maestro classifies every directive and researches a relevant
 
 ## Dispatch
 
-Keep direct, low-risk work in the main agent. Use bounded delegation when independent investigation, expertise, parallelism or review helps. Select available models according to task complexity, configured cost limits and privacy boundaries. Never assume a particular provider, model identifier, host or tool is installed.
+Keep direct, low-risk grounding and coordination in the main agent. Delegate nontrivial design to the managed Astra designer and product implementation to the managed SOL implementation builder. Use bounded delegation when independent investigation, expertise, parallelism or review helps. Select available models according to task complexity, configured cost limits and privacy boundaries. Never assume a particular provider, model identifier, host or tool is installed.
 
 Codex role families and reasoning defaults are versioned in `codex/parity/model-policy.toml`
 and installed at `orchestra/model-policy.toml` within the selected Codex home:
@@ -29,13 +29,23 @@ when explicitly dispatching `codex-obs`; never copy an ID from an old reminder.
 Ordinary reinstall preserves a verified resolution. Model refresh is an explicit
 installer operation, and an unavailable family or reasoning level fails closed.
 
-For nontrivial designs, the DEFAULT main designer is the projected Astra designer
-role, normally `code-architect`. The DEFAULT implementation role is the SOL
-`kherep-builder`. The Maestro coordinates and accepts their work. Resolve the
-designer's actual managed name from the receipt's `projection.agentDefaults` or
-installed dispatch snapshot's `projectedAgents`: a personal name collision may
-rename it, and a personal `code-architect` is not thereby the managed designer.
-Read concrete model IDs from that installed resolution, never from this guidance.
+Resolve BOTH actual managed names before dispatch: the Astra design worker
+(normally `code-architect`) and the SOL implementation worker (the original
+`kherep-builder` mapping). Use the receipt's `projection.agentDefaults` or the
+installed dispatch snapshot's `projectedAgents` for concrete model and reasoning
+defaults. Validate the builder against the original `capabilities.agents`
+`kherep-builder` mapping, including any `as` name and explicit or default source,
+and its matching `projection.agents` name with `installed` or
+`replaced-with-backup` status. Validate the designer's receipt name, the source
+`feature-dev@claude-plugins-official` and `projected` status, its design purpose,
+and its resolved designer defaults. A personal name collision may rename a
+plugin worker. A familiar alias or the first matching role does not establish
+identity: simplifier and workflow specialists can also carry `role = builder`.
+Require one unambiguous managed binding for each intended purpose. Missing,
+inconsistent or ambiguous identity is STOP/UNKNOWN; do not guess an alias or have
+the Maestro take over product implementation. Read concrete model IDs from the
+installed resolution, never from this guidance. These are routing instructions;
+they add no runtime guard and establish no native enforcement measurement.
 
 Every dispatch states the objective, exact ownership, constraints, required evidence and return format. Use separate worktrees for independent writers. Read-only reviews may run alongside implementation. Do not delegate a task whose result cannot be retrieved and checked.
 

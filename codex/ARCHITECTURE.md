@@ -14,9 +14,35 @@ The Maestro context hook emits routing and safety reminders. It does not forward
 
 Existing reminders and acceptance hooks remain configured. Every managed hook also carries `commandWindows`, the same command behind the PowerShell call operator `&`, because Codex on Windows runs a hook through `pwsh -NoProfile -Command`, where a command that starts with a quoted path does not parse. Historical renderers keep their original bytes, including the retired native hook commands and the blocks without `commandWindows`, so upgrades recognize exact prior blocks. The receipt establishes configuration only. Current Codex hook trust and feature policies must allow execution at the actual host; Desktop execution remains UNKNOWN until independently measured. `prepared` and `injected_port_prepared` describe prepared output, not native delivery or model use.
 
+## Routing-only update
+
+`install-routing.mts` calls `lib/routing-update.mts` independently of the full
+installer. Explicit public render parameters pass through pure `renderIntercom`
+and `launcherCommand`; no Control Plane configuration is read. Complete bytes
+from the frozen revision in `parity/routing-predecessor.json` and current
+`ROUTING.md` identify recognized states. Path and byte preflight precede
+`InstallTransaction`, which backs up only the routing file; its dedicated
+receipt binds the backup, source and render parameters. Rollback verifies that
+evidence and current bytes before restoration. Hooks, model resolution and the
+main parity receipt are outside this interface.
+
+```mermaid
+flowchart LR
+  cli[Routing check / apply / rollback] --> updater[Exact byte and path preflight]
+  source[Frozen predecessor + current routing] --> updater
+  updater --> target[orchestra/ROUTING.md]
+  updater --> evidence[Dedicated routing backup + receipt]
+```
+
+The routing assigns SOL root coordination and final acceptance, managed Astra
+nontrivial design, and managed SOL builder implementation. Installed projection
+metadata identifies the managed workers; a role match alone is insufficient.
+This is an instruction change with no new runtime guard. Native compliance
+requires separate target measurement.
+
 ## Agent model resolution
 
-`codex/parity/model-policy.toml` defines versionless role families and reasoning defaults. Astra is the default main designer, SOL implements and coordinates the root, Terra handles support and research, and Luna handles observations and broker work. The `feature-dev` code architect maps to the designer before generic plugin mappings. Actual plugin names, including personal-name collision renames, are recorded with their role, concrete model and reasoning in `projection.agentDefaults`.
+`codex/parity/model-policy.toml` defines versionless role families and reasoning defaults. Astra owns nontrivial design, SOL implements and coordinates the root, Terra handles support and research, and Luna handles observations and broker work. The `feature-dev` code architect maps to the designer before generic plugin mappings. Actual plugin names, including personal-name collision renames, are recorded with their role, concrete model and reasoning in `projection.agentDefaults`.
 
 The synchronous installer performs `lib/model-install-state.mts` preflight before transactions or runtime calls. It reads only the canonical `orchestra/parity-receipt.json` for an earlier `modelResolution`; a missing resolution requires a complete injected catalog, while an unreadable or inconsistent receipt fails closed. Ordinary reinstall validates and retains the existing resolution. A changed policy or newer catalog requires explicit `--refresh-models`. The async CLI entry point uses an injectable catalog reader only for the first resolution or that explicit refresh. Top-level operator model and reasoning settings retain the existing preservation behavior.
 
