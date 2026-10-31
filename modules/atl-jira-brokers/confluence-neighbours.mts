@@ -196,9 +196,17 @@ export async function reportStitch(
   let index: SpaceIndex;
   let work: IndexedPage[];
   let orphanCount: number;
-  if (options.only) {
+  // Issue #710: a supplied id selects the targeted mode, even an empty one. An
+  // empty id is a caller that lost its page, not a request for the sweep; on
+  // 2026-10-31 that fall-through wrote to 127 unrelated pages.
+  if (options.only !== undefined) {
+    const only = options.only.trim();
+    if (!/^\d+$/.test(only)) {
+      deps.logError("--id must be a numeric Confluence page id. Nothing was searched or written.");
+      return 1;
+    }
     index = await spaceIndex(deps.session, deps.spaceId);
-    const page = index.byId.get(options.only);
+    const page = index.byId.get(only);
     if (!page) {
       deps.logError("That id is not a page in this space.");
       return 1;

@@ -92,6 +92,14 @@ for (const field of ['authorId', 'spaceId', 'parentId', 'body', 'title', 'labels
         assert.equal(await publishObservations(request(), f.broker, f.store), 'OBS-RESULT: failed readback-unverified created=101');
         assert.ok(!f.calls.includes('stitch'));
     });
+// Issue #710: an id that is not a page id never reaches stitch.
+for (const id of ['', 'abc'])
+    test(`create returning ${JSON.stringify(id)} fails before stitch`, async (t) => {
+        const f = fixture(t);
+        f.broker.create = async () => { f.calls.push('create'); return id; };
+        assert.equal(await publishObservations(request(), f.broker, f.store), 'OBS-RESULT: failed create-unverified');
+        assert.ok(!f.calls.includes('stitch'));
+    });
 test('unknown placement and injected controls are rejected without I/O', async (t) => {
     const f = fixture(t);
     for (const r of [{ ...request(), spaceId: '999' }, { ...request(), sessionId: '../path' },

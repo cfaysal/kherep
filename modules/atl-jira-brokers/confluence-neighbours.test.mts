@@ -367,3 +367,18 @@ test("stitch --only: a non-string title row is unsearched, not isolated", async 
   assert.match(err[0].slice("unsearched\t901\t".length), ROWS_LINE);
   assert.equal(err[1], "1 orphan(s) were never searched. Their neighbours are UNKNOWN.");
 });
+
+// Issue #710. A supplied id selects the targeted mode, even an empty one: the
+// falsy "" used to fall through to the sweep and write across the space.
+for (const only of ["", "   ", "abc"]) {
+  test(`stitch only=${JSON.stringify(only)} refuses before any request instead of sweeping`, async () => {
+    const log: string[] = [];
+    const run: NeighbourDeps = {
+      ...deps(log),
+      session: { async request() { throw new Error("no request may run"); } },
+      semantic: async () => { throw new Error("no search may run"); },
+    };
+    assert.equal(await reportStitch(run, { only }), 1);
+    assert.deepEqual(log, ["error: --id must be a numeric Confluence page id. Nothing was searched or written."]);
+  });
+}

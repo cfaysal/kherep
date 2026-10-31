@@ -523,6 +523,14 @@ increments the minor version; every other release increments the patch version.
 
 ### Fixed
 
+- `stitch` with an empty `--id` no longer sweeps the whole space (issue
+  #710). A present `--id` that is empty, blank or not numeric now exits 1
+  before any request; `reportStitch` treats any supplied id as the targeted
+  mode; the Codex observation adapter refuses a non-page id itself; and
+  `claude-obs` takes the id only from the `id:` line its own `create`
+  printed, reporting `OBS-RESULT: failed stitch without page id` otherwise.
+  On 2026-10-31 an empty id fell through to the sweep and wrote to 127
+  unrelated pages. The bare `stitch --space <key>` sweep is unchanged.
 - Denied-call reports name the violation, not a guard's header (issue
   #700). The commit, deploy and main-checkout guards print a header ending
   in `:` and then their violations; the journal now records the first

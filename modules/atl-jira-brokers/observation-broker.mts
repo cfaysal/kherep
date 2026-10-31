@@ -168,6 +168,9 @@ export function observationBroker(home: string, context?: ConfluenceContext, opt
                 body: raw.body?.storage?.value ?? '', labels: await listLabels(session, id) };
         },
         async stitch(id, spaceId, key) {
+            // Issue #710: this adapter stitches one page and nothing else.
+            if (!pageId(id))
+                throw new Error('stitch-unverified');
             const errors: string[] = [];
             const links: {
                 from: string;

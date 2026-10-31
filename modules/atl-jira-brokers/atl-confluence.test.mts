@@ -250,6 +250,20 @@ test(`${BROKER} stitch --dry-run before --id keeps the id`, async () => {
   assert.equal(calls.filter((call) => call.options?.method === "PUT").length, 0, "a dry run writes nothing");
 });
 
+// Issue #710. On 2026-10-31 an observation run passed an empty --id; the falsy
+// value fell through to the full-space sweep and wrote to 127 unrelated pages.
+// A present --id that names no page fails before any request, sweep included.
+for (const id of ["", "   ", "abc", "12a"]) {
+  test(`${BROKER} stitch --id ${JSON.stringify(id)} fails before any request and writes nothing`, async () => {
+    const { out, err, calls, injected } = harness({ api: defaultApi });
+    injected.semantic = async () => { throw new Error("stitch must not search"); };
+    assert.equal(await runCli(["stitch", "--space", "KB", "--id", id, "--per-orphan", "2"], injected), 1);
+    assert.deepEqual(err, ["--id must be a numeric Confluence page id. Nothing was searched or written; the full-space sweep runs only without --id."]);
+    assert.deepEqual(out, []);
+    assert.deepEqual(calls, [], "not even the space lookup runs");
+  });
+}
+
 test(`${BROKER} search with a malformed call is unavailable, not a measured no match`, async () => {
   const { out, err, calls, injected } = harness({ api: defaultApi });
   assert.equal(await runCli(["search", "--space", "KB", "hook order"], injected), 2);
