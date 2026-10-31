@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { reserveNativeOwner } from "./codex-native-pending.mts";
+import { releaseNativeOwner, reserveNativeOwner } from "./codex-native-pending.mts";
 import { nativeReconcileFixture as fixture, OWNER, id } from "./codex-native-reconcile-fixture.mts";
 import { reconcileNativeQueues } from "./codex-native-reconcile.mts";
 import { taskNode } from "./task-fixture.mts";
@@ -54,4 +54,43 @@ test("uncertain, incomplete, malformed and reserved-before-attempt histories nev
   assert.equal(reserveNativeOwner(f.paths, OWNER, [id(1)]), true);
   await reconcileNativeQueues(f.paths, OWNER);
   assert.equal(reserveNativeOwner(f.paths, OWNER, [id(2)]), false);
+});
+
+
+test("release without a reservation leaves absent storage absent", t => {
+  const f = taskNode(t), directory = path.dirname(pendingFile(f.paths));
+  assert.equal(fs.existsSync(directory), false);
+  releaseNativeOwner(f.paths, OWNER);
+  assert.equal(fs.existsSync(directory), false);
+});
+
+test("release without an owner file preserves existing storage and foreign records", t => {
+  const f = taskNode(t), directory = path.dirname(pendingFile(f.paths));
+  fs.mkdirSync(directory);
+  const foreign = path.join(directory, "01a121f0-d3b1-7383-852c-b4405eae3162.json");
+  fs.writeFileSync(foreign, "synthetic foreign reservation");
+  const before = fs.readdirSync(directory);
+  releaseNativeOwner(f.paths, OWNER);
+  assert.deepEqual(fs.readdirSync(directory), before);
+  assert.equal(fs.readFileSync(foreign, "utf8"), "synthetic foreign reservation");
+});
+
+test("release preserves malformed and unreadable reservations fail closed", async t => {
+  for (const kind of ["malformed", "unreadable"] as const) await t.test(kind, sub => {
+    const f = taskNode(sub), file = pendingFile(f.paths);
+    assert.equal(reserveNativeOwner(f.paths, OWNER, [id(1)]), true);
+    if (kind === "malformed") fs.writeFileSync(file, "{");
+    const before = fs.readFileSync(file);
+    if (kind === "unreadable") {
+      const read = fs.readFileSync;
+      sub.mock.method(fs, "readFileSync", ((target: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+        if (String(target) === file) throw Object.assign(new Error("synthetic unreadable reservation"), { code: "EACCES" });
+        return Reflect.apply(read, fs, [target, ...args]);
+      }) as typeof fs.readFileSync);
+    }
+    assert.throws(() => releaseNativeOwner(f.paths, OWNER));
+    sub.mock.restoreAll();
+    assert.deepEqual(fs.readFileSync(file), before);
+    assert.equal(reserveNativeOwner(f.paths, OWNER, [id(2)]), false);
+  });
 });

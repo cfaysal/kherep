@@ -7,7 +7,7 @@ import { replayHooks } from "./hook-run-baseline.mts";
 // starts the hook as its one Node child: one extra Node process per such run.
 const ENTRY = "codex-control-plane-hook.mts";
 
-test("actual hook/process counts for the fixed event sequence retain guard decisions and real Intercom Receive/Stop", () => {
+test("actual hook/process counts retain guard decisions and real Intercom Receive/Stop/ACK", () => {
   const measured = replayHooks();
   const node = path.basename(process.execPath);
   const entryRuns = measured.rows.filter(r => r.hook === ENTRY);
