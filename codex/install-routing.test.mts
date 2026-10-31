@@ -1,12 +1,49 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fixture, predecessor, current, snapshot, predecessorFile } from "./install-routing.fixture.mts";
+import { renderIntercom } from "../bootstrap/render-intercom.mts";
+import { launcherCommand } from "../modules/control-plane/node/launcher.mts";
 
 const api = () => import("./lib/routing-update.mts");
+test("fixture canonicalizes a synthetic aliased temporary parent", async t => {
+  const outer = fixture(t), realParent = path.join(outer.root, "temporary-parent"), alias = path.join(outer.root, "temporary-alias");
+  fs.mkdirSync(realParent);
+  try { fs.symlinkSync(realParent, alias, "junction"); }
+  catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes((error as NodeJS.ErrnoException).code ?? "")) { t.skip("host disallows synthetic junction creation"); return; }
+    throw error;
+  }
+  t.mock.method(os, "tmpdir", () => alias);
+  const f = fixture(t), { updateRouting } = await api();
+  assert.equal(f.root, fs.realpathSync(f.root));
+  assert.equal(updateRouting({ ...f.options, mode: "check" }).status, "ready");
+  f.assertProtected();
+});
+test("CLI checks through a symlinked source entry with either main-module path form", t => {
+  const f = fixture(t), sourceAlias = path.join(f.root, "source-alias"), configRoot = path.join(f.root, "public-config");
+  try { fs.symlinkSync(import.meta.dirname, sourceAlias, "junction"); }
+  catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes((error as NodeJS.ErrnoException).code ?? "")) { t.skip("host disallows synthetic junction creation"); return; }
+    throw error;
+  }
+  const content = JSON.parse(fs.readFileSync(predecessorFile, "utf8")).content;
+  fs.writeFileSync(f.target, renderIntercom(content, { command: launcherCommand(configRoot), exampleTarget: "peer/session" }));
+  const before = snapshot(f.root);
+  for (const flags of [[], ["--preserve-symlinks-main"]]) {
+    const run = spawnSync(process.execPath, [...flags, path.join(sourceAlias, "install-routing.mts"), "check", "--codex-home", f.home,
+      "--config-root", configRoot, "--example-target", "peer/session"], { encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr);
+    assert.notEqual(run.stdout.trim(), "", "symlinked main must execute the CLI");
+    assert.deepEqual(JSON.parse(run.stdout), { status: "ready" });
+    assert.deepEqual(snapshot(f.root), before);
+  }
+  f.assertProtected();
+});
 test("the predecessor is the complete pinned public source", async () => {
   const pinned = JSON.parse(fs.readFileSync(predecessorFile, "utf8"));
   assert.equal(pinned.revision, "kherep@2b592140fd25e5e1f49dc3547ca3a798ef418721");

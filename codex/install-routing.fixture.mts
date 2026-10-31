@@ -26,7 +26,7 @@ export function snapshot(root: string): Record<string, string> {
   walk(root); return out;
 }
 export function fixture(t: { after(fn: () => void): void }) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "routing-707-")), home = path.join(root, "home");
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "routing-707-"))), home = path.join(root, "home");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const target = path.join(home, "orchestra/ROUTING.md");
   fs.mkdirSync(path.dirname(target), { recursive: true });

@@ -48,10 +48,15 @@ candidate first. Supply absolute Codex-home and public Control Plane config-root
 paths and an explicit public example address. The config root is only a rendering
 input; the updater does not open it.
 
+The Codex home must already exist at its canonical real path, with no linked
+ancestors. Resolve it with `fs.realpathSync` before invoking the CLI. For example,
+macOS `/tmp/candidate-codex` may resolve to `/private/tmp/candidate-codex`; pass
+the resolved path. The example home below must contain recognized routing.
+
 ```sh
-node codex/install-routing.mts check --codex-home /tmp/candidate-codex --config-root /opt/public-kherep --example-target peer/session
-node codex/install-routing.mts apply --codex-home /tmp/candidate-codex --config-root /opt/public-kherep --example-target peer/session
-node codex/install-routing.mts rollback --codex-home /tmp/candidate-codex --backup-id <returned-backup-id>
+node codex/install-routing.mts check --codex-home /opt/public-candidate-codex --config-root /opt/public-kherep --example-target peer/session
+node codex/install-routing.mts apply --codex-home /opt/public-candidate-codex --config-root /opt/public-kherep --example-target peer/session
+node codex/install-routing.mts rollback --codex-home /opt/public-candidate-codex --backup-id <returned-backup-id>
 ```
 
 On Windows use absolute paths such as `C:/Public/CandidateCodex` and
