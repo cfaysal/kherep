@@ -77,6 +77,11 @@ export async function cmdOrphans(ctx: NeighbourCliContext, args: NeighbourArgs):
 }
 
 export async function cmdStitch(ctx: NeighbourCliContext, args: NeighbourArgs): Promise<number> {
+  // Issue #710: checked before the space is even looked up. A present --id that
+  // names no page must never reach the sweep, which runs only without --id.
+  if ("id" in args &&!/^\d+$/.test((args.id ?? "").trim())) {
+    throw new ConfluenceError("--id must be a numeric Confluence page id. Nothing was searched or written; the full-space sweep runs only without --id.");
+  }
   return await reportStitch(await neighbourDeps(ctx, args), {
     limit: positive(args.limit, "--limit"),
     perOrphan: positive(args["per-orphan"], "--per-orphan"),

@@ -118,18 +118,15 @@ by searching for it, and nobody searches for something they do not know exists.
 
     <confluence.json broker> related --space <spaceKey> --title "<the title you are about to use>" --limit 3
 
-- Hits: name them in the body **as links**, and say in one sentence how each relates to the finding.
-  The verb prints one line per hit as `related<TAB><id><TAB><title>`. A link to that hit is, in
-  storage format, exactly:
+- Hits: name them in the body **as links**, and say in one sentence how each relates to the finding. The verb prints
+  one line per hit as `related<TAB><id><TAB><title>`. A link to that hit is, in storage format, exactly:
 
       <a href="/wiki/spaces/<spaceKey>/pages/<id>">the title the verb printed</a>
 
-  You take the id from that line and nowhere else. You NEVER write the title of another page as
-  plain prose - not as "see also X", not as "this narrows what X documents". A title in prose is
-  indistinguishable from a page that exists. Either it is an anchor with an id the verb gave you,
-  or the page is not mentioned.
-  The broker refuses a body whose links point outside this space, so an invented id fails the
-  write rather than landing as a trail that goes nowhere.
+  You take the id from that line and nowhere else. You NEVER write the title of another page as plain prose - not as
+  "see also X", not as "this narrows what X documents". A title in prose is indistinguishable from a page that exists.
+  Either it is an anchor with an id the verb gave you, or the page is not mentioned. The broker refuses a body whose
+  links point outside this space, so an invented id fails the write rather than landing as a trail that goes nowhere.
 - `count: 0` and exit code 0: there is no matching page. You write the observation WITHOUT links
   and you say so in the body: "No existing page in this space matched this finding." That sentence
   is the result of a search, not an apology for the lack of one.
@@ -143,7 +140,10 @@ After the page exists, you link it in the other direction, once:
 
 This puts a link to your page on the pages it belongs next to. Your own outgoing links do not make your page
 findable - nobody points at it yet, and that is exactly what this call fixes. Skipping it means your page is an
-orphan the moment you finish.
+orphan the moment you finish. The id is the digits of the `id:` line this run's `create` printed, typed literally,
+never through a shell variable. Without that line you do NOT run `stitch` and report
+`OBS-RESULT: failed stitch without page id`: `stitch` without `--id` is a sweep that writes across the whole space
+and is never yours to run.
 
 ## One observation is one page
 

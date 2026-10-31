@@ -187,6 +187,13 @@ test('stitch fresh-version merge preserves an intervening human body edit', asyn
     assert.match(write.body.body.value, /pages\/100/);
     assert.equal(write.body.version.number, 3);
 });
+// Issue #710: the adapter stitches one verified page id and never reaches the sweep.
+for (const id of ['', ' ', 'abc'])
+    test(`targeted stitch refuses page id ${JSON.stringify(id)} before any request`, async (t) => {
+        const f = fixture(t);
+        await assert.rejects(() => f.broker.stitch(id, '10', 'SYNTHETIC'), /^Error: stitch-unverified$/);
+        assert.deepEqual(f.calls, []);
+    });
 test('native tools/call accepts _meta progressToken:number and threadId without forwarding metadata', async () => {
     const args = { ...request(), observations: [] };
     const received: unknown[] = [];
