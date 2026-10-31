@@ -50,6 +50,8 @@ export interface InboxRecord {
   // Set by StopFailure: the turn that carried the offer ended on an API error,
   // so the next UserPromptSubmit offers it again at once.
   retry?: boolean;
+  // Codex-only exact-offer generation. Shared/Claude writers never create it.
+  codexOffer?: { owner: string; generation: string; fingerprint: string };
   // Reply hops: 0 for a new message, one more than the depth of this node's
   // sent message it answers (exchange.mts replyDepth). Missing means 0.
   depth?: number;

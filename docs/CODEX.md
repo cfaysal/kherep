@@ -469,8 +469,12 @@ helper that already exited, so the close there is never confirmed and the
 lease is kept.
 
 Admission and a metadata claim leave messages `accepted`. Explicit
-`msg inbox --receive` offers only the messages actually returned; normal confirming
-Stop marks those `offered` records `delivered`. An interrupt does not confirm them.
+`msg inbox --receive` offers only complete messages actually returned. The Maestro
+executes the returned `msg inbox --ack <receipt> --from <owner>` command after
+processing them; Stop never confirms fetched content. An interrupted offer can be
+received again immediately without consuming an offer attempt. An oversized
+message gets an exact `--receive <messageId>` recovery command. See the
+[receipt contract](../modules/control-plane/CODEX-RECEIPTS.md).
 Messages outside the ticket or a limited Receive remain in the CP Inbox under
 its existing retention contract. The normal prompt/Stop intake remains available.
 

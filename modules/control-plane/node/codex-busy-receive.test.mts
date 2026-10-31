@@ -27,7 +27,7 @@ function commands(node: ReturnType<typeof busyFixture>) {
   return { hook, receive };
 }
 
-test("real CP poll, hook, Receive and Stop offer and confirm once without native artifacts", async (t) => {
+test("real CP poll, hook, Receive and Stop require a separate processing ACK without native artifacts", async (t) => {
   const now = Date.now();
   const node = busyFixture(t, 1, now, false);
   const legacyLedger = path.join(listenerDir(node.paths), `${BUSY_OWNER}.queued.json`);
@@ -64,11 +64,16 @@ test("real CP poll, hook, Receive and Stop offer and confirm once without native
   const offered = getMessage(node.paths.inbox, node.ids[0])!;
   assert.equal(offered.state, "offered");
   assert.equal(offered.offers, 1);
-  assert.equal(receive().stdout.includes(BUSY_BODY), false, "repeated Receive never reoffers offered content");
+  assert.equal(receive().stdout.includes(BUSY_BODY), true, "explicit receive recovers an interrupted offer");
   await poll();
   const stopped = hook({ ...node.input, hook_event_name: "Stop", stop_hook_active: true });
   assert.equal(stopped.status, 0, stopped.stderr);
   assert.equal(stopped.stdout, "");
+  assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "offered");
+  const token = received.stdout.match(/msg inbox --ack ([0-9a-f-]{36}) --from /)![1]!;
+  const acked = spawnSync(process.execPath, [CLI, "msg", "inbox", "--ack", token, "--from", BUSY_OWNER], {
+    env: { ...process.env, KHEREP_CONFIG_DIR: node.root, CODEX_THREAD_ID: BUSY_OWNER }, windowsHide: true, encoding: "utf8" });
+  assert.equal(acked.status, 0, acked.stderr);
   assert.equal(getMessage(node.paths.inbox, node.ids[0])?.state, "delivered");
   assert.equal(hook(node.input).stdout, "");
   assert.equal(receive().stdout.includes(BUSY_BODY), false, "a later intake does not offer the packet again");
@@ -127,7 +132,7 @@ test("more than eight admitted IDs and bounded Receive retain every unreturned m
   const stopped = hook({ ...node.input, hook_event_name: "Stop", stop_hook_active: true });
   assert.equal(stopped.status, 0, stopped.stderr);
   for (const id of node.ids) assert.equal(getMessage(node.paths.inbox, id)?.state,
-    returned.includes(id) ? "delivered" : "accepted");
+    returned.includes(id) ? "offered" : "accepted");
 });
 
 

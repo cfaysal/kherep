@@ -1,3 +1,4 @@
+import { codexAckInstruction, prepareCodexOffers } from "./codex-inbox-ack.mts";
 import type { DirectoryBody } from "../protocol-messages.mts";
 import type { NodePaths } from "./config.mts";
 import { markNoticed, readDirectory } from "./exchange.mts";
@@ -15,7 +16,9 @@ import { failureNotice, noticesIntro, receiptNotice, stillUnnoticed, unnoticedNo
 // records a session gets, how they are framed as context, and the offer and
 // confirm bookkeeping. deliver-hook.mts wraps it for Claude Code,
 // deliver-codex.mts for Codex.
-// Delivery is offer, then confirm: a hook call marks what it injects offered,
+// Shared defaults (Claude and task intake) are offer, then confirm. Codex
+// interactive intake opts into exact complete-output processing receipts below.
+// A default hook call marks what it injects offered,
 // and the next Stop, which proves the turn completed, marks it delivered. A
 // turn that ends without Stop leaves it offered. UserPromptSubmit offers it
 // again only on evidence that the offering turn ended: StopFailure flagged it
@@ -56,6 +59,9 @@ export interface HookDeps {
   reofferOffered?: boolean;
   notices?: SentNotices;
   offeredBy?: OfferedBy;
+  // Opt-in only: Codex uses exact complete-output receipts instead of Stop confirmation.
+  codexOwner?: string;
+  codexSelected?: InboxRecord;
 }
 
 // PostToolUse: Claude Code delivery inside a running turn (deliver-midturn.mts).
@@ -122,7 +128,7 @@ function fitted(record: InboxRecord, directory: DirectoryBody | null, tag: strin
 // Blocks for the records in order within room bytes: the first always, shortened
 // if needed, later ones only while they fit whole.
 function fitBlocks(paths: NodePaths, records: InboxRecord[], directory: DirectoryBody | null, tag: string, reply: string,
-  inboxCommand: string, room: number): string[] {
+  inboxCommand: string, room: number, completeOnly = false): string[] {
   const blocks: string[] = [];
   let left = room;
   for (const record of records) {
@@ -130,7 +136,7 @@ function fitBlocks(paths: NodePaths, records: InboxRecord[], directory: Director
     const proxied = relayStateOf(paths, record.messageId);
     const full = block(record, record.text, directory, tag, reply, proxied);
     const fits = bytes(full) <= room;
-    if (!fits && blocks.length > 0) break;
+    if (!fits && (blocks.length > 0 || completeOnly)) break;
     const next = fits ? full : fitted(record, directory, tag, reply, inboxCommand, room, proxied);
     blocks.push(next);
     left -= bytes(next) + 2;
@@ -202,16 +208,16 @@ function contextUnderBudget(event: DeliveryEvent, refs: string[], deps: HookDeps
   const { paths } = deps;
   const now = deps.now?.() ?? Date.now();
   const maxBytes = deps.maxBytes ?? MAX_CONTEXT_BYTES;
-  const mine = sessionInbox(paths, refs);
-  if (event === "Stop") confirmOffered(paths, mine);
+  const mine = deps.codexOwner && deps.codexSelected ? [deps.codexSelected] : sessionInbox(paths, refs);
+  if (event === "Stop" && !deps.codexOwner) confirmOffered(paths, mine);
   // UserPromptSubmit offers again what an ended turn carried without a Stop,
   // up to MAX_OFFERS times; Stop offers only new arrivals.
   const waiting: InboxRecord[] = [];
   for (const r of mine) {
     if (r.state === "accepted") {
       waiting.push(r);
-    } else if (r.state === "offered" && event === "UserPromptSubmit" && deps.reofferOffered !== false && offerEnded(r, now)) {
-      if ((r.offers ?? 0) < MAX_OFFERS) waiting.push(r);
+    } else if (r.state === "offered" && event === "UserPromptSubmit" && deps.reofferOffered !== false && (deps.codexOwner || offerEnded(r, now))) {
+      if (deps.codexOwner || (r.offers ?? 0) < MAX_OFFERS) waiting.push(r);
       else markRefused(paths.inbox, r.messageId, exhaustedOfferReason(r, MAX_OFFERS));
     }
   }
@@ -231,20 +237,28 @@ function contextUnderBudget(event: DeliveryEvent, refs: string[], deps: HookDeps
   const partBytes = (parts: string[]): number => parts.reduce((sum, p) => sum + bytes(p) + 2, 0);
   // Receipts are low priority: they take room only if every shown message
   // still fits whole; otherwise they wait for the next event.
+  const receiptToken = crypto.randomUUID();
+  const ackLine = deps.codexOwner ? codexAckInstruction(deps.codexOwner, cli, receiptToken) : "";
   const receipt = notices.receipts.length === 0 ? "" : receiptNotice(notices.receipts, directory);
   const received = receipt !== "" && bytes(introLine(event, tag, shown.length > 0, failures.length > 0, true)) + FOOTER_BYTES
+    + (shown.length && ackLine ? bytes(ackLine) + 2 : 0)
     + partBytes([...failed, receipt]) + partBytes(shown.map((r) => block(r, r.text, directory, tag, reply, relayStateOf(paths, r.messageId)))) <= maxBytes;
   if (shown.length === 0 && failures.length === 0 && !received) return "";
   const intro = introLine(event, tag, shown.length > 0, failures.length > 0, received);
   const parts = received ? [...failed, receipt] : failed;
-  const room = maxBytes - bytes(intro) - FOOTER_BYTES - partBytes(parts);
-  const blocks = fitBlocks(paths, shown, directory, tag, reply, cli + " msg inbox" + (deps.replyFrom ? " --from " + deps.replyFrom : "") + " --all", room);
+  const room = maxBytes - bytes(intro) - FOOTER_BYTES - partBytes(parts) - (ackLine ? bytes(ackLine) + 2 : 0);
+  const blocks = fitBlocks(paths, shown, directory, tag, reply, cli + " msg inbox" + (deps.replyFrom ? " --from " + deps.replyFrom : "") + " --all", room, !!deps.codexOwner);
   const offeredBy = deps.offeredBy ?? EVENT_OFFER[event];
   // Marked first, shown after (#627): an offer not written (lock busy, record gone) is not shown; it waits for the next event.
-  const shownBlocks = blocks.filter((_, i) => markOffered(paths.inbox, waiting[i].messageId, now, offeredBy) !== null);
-  if (shownBlocks.length === 0 && failures.length === 0 && !received) return "";
+  const emitted = deps.codexOwner ? prepareCodexOffers(paths, shown.slice(0, blocks.length), deps.codexOwner, receiptToken, now, offeredBy) : null;
+  const shownBlocks = blocks.filter((_, i) => emitted ? emitted.some(r => r.messageId === shown[i].messageId)
+    : markOffered(paths.inbox, waiting[i].messageId, now, offeredBy) !== null);
+  if (shownBlocks.length === 0 && failures.length === 0 && !received) {
+    if (!deps.codexOwner || waiting.length === 0) return "";
+    return `Incomplete: the next message exceeds this bounded output; no offer receipt was issued. Run \`${cli} msg inbox --from ${deps.codexOwner} --receive ${waiting[0].messageId}\` for complete content. If tool output is truncated, do not ACK.`;
+  }
   for (const record of received ? [...failures, ...notices.receipts] : failures) markNoticed(paths, record.messageId, now);
   const left = waiting.length - shownBlocks.length;
   const footer = left > 0 ? [`${left} more message(s) wait for the next turn.`] : [];
-  return [intro, ...parts, ...shownBlocks, ...footer].join("\n\n");
+  return [intro, ...parts, ...shownBlocks, ...(shownBlocks.length && ackLine ? [ackLine] : []), ...footer].join("\n\n");
 }

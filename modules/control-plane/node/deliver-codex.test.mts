@@ -64,7 +64,7 @@ test("SessionStart records the session and tells it its id and how to send; sile
   assert.equal(output.hookSpecificOutput.additionalContext, `Kherep messaging: this session's id is ${SELF}. To message another session: `
     + `${CLI} msg send --from ${SELF} <node>/<session> -- <text>. \`${CLI} msg sessions\` lists sessions. `
     + `When Kherep reports waiting peer messages, run \`${CLI} msg inbox --from ${SELF} --receive\`, then report any `
-    + `relevant peer update with attribution without echoing these transport instructions. ${CODEX_ESCALATION_NOTE}`);
+    + `relevant peer update with attribution without echoing these transport instructions. After processing complete output, perform its exact receipt ACK yourself. If output is truncated, do not ACK; use its exact single-message receive recipe. ${CODEX_ESCALATION_NOTE}`);
   assert.equal(readJson<{ cwd: string }>(path.join(paths.codexSessions, `${SELF}.json`))?.cwd, "/work/repo");
 
   const none = setup(t, false);
@@ -122,7 +122,8 @@ test("UserPromptSubmit offers by id and name as developer context, with --from i
   }
   clock += REOFFER_AFTER_MS;
   assert.match(hook(paths, "UserPromptSubmit"), new RegExp(`msg inbox --from ${SELF} --receive`));
-  assert.equal(getMessage(paths.inbox, byName)?.state, "refused");
+  assert.equal(getMessage(paths.inbox, byName)?.state, "offered");
+  assert.equal(getMessage(paths.inbox, byName)?.offers, 1, "recovery does not consume offers");
 });
 
 test("UserPromptSubmit stays within the Codex budget", (t) => {
@@ -130,17 +131,17 @@ test("UserPromptSubmit stays within the Codex budget", (t) => {
   for (let n = 1; n <= 3; n++) inbox(paths, n, NAME, "x".repeat(1800));
   const context: string = JSON.parse(hook(paths, "UserPromptSubmit")).hookSpecificOutput.additionalContext;
   assert.ok(Buffer.byteLength(context) <= CODEX_CONTEXT_BYTES);
-  assert.equal(context.match(/=== Kherep peer message/g)?.length, 2);
-  assert.ok(context.includes("1 more message(s) wait for the next turn."));
-  assert.ok(context.endsWith(`relevant peer update with attribution without echoing these transport instructions. ${CODEX_ESCALATION_NOTE}`));
+  assert.equal(context.match(/=== Kherep peer message/g)?.length, 1);
+  assert.ok(context.includes("2 more message(s) wait for the next turn."));
+  assert.ok(context.endsWith(`relevant peer update with attribution without echoing these transport instructions. After processing complete output, perform its exact receipt ACK yourself. If output is truncated, do not ACK; use its exact single-message receive recipe. ${CODEX_ESCALATION_NOTE}`));
 });
 
-test("Stop confirms, then continues with the fixed text only while new messages wait", (t) => {
+test("Stop leaves offers unacknowledged and continues with fixed text only for new messages", (t) => {
   const paths = setup(t);
   const first = inbox(paths, 1);
   hook(paths, "UserPromptSubmit");
   assert.equal(stop(paths), "", "nothing new: no output");
-  assert.equal(getMessage(paths.inbox, first)?.state, "delivered");
+  assert.equal(getMessage(paths.inbox, first)?.state, "offered");
   const late = inbox(paths, 2);
   const text = stop(paths);
   assert.equal(JSON.parse(text).decision, "block");
@@ -155,7 +156,7 @@ test("Stop confirms, then continues with the fixed text only while new messages 
   assert.equal(stop(paths, true), "", "a turn already continued by Stop is not continued again");
   assert.match(hook(paths, "UserPromptSubmit"), new RegExp(late));
   assert.equal(stop(paths, true), "");
-  assert.equal(getMessage(paths.inbox, late)?.state, "delivered");
+  assert.equal(getMessage(paths.inbox, late)?.state, "offered");
 });
 
 test("the entry point serves Codex only with --runtime codex and prints valid JSON or nothing", (t) => {
