@@ -167,6 +167,32 @@ function occurrences(text: string, value: string): number {
   return text.split(value).length - 1;
 }
 
+test("projects the Codex root orchestration boundary into routing and Maestro instructions", (t) => {
+  const { root, codexHome, installOptions } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  install(installOptions);
+  const agents = fs.readFileSync(path.join(codexHome, "AGENTS.md"), "utf8");
+  const maestro = agents.slice(agents.indexOf(AGENTS_START), agents.indexOf(AGENTS_END));
+  const routing = fs.readFileSync(path.join(codexHome, "orchestra", "ROUTING.md"), "utf8");
+  for (const [name, text] of [["routing", routing], ["Maestro", maestro]]) {
+    for (const rule of [
+      /root.*orchestrator, not.*execution worker/i,
+      /implementation, detailed investigations.*builds, long functional suites and native platform tests.*subagents/is,
+      /short.*(?:routing|evidence).*read/is,
+      /no long synchronous waits/i,
+      /close the main turn/i,
+      /retrievable.*(?:result|receipt)/i,
+      /failure handling.*pickup/i,
+      /(?:completion|input) events.*explicit pickup point/is,
+      /(?:unknown|unverified).*runtime support.*UNKNOWN/is,
+      /artifact identity/i,
+      /privacy.*authority/i,
+    ]) assert.match(text, rule, `${name} retains ${rule}`);
+  }
+  assert.match(routing, /Astra designs, SOL builds and coordinates the root/);
+  assert.doesNotMatch(routing, /Maestro.*runs proportional checks/);
+});
+
 // Issue #376. Every block before this guard lacks its entry, the last one of
 // the Agent, web and MCP PreToolUse group.
 function withoutAtlassianDestructiveGuard(config: string, hookDir: string): string {
