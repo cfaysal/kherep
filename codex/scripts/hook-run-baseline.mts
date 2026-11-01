@@ -111,10 +111,10 @@ const original=cp.spawnSync; cp.spawnSync=function(file,args,options){const r=or
     fs.writeFileSync(path.join(node.workspace, "sample.mts"), "const value = 1;\n");
     assert.equal(event("edit", "PreToolUse", edit).denied, false);
     event("edit", "PostToolUse", edit);
-    assert.equal(event("commit-allowed", "PreToolUse", shell('git commit -m "SYN-123 fix: synthetic fixture"')).denied, false);
-    const deniedCommit = event("commit-denied", "PreToolUse", shell('git commit -m "SYN-123 fix: synthetic\nCo-Authored-By: Bot <bot@example.invalid>"'));
+    assert.equal(event("commit-allowed", "PreToolUse", shell('git commit -m "SYN-123 fix: synthetic fixture\nCo-Authored-By: Bot <bot@example.invalid>"')).denied, false);
+    const deniedCommit = event("commit-denied", "PreToolUse", shell('git commit -m "SYN-123 fix: synthetic — fixture"'));
     assert.equal(deniedCommit.denied, true);
-    assert.ok(deniedCommit.output.includes("commit message contains a Co-Authored-By trailer"));
+    assert.ok(deniedCommit.output.includes("commit message contains an em dash (U+2014)"));
     assert.equal(deniedCommit.output.includes("commit subject does not start with the configured work-item key and a space"), false);
     assert.equal(event("deploy-allowed", "PreToolUse", shell("kubectl get pods")).denied, false);
     assert.equal(event("deploy-denied", "PreToolUse", shell("kubectl delete pods synthetic")).denied, true);

@@ -160,7 +160,7 @@ const PRIVATE_FILE = `D:/Work-${"credentials"}/fixture.env`;
 const PRIVATE_TAG = `<${"private"}>synthetic</${"private"}>`;
 const PRETOOL_GUARDS: { hook: string; matcher: string; mode: Mode; blocking: ToolCase[]; benign: ToolCase }[] = [
   { hook: "commit-guard.mts", matcher: "Bash", mode: "exit2",
-    blocking: [bash('git commit -m "x Co-Authored-By: bot"')], benign: bash('git commit -m "plain subject"') },
+    blocking: [bash('git commit -m "em — dash"')], benign: bash('git commit -m "plain subject\n\nCo-Authored-By: bot"') },
   { hook: "deploy-guard.mts", matcher: "Bash", mode: "exit2",
     blocking: [bash("git push --force")], benign: bash("git push origin main") },
   { hook: "main-checkout-guard.mts", matcher: "Bash|PowerShell", mode: "exit2",

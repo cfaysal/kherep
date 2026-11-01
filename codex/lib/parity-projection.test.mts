@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { createHash } from "node:crypto";
 
 import { fixtureResolution } from "./model-policy.fixture.mts";
 import { resolveCapabilities } from "./model-policy.mts";
@@ -201,4 +202,40 @@ test("transaction rollback restores a stale managed target after cleanup", (t) =
   assert.equal(fs.existsSync(staleSkill), false);
   transaction.rollback();
   assert.equal(fs.readFileSync(staleSkill, "utf8"), "restore me\n");
+});
+
+test("the exact predecessor skill is backed up on projection upgrade and restored on rollback", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kherep-attribution-skill-"));
+  t.after(() => fs.rmSync(root, { force: true, recursive: true }));
+  const repoRoot = path.resolve(here, "..", "..");
+  const snapshot = JSON.parse(fs.readFileSync(path.join(repoRoot, "bootstrap", "fixtures", "coauthor-ban-predecessor.json"), "utf8"));
+  const predecessor = snapshot.files["codex/parity/plugin-sources/caveman_caveman/skills/caveman-commit/SKILL.md"] as { text: string; sha256: string };
+  assert.equal(createHash("sha256").update(predecessor.text).digest("hex"), predecessor.sha256);
+  const pluginSourceRoot = path.join(root, "plugins");
+  const pluginRoot = path.join(pluginSourceRoot, "caveman");
+  fs.cpSync(path.join(repoRoot, "codex", "parity", "plugin-sources", "caveman_caveman"), pluginRoot, { recursive: true });
+  write(path.join(pluginRoot, "skills", "caveman-commit", "SKILL.md"), predecessor.text);
+  const manifest = () => write(path.join(pluginSourceRoot, "manifest.json"), JSON.stringify({ plugins: [{
+    id: "caveman@caveman", version: "fixture", path: "caveman", contentSha256: componentHash(pluginRoot),
+  }] }));
+  manifest();
+  const capabilities = readCapabilities(repoRoot);
+  capabilities.plugins = [{ id: "caveman@caveman", mode: "project" }];
+  const codexHome = path.join(root, "codex");
+  const first = project({ capabilities, codexHome, repoRoot, pluginSourceRoot,
+    transaction: new InstallTransaction(codexHome, path.join(root, "first-backup")) });
+  const skill = first.skills.find(entry => entry.source === "caveman@caveman" && entry.name.endsWith("caveman-commit"))!;
+  assert.ok(skill, "derive the target name from the actual projection receipt");
+  const target = path.join(codexHome, "skills", skill.name, "SKILL.md");
+  const oldProjected = fs.readFileSync(target);
+  assert.match(oldProjected.toString(), /any AI attribution/);
+  write(path.join(codexHome, "orchestra", "parity-receipt.json"), JSON.stringify({ projection: first }));
+  fs.copyFileSync(path.join(repoRoot, "codex", "parity", "plugin-sources", "caveman_caveman", "skills", "caveman-commit", "SKILL.md"), path.join(pluginRoot, "skills", "caveman-commit", "SKILL.md"));
+  manifest();
+  const transaction = new InstallTransaction(codexHome, path.join(root, "upgrade-backup"));
+  project({ capabilities, codexHome, repoRoot, pluginSourceRoot, transaction });
+  assert.doesNotMatch(fs.readFileSync(target, "utf8"), /any AI attribution/);
+  assert.deepEqual(fs.readFileSync(path.join(transaction.backupRoot, "skills", skill.name, "SKILL.md")), oldProjected);
+  transaction.rollback();
+  assert.deepEqual(fs.readFileSync(target), oldProjected);
 });

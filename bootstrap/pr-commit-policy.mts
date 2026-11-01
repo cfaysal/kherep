@@ -14,8 +14,8 @@
 // KHEREP_WORK_ITEM=none escape hatch cannot reach the hook. The hook gets the
 // repository toplevel as KHEREP_WORKSPACE, KHEREP_WORK_ITEM_REQUIRED from the
 // caller (default "0") and KHEREP_WORK_ITEM_PATTERN only if the caller set it.
-// Before any commit, the hook must reject a canary message with an attribution
-// trailer; an emptied or unloadable hook would otherwise pass every commit.
+// Before any commit, the hook must reject a missing-key canary under an isolated
+// required work-item policy; an emptied hook would otherwise pass every commit.
 //
 // Exit codes: 0 every commit passed, 1 at least one commit failed the policy,
 // 2 the range or the hook could not be read. A failed read is never a pass.
@@ -29,8 +29,8 @@ import { pathToFileURL } from "node:url";
 import { errorMessage } from "./shape.mts";
 
 export const DEFAULT_HOOK = path.resolve(import.meta.dirname, "..", "claude", "kherep", "githooks", "commit-msg");
-const CANARY = "canary\n\nCo-authored-by: Example <example@example.com>\n";
-const CANARY_TEXT = "AI attribution trailer";
+const CANARY = "canary without a work-item key\n";
+const CANARY_TEXT = "requires the subject to start with the configured work-item key";
 
 export interface Options { base: string; head: string; hook?: string; cwd?: string; env?: NodeJS.ProcessEnv }
 export interface Result { code: number; stdout: string[]; stderr: string[] }
@@ -90,14 +90,16 @@ export function checkCommits(options: Options): Result {
     const top = git(cwd, ["rev-parse", "--show-toplevel"], "repository toplevel").trim();
     const env = hookEnv(options.env ?? process.env, top);
     const message = slash(path.join(tmp, "COMMIT_EDITMSG"));
-    const runHook = (text: string | Buffer) => {
+    const runHook = (text: string | Buffer, hookEnvironment = env) => {
       fs.writeFileSync(message, text);
-      const result = spawnSync("sh", [hook, message], { cwd: top, env, encoding: "utf8" });
+      const result = spawnSync("sh", [hook, message], { cwd: top, env: hookEnvironment, encoding: "utf8" });
       if (result.error) throw new Unreadable(`hook ${hook} did not run: ${result.error.message}`);
       return { status: result.status, stderr: (result.stderr ?? "").trim() };
     };
 
-    const canary = runHook(CANARY);
+    const canary = runHook(CANARY, { ...env,
+      KHEREP_WORK_ITEM_REQUIRED: "1", KHEREP_WORK_ITEM_PATTERN: "KHEREPCANARY-[0-9]+",
+    });
     if (canary.status !== 1 || !canary.stderr.includes(CANARY_TEXT)) {
       return unreadable(`hook did not reject the canary (exit ${canary.status}${canary.stderr ? `: ${canary.stderr}` : ""})`);
     }

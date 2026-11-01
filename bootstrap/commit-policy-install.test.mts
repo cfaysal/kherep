@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { createHash } from "node:crypto";
 
 import { parsePolicy } from "./commit-policy.mts";
 
@@ -50,8 +51,27 @@ const backupPolicy = (f: Fixture, name: string): string =>
 
 test("install writes the policy, backs up a change, keeps values and joins drift-check", (t) => {
   const f = fixture(t);
+  const snapshot = JSON.parse(fs.readFileSync(path.join(HERE, "fixtures", "coauthor-ban-predecessor.json"), "utf8"));
+  const predecessor = snapshot.files["claude/kherep/githooks/commit-msg"] as { text: string; sha256: string };
+  assert.equal(createHash("sha256").update(predecessor.text).digest("hex"), predecessor.sha256);
+  const hook = path.join(f.claude, "kherep", "githooks", "commit-msg");
+  fs.mkdirSync(path.dirname(hook), { recursive: true });
+  fs.writeFileSync(hook, predecessor.text);
+  assert.equal(spawnSync("git", ["init", "-q"], { cwd: f.ws }).status, 0);
+  const message = path.join(f.root, "message.txt");
+  fs.writeFileSync(message, "Allow attribution\n\nCo-authored-by: Example <dev@example.com>\n");
+  const hookEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KHEREP_")));
+  const checkHook = (required: string) => spawnSync("sh", [slash(hook), slash(message)], {
+    cwd: f.ws, env: { ...hookEnv, HOME: slash(f.home), KHEREP_WORKSPACE: slash(f.ws), KHEREP_WORK_ITEM_REQUIRED: required }, encoding: "utf8",
+  });
+  assert.equal(checkHook("0").status, 1, "exact predecessor denies attribution even without a required key");
   const first = run("install.sh", f, { KHEREP_WORK_ITEM_REQUIRED: "1", KHEREP_WORK_ITEM_PATTERN: "OP-[0-9]+" });
   assert.equal(first.status, 0, first.out);
+  assert.deepEqual(fs.readFileSync(hook), fs.readFileSync(path.join(HERE, "..", "claude", "kherep", "githooks", "commit-msg")));
+  const firstBackup = backups(f).at(-1)!;
+  assert.equal(fs.readFileSync(path.join(f.claude, "backups", "bootstrap", firstBackup, "kherep", "githooks", "commit-msg"), "utf8"), predecessor.text);
+  assert.equal(checkHook("0").status, 0, "installed hook accepts attribution");
+  assert.equal(checkHook("1").status, 1, "missing key remains denied");
   const written = fs.readFileSync(f.policy, "utf8");
   assert.ok(!written.includes("\r"), "policy file must be LF only");
   assert.ok(written.includes(`\nworkspace=${fs.realpathSync(f.ws).replace(/\\/g, "/")}\n`), written);
