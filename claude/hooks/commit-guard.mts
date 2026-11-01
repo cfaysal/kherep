@@ -47,7 +47,6 @@ function subjectOf(message: string): string {
   const command = payload.tool_input && payload.tool_input.command;
   if (typeof command !== "string" || !commitsViaGit(command)) process.exit(0);
   const violations: string[] = [];
-  if (/co-authored-by/i.test(command)) violations.push("commit message contains a Co-Authored-By trailer");
   if (/\u2014/.test(command)) violations.push("commit message contains an em dash (U+2014)");
   const policyEnabled = process.env.KHEREP_WORK_ITEM_REQUIRED === "1";
   const inScope = isWithin(targetPath(command, payload.cwd), process.env.KHEREP_WORKSPACE);

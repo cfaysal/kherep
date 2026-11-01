@@ -46,18 +46,40 @@ function run(f: Fixture, ...args: string[]): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, [script, ...args], { cwd: f.repo, encoding: "utf8", env: hostEnv });
 }
 
-test("a commit with an AI attribution trailer fails the range, the clean one passes", (t) => {
+test("clean and attributed commits both pass the complete range", (t) => {
   const f = fixture(t);
   const base = f.git("rev-parse", "HEAD");
   const clean = f.commit("Add a clean change");
   const bad = f.commit("Add an attributed change\n\nCo-authored-by: Example <example@example.com>");
   const result = run(f, base, bad);
 
-  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, new RegExp(`^ok   ${clean} Add a clean change$`, "m"));
-  assert.match(result.stdout, new RegExp(`^FAIL ${bad} Add an attributed change$`, "m"));
-  assert.match(result.stdout, /AI attribution trailer/);
-  assert.match(result.stdout, /commit-policy: 1 of 2 commits failed/);
+  assert.match(result.stdout, new RegExp(`^ok   ${bad} Add an attributed change$`, "m"));
+  assert.match(result.stdout, /commit-policy: 2 commits passed/);
+});
+
+test("the strict canary survives repo opt-out and caller pattern without leaking into real commits", (t) => {
+  const f = fixture(t);
+  f.git("config", "--local", "kherep.workItemRequired", "false");
+  const base = f.git("rev-parse", "HEAD");
+  const head = f.commit("Key-free attributed change\n\nCo-authored-by: Codex <codex@openai.com>");
+  const result = spawnSync(process.execPath, [script, base, head], {
+    cwd: f.repo, encoding: "utf8", env: { ...hostEnv, KHEREP_WORK_ITEM_REQUIRED: "0", KHEREP_WORK_ITEM_PATTERN: ".*" },
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^commit-policy: 1 commit passed$/m);
+  const required = spawnSync(process.execPath, [script, base, head], {
+    cwd: f.repo, encoding: "utf8", env: { ...hostEnv, KHEREP_WORK_ITEM_REQUIRED: "1", KHEREP_WORK_ITEM_PATTERN: "ABC-[0-9]+" },
+  });
+  assert.equal(required.status, 1, required.stdout + required.stderr);
+  assert.match(required.stdout, /work-item key/);
+  const valid = f.commit("ABC-12 Attributed change\n\nCo-authored-by: Example <dev@example.com>");
+  const configuredPattern = spawnSync(process.execPath, [script, head, valid], {
+    cwd: f.repo, encoding: "utf8", env: { ...hostEnv, KHEREP_WORK_ITEM_REQUIRED: "1", KHEREP_WORK_ITEM_PATTERN: "ABC-[0-9]+" },
+  });
+  assert.equal(configuredPattern.status, 0, configuredPattern.stdout + configuredPattern.stderr);
+  assert.match(configuredPattern.stdout, /^commit-policy: 1 commit passed$/m);
 });
 
 test("a range of clean commits passes", (t) => {

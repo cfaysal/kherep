@@ -20,8 +20,11 @@ test("the real commit-guard through the Codex shell dispatcher: the em dash viol
   fs.copyFileSync(path.join(CLAUDE_HOOKS, "lib", "git-commit-match.mts"), path.join(home.hookDir, "lib", "git-commit-match.mts"));
   const env = { ...process.env };
   for (const name of ["KHEREP_WORK_ITEM_REQUIRED", "KHEREP_DENIAL_FAULT", "KHEREP_DENIAL_FAULT_MAIN"]) delete env[name];
-  const commit = { tool_input: { command: "git commit -m \"x \u2014 y\"" } };
+  const commit = { tool_input: { command: "git commit -m \"x \u2014 y\n\nCo-authored-by: Example <dev@example.com>\"" } };
   const shell = (input: string) => run([path.join(home.hookDir, "codex-shell-checks.mts")], input, env);
+  const attributed = await shell(shellPayload({ agent_id: undefined, tool_input: { command: "git commit -m \"plain subject\n\nCo-authored-by: Codex <codex@openai.com>\"" } }));
+  assert.equal(attributed.status, 0, attributed.stderr);
+  assert.doesNotMatch(attributed.stdout, /"permissionDecision":"deny"/);
   const plain = await shell(shellPayload({ ...commit, agent_id: undefined }));
   const delegated = await shell(shellPayload(commit));
   assert.equal(delegated.status, 0, delegated.stderr);

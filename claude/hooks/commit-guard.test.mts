@@ -6,11 +6,11 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { commitsViaGit } from "./lib/git-commit-match.mts";
 const hook = path.join(import.meta.dirname, "commit-guard.mts");
-function run(command: string, env: Record<string, string> = {}, cwd = "/work/repo", timeout?: number): number | null {
+function run(command: string, env: Record<string, string> = {}, cwd = "/work/repo", timeout?: number, tool = "Bash"): number | null {
   return spawnSync(process.execPath, [hook], {
-    input: JSON.stringify({ tool_name: "Bash", cwd, tool_input: { command } }),
+    input: JSON.stringify({ tool_name: tool, cwd, tool_input: { command } }),
     encoding: "utf8",
-    env: { ...process.env, KHEREP_WORKSPACE: "/work", ...env },
+    env: { ...process.env, KHEREP_WORKSPACE: "/work", KHEREP_WORK_ITEM_REQUIRED: "", ...env },
     timeout,
   }).status;
 }
@@ -21,8 +21,14 @@ assert.equal(run('KHEREP_WORK_ITEM=none git commit -m "exception"', { KHEREP_WOR
 assert.equal(run('git commit -m "plain subject"', { KHEREP_WORK_ITEM_REQUIRED: "1" }, "/elsewhere/repo"), 0);
 assert.equal(run('git commit -m "TASK_12 valid subject"', { KHEREP_WORK_ITEM_REQUIRED: "1", KHEREP_WORK_ITEM_PATTERN: "TASK_\\d+" }), 0);
 assert.equal(run('git commit -m "subject"', { KHEREP_WORK_ITEM_REQUIRED: "1", KHEREP_WORK_ITEM_PATTERN: "[" }), 2);
-assert.equal(run('git commit -m "x Co-Authored-By: bot"'), 2);
+assert.equal(run('git commit -m "x Co-Authored-By: bot"'), 0);
+assert.equal(run('git commit -m "plain subject\n\nCo-authored-by: Codex <codex@openai.com>"', { KHEREP_WORK_ITEM_REQUIRED: "1" }), 2);
+assert.equal(run('git commit -m "ABC-12 valid subject\n\nCo-authored-by: Example <dev@example.com>"', { KHEREP_WORK_ITEM_REQUIRED: "1" }), 0);
+assert.equal(run('git commit -m "em — dash\n\nCo-authored-by: Example <dev@example.com>"'), 2);
 assert.equal(run('git commit -m "em — dash"'), 2);
+assert.equal(run('git commit -m "plain subject\n\nCo-authored-by: Codex <codex@openai.com>"', {}, "/work/repo", undefined, "PowerShell"), 0);
+assert.equal(run('git commit -m "plain subject\n\nCo-authored-by: Example <dev@example.com>"', { KHEREP_WORK_ITEM_REQUIRED: "1" }, "/work/repo", undefined, "PowerShell"), 2);
+assert.equal(run('git commit -m "em — dash\n\nCo-authored-by: Example <dev@example.com>"', {}, "/work/repo", undefined, "PowerShell"), 2);
 // Per-repository opt-out (kherep.workItemRequired=false). The guard's only key
 // source is KHEREP_WORK_ITEM_REQUIRED in its environment, and a non-empty value
 // wins over the repository value in the commit-msg hook too, so the guard's
@@ -35,7 +41,7 @@ assert.equal(spawnSync("git", ["config", "--local", "kherep.workItemRequired", "
 const ws = { KHEREP_WORKSPACE: root };
 assert.equal(run('git commit -m "plain subject"', { ...ws, KHEREP_WORK_ITEM_REQUIRED: "" }, repo), 0);
 assert.equal(run('git commit -m "plain subject"', { ...ws, KHEREP_WORK_ITEM_REQUIRED: "1" }, repo), 2);
-assert.equal(run('git commit -m "x Co-Authored-By: bot"', { ...ws, KHEREP_WORK_ITEM_REQUIRED: "" }, repo), 2);
+assert.equal(run('git commit -m "x Co-Authored-By: bot"', { ...ws, KHEREP_WORK_ITEM_REQUIRED: "" }, repo), 0);
 fs.rmSync(root, { recursive: true, force: true });
 
 // Issue #271: the hook used this regex to find `git ... commit`; it backtracks

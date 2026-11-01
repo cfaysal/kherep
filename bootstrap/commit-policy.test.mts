@@ -164,13 +164,21 @@ test("a repository-local false value opts the repository out of the key rule", (
   }
 });
 
-test("an opted-out repository still rejects an AI attribution trailer", (t) => {
+test("attribution is allowed without identity or trailer restrictions and preserves the key rule", (t) => {
   const f = fixture(t);
   writePolicy(f, [`workspace=${fwd(f.workspace)}`, "work_item_required=1"]);
   setRepoConfig(f, "false");
-  const result = runHook(f, "fix: opted out\n\nCo-authored-by: Example <bot@example.com>");
-  assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stderr, /AI attribution trailer/);
+  for (const attribution of [
+    "Co-authored-by: Example <dev@example.com>",
+    "Co-authored-by: Codex <codex@openai.com>",
+    "Co-authored-by: Other AI <bot@example.com>\nCo-authored-by: Example <dev@example.com>",
+    "Generated with [Claude Code]",
+  ]) {
+    const message = `fix: opted out\n\n${attribution}`;
+    assert.equal(runHook(f, message).status, 0);
+    assert.equal(runHook(f, message, { KHEREP_WORK_ITEM_REQUIRED: "1" }).status, 1);
+    assert.equal(runHook(f, `ABC-12 ${message}`, { KHEREP_WORK_ITEM_REQUIRED: "1" }).status, 0);
+  }
 });
 
 test("an invalid or true repository value does not opt out", (t) => {
@@ -212,5 +220,8 @@ test("a real git commit in an opted-out repository is accepted without a key", (
   const accepted = git("commit", "-q", "-m", "fix: no key, opted out");
   assert.equal(accepted.status, 0, accepted.stderr);
   const trailer = git("commit", "-q", "--allow-empty", "-m", "fix: trailer\n\nCo-authored-by: Example <bot@example.com>");
-  assert.equal(trailer.status, 1, trailer.stderr);
+  assert.equal(trailer.status, 0, trailer.stderr);
+  assert.equal(git("log", "-1", "--format=%an|%ae|%cn|%ce").stdout.trim(),
+    "Example|dev@example.com|Example|dev@example.com");
+  assert.match(git("log", "-1", "--format=%B").stdout, /Co-authored-by: Example <bot@example.com>/);
 });

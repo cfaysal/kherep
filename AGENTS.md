@@ -12,6 +12,7 @@
 
 - Track changes to this repository in its GitHub Issues and close them from the pull request with `Closes #<number>`; commits and branch names carry no external tracker keys. See [CONTRIBUTING.md](CONTRIBUTING.md).
 - In repositories where Kherep is installed, follow that workspace's authorized work-item and commit conventions; do not assume a particular organization, tracker or key in the reusable product.
+- Allow co-author trailers and AI attribution without special configuration in every repository and runtime; keep all other workspace and commit rules in effect.
 - Write new executable code as TypeScript with the .mts extension, ESM and explicit .mts relative imports.
 - Use erasable syntax supported by Node.js type stripping. Do not use enums, namespaces, parameter properties or import-equals.
 - Run npm run typecheck and npm run test:bootstrap before committing. Run focused functional tests for affected components. Report unavailable CI separately.

@@ -13,10 +13,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
+import { createHash } from "node:crypto";
 
 import { install } from "./install.mts";
 import { fixtureModelOptions } from "./lib/model-policy.fixture.mts";
 import { command, contextCommand } from "./lib/parity-config.mts";
+import { InstallTransaction } from "./lib/install-transaction.mts";
 
 const GUARDS = ["commit-guard", "deploy-guard", "playwright-file-guard"] as const;
 
@@ -100,12 +102,10 @@ function runWired(hook: WiredHook, payload: Record<string, unknown>, env: Record
 // benign input. Issue #258: commit-guard and deploy-guard block with exit 2, and
 // the adapter answers Codex with the JSON deny on exit 0, the form that survives
 // the Windows pwsh wrapper; playwright-file-guard denies through JSON itself.
-// The trailer is built from pieces so that a live commit guard does not match
-// this file's text in a command line.
 const CASES = [
   {
     guard: "commit-guard", matcher: "Bash|shell_command|exec_command|functions\\.exec", tool: "shell_command",
-    blocking: `git commit -m "x ${"Co-"}${"Authored-By"}: bot"`, benign: 'git commit -m "plain subject"',
+    blocking: 'git commit -m "em — dash"', benign: 'git commit -m "plain subject\n\nCo-authored-by: Example <dev@example.com>"',
   },
   {
     guard: "deploy-guard", matcher: "Bash|shell_command|exec_command|functions\\.exec", tool: "shell_command",
@@ -151,6 +151,36 @@ test("each shared guard still blocks through its wired Codex command after an in
     assert.doesNotMatch(config, new RegExp(`${guard}\\.js`), `config.toml does not wire ${guard}.js`);
   }
   assertGuardsBlock(config, hookDir);
+});
+
+test("upgrade preserves the exact attribution-denying guard and transaction rollback restores it", (t) => {
+  const { hookDir, options } = fixture(t);
+  install(options);
+  const snapshot = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "bootstrap", "fixtures", "coauthor-ban-predecessor.json"), "utf8"));
+  const predecessor = snapshot.files["claude/hooks/commit-guard.mts"] as { text: string; sha256: string };
+  assert.equal(snapshot.baseline, "0c28fdd8f35b20ffd4ad9e34dcd3c0dfc639708f");
+  assert.equal(createHash("sha256").update(predecessor.text).digest("hex"), predecessor.sha256);
+  const target = path.join(hookDir, "commit-guard.mts");
+  fs.writeFileSync(target, predecessor.text);
+  const input = JSON.stringify({ tool_name: "Bash", tool_input: { command: 'git commit -m "plain\n\nCo-authored-by: Example <dev@example.com>"' } });
+  const direct = () => spawnSync(process.execPath, [target], { input, encoding: "utf8" });
+  assert.equal(direct().status, 2, "exact predecessor denied attribution");
+  const unrelated = fs.readFileSync(path.join(hookDir, "deploy-guard.mts"));
+  const upgraded = install(options);
+  const newBytes = fs.readFileSync(path.join(import.meta.dirname, "..", "claude", "hooks", "commit-guard.mts"));
+  assert.deepEqual(fs.readFileSync(target), newBytes);
+  assert.equal(fs.readFileSync(path.join(upgraded.backupRoot, "hooks", "kherep-maestro", "commit-guard.mts"), "utf8"), predecessor.text);
+  assert.equal(direct().status, 0, "upgraded guard accepts attribution");
+  assert.deepEqual(fs.readFileSync(path.join(hookDir, "deploy-guard.mts")), unrelated);
+  assertGuardsBlock(fs.readFileSync(upgraded.targets.config, "utf8"), hookDir);
+  // Exercise the existing transaction rollback on the same exact predecessor.
+  fs.writeFileSync(target, predecessor.text);
+  const transaction = new InstallTransaction(options.codexHome, path.join(options.codexHome, "backups", "rollback-attribution"));
+  transaction.copyFile(path.join(import.meta.dirname, "..", "claude", "hooks", "commit-guard.mts"), target);
+  assert.equal(direct().status, 0);
+  transaction.rollback();
+  assert.equal(fs.readFileSync(target, "utf8"), predecessor.text);
+  assert.equal(direct().status, 2);
 });
 
 // Issue #258. Codex on Windows runs `commandWindows` as `pwsh -NoProfile -Command

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 interface Entry {
+  directory: boolean;
   existed: boolean;
   relative: string;
   target: string;
@@ -43,8 +44,14 @@ export class InstallTransaction {
   stage(target: string): string {
     const { relative, resolved } = this.relative(target);
     if (this.entries.has(resolved)) return resolved;
+    // An ancestor snapshot already contains the original child bytes. Restaging
+    // a replaced child would overwrite that backup with post-change content.
+    for (const entry of this.entries.values()) {
+      const child = path.relative(entry.target, resolved);
+      if (entry.directory && child && child !== ".." && !child.startsWith(`..${path.sep}`) && !path.isAbsolute(child)) return resolved;
+    }
     const stat = fs.lstatSync(resolved, { throwIfNoEntry: false });
-    const entry: Entry = { existed: Boolean(stat), relative, target: resolved };
+    const entry: Entry = { directory: Boolean(stat?.isDirectory()), existed: Boolean(stat), relative, target: resolved };
     this.entries.set(resolved, entry);
     if (stat) {
       const backup = path.join(this.backupRoot, relative);

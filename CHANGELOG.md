@@ -330,6 +330,8 @@ increments the minor version; every other release increments the patch version.
 
 ### Changed
 
+- Allow co-author trailers and AI attribution for every runtime and repository; preserve other commit policies and verify the CI hook with an isolated work-item canary (#722).
+
 - CI runs its Ubuntu jobs on `ubuntu-26.04` explicitly instead of
   `ubuntu-latest`, which GitHub moves from 24.04 to 26.04 between
   2026-10-19 and 2026-11-19 (actions/runner-images#14748). A mixed image
