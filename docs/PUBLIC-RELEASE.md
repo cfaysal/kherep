@@ -6,7 +6,7 @@ Kherep is developed in its public repository, `cfaysal/kherep`. Every commit pus
 
 - Keep sessions, internal project records, connection profiles, credentials, and private infrastructure inventories outside source control.
 - Use synthetic identities and reserved domains in examples.
-- Commit with a GitHub noreply address; the author and committer addresses are published with every commit and tag.
+- Commit with a GitHub noreply address; the author and committer addresses are published with every commit and tag. Review co-author names and email addresses before pushing, because they are part of the public commit message.
 - Describe configured, tested, and running capabilities separately.
 - Verify installation instructions in a disposable candidate and preserve recovery evidence outside the public tree.
 
